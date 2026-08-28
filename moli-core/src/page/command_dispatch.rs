@@ -111,6 +111,33 @@ impl CompletedPageCommand {
 }
 
 impl Page {
+    /// Starts one exact RemoteWindowProxy target command without holding a
+    /// protocol target-slot borrow across the renderer ACK.
+    pub fn start_remote_window_proxy_command(
+        &self,
+        command: super::RendererRemoteWindowProxyCommand,
+    ) -> Result<PendingPageCommand> {
+        Ok(PendingPageCommand {
+            pending: self.handle.enqueue_cancellable_protocol_command(
+                RendererPageCommand::DispatchRemoteWindowProxyCommand(command),
+            )?,
+            renderer_agent_attachment_id: self.renderer_agent_attachment_id,
+        })
+    }
+
+    pub fn finish_remote_window_proxy_command(
+        &mut self,
+        completion: CompletedPageCommand,
+    ) -> Result<bool> {
+        let reply = self.finish_page_command(completion);
+        expect_page_reply!(
+            reply,
+            "RemoteWindowProxy command",
+            "a boolean endpoint ACK",
+            RendererPageReply::Bool(accepted) => Ok(accepted),
+        )
+    }
+
     pub(crate) fn start_page_command(
         &self,
         mut command: RendererPageCommand,

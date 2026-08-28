@@ -42,9 +42,11 @@ fn test_navigation_dispatch_state(fetch_request_id: &str) -> NavigationDispatchS
         request_body: None,
         request_body_bytes: None,
         request_headers: Vec::new(),
+        navigation_history_entry_seed: None,
         request_load_policy: crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
         timestamp: 0.0,
         source_document_security: Default::default(),
+        service_worker_clients_open_window_continuation: None,
     }
 }
 
@@ -1274,6 +1276,7 @@ fn committed_document_navigation_state_clears_document_local_runtime_state() {
             source: "globalThis.fromPreload = true;".to_owned(),
             world_name: None,
             has_bidi_channel_argument: false,
+            browser_internal: false,
             bidi_channel_handoffs: Vec::new(),
         },
     ));
@@ -1333,6 +1336,7 @@ fn target_parking_store_mutates_target_owner_state_with_default_elision() {
                 source: "globalThis.fromPreload = true;".to_owned(),
                 world_name: Some("utility".to_owned()),
                 has_bidi_channel_argument: false,
+                browser_internal: false,
                 bidi_channel_handoffs: Vec::new(),
             },
         ));
@@ -1540,6 +1544,11 @@ fn active_target_initial_empty_document_record_tracks_navigation_lifecycle() {
             .materialized()
     );
 
+    // Model an auxiliary target whose requested initial navigation must
+    // replace its internally materialized about:blank entry when it finally
+    // commits, even if an earlier response did not commit a Document.
+    context.mark_target_initial_url_replaces_empty_document("TID-initial-active");
+
     let token = context
         .start_document_navigation_for_active_target("LOADER-initial-active".to_owned())
         .expect("active target should start document navigation");
@@ -1555,6 +1564,10 @@ fn active_target_initial_empty_document_record_tracks_navigation_lifecycle() {
         Some("TID-initial-active"),
         "LOADER-initial-active",
     );
+    context
+        .active_target
+        .owner_state
+        .resolve_no_commit_response_navigation_history();
     let cleared = context
         .active_target
         .owner_state
@@ -1566,6 +1579,13 @@ fn active_target_initial_empty_document_record_tracks_navigation_lifecycle() {
     let committed = context
         .start_document_navigation_for_active_target("LOADER-initial-active-2".to_owned())
         .expect("active target should restart document navigation");
+    context
+        .active_target
+        .owner_state
+        .record_loaded_page_navigation_history((
+            "https://example.test/committed".to_owned(),
+            "committed".to_owned(),
+        ));
     context.commit_document_navigation_if_matches(&committed);
     let exited = context
         .active_target
@@ -1579,6 +1599,13 @@ fn active_target_initial_empty_document_record_tracks_navigation_lifecycle() {
         !context.accepts_pending_document_navigation_event(&token),
         "cleared navigation must stay rejected"
     );
+    let (current_index, entries) = context
+        .active_target
+        .owner_state
+        .navigation_history_snapshot(None);
+    assert_eq!(current_index, 0);
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].url, "https://example.test/committed");
 }
 
 #[test]

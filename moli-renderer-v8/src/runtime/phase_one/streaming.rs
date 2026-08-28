@@ -148,6 +148,10 @@ impl ConcurrentParseTimeRuntime {
             state,
             stage,
             started,
+            matches!(
+                boundary,
+                CommittedNavigationBootstrapBoundary::DocumentCommit
+            ),
         )
         .await?;
         let outcome = settle_streaming_raw_response_at_boundary(
@@ -386,6 +390,10 @@ impl ConcurrentParseTimeRuntime {
             state,
             stage,
             started,
+            matches!(
+                boundary,
+                CommittedNavigationBootstrapBoundary::DocumentCommit
+            ),
         )
         .await?;
         let outcome = settle_streaming_raw_response_at_boundary(
@@ -416,6 +424,7 @@ impl ConcurrentParseTimeRuntime {
         state: ParseTimeDriverState,
         stage: PageVmInitStage,
         started: Instant,
+        defer_document_start_scripts: bool,
     ) -> Result<ParseTimePageVmStreamingBootstrapOutcome> {
         let (state, page_vm, triggered_navigation) =
             Self::bootstrap_page_vm_from_state_on_fresh_local_task(
@@ -426,6 +435,7 @@ impl ConcurrentParseTimeRuntime {
                 runtime_hooks,
                 state,
                 started,
+                defer_document_start_scripts,
                 "streaming html bootstrap local task channel closed",
             )
             .await?;
@@ -437,8 +447,12 @@ impl ConcurrentParseTimeRuntime {
                 },
             );
         }
+        let mut runtime = Self::new_parser_owner(loader.clone(), stage, state, page_vm);
+        if defer_document_start_scripts {
+            runtime.defer_document_start_scripts();
+        }
         Ok(ParseTimePageVmStreamingBootstrapOutcome::Runtime(Box::new(
-            Self::new_parser_owner(loader.clone(), stage, state, page_vm),
+            runtime,
         )))
     }
 
@@ -933,6 +947,9 @@ mod tests {
             web_storage: crate::RendererWebStorageHandles::ephemeral(),
             root_frame_id: None,
             main_document_commit: None,
+            initial_document_referrer: None,
+            initial_top_level_browsing_context_name: None,
+            auxiliary_browsing_context_policy: None,
             top_level_storage_key: None,
             document_start_scripts: vec![],
             runtime_bindings: vec![],
@@ -941,6 +958,7 @@ mod tests {
             permission_overrides: vec![],
             extra_http_headers: vec![],
             document_policy_container: Default::default(),
+            cross_origin_opener_policy: Default::default(),
             document_default_language: None,
             document_last_modified: None,
             locale_override: None,

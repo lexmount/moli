@@ -360,14 +360,25 @@ pub(in crate::native_bridge) fn build_live_collection_wrapper<'s>(
     runtime_ptr: *mut JsContextHost,
     descriptor: LiveCollectionDescriptor,
 ) -> v8::Local<'s, v8::Object> {
-    {
+    let cached_wrapper = {
         let host = unsafe { &mut *runtime_ptr };
-        if let Some(wrapper) = host
-            .native_bridge_mut()
+        host.native_bridge_mut()
             .cached_live_collection_wrapper(scope, &descriptor)
-        {
-            return wrapper;
+    };
+    if let Some(wrapper) = cached_wrapper {
+        let authoritative_child_owner = unsafe { &mut *runtime_ptr }
+            .native_bridge_mut()
+            .bind_cached_live_collection_owner_realm(scope, runtime_ptr, &descriptor);
+        if let Some(child_handle) = authoritative_child_owner {
+            set_child_collection_prototype(
+                scope,
+                runtime_ptr,
+                wrapper,
+                descriptor.collection_kind,
+                child_handle,
+            );
         }
+        return wrapper;
     }
 
     let collection_id = {
@@ -395,7 +406,19 @@ pub(in crate::native_bridge) fn build_live_collection_wrapper<'s>(
     {
         let host = unsafe { &mut *runtime_ptr };
         host.native_bridge_mut()
-            .cache_live_collection_wrapper(scope, descriptor, wrapper);
+            .cache_live_collection_wrapper(scope, descriptor.clone(), wrapper);
+        let authoritative_child_owner = host
+            .native_bridge_mut()
+            .bind_cached_live_collection_owner_realm(scope, runtime_ptr, &descriptor);
+        if let Some(child_handle) = authoritative_child_owner {
+            set_child_collection_prototype(
+                scope,
+                runtime_ptr,
+                wrapper,
+                descriptor.collection_kind,
+                child_handle,
+            );
+        }
     }
     wrapper
 }
@@ -435,14 +458,39 @@ fn set_collection_prototype(
     wrapper: v8::Local<'_, v8::Object>,
     kind: CollectionKind,
 ) {
-    let prototype_name = match kind {
+    set_named_constructor_prototype(scope, wrapper, collection_prototype_name(kind));
+}
+
+fn collection_prototype_name(kind: CollectionKind) -> &'static str {
+    match kind {
         CollectionKind::NodeList => "NodeList",
         CollectionKind::HtmlCollection => "HTMLCollection",
         CollectionKind::FormControlsCollection => "HTMLFormControlsCollection",
         CollectionKind::OptionsCollection => "HTMLOptionsCollection",
         CollectionKind::RadioNodeList => "RadioNodeList",
-    };
-    set_named_constructor_prototype(scope, wrapper, prototype_name);
+    }
+}
+
+fn set_child_collection_prototype(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    wrapper: v8::Local<'_, v8::Object>,
+    kind: CollectionKind,
+    child_handle: DomHandle,
+) {
+    let prototype_name = collection_prototype_name(kind);
+    let prototype = unsafe { &mut *runtime_ptr }
+        .child_browsing_context_constructor_prototype(scope, child_handle, prototype_name)
+        .unwrap_or_else(|| {
+            panic!("current child realm must expose intrinsic `{prototype_name}` prototype")
+        });
+    let updated = wrapper
+        .set_prototype(scope, prototype)
+        .unwrap_or_else(|| panic!("failed to set child-realm `{prototype_name}` prototype"));
+    assert!(
+        updated,
+        "V8 rejected the child-realm `{prototype_name}` collection prototype"
+    );
 }
 
 pub(crate) fn install_collection_template_bindings<'s>(

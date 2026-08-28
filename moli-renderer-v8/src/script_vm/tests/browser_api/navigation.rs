@@ -51,116 +51,6 @@ fn form_target_blank_reloads_rel_opener_policy_for_each_submission() {
     }
 }
 
-#[tokio::test]
-async fn hyperlink_target_blank_reloads_rel_opener_policy_for_each_activation() {
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
-    let mut vm =
-        new_broadcast_channel_page_test_vm_with_loader("https://example.com/page.html", &loader);
-
-    let setup = vm
-        .eval(
-            r#"
-(() => {
-  globalThis.__hyperlinkPopupResults = [];
-  globalThis.__hyperlinkPopupChannel = new BroadcastChannel("hyperlink-rel-policy");
-  __hyperlinkPopupChannel.onmessage = event => __hyperlinkPopupResults.push(event.data);
-  globalThis.__hyperlinkPopupUrl = label => URL.createObjectURL(new Blob([`
-    <!doctype html>
-    <script>
-      new BroadcastChannel("hyperlink-rel-policy").postMessage({
-        label: ${JSON.stringify(label)},
-        hasOpener: opener !== null,
-        referrer: document.referrer
-      });
-      window.close();
-    <\/script>
-  `], { type: "text/html" }));
-  const html = document.createElement("html");
-  const body = document.createElement("body");
-  html.appendChild(body);
-  document.appendChild(html);
-  globalThis.__hyperlink = document.createElement("a");
-  __hyperlink.target = "_blank";
-  __hyperlink.rel = "noopener";
-  __hyperlink.href = __hyperlinkPopupUrl("anchor-noopener");
-  body.appendChild(__hyperlink);
-  __hyperlink.click();
-  return String(__hyperlinkPopupResults.length);
-})()
-"#,
-        )
-        .expect("anchor noopener popup setup should evaluate");
-    assert_eq!(setup, "0");
-    advance_page_task_executor_until_eval_equals(
-        &mut vm,
-        &loader,
-        "String(globalThis.__hyperlinkPopupResults.length)",
-        "1",
-        "anchor noopener popup should load",
-    )
-    .await;
-
-    vm.eval(
-        r#"
-__hyperlink.rel = "opener";
-__hyperlink.href = __hyperlinkPopupUrl("anchor-opener");
-__hyperlink.click();
-"#,
-    )
-    .expect("anchor opener popup should schedule");
-    advance_page_task_executor_until_eval_equals(
-        &mut vm,
-        &loader,
-        "String(globalThis.__hyperlinkPopupResults.length)",
-        "2",
-        "anchor opener popup should load",
-    )
-    .await;
-
-    vm.eval(
-        r#"
-globalThis.__hyperlink = document.createElement("area");
-__hyperlink.target = "_blank";
-__hyperlink.rel = "noreferrer";
-__hyperlink.href = __hyperlinkPopupUrl("area-noreferrer");
-document.body.appendChild(__hyperlink);
-__hyperlink.click();
-"#,
-    )
-    .expect("area noreferrer popup should schedule");
-    advance_page_task_executor_until_eval_equals(
-        &mut vm,
-        &loader,
-        "String(globalThis.__hyperlinkPopupResults.length)",
-        "3",
-        "area noreferrer popup should load",
-    )
-    .await;
-
-    vm.eval(
-        r#"
-__hyperlink.rel = "opener";
-__hyperlink.href = __hyperlinkPopupUrl("area-opener");
-__hyperlink.click();
-"#,
-    )
-    .expect("area opener popup should schedule");
-    advance_page_task_executor_until_eval_equals(
-        &mut vm,
-        &loader,
-        "String(globalThis.__hyperlinkPopupResults.length)",
-        "4",
-        "area opener popup should load",
-    )
-    .await;
-
-    assert_eq!(
-        vm.eval("JSON.stringify(globalThis.__hyperlinkPopupResults)")
-            .expect("hyperlink popup relation results should evaluate"),
-        r#"[{"label":"anchor-noopener","hasOpener":false,"referrer":"https://example.com/page.html"},{"label":"anchor-opener","hasOpener":true,"referrer":"https://example.com/page.html"},{"label":"area-noreferrer","hasOpener":false,"referrer":""},{"label":"area-opener","hasOpener":true,"referrer":"https://example.com/page.html"}]"#
-    );
-}
-
 #[test]
 fn document_readiness_events_precede_domcontentloaded_and_window_load() {
     let mut vm = new_storage_test_vm("https://document-readiness-events.test/");
@@ -1291,6 +1181,169 @@ fn history_navigation_arguments_use_webidl_conversion() {
     assert_eq!(
         result,
         "TypeError|TypeError|RangeError|TypeError|RangeError|undefined|#three|3|TypeError|TypeError|RangeError|TypeError|TypeError|RangeError"
+    );
+}
+
+#[test]
+fn root_initial_empty_document_replaces_same_and_cross_document_history_updates() {
+    let mut vm = new_storage_test_vm("about:blank");
+    vm.mark_root_document_initial_empty();
+
+    let same_document = vm
+        .eval(
+            r##"
+(() => {
+  location.hash = "#fragment";
+  const fragmentLength = history.length;
+  history.pushState({ step: "state" }, "", "#state");
+  return JSON.stringify({
+    href: location.href,
+    fragmentLength,
+    historyLength: history.length,
+    navigationLength: navigation.entries().length,
+    state: history.state.step
+  });
+})()
+"##,
+        )
+        .expect("initial empty same-document navigation should evaluate");
+    assert_eq!(
+        same_document,
+        r##"{"href":"about:blank#state","fragmentLength":1,"historyLength":1,"navigationLength":1,"state":"state"}"##
+    );
+
+    assert_eq!(
+        vm.eval(r#"location.href = "https://initial-empty-next.test/committed"; "queued""#)
+            .expect("initial empty cross-document navigation should queue"),
+        "queued"
+    );
+    let pending = vm
+        .take_pending_location_navigation_with_seed()
+        .expect("initial empty cross-document navigation should be pending");
+    let seed = pending
+        .entry_seed
+        .expect("initial empty cross-document navigation should carry a seed");
+    assert_eq!(seed.current_index, 0);
+    assert_eq!(seed.entries.len(), 1);
+    assert_eq!(
+        seed.entries[0].url,
+        "https://initial-empty-next.test/committed"
+    );
+    assert_eq!(
+        seed.activation
+            .as_ref()
+            .and_then(|activation| activation.navigation_type.as_deref()),
+        Some("replace")
+    );
+}
+
+#[test]
+fn root_initial_empty_same_document_updates_keep_creator_fallback_base() {
+    let mut vm = new_storage_test_vm("about:blank");
+    let context_host = vm
+        .context_host_weak_for_test()
+        .upgrade()
+        .expect("standalone VM should retain its context host");
+    {
+        let mut host = context_host.borrow_mut();
+        let document = host.document_handle();
+        assert!(
+            host.dom_host_mut()
+                .set_document_fallback_base_url_for_handle(
+                    document,
+                    Some(url::Url::parse("https://creator.test/path/opener.html").unwrap()),
+                )
+        );
+    }
+    vm.mark_root_document_initial_empty();
+
+    let same_document = vm
+        .eval(
+            r##"
+location.hash = "#fragment";
+history.pushState({ step: "state" }, "", "#state");
+`${location.href}|${document.baseURI}|${history.length}`
+"##,
+        )
+        .expect("initial empty same-document mutations should evaluate");
+    assert_eq!(
+        same_document,
+        "about:blank#state|https://creator.test/path/opener.html|1"
+    );
+
+    assert_eq!(
+        vm.eval(r#"location.href = "resources/next.html"; "queued""#)
+            .expect("creator-relative navigation should queue"),
+        "queued"
+    );
+    let pending = vm
+        .take_pending_location_navigation_with_seed()
+        .expect("creator-relative navigation should remain pending");
+    assert_eq!(
+        pending.url.as_str(),
+        "https://creator.test/path/resources/next.html"
+    );
+}
+
+#[test]
+fn javascript_url_task_does_not_replace_already_handed_off_ordinary_navigation() {
+    let mut vm = new_storage_test_vm("https://popup-order.test/opener");
+
+    vm.eval(
+        r#"
+location.href = "https://popup-order.test/destination";
+location.href = "javascript:void(globalThis.__afterOrdinary = true)";
+"queued"
+"#,
+    )
+    .expect("ordinary and JavaScript URL navigations should queue");
+
+    let ordinary = vm
+        .take_pending_non_javascript_location_navigation()
+        .expect("ordinary navigation should remain at the owner queue head");
+    assert_eq!(
+        ordinary.url.as_str(),
+        "https://popup-order.test/destination"
+    );
+    let javascript = vm.take_pending_javascript_location_navigation_batch();
+    assert_eq!(javascript.len(), 1);
+    assert_eq!(
+        javascript[0].url.as_str(),
+        "javascript:void(globalThis.__afterOrdinary = true)"
+    );
+}
+
+#[test]
+fn document_open_exits_root_initial_empty_history_replacement_mode() {
+    let mut vm = new_storage_test_vm("about:blank");
+    vm.mark_root_document_initial_empty();
+
+    assert_eq!(
+        vm.eval(
+            r#"
+document.open();
+document.close();
+location.href = "https://after-document-open.test/committed";
+"queued"
+"#,
+        )
+        .expect("document.open initial-empty history probe should evaluate"),
+        "queued"
+    );
+
+    let pending = vm
+        .take_pending_location_navigation_with_seed()
+        .expect("post-document.open navigation should be pending");
+    let seed = pending
+        .entry_seed
+        .expect("post-document.open navigation should carry a seed");
+    assert_eq!(seed.current_index, 1);
+    assert_eq!(seed.entries.len(), 2);
+    assert_eq!(
+        seed.activation
+            .as_ref()
+            .and_then(|activation| activation.navigation_type.as_deref()),
+        Some("push")
     );
 }
 

@@ -5,6 +5,7 @@ use super::{ScriptVm, child_document_script_scheduler::ChildDocumentScriptSchedu
 use crate::{
     document_runtime::DomHandle,
     frame_owner_model::{FrameDocumentOwner, FrameDocumentTaskOwner, FrameRealmId},
+    native_bridge::ChildDocumentStartScriptSnapshot,
     page_task_queue::{
         RendererPageChildFrameTaskOwner, RendererPageChildFrameTaskTarget,
         RendererPageChildRealmMaterializationTarget,
@@ -123,6 +124,15 @@ impl ScriptVm {
         {
             return Ok(ChildRealmMaterializationApplication::NoPendingRequest);
         }
+        let document_start_scripts = self
+            ._context_host
+            .borrow()
+            .child_document_start_script_snapshot(owner)
+            .ok_or_else(|| {
+                anyhow!(
+                    "child realm materialization has no document-start snapshot for owner {owner:?}"
+                )
+            })?;
         // Keep the exact request registered while materialization enters the
         // child Window. V8 callbacks are re-entrant, and a repeated exposure
         // during this boundary must observe the existing reservation rather
@@ -132,6 +142,7 @@ impl ScriptVm {
             handle,
             owner,
             runtime_isolated_worlds,
+            &document_start_scripts,
         ) {
             Ok((_execution_context_id, activity)) => {
                 self._context_host
@@ -188,6 +199,7 @@ impl ScriptVm {
             return false;
         };
         let mut host = self._context_host.borrow_mut();
+        host.retire_child_document_start_script_snapshot(target.document_owner());
         let discarded_script_work =
             host.retire_child_document_script_ready_tasks_for_owner(target.document_owner());
         discarded_script_work != 0
@@ -322,6 +334,7 @@ impl ScriptVm {
     fn replay_default_world_state_into_child_default_context_body(
         &mut self,
         execution_context_id: i64,
+        document_start_scripts: &ChildDocumentStartScriptSnapshot,
     ) -> (ChildRealmMaterializationBodyActivity, Result<()>) {
         let mut activity = ChildRealmMaterializationBodyActivity::StateOnly;
         let binding_names = self
@@ -336,12 +349,20 @@ impl ScriptVm {
             }
         }
 
-        let scripts = self
-            ._context_host
-            .borrow()
-            .stored_default_document_start_scripts();
-        for script in scripts {
+        for script in document_start_scripts.default_world_scripts().cloned() {
             if script.source.trim().is_empty() {
+                continue;
+            }
+            if script.browser_internal {
+                activity = ChildRealmMaterializationBodyActivity::DocumentStartScript;
+                if let Err(error) = self
+                    .exec_browser_internal_bootstrap_script_in_execution_context(
+                        execution_context_id,
+                        &script.source,
+                    )
+                {
+                    return (activity, Err(error));
+                }
                 continue;
             }
             let job = match self.child_frame_source_script_job_for_execution_context_id(
@@ -363,14 +384,9 @@ impl ScriptVm {
     fn child_named_runtime_world_definitions(
         &self,
         runtime_isolated_worlds: &[crate::protocol_types::RuntimeIsolatedWorldDefinition],
+        document_start_scripts: &ChildDocumentStartScriptSnapshot,
     ) -> Vec<crate::protocol_types::RuntimeIsolatedWorldDefinition> {
-        let (scripts, bindings) = {
-            let host = self._context_host.borrow();
-            (
-                host.stored_document_start_scripts(),
-                host.stored_runtime_bindings(),
-            )
-        };
+        let bindings = self._context_host.borrow().stored_runtime_bindings();
         let mut worlds = Vec::<crate::protocol_types::RuntimeIsolatedWorldDefinition>::new();
         let remember = |worlds: &mut Vec<crate::protocol_types::RuntimeIsolatedWorldDefinition>,
                         name: &str,
@@ -388,7 +404,7 @@ impl ScriptVm {
         for world in runtime_isolated_worlds {
             remember(&mut worlds, &world.name, world.grant_universal_access);
         }
-        for script in scripts {
+        for script in document_start_scripts.scripts() {
             if let Some(world_name) = script.world_name.as_deref() {
                 remember(&mut worlds, world_name, false);
             }
@@ -469,15 +485,11 @@ impl ScriptVm {
         handle: DomHandle,
         owner: FrameDocumentTaskOwner,
         runtime_isolated_worlds: &[crate::protocol_types::RuntimeIsolatedWorldDefinition],
+        document_start_scripts: &ChildDocumentStartScriptSnapshot,
     ) -> ChildRealmMaterializationBodyActivity {
-        let (scripts, bindings) = {
-            let host = self._context_host.borrow();
-            (
-                host.stored_document_start_scripts(),
-                host.stored_runtime_bindings(),
-            )
-        };
-        let worlds = self.child_named_runtime_world_definitions(runtime_isolated_worlds);
+        let bindings = self._context_host.borrow().stored_runtime_bindings();
+        let worlds = self
+            .child_named_runtime_world_definitions(runtime_isolated_worlds, document_start_scripts);
         let mut prepared_worlds = Vec::<(String, i64)>::new();
         let mut activity = ChildRealmMaterializationBodyActivity::StateOnly;
 
@@ -503,8 +515,9 @@ impl ScriptVm {
         // Preserve script registry order. A named world is created immediately
         // before the first script that needs it, just like Blink's
         // EvaluateScriptOnNewDocument path.
-        for script in scripts
-            .into_iter()
+        for script in document_start_scripts
+            .scripts()
+            .iter()
             .filter(|script| script.world_name.is_some())
         {
             if script.source.trim().is_empty() {
@@ -540,8 +553,15 @@ impl ScriptVm {
                 }
             };
             activity = ChildRealmMaterializationBodyActivity::DocumentStartScript;
-            if let Err(error) = self.exec_in_execution_context(execution_context_id, &script.source)
-            {
+            let execution = if script.browser_internal {
+                self.exec_browser_internal_bootstrap_script_in_execution_context(
+                    execution_context_id,
+                    &script.source,
+                )
+            } else {
+                self.exec_in_execution_context(execution_context_id, &script.source)
+            };
+            if let Err(error) = execution {
                 self.record_runtime_warning(format_args!(
                     "child preload script in world `{world_name}` failed: {error}"
                 ));
@@ -579,6 +599,7 @@ impl ScriptVm {
         handle: DomHandle,
         owner: FrameDocumentTaskOwner,
         runtime_isolated_worlds: &[crate::protocol_types::RuntimeIsolatedWorldDefinition],
+        document_start_scripts: &ChildDocumentStartScriptSnapshot,
     ) -> Result<(i64, ChildRealmMaterializationBodyActivity)> {
         if self
             ._context_host
@@ -656,8 +677,11 @@ impl ScriptVm {
         // they must not require the pre-registration state to pretend that the
         // realm was already executable.
         self.refresh_default_runtime_bindings_for_child_window_body(handle);
-        let (activity, replay_result) =
-            self.replay_default_world_state_into_child_default_context_body(execution_context_id);
+        let (activity, replay_result) = self
+            .replay_default_world_state_into_child_default_context_body(
+                execution_context_id,
+                document_start_scripts,
+            );
         if let Err(error) = replay_result {
             // A document-start script failure does not un-create its V8
             // context. Keep the authoritative realm materialized and report
@@ -671,6 +695,7 @@ impl ScriptVm {
             handle,
             owner,
             runtime_isolated_worlds,
+            document_start_scripts,
         );
         Ok((
             execution_context_id,

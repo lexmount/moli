@@ -199,6 +199,7 @@ async fn add_script_to_evaluate_on_new_document_reuses_identifier_for_duplicate_
                     .to_owned(),
                 world_name: None,
                 has_bidi_channel_argument: false,
+                browser_internal: false,
                 bidi_channel_handoffs: Vec::new(),
             },
         ));
@@ -270,6 +271,7 @@ async fn add_script_to_evaluate_on_new_document_restored_scripts_bump_from_max_i
                 source: "globalThis.__lm_preload = 'seed';".to_owned(),
                 world_name: None,
                 has_bidi_channel_argument: false,
+                browser_internal: false,
                 bidi_channel_handoffs: Vec::new(),
             },
         ));
@@ -327,6 +329,7 @@ async fn add_script_to_evaluate_on_new_document_bump_ignores_non_numeric_identif
                 source: "globalThis.__lm_preload = 'legacy';".to_owned(),
                 world_name: None,
                 has_bidi_channel_argument: false,
+                browser_internal: false,
                 bidi_channel_handoffs: Vec::new(),
             },
         ));
@@ -344,6 +347,7 @@ async fn add_script_to_evaluate_on_new_document_bump_ignores_non_numeric_identif
                 source: "globalThis.__lm_preload = 'seed';".to_owned(),
                 world_name: None,
                 has_bidi_channel_argument: false,
+                browser_internal: false,
                 bidi_channel_handoffs: Vec::new(),
             },
         ));

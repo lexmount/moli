@@ -58,9 +58,6 @@ pub(crate) fn start_text_track_resource_fetch(
         OwnerDispatchScope::Top => {
             return Err("text-track request has no current document owner".to_owned());
         }
-        OwnerDispatchScope::LightweightPopup(_) => {
-            return Err("text-track requests in lightweight popups are unsupported".to_owned());
-        }
     };
     let base_url = host.document_base_url_for_handle(pending.owner_document_handle());
     if pending.source().trim().is_empty() {

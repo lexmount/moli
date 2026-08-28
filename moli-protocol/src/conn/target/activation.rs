@@ -1,6 +1,9 @@
 use moli_core::runtime::NavigationEngine;
 
-use crate::conn::{BackgroundProtocolEvent, BrowserContext, CdpConnection};
+use crate::conn::{
+    BackgroundProtocolEvent, BrowserContext, CdpConnection,
+    set_runtime_slot_top_level_page_focus_async,
+};
 
 /// The stable Target identities on both sides of one foreground selection.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -160,15 +163,69 @@ impl CdpConnection {
         &mut self,
         target_id: &str,
     ) -> Result<Option<CompletedTargetActivation>, String> {
-        let previous_active_target_id = self
-            .browser_context
-            .as_ref()
-            .and_then(BrowserContext::active_target_id_owned);
+        let (
+            target_is_active,
+            target_is_background,
+            demoted_focus,
+            previous_active_target_id,
+            owner_blocked_by_modal,
+        ) = {
+            let Some(browser_context) = self.browser_context.as_ref() else {
+                return Err("BrowserContextNotLoaded".to_owned());
+            };
+            (
+                browser_context.is_active_target(target_id),
+                browser_context.background_target(target_id).is_some(),
+                browser_context.focus_emulation_enabled,
+                browser_context.active_target_id_owned(),
+                browser_context.has_pending_javascript_dialog(),
+            )
+        };
+        if target_is_active {
+            let desired_focus = self
+                .browser_context
+                .as_ref()
+                .is_some_and(BrowserContext::document_has_focus);
+            if let Some(browser_context) = self.browser_context.as_mut()
+                && let Err(message) = set_runtime_slot_top_level_page_focus_async(
+                    &mut browser_context.active_target.runtime_slot,
+                    true,
+                    desired_focus,
+                    owner_blocked_by_modal,
+                )
+                .await
+            {
+                tracing::warn!(
+                    %message,
+                    %target_id,
+                    "failed to synchronize active target Page focus"
+                );
+            }
+            return Ok(Some(CompletedTargetActivation::new(Vec::new())));
+        }
+        if !target_is_background {
+            return Ok(None);
+        }
         let transition = TargetActivationTransition::new(target_id, previous_active_target_id);
         let hidden_screencast_sessions = transition
             .demoted_target_id()
             .map(|active_target_id| self.page_screencast_session_ids_for_target(active_target_id))
             .unwrap_or_default();
+        if let Some(browser_context) = self.browser_context.as_mut()
+            && let Err(message) = set_runtime_slot_top_level_page_focus_async(
+                &mut browser_context.active_target.runtime_slot,
+                false,
+                demoted_focus,
+                owner_blocked_by_modal,
+            )
+            .await
+        {
+            tracing::warn!(
+                %message,
+                %target_id,
+                "failed to deactivate previous active target Page"
+            );
+        }
         self.handoff_navigation_engine_for_target_activation(target_id);
         let Some(browser_context) = self.browser_context.as_mut() else {
             return Err("BrowserContextNotLoaded".to_owned());
@@ -178,6 +235,43 @@ impl CdpConnection {
             .await?;
         if !promoted {
             return Ok(None);
+        }
+        if let Some(demoted_target_id) = transition.demoted_target_id()
+            && let Err(message) = browser_context
+                .apply_surface_overrides_to_parked_target_loaded_page_async(demoted_target_id)
+                .await
+        {
+            tracing::warn!(
+                %message,
+                target_id = demoted_target_id,
+                "failed to synchronize demoted target visibility surface"
+            );
+        }
+        if owner_blocked_by_modal
+            && let Err(message) = browser_context
+                .apply_surface_overrides_to_loaded_page_async()
+                .await
+        {
+            tracing::warn!(
+                %message,
+                %target_id,
+                "failed to defer promoted target visibility surface"
+            );
+        }
+        let desired_focus = browser_context.document_has_focus();
+        if let Err(message) = set_runtime_slot_top_level_page_focus_async(
+            &mut browser_context.active_target.runtime_slot,
+            true,
+            desired_focus,
+            owner_blocked_by_modal,
+        )
+        .await
+        {
+            tracing::warn!(
+                %message,
+                %target_id,
+                "failed to activate promoted target Page"
+            );
         }
         self.refresh_active_browser_context_loader_async().await;
         self.notify_target_host_activated(target_id);

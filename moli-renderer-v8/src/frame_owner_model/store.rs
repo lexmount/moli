@@ -84,6 +84,7 @@ impl FrameOwnerStore {
         subresource_policy_context: crate::types::SubresourcePolicyContext,
         service_worker_client_id: Option<crate::service_worker_runtime::ServiceWorkerClientId>,
     ) -> FrameRealmId {
+        let browsing_context_id = BrowsingContextId::primary_top_level();
         let frame_id = main_frame_id();
         let window_proxy_id = main_window_proxy_id();
         let scheduler_lane_id = main_scheduler_lane_id();
@@ -104,6 +105,7 @@ impl FrameOwnerStore {
         self.frames.insert(
             frame_id.clone(),
             FrameRecord {
+                browsing_context_id,
                 frame_id: frame_id.clone(),
                 kind: FrameKind::Main,
                 parent_frame_id: None,
@@ -121,9 +123,9 @@ impl FrameOwnerStore {
             window_proxy_id,
             WindowProxyRecord {
                 id: window_proxy_id,
-                frame_id: frame_id.clone(),
+                browsing_context_id,
                 current_local_window_id: Some(local_window_id),
-                reachability: WindowProxyReachability::LiveFrame,
+                reachability: WindowProxyReachability::Live,
             },
         );
         self.scheduler_lanes.insert(
@@ -250,15 +252,17 @@ impl FrameOwnerStore {
                 .map(|frame| frame.window_proxy_id)
                 && let Some(proxy) = self.window_proxies.get_mut(&proxy_id)
             {
-                proxy.reachability = WindowProxyReachability::LiveFrame;
+                proxy.reachability = WindowProxyReachability::Live;
             }
             return frame_id;
         }
+        let browsing_context_id = self.ids.nested_browsing_context();
         let window_proxy_id = self.ids.window_proxy();
         let scheduler_lane_id = self.ids.scheduler_lane();
         self.frames.insert(
             frame_id.clone(),
             FrameRecord {
+                browsing_context_id,
                 frame_id: frame_id.clone(),
                 kind: FrameKind::ChildIframe,
                 parent_frame_id,
@@ -276,9 +280,9 @@ impl FrameOwnerStore {
             window_proxy_id,
             WindowProxyRecord {
                 id: window_proxy_id,
-                frame_id: frame_id.clone(),
+                browsing_context_id,
                 current_local_window_id: None,
-                reachability: WindowProxyReachability::LiveFrame,
+                reachability: WindowProxyReachability::Live,
             },
         );
         self.scheduler_lanes.insert(
@@ -357,6 +361,7 @@ impl FrameOwnerStore {
         }
 
         let transition = MainDocumentOwnerTransition::new(
+            snapshot.browsing_context_id,
             retired_owner,
             FrameDocumentTaskOwner::new(
                 snapshot.scheduler_lane_id,
@@ -411,8 +416,8 @@ impl FrameOwnerStore {
             return None;
         }
         let window_proxy = self.window_proxies.get(&frame.window_proxy_id)?;
-        if window_proxy.frame_id != frame_id
-            || window_proxy.reachability != WindowProxyReachability::LiveFrame
+        if window_proxy.browsing_context_id != frame.browsing_context_id
+            || window_proxy.reachability != WindowProxyReachability::Live
         {
             return None;
         }
@@ -518,7 +523,7 @@ impl FrameOwnerStore {
             .get_mut(&window_proxy_id)
             .expect("validated child WindowProxy must survive its document commit");
         proxy.current_local_window_id = Some(local_window_id);
-        proxy.reachability = WindowProxyReachability::LiveFrame;
+        proxy.reachability = WindowProxyReachability::Live;
         Some((local_window_id, document_id))
     }
 
@@ -542,6 +547,7 @@ impl FrameOwnerStore {
         {
             return None;
         }
+        let browsing_context_id = self.browsing_context_id_for_child_handle(child_handle)?;
         let scheduler_lane_id = self
             .current_child_frame_lane_task_owner(child_handle)?
             .scheduler_lane_id;
@@ -559,6 +565,7 @@ impl FrameOwnerStore {
         )?;
         Some(FrameDocumentOwnerTransition::new(
             child_handle,
+            browsing_context_id,
             None,
             Some(FrameDocumentTaskOwner::new(
                 scheduler_lane_id,
@@ -615,6 +622,7 @@ impl FrameOwnerStore {
         if retired_owner != expected_current_owner {
             return None;
         }
+        let browsing_context_id = self.browsing_context_id_for_child_handle(child_handle)?;
         let scheduler_lane_id = self
             .current_child_frame_lane_task_owner(child_handle)?
             .scheduler_lane_id;
@@ -649,6 +657,7 @@ impl FrameOwnerStore {
         )?;
         Some(FrameDocumentOwnerTransition::new(
             child_handle,
+            browsing_context_id,
             retired_owner,
             Some(FrameDocumentTaskOwner::new(
                 scheduler_lane_id,
@@ -813,6 +822,7 @@ impl FrameOwnerStore {
         );
         Some(FrameDocumentOwnerTransition::new(
             child_handle,
+            snapshot.browsing_context_id,
             Some(retired_owner),
             Some(current_owner),
         ))
@@ -928,6 +938,7 @@ impl FrameOwnerStore {
 
         let transition = FrameDocumentOwnerTransition::new(
             child_handle,
+            snapshot.browsing_context_id,
             Some(retired_owner),
             Some(FrameDocumentTaskOwner::new(
                 snapshot.scheduler_lane_id,
@@ -953,6 +964,7 @@ impl FrameOwnerStore {
         let retired_owner = self.current_child_document_task_owner(child_handle);
         let frame_id = self.frame_ids_by_child_handle.get(&child_handle).cloned()?;
         let frame = self.frames.get_mut(&frame_id)?;
+        let browsing_context_id = frame.browsing_context_id;
         frame.navigation_load = None;
         if let Some(local_window_id) = frame.current_local_window_id.take()
             && let Some(local_window) = self.local_windows.get_mut(&local_window_id)
@@ -975,7 +987,12 @@ impl FrameOwnerStore {
             proxy.current_local_window_id = None;
         }
         let transition = retired_owner.map(|retired_owner| {
-            FrameDocumentOwnerTransition::new(child_handle, Some(retired_owner), None)
+            FrameDocumentOwnerTransition::new(
+                child_handle,
+                browsing_context_id,
+                Some(retired_owner),
+                None,
+            )
         });
         if let Some(transition) = transition {
             self.pending_child_document_owner_retirements
@@ -1334,6 +1351,16 @@ impl FrameOwnerStore {
         self.frame_ids_by_child_handle.get(&child_handle)
     }
 
+    pub(crate) fn browsing_context_id_for_child_handle(
+        &self,
+        child_handle: DomHandle,
+    ) -> Option<BrowsingContextId> {
+        let frame_id = self.frame_ids_by_child_handle.get(&child_handle)?;
+        self.frames
+            .get(frame_id)
+            .map(|frame| frame.browsing_context_id)
+    }
+
     #[cfg(test)]
     pub(crate) fn frame_owner_element_for_child_handle(
         &self,
@@ -1582,9 +1609,9 @@ impl FrameOwnerStore {
 
         let proxy = self.window_proxies.get(&frame.window_proxy_id)?;
         if proxy.id != frame.window_proxy_id
-            || proxy.frame_id != *frame_id
+            || proxy.browsing_context_id != frame.browsing_context_id
             || proxy.current_local_window_id != Some(local_window_id)
-            || proxy.reachability != WindowProxyReachability::LiveFrame
+            || proxy.reachability != WindowProxyReachability::Live
         {
             return None;
         }
@@ -1618,6 +1645,7 @@ impl FrameOwnerStore {
         }
 
         Some(FrameOwnerSnapshot {
+            browsing_context_id: frame.browsing_context_id,
             frame_id: frame_id.clone(),
             kind: frame.kind,
             parent_frame_id: frame.parent_frame_id.clone(),
@@ -1659,6 +1687,7 @@ impl FrameOwnerStore {
 
         Some(ChildFrameOwnerSnapshot {
             owner_handle: child_handle,
+            browsing_context_id: owner.browsing_context_id,
             frame_id: owner.frame_id,
             parent_frame_id: owner.parent_frame_id,
             scheduler_lane_id: owner.scheduler_lane_id,
@@ -2391,25 +2420,6 @@ impl FrameOwnerStore {
             .get(frame_id)?
             .navigation_load
             .map(|state| state.binding)
-    }
-
-    pub(crate) fn current_child_frame_load_is_pending(&self, child_handle: DomHandle) -> bool {
-        let Some(frame_id) = self.frame_ids_by_child_handle.get(&child_handle) else {
-            return false;
-        };
-        let Some(frame) = self.frames.get(frame_id) else {
-            return false;
-        };
-        if frame.navigation_load.is_some() {
-            return true;
-        }
-        frame
-            .current_document_id
-            .and_then(|document_id| self.documents.get(&document_id))
-            .is_some_and(|document| {
-                document.lifecycle == DocumentLifecycleState::Current
-                    && document.lifecycle_progress.child_load_delivery_is_pending()
-            })
     }
 
     pub(crate) fn begin_child_frame_parent_document_load(
@@ -3463,7 +3473,9 @@ impl FrameOwnerStore {
             return None;
         }
         let proxy = self.window_proxies.get(&frame.window_proxy_id)?;
-        if proxy.frame_id != *frame_id || proxy.reachability != WindowProxyReachability::LiveFrame {
+        if proxy.browsing_context_id != frame.browsing_context_id
+            || proxy.reachability != WindowProxyReachability::Live
+        {
             return None;
         }
         Some(FrameLaneTaskOwner::new(frame.scheduler_lane_id))

@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use moli_core::{
     PageId, RendererOutputCursor, RendererOutputFenceLeaseId, RendererOutputPublication,
     RendererOutputResidenceIdentity, RendererOutputStreamIdentity, RendererOwnerLocalHostId,
+    RendererPageOutputOwnerReservationId,
 };
 
 use super::super::publication_route::RendererPublicationOwner;
@@ -51,6 +52,12 @@ struct ClosedRendererOutputStream {
     active_cursor_leases: HashSet<RendererOutputFenceLeaseId>,
 }
 
+#[derive(Debug)]
+struct PendingRendererPageOutputOwner {
+    residence: RendererOutputResidenceIdentity,
+    owner: RendererPublicationOwner,
+}
+
 /// Connection-owned ordering authority for concrete renderer output.
 ///
 /// Channel arrival order is not used as an implicit cross-residence order.
@@ -62,7 +69,12 @@ struct ClosedRendererOutputStream {
 pub(crate) struct OrderedRendererOutputIngress {
     open_streams: HashMap<RendererOutputStreamIdentity, OpenRendererOutputStream>,
     closed_streams: HashMap<RendererOutputStreamIdentity, ClosedRendererOutputStream>,
-    pending_owners: HashMap<RendererOutputResidenceIdentity, RendererPublicationOwner>,
+    pending_page_owners:
+        HashMap<RendererPageOutputOwnerReservationId, PendingRendererPageOutputOwner>,
+    /// Compatibility admission for callers which adopt an already-built Page
+    /// and no longer hold its creation reservation. Production navigation
+    /// registers the exact reservation above before renderer bootstrap.
+    pending_unreserved_owners: HashMap<RendererOutputResidenceIdentity, RendererPublicationOwner>,
     /// Stable readiness order only chooses between independent streams. A
     /// stream appears at most once, so a missing same-stream predecessor does
     /// not make every later admission rescan all buffered publications.
@@ -80,7 +92,18 @@ impl OrderedRendererOutputIngress {
             !self.open_streams.contains_key(&stream) && !self.closed_streams.contains_key(&stream),
             "renderer output stream opened more than once"
         );
-        let registered_owner = self.pending_owners.remove(&stream.residence());
+        let registered_owner = stream
+            .page_owner_reservation_id()
+            .and_then(|reservation_id| self.pending_page_owners.remove(&reservation_id))
+            .map(|pending| {
+                assert_eq!(
+                    pending.residence,
+                    stream.residence(),
+                    "renderer Page stream must open in its reserved output residence"
+                );
+                pending.owner
+            })
+            .or_else(|| self.pending_unreserved_owners.remove(&stream.residence()));
         if let (Some(registered), Some(discovered)) = (&registered_owner, &discovered_owner) {
             assert_eq!(
                 registered, discovered,
@@ -156,13 +179,67 @@ impl OrderedRendererOutputIngress {
         }
     }
 
-    /// Binds a renderer residence before its first concrete publication.
+    /// Binds the unowned stream generation for a renderer residence before
+    /// its first concrete publication.
     ///
     /// Navigation can construct the renderer agent (and therefore emit
     /// `Opened`) before protocol commit binds that Page reservation to a
     /// target. Conversely, initial-document construction binds the reservation
     /// first. Supporting both orders here keeps transport scheduling from
     /// becoming an ownership contract.
+    pub(crate) fn bind_page_owner_reservation(
+        &mut self,
+        residence: RendererOutputResidenceIdentity,
+        reservation_id: RendererPageOutputOwnerReservationId,
+        owner: RendererPublicationOwner,
+    ) {
+        assert!(
+            matches!(residence, RendererOutputResidenceIdentity::Page { .. }),
+            "only Page output can reserve a protocol target owner"
+        );
+        let mut matched_stream = false;
+        for (stream, state) in &mut self.open_streams {
+            if stream.page_owner_reservation_id() != Some(reservation_id) {
+                continue;
+            }
+            assert_eq!(
+                stream.residence(),
+                residence,
+                "renderer Page output reservation cannot move between residences"
+            );
+            matched_stream = true;
+            if let Some(existing) = &state.owner {
+                assert_eq!(
+                    existing, &owner,
+                    "one renderer output stream cannot change protocol owner"
+                );
+            } else {
+                state.owner = Some(owner.clone());
+            }
+        }
+        if matched_stream {
+            return;
+        }
+        if let Some(existing) = self.pending_page_owners.get(&reservation_id) {
+            assert_eq!(
+                existing.residence, residence,
+                "one Page output reservation cannot register two renderer residences"
+            );
+            assert_eq!(
+                existing.owner, owner,
+                "one Page output reservation cannot register two protocol owners"
+            );
+            return;
+        }
+        self.pending_page_owners.insert(
+            reservation_id,
+            PendingRendererPageOutputOwner { residence, owner },
+        );
+    }
+
+    /// Adopts one unreserved Page stream or validates a redundant commit-time
+    /// binding. New navigation code must use `bind_page_owner_reservation` so
+    /// overlapping provisional Documents cannot alias through Page identity.
     pub(crate) fn bind_owner(
         &mut self,
         residence: RendererOutputResidenceIdentity,
@@ -174,10 +251,6 @@ impl OrderedRendererOutputIngress {
                 continue;
             }
             matched_open_stream = true;
-            assert!(
-                state.pending.is_empty(),
-                "renderer output owner must bind before the first publication"
-            );
             if let Some(existing) = &state.owner {
                 assert_eq!(
                     existing, &owner,
@@ -190,10 +263,29 @@ impl OrderedRendererOutputIngress {
         if matched_open_stream {
             return;
         }
-        if let Some(existing) = self.pending_owners.insert(residence, owner.clone()) {
+
+        let mut matched_exact_reservation = false;
+        for pending in self.pending_page_owners.values() {
+            if pending.residence != residence {
+                continue;
+            }
+            matched_exact_reservation = true;
+            assert_eq!(
+                pending.owner, owner,
+                "commit-time Page owner must match its exact output reservation"
+            );
+        }
+        if matched_exact_reservation {
+            return;
+        }
+
+        if let Some(existing) = self
+            .pending_unreserved_owners
+            .insert(residence, owner.clone())
+        {
             assert_eq!(
                 existing, owner,
-                "one renderer residence cannot register two protocol owners"
+                "one unreserved renderer residence cannot register two protocol owners"
             );
         }
     }
@@ -202,12 +294,18 @@ impl OrderedRendererOutputIngress {
         &mut self,
         owner_local_host_id: RendererOwnerLocalHostId,
         page_id: PageId,
+        reservation_id: RendererPageOutputOwnerReservationId,
     ) {
-        self.pending_owners
-            .remove(&RendererOutputResidenceIdentity::Page {
-                owner_local_host_id,
-                page_id,
-            });
+        if let Some(pending) = self.pending_page_owners.remove(&reservation_id) {
+            assert_eq!(
+                pending.residence,
+                RendererOutputResidenceIdentity::Page {
+                    owner_local_host_id,
+                    page_id,
+                },
+                "renderer Page output reservation release changed residence"
+            );
+        }
     }
 
     pub(crate) fn close(
@@ -265,7 +363,7 @@ impl OrderedRendererOutputIngress {
                  open streams={:?}, closed streams={:?}, pending owner residences={:?}",
                 self.open_streams.keys().collect::<Vec<_>>(),
                 self.closed_streams.keys().collect::<Vec<_>>(),
-                self.pending_owners.keys().collect::<Vec<_>>(),
+                self.pending_page_owners.keys().collect::<Vec<_>>(),
             );
         }
         let state = self
@@ -443,7 +541,7 @@ impl OrderedRendererOutputIngress {
 
     #[cfg(test)]
     fn pending_owner_count(&self) -> usize {
-        self.pending_owners.len()
+        self.pending_page_owners.len() + self.pending_unreserved_owners.len()
     }
 
     #[cfg(test)]
@@ -498,6 +596,10 @@ mod tests {
     }
 
     fn page_owner(page_id: PageId) -> RendererPublicationOwner {
+        page_owner_generation(page_id, 1)
+    }
+
+    fn page_owner_generation(page_id: PageId, generation: u64) -> RendererPublicationOwner {
         let renderer_page = crate::conn::RendererPageResidenceIdentity::new(
             moli_core::RendererOwnerLocalHostId::new_for_testing(1),
             page_id,
@@ -509,7 +611,7 @@ mod tests {
             page_owner: crate::conn::TargetPageResidenceIdentity::new_for_test(
                 "BID-test".to_owned(),
                 Some("TID-test".to_owned()),
-                1,
+                generation,
             ),
         }
     }
@@ -704,7 +806,13 @@ mod tests {
         else {
             unreachable!("this fixture creates a Page stream")
         };
-        ingress.release_page_owner_reservation(owner_local_host_id, page_id);
+        ingress.release_page_owner_reservation(
+            owner_local_host_id,
+            page_id,
+            stream
+                .page_owner_reservation_id()
+                .expect("Page test stream must retain its reservation"),
+        );
 
         let RendererOutputIngressAdmission::Ready(ready) = ingress.admit(publication(stream, 1))
         else {
@@ -719,6 +827,49 @@ mod tests {
     }
 
     #[test]
+    fn stale_page_release_cannot_clear_newer_same_page_owner_reservation() {
+        let page_id = PageId::new_for_testing(14);
+        let stale_stream = RendererOutputStreamIdentity::new_page_for_protocol_test(page_id);
+        let current_stream = RendererOutputStreamIdentity::new_page_for_protocol_test(page_id);
+        let stale_reservation = stale_stream
+            .page_owner_reservation_id()
+            .expect("Page test stream must retain its reservation");
+        let current_reservation = current_stream
+            .page_owner_reservation_id()
+            .expect("Page test stream must retain its reservation");
+        let expected_owner = page_owner_generation(page_id, 1);
+        let mut ingress = OrderedRendererOutputIngress::default();
+        ingress.bind_page_owner_reservation(
+            stale_stream.residence(),
+            stale_reservation,
+            expected_owner.clone(),
+        );
+        ingress.bind_page_owner_reservation(
+            current_stream.residence(),
+            current_reservation,
+            expected_owner.clone(),
+        );
+        assert_eq!(ingress.pending_owner_count(), 2);
+        let RendererOutputResidenceIdentity::Page {
+            owner_local_host_id,
+            ..
+        } = stale_stream.residence()
+        else {
+            unreachable!("this fixture creates Page reservations")
+        };
+        ingress.release_page_owner_reservation(owner_local_host_id, page_id, stale_reservation);
+        assert_eq!(ingress.pending_owner_count(), 1);
+
+        ingress.open(current_stream, None);
+        assert_eq!(ingress.pending_owner_count(), 0);
+        assert!(matches!(
+            ingress.admit(publication(current_stream, 1)),
+            RendererOutputIngressAdmission::Ready(ready)
+                if ready.iter().all(|admitted| admitted.owner == expected_owner)
+        ));
+    }
+
+    #[test]
     fn exact_reservation_release_clears_many_concurrent_page_owners() {
         let mut ingress = OrderedRendererOutputIngress::default();
         let mut reservations = Vec::new();
@@ -726,7 +877,14 @@ mod tests {
         for raw_page_id in 20..=275 {
             let page_id = PageId::new_for_testing(raw_page_id);
             let stream = RendererOutputStreamIdentity::new_page_for_protocol_test(page_id);
-            ingress.bind_owner(stream.residence(), page_owner(page_id));
+            let reservation_id = stream
+                .page_owner_reservation_id()
+                .expect("Page test stream must retain its reservation");
+            ingress.bind_page_owner_reservation(
+                stream.residence(),
+                reservation_id,
+                page_owner(page_id),
+            );
             let RendererOutputResidenceIdentity::Page {
                 owner_local_host_id,
                 ..
@@ -734,7 +892,7 @@ mod tests {
             else {
                 unreachable!("this fixture creates Page reservations")
             };
-            reservations.push((owner_local_host_id, page_id));
+            reservations.push((owner_local_host_id, page_id, reservation_id));
         }
         assert_eq!(
             ingress.pending_owner_count(),
@@ -742,8 +900,8 @@ mod tests {
             "concurrent navigation reservations for one target remain independently addressable"
         );
 
-        for (owner_local_host_id, page_id) in reservations {
-            ingress.release_page_owner_reservation(owner_local_host_id, page_id);
+        for (owner_local_host_id, page_id, reservation_id) in reservations {
+            ingress.release_page_owner_reservation(owner_local_host_id, page_id, reservation_id);
         }
         assert_eq!(ingress.pending_owner_count(), 0);
     }

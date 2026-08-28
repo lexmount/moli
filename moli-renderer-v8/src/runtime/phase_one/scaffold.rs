@@ -88,6 +88,12 @@ async fn run_phase_one_creation_session_on_execution_context(
     scope_phase_one_execution_context_backend(&local_executor, async move {
         debug_assert_phase_one_execution_context_for(&run_executor, operation);
         let mut runtime = runtime;
+        if runtime.run_deferred_document_start_scripts()? {
+            return Ok(ParseTimeOwnerCompletion::TriggeredNavigation {
+                page_vm: Box::new(runtime.page_vm),
+                stage: runtime.stage,
+            });
+        }
         let main_parser_continuation_is_admitted = runtime
             .page_vm
             .vm()

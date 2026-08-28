@@ -518,9 +518,11 @@ async fn get_request_post_data_returns_main_document_navigation_post_body() {
         request_body: Some("username=alice&pw=s3cret".to_owned()),
         request_body_bytes: Some(b"username=alice&pw=s3cret".to_vec()),
         request_headers: Vec::new(),
+        navigation_history_entry_seed: None,
         request_load_policy: crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
         timestamp: 0.0,
         source_document_security: Default::default(),
+        service_worker_clients_open_window_continuation: None,
     };
 
     let mut events = Vec::new();
@@ -607,9 +609,11 @@ async fn get_request_post_data_uses_text_projection_while_bidi_collector_keeps_t
         request_body: Some(multipart_text.to_owned()),
         request_body_bytes: Some(transport_bytes.clone()),
         request_headers: Vec::new(),
+        navigation_history_entry_seed: None,
         request_load_policy: crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
         timestamp: 0.0,
         source_document_security: Default::default(),
+        service_worker_clients_open_window_continuation: None,
     };
 
     let mut events = Vec::new();

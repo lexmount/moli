@@ -313,6 +313,7 @@ mod tests {
                 None,
                 r#"{"id":1,"method":"Runtime.getProperties","params":{"objectId":"1"}}"#.to_owned(),
             ),
+            cancellation: None,
         });
         let error = match result {
             Ok(_) => panic!("raw owner Inspector admission must be rejected"),

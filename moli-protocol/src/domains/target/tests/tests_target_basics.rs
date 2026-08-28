@@ -1182,7 +1182,7 @@ async fn same_context_targets_replay_only_their_own_pre_document_binding_and_pre
     .await;
     ctx.expect_result(10396, json!({}), None);
 
-    ctx.process_async(json!({
+    ctx.process_and_wait_for_response_async(json!({
         "id": 10397,
         "method": "Page.navigate",
         "sessionId": "SID-active",
@@ -1246,7 +1246,7 @@ async fn same_context_targets_replay_only_their_own_pre_document_binding_and_pre
     .await;
     ctx.expect_result(10399, json!({}), None);
 
-    ctx.process_async(json!({
+    ctx.process_and_wait_for_response_async(json!({
         "id": 10400,
         "method": "Page.navigate",
         "sessionId": second_session_id,
@@ -1402,7 +1402,7 @@ async fn same_context_targets_materialize_only_their_own_utility_pre_document_bi
     .await;
     ctx.expect_result(10408, json!({}), None);
 
-    ctx.process_async(json!({
+    ctx.process_and_wait_for_response_async(json!({
         "id": 10409,
         "method": "Page.navigate",
         "sessionId": "SID-active",
@@ -1507,7 +1507,7 @@ async fn same_context_targets_materialize_only_their_own_utility_pre_document_bi
     .await;
     ctx.expect_result(10412, json!({}), None);
 
-    ctx.process_async(json!({
+    ctx.process_and_wait_for_response_async(json!({
         "id": 10413,
         "method": "Page.navigate",
         "sessionId": second_session_id,

@@ -190,6 +190,25 @@ impl NativeBridgeBindings {
         v8::Local::new(scope, &self.window_global_template)
     }
 
+    /// Builds per-Context bridge bindings while the owning isolate is already
+    /// entered by an outer native callback.
+    ///
+    /// Related auxiliary Pages share the opener's script-agent isolate but
+    /// require independent wrapper templates for their own `JsContextHost`.
+    /// Reusing only the isolate-level Window templates is intentional; every
+    /// mutable bridge/cache object below that boundary is rebuilt per realm.
+    pub(crate) fn build_peer_in_scope(&self, scope: &mut v8::PinScope<'_, '_>) -> Self {
+        let window_global_template = v8::Local::new(scope, &self.window_global_template);
+        let cross_origin_window_global_template =
+            v8::Local::new(scope, &self.cross_origin_window_global_template);
+        Self::build(
+            scope,
+            self.isolate_ptr,
+            window_global_template,
+            cross_origin_window_global_template,
+        )
+    }
+
     /// Install the native bridge global object with two internal fields:
     /// - field 0: `*mut JsContextHost` (for `runtime_ptr_from_object` compatibility)
     /// - field 1: `*const RefCell<JsContextHost>` from the per-context bridge-ref token
@@ -275,12 +294,12 @@ impl NativeBridgeBindings {
             window::sync_window_wrapper_function_identity(scope, wrapper);
             return;
         }
-        let BridgeHandle::Node(node_handle) = handle else {
+        let Some(node_handle) = handle.dom_handle() else {
             return;
         };
         let child_handle = {
             let host = unsafe { &*host_ptr };
-            let Some(document_handle) = host.dom_host().owner_document_handle(*node_handle) else {
+            let Some(document_handle) = host.dom_host().owner_document_handle(node_handle) else {
                 return;
             };
             let Some(child_handle) =
@@ -288,12 +307,17 @@ impl NativeBridgeBindings {
             else {
                 return;
             };
+            if host.child_browsing_context_document_handle(child_handle) != Some(document_handle) {
+                return;
+            }
             child_handle
         };
-        #[cfg(test)]
-        record_wrapper_owner_realm_custom_element_check_for_test();
-        if unsafe { &*host_ptr }.custom_element_handle_is_upgraded(*node_handle) {
-            return;
+        if matches!(handle, BridgeHandle::Node(_)) {
+            #[cfg(test)]
+            record_wrapper_owner_realm_custom_element_check_for_test();
+            if unsafe { &*host_ptr }.custom_element_handle_is_upgraded(node_handle) {
+                return;
+            }
         }
         let prototype_name = prototype_name_for_handle(host_ptr, handle);
         if let Some(prototype) = unsafe { &mut *host_ptr }
@@ -309,28 +333,6 @@ impl NativeBridgeBindings {
         }
     }
 
-    pub(super) fn instantiate_window_shell<'s, 'i>(
-        &mut self,
-        scope: &mut v8::PinScope<'s, 'i>,
-        host_ptr: *mut JsContextHost,
-    ) -> v8::Local<'s, v8::Object> {
-        let wrapper = self
-            .window_wrapper_template()
-            .new_instance(scope)
-            .expect("failed to instantiate synthetic Window wrapper");
-        let host_external = v8::External::new(scope, host_ptr as *mut c_void);
-        assert!(
-            wrapper.set_internal_field(0, host_external.into()),
-            "synthetic Window wrapper must expose its runtime field"
-        );
-        assert!(
-            wrapper.set_internal_field(1, v8::Number::new(scope, 0.0).into()),
-            "synthetic Window wrapper must expose its identity field"
-        );
-        set_named_constructor_prototype(scope, wrapper, "Window");
-        wrapper
-    }
-
     pub(super) fn instantiate_window_proxy_shell<'s, 'i>(
         &mut self,
         scope: &mut v8::PinScope<'s, 'i>,
@@ -340,6 +342,30 @@ impl NativeBridgeBindings {
         // properties, especially non-configurable Window.location, before
         // its cross-origin accessors are installed.
         let global_template = v8::Local::new(scope, &self.cross_origin_window_global_template);
+        let context = v8::Context::new(
+            scope,
+            v8::ContextOptions {
+                global_template: Some(global_template),
+                ..Default::default()
+            },
+        );
+        // Keep V8's unique default token. The shell is a restricted facade,
+        // not a same-origin realm alias; its owner installs the host/handle
+        // slots and access surface before exposing the global proxy.
+        let global = context.global(scope);
+        (global, v8::Global::new(scope, context))
+    }
+
+    pub(super) fn instantiate_same_origin_window_proxy_shell<'s, 'i>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, 'i>,
+        host_ptr: *mut JsContextHost,
+    ) -> (v8::Local<'s, v8::Object>, v8::Global<v8::Context>) {
+        // An accepted same-agent popup needs a real V8 global proxy before
+        // protocol has materialized its auxiliary Page. A temporary context
+        // owns that proxy synchronously; the related Page later detaches it
+        // and supplies the exact object as ContextOptions::global_object.
+        let global_template = v8::Local::new(scope, &self.window_global_template);
         let parent_security_token = scope.get_current_context().get_security_token(scope);
         let context = v8::Context::new(
             scope,
@@ -349,6 +375,18 @@ impl NativeBridgeBindings {
             },
         );
         context.set_security_token(parent_security_token);
+        let host_lifecycle = unsafe { &*host_ptr }.context_host_lifecycle_handle();
+        crate::util::install_context_host_pointer_slot(context, host_ptr, host_lifecycle);
+        {
+            let facade_scope = &mut v8::ContextScope::new(scope, context);
+            let global = context.global(facade_scope);
+            crate::context_bootstrap::exposed_interfaces::capture_eager_intrinsic_interfaces(
+                facade_scope,
+                global,
+                crate::context_bootstrap::exposed_interfaces::RealmKind::Window,
+            )
+            .expect("same-origin WindowProxy facade must initialize intrinsic interfaces");
+        }
         let global = context.global(scope);
         (global, v8::Global::new(scope, context))
     }

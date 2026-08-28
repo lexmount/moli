@@ -134,6 +134,10 @@ impl WindowOpenFeatures {
         self.noopener
     }
 
+    pub(super) fn suppresses_referrer(&self) -> bool {
+        self.noreferrer
+    }
+
     pub(super) fn enabled_feature_strings(&self) -> Vec<String> {
         let mut enabled = Vec::new();
         if let Some(x) = self.x {
@@ -247,5 +251,7 @@ mod tests {
                 .map(String::as_str),
             Some("noopener")
         );
+        assert!(!WindowOpenFeatures::parse("noopener").suppresses_referrer());
+        assert!(WindowOpenFeatures::parse("noreferrer").suppresses_referrer());
     }
 }

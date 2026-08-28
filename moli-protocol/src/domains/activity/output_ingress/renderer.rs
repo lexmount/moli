@@ -55,8 +55,13 @@ pub(crate) async fn ingest_renderer_output_transport_async(
         RendererOutputTransportMessage::PageReservationReleased {
             owner_local_host_id,
             page_id,
+            reservation_id,
         } => {
-            conn.release_renderer_page_output_owner_reservation(owner_local_host_id, page_id);
+            conn.release_renderer_page_output_owner_reservation(
+                owner_local_host_id,
+                page_id,
+                reservation_id,
+            );
         }
         RendererOutputTransportMessage::CursorLeaseDeclared { cursor, lease_id } => {
             conn.declare_renderer_output_cursor_lease(cursor, lease_id);
@@ -121,10 +126,18 @@ async fn ingest_renderer_output_publication(
     match route {
         RendererPublicationRoute::AttachedSession {
             session_id,
+            owner_route,
             projection,
         } => {
+            // Session ids are frontend-local readable identifiers and can be
+            // reused by another live browser context. Keep protocol delivery
+            // attached to the original session while all owner/currentness
+            // lookups execute against the exact route frozen by the renderer
+            // Page stream.
+            let mut route_scope =
+                conn.scoped_session_owner_route_override(session_id.clone(), owner_route);
             project_renderer_output_records_for_route(
-                conn,
+                route_scope.conn_mut(),
                 Some(&session_id),
                 records,
                 cursor,
@@ -223,10 +236,8 @@ async fn project_renderer_output_records_for_route(
                     PreparedProtocolOutputs::from_renderer_observation(
                         conn,
                         session_id,
-                        cursor.stream().renderer_agent(),
                         &observation,
                     )
-                    .await
                 };
                 barriers
                     .route_publication_outputs(

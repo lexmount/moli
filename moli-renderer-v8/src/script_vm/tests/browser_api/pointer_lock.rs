@@ -75,9 +75,7 @@ async fn activated_pointer_lock_reports_unsupported_after_observable_option_conv
         "<!doctype html><html><body></body></html>",
     );
 
-    vm._context_host
-        .borrow_mut()
-        .begin_protocol_user_gesture_activation();
+    vm._context_host.borrow_mut().notify_user_activation();
     let result = vm.eval(
         r#"
 (() => {
@@ -103,9 +101,6 @@ async fn activated_pointer_lock_reports_unsupported_after_observable_option_conv
 })()
 "#,
     );
-    vm._context_host
-        .borrow_mut()
-        .end_protocol_user_gesture_activation();
     assert_eq!(
         result.expect("activated pointer lock request should evaluate"),
         r#"{"optionReads":1,"target":null,"exitUndefined":true}"#,

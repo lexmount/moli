@@ -12,8 +12,7 @@ use crate::{
         CALLBACK_ERROR_WINDOW_HANDLE_SLOT, OwnerDispatchScope, ResourceTimingBufferId,
         RuntimeObservableContextToken, WindowExecutionContextBinding,
         WindowExecutionContextIdentity, WindowExecutionContextOwner, active_child_window_handle,
-        active_lightweight_popup_id, current_runtime_observable_context_token,
-        lightweight_popup_id_from_window,
+        current_runtime_observable_context_token,
     },
     script_provenance::CompiledStringProvenance,
     util::{
@@ -900,30 +899,6 @@ fn scheduled_timer_owner_for_target<'s>(
     let binding =
         host.clone_window_execution_context_binding(scope, execution_context_owner, dispatch_scope);
 
-    // Lightweight popups share the renderer isolate and install their context
-    // lazily. Capture the popup object's exact creation context before queueing.
-    let binding =
-        if binding.is_none() && matches!(dispatch_scope, OwnerDispatchScope::LightweightPopup(_)) {
-            let context = receiver
-                .and_then(|receiver| receiver.get_creation_context(scope))
-                .unwrap_or(fallback_context);
-            let realm_token = timer_context_realm_token(scope, context)?;
-            let binding = WindowExecutionContextBinding::new(
-                execution_context_owner,
-                dispatch_scope,
-                realm_token,
-                v8::Global::new(scope, context),
-            );
-            host.register_window_execution_context(WindowExecutionContextBinding::new(
-                execution_context_owner,
-                dispatch_scope,
-                realm_token,
-                v8::Global::new(scope, context),
-            ));
-            Some(binding)
-        } else {
-            binding
-        };
     Some(ScheduledTimerOwner::Window(
         ScheduledWindowTimerTarget::new(execution_context_owner, dispatch_scope, binding),
     ))
@@ -940,8 +915,8 @@ fn timer_target_dispatch_scope<'s>(
         return dispatch_scope;
     }
     let global = fallback_context.global(scope);
-    timer_target_dispatch_scope_from_object(scope, global)
-        .or_else(|| active_lightweight_popup_id(scope).map(OwnerDispatchScope::LightweightPopup))
+    let dispatch_scope = timer_target_dispatch_scope_from_object(scope, global);
+    dispatch_scope
         .or_else(|| active_child_window_handle(scope).map(OwnerDispatchScope::Child))
         .unwrap_or(OwnerDispatchScope::Top)
 }
@@ -950,9 +925,6 @@ fn timer_target_dispatch_scope_from_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<OwnerDispatchScope> {
-    if let Some(popup_id) = lightweight_popup_id_from_window(scope, object) {
-        return Some(OwnerDispatchScope::LightweightPopup(popup_id));
-    }
     if let Some(child_handle) = get_private_value(scope, object, CHILD_BROWSING_CONTEXT_HANDLE_SLOT)
         .and_then(|value| parse_callback_error_window_handle(scope, value))
     {

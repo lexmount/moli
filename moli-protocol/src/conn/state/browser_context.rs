@@ -30,7 +30,6 @@ use super::{
         EmulatedNetworkConditions,
     },
     identity::TargetIdentityState,
-    javascript_dialog::TargetPreparedJavaScriptDialog,
     page_slot::{DocumentNavigationToken, DocumentStartScript},
     parking::{TargetOwnerState, TargetParkingStateStore},
     service_worker_target::ServiceWorkerTargetState,
@@ -56,7 +55,6 @@ pub struct BrowserContext {
     pub(crate) target_can_access_opener: HashSet<String>,
     pub target_window_names: HashMap<String, String>,
     pub target_popup_ids: HashMap<String, u64>,
-    pending_popup_javascript_dialogs: HashMap<u64, Vec<TargetPreparedJavaScriptDialog>>,
     pub background_targets: Vec<super::parking::BackgroundTarget>,
     pub(crate) shared_worker_targets: BTreeMap<SharedWorkerInstanceId, SharedWorkerTargetState>,
     pub(crate) dedicated_worker_targets: BTreeMap<u64, DedicatedWorkerTargetState>,
@@ -383,38 +381,6 @@ fn usize_to_u64_saturating(value: usize) -> u64 {
 }
 
 impl BrowserContext {
-    /// Parks a dialog only until the matching lightweight-popup target obtains
-    /// a concrete protocol attachment.
-    ///
-    /// This is not a generic activity backlog: every value owns one popup id
-    /// and one one-shot renderer completion. Removing the browser context or
-    /// forgetting the popup mapping drops and dismisses the value.
-    pub(crate) fn park_pending_popup_javascript_dialog(
-        &mut self,
-        dialog: TargetPreparedJavaScriptDialog,
-    ) {
-        let popup_id = dialog
-            .popup_id()
-            .expect("only lightweight-popup dialogs may enter popup attachment residence");
-        self.pending_popup_javascript_dialogs
-            .entry(popup_id)
-            .or_default()
-            .push(dialog);
-    }
-
-    pub(crate) fn take_pending_popup_javascript_dialogs(
-        &mut self,
-        popup_id: u64,
-    ) -> Vec<TargetPreparedJavaScriptDialog> {
-        self.pending_popup_javascript_dialogs
-            .remove(&popup_id)
-            .unwrap_or_default()
-    }
-
-    pub(crate) fn dismiss_pending_popup_javascript_dialogs(&mut self, popup_id: u64) {
-        drop(self.take_pending_popup_javascript_dialogs(popup_id));
-    }
-
     pub fn new(id: String) -> Self {
         Self::new_with_initial_cookies(id, Vec::new())
     }
@@ -509,7 +475,6 @@ impl BrowserContext {
             target_can_access_opener: HashSet::new(),
             target_window_names: HashMap::new(),
             target_popup_ids: HashMap::new(),
-            pending_popup_javascript_dialogs: HashMap::new(),
             background_targets: Vec::new(),
             shared_worker_targets: BTreeMap::new(),
             dedicated_worker_targets: BTreeMap::new(),
@@ -752,6 +717,25 @@ impl BrowserContext {
             target
                 .loaded_page()
                 .is_some_and(|page| page.renderer_owner_local_host_id() == owner_local_host_id)
+                .then(|| target.target_id().to_owned())
+        })
+    }
+
+    pub(crate) fn target_id_for_renderer_popup_target(
+        &self,
+        resolved_target: moli_core::page::RendererResolvedPopupTarget,
+    ) -> Option<String> {
+        let matches = |page: &moli_core::page::Page| {
+            page.renderer_owner_local_host_id() == resolved_target.owner_local_host_id()
+                && page.renderer_page_id() == resolved_target.page_id()
+        };
+        if self.loaded_page().is_some_and(matches) {
+            return self.target_id.clone();
+        }
+        self.background_targets.iter().find_map(|target| {
+            target
+                .loaded_page()
+                .is_some_and(matches)
                 .then(|| target.target_id().to_owned())
         })
     }

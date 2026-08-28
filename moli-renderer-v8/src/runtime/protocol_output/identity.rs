@@ -9,6 +9,34 @@ use crate::runtime::{PageId, RendererBrowserContextRuntimeId, RendererOwnerLocal
 
 static NEXT_RENDERER_OUTPUT_STREAM_EPOCH: AtomicU64 = AtomicU64::new(1);
 static NEXT_RENDERER_OUTPUT_FENCE_LEASE_ID: AtomicU64 = AtomicU64::new(1);
+static NEXT_RENDERER_PAGE_OUTPUT_OWNER_RESERVATION_ID: AtomicU64 = AtomicU64::new(1);
+
+/// Exact protocol-owner reservation allocated before one Page bootstrap.
+///
+/// Several provisional Documents can reuse the same logical renderer Page
+/// while Fetch interception or navigation cancellation delays their transport
+/// controls. This identity prevents an older bootstrap's release marker from
+/// clearing the owner reserved for a newer Document on that Page.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct RendererPageOutputOwnerReservationId(NonZeroU64);
+
+impl RendererPageOutputOwnerReservationId {
+    pub(crate) fn allocate() -> Self {
+        let raw = NEXT_RENDERER_PAGE_OUTPUT_OWNER_RESERVATION_ID
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                current.checked_add(1)
+            })
+            .expect("renderer Page output-owner reservation id exhausted");
+        Self(
+            NonZeroU64::new(raw)
+                .expect("renderer Page output-owner reservation allocator returned zero"),
+        )
+    }
+
+    pub fn get(self) -> u64 {
+        self.0.get()
+    }
+}
 
 /// Distinguishes two lifetimes that reuse the same logical renderer residence.
 ///
@@ -58,6 +86,7 @@ pub struct RendererOutputStreamIdentity {
     residence: RendererOutputResidenceIdentity,
     renderer_agent: RendererDevToolsAgentToken,
     epoch: RendererOutputStreamEpoch,
+    page_owner_reservation_id: Option<RendererPageOutputOwnerReservationId>,
 }
 
 impl RendererOutputStreamIdentity {
@@ -65,6 +94,7 @@ impl RendererOutputStreamIdentity {
         owner_local_host_id: RendererOwnerLocalHostId,
         page_id: PageId,
         renderer_agent: RendererDevToolsAgentToken,
+        page_owner_reservation_id: RendererPageOutputOwnerReservationId,
     ) -> Self {
         Self {
             residence: RendererOutputResidenceIdentity::Page {
@@ -73,6 +103,7 @@ impl RendererOutputStreamIdentity {
             },
             renderer_agent,
             epoch: RendererOutputStreamEpoch::allocate(),
+            page_owner_reservation_id: Some(page_owner_reservation_id),
         }
     }
 
@@ -87,6 +118,7 @@ impl RendererOutputStreamIdentity {
             },
             renderer_agent: RendererDevToolsAgentToken::allocate(),
             epoch: RendererOutputStreamEpoch::allocate(),
+            page_owner_reservation_id: None,
         }
     }
 
@@ -101,6 +133,7 @@ impl RendererOutputStreamIdentity {
             },
             renderer_agent: RendererDevToolsAgentToken::allocate(),
             epoch: RendererOutputStreamEpoch::allocate(),
+            page_owner_reservation_id: None,
         }
     }
 
@@ -110,6 +143,7 @@ impl RendererOutputStreamIdentity {
             RendererOwnerLocalHostId::new_for_testing(1),
             page_id,
             RendererDevToolsAgentToken::allocate(),
+            RendererPageOutputOwnerReservationId::allocate(),
         )
     }
 
@@ -131,6 +165,10 @@ impl RendererOutputStreamIdentity {
 
     pub fn epoch(self) -> RendererOutputStreamEpoch {
         self.epoch
+    }
+
+    pub fn page_owner_reservation_id(self) -> Option<RendererPageOutputOwnerReservationId> {
+        self.page_owner_reservation_id
     }
 }
 

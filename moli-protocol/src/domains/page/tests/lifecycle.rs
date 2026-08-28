@@ -4,6 +4,50 @@ use crate::domains::page::{
     PageScreencastCaptureCompletion, PageScreencastCaptureStart, PageScreencastSubscriptionStatus,
 };
 
+#[tokio::test(flavor = "multi_thread")]
+async fn stale_window_close_termination_cannot_retire_current_page_residence() {
+    let mut ctx = TestContext::new();
+    load_bc_with_session(
+        &mut ctx,
+        "BID-stale-window-close",
+        "TID-stale-window-close",
+        "SID-stale-window-close",
+        "about:blank",
+    );
+    ensure_initial_document_for_session(&mut ctx, Some("SID-stale-window-close")).await;
+    let current = ctx
+        .conn
+        .target_page_residence_identity_for_session(Some("SID-stale-window-close"))
+        .expect("current Page residence");
+    let stale_attachment_id = current.page_attachment_id().get() + 1;
+    let stale = crate::conn::TargetPageResidenceIdentity::new_for_test(
+        current.browser_context_id().to_owned(),
+        current.target_id().map(str::to_owned),
+        stale_attachment_id,
+    );
+    let action = crate::domains::page::PageTargetTerminationOwnerAction::new_for_window_close(
+        crate::conn::CommandOwnerScope::capture(&ctx.conn, Some("SID-stale-window-close")),
+        "TID-stale-window-close".to_owned(),
+        stale,
+    );
+
+    let (events, scheduler_events) =
+        crate::domains::page::complete_page_target_termination_owner_action_async(
+            &mut ctx.conn,
+            action,
+        )
+        .await
+        .into_protocol_event_parts();
+    assert!(events.is_empty());
+    assert!(scheduler_events.is_empty());
+    assert_eq!(
+        ctx.conn
+            .target_page_residence_identity_for_session(Some("SID-stale-window-close")),
+        Some(current),
+        "the final close continuation must recheck its exact Page generation"
+    );
+}
+
 #[test]
 fn child_frame_security_identity_matches_chromium_cdp_url_projection() {
     assert_eq!(
@@ -2920,6 +2964,258 @@ async fn crash_aborts_paused_response_stage_navigation() {
     server.abort();
 }
 #[tokio::test(flavor = "multi_thread")]
+async fn page_close_beforeunload_reject_then_accepts_and_unloads_once() {
+    let mut ctx = TestContext::new();
+    load_bc_with_session(
+        &mut ctx,
+        "BID-beforeunload-close",
+        "TID-beforeunload-close",
+        "SID-beforeunload-close",
+        "about:blank",
+    );
+    let page = ctx
+        .conn
+        .load_page_via_runtime_async("data:text/html,<body>beforeunload close</body>")
+        .await
+        .expect("page should load");
+    ctx.conn
+        .browser_context
+        .as_mut()
+        .unwrap()
+        .active_target
+        .runtime_slot
+        .set_loaded_page_for_test(page);
+
+    ctx.process_async(json!({
+        "id": 2380,
+        "method": "Runtime.enable",
+        "sessionId": "SID-beforeunload-close"
+    }))
+    .await;
+    ctx.expect_result(2380, json!({}), Some("SID-beforeunload-close"));
+    ctx.process_async(json!({
+        "id": 2381,
+        "method": "Runtime.evaluate",
+        "sessionId": "SID-beforeunload-close",
+        "params": {
+            "expression": r#"(() => {
+  globalThis.__closeLifecycle = { beforeunload: 0, pagehide: 0, unload: 0 };
+  onbeforeunload = event => {
+    __closeLifecycle.beforeunload++;
+    console.log(`close-beforeunload-${__closeLifecycle.beforeunload}`, document.body);
+    event.preventDefault();
+    event.returnValue = "stay";
+    return "stay";
+  };
+  addEventListener("pagehide", () => {
+    __closeLifecycle.pagehide++;
+    console.log(`close-pagehide-${__closeLifecycle.pagehide}`);
+  });
+  addEventListener("unload", () => {
+    __closeLifecycle.unload++;
+    console.log(`close-unload-${__closeLifecycle.unload}`);
+  });
+  return navigator.userActivation.hasBeenActive;
+})()"#,
+            "returnByValue": true,
+            "userGesture": true
+        }
+    }))
+    .await;
+    let activation = take_response_by_id(&mut ctx, 2381);
+    assert_eq!(activation["result"]["result"]["value"], json!(true));
+    ctx.sent.clear();
+
+    ctx.process_async(json!({
+        "id": 2382,
+        "method": "Page.close",
+        "sessionId": "SID-beforeunload-close"
+    }))
+    .await;
+    let first_close_messages = ctx.take_all();
+    let first_dialog_index = first_close_messages
+        .iter()
+        .position(|message| {
+            message["method"] == json!("Page.javascriptDialogOpening")
+                && message["params"]["type"] == json!("beforeunload")
+        })
+        .unwrap_or_else(|| {
+            panic!("first Page.close should open beforeunload: {first_close_messages:?}")
+        });
+    let first_response_index = first_close_messages
+        .iter()
+        .position(|message| message["id"] == json!(2382))
+        .unwrap_or_else(|| panic!("first Page.close should resolve: {first_close_messages:?}"));
+    assert!(
+        first_dialog_index < first_response_index,
+        "the dialog prefix fence must precede the Page.close response"
+    );
+    let first_beforeunload_console = first_close_messages
+        .iter()
+        .find(|message| {
+            message["method"] == json!("Runtime.consoleAPICalled")
+                && message["params"]["args"][0]["value"] == json!("close-beforeunload-1")
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "first Page.close should publish the beforeunload console event: \
+                 {first_close_messages:?}"
+            )
+        });
+    assert_eq!(
+        first_beforeunload_console["params"]["args"][1]["subtype"],
+        json!("node"),
+        "renderer publication must resolve DOM RemoteObject metadata without a Page round trip: \
+         {first_beforeunload_console:?}"
+    );
+    assert!(
+        ctx.conn
+            .browser_context
+            .as_ref()
+            .is_some_and(|browser_context| browser_context.has_active_target())
+    );
+
+    ctx.process_async(json!({
+        "id": 2383,
+        "method": "Page.handleJavaScriptDialog",
+        "sessionId": "SID-beforeunload-close",
+        "params": { "accept": false }
+    }))
+    .await;
+    ctx.expect_result(2383, json!({}), Some("SID-beforeunload-close"));
+    ctx.process_async(json!({
+        "id": 2384,
+        "method": "Runtime.evaluate",
+        "sessionId": "SID-beforeunload-close",
+        "params": {
+            "expression": "JSON.stringify([window.closed, __closeLifecycle.beforeunload, __closeLifecycle.pagehide, __closeLifecycle.unload])",
+            "returnByValue": true
+        }
+    }))
+    .await;
+    let rejected_state = take_response_by_id(&mut ctx, 2384);
+    assert_eq!(
+        rejected_state["result"]["result"]["value"],
+        json!("[false,1,0,0]")
+    );
+    ctx.sent.clear();
+
+    ctx.process_async(json!({
+        "id": 2385,
+        "method": "Page.close",
+        "sessionId": "SID-beforeunload-close"
+    }))
+    .await;
+    assert!(ctx.sent.iter().any(|message| {
+        message["method"] == json!("Page.javascriptDialogOpening")
+            && message["params"]["type"] == json!("beforeunload")
+    }));
+    ctx.process_async(json!({
+        "id": 2386,
+        "method": "Page.handleJavaScriptDialog",
+        "sessionId": "SID-beforeunload-close",
+        "params": { "accept": true }
+    }))
+    .await;
+    ctx.wait_until_scheduler_state("accepted beforeunload close teardown", |conn| {
+        conn.browser_context
+            .as_ref()
+            .is_some_and(|browser_context| !browser_context.has_active_target())
+    })
+    .await;
+
+    let messages = ctx.take_all();
+    let beforeunload = console_message_index(&messages, "close-beforeunload-2");
+    let pagehide = console_message_index(&messages, "close-pagehide-1");
+    let unload = console_message_index(&messages, "close-unload-1");
+    let detached = messages
+        .iter()
+        .position(|message| message["method"] == json!("Target.detachedFromTarget"))
+        .unwrap_or_else(|| panic!("accepted close should detach the target: {messages:?}"));
+    assert!(beforeunload < pagehide && pagehide < unload && unload < detached);
+    assert_eq!(
+        messages
+            .iter()
+            .filter(|message| {
+                message["method"] == json!("Runtime.consoleAPICalled")
+                    && message["params"]["args"][0]["value"]
+                        .as_str()
+                        .is_some_and(|value| value.starts_with("close-pagehide-"))
+            })
+            .count(),
+        1
+    );
+    assert_eq!(
+        messages
+            .iter()
+            .filter(|message| {
+                message["method"] == json!("Runtime.consoleAPICalled")
+                    && message["params"]["args"][0]["value"]
+                        .as_str()
+                        .is_some_and(|value| value.starts_with("close-unload-"))
+            })
+            .count(),
+        1
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn page_close_ignores_beforeunload_cancellation_without_sticky_activation() {
+    let mut ctx = TestContext::new();
+    load_bc_with_session(
+        &mut ctx,
+        "BID-beforeunload-no-activation",
+        "TID-beforeunload-no-activation",
+        "SID-beforeunload-no-activation",
+        "about:blank",
+    );
+    let page = ctx
+        .conn
+        .load_page_via_runtime_async("data:text/html,<body>no activation close</body>")
+        .await
+        .expect("page should load");
+    ctx.conn
+        .browser_context
+        .as_mut()
+        .unwrap()
+        .active_target
+        .runtime_slot
+        .set_loaded_page_for_test(page);
+    ctx.process_async(json!({
+        "id": 2390,
+        "method": "Runtime.evaluate",
+        "sessionId": "SID-beforeunload-no-activation",
+        "params": {
+            "expression": "onbeforeunload = event => { event.preventDefault(); event.returnValue = 'stay'; return 'stay'; }; navigator.userActivation.hasBeenActive",
+            "returnByValue": true
+        }
+    }))
+    .await;
+    let setup = take_response_by_id(&mut ctx, 2390);
+    assert_eq!(setup["result"]["result"]["value"], json!(false));
+    ctx.sent.clear();
+
+    ctx.process_async(json!({
+        "id": 2391,
+        "method": "Page.close",
+        "sessionId": "SID-beforeunload-no-activation"
+    }))
+    .await;
+    ctx.wait_until_scheduler_state("activation-free Page.close teardown", |conn| {
+        conn.browser_context
+            .as_ref()
+            .is_some_and(|browser_context| !browser_context.has_active_target())
+    })
+    .await;
+    assert!(
+        ctx.sent
+            .iter()
+            .all(|message| { message["method"] != json!("Page.javascriptDialogOpening") })
+    );
+    ctx.expect_result(2391, json!({}), Some("SID-beforeunload-no-activation"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn close_clears_loaded_page_state_and_emits_detached_events() {
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
@@ -3503,12 +3799,13 @@ async fn close_command_background_events_keep_target_detached_sidecar() {
     // only then may this owner action retire the session route and materialize
     // the detach sidecar. Exercise that real scheduler boundary instead of
     // expecting the old command-local destructive drain.
-    let (mut termination_events, nested_scheduler_events) = ctx
+    let (mut termination_events, nested_scheduler_events, renderer_output_predecessor) = ctx
         .conn
         .complete_ready_protocol_scheduler_work_turn(work)
         .await
         .into_protocol_event_parts();
     assert!(nested_scheduler_events.is_empty());
+    assert!(renderer_output_predecessor.is_none());
     events.append(&mut termination_events);
 
     let response = events

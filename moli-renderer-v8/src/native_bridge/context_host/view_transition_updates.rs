@@ -140,10 +140,6 @@ impl JsContextHost {
                 self.ensure_prebootstrapped_child_default_context(scope, handle)
                     .ok()?;
             }
-            OwnerDispatchScope::LightweightPopup(popup_id) => {
-                self.ensure_lightweight_popup_execution_context(scope, popup_id)
-                    .then_some(())?;
-            }
         }
         self.window_execution_context(scope, target.owner(), target.dispatch_scope())
             .map(|(_, context)| context)

@@ -2,9 +2,6 @@ use crate::dom::native::NativeNodeId;
 use crate::frame_owner_model::{
     ChildDocumentModuleFetchTarget, ChildDocumentNavigationFetchTarget, FrameDocumentTaskOwner,
 };
-use crate::native_bridge::{
-    LightweightPopupClassicScriptFetchTarget, LightweightPopupDocumentFetchTarget,
-};
 use crate::runtime::RendererDocumentToken;
 use crate::types::AsyncSubresourceFetchEventTarget;
 use crate::types::DocumentWriteExternalScriptFetchTarget;
@@ -29,8 +26,6 @@ pub(crate) enum RendererPageResourceCompletionLocalOwner {
     },
     ChildModuleFetch(ChildDocumentModuleFetchTarget),
     ChildDocumentNavigation(ChildDocumentNavigationFetchTarget),
-    PopupDocumentLoad(LightweightPopupDocumentFetchTarget),
-    PopupClassicScript(LightweightPopupClassicScriptFetchTarget),
 }
 
 /// Exact owner of a completion stored in the stable Page queue.
@@ -156,26 +151,6 @@ impl RendererPageResourceCompletionOwner {
         Self {
             root_document,
             local_owner: RendererPageResourceCompletionLocalOwner::ChildDocumentNavigation(target),
-        }
-    }
-
-    pub(crate) fn popup_document_load(
-        root_document: RendererDocumentToken,
-        target: LightweightPopupDocumentFetchTarget,
-    ) -> Self {
-        Self {
-            root_document,
-            local_owner: RendererPageResourceCompletionLocalOwner::PopupDocumentLoad(target),
-        }
-    }
-
-    pub(crate) fn popup_classic_script(
-        root_document: RendererDocumentToken,
-        target: LightweightPopupClassicScriptFetchTarget,
-    ) -> Self {
-        Self {
-            root_document,
-            local_owner: RendererPageResourceCompletionLocalOwner::PopupClassicScript(target),
         }
     }
 

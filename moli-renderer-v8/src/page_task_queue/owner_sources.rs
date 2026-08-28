@@ -1572,6 +1572,12 @@ impl RendererPageOwnedTaskSources {
         self.modulepreload_start.clear();
         self.dynamic_import_owner_action.clear();
     }
+
+    pub(crate) fn redispatch_script_agent_tasks_after_page_retirement(&mut self) {
+        for task in self.v8_foreground_task.drain_for_page_retirement() {
+            task.redispatch_after_page_retirement();
+        }
+    }
 }
 
 impl RendererPageTaskProducerRoutes {

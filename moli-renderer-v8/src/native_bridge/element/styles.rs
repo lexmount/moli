@@ -132,9 +132,6 @@ fn style_object_forces_empty_computed<'s>(
                     frame_handle,
                 )
             }
-            ComputedStyleTargetKey::PopupDocument(document_handle) => {
-                !popup_document_target_is_current(unsafe { &*runtime_ptr }, handle, document_handle)
-            }
             ComputedStyleTargetKey::Dynamic => {
                 computed_style_target_context(scope, unsafe { &*runtime_ptr }, handle, None)
                     .returns_empty_style()
@@ -156,21 +153,6 @@ fn child_frame_target_document_is_current(
     runtime
         .child_browsing_context_document_handle(frame_handle)
         .is_some_and(|document| Some(document) == target_document)
-}
-
-fn popup_document_target_is_current(
-    runtime: &JsContextHost,
-    target: DomHandle,
-    popup_document: DomHandle,
-) -> bool {
-    let target_document = runtime
-        .dom_host()
-        .node(target)
-        .and_then(crate::dom::native::Node::owner_document);
-    target_document == Some(popup_document)
-        && runtime
-            .lightweight_popup_id_for_document_handle(popup_document)
-            .is_some_and(|popup_id| runtime.lightweight_popup_is_open(popup_id))
 }
 
 fn detached_iframe_target_document_is_current<'s>(
@@ -371,9 +353,7 @@ fn live_computed_style_viewport<'s>(
         {
             iframe_handle_viewport(runtime, frame)
         }
-        ComputedStyleTargetKey::ChildFrame(_)
-        | ComputedStyleTargetKey::DetachedIframe(_)
-        | ComputedStyleTargetKey::PopupDocument(_) => None,
+        ComputedStyleTargetKey::ChildFrame(_) | ComputedStyleTargetKey::DetachedIframe(_) => None,
     }
 }
 

@@ -14,16 +14,46 @@ pub(super) enum RealmInterfaceState {
     Failed,
 }
 
-pub(super) struct IntrinsicInterfaceRegistry {
+pub(crate) struct IntrinsicInterfaceRegistry {
     realm_kind: RealmKind,
     states: RefCell<Vec<RealmInterfaceState>>,
     objects: RefCell<Vec<Option<RealmInterfaceObjects>>>,
 }
 
 struct RealmInterfaceObjects {
-    constructor: v8::Global<v8::Object>,
-    prototype: v8::Global<v8::Object>,
-    public_interface: v8::Global<v8::Object>,
+    constructor: RealmInterfaceObjectHandle,
+    prototype: RealmInterfaceObjectHandle,
+    public_interface: RealmInterfaceObjectHandle,
+}
+
+enum RealmInterfaceObjectHandle {
+    Strong(v8::Global<v8::Object>),
+    Weak(v8::Weak<v8::Object>),
+}
+
+impl RealmInterfaceObjectHandle {
+    fn new(scope: &mut v8::PinScope<'_, '_>, object: v8::Local<'_, v8::Object>) -> Self {
+        if crate::util::page_context_is_detached_document(scope.get_current_context()) {
+            Self::Weak(v8::Weak::new(scope, object))
+        } else {
+            Self::Strong(v8::Global::new(scope, object))
+        }
+    }
+
+    fn to_local<'s>(&self, scope: &mut v8::PinScope<'s, '_>) -> Option<v8::Local<'s, v8::Object>> {
+        match self {
+            Self::Strong(object) => Some(v8::Local::new(scope, object)),
+            Self::Weak(object) => object.to_local(scope),
+        }
+    }
+
+    fn weaken(&mut self, scope: &mut v8::PinScope<'_, '_>) {
+        let Self::Strong(object) = self else {
+            return;
+        };
+        let object = v8::Local::new(scope, &*object);
+        *self = Self::Weak(v8::Weak::new(scope, object));
+    }
 }
 
 impl IntrinsicInterfaceRegistry {
@@ -117,12 +147,18 @@ impl IntrinsicInterfaceRegistry {
         {
             let objects = self.objects.borrow();
             if let Some(existing) = objects.get(id.index()).and_then(Option::as_ref) {
-                let same_constructor =
-                    v8::Local::new(scope, &existing.constructor).strict_equals(constructor.into());
-                let same_prototype =
-                    v8::Local::new(scope, &existing.prototype).strict_equals(prototype.into());
-                let same_public_interface = v8::Local::new(scope, &existing.public_interface)
-                    .strict_equals(public_interface.into());
+                let same_constructor = existing
+                    .constructor
+                    .to_local(scope)
+                    .is_some_and(|existing| existing.strict_equals(constructor.into()));
+                let same_prototype = existing
+                    .prototype
+                    .to_local(scope)
+                    .is_some_and(|existing| existing.strict_equals(prototype.into()));
+                let same_public_interface = existing
+                    .public_interface
+                    .to_local(scope)
+                    .is_some_and(|existing| existing.strict_equals(public_interface.into()));
                 if same_constructor && same_prototype && same_public_interface {
                     return Ok(());
                 }
@@ -141,9 +177,9 @@ impl IntrinsicInterfaceRegistry {
         })?;
         debug_assert!(slot.is_none());
         *slot = Some(RealmInterfaceObjects {
-            constructor: v8::Global::new(scope, constructor),
-            prototype: v8::Global::new(scope, prototype),
-            public_interface: v8::Global::new(scope, public_interface),
+            constructor: RealmInterfaceObjectHandle::new(scope, constructor),
+            prototype: RealmInterfaceObjectHandle::new(scope, prototype),
+            public_interface: RealmInterfaceObjectHandle::new(scope, public_interface),
         });
         Ok(())
     }
@@ -155,7 +191,7 @@ impl IntrinsicInterfaceRegistry {
     ) -> Option<v8::Local<'s, v8::Object>> {
         let objects = self.objects.borrow();
         let object = objects.get(id.index())?.as_ref()?;
-        Some(v8::Local::new(scope, &object.constructor))
+        object.constructor.to_local(scope)
     }
 
     pub(super) fn prototype<'s>(
@@ -165,7 +201,7 @@ impl IntrinsicInterfaceRegistry {
     ) -> Option<v8::Local<'s, v8::Object>> {
         let objects = self.objects.borrow();
         let object = objects.get(id.index())?.as_ref()?;
-        Some(v8::Local::new(scope, &object.prototype))
+        object.prototype.to_local(scope)
     }
 
     pub(super) fn public_interface<'s>(
@@ -175,8 +211,26 @@ impl IntrinsicInterfaceRegistry {
     ) -> Option<v8::Local<'s, v8::Object>> {
         let objects = self.objects.borrow();
         let object = objects.get(id.index())?.as_ref()?;
-        Some(v8::Local::new(scope, &object.public_interface))
+        object.public_interface.to_local(scope)
     }
+
+    fn weaken_for_context_teardown(&self, scope: &mut v8::PinScope<'_, '_>) {
+        for objects in self.objects.borrow_mut().iter_mut().flatten() {
+            objects.constructor.weaken(scope);
+            objects.prototype.weaken(scope);
+            objects.public_interface.weaken(scope);
+        }
+    }
+}
+
+pub(crate) fn weaken_intrinsic_interface_registry_for_context_teardown(
+    scope: &mut v8::PinScope<'_, '_>,
+) -> Option<Rc<IntrinsicInterfaceRegistry>> {
+    let registry = scope
+        .get_current_context()
+        .get_slot::<IntrinsicInterfaceRegistry>()?;
+    registry.weaken_for_context_teardown(scope);
+    Some(registry)
 }
 
 #[cfg(test)]

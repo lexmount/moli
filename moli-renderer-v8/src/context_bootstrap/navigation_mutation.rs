@@ -29,8 +29,8 @@ use super::navigation_serialize::{
     sync_child_pending_navigation_entry_seed_from_owner,
 };
 use super::navigation_window::{
-    runtime_top_window_owner, runtime_window_is_global, window_history_for_holder,
-    window_location_for_holder, window_navigation_for_holder,
+    navigation_document_is_initial_empty, runtime_top_window_owner, runtime_window_is_global,
+    window_history_for_holder, window_location_for_holder, window_navigation_for_holder,
 };
 use super::*;
 use crate::native_bridge::NavigationActivationSeed;

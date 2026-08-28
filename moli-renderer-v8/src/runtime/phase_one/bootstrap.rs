@@ -18,6 +18,7 @@ impl ConcurrentParseTimeRuntime {
         runtime_hooks: PageVmRuntimeHooks,
         mut state: ParseTimeDriverState,
         started: Instant,
+        defer_document_start_scripts: bool,
         closed_message: &'static str,
     ) -> Result<(ParseTimeDriverState, PageVm, bool)> {
         let bootstrap_executor = local_executor.clone();
@@ -25,7 +26,7 @@ impl ConcurrentParseTimeRuntime {
             let (page_vm, triggered_navigation) = {
                 let buffered_document_preloads = &mut state.buffered_document_preloads;
                 let service_worker_preload_context = state.service_worker_preload_context.as_ref();
-                PageVm::new_from_parser_stream_and_run_document_start(
+                PageVm::new_from_parser_stream(
                     page_id,
                     local_executor,
                     &loader,
@@ -33,6 +34,7 @@ impl ConcurrentParseTimeRuntime {
                     runtime_hooks,
                     &mut state.parser_session,
                     started,
+                    defer_document_start_scripts,
                     |page_vm| {
                         admit_pending_preloads(
                             page_vm,
@@ -114,6 +116,7 @@ impl ConcurrentParseTimeRuntime {
                 runtime_hooks,
                 state,
                 started,
+                false,
                 "html bootstrap local task channel closed",
             )
             .await?;
@@ -192,6 +195,7 @@ impl ConcurrentParseTimeRuntime {
                 runtime_hooks,
                 state,
                 started,
+                false,
                 "XML bootstrap local task channel closed",
             )
             .await?;

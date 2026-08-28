@@ -137,6 +137,11 @@ impl MainDocumentProgressGate {
         Self { queue }
     }
 
+    pub(super) fn make_body_finished_visible(&mut self) {
+        self.queue
+            .mark_output_visible_until(MainDocumentProgressOutputBoundary::BodyFinishedVisible);
+    }
+
     fn drain_visible_until_into_background_events(
         &mut self,
         boundary: MainDocumentProgressOutputBoundary,

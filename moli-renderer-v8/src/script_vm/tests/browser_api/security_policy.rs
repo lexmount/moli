@@ -186,6 +186,182 @@ fn hyperlink_javascript_url_csp_checks_the_source_document_before_target_selecti
 }
 
 #[test]
+fn form_javascript_url_csp_checks_the_source_document_before_target_selection() {
+    for (target, expected_kind) in [
+        ("_self", "self"),
+        ("named-target", "named"),
+        ("_blank", "blank"),
+    ] {
+        let mut vm = new_storage_test_vm(&format!(
+            "https://form-javascript-csp-{expected_kind}.test/page.html"
+        ));
+        vm.set_response_content_security_policies(&["script-src 'none'".to_owned()]);
+
+        vm.eval(&format!(
+            r#"
+(() => {{
+  const violations = [];
+  document.addEventListener("securitypolicyviolation", event => {{
+    violations.push(`${{event.disposition}}:${{event.effectiveDirective}}:${{event.blockedURI}}`);
+  }});
+  globalThis.__formJavascriptCspViolations = violations;
+  const root = document.body || document.documentElement ||
+      document.appendChild(document.createElement("html"));
+  const form = document.createElement("form");
+  form.method = "post";
+  form.action = "javascript:globalThis.__blockedFormJavascriptRan = true";
+  form.target = "{target}";
+  form.rel = "opener";
+  root.appendChild(form);
+  form.submit();
+}})()
+"#
+        ))
+        .expect("blocked form javascript URL submission should evaluate");
+
+        assert!(
+            vm.take_pending_location_navigation_with_seed().is_none(),
+            "blocked {expected_kind} form must not queue a top-level navigation"
+        );
+        assert!(
+            vm.take_pending_popup_activations().is_empty(),
+            "blocked {expected_kind} form must not create or reuse a popup"
+        );
+        assert_eq!(
+            drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+            1
+        );
+        assert_eq!(
+            vm.eval(
+                "JSON.stringify({ ran: globalThis.__blockedFormJavascriptRan === true, violations: globalThis.__formJavascriptCspViolations })"
+            )
+            .expect("blocked form javascript URL result should be observable"),
+            r#"{"ran":false,"violations":["enforce:script-src-elem:inline"]}"#,
+            "case {expected_kind}"
+        );
+    }
+}
+
+#[test]
+fn window_open_javascript_url_source_csp_preserves_the_selected_self_target() {
+    let mut vm = new_storage_test_vm("https://window-open-self-javascript-csp.test/page.html");
+    vm.set_response_content_security_policies(&["script-src 'none'".to_owned()]);
+
+    assert_eq!(
+        vm.eval(
+            r#"
+(() => {
+  globalThis.__windowOpenSelfJavascriptCspViolations = [];
+  document.addEventListener("securitypolicyviolation", event => {
+    __windowOpenSelfJavascriptCspViolations.push(
+      `${event.disposition}:${event.effectiveDirective}:${event.blockedURI}`
+    );
+  });
+  const selected = window.open(
+    "javascript:globalThis.__blockedWindowOpenSelfJavascriptRan = true",
+    "_self"
+  );
+  return selected === window;
+})()
+"#,
+        )
+        .expect("blocked window.open(_self) JavaScript URL should evaluate"),
+        "true"
+    );
+    assert!(
+        vm.take_pending_location_navigation_with_seed().is_none(),
+        "source CSP denial must leave the selected self target unnavigated"
+    );
+    assert!(vm.take_pending_popup_activations().is_empty());
+    assert_eq!(
+        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        1
+    );
+    assert_eq!(
+        vm.eval(
+            "JSON.stringify({ ran: globalThis.__blockedWindowOpenSelfJavascriptRan === true, violations: __windowOpenSelfJavascriptCspViolations })"
+        )
+        .expect("window.open(_self) source CSP result should be observable"),
+        r#"{"ran":false,"violations":["enforce:script-src-elem:inline"]}"#
+    );
+}
+
+#[test]
+fn form_action_csp_runs_after_new_target_selection_and_skips_prevented_submission() {
+    let mut vm = new_storage_test_vm("https://form-action-order.test/page.html");
+    vm.set_response_content_security_policies(&["form-action 'none'".to_owned()]);
+
+    vm.eval(
+        r#"
+(() => {
+  globalThis.__formActionViolations = [];
+  document.addEventListener("securitypolicyviolation", event => {
+    __formActionViolations.push([
+      event.disposition,
+      event.effectiveDirective,
+      event.blockedURI
+    ].join("|"));
+  });
+  const root = document.body || document.documentElement ||
+      document.appendChild(document.createElement("html"));
+  const form = document.createElement("form");
+  form.action = "https://form-action-order.test/blocked-new-target";
+  form.target = "_blank";
+  form.rel = "opener";
+  root.appendChild(form);
+  form.submit();
+})()
+"#,
+    )
+    .expect("form-action blocked auxiliary submission should evaluate");
+
+    let activations = vm.take_pending_popup_activations();
+    assert_eq!(activations.len(), 1);
+    let activation = &activations[0];
+    assert_eq!(
+        activation.url(),
+        "https://form-action-order.test/blocked-new-target?"
+    );
+    assert!(
+        !activation.has_destination_navigation(),
+        "form-action denial happens after target creation and must retain only the initial Document"
+    );
+    assert_eq!(activation.request_method(), None);
+    assert_eq!(
+        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        1
+    );
+    assert_eq!(
+        vm.eval("JSON.stringify(__formActionViolations)")
+            .expect("form-action violation should be observable"),
+        r#"["enforce|form-action|https://form-action-order.test/blocked-new-target?"]"#
+    );
+
+    let prevented = vm
+        .eval(
+            r#"
+(() => {
+  const form = document.createElement("form");
+  form.action = "https://form-action-order.test/prevented";
+  form.target = "_blank";
+  form.addEventListener("submit", event => event.preventDefault());
+  document.documentElement.appendChild(form);
+  form.requestSubmit();
+  return __formActionViolations.length;
+})()
+"#,
+        )
+        .expect("prevented form submission should evaluate");
+    assert_eq!(prevented, "1");
+    assert!(vm.take_pending_popup_activations().is_empty());
+    assert_eq!(
+        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        0,
+        "preventDefault must stop before target selection and form-action reporting"
+    );
+}
+
+#[test]
 fn inline_style_csp_blocks_cascade_preserves_text_and_targets_source_elements() {
     let mut vm = new_storage_test_vm("https://inline-style-csp.test/page.html");
     vm.set_response_content_security_policies(&[

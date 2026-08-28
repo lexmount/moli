@@ -1,7 +1,7 @@
 use super::{
     JsContextHost, OwnerDispatchScope, WindowExecutionContextAccessPolicy,
     WindowExecutionContextBinding, WindowExecutionContextIdentity, WindowExecutionContextOwner,
-    WindowExecutionContextRealmRegistration, active_lightweight_popup_id,
+    WindowExecutionContextRealmRegistration,
 };
 use crate::runtime::RuntimeConsoleMessageSnapshot;
 use serde_json::Value;
@@ -100,42 +100,101 @@ impl PendingRuntimeObservableConsoleSourceEvent {
 }
 
 impl JsContextHost {
-    pub(crate) fn register_lightweight_popup_execution_context(
-        &mut self,
-        scope: &mut v8::PinScope<'_, '_>,
-        popup_id: u64,
-    ) -> bool {
-        let dispatch_scope = OwnerDispatchScope::LightweightPopup(popup_id);
-        let Some(owner) = self.current_window_execution_context_owner(dispatch_scope) else {
-            return false;
-        };
-        let Some(realm_token) = current_runtime_observable_context_token(scope) else {
-            return false;
-        };
-        self.register_window_execution_context(WindowExecutionContextBinding::new(
-            owner,
-            dispatch_scope,
-            realm_token,
-            v8::Global::new(scope, scope.get_current_context()),
-        ));
-        true
-    }
+    pub(crate) fn retire_all_window_execution_context_resources_for_teardown(&mut self) {
+        let owners = self
+            .window_execution_contexts
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+        let mut realm_tokens = self
+            .window_execution_contexts
+            .values()
+            .map(WindowExecutionContextBinding::realm_token)
+            .chain(
+                self.window_execution_context_realms
+                    .concrete_by_token
+                    .keys()
+                    .copied(),
+            )
+            .collect::<Vec<_>>();
+        realm_tokens.sort_unstable();
+        realm_tokens.dedup();
 
-    pub(crate) fn ensure_lightweight_popup_execution_context(
-        &mut self,
-        scope: &mut v8::PinScope<'_, '_>,
-        popup_id: u64,
-    ) -> bool {
-        let Some(window) = self.lightweight_popup_window(scope, popup_id) else {
-            return false;
-        };
-        let Some(context) = window.get_creation_context(scope) else {
-            return false;
-        };
-        let context = v8::Global::new(scope, context);
-        let context = v8::Local::new(scope, &context);
-        let popup_scope = &mut v8::ContextScope::new(scope, context);
-        self.register_lightweight_popup_execution_context(popup_scope, popup_id)
+        for realm_token in realm_tokens {
+            self.cancel_timers_for_context_token(realm_token);
+            self.retire_runtime_binding_context_token(realm_token);
+            self.retire_image_decode_requests_for_context_token(realm_token);
+            self.retire_webcrypto_context_token(realm_token);
+            self.retire_opfs_context_token(realm_token);
+            self.retire_workers_for_context_token(realm_token);
+            self.disconnect_shared_worker_clients_for_context_token(realm_token);
+            self.retire_window_xhrs_for_context_token(realm_token);
+            self.retire_window_fetches_for_context_token(realm_token);
+            self.retire_window_event_sources_for_context_token(realm_token);
+            self.retire_message_ports_for_context_token(realm_token);
+            self.retire_window_messages_for_context_token(realm_token);
+            self.close_broadcast_channels_for_context_token(realm_token);
+            self.retire_websockets_for_context_token(realm_token);
+            self.retire_window_execution_contexts_for_context_token(realm_token);
+        }
+
+        for owner in owners {
+            self.cancel_window_execution_context_timers(owner);
+            self.retire_webcrypto_execution_context_owner(owner);
+            self.retire_opfs_execution_context_owner(owner);
+            self.retire_workers_for_execution_context_owner(owner);
+            self.disconnect_shared_worker_clients_for_execution_context_owner(owner);
+            self.retire_window_xhrs_for_execution_context_owner(owner);
+            self.retire_window_fetches_for_execution_context_owner(owner);
+            self.retire_window_event_sources_for_execution_context_owner(owner);
+            self.retire_window_messages_for_execution_context_owner(owner);
+            self.close_broadcast_channels_for_execution_context_owner(owner);
+            self.retire_websockets_for_execution_context_owner(owner);
+            self.retire_image_decode_requests_for_execution_context_owner(owner);
+            self.retire_message_ports_for_execution_context_owner(owner);
+            self.retire_window_execution_context(owner);
+        }
+
+        self.retire_v8_execution_state_for_context_teardown();
+
+        // A detached Document realm may keep this host and its native DOM
+        // alive through the V8 Context slot. None of the host's active
+        // execution registries may in turn keep that Context alive with a
+        // strong Global handle: that would form an untraceable
+        // Context -> Rust host -> Global -> Context cycle. Chromium retires
+        // these LocalDOMWindow/ExecutionContext-owned services when the frame
+        // is detached while ordinary retained Document/Node values remain
+        // usable.
+        drop(std::mem::take(&mut self.custom_elements));
+        self.child_custom_elements.clear();
+        self.scoped_custom_elements.clear();
+        drop(std::mem::take(&mut self.custom_element_reactions));
+        drop(std::mem::take(&mut self.observers));
+        drop(std::mem::take(&mut self.child_window_proxy_records));
+        self.pending_service_worker_registers.clear();
+        self.pending_service_worker_unregisters.clear();
+        self.pending_service_worker_ready.clear();
+        self.service_worker_registration_watchers.clear();
+        self.pending_window_messages.clear();
+        drop(std::mem::take(&mut self.directory_reader_callbacks));
+        drop(std::mem::take(&mut self.misc_platform_api_tasks));
+        drop(std::mem::take(&mut self.file_entry_file_callbacks));
+        drop(std::mem::take(&mut self.user_interaction_tasks));
+        self.pending_image_load_events.clear();
+        self.pending_media_load_sequences.clear();
+        self.pending_text_track_load_sequences.clear();
+        self.pending_media_text_track_gates.clear();
+        self.resource_timing_buffers =
+            super::resource_timing::SharedResourceTimingBufferRegistry::new();
+        drop(std::mem::take(&mut self.history_queue));
+        drop(std::mem::take(&mut self.rendering_updates));
+        drop(std::mem::take(&mut self.view_transition_updates));
+        drop(std::mem::take(&mut self.media_element_events));
+        drop(std::mem::take(&mut self.element_toggle_events));
+        drop(std::mem::take(&mut self.text_track_default_modes));
+        self.child_window_event_listeners.clear();
+        drop(std::mem::take(&mut self.event_callbacks));
+        self.bridge.abort.clear_for_context_teardown();
     }
 
     pub(crate) fn current_runtime_window_execution_context_binding(
@@ -155,9 +214,7 @@ impl JsContextHost {
         &self,
         scope: &mut v8::PinScope<'_, '_>,
     ) -> Option<WindowExecutionContextIdentity> {
-        let dispatch_scope = if let Some(popup_id) = active_lightweight_popup_id(scope) {
-            OwnerDispatchScope::LightweightPopup(popup_id)
-        } else if let Some(child_handle) =
+        let dispatch_scope = if let Some(child_handle) =
             crate::context_bootstrap::child_browsing_context_handle_for_current_realm_scope(scope)
         {
             OwnerDispatchScope::Child(child_handle)
@@ -178,23 +235,7 @@ impl JsContextHost {
         let realm_token = current_runtime_observable_context_token(scope)?;
         let registration = self
             .window_execution_context_realms
-            .registration(dispatch_scope, realm_token)
-            .or_else(|| {
-                // Lightweight popups still share their opener's concrete V8 context. Until P2
-                // gives each popup a LocalWindow realm, the active popup scope is the only exact
-                // address available at API acceptance.
-                matches!(dispatch_scope, OwnerDispatchScope::LightweightPopup(_))
-                    .then(|| {
-                        self.current_window_execution_context_owner(dispatch_scope)
-                            .map(|owner| {
-                                WindowExecutionContextRealmRegistration::new(
-                                    owner,
-                                    WindowExecutionContextAccessPolicy::EnforceWebOrigin,
-                                )
-                            })
-                    })
-                    .flatten()
-            })?;
+            .registration(dispatch_scope, realm_token)?;
         let owner = registration.owner;
         if !self.window_execution_context_owner_is_current(owner, dispatch_scope) {
             return None;
@@ -230,10 +271,12 @@ impl JsContextHost {
         })
     }
 
-    /// Resolves a concrete Window realm without invoking any V8 property API.
+    /// Resolves only a live concrete Window realm without invoking any V8
+    /// property API.
     ///
-    /// V8 calls this while `MayAccess` is already active, so reading global or
-    /// private properties here would recursively enter the access callback.
+    /// Operation-admission callers use this strict identity and therefore
+    /// continue to reject detached Documents. V8's `MayAccess` callback uses
+    /// the separate passive principal retained on the Context.
     pub(crate) fn window_execution_context_identity_for_access_check(
         &self,
         context: v8::Local<'_, v8::Context>,
@@ -256,28 +299,23 @@ impl JsContextHost {
 
     pub(crate) fn window_execution_context_identity_for_v8_context(
         &self,
-        scope: &mut v8::PinScope<'_, '_>,
+        _scope: &mut v8::PinScope<'_, '_>,
+        context: v8::Local<'_, v8::Context>,
+    ) -> Option<WindowExecutionContextIdentity> {
+        self.window_execution_context_identity_for_v8_context_without_scope(context)
+    }
+
+    pub(crate) fn window_execution_context_identity_for_v8_context_without_scope(
+        &self,
         context: v8::Local<'_, v8::Context>,
     ) -> Option<WindowExecutionContextIdentity> {
         let realm_token = context
             .get_slot::<RuntimeObservableContextToken>()
             .as_deref()
             .copied()?;
-        let registered = match active_lightweight_popup_id(scope) {
-            Some(popup_id) => {
-                let dispatch_scope = OwnerDispatchScope::LightweightPopup(popup_id);
-                let registration = self
-                    .window_execution_context_realms
-                    .registration(dispatch_scope, realm_token)?;
-                super::WindowExecutionContextScopedRealmRegistration::new(
-                    dispatch_scope,
-                    registration,
-                )
-            }
-            None => self
-                .window_execution_context_realms
-                .concrete_registration(realm_token)?,
-        };
+        let registered = self
+            .window_execution_context_realms
+            .concrete_registration(realm_token)?;
         Some(WindowExecutionContextIdentity::new(
             registered.registration.owner,
             registered.dispatch_scope,
@@ -391,24 +429,9 @@ impl JsContextHost {
         crate::observer_runtime::retire_execution_context_owner(self, owner);
         let retired = self.window_execution_contexts.remove(&owner);
         if let Some(binding) = retired.as_ref() {
-            // A lightweight popup is an owner alias over its opener's concrete
-            // realm. Retire its exact-owner state without destroying the
-            // opener's realm-wide wrappers and IndexedDB state.
-            if matches!(
-                binding.dispatch_scope(),
-                OwnerDispatchScope::LightweightPopup(_)
-            ) {
-                let retirement = self.retire_indexed_db_owner(owner);
-                if let Some(manager) = self.indexed_db_manager.as_ref() {
-                    let _ = manager.close_database_handles(retirement.retired_connections);
-                }
-            } else {
-                let retirement = self.retire_indexed_db_context(binding.realm_token());
-                if let Some(manager) = self.indexed_db_manager.as_ref() {
-                    let _ = manager.close_database_handles(retirement.retired_connections);
-                }
-                self.bridge
-                    .retire_default_world_wrappers_for_realm(binding.realm_token());
+            let retirement = self.retire_indexed_db_context(binding.realm_token());
+            if let Some(manager) = self.indexed_db_manager.as_ref() {
+                let _ = manager.close_database_handles(retirement.retired_connections);
             }
         }
         self.window_execution_context_realms.retire_owner(owner);
@@ -439,8 +462,6 @@ impl JsContextHost {
         for owner in owners {
             self.window_execution_contexts.remove(&owner);
         }
-        self.bridge
-            .retire_default_world_wrappers_for_realm(context_token);
         let _ = self
             .window_execution_context_realms
             .remove_token(context_token);
@@ -474,12 +495,18 @@ impl JsContextHost {
         context_token: RuntimeObservableContextToken,
     ) -> usize {
         crate::observer_runtime::retire_context_token(self, context_token);
+        let indexed_db_retirement = self.retire_indexed_db_context(context_token);
+        let retired_indexed_db_connections = indexed_db_retirement.retired_connections.len();
+        if let Some(manager) = self.indexed_db_manager.as_ref() {
+            let _ = manager.close_database_handles(indexed_db_retirement.retired_connections);
+        }
         let retired_realm_count = self
             .window_execution_context_realms
             .remove_token(context_token);
         tracing::debug!(
             ?context_token,
             retired_realm_count,
+            retired_indexed_db_connections,
             "retired isolated Window realm registration"
         );
         retired_realm_count
@@ -505,12 +532,6 @@ impl JsContextHost {
                 self.current_child_document_task_owner(child_handle)?
                     .local_window_id,
             )),
-            OwnerDispatchScope::LightweightPopup(popup_id) => {
-                Some(WindowExecutionContextOwner::LightweightPopup {
-                    popup_id,
-                    local_window_id: self.current_lightweight_popup_local_window_id(popup_id)?,
-                })
-            }
         }
     }
 
@@ -555,18 +576,6 @@ impl JsContextHost {
             ) => self
                 .current_child_document_task_owner(child_handle)
                 .is_some_and(|current| current.local_window_id == local_window_id),
-            (
-                WindowExecutionContextOwner::LightweightPopup {
-                    popup_id,
-                    local_window_id,
-                },
-                OwnerDispatchScope::LightweightPopup(dispatch_popup_id),
-            ) => {
-                popup_id == dispatch_popup_id
-                    && self.current_lightweight_popup_local_window_id(popup_id)
-                        == Some(local_window_id)
-            }
-            _ => false,
         }
     }
 
@@ -634,67 +643,5 @@ impl JsContextHost {
         &mut self,
     ) -> Vec<PendingRuntimeObservableConsoleSourceEvent> {
         std::mem::take(&mut self.pending_runtime_observable_console_source_events)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{
-        document_runtime::DomHandle,
-        frame_owner_model::LocalWindowId,
-        native_bridge::context_host::{
-            WindowExecutionContextRealmRecords, WindowExecutionContextScopedRealmRegistration,
-        },
-        window_document_identity::LightweightPopupLocalWindowId,
-    };
-
-    #[test]
-    fn concrete_realm_identity_and_lightweight_popup_alias_share_one_context_token() {
-        let mut records = WindowExecutionContextRealmRecords::default();
-        let token = RuntimeObservableContextToken::from_raw(17);
-        let top_scope = OwnerDispatchScope::Top;
-        let top_registration = WindowExecutionContextRealmRegistration::new(
-            WindowExecutionContextOwner::Frame(LocalWindowId(1)),
-            WindowExecutionContextAccessPolicy::EnforceWebOrigin,
-        );
-        let popup_scope = OwnerDispatchScope::LightweightPopup(7);
-        let popup_registration = WindowExecutionContextRealmRegistration::new(
-            WindowExecutionContextOwner::LightweightPopup {
-                popup_id: 7,
-                local_window_id: LightweightPopupLocalWindowId::new(2),
-            },
-            WindowExecutionContextAccessPolicy::EnforceWebOrigin,
-        );
-
-        assert!(records.register(top_scope, token, top_registration).is_ok());
-        assert!(
-            records
-                .register(popup_scope, token, popup_registration)
-                .is_ok()
-        );
-        assert_eq!(
-            records.concrete_registration(token),
-            Some(WindowExecutionContextScopedRealmRegistration::new(
-                top_scope,
-                top_registration,
-            ))
-        );
-        assert_eq!(
-            records.registration(popup_scope, token),
-            Some(popup_registration)
-        );
-
-        let conflicting_child = OwnerDispatchScope::Child(DomHandle::new(9));
-        assert!(
-            records
-                .register(conflicting_child, token, top_registration)
-                .is_err(),
-            "one V8 context token must have exactly one concrete Window realm"
-        );
-
-        assert_eq!(records.remove_token(token), 2);
-        assert!(records.concrete_registration(token).is_none());
-        assert!(records.registration(popup_scope, token).is_none());
     }
 }

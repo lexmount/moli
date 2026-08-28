@@ -28,4 +28,5 @@ pub(in crate::context_bootstrap) use metadata::TemplateBuildProfile;
 pub(super) use metadata::constructor_spec_is_lazy;
 #[cfg(test)]
 pub(crate) use metadata::dedicated_worker_lazy_interface_names_for_test;
+pub(crate) use realm_registry::weaken_intrinsic_interface_registry_for_context_teardown;
 pub(in crate::context_bootstrap) use template_registry::ExposedInterfaceTemplateRegistry;

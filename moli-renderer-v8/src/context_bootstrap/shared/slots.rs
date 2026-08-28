@@ -30,6 +30,7 @@ pub(in crate::context_bootstrap) const WINDOW_SESSION_STORAGE_SLOT: &str =
     "__moliWindowSessionStorage";
 pub(crate) const WINDOW_CUSTOM_ELEMENTS_SLOT: &str = "__moliWindowCustomElements";
 pub(crate) const WINDOW_NAME_SLOT: &str = "__moliWindowName";
+pub(crate) const WINDOW_OPENER_SLOT: &str = "__moliWindowOpener";
 pub(crate) const CHILD_BROWSING_CONTEXT_HANDLE_SLOT: &str = "__moliChildBrowsingContextHandle";
 pub(in crate::context_bootstrap) const WINDOW_SELF_SLOT: &str = "__moliWindowSelf";
 pub(in crate::context_bootstrap) const WINDOW_PARENT_SLOT: &str = "__moliWindowParent";

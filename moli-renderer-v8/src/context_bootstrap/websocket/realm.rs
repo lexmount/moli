@@ -29,11 +29,6 @@ pub(super) fn effective_websocket_document_scope(
             let (frame_id, document_url) = host.child_browsing_context_request_scope(handle)?;
             Some((binding, Some(frame_id), document_url))
         }
-        crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id) => Some((
-            binding,
-            None,
-            host.lightweight_popup_request_base_url(scope, popup_id)?,
-        )),
         crate::native_bridge::OwnerDispatchScope::Top => {
             Some((binding, None, host.document_url().clone()))
         }

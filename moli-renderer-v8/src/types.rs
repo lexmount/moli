@@ -803,6 +803,7 @@ pub(super) struct ServiceWorkerClientsOpenWindowRequestCompletion {
     pub(super) request_id: u64,
     pub(super) source_version_id: crate::service_worker_runtime::ServiceWorkerVersionId,
     pub(super) source_run: crate::runtime::RendererServiceWorkerRunIdentity,
+    pub(super) source_script_url: url::Url,
     pub(super) url: url::Url,
 }
 
@@ -820,6 +821,7 @@ pub(super) struct ServiceWorkerClientsOpenWindowCompletion {
 #[derive(Debug)]
 pub(super) struct ServiceWorkerNotificationActionNavigateRequestCompletion {
     pub(super) host: ServiceWorkerWindowClientTarget,
+    pub(super) source_script_url: url::Url,
     pub(super) url: url::Url,
 }
 
@@ -1517,57 +1519,6 @@ impl ChildDocumentLoadCompletion {
             result,
         )
     }
-}
-
-#[derive(Debug)]
-pub(super) struct PopupDocumentLoadCompletion {
-    target: crate::native_bridge::LightweightPopupDocumentFetchTarget,
-    pub(super) result: std::result::Result<PopupDocumentLoadOutcome, String>,
-}
-
-impl PopupDocumentLoadCompletion {
-    pub(crate) fn new(
-        target: crate::native_bridge::LightweightPopupDocumentFetchTarget,
-        result: std::result::Result<PopupDocumentLoadOutcome, String>,
-    ) -> Self {
-        Self { target, result }
-    }
-
-    pub(crate) fn target(&self) -> crate::native_bridge::LightweightPopupDocumentFetchTarget {
-        self.target
-    }
-}
-
-#[derive(Debug)]
-pub(super) struct PopupClassicScriptLoadCompletion {
-    target: crate::native_bridge::LightweightPopupClassicScriptFetchTarget,
-    pub(super) result: std::result::Result<LoadedChildScriptSource, String>,
-}
-
-impl PopupClassicScriptLoadCompletion {
-    pub(crate) fn new(
-        target: crate::native_bridge::LightweightPopupClassicScriptFetchTarget,
-        result: std::result::Result<LoadedChildScriptSource, String>,
-    ) -> Self {
-        Self { target, result }
-    }
-
-    pub(crate) fn target(&self) -> crate::native_bridge::LightweightPopupClassicScriptFetchTarget {
-        self.target
-    }
-}
-
-#[derive(Debug)]
-pub(super) enum PopupDocumentLoadOutcome {
-    Loaded(Box<LoadedChildDocument>),
-    IgnoredNavigation,
-}
-
-#[derive(Debug, Clone)]
-pub(super) struct LoadedChildScriptSource {
-    pub(super) final_url: Url,
-    pub(super) redirected: bool,
-    pub(super) source: String,
 }
 
 #[cfg(test)]

@@ -17,6 +17,7 @@ impl crate::native_bridge::JsContextHost {
         scope: &mut v8::PinScope<'s, '_>,
         global: v8::Local<'s, v8::Object>,
         handle: crate::document_runtime::DomHandle,
+        browsing_context_id: crate::frame_owner_model::BrowsingContextId,
         expected_retired_owner: crate::frame_owner_model::FrameDocumentTaskOwner,
         current_owner: crate::frame_owner_model::FrameDocumentTaskOwner,
         realm_token: crate::native_bridge::RuntimeObservableContextToken,
@@ -27,6 +28,7 @@ impl crate::native_bridge::JsContextHost {
             global,
             model::ChildWindowRealmRebind {
                 handle,
+                browsing_context_id,
                 expected_retired_owner,
                 current_owner,
                 realm_token,

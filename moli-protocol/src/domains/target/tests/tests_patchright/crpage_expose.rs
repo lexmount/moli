@@ -852,7 +852,7 @@ async fn patchright_over_cdp_main_and_utility_init_scripts_see_bindings_on_first
     );
     ctx.sent.clear();
 
-    ctx.process_async(json!({
+    ctx.process_and_wait_for_response_async(json!({
         "id": 26657,
         "method": "Page.navigate",
         "sessionId": attached.session_id,
@@ -1135,7 +1135,7 @@ async fn patchright_over_cdp_auto_attach_sweep_init_scripts_see_same_named_bindi
             &mut second_utility_binding_called_during_navigation,
         ),
     ] {
-        ctx.process_async(json!({
+        ctx.process_and_wait_for_response_async(json!({
             "id": id,
             "method": "Page.navigate",
             "sessionId": session_id,

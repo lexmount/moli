@@ -1185,6 +1185,19 @@ impl Page {
         .await
     }
 
+    /// Queues a surface transition behind a synchronously modal renderer turn
+    /// while intentionally abandoning only its reply. The Page command stays
+    /// non-interruptible and therefore runs in owner FIFO once the dialog
+    /// settles.
+    pub fn enqueue_page_surface_override_script_detached(&self, source: &str) -> Result<()> {
+        drop(
+            self.start_page_command(RendererPageCommand::RunPageSurfaceOverrideScript {
+                source: source.to_owned(),
+            })?,
+        );
+        Ok(())
+    }
+
     pub fn finish_document_start_script_result(
         &mut self,
         completion: CompletedPageCommand,

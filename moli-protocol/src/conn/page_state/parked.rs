@@ -40,6 +40,8 @@ impl BrowserContext {
             initial_empty_document_url,
             creator,
             None,
+            None,
+            None,
             session_storage_namespace,
         );
     }
@@ -51,6 +53,10 @@ impl BrowserContext {
         url: String,
         initial_empty_document_url: Option<String>,
         creator: Option<TargetInitialEmptyDocumentCreator>,
+        pending_auxiliary_page: Option<moli_core::page::RendererPendingAuxiliaryPage>,
+        auxiliary_browsing_context_policy: Option<
+            moli_core::page::RendererAuxiliaryBrowsingContextPolicy,
+        >,
         session_storage_store: Option<SharedWebStorageStore>,
         initial_empty_document_storage_key: Option<moli_storage_key::MoliStorageKey>,
     ) {
@@ -63,6 +69,8 @@ impl BrowserContext {
             url,
             initial_empty_document_url,
             creator,
+            pending_auxiliary_page,
+            auxiliary_browsing_context_policy,
             initial_empty_document_storage_key,
             session_storage_namespace,
         );
@@ -88,6 +96,10 @@ impl BrowserContext {
         url: String,
         initial_empty_document_url: Option<String>,
         creator: Option<TargetInitialEmptyDocumentCreator>,
+        pending_auxiliary_page: Option<moli_core::page::RendererPendingAuxiliaryPage>,
+        auxiliary_browsing_context_policy: Option<
+            moli_core::page::RendererAuxiliaryBrowsingContextPolicy,
+        >,
         initial_empty_document_storage_key: Option<moli_storage_key::MoliStorageKey>,
         session_storage_namespace: Option<TargetSessionStorageNamespace>,
     ) {
@@ -101,6 +113,20 @@ impl BrowserContext {
             );
         });
         let mut target = BackgroundTarget::with_identity(target_id, session_id, target_identity);
+        if let Some(pending_auxiliary_page) = pending_auxiliary_page {
+            assert!(
+                target.runtime_slot.stage_pending_auxiliary_page(
+                    pending_auxiliary_page,
+                    auxiliary_browsing_context_policy,
+                ),
+                "new popup target must accept its renderer-owned auxiliary Page reservation"
+            );
+        } else {
+            assert!(
+                auxiliary_browsing_context_policy.is_none(),
+                "auxiliary frame policy cannot outlive a rejected Page reservation"
+            );
+        }
         if let Some(namespace) = session_storage_namespace {
             target.replace_session_storage_namespace(namespace);
         }
@@ -169,12 +195,8 @@ impl BrowserContext {
     }
 
     pub(crate) fn remember_target_popup_id(&mut self, popup_id: Option<u64>, target_id: &str) {
-        if let Some(popup_id) = popup_id
-            && let Some(replaced_popup_id) =
-                self.target_popup_ids.insert(target_id.to_owned(), popup_id)
-            && replaced_popup_id != popup_id
-        {
-            self.dismiss_pending_popup_javascript_dialogs(replaced_popup_id);
+        if let Some(popup_id) = popup_id {
+            self.target_popup_ids.insert(target_id.to_owned(), popup_id);
         }
     }
 
@@ -184,15 +206,14 @@ impl BrowserContext {
     }
 
     pub(crate) fn forget_target_popup_id_for_target(&mut self, target_id: &str) {
-        if let Some(popup_id) = self.target_popup_ids.remove(target_id) {
-            self.dismiss_pending_popup_javascript_dialogs(popup_id);
-        }
+        self.target_popup_ids.remove(target_id);
     }
 
     pub(crate) fn target_popup_id(&self, target_id: &str) -> Option<u64> {
         self.target_popup_ids.get(target_id).copied()
     }
 
+    #[cfg(test)]
     pub(crate) fn target_id_for_popup_id(&self, popup_id: u64) -> Option<&str> {
         self.target_popup_ids
             .iter()
@@ -728,14 +749,6 @@ impl BrowserContext {
             .await
     }
 
-    pub(crate) async fn promote_last_background_target_to_active_async(
-        &mut self,
-    ) -> Option<BackgroundTarget> {
-        let promoted = self.last_promotable_background_target_id()?;
-        self.promote_selected_background_target_to_active_async(promoted)
-            .await
-    }
-
     pub(crate) fn last_promotable_background_target_id(&self) -> Option<String> {
         self.background_targets
             .iter()
@@ -748,6 +761,7 @@ impl BrowserContext {
             })
     }
 
+    #[cfg(test)]
     async fn promote_selected_background_target_to_active_async(
         &mut self,
         promoted: String,
@@ -1136,6 +1150,16 @@ impl BrowserContext {
         target_id: &str,
     ) -> Option<&ParkedTargetOwnerState> {
         self.target_parking.target_owner_state(target_id)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn target_owner_state(&self, target_id: &str) -> Option<&ParkedTargetOwnerState> {
+        if self.is_active_target(target_id) {
+            Some(&self.active_target.owner_state)
+        } else {
+            self.background_target(target_id)?;
+            self.parked_target_owner_state(target_id)
+        }
     }
 
     #[cfg(test)]
@@ -2284,6 +2308,7 @@ mod tests {
                     source: "globalThis.fromDocumentStart = true".to_owned(),
                     world_name: None,
                     has_bidi_channel_argument: false,
+                    browser_internal: false,
                     bidi_channel_handoffs: Vec::new(),
                 },
             ));
@@ -2414,6 +2439,7 @@ mod tests {
                     source: "globalThis.demoted = true".to_owned(),
                     world_name: None,
                     has_bidi_channel_argument: false,
+                    browser_internal: false,
                     bidi_channel_handoffs: Vec::new(),
                 },
             ));

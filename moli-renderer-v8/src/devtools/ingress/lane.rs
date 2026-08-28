@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use moli_page_types::{DevToolsSessionKey, RendererDevToolsAgentToken};
 
@@ -21,6 +21,10 @@ impl RendererDevToolsSessionLaneKey {
             agent_token,
             session,
         }
+    }
+
+    pub(crate) fn belongs_to_agent(&self, agent_token: RendererDevToolsAgentToken) -> bool {
+        self.agent_token == agent_token
     }
 }
 
@@ -56,6 +60,7 @@ impl<C> Default for RendererDevToolsSessionLane<C> {
 pub(crate) struct RendererDevToolsSessionLanes<C> {
     sessions: BTreeMap<RendererDevToolsSessionLaneKey, RendererDevToolsSessionLane<C>>,
     ready_sessions: VecDeque<RendererDevToolsSessionLaneKey>,
+    detached_agents: BTreeSet<RendererDevToolsAgentToken>,
     closed: bool,
 }
 
@@ -64,6 +69,7 @@ impl<C> Default for RendererDevToolsSessionLanes<C> {
         Self {
             sessions: BTreeMap::new(),
             ready_sessions: VecDeque::new(),
+            detached_agents: BTreeSet::new(),
             closed: false,
         }
     }
@@ -77,6 +83,9 @@ impl<C: RendererDevToolsIngressCommand> RendererDevToolsSessionLanes<C> {
     ) -> Result<(), RendererDevToolsLaneEnqueueError<C>> {
         if self.closed {
             return Err(RendererDevToolsLaneEnqueueError::TargetClosed(command));
+        }
+        if self.detached_agents.contains(&lane_key.agent_token) {
+            return Err(RendererDevToolsLaneEnqueueError::SessionDetached(command));
         }
         let lane = self.sessions.entry(lane_key.clone()).or_default();
         if lane.detached {
@@ -207,6 +216,20 @@ impl<C: RendererDevToolsIngressCommand> RendererDevToolsSessionLanes<C> {
             self.sessions.remove(lane_key);
         }
         commands
+    }
+
+    pub(crate) fn detach_agent(&mut self, agent_token: RendererDevToolsAgentToken) -> Vec<C> {
+        self.detached_agents.insert(agent_token);
+        let lane_keys = self
+            .sessions
+            .keys()
+            .filter(|lane_key| lane_key.belongs_to_agent(agent_token))
+            .cloned()
+            .collect::<Vec<_>>();
+        lane_keys
+            .iter()
+            .flat_map(|lane_key| self.detach_session(lane_key))
+            .collect()
     }
 
     pub(crate) fn close_and_drain(&mut self) -> Vec<C> {

@@ -2072,13 +2072,22 @@ fn form_submission_rewrites_charset_control_from_accept_charset() {
         .borrow()
         .child_browsing_context_pending_live_navigation_for_test(handle)
         .expect("form submit should queue a pending child navigation");
-    let crate::native_bridge::ChildBrowsingContextBootstrap::Url(url) = pending else {
-        panic!("GET form submit should use URL navigation, got {pending:?}");
+    let crate::native_bridge::ChildBrowsingContextBootstrap::Request(request) = pending else {
+        panic!("GET form submit should preserve its typed request, got {pending:?}");
     };
 
+    assert_eq!(request.method, "GET");
+    assert!(request.body.is_none());
     assert_eq!(
-        url.as_str(),
+        request.url.as_str(),
         "https://form-charset-submit.test/common/blank.html?_charset_=windows-1252&_CHARSET_=windows-1252"
+    );
+    assert_eq!(
+        request.request_headers,
+        vec![(
+            "Referer".to_owned(),
+            "https://form-charset-submit.test/page.html".to_owned()
+        )]
     );
 
     let form_data_value = vm
@@ -2154,13 +2163,22 @@ fn form_get_submission_uses_document_encoding_for_query() {
         .borrow()
         .child_browsing_context_pending_live_navigation_for_test(handle)
         .expect("GET form submit should queue a pending child navigation");
-    let crate::native_bridge::ChildBrowsingContextBootstrap::Url(url) = pending else {
-        panic!("GET form submit should use URL navigation, got {pending:?}");
+    let crate::native_bridge::ChildBrowsingContextBootstrap::Request(request) = pending else {
+        panic!("GET form submit should preserve its typed request, got {pending:?}");
     };
 
+    assert_eq!(request.method, "GET");
+    assert!(request.body.is_none());
     assert_eq!(
-        url.as_str(),
+        request.url.as_str(),
         "https://form-gbk-submit.test/search?_charset_=GBK&q=%BC%D2%BE%D3"
+    );
+    assert_eq!(
+        request.request_headers,
+        vec![(
+            "Referer".to_owned(),
+            "https://form-gbk-submit.test/page.html".to_owned()
+        )]
     );
 }
 #[test]
@@ -2274,13 +2292,19 @@ async fn iso_2022_jp_get_form_data_url_target_posts_stateful_values() {
         .borrow()
         .child_browsing_context_pending_live_navigation_for_test(handle)
         .expect("form submit should queue target navigation");
-    let crate::native_bridge::ChildBrowsingContextBootstrap::Url(url) = pending else {
-        panic!("GET form submit should use URL navigation, got {pending:?}");
+    let crate::native_bridge::ChildBrowsingContextBootstrap::Request(request) = pending else {
+        panic!("GET form submit should preserve its typed request, got {pending:?}");
     };
+    assert_eq!(request.method, "GET");
+    assert!(request.body.is_none());
+    assert!(request.request_headers.is_empty());
     assert!(
-        url.as_str()
+        request
+            .url
+            .as_str()
             .starts_with("data:text/html;charset=iso-2022-jp,"),
-        "unexpected form target URL: {url}"
+        "unexpected form target URL: {}",
+        request.url
     );
 
     vm.drain_ready_child_frame_task_executor_turns_for_setup(&loader, 128)
@@ -2538,6 +2562,69 @@ async fn submit_button_click_supersedes_programmatic_submit_after_target_change(
     assert_eq!(
         server.finish_targets().await,
         vec!["/path/does_not_exist.html?navigated=1"]
+    );
+}
+
+#[test]
+fn submit_button_does_not_cancel_a_newer_non_form_navigation_in_the_previous_target() {
+    let mut vm = new_storage_test_vm("https://form-navigation-token.test/path/index.html");
+
+    vm.eval(
+        r#"
+(() => {
+  if (!document.documentElement) {
+    document.appendChild(document.createElement('html'));
+  }
+  if (!document.body) {
+    document.documentElement.appendChild(document.createElement('body'));
+  }
+  document.body.innerHTML =
+    '<iframe name="frame1" id="frame1"></iframe>' +
+    '<iframe name="frame2" id="frame2"></iframe>' +
+    '<form id="form1" target="frame1" action="form-submit.html">' +
+      '<button id="submitbutton" type="submit">submit</button>' +
+    '</form>';
+
+  const form = document.getElementById('form1');
+  form.submit();
+  document.getElementById('frame1').contentWindow.location.href = 'replacement.html';
+  form.target = 'frame2';
+  document.getElementById('submitbutton').click();
+})()
+"#,
+    )
+    .expect("form and replacement child navigations should evaluate");
+
+    let host = vm._context_host.borrow();
+    let first_handle = host
+        .child_browsing_context_handle_by_index(0)
+        .expect("first target iframe should have a child browsing context");
+    let second_handle = host
+        .child_browsing_context_handle_by_index(1)
+        .expect("second target iframe should have a child browsing context");
+    let first_pending = host
+        .child_browsing_context_pending_live_navigation_for_test(first_handle)
+        .expect("the newer non-form navigation must remain pending");
+    let second_pending = host
+        .child_browsing_context_pending_live_navigation_for_test(second_handle)
+        .expect("the submitter navigation should be pending in its new target");
+
+    let crate::native_bridge::ChildBrowsingContextBootstrap::Request(first_request) = first_pending
+    else {
+        panic!("replacement navigation should remain request-owned, got {first_pending:?}");
+    };
+    let crate::native_bridge::ChildBrowsingContextBootstrap::Request(second_request) =
+        second_pending
+    else {
+        panic!("submitter navigation should remain request-owned, got {second_pending:?}");
+    };
+    assert_eq!(
+        first_request.url.as_str(),
+        "https://form-navigation-token.test/path/replacement.html"
+    );
+    assert_eq!(
+        second_request.url.as_str(),
+        "https://form-navigation-token.test/path/form-submit.html?"
     );
 }
 
@@ -3476,6 +3563,71 @@ fn child_button_activation_self_submit_dispatches_iframe_load() {
         "submit|load"
     );
 }
+
+#[test]
+fn child_form_top_target_carries_exact_child_window_document_source() {
+    let mut vm = new_storage_test_vm("https://child-form-top-source.test/root/page.html");
+
+    vm.eval(
+        r#"
+(() => {
+  const iframe = document.createElement("iframe");
+  (document.body || document.documentElement || document).appendChild(iframe);
+  iframe.contentDocument.body.innerHTML =
+    '<form action="/submit" target="_top"><button id="submit">Submit</button></form>';
+})()
+"#,
+    )
+    .expect("child top-target form setup should evaluate");
+    vm.drain_pending_child_frame_work_for_test();
+
+    let (root_document, child) = {
+        let host = vm._context_host.borrow();
+        let handle = host
+            .child_browsing_context_handle_by_index(0)
+            .expect("test iframe should have a child browsing context");
+        (
+            host.root_document_lifecycle_identity()
+                .expect("test Page should expose its root lifecycle identity"),
+            host.frame_owner_current_child_snapshot(handle)
+                .expect("test iframe should expose its current child owner"),
+        )
+    };
+
+    vm.eval(
+        r#"
+document.querySelector("iframe").contentDocument.getElementById("submit").click()
+"#,
+    )
+    .expect("child top-target form click should evaluate");
+
+    let pending = vm
+        .take_pending_location_navigation_with_seed()
+        .expect("child top-target form should queue a Page-owned navigation");
+    assert_eq!(
+        pending.url.as_str(),
+        "https://child-form-top-source.test/submit?"
+    );
+    let source = pending
+        .navigation_source
+        .expect("child top-target form should retain its initiating Window/Document");
+    assert_eq!(source.root_document(), Some(root_document));
+    assert_eq!(
+        source.source_url(),
+        "https://child-form-top-source.test/root/page.html",
+        "an initial about:blank child should use its inherited creator URL"
+    );
+    assert_eq!(
+        source.window(),
+        Some(&crate::RendererWindowDocumentSource::ChildFrame {
+            frame_id: child.frame_id.0,
+            local_window_id: child.local_window_id.0,
+            document_id: child.document_id.0,
+        }),
+        "target selection must not replace the child initiator with RootFrame"
+    );
+}
+
 #[test]
 fn anchor_click_queues_pending_top_level_location_navigation() {
     let mut vm = new_storage_test_vm("https://anchor-click-navigation.test/path/index.html");

@@ -277,6 +277,13 @@ fn xpath_result_runtime_ptr<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     result: v8::Local<'s, v8::Object>,
 ) -> Option<*mut JsContextHost> {
+    if crate::util::page_context_is_disconnected(scope.get_current_context())
+        || result
+            .get_creation_context(scope)
+            .is_some_and(crate::util::page_context_is_disconnected)
+    {
+        return None;
+    }
     let value = get_private_value(scope, result, XPATH_RESULT_RUNTIME_SLOT)?;
     let external = v8::Local::<v8::External>::try_from(value).ok()?;
     let runtime_ptr = external.value() as *mut JsContextHost;

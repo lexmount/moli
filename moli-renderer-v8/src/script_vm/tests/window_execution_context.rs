@@ -269,6 +269,60 @@ fn fetch_receiver_generation_is_frozen_before_request_init_getters_run() {
 }
 
 #[test]
+fn window_open_receiver_generation_is_frozen_before_url_conversion() {
+    let mut vm = new_storage_test_vm("https://window-open-receiver-generation.test/");
+    vm.eval(
+        r#"
+        const frame = document.createElement("iframe");
+        globalThis.__windowOpenGenerationFrame = frame;
+        (document.body || document.documentElement || document).appendChild(frame);
+        void frame.contentWindow;
+        "frame-ready"
+        "#,
+    )
+    .expect("window.open generation child should be exposed");
+    materialize_single_child_default_realm_for_test(&mut vm, "window.open generation receiver");
+
+    assert_eq!(
+        vm.eval(
+            r#"
+            (() => {
+              const frame = __windowOpenGenerationFrame;
+              const staleWindow = frame.contentWindow;
+              let replacementWindow = null;
+              const url = {
+                toString() {
+                  frame.remove();
+                  (document.body || document.documentElement || document)
+                    .appendChild(frame);
+                  replacementWindow = frame.contentWindow;
+                  return "/must-not-navigate";
+                }
+              };
+              const result = staleWindow.open(url, "_self");
+              return JSON.stringify([
+                staleWindow !== replacementWindow,
+                result === null,
+                replacementWindow.location.href
+              ]);
+            })()
+            "#,
+        )
+        .expect("window.open URL conversion should be allowed to replace the receiver Window"),
+        r#"[true,true,"about:blank"]"#,
+        "window.open must reject the frozen stale LocalWindow instead of rebinding through the reused iframe handle"
+    );
+    assert!(
+        !vm.has_pending_location_navigation(),
+        "a stale window.open receiver must not queue top-level navigation"
+    );
+    assert!(
+        vm.take_pending_popup_activations().is_empty(),
+        "a stale window.open receiver must not fall through to popup creation"
+    );
+}
+
+#[test]
 fn detached_fetch_receiver_returns_a_rejected_current_realm_promise() {
     let mut vm = new_storage_test_vm("https://detached-fetch-receiver.test/");
     vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Fetch));

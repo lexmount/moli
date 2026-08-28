@@ -2888,6 +2888,32 @@ mod tests {
     }
 
     #[test]
+    fn initial_empty_document_url_update_preserves_creator_fallback_base() {
+        let mut host =
+            DomHost::from_dom(NativeDom::new_html(url::Url::parse("about:blank").unwrap()));
+        let document = host.document_handle();
+        assert!(host.set_document_fallback_base_url_for_handle(
+            document,
+            Some(url::Url::parse("https://creator.test/path/opener.html").unwrap()),
+        ));
+
+        assert!(host.set_document_url_for_handle_preserving_fallback_base(
+            document,
+            url::Url::parse("about:blank#fragment").unwrap(),
+        ));
+        assert_eq!(
+            host.document_url().expect("document URL").as_str(),
+            "about:blank#fragment"
+        );
+        assert_eq!(
+            host.document_base_url()
+                .expect("creator fallback base")
+                .as_str(),
+            "https://creator.test/path/opener.html"
+        );
+    }
+
+    #[test]
     fn detached_document_base_url_cache_tracks_base_tree_mutations() {
         let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
         let document = host.create_detached_html_document_with_url(

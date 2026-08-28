@@ -779,7 +779,7 @@ fn crypto_key_structured_clone_matches_chromium_symmetric_matrix() {
     assert_eq!(result, "[]");
 }
 #[test]
-fn child_initial_about_blank_executes_dynamic_inline_script_from_parent_document() {
+fn child_initial_about_blank_executes_dynamic_inline_script_synchronously() {
     let mut vm = new_storage_test_vm("https://webcrypto-context-detach.test/");
 
     let setup = vm
@@ -794,6 +794,7 @@ fn child_initial_about_blank_executes_dynamic_inline_script_from_parent_document
 
               const frame = document.createElement("iframe");
               (document.body || document.documentElement || document).appendChild(frame);
+              const childBody = frame.contentDocument.body;
 
               const script = document.createElement("script");
               script.textContent = `
@@ -807,29 +808,27 @@ fn child_initial_about_blank_executes_dynamic_inline_script_from_parent_document
                     return "SHA-256";
                   }
                 });
+                Promise.resolve().then(() => {
+                  top.__childDynamicScriptEvents.push("microtask");
+                });
                 crypto.subtle.digest(algorithm, new Uint8Array());
                 top.__childDynamicScriptEvents.push("after-call");
               `;
-              frame.contentDocument.body.appendChild(script);
-              return [
-                String(frame.contentDocument.body !== null),
-                String(frame.contentDocument.getElementsByTagName("script").length)
-              ].join("|");
+              childBody.appendChild(script);
+              top.__childDynamicScriptEvents.push("after-append");
+              return "append-returned";
             })()
         "#,
         )
         .expect("dynamic child script setup should evaluate");
-    assert_eq!(setup, "true|1");
-    assert!(
-        vm.has_pending_child_frame_realm_materialization(),
-        "the script must wait behind its typed child-realm prerequisite"
-    );
-
-    vm.drain_pending_child_frame_work_for_test();
+    assert_eq!(setup, "append-returned");
 
     let result = vm
         .eval("JSON.stringify(globalThis.__childDynamicScriptEvents)")
         .expect("dynamic child script events should be readable");
 
-    assert_eq!(result, r#"["start:true","getter","after-call"]"#);
+    assert_eq!(
+        result, r#"["start:true","getter","after-call","after-append","microtask"]"#,
+        "child inline classic execution must finish before appendChild returns, while its Promise callback waits for the outer script turn's microtask checkpoint"
+    );
 }

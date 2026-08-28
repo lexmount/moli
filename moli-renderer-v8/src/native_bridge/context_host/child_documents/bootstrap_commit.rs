@@ -89,6 +89,7 @@ impl JsContextHost {
                     credentialless_storage_nonce,
                 );
             }
+            self.refresh_child_top_navigation_policy_after_commit(handle);
             let snapshot =
                 self.cache_child_snapshot_with_current_document_policy(handle, snapshot)?;
             let loader_id = self.allocate_child_document_loader_id();
@@ -132,6 +133,7 @@ impl JsContextHost {
                 credentialless_storage_nonce,
             );
         }
+        self.refresh_child_top_navigation_policy_after_commit(handle);
 
         let result = if let Some(snapshot) = cached_snapshot {
             let snapshot =

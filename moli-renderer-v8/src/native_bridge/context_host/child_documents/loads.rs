@@ -7,6 +7,7 @@ use super::{
 #[cfg(test)]
 use crate::referrer_policy::response_referrer_policy_from_headers;
 use crate::{
+    browsing_context_model::BrowsingContextAccessOrigin,
     content_security_policy::{
         ContentSecurityPolicyViolationEventFields, send_content_security_policy_reports,
     },
@@ -107,6 +108,31 @@ impl JsContextHost {
         }
     }
 
+    pub(in crate::native_bridge::context_host) fn cancel_pending_child_document_load_for_navigation(
+        &mut self,
+        handle: DomHandle,
+        navigation_load: crate::frame_owner_model::FrameDocumentNavigationLoadBinding,
+    ) {
+        let pending_ids = self
+            .pending_child_document_navigations
+            .iter()
+            .filter_map(|(load_id, pending)| {
+                (pending.target.child_handle() == handle
+                    && pending.target.navigation_load() == navigation_load)
+                    .then_some(*load_id)
+            })
+            .collect::<Vec<_>>();
+        for load_id in pending_ids {
+            let Some(pending) = self.pending_child_document_navigations.remove(&load_id) else {
+                continue;
+            };
+            pending.resource_loader.cancel();
+            self.finish_pending_child_document_navigation_owner_request(&pending);
+            self.clear_child_browsing_context_pending_document_load_if_matches(handle, load_id);
+            let _ = self.settle_child_navigation_load(handle, navigation_load, false);
+        }
+    }
+
     pub(in crate::native_bridge::context_host::child_documents) fn start_child_document_load(
         &mut self,
         handle: DomHandle,
@@ -176,7 +202,27 @@ impl JsContextHost {
             .and_then(|entry| entry.pending_service_worker_client_id());
         let frame_owner_resource_timing =
             self.pending_frame_owner_resource_timing(handle, &target_url, initiator);
-        let initiator_url = self.document_url_for_child_context(handle);
+        let default_initiator_url = self.document_url_for_child_context(handle);
+        let default_document_referrer =
+            self.inferred_child_document_navigation_referrer(handle, &target_url);
+        let (initiator_url, has_explicit_navigation_source, document_referrer) = match &bootstrap {
+            ChildBrowsingContextBootstrap::Request(request) => (
+                request
+                    .initiator_url()
+                    .cloned()
+                    .unwrap_or_else(|| default_initiator_url.clone()),
+                request.has_explicit_navigation_source(),
+                request
+                    .document_referrer()
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| default_document_referrer.clone()),
+            ),
+            ChildBrowsingContextBootstrap::AboutBlank
+            | ChildBrowsingContextBootstrap::Url(_)
+            | ChildBrowsingContextBootstrap::Srcdoc { .. } => {
+                (default_initiator_url, false, default_document_referrer)
+            }
+        };
         let browser_context = self.host_document().cookie_browser_context();
         self.pending_child_document_navigations.insert(
             load_id,
@@ -197,15 +243,19 @@ impl JsContextHost {
         let task_resource_loader = resource_loader.clone();
         resource_loader.spawn_resource_task(async move {
             let result = async {
-                let request = configure_child_document_navigation_request(
+                let mut request = configure_child_document_navigation_request(
                     child_document_load_request(bootstrap).ok_or_else(|| {
                         "unsupported child document navigation bootstrap".to_owned()
                     })?,
                     &initiator_url,
                     &browser_context,
-                )
-                .with_page_network_policy()
-                .with_network_partition_key(network_partition_key);
+                );
+                if has_explicit_navigation_source {
+                    request = request.without_inferred_referrer();
+                }
+                let request = request
+                    .with_page_network_policy()
+                    .with_network_partition_key(network_partition_key);
                 let request_url = request.url.as_str().to_owned();
                 let request_method = request.method.clone();
                 let request_headers = request.request_headers.clone();
@@ -232,6 +282,7 @@ impl JsContextHost {
                         head,
                         body,
                         &parent_character_set,
+                        Some(document_referrer.as_str()),
                     );
                 }
                 let response = task_resource_loader
@@ -246,6 +297,7 @@ impl JsContextHost {
                     head,
                     body,
                     &parent_character_set,
+                    Some(document_referrer.as_str()),
                 )
             }
             .await;
@@ -539,6 +591,7 @@ impl JsContextHost {
                     document_credentialless,
                     credentialless_storage_nonce,
                 );
+                self.refresh_child_top_navigation_policy_after_commit(handle);
                 let resource_was_cached = loaded
                     .document_network
                     .as_ref()
@@ -696,20 +749,14 @@ impl JsContextHost {
         let mut current = handle;
         for _ in 0..=self.child_browsing_contexts.len() {
             let parent = self.child_browsing_context_parent_handle(current);
-            let owner_scope = match parent {
-                Some(parent) => OwnerDispatchScope::Child(parent),
-                None => self.child_browsing_context_popup_owner_id(current).map_or(
-                    OwnerDispatchScope::Top,
-                    OwnerDispatchScope::LightweightPopup,
-                ),
-            };
+            let owner_scope = parent.map_or(OwnerDispatchScope::Top, OwnerDispatchScope::Child);
             let origin = self
                 .window_access_origin_for_dispatch_scope(owner_scope)
-                .and_then(|origin| {
-                    let serialized = origin.serialized_origin();
-                    (serialized != "null")
-                        .then(|| url::Url::parse(&serialized).ok())
-                        .flatten()
+                .and_then(|origin| match origin {
+                    BrowsingContextAccessOrigin::Opaque { .. } => None,
+                    BrowsingContextAccessOrigin::Tuple {
+                        serialized_origin, ..
+                    } => url::Url::parse(&serialized_origin).ok(),
                 });
             ancestors.push(origin);
             let Some(parent) = parent else {
@@ -739,6 +786,7 @@ fn child_document_load_outcome_from_response(
     head: moli_fetch::ResponseHead,
     body: moli_fetch::ResponseBody,
     parent_character_set: &str,
+    document_referrer: Option<&str>,
 ) -> Result<ChildDocumentLoadOutcome, String> {
     if child_document_response_should_ignore_navigation(head.status, &head.headers) {
         return Ok(ChildDocumentLoadOutcome::IgnoredNavigation);
@@ -757,8 +805,9 @@ fn child_document_load_outcome_from_response(
             decode_html_document_with_fallback(&body_bytes, &head.headers, Some(&fallback));
         (markup, character_set.to_owned())
     };
-    let policy_container =
+    let mut policy_container =
         DocumentPolicyContainer::from_navigation_response_headers(&head.headers, &head.final_url);
+    policy_container.document_referrer = document_referrer.unwrap_or_default().to_owned();
     Ok(ChildDocumentLoadOutcome::Loaded(Box::new(
         LoadedChildDocument {
             final_url: head.final_url.clone(),
@@ -847,6 +896,7 @@ mod tests {
             },
             moli_fetch::ResponseBody::materialized_bytes(body_bytes.clone()),
             "UTF-8",
+            None,
         )
         .expect("child document response should load");
         let ChildDocumentLoadOutcome::Loaded(document) = outcome else {

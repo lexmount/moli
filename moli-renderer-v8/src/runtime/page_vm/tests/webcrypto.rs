@@ -7,10 +7,9 @@ use crate::page_task_queue::{
 };
 
 #[tokio::test(flavor = "current_thread")]
-async fn selected_child_script_registers_webcrypto_to_child_window_and_retires_on_detach() {
+async fn synchronous_child_script_registers_webcrypto_to_child_window_and_retires_on_detach() {
     run_page_vm_async_test(async move {
         let mut page_vm = test_page_vm();
-        let loader = page_vm.request_client.clone();
         page_vm.vm_mut().eval(
             r#"
 (() => {
@@ -45,21 +44,6 @@ async fn selected_child_script_registers_webcrypto_to_child_window_and_retires_o
 })()
 "#,
         )?;
-        run_expected_child_realm_materialization_for_wait(
-            &mut page_vm,
-            "child WebCrypto script realm",
-        )
-        .await;
-        assert!(
-            page_vm
-                .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::ChildDocumentScriptReady,
-                    &loader,
-                )
-                .await?,
-            "child WebCrypto registration must execute from the complete selected script task"
-        );
-
         let child_handle = page_vm
             .vm()
             .element_handle_by_id_for_test("owner-bound-crypto-frame")
@@ -75,6 +59,19 @@ async fn selected_child_script_registers_webcrypto_to_child_window_and_retires_o
             crate::native_bridge::WindowExecutionContextOwner::Frame(child_owner.local_window_id),
             "WebCrypto registration in a child realm must bind its child LocalWindow"
         );
+        assert!(
+            page_vm
+                .claim_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::ChildDocumentScriptReady,
+                )
+                .is_none(),
+            "a dynamic inline classic script must not publish an asynchronous DocumentScriptReady task"
+        );
+        run_expected_child_realm_materialization_for_wait(
+            &mut page_vm,
+            "child WebCrypto script realm publication",
+        )
+        .await;
 
         page_vm.vm_mut().eval("document.open(); 'replaced'")?;
         assert!(
@@ -84,7 +81,7 @@ async fn selected_child_script_registers_webcrypto_to_child_window_and_retires_o
         Ok::<_, anyhow::Error>(())
     })
     .await
-    .expect("child WebCrypto owner should be tested through a complete selected script task");
+    .expect("child WebCrypto owner should be tested through synchronous inline execution");
 }
 
 #[test]

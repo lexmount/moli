@@ -37,9 +37,17 @@ pub(super) fn dynamic_script_execute_is_runnable_before_dom_content_loaded(
 }
 
 impl ScriptVmContextBootstrap {
-    pub(super) fn new_main_default(
-        isolate: &mut v8::OwnedIsolate,
-        isolate_bootstrap: &IsolateBootstrapCache,
+    /// Creates a main default world inside a V8 scope that is already entered.
+    ///
+    /// Native callbacks such as `window.open()` cannot borrow the owning
+    /// document isolate a second time while author script is on the stack.
+    /// Keeping the in-scope primitive next to the child-default equivalent
+    /// lets a caller prebootstrap a distinct Page realm without re-entering
+    /// the isolate; Inspector materialization remains a later owner action.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn new_main_default_in_scope<'s>(
+        scope: &mut v8::PinScope<'s, '_, ()>,
+        global_template: v8::Local<'s, v8::ObjectTemplate>,
         context_host: Rc<RefCell<JsContextHost>>,
         resource_owner_id: ResourceOwnerId,
         promise_reject_dispatch: &PromiseRejectDispatchSlot,
@@ -48,9 +56,9 @@ impl ScriptVmContextBootstrap {
         renderer_page_script_environment: Option<crate::script_vm::RendererPageScriptEnvironment>,
         reuse_main_window_proxy: bool,
     ) -> Result<Self> {
-        Self::new_with_mode(
-            isolate,
-            isolate_bootstrap,
+        Self::new_in_scope(
+            scope,
+            global_template,
             context_host,
             resource_owner_id,
             promise_reject_dispatch,
@@ -171,7 +179,7 @@ impl ScriptVmContextBootstrap {
                             "replacement main context is missing its page script environment"
                         )
                     })?
-                    .with_main_window_proxy(|proxy| v8::Local::new(scope, proxy))?,
+                    .take_main_window_proxy_for_context(scope)?,
             ),
             WindowContextBootstrapMode::MainDefault => None,
             WindowContextBootstrapMode::ChildDefault { child_handle, .. } => {
@@ -237,6 +245,18 @@ impl ScriptVmContextBootstrap {
                 "failed to allocate internalized Window security token; using unique context token"
             );
         }
+        if matches!(mode, WindowContextBootstrapMode::MainDefault)
+            && reusable_window_proxy.is_some()
+            && let Some(security_token) = renderer_page_script_environment
+                .as_ref()
+                .and_then(|environment| environment.take_initial_main_window_security_token(scope))
+        {
+            // Initial about:blank inherits its creator's exact effective
+            // origin. Reusing the creator-visible proxy is insufficient for
+            // opaque or document.domain-mutated origins because V8 otherwise
+            // assigns the new context a distinct default token.
+            local_context.set_security_token(security_token);
+        }
         if matches!(
             mode,
             WindowContextBootstrapMode::MainDefault
@@ -273,6 +293,11 @@ impl ScriptVmContextBootstrap {
         install_host_bindings(scope, unsafe { &mut *host_ptr })?;
         let global = scope.get_current_context().global(scope);
         let bridge_ref = JsContextHost::install_into_bridge(&context_host, scope, global)?;
+        if matches!(mode, WindowContextBootstrapMode::MainDefault)
+            && let Some(environment) = renderer_page_script_environment.as_ref()
+        {
+            environment.bind_current_main_default_context(v8::Global::new(scope, local_context));
+        }
         let runtime_observable_context_token =
             unsafe { &mut *host_ptr }.allocate_runtime_observable_context_token();
         install_runtime_observable_context_token_for_context(
@@ -283,6 +308,7 @@ impl ScriptVmContextBootstrap {
             host_ptr,
             mode,
             runtime_observable_context_token,
+            local_context,
         )?;
         // SecureContext is origin-based, not document-URL-based. Initial
         // about:blank/srcdoc child contexts can keep about:* document URLs while
@@ -304,6 +330,23 @@ impl ScriptVmContextBootstrap {
             } => unsafe { &*host_ptr }.document_url().clone(),
         };
         finish_context_bootstrap(scope, unsafe { &mut *host_ptr }, &secure_context_url)?;
+        if matches!(mode, WindowContextBootstrapMode::MainDefault)
+            && let Some(environment) = renderer_page_script_environment.as_ref()
+        {
+            if reusable_window_proxy.is_some() {
+                environment.restore_main_window_opener_after_navigation(scope, global);
+            } else {
+                let opener = unsafe { &mut *host_ptr }
+                    .restore_current_top_level_opener_projection(scope, environment)?;
+                set_private_value(
+                    scope,
+                    global,
+                    crate::context_bootstrap::WINDOW_OPENER_SLOT,
+                    opener,
+                );
+            }
+            environment.restore_main_window_name_after_navigation(scope, global);
+        }
         match mode {
             WindowContextBootstrapMode::Isolated {
                 child_handle: Some(child_handle),
@@ -334,8 +377,25 @@ impl ScriptVmContextBootstrap {
                     runtime_observable_context_token,
                 )?;
             }
-            WindowContextBootstrapMode::MainDefault
-            | WindowContextBootstrapMode::Isolated {
+            WindowContextBootstrapMode::MainDefault => {
+                let top_window_endpoint = v8::Boolean::new(scope, true);
+                set_private_value(
+                    scope,
+                    global,
+                    window_host::TOP_WINDOW_MESSAGE_ENDPOINT_SLOT,
+                    top_window_endpoint.into(),
+                );
+                let window_proxy_endpoint = renderer_page_script_environment.as_ref().map(
+                    crate::script_vm::RendererPageScriptEnvironment::top_level_window_proxy_endpoint_id,
+                );
+                unsafe { &mut *host_ptr }
+                    .install_top_level_window_proxy_cross_origin_access_surface(
+                        scope,
+                        global,
+                        window_proxy_endpoint,
+                    );
+            }
+            WindowContextBootstrapMode::Isolated {
                 child_handle: None, ..
             } => {
                 let top_window_endpoint = v8::Boolean::new(scope, true);
@@ -350,6 +410,11 @@ impl ScriptVmContextBootstrap {
         if let Some(registration) = realm_registration.as_mut() {
             registration.commit();
         }
+        crate::util::retain_context_host_for_document_realm(
+            local_context,
+            context_host,
+            unsafe { &*host_ptr }.deferred_context_host_release_queue(),
+        );
         Ok(Self {
             context: v8::Global::new(scope, local_context),
             runtime_observable_context_token,
@@ -427,6 +492,7 @@ impl PendingWindowRealmBootstrapRegistration {
         host: *mut JsContextHost,
         mode: WindowContextBootstrapMode,
         realm_token: crate::native_bridge::RuntimeObservableContextToken,
+        context: v8::Local<'_, v8::Context>,
     ) -> Result<Option<Self>> {
         let Some((owner, dispatch_scope, access_policy)) = mode.registration() else {
             return Ok(None);
@@ -439,11 +505,21 @@ impl PendingWindowRealmBootstrapRegistration {
         ) {
             anyhow::bail!("failed to register Window realm before runtime bootstrap");
         }
-        Ok(Some(Self {
+        let registration = Self {
             host,
             realm_token,
             committed: false,
-        }))
+        };
+        let identity = crate::native_bridge::WindowExecutionContextIdentity::new(
+            owner,
+            dispatch_scope,
+            realm_token,
+            access_policy,
+        );
+        if !unsafe { &*host }.install_window_access_check_principal_for_context(context, identity) {
+            anyhow::bail!("failed to install Window realm access-check principal");
+        }
+        Ok(Some(registration))
     }
 
     fn commit(&mut self) {

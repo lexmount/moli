@@ -35,8 +35,7 @@ fn push_dialog_for_session(
         moli_core::page::RendererJavaScriptDialogSource::ChildFrame { frame_id, .. } => {
             frame_id.clone()
         }
-        moli_core::page::RendererJavaScriptDialogSource::RootFrame
-        | moli_core::page::RendererJavaScriptDialogSource::LightweightPopup { .. } => ctx
+        moli_core::page::RendererJavaScriptDialogSource::RootFrame => ctx
             .conn
             .target_session_owner_frame_tree_identity(session_id)
             .map(|(frame_id, _, _, _)| frame_id)

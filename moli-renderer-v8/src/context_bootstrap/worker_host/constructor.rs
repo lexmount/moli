@@ -159,13 +159,8 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
                     .map(|(handle, _, _)| handle)
             })
             .or_else(|| crate::native_bridge::active_child_window_handle(scope));
-        let active_popup_base_url = child_handle
-            .is_none()
-            .then(|| host.active_lightweight_popup_base_url(scope))
-            .flatten();
         let base_url = child_handle
             .and_then(|handle| host.child_browsing_context_base_url(handle))
-            .or(active_popup_base_url)
             .unwrap_or_else(|| worker_constructor_base_url(host));
         let network_partition_key = child_handle
             .and_then(|handle| host.child_browsing_context_network_partition_key(handle));
@@ -175,13 +170,8 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
             .storage_key()
             .clone();
         let creator_top_level_site = creator_storage_key.top_level_site().to_owned();
-        let owner_scope = if let Some(handle) = child_handle {
-            crate::native_bridge::WorkerOwnerScope::Child(handle)
-        } else if let Some(popup_id) = crate::native_bridge::active_lightweight_popup_id(scope) {
-            crate::native_bridge::WorkerOwnerScope::LightweightPopup(popup_id)
-        } else {
-            crate::native_bridge::WorkerOwnerScope::Top
-        };
+        let owner_scope = child_handle.map(crate::native_bridge::WorkerOwnerScope::Child);
+        let owner_scope = owner_scope.unwrap_or(crate::native_bridge::WorkerOwnerScope::Top);
         let dispatch_scope = crate::native_bridge::OwnerDispatchScope::from(owner_scope);
         let Some(creator_document_loader) =
             host.document_resource_loader_for_dispatch_scope(dispatch_scope)

@@ -309,6 +309,7 @@ impl JsContextHost {
                 expected_current_owner,
             )?;
         debug_assert_eq!(owner_transition.retired_owner(), expected_current_owner);
+        let _ = self.ensure_child_opaque_origin_nonce(handle);
 
         match owner_transition.local_window_owner_transition() {
             FrameLocalWindowOwnerTransition::Replaced { .. } => {
@@ -325,13 +326,17 @@ impl JsContextHost {
             }
         }
 
-        if let Some(retired_owner) = owner_transition.retired_owner() {
-            self.retire_child_document_external_state(
-                handle,
-                retired_owner,
-                expected_current_document_handle
-                    .expect("retired owner must have a matching document handle"),
-            );
+        let external_state_retirement =
+            expected_current_document_handle.and_then(|document_handle| {
+                owner_transition.external_state_retirement(document_handle)
+            });
+        debug_assert_eq!(
+            external_state_retirement.is_some(),
+            owner_transition.retired_owner().is_some(),
+            "retired owner must have a matching document handle"
+        );
+        if let Some(retirement) = external_state_retirement {
+            self.retire_child_document_external_state(retirement);
         }
 
         let replaced_document_handle = self
@@ -350,6 +355,7 @@ impl JsContextHost {
         let current_owner = owner_transition
             .current_owner()
             .expect("child document commit must install a current owner");
+        self.capture_child_document_start_script_snapshot(current_owner);
         let resource_authority = match navigation_loader {
             Some(loader) => {
                 let seed = loader

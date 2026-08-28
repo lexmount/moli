@@ -55,7 +55,7 @@ pub(super) fn initialize_resource_timing_buffer_state<'s>(
     let host_ptr = context_host_ptr_from_global_bridge(scope)
         .expect("Performance must be initialized in a renderer context");
     let (buffer_id, finalizer) = unsafe { &mut *host_ptr }
-        .create_resource_timing_buffer(DEFAULT_RESOURCE_TIMING_BUFFER_SIZE);
+        .create_resource_timing_buffer(scope, DEFAULT_RESOURCE_TIMING_BUFFER_SIZE);
     let id = v8::BigInt::new_from_u64(scope, buffer_id.raw());
     set_private_value(
         scope,

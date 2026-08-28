@@ -1,5 +1,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+pub(crate) use crate::browsing_context_model::{
+    BrowsingContextId, DocumentCreationKind, DocumentId, LocalWindowId,
+    StableWindowProxyRecord as WindowProxyRecord, WindowProxyId, WindowProxyReachability,
+};
+use crate::browsing_context_model::{
+    DocumentExternalStateRetirement, DocumentLocalWindowTransition, DocumentOwnerTransition,
+    DocumentRealmCurrentness, LocalWindowOwnerTransition, RealmLifecycleState,
+    RealmMaterializationRequest,
+};
 use crate::document_runtime::{DocumentPolicyContainer, DomHandle};
 use crate::service_worker_runtime::ServiceWorkerClientId;
 use crate::types::SubresourcePolicyContext;
@@ -15,15 +24,6 @@ use super::load_event_gate::DocumentLoadGateRelease;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct FrameId(pub(crate) String);
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct WindowProxyId(pub(crate) u64);
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct LocalWindowId(pub(crate) u64);
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct DocumentId(pub(crate) u64);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct DocumentLoadDelayTokenId(pub(crate) u64);
@@ -98,27 +98,38 @@ impl FrameDocumentTaskOwner {
 /// through the browsing-context identity alone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct MainDocumentOwnerTransition {
-    retired_owner: FrameDocumentTaskOwner,
-    current_owner: FrameDocumentTaskOwner,
+    owner_transition: DocumentOwnerTransition<BrowsingContextId, FrameDocumentTaskOwner>,
 }
 
 impl MainDocumentOwnerTransition {
     pub(crate) fn new(
+        browsing_context_id: BrowsingContextId,
         retired_owner: FrameDocumentTaskOwner,
         current_owner: FrameDocumentTaskOwner,
     ) -> Self {
         Self {
-            retired_owner,
-            current_owner,
+            owner_transition: DocumentOwnerTransition::new(
+                browsing_context_id,
+                Some(retired_owner),
+                Some(current_owner),
+            ),
         }
     }
 
+    pub(crate) fn browsing_context_id(self) -> BrowsingContextId {
+        self.owner_transition.browsing_context_id()
+    }
+
     pub(crate) fn retired_owner(self) -> FrameDocumentTaskOwner {
-        self.retired_owner
+        self.owner_transition
+            .retired_owner()
+            .expect("main document replacement must retire an owner")
     }
 
     pub(crate) fn current_owner(self) -> FrameDocumentTaskOwner {
-        self.current_owner
+        self.owner_transition
+            .current_owner()
+            .expect("main document replacement must install an owner")
     }
 }
 
@@ -130,8 +141,62 @@ impl MainDocumentOwnerTransition {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct FrameDocumentOwnerTransition {
     child_handle: DomHandle,
-    retired_owner: Option<FrameDocumentTaskOwner>,
-    current_owner: Option<FrameDocumentTaskOwner>,
+    owner_transition: DocumentOwnerTransition<BrowsingContextId, FrameDocumentTaskOwner>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct FrameDocumentExternalStateRetirement {
+    child_handle: DomHandle,
+    retirement:
+        DocumentExternalStateRetirement<BrowsingContextId, FrameDocumentTaskOwner, DomHandle>,
+}
+
+impl FrameDocumentExternalStateRetirement {
+    pub(crate) fn new(
+        child_handle: DomHandle,
+        browsing_context_id: BrowsingContextId,
+        retired_owner: FrameDocumentTaskOwner,
+        document_handle: DomHandle,
+    ) -> Self {
+        Self {
+            child_handle,
+            retirement: DocumentExternalStateRetirement::new(
+                browsing_context_id,
+                retired_owner,
+                document_handle,
+            ),
+        }
+    }
+
+    fn from_retirement(
+        child_handle: DomHandle,
+        retirement: DocumentExternalStateRetirement<
+            BrowsingContextId,
+            FrameDocumentTaskOwner,
+            DomHandle,
+        >,
+    ) -> Self {
+        Self {
+            child_handle,
+            retirement,
+        }
+    }
+
+    pub(crate) fn child_handle(self) -> DomHandle {
+        self.child_handle
+    }
+
+    pub(crate) fn browsing_context_id(self) -> BrowsingContextId {
+        self.retirement.browsing_context_id()
+    }
+
+    pub(crate) fn retired_owner(self) -> FrameDocumentTaskOwner {
+        self.retirement.retired_owner()
+    }
+
+    pub(crate) fn document_handle(self) -> DomHandle {
+        self.retirement.document_token()
+    }
 }
 
 /// The LocalWindow identity change that actually committed with a document
@@ -141,54 +206,23 @@ pub(crate) struct FrameDocumentOwnerTransition {
 /// initial-empty reuse. Consumers use it to retire LocalWindow-owned runtime
 /// state without repeating the preflight decision after the owner store has
 /// changed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum FrameLocalWindowOwnerTransition {
-    Installed {
-        current: LocalWindowId,
-    },
-    Preserved {
-        current: LocalWindowId,
-    },
-    Replaced {
-        retired: LocalWindowId,
-        current: LocalWindowId,
-    },
-    Retired {
-        retired: LocalWindowId,
-    },
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum FrameDocumentLocalWindowTransition {
-    ReplaceLocalWindow,
-    ReuseInitialEmptyLocalWindow,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum DocumentCreationKind {
-    InitialEmpty,
-    Navigation,
-    Srcdoc,
-    JavascriptUrl,
-    DocumentOpen,
-}
-
-impl DocumentCreationKind {
-    pub(crate) fn is_initial_empty(self) -> bool {
-        matches!(self, Self::InitialEmpty)
-    }
-}
+pub(crate) type FrameLocalWindowOwnerTransition = LocalWindowOwnerTransition<LocalWindowId>;
+pub(crate) type FrameDocumentLocalWindowTransition = DocumentLocalWindowTransition;
 
 impl FrameDocumentOwnerTransition {
     pub(crate) fn new(
         child_handle: DomHandle,
+        browsing_context_id: BrowsingContextId,
         retired_owner: Option<FrameDocumentTaskOwner>,
         current_owner: Option<FrameDocumentTaskOwner>,
     ) -> Self {
         Self {
             child_handle,
-            retired_owner,
-            current_owner,
+            owner_transition: DocumentOwnerTransition::new(
+                browsing_context_id,
+                retired_owner,
+                current_owner,
+            ),
         }
     }
 
@@ -196,70 +230,43 @@ impl FrameDocumentOwnerTransition {
         self.child_handle
     }
 
+    pub(crate) fn browsing_context_id(self) -> BrowsingContextId {
+        self.owner_transition.browsing_context_id()
+    }
+
     pub(crate) fn retired_owner(self) -> Option<FrameDocumentTaskOwner> {
-        self.retired_owner
+        self.owner_transition.retired_owner()
     }
 
     pub(crate) fn current_owner(self) -> Option<FrameDocumentTaskOwner> {
-        self.current_owner
+        self.owner_transition.current_owner()
     }
 
     pub(crate) fn local_window_owner_transition(self) -> FrameLocalWindowOwnerTransition {
-        match (self.retired_owner, self.current_owner) {
-            (None, Some(current)) => FrameLocalWindowOwnerTransition::Installed {
-                current: current.local_window_id,
-            },
-            (Some(retired), Some(current))
-                if retired.local_window_id == current.local_window_id =>
-            {
-                FrameLocalWindowOwnerTransition::Preserved {
-                    current: current.local_window_id,
-                }
-            }
-            (Some(retired), Some(current)) => FrameLocalWindowOwnerTransition::Replaced {
-                retired: retired.local_window_id,
-                current: current.local_window_id,
-            },
-            (Some(retired), None) => FrameLocalWindowOwnerTransition::Retired {
-                retired: retired.local_window_id,
-            },
-            (None, None) => {
-                unreachable!("a document owner transition must install or retire an owner")
-            }
-        }
+        FrameLocalWindowOwnerTransition::between(
+            self.retired_owner().map(|owner| owner.local_window_id),
+            self.current_owner().map(|owner| owner.local_window_id),
+        )
+    }
+
+    pub(crate) fn external_state_retirement(
+        self,
+        document_handle: DomHandle,
+    ) -> Option<FrameDocumentExternalStateRetirement> {
+        self.owner_transition
+            .external_state_retirement(document_handle)
+            .map(|retirement| {
+                FrameDocumentExternalStateRetirement::from_retirement(self.child_handle, retirement)
+            })
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum FrameDocumentTaskRealmCurrentness {
-    Current {
-        owner: FrameDocumentTaskOwner,
-        realm_id: FrameRealmId,
-    },
-    StaleOwner,
-    MissingRealm {
-        owner: FrameDocumentTaskOwner,
-    },
-    PendingRealm {
-        owner: FrameDocumentTaskOwner,
-        realm_id: FrameRealmId,
-    },
-    StaleRealm {
-        owner: FrameDocumentTaskOwner,
-        current_realm_id: FrameRealmId,
-    },
-}
-
-impl FrameDocumentTaskRealmCurrentness {
-    /// Whether the exact Document/LocalWindow/realm identity is still current,
-    /// independently of whether its V8 context has finished materializing.
-    pub(crate) const fn names_current_document_realm(self) -> bool {
-        matches!(self, Self::Current { .. } | Self::PendingRealm { .. })
-    }
-}
+pub(crate) type FrameDocumentTaskRealmCurrentness =
+    DocumentRealmCurrentness<FrameDocumentTaskOwner, FrameRealmId>;
 
 #[derive(Clone, Debug)]
 pub(crate) struct FrameRecord {
+    pub(crate) browsing_context_id: BrowsingContextId,
     pub(crate) frame_id: FrameId,
     pub(crate) kind: FrameKind,
     pub(crate) parent_frame_id: Option<FrameId>,
@@ -408,6 +415,7 @@ pub(crate) enum FrameOwnerElementLifecycleState {
 
 #[derive(Clone, Debug)]
 pub(crate) struct FrameOwnerSnapshot {
+    pub(crate) browsing_context_id: BrowsingContextId,
     pub(crate) frame_id: FrameId,
     pub(crate) kind: FrameKind,
     pub(crate) parent_frame_id: Option<FrameId>,
@@ -427,6 +435,7 @@ pub(crate) struct FrameOwnerSnapshot {
 #[derive(Clone, Debug)]
 pub(crate) struct ChildFrameOwnerSnapshot {
     pub(crate) owner_handle: DomHandle,
+    pub(crate) browsing_context_id: BrowsingContextId,
     pub(crate) frame_id: FrameId,
     pub(crate) parent_frame_id: Option<FrameId>,
     pub(crate) scheduler_lane_id: FrameSchedulerLaneId,
@@ -458,20 +467,6 @@ impl ChildDocumentOpenReplacementPlan {
             self.snapshot.document_id,
         )
     }
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct WindowProxyRecord {
-    pub(crate) id: WindowProxyId,
-    pub(crate) frame_id: FrameId,
-    pub(crate) current_local_window_id: Option<LocalWindowId>,
-    pub(crate) reachability: WindowProxyReachability,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum WindowProxyReachability {
-    LiveFrame,
-    DetachedReachable,
 }
 
 #[derive(Clone, Debug)]
@@ -1346,40 +1341,8 @@ pub(crate) struct FrameRealmRecord {
     pub(crate) lifecycle: FrameRealmLifecycleState,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum FrameRealmLifecycleState {
-    Reserved,
-    MaterializationQueued,
-    Materialized,
-    DetachedReachable,
-    Disposed,
-}
-
-impl FrameRealmLifecycleState {
-    pub(super) const fn belongs_to_current_local_window(self) -> bool {
-        matches!(
-            self,
-            Self::Reserved | Self::MaterializationQueued | Self::Materialized
-        )
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum FrameRealmMaterializationRequest {
-    NewlyQueued { realm_id: FrameRealmId },
-    AlreadyQueued { realm_id: FrameRealmId },
-    AlreadyMaterialized { realm_id: FrameRealmId },
-}
-
-impl FrameRealmMaterializationRequest {
-    pub(crate) const fn realm_id(self) -> FrameRealmId {
-        match self {
-            Self::NewlyQueued { realm_id }
-            | Self::AlreadyQueued { realm_id }
-            | Self::AlreadyMaterialized { realm_id } => realm_id,
-        }
-    }
-}
+pub(crate) type FrameRealmLifecycleState = RealmLifecycleState;
+pub(crate) type FrameRealmMaterializationRequest = RealmMaterializationRequest<FrameRealmId>;
 
 #[derive(Clone, Debug)]
 pub(crate) struct FrameScriptJob {

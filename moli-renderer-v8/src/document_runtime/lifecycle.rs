@@ -44,6 +44,23 @@ impl DocumentRuntime {
         self.main_document_script_preloads = store;
     }
 
+    /// Drops every V8-backed execution edge while preserving the native DOM
+    /// graph used by author-retained detached Document and Node wrappers.
+    /// LocalWindow execution has ended at this point: timers, event callbacks,
+    /// pending module work, parser sessions, and document.write continuations
+    /// must neither run again nor keep the retired Context alive.
+    pub(crate) fn retire_v8_execution_state_for_context_teardown(&mut self) {
+        self.timeouts = HostTimeoutScheduler::default();
+        self.events = HostEventTargetRegistry::default();
+        self.script_lifecycle.clear_for_document_replacement();
+        self.root_document_parser = None;
+        self.document_write_script_preload_scanner = None;
+        self.document_write_script_preloads.clear();
+        self.pending_document_write_external_script_load = None;
+        self.pending_document_write_stylesheet_blocked_script = None;
+        self.pending_document_write_stylesheet_parser_pause = None;
+    }
+
     pub(super) fn bind_main_document_runtime_producer(
         &mut self,
         owner: crate::frame_owner_model::FrameDocumentTaskOwner,
@@ -400,10 +417,31 @@ impl DocumentRuntime {
         &mut self,
         url: Url,
     ) -> Option<(Option<DomHandle>, Option<DomHandle>)> {
+        self.set_document_url_with_fallback_base_update(url, true)
+    }
+
+    pub(crate) fn set_document_url_preserving_fallback_base(
+        &mut self,
+        url: Url,
+    ) -> Option<(Option<DomHandle>, Option<DomHandle>)> {
+        self.set_document_url_with_fallback_base_update(url, false)
+    }
+
+    fn set_document_url_with_fallback_base_update(
+        &mut self,
+        url: Url,
+        update_fallback_base: bool,
+    ) -> Option<(Option<DomHandle>, Option<DomHandle>)> {
         let document_handle = self.dom_host.document_handle();
         let previous_target = self.dom_host.document_target_element(document_handle);
         self.document.set_url(url.clone());
-        let changed = self.dom_host.set_document_url(url);
+        let changed = if update_fallback_base {
+            self.dom_host
+                .set_document_url_for_handle(document_handle, url)
+        } else {
+            self.dom_host
+                .set_document_url_for_handle_preserving_fallback_base(document_handle, url)
+        };
         let next_target = self.dom_host.document_target_element(document_handle);
         (changed && previous_target != next_target).then_some((previous_target, next_target))
     }

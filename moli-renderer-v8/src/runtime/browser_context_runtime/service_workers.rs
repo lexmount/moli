@@ -1,3 +1,8 @@
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+
 use anyhow::{Result, anyhow};
 use moli_fetch::{BrowserNavigationRequestKind, FetchCancelHandle, Request};
 
@@ -18,6 +23,125 @@ use crate::types::{AsyncSubresourceNetworkContext, SubresourceResourceType};
 use url::Url;
 
 use super::RendererBrowserContextRuntime;
+
+/// Once-only completion authority for one exact `Clients.openWindow()` Page.
+///
+/// The ServiceWorker request originates on an existing Window client's Page,
+/// while the opened WindowClient belongs to a newly reserved auxiliary Page.
+/// Keeping the expected renderer Page identity beside the worker request
+/// prevents concurrent same-URL opens, target reuse projections, or a later
+/// current target from completing the wrong Promise. The final owner resolves
+/// the carrier with the committed Page's WindowClient identity; dropping the
+/// last unresolved carrier reports a successful open with no observable
+/// WindowClient, matching Chromium's close/failure race result.
+#[derive(Clone)]
+pub struct RendererServiceWorkerClientsOpenWindowContinuation {
+    inner: Arc<RendererServiceWorkerClientsOpenWindowContinuationInner>,
+}
+
+struct RendererServiceWorkerClientsOpenWindowContinuationInner {
+    completion_endpoint: crate::service_worker_runtime::ServiceWorkerOpenWindowCompletionEndpoint,
+    expected_page_id: super::super::PageId,
+    request_id: u64,
+    source_version_id: crate::service_worker_runtime::ServiceWorkerVersionId,
+    source_run: crate::runtime::RendererServiceWorkerRunIdentity,
+    completed: AtomicBool,
+}
+
+impl std::fmt::Debug for RendererServiceWorkerClientsOpenWindowContinuation {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RendererServiceWorkerClientsOpenWindowContinuation")
+            .field("expected_page_id", &self.inner.expected_page_id)
+            .field("request_id", &self.inner.request_id)
+            .field("source_version_id", &self.inner.source_version_id.as_u64())
+            .field("source_run", &self.inner.source_run)
+            .field("completed", &self.inner.completed.load(Ordering::Acquire))
+            .finish()
+    }
+}
+
+impl PartialEq for RendererServiceWorkerClientsOpenWindowContinuation {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
+    }
+}
+
+impl Eq for RendererServiceWorkerClientsOpenWindowContinuation {}
+
+impl RendererServiceWorkerClientsOpenWindowContinuation {
+    pub(crate) fn new(
+        browser_context_runtime: &RendererBrowserContextRuntime,
+        expected_page_id: super::super::PageId,
+        request_id: u64,
+        source_version_id: crate::service_worker_runtime::ServiceWorkerVersionId,
+        source_run: crate::runtime::RendererServiceWorkerRunIdentity,
+    ) -> Self {
+        Self {
+            inner: Arc::new(RendererServiceWorkerClientsOpenWindowContinuationInner {
+                completion_endpoint: browser_context_runtime
+                    .service_worker_runtime()
+                    .clients_open_window_completion_endpoint(),
+                expected_page_id,
+                request_id,
+                source_version_id,
+                source_run,
+                completed: AtomicBool::new(false),
+            }),
+        }
+    }
+
+    pub fn expected_page_id(&self) -> super::super::PageId {
+        self.inner.expected_page_id
+    }
+
+    /// Completes this request from the WindowClient installed in the exact
+    /// reserved Page. A mismatched Page is treated as an opened-but-
+    /// unobservable Window, never as authority to expose another client.
+    pub fn resolve_for_committed_page(
+        &self,
+        page_id: super::super::PageId,
+        service_worker_client_id: u64,
+    ) {
+        if self.inner.completed.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        self.inner.completion_endpoint.enqueue_committed_page(
+            self.inner.expected_page_id,
+            page_id,
+            service_worker_client_id,
+            self.inner.request_id,
+            self.inner.source_version_id,
+            self.inner.source_run.clone(),
+        );
+    }
+
+    pub fn resolve_null(&self) {
+        if self.inner.completed.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        self.inner.completion_endpoint.enqueue_null(
+            self.inner.expected_page_id,
+            self.inner.request_id,
+            self.inner.source_version_id,
+            self.inner.source_run.clone(),
+        );
+    }
+}
+
+impl Drop for RendererServiceWorkerClientsOpenWindowContinuationInner {
+    fn drop(&mut self) {
+        if self.completed.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        self.completion_endpoint.enqueue_null(
+            self.expected_page_id,
+            self.request_id,
+            self.source_version_id,
+            self.source_run.clone(),
+        );
+    }
+}
 
 pub struct RendererReservedServiceWorkerClient {
     browser_context_runtime: RendererBrowserContextRuntime,

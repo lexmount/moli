@@ -3,6 +3,7 @@ use url::Url;
 use crate::conn::{
     CdpConnection, CommandDispatchContext, CommittedRendererAgentAttachment,
     DocumentNavigationToken, LoadedNavigationRendererAttachmentCommit, NavigationDispatchState,
+    StablePageNavigationCommitTarget,
 };
 use crate::domains::activity::{
     MainDocumentDownloadNavigationActivity, MainDocumentNavigationActivity,
@@ -10,6 +11,7 @@ use crate::domains::activity::{
 use crate::domains::command_output::CommandOutputBuffer;
 use crate::domains::network::{
     MaterializedDownloadDocumentProgress, MaterializedLoadedDocumentProgress,
+    MaterializedStablePageDocumentProgress,
 };
 use moli_core::page::{
     Page, RendererDocumentLifecycleEvent, RendererDocumentLifecycleEventKind,
@@ -29,7 +31,7 @@ pub(super) async fn commit_loaded_navigation_async(
     navigation: MaterializedLoadedDocumentProgress,
     committed_renderer_attachment: Option<CommittedRendererAgentAttachment>,
     command_context: &mut CommandDispatchContext,
-) {
+) -> bool {
     let MaterializedLoadedDocumentProgress {
         page,
         pending_download,
@@ -41,6 +43,7 @@ pub(super) async fn commit_loaded_navigation_async(
         initial_runtime_realms,
         renderer_output_predecessor,
         main_document_commit,
+        document_continuation_observer: _,
         progress_gate,
         navigation_engine,
         network_error_page,
@@ -60,7 +63,7 @@ pub(super) async fn commit_loaded_navigation_async(
                 "{error} after early Page.navigate result"
             );
         }
-        return;
+        return false;
     };
     let is_network_error_page = network_error_page.is_some();
     let navigation_session_id = state.navigate_session_id.clone();
@@ -91,7 +94,7 @@ pub(super) async fn commit_loaded_navigation_async(
     )
     .await
     else {
-        return;
+        return false;
     };
     if !is_network_error_page {
         let _ = conn.commit_main_document_resource_for_session_owner(
@@ -158,6 +161,137 @@ pub(super) async fn commit_loaded_navigation_async(
             .await;
     })
     .await;
+    true
+}
+
+pub(super) async fn commit_stable_page_navigation_async(
+    conn: &mut CdpConnection,
+    out: &mut CommandOutputBuffer,
+    token: &DocumentNavigationToken,
+    state: NavigationDispatchState,
+    navigation: MaterializedStablePageDocumentProgress,
+    committed_renderer_attachment: CommittedRendererAgentAttachment,
+) -> bool {
+    let MaterializedStablePageDocumentProgress {
+        stable_page_target,
+        pending_download,
+        page_creation_artifacts,
+        final_url,
+        response_headers,
+        response_from_cache,
+        main_document_body,
+        initial_runtime_realms,
+        renderer_output_predecessor,
+        main_document_commit,
+        document_continuation_observer: _,
+        progress_gate,
+        navigation_engine,
+        network_error_page,
+    } = navigation;
+    let target_url = network_error_page
+        .as_ref()
+        .map(|error_page| error_page.unreachable_url().clone())
+        .unwrap_or_else(|| final_url.clone());
+    let Some(main_document_commit) = main_document_commit else {
+        let error = "stable Page navigation is missing its frozen main Document commit identity";
+        if state.navigate_id.is_some() {
+            out.push_error_after_messages(-32000, error);
+        } else {
+            tracing::warn!(
+                session_id = state.navigate_session_id.as_deref(),
+                loader_id = state.loader_id,
+                "{error} after early Page.navigate result"
+            );
+        }
+        return false;
+    };
+    let is_network_error_page = network_error_page.is_some();
+    let navigation_session_id = state.navigate_session_id.clone();
+    let (page_creation_artifacts, mut deferred_initial_renderer_document_lifecycle_events) =
+        split_renderer_page_creation_lifecycle_at_load_boundary(page_creation_artifacts);
+    let mut navigation_activity = MainDocumentNavigationActivity::new(
+        state,
+        final_url.clone(),
+        progress_gate,
+        Some(token.clone()),
+    );
+    if let Some(error_page) = network_error_page.as_ref() {
+        navigation_activity =
+            navigation_activity.with_network_error_page_result(error_page.error_text().to_owned());
+    }
+    // Keep the protocol-state transaction off the caller's navigation future:
+    // background target creation already carries the fetch and target-handoff
+    // state on its test thread stack.
+    let Some(_commit) = Box::pin(commit_stable_page_navigation_protocol_state_async(
+        conn,
+        out,
+        token,
+        navigation_activity.state(),
+        &stable_page_target,
+        &final_url,
+        &target_url,
+        &main_document_commit,
+        initial_runtime_realms,
+        committed_renderer_attachment,
+    ))
+    .await
+    else {
+        return false;
+    };
+    if !is_network_error_page {
+        let _ = conn.commit_main_document_resource_for_session_owner(
+            navigation_session_id.as_deref(),
+            navigation_activity.state().frame_id.clone(),
+            navigation_activity.state().loader_id.clone(),
+            final_url.clone(),
+            response_headers,
+            response_from_cache,
+            main_document_body,
+        );
+    }
+    let (renderer_document_binding, mut initial_renderer_document_lifecycle_events) = conn
+        .bind_renderer_document_lifecycle_for_session_owner(
+            navigation_activity.state().navigate_session_id.as_deref(),
+            page_creation_artifacts,
+            Some(token.clone()),
+            navigation_activity.state().frame_id.clone(),
+            navigation_activity.state().loader_id.clone(),
+        );
+    let load_visibility_barrier_armed = renderer_document_binding.is_some()
+        && conn.begin_renderer_document_load_visibility_barrier_for_session_owner(
+            navigation_activity.state().navigate_session_id.as_deref(),
+            &navigation_activity.state().loader_id,
+        );
+    if load_visibility_barrier_armed {
+        let (_, visible_events) = conn.ingest_renderer_document_lifecycle_events_for_session_owner(
+            navigation_activity.state().navigate_session_id.as_deref(),
+            std::mem::take(&mut deferred_initial_renderer_document_lifecycle_events),
+        );
+        initial_renderer_document_lifecycle_events.extend(visible_events);
+    }
+    navigation_activity.defer_initial_renderer_document_lifecycle_events_until_load_boundary(
+        deferred_initial_renderer_document_lifecycle_events,
+    );
+    if let Some(engine) = navigation_engine {
+        conn.adopt_loaded_navigation_engine_for_session_owner(
+            navigation_session_id.as_deref(),
+            engine,
+        );
+    }
+    Box::pin(async move {
+        navigation_activity
+            .emit_loaded_navigation_commit_async(
+                conn,
+                out,
+                pending_download,
+                renderer_document_binding,
+                initial_renderer_document_lifecycle_events,
+                renderer_output_predecessor,
+            )
+            .await;
+    })
+    .await;
+    true
 }
 
 fn split_renderer_page_creation_lifecycle_at_load_boundary(
@@ -555,6 +689,197 @@ async fn restore_and_commit_loaded_navigation_page_async(
         );
     }
     Some(outcome)
+}
+
+async fn commit_stable_page_navigation_protocol_state_async(
+    conn: &mut CdpConnection,
+    out: &mut CommandOutputBuffer,
+    token: &DocumentNavigationToken,
+    state: &NavigationDispatchState,
+    expected: &StablePageNavigationCommitTarget,
+    final_url: &Url,
+    target_url: &Url,
+    main_document_commit: &moli_core::page::RendererMainDocumentCommit,
+    initial_runtime_realms: Vec<RendererRuntimeRealmInfo>,
+    committed_renderer_attachment: CommittedRendererAgentAttachment,
+) -> Option<LoadedPageCommitOutcome> {
+    if !conn.target_page_residence_identity_is_current_for_session(
+        state.navigate_session_id.as_deref(),
+        expected.target_page(),
+    ) || conn
+        .renderer_page_residence_identity_for_session_owner(state.navigate_session_id.as_deref())
+        != Some(expected.renderer_page())
+        || committed_renderer_attachment.navigation() != token
+        || conn.current_renderer_agent_attachment_id_for_session_owner(
+            state.navigate_session_id.as_deref(),
+        ) != Some(committed_renderer_attachment.current().id())
+    {
+        tracing::warn!(
+            session_id = state.navigate_session_id.as_deref(),
+            loader_id = token.loader_id,
+            "stable Page replacement no longer matches its committed protocol owner"
+        );
+        discard_irreversibly_committed_stable_page_if_current_async(
+            conn, state, expected, final_url,
+        )
+        .await;
+        return None;
+    }
+    let Some(commit_state) = conn
+        .prepare_loaded_navigation_commit_for_session_owner(state.navigate_session_id.as_deref())
+    else {
+        tracing::warn!(
+            session_id = state.navigate_session_id.as_deref(),
+            loader_id = token.loader_id,
+            "stable Page replacement lost its protocol commit state after renderer commit"
+        );
+        discard_irreversibly_committed_stable_page_if_current_async(
+            conn, state, expected, final_url,
+        )
+        .await;
+        return None;
+    };
+    let page_commit = match conn.commit_loaded_navigation_document_replacement_for_session_owner(
+        state.navigate_session_id.as_deref(),
+        committed_renderer_attachment,
+        target_url,
+    ) {
+        Some(Ok(commit)) => commit,
+        Some(Err(error)) => {
+            if state.navigate_id.is_some() {
+                out.push_error_after_messages(
+                    -32000,
+                    format!("failed to commit stable Page protocol state: {error}"),
+                );
+            } else {
+                tracing::warn!(
+                    %error,
+                    session_id = state.navigate_session_id.as_deref(),
+                    "stable Page navigation failed after early Page.navigate result"
+                );
+            }
+            let _ = conn
+                .discard_loaded_page_after_failed_navigation_for_session_owner_async(
+                    state.navigate_session_id.as_deref(),
+                    final_url,
+                )
+                .await;
+            return None;
+        }
+        None => {
+            tracing::warn!(
+                session_id = state.navigate_session_id.as_deref(),
+                loader_id = token.loader_id,
+                "stable Page replacement lost its target owner during protocol state commit"
+            );
+            discard_irreversibly_committed_stable_page_if_current_async(
+                conn, state, expected, final_url,
+            )
+            .await;
+            return None;
+        }
+    };
+    let mut claimed_inspector_await_events = Vec::new();
+    for session_id in
+        conn.page_event_session_ids_for_session_owner(state.navigate_session_id.as_deref())
+    {
+        conn.fail_claimed_pending_inspector_awaits_for_session_owner_background_events_into(
+            &mut claimed_inspector_await_events,
+            session_id.as_deref(),
+            "Inspected target navigated or closed",
+        );
+    }
+    out.extend_background_events_after_messages(claimed_inspector_await_events);
+    if let Some(replaced_page_owner) = page_commit.replaced_page_owner.as_ref() {
+        let worker_retirement_events =
+            crate::domains::target::retire_dedicated_worker_targets_for_replaced_page_async(
+                conn,
+                replaced_page_owner,
+            )
+            .await;
+        out.extend_background_events_after_messages(worker_retirement_events);
+    }
+    if conn
+        .commit_loaded_navigation_target_identity_for_session_owner(
+            state.navigate_session_id.as_deref(),
+            main_document_commit,
+            target_url,
+        )
+        .is_none()
+    {
+        tracing::warn!(
+            session_id = state.navigate_session_id.as_deref(),
+            loader_id = token.loader_id,
+            "stable Page replacement lost its target identity commit route"
+        );
+        discard_irreversibly_committed_stable_page_if_current_async(
+            conn, state, expected, final_url,
+        )
+        .await;
+        return None;
+    }
+    if commit_state.runtime_frontend_enabled {
+        let _ = conn.set_renderer_runtime_agent_owns_page_console_api_events_for_session_owner(
+            state.navigate_session_id.as_deref(),
+            true,
+        );
+    }
+    conn.commit_document_navigation_for_session_owner_if_matches(
+        state.navigate_session_id.as_deref(),
+        token,
+    );
+    let preload_channel_execution_context_ids = if conn
+        .target_owner_has_bidi_channel_preload_script_for_session(
+            state.navigate_session_id.as_deref(),
+        ) {
+        dedupe_preload_channel_execution_context_ids(
+            initial_runtime_realms
+                .iter()
+                .filter_map(runtime_realm_execution_context_id)
+                .collect(),
+        )
+    } else {
+        Vec::new()
+    };
+    let mut preload_channel_listener_events = Vec::new();
+    for execution_context_id in preload_channel_execution_context_ids {
+        Box::pin(
+            crate::domains::runtime::start_bidi_preload_channel_listeners_for_execution_context_background_events_async(
+                conn,
+                state.navigate_session_id.as_deref(),
+                execution_context_id,
+                &mut preload_channel_listener_events,
+            ),
+        )
+        .await;
+    }
+    out.extend_background_events_after_messages(preload_channel_listener_events);
+    Some(LoadedPageCommitOutcome::default())
+}
+
+async fn discard_irreversibly_committed_stable_page_if_current_async(
+    conn: &mut CdpConnection,
+    state: &NavigationDispatchState,
+    expected: &StablePageNavigationCommitTarget,
+    final_url: &Url,
+) {
+    if !conn.target_page_residence_identity_is_current_for_session(
+        state.navigate_session_id.as_deref(),
+        expected.target_page(),
+    ) {
+        tracing::error!(
+            session_id = state.navigate_session_id.as_deref(),
+            loader_id = state.loader_id,
+            "could not retire an irreversibly committed stable Page through its captured target route"
+        );
+        return;
+    }
+    let _ = conn
+        .discard_loaded_page_after_failed_navigation_for_session_owner_async(
+            state.navigate_session_id.as_deref(),
+            final_url,
+        )
+        .await;
 }
 
 fn runtime_realm_execution_context_id(realm: &RendererRuntimeRealmInfo) -> Option<i64> {

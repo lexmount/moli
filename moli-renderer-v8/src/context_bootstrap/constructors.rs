@@ -16,6 +16,7 @@ mod core;
 mod custom_elements_registry;
 mod document_nodes;
 mod dom_exception;
+pub(crate) use dom_exception::weaken_dom_exception_prototype_for_context_teardown;
 mod dom_implementation;
 mod elements;
 mod text_codecs;

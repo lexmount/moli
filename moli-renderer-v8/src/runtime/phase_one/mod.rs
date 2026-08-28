@@ -2088,6 +2088,9 @@ document.body.setAttribute('data-error-state', [
             web_storage: crate::RendererWebStorageHandles::ephemeral(),
             root_frame_id: None,
             main_document_commit: None,
+            initial_document_referrer: None,
+            initial_top_level_browsing_context_name: None,
+            auxiliary_browsing_context_policy: None,
             top_level_storage_key: None,
             document_start_scripts: vec![],
             runtime_bindings: vec![],
@@ -2096,6 +2099,7 @@ document.body.setAttribute('data-error-state', [
             permission_overrides: vec![],
             extra_http_headers: vec![],
             document_policy_container: Default::default(),
+            cross_origin_opener_policy: Default::default(),
             document_default_language: None,
             document_last_modified: None,
             locale_override: None,
@@ -2217,7 +2221,7 @@ document.body.setAttribute('data-error-state', [
     }
 
     #[test]
-    fn buffered_modulepreload_does_not_feed_later_module_script_text_cache() {
+    fn buffered_module_requests_do_not_feed_later_module_script_text_cache() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -2230,14 +2234,17 @@ document.body.setAttribute('data-error-state', [
 
             cache.append_to_main_document_scan(
                 &final_url,
-                r#"<link rel="modulepreload" href="/entry.mjs">"#,
+                r#"
+                    <link rel="modulepreload" href="/entry.mjs">
+                    <script type="module" src="/entry.mjs"></script>
+                "#,
                 &loader,
             );
 
             let consumer = prepared_external_module("https://example.test/entry.mjs");
             assert!(
                 cache.shared_preload_for_script(&consumer).is_none(),
-                "modulepreload should reserve the native module map entry instead of becoming reusable script text"
+                "modulepreload and module-script roots must stay out of the legacy script-text preload cache"
             );
         });
     }
@@ -2287,7 +2294,6 @@ document.body.setAttribute('data-error-state', [
             vec![
                 Url::parse("https://example.test/normal.js").expect("normal url"),
                 Url::parse("https://example.test/defer.js").expect("defer url"),
-                Url::parse("https://example.test/module.mjs").expect("module url"),
             ]
         );
     }
@@ -5820,6 +5826,9 @@ globalThis.__outerDocumentWriteScriptContinued = true;
                 web_storage: crate::RendererWebStorageHandles::ephemeral(),
                 root_frame_id: None,
                 main_document_commit: None,
+                initial_document_referrer: None,
+                initial_top_level_browsing_context_name: None,
+                auxiliary_browsing_context_policy: None,
                 top_level_storage_key: None,
                 document_start_scripts: vec![],
                 runtime_bindings: vec![],
@@ -5828,6 +5837,7 @@ globalThis.__outerDocumentWriteScriptContinued = true;
                 permission_overrides: vec![],
                 extra_http_headers: vec![],
                 document_policy_container: Default::default(),
+                cross_origin_opener_policy: Default::default(),
                 document_default_language: None,
                 document_last_modified: None,
                 locale_override: None,
@@ -14224,6 +14234,9 @@ document.body.setAttribute('data-result', [
             web_storage: crate::RendererWebStorageHandles::ephemeral(),
                     root_frame_id: None,
                     main_document_commit: None,
+                    initial_document_referrer: None,
+                    initial_top_level_browsing_context_name: None,
+                    auxiliary_browsing_context_policy: None,
                     top_level_storage_key: None,
                     document_start_scripts: vec![],
                     runtime_bindings: vec![],
@@ -14232,6 +14245,7 @@ document.body.setAttribute('data-result', [
                     permission_overrides: vec![],
                     extra_http_headers: vec![],
                     document_policy_container: Default::default(),
+                    cross_origin_opener_policy: Default::default(),
                     document_default_language: None,
                     document_last_modified: None,
                     locale_override: None,
@@ -14404,6 +14418,9 @@ document.body.setAttribute('data-result', [
             web_storage: crate::RendererWebStorageHandles::ephemeral(),
                     root_frame_id: None,
                     main_document_commit: None,
+                    initial_document_referrer: None,
+                    initial_top_level_browsing_context_name: None,
+                    auxiliary_browsing_context_policy: None,
                     top_level_storage_key: None,
                     document_start_scripts: vec![],
                     runtime_bindings: vec![],
@@ -14412,6 +14429,7 @@ document.body.setAttribute('data-result', [
                     permission_overrides: vec![],
                     extra_http_headers: vec![],
                     document_policy_container: Default::default(),
+                    cross_origin_opener_policy: Default::default(),
                     document_default_language: None,
                     document_last_modified: None,
                     locale_override: None,
@@ -14633,6 +14651,9 @@ document.body.setAttribute('data-result', [
             web_storage: crate::RendererWebStorageHandles::ephemeral(),
                     root_frame_id: None,
                     main_document_commit: None,
+                    initial_document_referrer: None,
+                    initial_top_level_browsing_context_name: None,
+                    auxiliary_browsing_context_policy: None,
                     top_level_storage_key: None,
                     document_start_scripts: vec![],
                     runtime_bindings: vec![],
@@ -14641,6 +14662,7 @@ document.body.setAttribute('data-result', [
                     permission_overrides: vec![],
                     extra_http_headers: vec![],
                     document_policy_container: Default::default(),
+                    cross_origin_opener_policy: Default::default(),
                     document_default_language: None,
                     document_last_modified: None,
                     locale_override: None,
@@ -16631,6 +16653,9 @@ document.body.setAttribute("data-range", [
             web_storage: crate::RendererWebStorageHandles::ephemeral(),
                     root_frame_id: None,
                     main_document_commit: None,
+                    initial_document_referrer: None,
+                    initial_top_level_browsing_context_name: None,
+                    auxiliary_browsing_context_policy: None,
                     top_level_storage_key: None,
                     document_start_scripts: vec![],
                     runtime_bindings: vec![],
@@ -16639,6 +16664,7 @@ document.body.setAttribute("data-range", [
                     permission_overrides: vec![],
                     extra_http_headers: vec![],
                     document_policy_container: Default::default(),
+                    cross_origin_opener_policy: Default::default(),
                     document_default_language: None,
                     document_last_modified: None,
                     locale_override: None,
@@ -16759,6 +16785,9 @@ document.body.setAttribute("data-range", [
             web_storage: crate::RendererWebStorageHandles::ephemeral(),
                     root_frame_id: None,
                     main_document_commit: None,
+                    initial_document_referrer: None,
+                    initial_top_level_browsing_context_name: None,
+                    auxiliary_browsing_context_policy: None,
                     top_level_storage_key: None,
                     document_start_scripts: vec![],
                     runtime_bindings: vec![],
@@ -16767,6 +16796,7 @@ document.body.setAttribute("data-range", [
                     permission_overrides: vec![],
                     extra_http_headers: vec![],
                     document_policy_container: Default::default(),
+                    cross_origin_opener_policy: Default::default(),
                     document_default_language: None,
                     document_last_modified: None,
                     locale_override: None,
@@ -16897,6 +16927,9 @@ document.body.setAttribute("data-range", [
             web_storage: crate::RendererWebStorageHandles::ephemeral(),
                     root_frame_id: None,
                     main_document_commit: None,
+                    initial_document_referrer: None,
+                    initial_top_level_browsing_context_name: None,
+                    auxiliary_browsing_context_policy: None,
                     top_level_storage_key: None,
                     document_start_scripts: vec![],
                     runtime_bindings: vec![],
@@ -16905,6 +16938,7 @@ document.body.setAttribute("data-range", [
                     permission_overrides: vec![],
                     extra_http_headers: vec![],
                     document_policy_container: Default::default(),
+                    cross_origin_opener_policy: Default::default(),
                     document_default_language: None,
                     document_last_modified: None,
                     locale_override: None,
@@ -17070,6 +17104,9 @@ document.body.setAttribute("data-range", [
             web_storage: crate::RendererWebStorageHandles::ephemeral(),
                     root_frame_id: None,
                     main_document_commit: None,
+                    initial_document_referrer: None,
+                    initial_top_level_browsing_context_name: None,
+                    auxiliary_browsing_context_policy: None,
                     top_level_storage_key: None,
                     document_start_scripts: vec![],
                     runtime_bindings: vec![],
@@ -17078,6 +17115,7 @@ document.body.setAttribute("data-range", [
                     permission_overrides: vec![],
                     extra_http_headers: vec![],
                     document_policy_container: Default::default(),
+                    cross_origin_opener_policy: Default::default(),
                     document_default_language: None,
                     document_last_modified: None,
                     locale_override: None,
@@ -17393,6 +17431,9 @@ document.body.setAttribute("data-range", [
             web_storage: crate::RendererWebStorageHandles::ephemeral(),
                     root_frame_id: None,
                     main_document_commit: None,
+                    initial_document_referrer: None,
+                    initial_top_level_browsing_context_name: None,
+                    auxiliary_browsing_context_policy: None,
                     top_level_storage_key: None,
                     document_start_scripts: vec![],
                     runtime_bindings: vec![],
@@ -17401,6 +17442,7 @@ document.body.setAttribute("data-range", [
                     permission_overrides: vec![],
                     extra_http_headers: vec![],
                     document_policy_container: Default::default(),
+                    cross_origin_opener_policy: Default::default(),
                     document_default_language: None,
                     document_last_modified: None,
                     locale_override: None,
@@ -17563,6 +17605,9 @@ document.body.setAttribute("data-range", [
             web_storage: crate::RendererWebStorageHandles::ephemeral(),
                     root_frame_id: None,
                     main_document_commit: None,
+                    initial_document_referrer: None,
+                    initial_top_level_browsing_context_name: None,
+                    auxiliary_browsing_context_policy: None,
                     top_level_storage_key: None,
                     document_start_scripts: vec![],
                     runtime_bindings: vec![],
@@ -17571,6 +17616,7 @@ document.body.setAttribute("data-range", [
                     permission_overrides: vec![],
                     extra_http_headers: vec![],
                     document_policy_container: Default::default(),
+                    cross_origin_opener_policy: Default::default(),
                     document_default_language: None,
                     document_last_modified: None,
                     locale_override: None,
@@ -17650,6 +17696,9 @@ document.body.setAttribute("data-range", [
                 &PageVmEnvConfig {
                     root_frame_id: None,
                     main_document_commit: None,
+                    initial_document_referrer: None,
+                    initial_top_level_browsing_context_name: None,
+                    auxiliary_browsing_context_policy: None,
                     top_level_storage_key: None,
                     web_storage: crate::RendererWebStorageHandles::ephemeral(),
                     document_start_scripts: vec![],
@@ -17659,6 +17708,7 @@ document.body.setAttribute("data-range", [
                     permission_overrides: vec![],
                     extra_http_headers: vec![],
                     document_policy_container: Default::default(),
+                    cross_origin_opener_policy: Default::default(),
                     document_default_language: None,
                     document_last_modified: None,
                     locale_override: None,

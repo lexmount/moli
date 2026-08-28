@@ -50,8 +50,6 @@ pub(crate) use classic_script_tasks::{
     frame_script_job_kind_from_parser_classic_ready_kind,
 };
 pub(crate) use frame_task_sources::{
-    FrameDocumentDynamicClassicExecutionFollowup, FrameDocumentDynamicClassicPrepareFollowup,
-    FrameDocumentDynamicClassicPrepareSkipReason, FrameDocumentDynamicClassicScriptExecutionAction,
     FrameDocumentExternalClassicExecutionFollowup, FrameDocumentExternalClassicExecutionResult,
     FrameDocumentExternalClassicPostExecutionAction, FrameDocumentExternalClassicPrepareFollowup,
     FrameDocumentExternalClassicPrepareSkipReason, FrameDocumentExternalClassicScriptExecution,
@@ -65,8 +63,7 @@ pub(crate) use frame_task_sources::{
     FrameDocumentScriptExecutionWork, FrameDocumentScriptPrepareFollowup,
     FrameDocumentScriptReadyTaskWork, FrameDocumentScriptWorkAdmission,
     FrameDocumentUnboundScriptWork, PendingChildDocumentScriptExecutionWork,
-    PendingChildDynamicDocumentScript, PendingChildExternalClassicDocumentScript,
-    PendingChildJavascriptUrlDocumentScript,
+    PendingChildExternalClassicDocumentScript, PendingChildJavascriptUrlDocumentScript,
 };
 pub(crate) use lifecycle_tasks::{
     ChildDocumentAsyncClassicScriptLoadDelay, DocumentLinkEventOwner,
@@ -174,8 +171,9 @@ pub(crate) use navigation_tasks::{
 #[cfg(test)]
 pub(crate) use records::FrameFunctionConstructorSource;
 pub(crate) use records::{
-    ChildFrameOwnerSnapshot, DocumentCreationKind, DocumentId, DocumentLoadDelayTokenId,
-    FrameDocumentDescendantLoadCompletion, FrameDocumentDescendantLoadParent,
+    BrowsingContextId, ChildFrameOwnerSnapshot, DocumentCreationKind, DocumentId,
+    DocumentLoadDelayTokenId, FrameDocumentDescendantLoadCompletion,
+    FrameDocumentDescendantLoadParent, FrameDocumentExternalStateRetirement,
     FrameDocumentLoadDispatchFinish, FrameDocumentLocalWindowTransition,
     FrameDocumentNavigationLoadBinding, FrameDocumentOwner, FrameDocumentOwnerTransition,
     FrameDocumentTaskOwner, FrameDocumentTaskRealmCurrentness, FrameId,

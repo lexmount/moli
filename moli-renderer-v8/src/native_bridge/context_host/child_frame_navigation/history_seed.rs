@@ -26,6 +26,11 @@ impl JsContextHost {
             ChildBrowsingContextBootstrap::Url(url) if url.scheme() == "javascript" => {
                 Url::parse("about:blank").ok()
             }
+            ChildBrowsingContextBootstrap::Request(request)
+                if request.url.scheme() == "javascript" =>
+            {
+                Url::parse("about:blank").ok()
+            }
             _ => Self::child_browsing_context_bootstrap_url(bootstrap),
         }
     }

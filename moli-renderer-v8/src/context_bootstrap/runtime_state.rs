@@ -60,6 +60,15 @@ pub(crate) const ORIGINAL_WEBASSEMBLY_GLOBAL_VALUE_GETTER_SLOT: &str =
 const WINDOW_INDEXED_DB_SURFACE_SLOT: &str = "moli.Window.indexedDB";
 const WINDOW_ORIGIN_RUNTIME_SLOT: &str = "__moliWindowOriginRuntime";
 const WINDOW_INTRINSIC_EVAL_SLOT: &str = "__moliWindowIntrinsicEval";
+const WINDOW_PROXY_CACHED_ACCESSOR_PRIVATE_NAME: &str = "Moli::Window#WindowProxyCachedAccessor";
+const WINDOW_DOCUMENT_CACHED_ACCESSOR_PRIVATE_NAME: &str = "Moli::Window#DocumentCachedAccessor";
+const AUXILIARY_WINDOW_VIEWPORT_SURFACE_PROPERTIES: &[&str] = &[
+    "innerWidth",
+    "innerHeight",
+    "outerWidth",
+    "outerHeight",
+    "devicePixelRatio",
+];
 pub(in crate::context_bootstrap) const WINDOW_SECURE_CONTEXT_AVAILABLE_SLOT: &str =
     "__moliWindowSecureContextAvailable";
 
@@ -509,7 +518,8 @@ fn legacy_unforgeable_window_slot_value<'s>(
     receiver: v8::Local<'s, v8::Object>,
     slot: &'static str,
 ) -> v8::Local<'s, v8::Value> {
-    object_hidden_value(scope, receiver, slot)
+    get_private_value(scope, receiver, slot)
+        .or_else(|| object_hidden_value(scope, receiver, slot))
         .unwrap_or_else(|| scope.get_current_context().global(scope).into())
 }
 
@@ -658,18 +668,92 @@ fn define_legacy_unforgeable_window_property<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Result<()> {
-    let getter = v8::Function::builder(legacy_unforgeable_window_getter)
-        .build(scope)
-        .ok_or_else(|| anyhow!("failed to build window getter"))?;
-    define_get_set_property(
+    let cache_name = v8str(scope, WINDOW_PROXY_CACHED_ACCESSOR_PRIVATE_NAME);
+    let cache_property = v8::Private::for_api(scope, Some(cache_name));
+    let getter_template = v8::FunctionTemplate::new_with_cache(
         scope,
-        object,
+        legacy_unforgeable_window_getter,
+        cache_property,
+        None,
+        None,
+        0,
+        v8::SideEffectType::HasNoSideEffect,
+    );
+    getter_template.remove_prototype();
+    let getter = getter_template
+        .get_function(scope)
+        .ok_or_else(|| anyhow!("failed to build window getter"))?;
+    getter.set_name(v8str(scope, "get window"));
+    object.set_accessor_property(
         v8str(scope, "window").into(),
-        getter.into(),
-        v8::undefined(scope).into(),
+        Some(getter),
+        None,
         v8::PropertyAttribute::DONT_DELETE,
-        "window",
-    )
+    );
+    object
+        .set_private(scope, cache_property, object.into())
+        .filter(|set| *set)
+        .map(|_| ())
+        .ok_or_else(|| anyhow!("failed to retain WindowProxy cached accessor value"))
+}
+
+fn redefine_cached_replaceable_window_proxy_aliases<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> Result<()> {
+    let cache_name = v8str(scope, WINDOW_PROXY_CACHED_ACCESSOR_PRIVATE_NAME);
+    let cache_property = v8::Private::for_api(scope, Some(cache_name));
+
+    let self_getter_template = v8::FunctionTemplate::new_with_cache(
+        scope,
+        legacy_unforgeable_self_getter,
+        cache_property,
+        None,
+        None,
+        0,
+        v8::SideEffectType::HasNoSideEffect,
+    );
+    self_getter_template.remove_prototype();
+    let self_getter = self_getter_template
+        .get_function(scope)
+        .ok_or_else(|| anyhow!("failed to build self getter"))?;
+    self_getter.set_name(v8str(scope, "get self"));
+    let self_setter = v8::Function::builder(replaceable_self_setter)
+        .build(scope)
+        .ok_or_else(|| anyhow!("failed to build self setter"))?;
+    self_setter.set_name(v8str(scope, "set self"));
+    object.set_accessor_property(
+        v8str(scope, "self").into(),
+        Some(self_getter),
+        Some(self_setter),
+        v8::PropertyAttribute::NONE,
+    );
+
+    let frames_getter_template = v8::FunctionTemplate::new_with_cache(
+        scope,
+        legacy_unforgeable_frames_getter,
+        cache_property,
+        None,
+        None,
+        0,
+        v8::SideEffectType::HasNoSideEffect,
+    );
+    frames_getter_template.remove_prototype();
+    let frames_getter = frames_getter_template
+        .get_function(scope)
+        .ok_or_else(|| anyhow!("failed to build frames getter"))?;
+    frames_getter.set_name(v8str(scope, "get frames"));
+    let frames_setter = v8::Function::builder(replaceable_frames_setter)
+        .build(scope)
+        .ok_or_else(|| anyhow!("failed to build frames setter"))?;
+    frames_setter.set_name(v8str(scope, "set frames"));
+    object.set_accessor_property(
+        v8str(scope, "frames").into(),
+        Some(frames_getter),
+        Some(frames_setter),
+        v8::PropertyAttribute::NONE,
+    );
+    Ok(())
 }
 
 fn legacy_unforgeable_self_getter<'s>(
@@ -876,10 +960,12 @@ fn window_name_runtime_setter<'s>(
         .to_string(scope)
         .map(|value| value.to_rust_string_lossy(scope))
         .unwrap_or_default();
-    if let Some(handle) = child_context_handle_from_owner(scope, receiver)
-        && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
-    {
-        unsafe { &mut *host_ptr }.set_child_browsing_context_name(handle, next.clone());
+    if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
+        if let Some(handle) = child_context_handle_from_owner(scope, receiver) {
+            unsafe { &mut *host_ptr }.set_child_browsing_context_name(handle, next.clone());
+        } else {
+            unsafe { &*host_ptr }.set_top_level_browsing_context_name(next.clone());
+        }
     }
     define_non_enumerable_string_property(scope, receiver, WINDOW_NAME_SLOT, &next);
 }
@@ -1412,19 +1498,60 @@ fn define_legacy_unforgeable_document_property<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Result<()> {
-    let getter = v8::Function::builder(legacy_unforgeable_document_getter)
-        .build(scope)
+    let cache_name = v8str(scope, WINDOW_DOCUMENT_CACHED_ACCESSOR_PRIVATE_NAME);
+    let cache_property = v8::Private::for_api(scope, Some(cache_name));
+    let getter_template = v8::FunctionTemplate::new_with_cache(
+        scope,
+        legacy_unforgeable_document_getter,
+        cache_property,
+        None,
+        None,
+        0,
+        v8::SideEffectType::HasNoSideEffect,
+    );
+    getter_template.remove_prototype();
+    let getter = getter_template
+        .get_function(scope)
         .ok_or_else(|| anyhow!("failed to build document getter"))?;
     getter.set_name(v8str(scope, "get document"));
-    define_get_set_property(
-        scope,
-        object,
+    object.set_accessor_property(
         v8str(scope, "document").into(),
-        getter.into(),
-        v8::undefined(scope).into(),
+        Some(getter),
+        None,
         v8::PropertyAttribute::DONT_DELETE,
-        "document",
-    )
+    );
+
+    // Blink eagerly writes the current Document wrapper to the cached
+    // accessor's private slot. Doing this while the realm is still active
+    // binds the value to its inner global, so a retained old closure keeps the
+    // old Document after the stable outer WindowProxy is detached and reused.
+    let document = object
+        .get(scope, v8str(scope, "document").into())
+        .filter(|document| !document.is_null_or_undefined())
+        .ok_or_else(|| anyhow!("failed to populate Window.document cached accessor"))?;
+    object
+        .set_private(scope, cache_property, document)
+        .filter(|set| *set)
+        .map(|_| ())
+        .ok_or_else(|| anyhow!("failed to retain Window.document cached accessor value"))
+}
+
+/// Updates V8's cached-accessor backing value when an initial empty
+/// LocalWindow keeps its realm but commits a replacement Document.
+///
+/// A cross-LocalWindow navigation gets a fresh inner global and therefore a
+/// fresh cache entry. Initial about:blank/srcdoc reuse is different: the
+/// stable realm survives, so leaving the bootstrap value in this private slot
+/// would make `window.document` permanently project the retired Document.
+pub(crate) fn sync_window_document_cached_accessor<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    window: v8::Local<'s, v8::Object>,
+    document: v8::Local<'s, v8::Object>,
+) {
+    let cache_name = v8str(scope, WINDOW_DOCUMENT_CACHED_ACCESSOR_PRIVATE_NAME);
+    let cache_property = v8::Private::for_api(scope, Some(cache_name));
+    let updated = window.set_private(scope, cache_property, document.into());
+    debug_assert_eq!(updated, Some(true));
 }
 
 fn document_all_runtime_getter<'s>(
@@ -1657,6 +1784,7 @@ pub(crate) fn finish_context_bootstrap(
         );
     }
     let _ = global.delete(scope, console_key.into());
+    crate::native_bridge::install_cross_origin_window_internal_method_intrinsics(scope, global)?;
     install_window_runtime_state(scope, global, document_runtime, secure_context_url)?;
     // WPT harness helper only. Normal builds keep the feature disabled so pages
     // do not observe non-standard `webdriver` / `WebDriver` globals.
@@ -1976,7 +2104,11 @@ fn install_window_runtime_state<'s>(
         global,
         runtime.document_url().as_str(),
     )?;
-    let origin = moli_url::origin_ascii_serialization(runtime.document_url());
+    let origin = if runtime.document_sandbox_policy().forces_opaque_origin {
+        "null".to_owned()
+    } else {
+        moli_url::origin_ascii_serialization(runtime.document_url())
+    };
     set_window_origin_runtime_state(scope, global, &origin)?;
 
     let console = ConsoleObjectDeclaration::default()
@@ -1998,6 +2130,10 @@ fn install_window_runtime_state<'s>(
     )
     .initialize(scope, global)
     .map_err(|error| anyhow!("failed to initialize Window bootstrap slots: {error}"))?;
+    set_private_value(scope, global, WINDOW_SELF_SLOT, global.into());
+    set_private_value(scope, global, WINDOW_PARENT_SLOT, global.into());
+    set_private_value(scope, global, WINDOW_TOP_SLOT, global.into());
+    set_private_value(scope, global, WINDOW_FRAMES_SLOT, global.into());
     define_legacy_unforgeable_window_property(scope, global)?;
     define_legacy_unforgeable_document_property(scope, global)?;
     // Blink exposes `self`, `parent`, and `frames` as [Replaceable], while
@@ -2005,6 +2141,7 @@ fn install_window_runtime_state<'s>(
     // classic-script declarations like `var parent = ...` work, without letting
     // DOM named items shadow the builtins.
     WindowLegacyAliasAccessorsDeclaration::default().initialize(scope, global)?;
+    redefine_cached_replaceable_window_proxy_aliases(scope, global)?;
     let intrinsic_eval = v8::Script::compile(scope, v8str(scope, "eval"), None)
         .and_then(|script| script.run(scope))
         .ok_or_else(|| anyhow!("failed to resolve intrinsic eval"))?;
@@ -2058,6 +2195,30 @@ pub(crate) fn set_window_origin_runtime_state(
         origin_value.into(),
     );
     Ok(())
+}
+
+pub(crate) fn inherit_auxiliary_window_viewport_surface<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    opener: v8::Local<'s, v8::Object>,
+    window: v8::Local<'s, v8::Object>,
+) {
+    for property in AUXILIARY_WINDOW_VIEWPORT_SURFACE_PROPERTIES {
+        let Some(value) = opener.get(scope, v8str(scope, property).into()) else {
+            continue;
+        };
+        if value.is_number() {
+            native_bridge::set_object_slot(scope, window, property, value);
+        }
+    }
+}
+
+pub(crate) fn window_origin_runtime_state<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    window: v8::Local<'s, v8::Object>,
+) -> Option<String> {
+    get_private_value(scope, window, WINDOW_ORIGIN_RUNTIME_SLOT)
+        .and_then(|value| value.to_string(scope))
+        .map(|value| value.to_rust_string_lossy(scope))
 }
 
 pub(crate) fn install_webassembly_runtime_state<'s>(

@@ -4,7 +4,7 @@
 //! focused assertions over emitted results, events, and errors.
 
 use serde_json::{Value, json};
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::time::Duration;
 
 use super::conn::{
@@ -53,7 +53,15 @@ pub struct TestContext {
         tokio::sync::mpsc::UnboundedSender<crate::domains::page::BackgroundNavigationCompletion>,
     background_navigation_completion_rx:
         tokio::sync::mpsc::UnboundedReceiver<crate::domains::page::BackgroundNavigationCompletion>,
+    document_continuation_completion_tx: tokio::sync::mpsc::UnboundedSender<
+        crate::domains::page::BackgroundDocumentContinuationCompletion,
+    >,
+    document_continuation_completion_rx: tokio::sync::mpsc::UnboundedReceiver<
+        crate::domains::page::BackgroundDocumentContinuationCompletion,
+    >,
+    document_continuation_scheduler_explicitly_enabled: bool,
     background_navigation_scheduler_enabled: bool,
+    pending_document_continuation_gates: HashSet<super::conn::BackgroundNavigationGateKey>,
 }
 
 struct PendingTestRuntimeDeferredReply {
@@ -209,8 +217,13 @@ impl TestContext {
         let (background_event_tx, background_event_rx) = tokio::sync::mpsc::unbounded_channel();
         let (background_navigation_completion_tx, background_navigation_completion_rx) =
             tokio::sync::mpsc::unbounded_channel();
+        let (document_continuation_completion_tx, document_continuation_completion_rx) =
+            tokio::sync::mpsc::unbounded_channel();
         conn.set_renderer_publication_sender(renderer_publication_tx);
         conn.set_runtime_inspector_response_ready_sender(runtime_inspector_response_ready_tx);
+        conn.set_document_continuation_completion_sender(
+            document_continuation_completion_tx.clone(),
+        );
         Self {
             conn,
             sent: Vec::new(),
@@ -223,7 +236,11 @@ impl TestContext {
             background_event_rx,
             background_navigation_completion_tx,
             background_navigation_completion_rx,
+            document_continuation_completion_tx,
+            document_continuation_completion_rx,
+            document_continuation_scheduler_explicitly_enabled: false,
             background_navigation_scheduler_enabled: false,
+            pending_document_continuation_gates: HashSet::new(),
         }
     }
 
@@ -239,12 +256,27 @@ impl TestContext {
         if self.background_navigation_scheduler_enabled {
             return;
         }
+        self.enable_document_continuation_scheduler_for_test();
         self.conn
             .set_background_event_sender(self.background_event_tx.clone());
         self.conn.set_background_navigation_completion_sender(
             self.background_navigation_completion_tx.clone(),
         );
         self.background_navigation_scheduler_enabled = true;
+    }
+
+    /// Enables only the typed post-commit continuation lane.
+    ///
+    /// Most compatibility tests keep foreground navigation synchronous through
+    /// its first stable renderer-owner boundary. Tests that intentionally park
+    /// author script execution behind Debugger control need the command reply
+    /// to remain independently routable so the controlling command can resume
+    /// that same continuation.
+    pub(crate) fn enable_document_continuation_scheduler_for_test(&mut self) {
+        self.conn.set_document_continuation_completion_sender(
+            self.document_continuation_completion_tx.clone(),
+        );
+        self.document_continuation_scheduler_explicitly_enabled = true;
     }
 
     /// Loads and installs one production-shaped navigation fixture for the
@@ -409,6 +441,39 @@ impl TestContext {
         let response_start = self.sent.len();
         Box::pin(self.process_parsed_command_like_scheduler(&command, true)).await;
         Box::pin(self.wait_for_test_command_response(command_id, response_start)).await;
+        if !self.document_continuation_scheduler_explicitly_enabled
+            && test_command_starts_document_navigation(&command)
+        {
+            Box::pin(self.wait_for_document_continuation_for_test(
+                command.session_id(),
+                "foreground navigation command continuation",
+            ))
+            .await;
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn wait_for_document_continuation_for_test(
+        &mut self,
+        session_id: Option<&str>,
+        description: &str,
+    ) {
+        while self
+            .conn
+            .has_pending_document_navigation_for_session_owner(session_id)
+            || self
+                .pending_document_continuation_gates
+                .iter()
+                .any(|key| key.matches_session_owner(session_id))
+        {
+            assert!(
+                matches!(
+                    Box::pin(self.wait_for_one_test_scheduler_turn()).await,
+                    TestSchedulerTurnOutcome::Processed(_)
+                ),
+                "test scheduler lost all input while waiting for {description}"
+            );
+        }
     }
 
     #[cfg(test)]
@@ -687,11 +752,106 @@ impl TestContext {
         }
     }
 
+    /// Mirrors the external-load wait used by the WebDriver adapters for one
+    /// protocol-neutral navigation command.
+    ///
+    /// A raw `CdpConnection` returns at the command boundary. The production
+    /// scheduler then waits for the exact target's typed Document continuation
+    /// and main-Document load residence before exposing a `wait: Load` result.
+    /// Direct-command tests must drive that same boundary rather than relying
+    /// on the renderer owner happening to finish first.
+    #[cfg(test)]
+    pub(crate) async fn wait_for_direct_navigation_load_for_test(
+        &mut self,
+        context: &crate::devtools_runtime::DevToolsCommandContext,
+        expected_loader_id: &str,
+        description: &str,
+    ) {
+        while self
+            .conn
+            .has_inflight_background_navigation_for_devtools_context(context)
+            || self
+                .pending_document_continuation_gates
+                .iter()
+                .any(|key| navigation_gate_matches_devtools_context(key, context))
+        {
+            assert!(
+                matches!(
+                    Box::pin(self.wait_for_one_test_scheduler_turn()).await,
+                    TestSchedulerTurnOutcome::Processed(_)
+                ),
+                "test scheduler lost all external input while waiting for {description}"
+            );
+        }
+
+        let wait_key = self
+            .conn
+            .capture_devtools_document_lifecycle_wait_key(
+                context,
+                expected_loader_id,
+                moli_core::page::RendererDocumentLifecycleMilestone::Load,
+            )
+            .unwrap_or_else(|| {
+                panic!(
+                    "failed to capture the exact load lifecycle waiter for {description}; loader={expected_loader_id}"
+                )
+            });
+        let lifecycle_state = tokio::time::timeout(TEST_SCHEDULER_INPUT_TIMEOUT, async {
+            loop {
+                let state = self
+                    .conn
+                    .devtools_document_lifecycle_wait_state(context, &wait_key);
+                if state != crate::conn::DevToolsDocumentLifecycleWaitState::Pending {
+                    return state;
+                }
+                assert!(
+                    matches!(
+                        Box::pin(self.wait_for_one_test_scheduler_turn()).await,
+                        TestSchedulerTurnOutcome::Processed(_)
+                    ),
+                    "test scheduler lost all external input while waiting for {description}"
+                );
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("timed out waiting for {description}"));
+        let _ = self
+            .conn
+            .release_devtools_document_lifecycle_wait_key(context, &wait_key);
+        assert_eq!(
+            lifecycle_state,
+            crate::conn::DevToolsDocumentLifecycleWaitState::Reached,
+            "exact load lifecycle did not reach its requested milestone for {description}"
+        );
+
+        let waited = tokio::time::timeout(TEST_SCHEDULER_INPUT_TIMEOUT, async {
+            while self.pending_protocol_scheduler_work.iter().any(|work| {
+                work.observes_main_document_load_for_devtools_context(&self.conn, context)
+            }) {
+                assert!(
+                    matches!(
+                        Box::pin(self.wait_for_one_test_scheduler_turn()).await,
+                        TestSchedulerTurnOutcome::Processed(_)
+                    ),
+                    "test scheduler lost all external input while waiting for {description}"
+                );
+            }
+        })
+        .await;
+        if waited.is_err() {
+            panic!(
+                "timed out waiting for {description}; pending protocol work={:?}",
+                self.pending_protocol_scheduler_work
+            );
+        }
+    }
+
     async fn process_parsed_command_like_scheduler(
         &mut self,
         command: &ParsedCdpCommand,
         drain_after_command: bool,
     ) -> Vec<CdpSchedulerEvent> {
+        Box::pin(self.wait_for_document_navigation_gate_before_command(command)).await;
         let output_session_id = command.command_output_session_id().map(str::to_owned);
         let mut protocol_events = Vec::new();
         let mut scheduler_events = Vec::new();
@@ -764,6 +924,28 @@ impl TestContext {
                 let _ = Box::pin(self.run_one_ready_test_scheduler_turn()).await;
             }
             scheduler_events
+        }
+    }
+
+    async fn wait_for_document_navigation_gate_before_command(
+        &mut self,
+        command: &ParsedCdpCommand,
+    ) {
+        if !command.waits_for_document_continuation_to_finish() {
+            return;
+        }
+        while self
+            .pending_document_continuation_gates
+            .iter()
+            .any(|key| key.matches_session_owner(command.session_id()))
+        {
+            assert!(
+                matches!(
+                    Box::pin(self.wait_for_one_test_scheduler_turn()).await,
+                    TestSchedulerTurnOutcome::Processed(_)
+                ),
+                "CDP command waiting for the committed Document continuation lost all scheduler input"
+            );
         }
     }
 
@@ -864,11 +1046,18 @@ impl TestContext {
                     return false;
                 }
                 CdpCommandTaskStep::Pending(pending) => {
-                    let completed = pending.wait().await;
-                    step = self
-                        .conn
-                        .complete_pending_command_dispatch_with_context(completed, command_context)
-                        .await;
+                    // Mirror the production scheduler's heap boundaries.  A
+                    // pending target command can retain both its completed
+                    // initial Page build and the navigation continuation, so
+                    // embedding either future here makes unrelated protocol
+                    // tests pay for the largest command state on their small
+                    // test-thread stack.
+                    let completed = Box::pin(pending.wait()).await;
+                    step = Box::pin(self.conn.complete_pending_command_dispatch_with_context(
+                        completed,
+                        command_context,
+                    ))
+                    .await;
                 }
             }
         }
@@ -1174,6 +1363,12 @@ impl TestContext {
             Box::pin(self.route_protocol_events_like_scheduler(prefix, work)).await;
         }
 
+        if let Some(key) = completion.document_continuation_gate_key() {
+            assert!(
+                self.pending_document_continuation_gates.remove(&key),
+                "document-continuation completion must settle an admitted background navigation gate"
+            );
+        }
         let outcome = self
             .conn
             .drain_background_navigation_completion_turn_async(completion)
@@ -1187,8 +1382,8 @@ impl TestContext {
             renderer_output_predecessor,
         ) = outcome.into_renderer_owner_turn_parts();
         assert!(
-            renderer_output_predecessor.is_none(),
-            "background navigation completion must use an insertion boundary"
+            renderer_output_boundary.is_none() || renderer_output_predecessor.is_none(),
+            "background navigation completion cannot carry both an insertion boundary and a continuation predecessor"
         );
         if !completion_prefix.is_empty() {
             Box::pin(self.route_protocol_events_like_scheduler(
@@ -1197,9 +1392,8 @@ impl TestContext {
             ))
             .await;
         }
-        if let Some(boundary) = renderer_output_boundary {
-            Box::pin(self.route_renderer_output_predecessor_before_command_response(boundary))
-                .await;
+        if let Some(fence) = renderer_output_boundary.or(renderer_output_predecessor) {
+            Box::pin(self.route_renderer_output_predecessor_before_command_response(fence)).await;
         }
         completion_suffix.append(&mut post_response_events);
         while let Ok(event) = self.background_event_rx.try_recv() {
@@ -1215,7 +1409,15 @@ impl TestContext {
 
     async fn run_one_ready_test_scheduler_turn(&mut self) -> TestSchedulerTurnOutcome {
         let mut work = VecDeque::new();
-        let input_kind = if self.background_navigation_scheduler_enabled
+        let input_kind = if let Ok(completion) = self.document_continuation_completion_rx.try_recv()
+        {
+            work.push_back(TestSchedulerWork::BackgroundNavigationCompletion(
+                crate::domains::page::BackgroundNavigationCompletion::document_continuation(
+                    completion,
+                ),
+            ));
+            TestSchedulerInputKind::BackgroundNavigationCompletion
+        } else if self.background_navigation_scheduler_enabled
             && let Ok(completion) = self.background_navigation_completion_rx.try_recv()
         {
             work.push_back(TestSchedulerWork::BackgroundNavigationCompletion(
@@ -1325,6 +1527,15 @@ impl TestContext {
                     work.push_back(TestSchedulerWork::RuntimeDeferredReplyReady(response));
                     TestSchedulerInputKind::RuntimeDeferredReply
                 }
+                maybe_continuation = self.document_continuation_completion_rx.recv() => {
+                    let Some(completion) = maybe_continuation else {
+                        return TestSchedulerTurnOutcome::Idle;
+                    };
+                    work.push_back(TestSchedulerWork::BackgroundNavigationCompletion(
+                        crate::domains::page::BackgroundNavigationCompletion::document_continuation(completion),
+                    ));
+                    TestSchedulerInputKind::BackgroundNavigationCompletion
+                }
                 maybe_completion = self.background_navigation_completion_rx.recv(), if background_navigation_scheduler_enabled => {
                     let Some(completion) = maybe_completion else {
                         return TestSchedulerTurnOutcome::Idle;
@@ -1350,6 +1561,15 @@ impl TestContext {
         } else {
             tokio::select! {
                 biased;
+                maybe_continuation = self.document_continuation_completion_rx.recv() => {
+                    let Some(completion) = maybe_continuation else {
+                        return TestSchedulerTurnOutcome::Idle;
+                    };
+                    work.push_back(TestSchedulerWork::BackgroundNavigationCompletion(
+                        crate::domains::page::BackgroundNavigationCompletion::document_continuation(completion),
+                    ));
+                    TestSchedulerInputKind::BackgroundNavigationCompletion
+                }
                 maybe_completion = self.background_navigation_completion_rx.recv(), if background_navigation_scheduler_enabled => {
                     let Some(completion) = maybe_completion else {
                         return TestSchedulerTurnOutcome::Idle;
@@ -1485,7 +1705,17 @@ impl TestContext {
         work: &mut VecDeque<TestSchedulerWork>,
     ) {
         let mut queue = VecDeque::new();
-        enqueue_scheduler_events_like_scheduler(&mut queue, scheduler_events);
+        for event in scheduler_events {
+            match event {
+                CdpSchedulerEvent::DocumentContinuationStarted { key } => {
+                    self.pending_document_continuation_gates.insert(key);
+                }
+                CdpSchedulerEvent::ProtocolWorkPublished { work } => {
+                    queue.push_back(TestDeferredSchedulerWork(work));
+                }
+                CdpSchedulerEvent::PageScreencastStarted { .. } => {}
+            }
+        }
         while let Some(TestDeferredSchedulerWork(protocol_work)) = queue.pop_front() {
             self.pending_protocol_scheduler_work
                 .push_back(protocol_work);
@@ -1501,8 +1731,16 @@ impl TestContext {
         work: &mut VecDeque<TestSchedulerWork>,
     ) {
         loop {
+            let can_execute = |work: &ProtocolSchedulerWork| {
+                self.background_navigation_scheduler_enabled
+                    || !work.requires_background_navigation_scheduler()
+            };
+            let front_is_fixture_parked = self
+                .pending_protocol_scheduler_work
+                .front()
+                .is_some_and(|work| work.is_ready() && !can_execute(work));
             let selected_index = match self.pending_protocol_scheduler_work.front() {
-                Some(front) if front.is_ready() => 0,
+                Some(front) if front.is_ready() && can_execute(front) => 0,
                 Some(front)
                     if front.kind() == ProtocolSchedulerWorkKind::MainDocumentLoadOwnerAction =>
                 {
@@ -1511,45 +1749,66 @@ impl TestContext {
                             .iter()
                             .position(|candidate| {
                                 candidate.is_ready()
-                                    && candidate.is_top_level_location_navigation_owner_action()
+                                    && can_execute(candidate)
+                                    && (candidate.is_top_level_location_navigation_owner_action()
+                                        || candidate.is_command_followup())
                             })
                     else {
                         return;
                     };
                     // Production checks the pending load observer out of the
-                    // FIFO while it waits for the renderer. An unconstrained
-                    // location owner action may then run and replace that
-                    // exact source Document, which completes the observer as
-                    // Superseded. Keeping the pending observer at the front in
-                    // this protocol-only harness would deadlock the action
-                    // needed to make it terminal.
+                    // FIFO while it waits for the renderer. A navigation owner
+                    // action may then replace that exact source Document and
+                    // make the observer terminal.
                     index
                 }
-                Some(_) | None => return,
+                Some(_) if front_is_fixture_parked => {
+                    let Some(index) = self
+                        .pending_protocol_scheduler_work
+                        .iter()
+                        .position(|candidate| candidate.is_ready() && can_execute(candidate))
+                    else {
+                        return;
+                    };
+                    index
+                }
+                Some(_) => {
+                    let Some(index) =
+                        self.pending_protocol_scheduler_work
+                            .iter()
+                            .position(|candidate| {
+                                candidate.is_ready()
+                                    && can_execute(candidate)
+                                    && candidate.is_command_followup()
+                            })
+                    else {
+                        return;
+                    };
+                    index
+                }
+                None => return,
             };
-            if !self.background_navigation_scheduler_enabled
-                && self
-                    .pending_protocol_scheduler_work
-                    .get(selected_index)
-                    .is_some_and(ProtocolSchedulerWork::requires_background_navigation_scheduler)
-            {
-                // The default protocol fixture has no owner task lane. Keep
-                // independent popup navigation resident rather than invoking
-                // the production function's synchronous fallback while the
-                // exact renderer cursor is still being projected. Tests that
-                // assert navigation progress opt into the production-shaped
-                // background scheduler and drive its typed completions.
-                return;
-            }
+            // The default protocol fixture has no owner task lane. Keep an
+            // independent popup navigation resident instead of invoking its
+            // synchronous fallback while the opener cursor is projected, but
+            // do not let that fixture-only limitation block ready work for a
+            // different target. Tests that assert popup navigation progress
+            // opt into the production-shaped background scheduler.
             let protocol_work = self
                 .pending_protocol_scheduler_work
                 .remove(selected_index)
                 .expect("ready protocol work must remain resident");
-            let (events, scheduler_events) = self
+            let (events, scheduler_events, renderer_output_predecessor) = self
                 .conn
                 .complete_ready_protocol_scheduler_work_turn(protocol_work)
                 .await
                 .into_protocol_event_parts();
+            if let Some(predecessor) = renderer_output_predecessor {
+                Box::pin(
+                    self.route_renderer_output_predecessor_before_command_response(predecessor),
+                )
+                .await;
+            }
             if !events.is_empty() {
                 work.push_back(TestSchedulerWork::ProtocolEvents(events));
             }
@@ -1830,6 +2089,29 @@ impl TestContext {
     }
 }
 
+#[cfg(test)]
+fn navigation_gate_matches_devtools_context(
+    key: &super::conn::BackgroundNavigationGateKey,
+    context: &crate::devtools_runtime::DevToolsCommandContext,
+) -> bool {
+    if let Some(target_id) = context.target_id.as_ref() {
+        return key.target_id() == Some(target_id.as_str());
+    }
+    key.matches_session_owner(
+        context
+            .session_id
+            .as_ref()
+            .map(|session_id| session_id.as_str()),
+    )
+}
+
+fn test_command_starts_document_navigation(command: &ParsedCdpCommand) -> bool {
+    matches!(
+        command.method(),
+        "Page.navigate" | "Page.reload" | "Page.navigateToHistoryEntry"
+    )
+}
+
 fn protocol_events_into_messages(events: Vec<BackgroundProtocolEvent>) -> Vec<Value> {
     events
         .into_iter()
@@ -1891,10 +2173,14 @@ async fn drain_scheduler_events_like_scheduler_with_materializer(
             protocol_work.is_ready(),
             "the stateless compatibility materializer cannot own pending protocol work; use TestContext or the production CdpScheduler"
         );
-        let (events, nested_scheduler_events) = conn
+        let (events, nested_scheduler_events, renderer_output_predecessor) = conn
             .complete_ready_protocol_scheduler_work_turn(protocol_work)
             .await
             .into_protocol_event_parts();
+        assert!(
+            renderer_output_predecessor.is_none(),
+            "the stateless compatibility materializer cannot project a renderer-owner predecessor; use TestContext or the production CdpScheduler"
+        );
         out.extend(events.into_iter().map(materialize_event));
         enqueue_scheduler_events_like_scheduler(&mut queue, nested_scheduler_events);
         enqueue_scheduler_events_like_scheduler(&mut queue, conn.take_scheduler_events());
@@ -1925,6 +2211,7 @@ fn enqueue_scheduler_events_like_scheduler(
                 queue.push_back(TestDeferredSchedulerWork(work));
             }
             CdpSchedulerEvent::PageScreencastStarted { .. } => {}
+            CdpSchedulerEvent::DocumentContinuationStarted { key: _ } => {}
         }
     }
 }
@@ -2150,8 +2437,13 @@ mod tests {
         let (background_event_tx, background_event_rx) = tokio::sync::mpsc::unbounded_channel();
         let (background_navigation_completion_tx, background_navigation_completion_rx) =
             tokio::sync::mpsc::unbounded_channel();
+        let (document_continuation_completion_tx, document_continuation_completion_rx) =
+            tokio::sync::mpsc::unbounded_channel();
         conn.set_renderer_publication_sender(publication_tx.clone());
         conn.set_runtime_inspector_response_ready_sender(runtime_response_tx);
+        conn.set_document_continuation_completion_sender(
+            document_continuation_completion_tx.clone(),
+        );
         let mut ctx = TestContext {
             conn,
             sent: Vec::new(),
@@ -2164,7 +2456,11 @@ mod tests {
             background_event_rx,
             background_navigation_completion_tx,
             background_navigation_completion_rx,
+            document_continuation_completion_tx,
+            document_continuation_completion_rx,
+            document_continuation_scheduler_explicitly_enabled: false,
             background_navigation_scheduler_enabled: false,
+            pending_document_continuation_gates: HashSet::new(),
         };
         let opened = |page_id| {
             RendererOutputTransportMessage::from(RendererOutputStreamControl::Opened {

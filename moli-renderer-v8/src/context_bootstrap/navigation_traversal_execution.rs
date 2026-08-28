@@ -72,17 +72,6 @@ pub(super) fn queue_navigation_traversal_with_result<'s>(
             host.record_pending_location_navigation(target_url, Some(seed.clone()));
             return Some(navigation_pending_result(scope));
         }
-        if let Some(popup_id) =
-            crate::native_bridge::lightweight_popup_id_from_window(scope, target.owner)
-        {
-            host.queue_lightweight_popup_cross_document_traversal(
-                scope,
-                popup_id,
-                target_url.as_str(),
-                seed,
-            );
-            return Some(navigation_pending_result(scope));
-        }
         let Some(child_handle) = child_handle else {
             return Some(navigation_pending_result(scope));
         };
@@ -163,18 +152,7 @@ pub(super) fn queue_history_traversal_without_result<'s>(
         }
         if runtime_window_is_global(scope, target.owner) {
             let delta = i64::from(target.target_index) - i64::from(target.current_index);
-            host.record_pending_top_level_history_traversal(delta);
-            return;
-        }
-        if let Some(popup_id) =
-            crate::native_bridge::lightweight_popup_id_from_window(scope, target.owner)
-        {
-            host.queue_lightweight_popup_cross_document_traversal(
-                scope,
-                popup_id,
-                target_url.as_str(),
-                seed,
-            );
+            host.record_pending_cross_document_top_level_history_traversal(delta, seed);
             return;
         }
         if let Some(child_handle) = child_handle {

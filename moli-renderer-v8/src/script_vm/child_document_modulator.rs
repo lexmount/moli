@@ -217,6 +217,7 @@ impl ScriptVm {
                     (
                         0,
                         self.rebind_isolated_worlds_for_document_owner_transition(
+                            transition.browsing_context_id(),
                             retired_owner,
                             current_owner,
                         ),
@@ -267,13 +268,19 @@ impl ScriptVm {
         }
         if let Some(current_owner) = transition.current_owner() {
             let child_handle = transition.child_handle();
+            let browsing_context_id = transition.browsing_context_id();
             if !self
                 ._context_host
                 .borrow()
-                .frame_document_task_owner_is_current(child_handle, current_owner)
+                .frame_document_projection_is_current(
+                    child_handle,
+                    browsing_context_id,
+                    current_owner,
+                )
             {
                 tracing::debug!(
                     ?child_handle,
+                    ?browsing_context_id,
                     ?current_owner,
                     "skipping realm projection for a superseded child owner transition"
                 );

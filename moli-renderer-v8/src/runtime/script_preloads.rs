@@ -228,14 +228,34 @@ impl BufferedDocumentPreloadState {
         requests: Vec<BufferedScriptPreloadRequest>,
         loader: &ResourceRequestClient,
         service_worker_context: Option<&ServiceWorkerScriptPreloadContext>,
-    ) {
+    ) -> usize {
         if requests.is_empty() {
-            return;
+            return 0;
+        }
+        let requests = requests
+            .into_iter()
+            .filter(|request| {
+                if request.kind_hint != crate::types::ScriptKind::Module {
+                    return true;
+                }
+                // The native module map is the sole fetch/result authority for
+                // module-script roots. A legacy shared source load cannot join
+                // that map or account for import-map integrity discovered by
+                // the parser. Starting both can overlap after DocumentCommit
+                // and issue the same root request twice. Until scanner results
+                // can be published into the native module map, leave module
+                // roots to the parser-owned graph.
+                false
+            })
+            .collect::<Vec<_>>();
+        if requests.is_empty() {
+            return 0;
         }
         let resource_task_runner = self
             .resource_task_runner
             .clone()
             .expect("script preloads require the navigation resource task runner");
+        let mut scheduled_count = 0;
         for request in requests {
             let key = request.cache_key();
             if self.entries.contains_key(&key) {
@@ -268,7 +288,9 @@ impl BufferedDocumentPreloadState {
             };
             self.entries
                 .insert(key, BufferedScriptPreloadEntry { request, load });
+            scheduled_count += 1;
         }
+        scheduled_count
     }
 
     fn queue_script_preloads_for_owner_admission(
@@ -395,9 +417,9 @@ impl BufferedDocumentPreloadState {
             .note_scanner_seen(batch.discovered_meta_csp_count);
         let discovered_count = batch.script_requests.len();
         // Bootstrap-time scanning runs before the parser can execute inline code.
-        // Keep it narrow to requests that can affect DCL: parser-blocking classic,
-        // defer classic, and modules. Async classic scripts should keep their
-        // normal background progress instead of competing with critical startup.
+        // Keep the legacy source-preload lane narrow to parser-blocking and defer
+        // classic scripts. Async classics retain normal background progress, and
+        // module roots stay under the native module-map owner.
         let requests = batch
             .script_requests
             .into_iter()
@@ -1135,9 +1157,10 @@ pub(super) fn prebootstrap_preload_request_is_dcl_relevant(
 ) -> bool {
     // Async classic scripts are observable before DCL when ready, but they do not
     // block DCL. Prebootstrap read-ahead is intentionally reserved for work that
-    // can otherwise hold parser completion or defer/module execution.
-    matches!(request.kind_hint, crate::types::ScriptKind::Module)
-        || matches!(
+    // can otherwise hold parser completion or defer execution. Module scripts use
+    // the native module map instead of this legacy shared-source preload lane.
+    request.kind_hint == crate::types::ScriptKind::Classic
+        && matches!(
             request.mode_hint,
             crate::types::ScriptMode::Normal | crate::types::ScriptMode::Defer
         )

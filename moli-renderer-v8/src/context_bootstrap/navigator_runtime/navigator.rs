@@ -83,7 +83,6 @@ const WORKER_NAVIGATOR_BACKING_SLOT: &str = "__moliWorkerNavigatorBacking";
 
 const NAVIGATOR_BRAND_SLOT: &str = "__moliNavigatorBrand";
 const NAVIGATOR_STORAGE_OWNER_CHILD_HANDLE_SLOT: &str = "__moliNavigatorStorageOwnerChildHandle";
-const NAVIGATOR_STORAGE_OWNER_POPUP_ID_SLOT: &str = "__moliNavigatorStorageOwnerPopupId";
 const NAVIGATOR_ACCEPT_LANGUAGE_SLOT: &str = "__moliNavigatorAcceptLanguage";
 pub(in crate::context_bootstrap) const NAVIGATOR_IDENTITY_PROFILE_SLOT: &str =
     "__moliNavigatorIdentityProfile";
@@ -91,14 +90,10 @@ pub(in crate::context_bootstrap) const STORAGE_MANAGER_BRAND_SLOT: &str =
     "__moliStorageManagerBrand";
 pub(in crate::context_bootstrap) const STORAGE_MANAGER_CHILD_HANDLE_SLOT: &str =
     "__moliStorageManagerChildHandle";
-pub(in crate::context_bootstrap) const STORAGE_MANAGER_POPUP_ID_SLOT: &str =
-    "__moliStorageManagerPopupId";
 pub(in crate::context_bootstrap) const STORAGE_BUCKET_MANAGER_BRAND_SLOT: &str =
     "__moliStorageBucketManagerBrand";
 pub(in crate::context_bootstrap) const STORAGE_BUCKET_MANAGER_CHILD_HANDLE_SLOT: &str =
     "__moliStorageBucketManagerChildHandle";
-pub(in crate::context_bootstrap) const STORAGE_BUCKET_MANAGER_POPUP_ID_SLOT: &str =
-    "__moliStorageBucketManagerPopupId";
 const SERVICE_WORKER_CONTAINER_LISTENERS_SLOT: &str = "__moliServiceWorkerContainerEvents";
 const SERVICE_WORKER_CONTAINER_ONMESSAGE_SLOT: &str = "__moliServiceWorkerContainerOnmessage";
 const SERVICE_WORKER_CONTAINER_ONMESSAGEERROR_SLOT: &str =
@@ -508,10 +503,10 @@ struct UserActivationObjectDeclaration {
     #[webapi(slot = USER_ACTIVATION_BRAND_SLOT, init = true)]
     brand: (),
 
-    #[webapi(accessor_property, getter = navigator_user_activation_state_getter_callback, enumerable)]
+    #[webapi(accessor_property, getter = navigator_user_activation_is_active_getter_callback, enumerable)]
     is_active: (),
 
-    #[webapi(accessor_property, getter = navigator_user_activation_state_getter_callback, enumerable)]
+    #[webapi(accessor_property, getter = navigator_user_activation_has_been_active_getter_callback, enumerable)]
     has_been_active: (),
 }
 
@@ -742,12 +737,17 @@ pub(in crate::context_bootstrap) fn navigator_receiver_branded<'s>(
         .is_some_and(|value| value.boolean_value(scope))
 }
 
-pub(crate) fn current_protocol_user_gesture_activation(scope: &mut v8::PinScope<'_, '_>) -> bool {
+pub(crate) fn current_transient_user_activation(scope: &mut v8::PinScope<'_, '_>) -> bool {
     context_host_ptr_from_global_bridge(scope)
-        .is_some_and(|host_ptr| unsafe { (&*host_ptr).protocol_user_gesture_activation() })
+        .is_some_and(|host_ptr| unsafe { (&*host_ptr).transient_user_activation() })
 }
 
-fn navigator_user_activation_state_getter_callback<'s>(
+fn current_sticky_user_activation(scope: &mut v8::PinScope<'_, '_>) -> bool {
+    context_host_ptr_from_global_bridge(scope)
+        .is_some_and(|host_ptr| unsafe { (&*host_ptr).sticky_user_activation() })
+}
+
+fn navigator_user_activation_is_active_getter_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
@@ -758,8 +758,23 @@ fn navigator_user_activation_state_getter_callback<'s>(
         throw_type_error(scope, "Illegal invocation");
         return;
     }
-    let active = current_protocol_user_gesture_activation(scope);
+    let active = current_transient_user_activation(scope);
     rv.set(v8::Boolean::new(scope, active).into());
+}
+
+fn navigator_user_activation_has_been_active_getter_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    if get_private_value(scope, args.this(), USER_ACTIVATION_BRAND_SLOT)
+        .is_none_or(|value| !value.boolean_value(scope))
+    {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    }
+    let has_been_active = current_sticky_user_activation(scope);
+    rv.set(v8::Boolean::new(scope, has_been_active).into());
 }
 
 fn set_resolved_promise(
@@ -967,14 +982,12 @@ fn build_navigator_connection<'s>(
 fn build_service_worker_container<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner_child: Option<DomHandle>,
-    owner_popup: Option<u64>,
 ) -> Result<v8::Local<'s, v8::Object>> {
     let service_worker = ServiceWorkerContainerDeclaration::default()
         .bind(scope)
         .map_err(|error| anyhow!("failed to bind navigator.serviceWorker object: {error}"))?;
     let owner = owner_child
         .map(OwnerDispatchScope::Child)
-        .or_else(|| owner_popup.map(OwnerDispatchScope::LightweightPopup))
         .unwrap_or(OwnerDispatchScope::Top);
     service_worker_object_set_owner_scope(scope, service_worker, owner);
     install_initial_service_worker_ready_promise(scope, service_worker);
@@ -988,7 +1001,6 @@ pub(in crate::context_bootstrap) fn service_worker_owner_token_value<'s>(
     let token = match owner {
         OwnerDispatchScope::Top => None,
         OwnerDispatchScope::Child(handle) => Some(format!("child:{}", handle.index())),
-        OwnerDispatchScope::LightweightPopup(popup_id) => Some(format!("popup:{popup_id}")),
     };
     token
         .and_then(|token| v8_string(scope, &token))
@@ -1032,7 +1044,7 @@ pub(super) fn build_lazy_navigator_subobject_in_current_realm<'s>(
     backing: v8::Local<'s, v8::Object>,
     subobject: NavigatorSubobject,
 ) -> Result<v8::Local<'s, v8::Value>> {
-    let (owner_child, owner_popup) = navigator_backing_owner(scope, backing);
+    let owner_child = navigator_backing_owner(scope, backing);
     let value: v8::Local<'s, v8::Value> = match subobject {
         NavigatorSubobject::Languages => {
             let languages = effective_navigator_languages(scope, backing);
@@ -1050,9 +1062,7 @@ pub(super) fn build_lazy_navigator_subobject_in_current_realm<'s>(
             .bind(scope)
             .map_err(|error| anyhow!("failed to bind Permissions object: {error}"))?
             .into(),
-        NavigatorSubobject::Storage => {
-            build_storage_manager(scope, owner_child, owner_popup)?.into()
-        }
+        NavigatorSubobject::Storage => build_storage_manager(scope, owner_child)?.into(),
         NavigatorSubobject::WebkitTemporaryStorage
         | NavigatorSubobject::WebkitPersistentStorage => {
             build_legacy_storage_quota_object(scope)?.into()
@@ -1062,7 +1072,7 @@ pub(super) fn build_lazy_navigator_subobject_in_current_realm<'s>(
             .map_err(|error| anyhow!("failed to bind MediaDevices object: {error}"))?
             .into(),
         NavigatorSubobject::ServiceWorker => {
-            build_service_worker_container(scope, owner_child, owner_popup)?.into()
+            build_service_worker_container(scope, owner_child)?.into()
         }
         NavigatorSubobject::Clipboard => ClipboardObjectDeclaration::default()
             .bind(scope)
@@ -1070,18 +1080,17 @@ pub(super) fn build_lazy_navigator_subobject_in_current_realm<'s>(
             .into(),
         NavigatorSubobject::UserActivation => build_user_activation(scope)?.into(),
         NavigatorSubobject::StorageBuckets => {
-            build_storage_bucket_manager(scope, owner_child, owner_popup)?.into()
+            build_storage_bucket_manager(scope, owner_child)?.into()
         }
         NavigatorSubobject::Geolocation => {
-            let secure_context =
-                navigator_geolocation_secure_context_available(scope, owner_child, owner_popup);
+            let secure_context = navigator_geolocation_secure_context_available(scope, owner_child);
             build_geolocation_object(scope, secure_context, owner_child)?.into()
         }
         NavigatorSubobject::MediaCapabilities => {
             let worker = get_private_value(scope, backing, WORKER_NAVIGATOR_BACKING_SLOT)
                 .is_some_and(|value| value.boolean_value(scope));
-            let secure_context = worker
-                || navigator_geolocation_secure_context_available(scope, owner_child, owner_popup);
+            let secure_context =
+                worker || navigator_geolocation_secure_context_available(scope, owner_child);
             build_media_capabilities_object(scope, secure_context, worker)?.into()
         }
     };
@@ -1091,37 +1100,24 @@ pub(super) fn build_lazy_navigator_subobject_in_current_realm<'s>(
 fn navigator_backing_owner<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     backing: v8::Local<'s, v8::Object>,
-) -> (Option<DomHandle>, Option<u64>) {
-    let owner_child = get_private_value(scope, backing, NAVIGATOR_STORAGE_OWNER_CHILD_HANDLE_SLOT)
+) -> Option<DomHandle> {
+    get_private_value(scope, backing, NAVIGATOR_STORAGE_OWNER_CHILD_HANDLE_SLOT)
         .and_then(|value| value.number_value(scope))
         .filter(|value| value.is_finite() && *value >= 0.0 && value.fract() == 0.0)
-        .map(|value| DomHandle::new(value as usize));
-    let owner_popup = get_private_value(scope, backing, NAVIGATOR_STORAGE_OWNER_POPUP_ID_SLOT)
-        .and_then(|value| v8::Local::<v8::BigInt>::try_from(value).ok())
-        .and_then(|value| {
-            let (popup_id, lossless) = value.u64_value();
-            (lossless && popup_id != 0).then_some(popup_id)
-        });
-    (owner_child, owner_popup)
+        .map(|value| DomHandle::new(value as usize))
 }
 
 fn navigator_geolocation_secure_context_available(
     scope: &mut v8::PinScope<'_, '_>,
     owner_child: Option<DomHandle>,
-    owner_popup: Option<u64>,
 ) -> bool {
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         return false;
     };
     let host = unsafe { &*host_ptr };
-    let url = if let Some(owner_child) = owner_child {
-        host.child_browsing_context_secure_context_url(owner_child)
-    } else if let Some(owner_popup) = owner_popup {
-        host.lightweight_popup_document_url(owner_popup)
-            .or_else(|| Some(host.document_url().clone()))
-    } else {
-        Some(host.document_url().clone())
-    };
+    let url = owner_child
+        .and_then(|owner_child| host.child_browsing_context_secure_context_url(owner_child))
+        .or_else(|| owner_child.is_none().then(|| host.document_url().clone()));
     url.is_some_and(|url| moli_url::is_potentially_trustworthy_url(&url))
 }
 
@@ -1186,7 +1182,6 @@ pub(in crate::context_bootstrap) fn navigator_identity_profile<'s>(
 fn build_window_navigator_backing_for_owner<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner_child: Option<DomHandle>,
-    owner_popup: Option<u64>,
     identity_override: Option<&BrowserIdentityProfile>,
 ) -> Result<v8::Local<'s, v8::Object>> {
     let profile = &DEFAULT_WINDOW_SURFACE_PROFILE;
@@ -1233,7 +1228,7 @@ fn build_window_navigator_backing_for_owner<'s>(
     .map_err(|error| anyhow!("failed to bind Navigator backing object: {error}"))
     .inspect(|&backing| {
         set_navigator_identity_profile(scope, backing, &identity);
-        set_navigator_storage_owner(scope, backing, owner_child, owner_popup);
+        set_navigator_storage_owner(scope, backing, owner_child);
         if let Some(accept_language) = v8_string(scope, identity.accept_language()) {
             set_private_value(
                 scope,
@@ -1251,7 +1246,7 @@ pub(super) fn build_window_navigator_object_for_owner<'s>(
     identity: Option<&BrowserIdentityProfile>,
     storage_apis_available: bool,
 ) -> Result<v8::Local<'s, v8::Object>> {
-    let backing = build_window_navigator_backing_for_owner(scope, owner_child, None, identity)?;
+    let backing = build_window_navigator_backing_for_owner(scope, owner_child, identity)?;
     let navigator = NavigatorObjectDeclaration::new(backing)
         .bind(scope)
         .map_err(|error| anyhow!("failed to bind Navigator object: {error}"))?;
@@ -1308,16 +1303,6 @@ pub(super) fn update_window_navigator_identity<'s>(
     Ok(())
 }
 
-pub(crate) fn build_lightweight_popup_window_navigator_object<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    owner_popup: u64,
-) -> Result<v8::Local<'s, v8::Object>> {
-    let backing = build_window_navigator_backing_for_owner(scope, None, Some(owner_popup), None)?;
-    NavigatorObjectDeclaration::new(backing)
-        .bind(scope)
-        .map_err(|error| anyhow!("failed to bind lightweight popup Navigator object: {error}"))
-}
-
 fn build_worker_navigator_backing<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     identity: &BrowserIdentityProfile,
@@ -1369,7 +1354,6 @@ fn set_navigator_storage_owner(
     scope: &mut v8::PinScope<'_, '_>,
     backing: v8::Local<'_, v8::Object>,
     owner_child: Option<DomHandle>,
-    owner_popup: Option<u64>,
 ) {
     if let Some(owner_child) = owner_child {
         let value = v8::Number::new(scope, owner_child.index() as f64);
@@ -1380,21 +1364,11 @@ fn set_navigator_storage_owner(
             value.into(),
         );
     }
-    if let Some(owner_popup) = owner_popup {
-        let value = v8::BigInt::new_from_u64(scope, owner_popup);
-        set_private_value(
-            scope,
-            backing,
-            NAVIGATOR_STORAGE_OWNER_POPUP_ID_SLOT,
-            value.into(),
-        );
-    }
 }
 
 fn build_storage_bucket_manager<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner_child: Option<DomHandle>,
-    owner_popup: Option<u64>,
 ) -> Result<v8::Local<'s, v8::Object>> {
     let manager = StorageBucketManagerObjectDeclaration::new()
         .bind(scope)
@@ -1408,22 +1382,12 @@ fn build_storage_bucket_manager<'s>(
         STORAGE_BUCKET_MANAGER_CHILD_HANDLE_SLOT,
         child_value,
     );
-    let popup_value: v8::Local<'s, v8::Value> = owner_popup
-        .map(|popup_id| v8::BigInt::new_from_u64(scope, popup_id).into())
-        .unwrap_or_else(|| v8::undefined(scope).into());
-    set_private_value(
-        scope,
-        manager,
-        STORAGE_BUCKET_MANAGER_POPUP_ID_SLOT,
-        popup_value,
-    );
     Ok(manager)
 }
 
 fn build_storage_manager<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner_child: Option<DomHandle>,
-    owner_popup: Option<u64>,
 ) -> Result<v8::Local<'s, v8::Object>> {
     let manager = StorageManagerObjectDeclaration::new()
         .bind(scope)
@@ -1437,10 +1401,6 @@ fn build_storage_manager<'s>(
         STORAGE_MANAGER_CHILD_HANDLE_SLOT,
         child_value,
     );
-    let popup_value: v8::Local<'s, v8::Value> = owner_popup
-        .map(|popup_id| v8::BigInt::new_from_u64(scope, popup_id).into())
-        .unwrap_or_else(|| v8::undefined(scope).into());
-    set_private_value(scope, manager, STORAGE_MANAGER_POPUP_ID_SLOT, popup_value);
     Ok(manager)
 }
 

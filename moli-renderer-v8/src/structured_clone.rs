@@ -6,6 +6,8 @@ use std::{
     sync::Arc,
 };
 
+use base64::{Engine as _, engine::general_purpose::STANDARD_NO_PAD as BASE64_STANDARD_NO_PAD};
+
 use crate::{
     context_bootstrap::{
         CryptoKeyAlgorithmClonePayload, CryptoKeyClonePayload, FileSystemFileSnapshotClonePayload,
@@ -56,6 +58,490 @@ pub(crate) struct V8StructuredClonePayload {
     blobs: Vec<ClonedBlob>,
     file_system_handles: Vec<ClonedFileSystemHandle>,
     pub(crate) metadata: StructuredCloneMetadata,
+}
+
+/// Process-neutral attachment set for one remote Window message.
+///
+/// V8's value serializer already emits portable bytes for ordinary values,
+/// but several attachment vectors below normally retain renderer-local
+/// capabilities (compiled Wasm modules and weak storage-service handles).
+/// RemoteWindowProxy transport crosses an explicit wire boundary, so it uses
+/// this value instead of moving [`V8StructuredClonePayload`] through the
+/// browser owner.
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct RemoteStructuredCloneWirePayload {
+    wire_bytes: String,
+    transferred_array_buffers: Vec<RemoteTransferredArrayBufferWire>,
+    transferred_message_ports: Vec<MessagePortId>,
+    readable_streams: Vec<RemoteStreamWire>,
+    writable_streams: Vec<RemoteStreamWire>,
+    transform_streams: Vec<RemoteTransformStreamWire>,
+    blobs: Vec<RemoteBlobWire>,
+    metadata: RemoteStructuredCloneMetadataWire,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct RemoteTransferredArrayBufferWire {
+    transfer_id: u32,
+    bytes: String,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct RemoteStreamWire {
+    clone_id: u32,
+    port_id: MessagePortId,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct RemoteTransformStreamWire {
+    clone_id: u32,
+    readable_port_id: MessagePortId,
+    writable_port_id: MessagePortId,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase", tag = "kind")]
+enum RemoteBlobPayloadWire {
+    Blob {
+        bytes: String,
+        mime_type: String,
+    },
+    File {
+        bytes: String,
+        mime_type: String,
+        name: String,
+        last_modified_bits: u64,
+    },
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct RemoteBlobWire {
+    clone_id: u32,
+    payload: RemoteBlobPayloadWire,
+}
+
+#[derive(Clone, Copy, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+enum RemoteRuntimeMessageAgentClusterWire {
+    WindowOrDedicatedWorker,
+    SharedWorker,
+    ServiceWorker,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct RemoteStructuredCloneMetadataWire {
+    contains_wasm_module: bool,
+    origin_check_required: bool,
+    locked_to_sender_agent_cluster: bool,
+    remote_agent_cluster_mismatch: bool,
+    sender_agent_cluster: Option<RemoteRuntimeMessageAgentClusterWire>,
+    sender_origin: Option<String>,
+}
+
+const MAX_REMOTE_STRUCTURED_CLONE_WIRE_BYTES: usize = 64 * 1024 * 1024;
+const MAX_REMOTE_STRUCTURED_CLONE_ATTACHMENTS: usize = 4_096;
+const MAX_REMOTE_STRUCTURED_CLONE_STRING_BYTES: usize = 16 * 1024;
+
+pub(crate) const fn remote_structured_clone_attachment_count_is_supported(count: usize) -> bool {
+    count <= MAX_REMOTE_STRUCTURED_CLONE_ATTACHMENTS
+}
+
+fn encode_remote_bytes(bytes: Vec<u8>) -> String {
+    BASE64_STANDARD_NO_PAD.encode(bytes)
+}
+
+fn decode_remote_bytes(encoded: &str, retained_bytes: &mut usize) -> anyhow::Result<Vec<u8>> {
+    let bytes = BASE64_STANDARD_NO_PAD
+        .decode(encoded)
+        .map_err(|_| anyhow::anyhow!("remote structured-clone attachment is not valid base64"))?;
+    *retained_bytes = retained_bytes
+        .checked_add(bytes.len())
+        .ok_or_else(|| anyhow::anyhow!("remote structured-clone retained-byte count overflow"))?;
+    anyhow::ensure!(
+        *retained_bytes <= MAX_REMOTE_STRUCTURED_CLONE_WIRE_BYTES,
+        "remote structured-clone payload exceeds the transport byte limit"
+    );
+    Ok(bytes)
+}
+
+fn validate_remote_attachment_count(count: usize, label: &str) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        remote_structured_clone_attachment_count_is_supported(count),
+        "remote structured-clone {label} attachment count exceeds the transport limit"
+    );
+    Ok(())
+}
+
+fn validate_unique_remote_clone_ids(
+    ids: impl IntoIterator<Item = u32>,
+    label: &str,
+) -> anyhow::Result<()> {
+    let mut seen = HashSet::new();
+    for id in ids {
+        anyhow::ensure!(
+            seen.insert(id),
+            "remote structured-clone {label} attachment repeats clone id {id}"
+        );
+    }
+    Ok(())
+}
+
+fn validate_unique_remote_port_ids(
+    ids: impl IntoIterator<Item = MessagePortId>,
+) -> anyhow::Result<()> {
+    let mut seen = HashSet::new();
+    for id in ids {
+        anyhow::ensure!(
+            id != 0 && seen.insert(id),
+            "remote structured-clone MessagePort attachment has an invalid identity"
+        );
+    }
+    Ok(())
+}
+
+fn validate_remote_clone_string(value: &str, label: &str) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        value.len() <= MAX_REMOTE_STRUCTURED_CLONE_STRING_BYTES && !value.contains('\0'),
+        "remote structured-clone {label} is invalid"
+    );
+    Ok(())
+}
+
+impl V8StructuredClonePayload {
+    /// Removes all renderer-local attachment capabilities at the source side.
+    ///
+    /// A compiled Wasm module is locked to its exact sender agent cluster and
+    /// deliberately has no representation on this cross-agent wire. The
+    /// receiver dispatches `messageerror` before deserialization, matching
+    /// Chromium's Mojo path. Storage capabilities without a browser-side
+    /// broker are rejected by `RemoteRuntimeMessage` serialization before
+    /// transfer-list side effects commit. Author-controlled attachment counts
+    /// and retained bytes are bounded here before base64 expansion; callers
+    /// surface those transport-limit failures as `DataCloneError`.
+    pub(crate) fn into_remote_wire(self) -> anyhow::Result<RemoteStructuredCloneWirePayload> {
+        validate_remote_attachment_count(self.base.transferred_array_buffers.len(), "ArrayBuffer")?;
+        validate_remote_attachment_count(self.base.transferred_message_ports.len(), "MessagePort")?;
+        validate_remote_attachment_count(self.readable_streams.len(), "ReadableStream")?;
+        validate_remote_attachment_count(self.writable_streams.len(), "WritableStream")?;
+        validate_remote_attachment_count(self.transform_streams.len(), "TransformStream")?;
+        validate_remote_attachment_count(self.blobs.len(), "Blob")?;
+        let mut retained_bytes = self.base.wire_bytes.len();
+        for byte_len in self
+            .base
+            .transferred_array_buffers
+            .iter()
+            .map(|buffer| buffer.bytes.len())
+            .chain(self.blobs.iter().map(|blob| match &blob.payload {
+                BlobClonePayload::Blob { bytes, .. } => bytes.len(),
+                BlobClonePayload::File { file, .. } => file.bytes.len(),
+            }))
+        {
+            retained_bytes = retained_bytes.checked_add(byte_len).ok_or_else(|| {
+                anyhow::anyhow!("remote structured-clone retained-byte count overflow")
+            })?;
+        }
+        anyhow::ensure!(
+            retained_bytes <= MAX_REMOTE_STRUCTURED_CLONE_WIRE_BYTES,
+            "remote structured-clone payload exceeds the transport byte limit"
+        );
+        anyhow::ensure!(
+            self.file_system_handles.is_empty(),
+            "remote structured clone retained a renderer-local FileSystemHandle"
+        );
+        anyhow::ensure!(
+            self.metadata.contains_wasm_module != self.wasm_modules.is_empty(),
+            "remote structured-clone Wasm metadata disagrees with its attachments"
+        );
+        let contains_wasm_module = self.metadata.contains_wasm_module;
+        let blobs = self
+            .blobs
+            .into_iter()
+            .map(|blob| {
+                let payload = match blob.payload {
+                    BlobClonePayload::Blob { bytes, mime_type } => RemoteBlobPayloadWire::Blob {
+                        bytes: encode_remote_bytes(bytes),
+                        mime_type,
+                    },
+                    BlobClonePayload::File {
+                        file,
+                        opfs_snapshot,
+                    } => {
+                        anyhow::ensure!(
+                            opfs_snapshot.is_none(),
+                            "remote structured clone retained an OPFS File capability"
+                        );
+                        RemoteBlobPayloadWire::File {
+                            bytes: encode_remote_bytes(file.bytes),
+                            mime_type: file.mime_type,
+                            name: file.name,
+                            last_modified_bits: file.last_modified.to_bits(),
+                        }
+                    }
+                };
+                Ok(RemoteBlobWire {
+                    clone_id: blob.clone_id,
+                    payload,
+                })
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        Ok(RemoteStructuredCloneWirePayload {
+            wire_bytes: encode_remote_bytes(self.base.wire_bytes),
+            transferred_array_buffers: self
+                .base
+                .transferred_array_buffers
+                .into_iter()
+                .map(|buffer| RemoteTransferredArrayBufferWire {
+                    transfer_id: buffer.transfer_id,
+                    bytes: encode_remote_bytes(buffer.bytes),
+                })
+                .collect(),
+            transferred_message_ports: self.base.transferred_message_ports,
+            readable_streams: self
+                .readable_streams
+                .into_iter()
+                .map(|stream| RemoteStreamWire {
+                    clone_id: stream.clone_id,
+                    port_id: stream.payload.port_id(),
+                })
+                .collect(),
+            writable_streams: self
+                .writable_streams
+                .into_iter()
+                .map(|stream| RemoteStreamWire {
+                    clone_id: stream.clone_id,
+                    port_id: stream.payload.port_id(),
+                })
+                .collect(),
+            transform_streams: self
+                .transform_streams
+                .into_iter()
+                .map(|stream| {
+                    let [readable_port_id, writable_port_id] = stream.payload.port_ids();
+                    RemoteTransformStreamWire {
+                        clone_id: stream.clone_id,
+                        readable_port_id,
+                        writable_port_id,
+                    }
+                })
+                .collect(),
+            blobs,
+            metadata: RemoteStructuredCloneMetadataWire {
+                contains_wasm_module: self.metadata.contains_wasm_module,
+                origin_check_required: self.metadata.origin_check_required,
+                locked_to_sender_agent_cluster: self.metadata.locked_to_sender_agent_cluster,
+                remote_agent_cluster_mismatch: contains_wasm_module,
+                sender_agent_cluster: self.metadata.sender_agent_cluster.map(
+                    |cluster| match cluster {
+                        RuntimeMessageAgentCluster::WindowOrDedicatedWorker => {
+                            RemoteRuntimeMessageAgentClusterWire::WindowOrDedicatedWorker
+                        }
+                        RuntimeMessageAgentCluster::SharedWorker => {
+                            RemoteRuntimeMessageAgentClusterWire::SharedWorker
+                        }
+                        RuntimeMessageAgentCluster::ServiceWorker => {
+                            RemoteRuntimeMessageAgentClusterWire::ServiceWorker
+                        }
+                    },
+                ),
+                sender_origin: self.metadata.sender_origin,
+            },
+        })
+    }
+
+    pub(crate) fn from_remote_wire(wire: RemoteStructuredCloneWirePayload) -> anyhow::Result<Self> {
+        validate_remote_attachment_count(wire.transferred_array_buffers.len(), "ArrayBuffer")?;
+        validate_remote_attachment_count(wire.transferred_message_ports.len(), "MessagePort")?;
+        validate_remote_attachment_count(wire.readable_streams.len(), "ReadableStream")?;
+        validate_remote_attachment_count(wire.writable_streams.len(), "WritableStream")?;
+        validate_remote_attachment_count(wire.transform_streams.len(), "TransformStream")?;
+        validate_remote_attachment_count(wire.blobs.len(), "Blob")?;
+        validate_unique_remote_clone_ids(
+            wire.readable_streams.iter().map(|stream| stream.clone_id),
+            "ReadableStream",
+        )?;
+        validate_unique_remote_clone_ids(
+            wire.writable_streams.iter().map(|stream| stream.clone_id),
+            "WritableStream",
+        )?;
+        validate_unique_remote_clone_ids(
+            wire.transform_streams.iter().map(|stream| stream.clone_id),
+            "TransformStream",
+        )?;
+        validate_unique_remote_clone_ids(wire.blobs.iter().map(|blob| blob.clone_id), "Blob")?;
+        validate_unique_remote_clone_ids(
+            wire.transferred_array_buffers
+                .iter()
+                .map(|buffer| buffer.transfer_id),
+            "ArrayBuffer transfer",
+        )?;
+        anyhow::ensure!(
+            wire.transferred_array_buffers
+                .iter()
+                .all(|buffer| buffer.transfer_id != 0),
+            "remote structured-clone ArrayBuffer transfer id is zero"
+        );
+        validate_unique_remote_port_ids(
+            wire.transferred_message_ports
+                .iter()
+                .copied()
+                .chain(wire.readable_streams.iter().map(|stream| stream.port_id))
+                .chain(wire.writable_streams.iter().map(|stream| stream.port_id))
+                .chain(
+                    wire.transform_streams
+                        .iter()
+                        .flat_map(|stream| [stream.readable_port_id, stream.writable_port_id]),
+                ),
+        )?;
+        if wire.metadata.contains_wasm_module {
+            anyhow::ensure!(
+                wire.metadata.origin_check_required
+                    && wire.metadata.locked_to_sender_agent_cluster
+                    && wire.metadata.remote_agent_cluster_mismatch
+                    && wire.metadata.sender_agent_cluster.is_some()
+                    && wire.metadata.sender_origin.is_some(),
+                "remote structured-clone Wasm metadata is incomplete"
+            );
+        } else {
+            anyhow::ensure!(
+                !wire.metadata.origin_check_required
+                    && !wire.metadata.locked_to_sender_agent_cluster
+                    && !wire.metadata.remote_agent_cluster_mismatch
+                    && wire.metadata.sender_agent_cluster.is_none()
+                    && wire.metadata.sender_origin.is_none(),
+                "remote structured-clone metadata retains a spurious Wasm capability"
+            );
+        }
+        if let Some(origin) = wire.metadata.sender_origin.as_deref() {
+            validate_remote_clone_string(origin, "sender origin")?;
+        }
+
+        let mut retained_bytes = 0;
+        let wire_bytes = decode_remote_bytes(&wire.wire_bytes, &mut retained_bytes)?;
+        let transferred_array_buffers = wire
+            .transferred_array_buffers
+            .into_iter()
+            .map(|buffer| {
+                Ok(TransferredArrayBuffer {
+                    transfer_id: buffer.transfer_id,
+                    bytes: decode_remote_bytes(&buffer.bytes, &mut retained_bytes)?,
+                })
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        let blobs = wire
+            .blobs
+            .into_iter()
+            .map(|blob| {
+                let payload = match blob.payload {
+                    RemoteBlobPayloadWire::Blob { bytes, mime_type } => {
+                        validate_remote_clone_string(&mime_type, "Blob MIME type")?;
+                        BlobClonePayload::Blob {
+                            bytes: decode_remote_bytes(&bytes, &mut retained_bytes)?,
+                            mime_type,
+                        }
+                    }
+                    RemoteBlobPayloadWire::File {
+                        bytes,
+                        mime_type,
+                        name,
+                        last_modified_bits,
+                    } => {
+                        validate_remote_clone_string(&mime_type, "File MIME type")?;
+                        validate_remote_clone_string(&name, "File name")?;
+                        let last_modified = f64::from_bits(last_modified_bits);
+                        anyhow::ensure!(
+                            last_modified.is_finite(),
+                            "remote structured-clone File lastModified is not finite"
+                        );
+                        BlobClonePayload::File {
+                            file: SelectedFile {
+                                bytes: decode_remote_bytes(&bytes, &mut retained_bytes)?,
+                                mime_type,
+                                name,
+                                last_modified,
+                            },
+                            opfs_snapshot: None,
+                        }
+                    }
+                };
+                Ok(ClonedBlob {
+                    clone_id: blob.clone_id,
+                    payload,
+                })
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+
+        Ok(Self {
+            base: StructuredCloneWireBytes {
+                wire_bytes,
+                transferred_array_buffers,
+                transferred_message_ports: wire.transferred_message_ports,
+            },
+            wasm_modules: Vec::new(),
+            readable_streams: wire
+                .readable_streams
+                .into_iter()
+                .map(|stream| ClonedReadableStream {
+                    clone_id: stream.clone_id,
+                    payload: ReadableStreamClonePayload {
+                        port_id: stream.port_id,
+                    },
+                })
+                .collect(),
+            writable_streams: wire
+                .writable_streams
+                .into_iter()
+                .map(|stream| ClonedWritableStream {
+                    clone_id: stream.clone_id,
+                    payload: WritableStreamClonePayload {
+                        port_id: stream.port_id,
+                    },
+                })
+                .collect(),
+            transform_streams: wire
+                .transform_streams
+                .into_iter()
+                .map(|stream| ClonedTransformStream {
+                    clone_id: stream.clone_id,
+                    payload: TransformStreamClonePayload {
+                        readable: ReadableStreamClonePayload {
+                            port_id: stream.readable_port_id,
+                        },
+                        writable: WritableStreamClonePayload {
+                            port_id: stream.writable_port_id,
+                        },
+                    },
+                })
+                .collect(),
+            blobs,
+            file_system_handles: Vec::new(),
+            metadata: StructuredCloneMetadata {
+                contains_wasm_module: wire.metadata.contains_wasm_module,
+                origin_check_required: wire.metadata.origin_check_required,
+                locked_to_sender_agent_cluster: wire.metadata.locked_to_sender_agent_cluster,
+                remote_agent_cluster_mismatch: wire.metadata.remote_agent_cluster_mismatch,
+                sender_agent_cluster: wire.metadata.sender_agent_cluster.map(
+                    |cluster| match cluster {
+                        RemoteRuntimeMessageAgentClusterWire::WindowOrDedicatedWorker => {
+                            RuntimeMessageAgentCluster::WindowOrDedicatedWorker
+                        }
+                        RemoteRuntimeMessageAgentClusterWire::SharedWorker => {
+                            RuntimeMessageAgentCluster::SharedWorker
+                        }
+                        RemoteRuntimeMessageAgentClusterWire::ServiceWorker => {
+                            RuntimeMessageAgentCluster::ServiceWorker
+                        }
+                    },
+                ),
+                sender_origin: wire.metadata.sender_origin,
+            },
+        })
+    }
 }
 
 impl V8StructuredClonePayload {
@@ -228,19 +714,34 @@ struct ClonedWasmModuleStore {
 pub(crate) enum StructuredClonePolicy {
     Runtime,
     RuntimeMessage,
+    /// A message whose attachment set must survive an OS-process boundary.
+    /// Agent-locked compiled modules are converted to a guaranteed remote
+    /// `messageerror`; storage-service weak handles are rejected while
+    /// serialization is still reversible.
+    RemoteRuntimeMessage,
     Storage,
 }
 
 impl StructuredClonePolicy {
     fn allows_wasm_module(self) -> bool {
-        matches!(self, Self::Runtime | Self::RuntimeMessage)
+        matches!(
+            self,
+            Self::Runtime | Self::RuntimeMessage | Self::RemoteRuntimeMessage
+        )
+    }
+
+    fn requires_process_neutral_attachments(self) -> bool {
+        self == Self::RemoteRuntimeMessage
     }
 
     fn metadata_for_wasm_modules(self, contains_wasm_module: bool) -> StructuredCloneMetadata {
         StructuredCloneMetadata {
             contains_wasm_module,
-            origin_check_required: contains_wasm_module && self == Self::RuntimeMessage,
-            locked_to_sender_agent_cluster: contains_wasm_module && self == Self::RuntimeMessage,
+            origin_check_required: contains_wasm_module
+                && matches!(self, Self::RuntimeMessage | Self::RemoteRuntimeMessage),
+            locked_to_sender_agent_cluster: contains_wasm_module
+                && matches!(self, Self::RuntimeMessage | Self::RemoteRuntimeMessage),
+            remote_agent_cluster_mismatch: false,
             sender_agent_cluster: None,
             sender_origin: None,
         }
@@ -259,6 +760,7 @@ pub(crate) struct StructuredCloneMetadata {
     pub(crate) contains_wasm_module: bool,
     pub(crate) origin_check_required: bool,
     pub(crate) locked_to_sender_agent_cluster: bool,
+    pub(crate) remote_agent_cluster_mismatch: bool,
     pub(crate) sender_agent_cluster: Option<RuntimeMessageAgentCluster>,
     pub(crate) sender_origin: Option<String>,
 }
@@ -405,6 +907,21 @@ impl v8::ValueSerializerImpl for WireSerializer {
             return Some(true);
         }
         if let Some(payload) = blob_clone_payload_from_object(scope, object) {
+            if self.policy.requires_process_neutral_attachments()
+                && matches!(
+                    &payload,
+                    BlobClonePayload::File {
+                        opfs_snapshot: Some(_),
+                        ..
+                    }
+                )
+            {
+                throw_data_clone_exception(
+                    scope,
+                    "An OPFS-backed File cannot cross a remote Window boundary yet.",
+                );
+                return None;
+            }
             let mut store = self.blobs.borrow_mut();
             let clone_id = store.next_id;
             let Some(next_id) = store.next_id.checked_add(1) else {
@@ -419,6 +936,13 @@ impl v8::ValueSerializerImpl for WireSerializer {
             return Some(true);
         }
         if let Some(payload) = file_system_handle_clone_payload_from_object(scope, object) {
+            if self.policy.requires_process_neutral_attachments() {
+                throw_data_clone_exception(
+                    scope,
+                    "A FileSystemHandle cannot cross a remote Window boundary yet.",
+                );
+                return None;
+            }
             let mut store = self.file_system_handles.borrow_mut();
             let clone_id = store.next_id;
             let Some(next_id) = store.next_id.checked_add(1) else {
@@ -1033,6 +1557,27 @@ pub(crate) fn serialize_for_wire_for_runtime_message<'s>(
     )
 }
 
+pub(crate) fn serialize_for_wire_for_remote_runtime_message<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
+    array_buffer_transfers: &[v8::Local<'s, v8::ArrayBuffer>],
+    message_port_transfers: &[v8::Local<'s, v8::Object>],
+    readable_stream_transfers: &[v8::Local<'s, v8::Object>],
+    writable_stream_transfers: &[v8::Local<'s, v8::Object>],
+    transform_stream_transfers: &[v8::Local<'s, v8::Object>],
+) -> Option<V8StructuredClonePayload> {
+    serialize_for_wire_with_policy(
+        scope,
+        value,
+        array_buffer_transfers,
+        message_port_transfers,
+        readable_stream_transfers,
+        writable_stream_transfers,
+        transform_stream_transfers,
+        StructuredClonePolicy::RemoteRuntimeMessage,
+    )
+}
+
 fn serialize_for_wire_with_policy<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
@@ -1092,6 +1637,18 @@ fn serialize_for_wire_with_policy<'s>(
     let Some(true) = serializer.write_value(context, value) else {
         return None;
     };
+    // Blob attachments are discovered only while V8 walks the value. Reject
+    // an oversized remote set before committing any transfer-list side
+    // effects, just as the caller does for attachments known up front.
+    if policy.requires_process_neutral_attachments()
+        && !remote_structured_clone_attachment_count_is_supported(blobs.borrow().blobs.len())
+    {
+        throw_data_clone_exception(
+            scope,
+            "Blob attachment count exceeds the remote transport limit.",
+        );
+        return None;
+    }
     for buffer in array_buffer_transfers {
         if buffer.detach(None) != Some(true) {
             throw_data_clone_exception(scope, "Failed to transfer ArrayBuffer.");
@@ -1192,6 +1749,10 @@ fn validate_message_event_metadata(
             || metadata.sender_agent_cluster.is_none())
     {
         throw_data_clone_exception(scope, "Invalid WebAssembly.Module message clone metadata.");
+        return None;
+    }
+    if metadata.remote_agent_cluster_mismatch && !metadata.contains_wasm_module {
+        throw_data_clone_exception(scope, "Invalid remote agent-cluster message metadata.");
         return None;
     }
     Some(())

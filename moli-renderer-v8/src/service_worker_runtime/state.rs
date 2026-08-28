@@ -1,7 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     sync::{
-        Weak,
+        Arc, Weak,
         atomic::{AtomicBool, AtomicU64},
     },
 };
@@ -60,7 +60,7 @@ use super::{
     resource_store::{ServiceWorkerStoredRegistration, SharedServiceWorkerResourceStore},
     run_owner::ServiceWorkerRunOwner,
     script_loading::{LoadedServiceWorkerScript, ServiceWorkerScriptUpdateCheckParams},
-    service_lane::ServiceWorkerServiceLane,
+    service_lane::{ServiceWorkerOpenWindowCompletionQueue, ServiceWorkerServiceLane},
     snapshots::ServiceWorkerRegistrationSnapshot,
     target_output_streams::ServiceWorkerTargetOutputStreams,
     version::{
@@ -131,7 +131,8 @@ pub(super) struct ServiceWorkerRuntimeInner {
     pub(super) pause_new_workers_on_start_for_devtools: AtomicBool,
     pub(super) state: Mutex<ServiceWorkerRuntimeState>,
     pub(super) service_lane: ServiceWorkerServiceLane,
-    pub(super) owner_wake: ServiceWorkerOwnerWake,
+    pub(super) owner_wake: Arc<ServiceWorkerOwnerWake>,
+    pub(super) open_window_completion_queue: Arc<ServiceWorkerOpenWindowCompletionQueue>,
     pub(super) resource_store: SharedServiceWorkerResourceStore,
     pub(super) restored_worker_context_runtime: RendererWorkerContextRuntime,
     pub(super) browser_resource_runtime: crate::network::BrowserResourceRuntimeBinding,
@@ -149,6 +150,9 @@ impl ServiceWorkerRuntimeInner {
         browser_context_runtime_id: crate::runtime::RendererBrowserContextRuntimeId,
         output_transport: crate::runtime::RendererOutputTransportSenderSlot,
     ) -> Self {
+        let owner_wake = Arc::new(ServiceWorkerOwnerWake::default());
+        let open_window_completion_queue =
+            ServiceWorkerOpenWindowCompletionQueue::new(owner_wake.clone());
         Self {
             next_registration_id: AtomicU64::new(1),
             next_version_id: AtomicU64::new(1),
@@ -164,7 +168,8 @@ impl ServiceWorkerRuntimeInner {
                 output_transport,
             )),
             service_lane: ServiceWorkerServiceLane::default(),
-            owner_wake: ServiceWorkerOwnerWake::default(),
+            owner_wake,
+            open_window_completion_queue,
             resource_store,
             restored_worker_context_runtime,
             browser_resource_runtime,

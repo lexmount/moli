@@ -244,6 +244,7 @@ struct RendererInspectorIoState {
     commands: VecDeque<RendererInspectorIoCommand>,
     active_command_id: Option<u64>,
     detached_sessions: BTreeSet<RendererDevToolsSessionLaneKey>,
+    detached_agents: BTreeSet<RendererDevToolsAgentToken>,
     closed: bool,
     owner_wake_tx: Option<tokio::sync::mpsc::UnboundedSender<RendererInspectorIoOwnerWake>>,
 }
@@ -364,6 +365,7 @@ impl RendererInspectorIoIngress {
                     commands: VecDeque::new(),
                     active_command_id: None,
                     detached_sessions: BTreeSet::new(),
+                    detached_agents: BTreeSet::new(),
                     closed: false,
                     owner_wake_tx: None,
                 }),
@@ -391,14 +393,23 @@ impl RendererInspectorIoIngress {
     /// Breaks an active V8 call so target teardown can reach the Page owner.
     ///
     /// Closing the ingress prevents queued IO work from being claimed, but
-    /// the owner may still be inside non-yielding JavaScript. Target close
-    /// owns this isolate's lifetime, so teardown can terminate that execution
-    /// directly instead of depending on another DevTools command.
+    /// the owner may still be inside non-yielding JavaScript. Teardown can
+    /// terminate that execution directly instead of depending on another
+    /// DevTools command. A related Page can share this isolate, so the Page
+    /// owner must cancel a successful termination request immediately before
+    /// removing the target Page.
     pub(crate) fn terminate_execution_for_target_close(&self) -> bool {
         self.shared
             .interrupt_route
             .as_ref()
             .is_some_and(|route| route.isolate.terminate_execution())
+    }
+
+    pub(crate) fn cancel_terminate_execution_for_target_close(&self) -> bool {
+        self.shared
+            .interrupt_route
+            .as_ref()
+            .is_some_and(|route| route.isolate.cancel_terminate_execution())
     }
 
     pub(crate) fn configure_owner_wake(
@@ -443,7 +454,9 @@ impl RendererInspectorIoIngress {
         };
         let rejected = if state.closed {
             Some((command, "Inspector IO target is closed"))
-        } else if state.detached_sessions.contains(&lane_key) {
+        } else if state.detached_agents.contains(&agent_token)
+            || state.detached_sessions.contains(&lane_key)
+        {
             Some((command, "Inspector IO session was detached"))
         } else {
             state.commands.push_back(command);
@@ -589,14 +602,13 @@ impl RendererInspectorIoIngress {
         }
     }
 
-    pub(crate) fn cancel_all_queued(&self, message: &str) {
-        let commands = self
-            .shared
-            .state
-            .lock()
-            .commands
-            .drain(..)
-            .collect::<Vec<_>>();
+    pub(crate) fn close_agent(&self, agent_token: RendererDevToolsAgentToken, message: &str) {
+        let commands = {
+            let mut state = self.shared.state.lock();
+            state.detached_agents.insert(agent_token);
+            state.drain_commands(|command| command.agent_token == agent_token)
+        };
+        self.shared.pause_wake.notify_all();
         for command in commands {
             fail_io_command(command, message);
         }

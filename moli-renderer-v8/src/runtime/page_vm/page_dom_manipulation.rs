@@ -30,9 +30,6 @@ impl PageVm {
             RendererPageDomManipulationTask::ImageLoadEvent(task) => self
                 .apply_selected_page_image_load_event_turn(task)
                 .map(|outcome| outcome.map_action(PageDomManipulationTurnAction::ImageLoadEvent)),
-            RendererPageDomManipulationTask::PopupLoadEvent(task) => self
-                .apply_selected_page_popup_load_event_turn(task)
-                .map(|outcome| outcome.map_action(PageDomManipulationTurnAction::PopupLoadEvent)),
             RendererPageDomManipulationTask::ConnectedStyleEvent(task) => self
                 .apply_selected_page_connected_style_event_turn(task)
                 .map(|outcome| {

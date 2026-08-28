@@ -47,9 +47,7 @@ impl JsContextHost {
         let Some(wrapper) = self.child_window_proxy_records.live_window(scope, handle) else {
             return;
         };
-        if self
-            .child_window_proxy_records
-            .live_window_exposed_to_top(handle)
+        if self.child_window_proxy_records.window_proxy_exposed(handle)
             && !self.child_browsing_context_is_same_origin_with_top(handle)
         {
             let _ = self.ensure_top_exposed_cross_origin_window_proxy(scope, handle);
@@ -103,6 +101,11 @@ impl JsContextHost {
             self.child_performance_time_origin(handle),
         );
         bind_materialized_child_window_indexed_db_factory(scope, wrapper, handle);
+        let current_realm_owns_proxy = self
+            .current_registered_window_execution_context_identity(
+                crate::native_bridge::OwnerDispatchScope::Child(handle),
+            )
+            .is_some();
         let document = self
             .child_browsing_context_document_wrapper(scope, handle)
             .map(|document| {
@@ -112,6 +115,11 @@ impl JsContextHost {
                     wrapper,
                     visible_state.seed_is_committed,
                 );
+                if current_realm_owns_proxy {
+                    crate::context_bootstrap::sync_window_document_cached_accessor(
+                        scope, wrapper, document,
+                    );
+                }
                 document.into()
             })
             .unwrap_or_else(|| v8::null(scope).into());

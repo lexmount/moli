@@ -1209,9 +1209,101 @@ pub(super) async fn window_child_browsing_context_external_script_cookie_child_p
         .and_then(|value| value.to_str().ok())
         .unwrap_or("127.0.0.1");
     let script_origin = format!("http://{}", alternate_fixture_host(host));
-    Html(format!(
-        "<!doctype html><html><body><iframe id=\"nested\" name=\"nestedNamed\" srcdoc=\"<p>nested</p>\"></iframe><iframe id=\"document-collision\" name=\"document\" srcdoc=\"<p>document collision</p>\"></iframe><iframe id=\"focus-collision\" name=\"focus\" srcdoc=\"<p>focus collision</p>\"></iframe><script src=\"{script_origin}/compat/window-child-browsing-context-external-script-cookie.js\"></script><script>addEventListener('message', event => {{ if (event.data && event.data.type === 'report-length') {{ parent.postMessage({{type:event.data.replyType,parentLength:parent.length,topLength:top.length}}, '*'); }} }});document.body.setAttribute('data-external-cookie-seen', String(window.externalChildCookieSeen));parent.postMessage({{type:'external-cookie-seen',value:window.externalChildCookieSeen,parentIsTop:parent === top,childLength:length,parentLength:parent.length}}, '*');</script></body></html>"
-    ))
+    let html = r#"<!doctype html>
+<html>
+<body>
+  <iframe id="nested" name="nestedNamed" srcdoc="<p>nested</p>"></iframe>
+  <iframe id="document-collision" name="document" srcdoc="<p>document collision</p>"></iframe>
+  <iframe id="focus-collision" name="focus" srcdoc="<p>focus collision</p>"></iframe>
+  <script src="__SCRIPT_ORIGIN__/compat/window-child-browsing-context-external-script-cookie.js"></script>
+  <script>
+    addEventListener('message', event => {
+      if (!event.data) return;
+      if (event.data.type === 'report-length') {
+        parent.postMessage({
+          type: event.data.replyType,
+          parentLength: parent.length,
+          topLength: top.length
+        }, '*');
+      }
+      if (event.data.type === 'mutate-nested-children') {
+        try {
+          const nested = document.getElementById('nested');
+          nested.contentWindow.name = 'renamedNested';
+          document.getElementById('document-collision').remove();
+          const thenFrame = document.createElement('iframe');
+          thenFrame.name = 'then';
+          thenFrame.srcdoc = '<p>then child</p>';
+          document.body.append(thenFrame);
+          parent.postMessage({
+            type: event.data.replyType,
+            childLength: length,
+            renamedName: nested.contentWindow.name,
+            thenName: thenFrame.name
+          }, '*');
+        } catch (error) {
+          parent.postMessage({
+            type: event.data.replyType,
+            error: `${error && error.name}:${error && error.message}`
+          }, '*');
+        }
+      }
+      if (event.data.type === 'probe-same-origin-sibling-endpoint') {
+        let stage = 'read-parent-frames';
+        try {
+          const siblingFrames = parent.frames;
+          stage = 'read-target-index';
+          const target = siblingFrames[event.data.targetIndex];
+          stage = 'write-target-marker';
+          target.__observerEndpointMarker = 'same-origin-observer';
+          stage = 'read-target-surface';
+          parent.postMessage({
+            type: event.data.replyType,
+            repeatedIdentity: target === parent.frames[event.data.targetIndex],
+            namedIdentity: target === parent.observerTarget,
+            descriptorIdentity:
+              target === Object.getOwnPropertyDescriptor(
+                parent,
+                String(event.data.targetIndex)
+              ).value,
+            namedDescriptorIdentity:
+              target === Object.getOwnPropertyDescriptor(
+                parent,
+                'observerTarget'
+              ).value,
+            documentText: target.document.body.textContent.trim(),
+            documentDefaultView: target.document.defaultView === target,
+            locationPathname: target.location.pathname,
+            marker: target.__observerEndpointMarker,
+            distinctArrayRealm: target.Array !== Array,
+            parentIdentity: target.parent === parent,
+            topIdentity: target.top === top
+          }, '*');
+        } catch (error) {
+          parent.postMessage({
+            type: event.data.replyType,
+            stage,
+            error: `${error && error.name}:${error && error.message}`
+          }, '*');
+        }
+      }
+    });
+    document.body.setAttribute(
+      'data-external-cookie-seen',
+      String(window.externalChildCookieSeen)
+    );
+    parent.postMessage({
+      type: 'external-cookie-seen',
+      value: window.externalChildCookieSeen,
+      parentIsTop: parent === top,
+      childLength: length,
+      parentLength: parent.length
+    }, '*');
+  </script>
+</body>
+</html>"#
+        .replace("__SCRIPT_ORIGIN__", &script_origin);
+    Html(html)
 }
 
 pub(super) async fn window_child_browsing_context_external_script_cookie_asset(

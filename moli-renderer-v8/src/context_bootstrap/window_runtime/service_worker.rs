@@ -777,10 +777,6 @@ fn service_worker_container_for_owner<'s>(
             let host_ptr = context_host_ptr_from_global_bridge(scope)?;
             unsafe { &mut *host_ptr }.child_browsing_context_window_wrapper(scope, handle)?
         }
-        crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id) => {
-            let host_ptr = context_host_ptr_from_global_bridge(scope)?;
-            unsafe { &*host_ptr }.lightweight_popup_window(scope, popup_id)?
-        }
     };
     service_worker_container_from_window(scope, window)
 }
@@ -2938,12 +2934,6 @@ fn service_worker_owner_scope_from_object<'s>(
         && let Ok(index) = raw.parse::<usize>()
     {
         return OwnerDispatchScope::Child(DomHandle::new(index));
-    }
-    if let Some(raw) = token.strip_prefix("popup:")
-        && let Ok(popup_id) = raw.parse::<u64>()
-        && popup_id != 0
-    {
-        return OwnerDispatchScope::LightweightPopup(popup_id);
     }
     OwnerDispatchScope::Top
 }

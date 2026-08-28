@@ -365,6 +365,7 @@ impl RendererDevToolsSession {
             state,
         );
         let session = Rc::new(session);
+        outbound.bind_message_finalizer(backend.message_finalizer(context_group_id, &session));
         let executor_registration = frontend_session_route.map(|(agent_token, session_key)| {
             backend.register_session_executor_route(
                 context_group_id,

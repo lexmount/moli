@@ -302,9 +302,11 @@ impl LivePageEntry {
         self.begin_standalone_navigation_follow_for_handoff(None)
     }
 
-    /// Claim a producer handoff only while the same request still occupies
-    /// the ScriptVm's unique pending navigation slot. A delayed wake for an
-    /// overwritten request therefore cannot start the replacement request.
+    /// Claim a producer handoff only while the same request is still at the
+    /// head of the ScriptVm's pending navigation owner queue. A delayed wake
+    /// for an overwritten/canceled request therefore cannot start a different
+    /// request, while FIFO JavaScript URL handoffs remain independently
+    /// claimable.
     pub(in crate::runtime) fn begin_standalone_navigation_follow_from_handoff(
         &mut self,
         handoff: crate::page_task_queue::RendererTopLevelNavigationHandoff,
@@ -324,6 +326,7 @@ impl LivePageEntry {
         }
         let current = self
             .active_page_vm()
+            .filter(|page_vm| page_vm.has_live_script_vm())
             .and_then(|page_vm| page_vm.vm().pending_location_navigation_handoff());
         self.standalone_navigation_follow.claim(current, requested)
     }
@@ -331,6 +334,7 @@ impl LivePageEntry {
     pub(in crate::runtime) fn settle_standalone_navigation_follow(&mut self, succeeded: bool) {
         let current = self
             .active_page_vm()
+            .filter(|page_vm| page_vm.has_live_script_vm())
             .and_then(|page_vm| page_vm.vm().pending_location_navigation_handoff());
         self.standalone_navigation_follow.settle(current, succeeded);
     }
@@ -371,6 +375,13 @@ impl LivePageEntry {
     pub(super) fn publish_replacement_document_commit(
         &mut self,
     ) -> Result<PublishedReplacementDocument> {
+        self.publish_replacement_document_commit_with_metadata(None)
+    }
+
+    fn publish_replacement_document_commit_with_metadata(
+        &mut self,
+        metadata: Option<PreparedReplacementDocumentMetadata>,
+    ) -> Result<PublishedReplacementDocument> {
         let stable_before = self.slot.entry();
         ensure!(
             stable_before.is_active(),
@@ -401,7 +412,16 @@ impl LivePageEntry {
 
         self.page_vm_mut()
             .settle_replacement_document_commit(navigation_handoff)?;
-        RendererOwnerLocalStore::commit_active_vm_page_state_on_entry(self)?;
+        match metadata {
+            Some(metadata) => {
+                RendererOwnerLocalStore::commit_active_vm_page_state_on_entry_with_metadata(
+                    self, metadata,
+                )?;
+            }
+            None => {
+                RendererOwnerLocalStore::commit_active_vm_page_state_on_entry(self)?;
+            }
+        }
         let stable_after = self.slot.entry();
         ensure!(
             stable_after.vm_creation_id() == vm_creation_id,
@@ -425,6 +445,72 @@ impl LivePageEntry {
             self.vm = None;
         }
         Ok(published)
+    }
+
+    pub(in crate::runtime) fn validate_prepared_replacement_generation(
+        &self,
+        expected_vm_creation_id: u64,
+    ) -> Result<()> {
+        let stable = self.slot.entry();
+        ensure!(
+            stable.is_active(),
+            "prepared replacement cannot commit into a retired Page slot"
+        );
+        ensure!(
+            !self.has_uncommitted_page_vm(),
+            "prepared replacement cannot overlap another uncommitted Document"
+        );
+        let resident = self
+            .active_page_vm()
+            .ok_or_else(|| anyhow!("prepared replacement lost the resident PageVm"))?;
+        ensure!(
+            stable.vm_creation_id() == expected_vm_creation_id
+                && resident.creation_id == expected_vm_creation_id,
+            "stale prepared replacement expected PageVm {expected_vm_creation_id}, current stable PageVm {} and resident PageVm {}",
+            stable.vm_creation_id(),
+            resident.creation_id
+        );
+        ensure!(
+            resident.has_live_script_vm(),
+            "prepared replacement cannot detach an already-retired Document realm"
+        );
+        Ok(())
+    }
+
+    pub(super) fn install_prepared_replacement_page_vm(
+        &mut self,
+        mut page_vm: PageVm,
+        navigation_handoff: crate::page_task_queue::RendererTopLevelNavigationHandoff,
+        metadata: PreparedReplacementDocumentMetadata,
+    ) -> Result<PublishedReplacementDocument> {
+        ensure!(
+            self.pending_phase_one_navigation.is_none(),
+            "prepared replacement cannot install over a phase-one residence"
+        );
+        ensure!(
+            self.vm
+                .as_ref()
+                .is_some_and(|page_vm| !page_vm.has_live_script_vm()),
+            "prepared replacement PageVm must install after the old Document realm is detached"
+        );
+        page_vm.prepare_replacement_document_commit(navigation_handoff)?;
+        self.retire_document_lifecycle_turn();
+        self.vm = Some(page_vm);
+        self.publish_replacement_document_commit_with_metadata(Some(metadata))
+    }
+
+    pub(super) fn install_prepared_replacement_pending_phase_one(
+        &mut self,
+        mut pending: PageVmPendingPhaseOneNavigation,
+        navigation_handoff: crate::page_task_queue::RendererTopLevelNavigationHandoff,
+        metadata: PreparedReplacementDocumentMetadata,
+    ) -> Result<(RendererPageToken, PublishedReplacementDocument)> {
+        pending
+            .page_vm_mut()
+            .prepare_replacement_document_commit(navigation_handoff)?;
+        let wake_token = self.install_new_pending_phase_one_navigation(pending)?;
+        let published = self.publish_replacement_document_commit_with_metadata(Some(metadata))?;
+        Ok((wake_token, published))
     }
 
     pub(in crate::runtime) fn active_page_vm(&self) -> Option<&PageVm> {

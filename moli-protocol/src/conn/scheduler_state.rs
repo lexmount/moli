@@ -7,8 +7,77 @@ use serde_json::{Value, json};
 
 const RECENT_ACTIVITY_TRACE_LIMIT: usize = 128;
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct BackgroundNavigationGateKey {
+    target_id: Option<String>,
+    session_id: Option<String>,
+    frame_id: String,
+    loader_id: String,
+    navigation_request_id: Option<u64>,
+}
+
+impl BackgroundNavigationGateKey {
+    pub(crate) fn for_navigation(
+        token: &super::state::DocumentNavigationToken,
+        state: &super::state::NavigationDispatchState,
+    ) -> Self {
+        // Keep this key limited to fields that are stable from background task
+        // spawn through lifecycle completion. `navigate_id` is intentionally
+        // excluded because early Page.navigate replies clear it before the
+        // completion is sent.
+        Self {
+            target_id: Some(token.target_id.clone()),
+            session_id: state
+                .navigate_session_id
+                .clone()
+                .or_else(|| state.session_id.clone()),
+            frame_id: state.frame_id.clone(),
+            loader_id: token.loader_id.clone(),
+            navigation_request_id: Some(token.request_id.get()),
+        }
+    }
+
+    /// Reports whether this gate belongs to the renderer/session owner used by
+    /// an incoming CDP command.
+    pub fn matches_session_owner(&self, session_id: Option<&str>) -> bool {
+        self.session_id.as_deref() == session_id
+    }
+
+    pub(crate) fn target_id(&self) -> Option<&str> {
+        self.target_id.as_deref()
+    }
+
+    pub(crate) fn session_id(&self) -> Option<&str> {
+        self.session_id.as_deref()
+    }
+
+    pub(crate) fn loader_id(&self) -> &str {
+        &self.loader_id
+    }
+
+    #[cfg(feature = "test-support")]
+    pub(crate) fn from_test_parts(
+        target_id: Option<String>,
+        session_id: Option<String>,
+        frame_id: String,
+        loader_id: String,
+        navigation_request_id: Option<u64>,
+    ) -> Self {
+        Self {
+            target_id,
+            session_id,
+            frame_id,
+            loader_id,
+            navigation_request_id,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum CdpSchedulerEvent {
+    DocumentContinuationStarted {
+        key: BackgroundNavigationGateKey,
+    },
     ProtocolWorkPublished {
         work: crate::domains::activity::ProtocolSchedulerWork,
     },
@@ -175,6 +244,10 @@ impl CdpTurnOutcome {
 }
 
 impl CdpRendererOwnerTurnOutcome {
+    pub fn renderer_output_predecessor(&self) -> Option<&moli_core::RendererOutputFence> {
+        self.renderer_output_predecessor.as_ref()
+    }
+
     #[cfg(test)]
     pub fn into_parts(self) -> (Vec<serde_json::Value>, Vec<CdpSchedulerEvent>) {
         assert!(

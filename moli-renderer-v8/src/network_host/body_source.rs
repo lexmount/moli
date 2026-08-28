@@ -244,6 +244,7 @@ enum PendingBodyMaterializationKind {
 
 pub(crate) struct PendingBodyMaterialization {
     resolver: v8::Global<v8::PromiseResolver>,
+    owner_realm: Option<crate::native_bridge::RuntimeObservableContextToken>,
     kind: PendingBodyMaterializationKind,
 }
 
@@ -261,7 +262,92 @@ pub(crate) struct PendingNetworkBodySourceState {
     closed: bool,
     error: Option<String>,
     error_reason: Option<v8::Global<v8::Value>>,
+    error_reason_owner_realm: Option<crate::native_bridge::RuntimeObservableContextToken>,
     materializations: Vec<PendingBodyMaterialization>,
+}
+
+fn value_owner_realm(
+    scope: &mut v8::PinScope<'_, '_>,
+    value: v8::Local<'_, v8::Value>,
+) -> Option<crate::native_bridge::RuntimeObservableContextToken> {
+    v8::Local::<v8::Object>::try_from(value)
+        .ok()
+        .and_then(|object| object.get_creation_context(scope))
+        .and_then(|context| {
+            context
+                .get_slot::<crate::native_bridge::RuntimeObservableContextToken>()
+                .as_deref()
+                .copied()
+        })
+        .or_else(|| crate::native_bridge::current_runtime_observable_context_token(scope))
+}
+
+fn resolver_owner_realm(
+    scope: &mut v8::PinScope<'_, '_>,
+    resolver: v8::Local<'_, v8::PromiseResolver>,
+) -> Option<crate::native_bridge::RuntimeObservableContextToken> {
+    v8::Local::<v8::Object>::from(resolver)
+        .get_creation_context(scope)
+        .and_then(|context| {
+            context
+                .get_slot::<crate::native_bridge::RuntimeObservableContextToken>()
+                .as_deref()
+                .copied()
+        })
+        .or_else(|| crate::native_bridge::current_runtime_observable_context_token(scope))
+}
+
+impl crate::native_bridge::JsContextHost {
+    /// Drops only the strong V8 edges owned by one retiring realm while
+    /// preserving byte/error metadata for an author-retained Response.
+    ///
+    /// Pending body sources are Page-host state shared by top and child
+    /// realms. Keeping their PromiseResolver or error reason Globals after a
+    /// child navigation would create an untraceable
+    /// Context -> host -> Global -> Context cycle.
+    pub(crate) fn retire_pending_network_body_v8_handles_for_context_token(
+        &mut self,
+        context_token: crate::native_bridge::RuntimeObservableContextToken,
+    ) -> (usize, usize) {
+        let mut retired_error_reasons = 0;
+        let mut retired_materializations = 0;
+        for state in self.pending_network_body_sources.values_mut() {
+            if state.error_reason_owner_realm == Some(context_token) {
+                retired_error_reasons += usize::from(state.error_reason.take().is_some());
+                state.error_reason_owner_realm = None;
+            }
+            let before = state.materializations.len();
+            state
+                .materializations
+                .retain(|materialization| materialization.owner_realm != Some(context_token));
+            retired_materializations += before.saturating_sub(state.materializations.len());
+        }
+        (retired_error_reasons, retired_materializations)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pending_network_body_v8_handle_counts_for_context_token(
+        &self,
+        context_token: crate::native_bridge::RuntimeObservableContextToken,
+    ) -> (usize, usize) {
+        self.pending_network_body_sources.values().fold(
+            (0, 0),
+            |(error_reasons, materializations), state| {
+                (
+                    error_reasons
+                        + usize::from(state.error_reason_owner_realm == Some(context_token)),
+                    materializations
+                        + state
+                            .materializations
+                            .iter()
+                            .filter(|materialization| {
+                                materialization.owner_realm == Some(context_token)
+                            })
+                            .count(),
+                )
+            },
+        )
+    }
 }
 
 enum PendingBodyRejection {
@@ -562,6 +648,7 @@ fn pending_network_body_source_and_stream<'s>(
                 closed: false,
                 error: None,
                 error_reason: None,
+                error_reason_owner_realm: None,
                 materializations: Vec::new(),
             },
         );
@@ -580,6 +667,7 @@ fn pending_network_body_source_and_stream<'s>(
                     closed: false,
                     error: None,
                     error_reason: None,
+                    error_reason_owner_realm: None,
                     materializations: Vec::new(),
                 },
             );
@@ -907,6 +995,7 @@ fn error_pending_network_body_stream_with_clone_ids<'s>(
         state.closed = true;
         state.error = Some(error_text.to_owned());
         state.error_reason = Some(v8::Global::new(scope, reason));
+        state.error_reason_owner_realm = value_owner_realm(scope, reason);
         if let Some(stream) = state.stream.to_local(scope) {
             error_stream(scope, stream, reason);
         }
@@ -926,6 +1015,7 @@ fn error_pending_network_body_stream_with_clone_ids<'s>(
             clone.closed = true;
             clone.error = Some(error_text.to_owned());
             clone.error_reason = Some(v8::Global::new(scope, reason));
+            clone.error_reason_owner_realm = value_owner_realm(scope, reason);
             if let Some(stream) = clone.stream.to_local(scope) {
                 error_stream(scope, stream, reason);
             }
@@ -1526,6 +1616,7 @@ fn inspect_pending_body_source_for_materialization<'s>(
         } else {
             state.materializations.push(PendingBodyMaterialization {
                 resolver: v8::Global::new(scope, resolver),
+                owner_realm: resolver_owner_realm(scope, resolver),
                 kind,
             });
         }

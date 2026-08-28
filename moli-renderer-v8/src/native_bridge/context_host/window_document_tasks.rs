@@ -1,6 +1,12 @@
-use super::{JsContextHost, OwnerDispatchScope, WindowDocumentOwner, WindowDocumentTaskTarget};
+use super::{
+    JsContextHost, OwnerDispatchScope, WindowDocumentOwner, WindowDocumentTaskTarget,
+    WindowExecutionContextIdentity,
+};
 use crate::document_runtime::DomHandle;
-use crate::runtime::{RendererDocumentLifecycleIdentity, RendererWindowDocumentSource};
+use crate::runtime::{
+    RendererDocumentLifecycleIdentity, RendererTopLevelNavigationSource,
+    RendererWindowDocumentSource,
+};
 
 /// One PageVm-local payload keyed by immutable exact-Document identity.
 ///
@@ -190,16 +196,84 @@ impl JsContextHost {
                     document_id: owner.document_id.0,
                 }
             }
-            (
-                WindowDocumentOwner::LightweightPopup(owner),
-                OwnerDispatchScope::LightweightPopup(popup_id),
-            ) if owner.popup_id() == popup_id => RendererWindowDocumentSource::LightweightPopup {
-                popup_id,
-                popup_document_id: owner.document_id().as_u64(),
-            },
-            _ => return None,
         };
         Some((target, root_document, source))
+    }
+
+    pub(crate) fn renderer_window_document_source_for_identity(
+        &self,
+        identity: WindowExecutionContextIdentity,
+    ) -> Option<(
+        WindowDocumentTaskTarget,
+        RendererDocumentLifecycleIdentity,
+        RendererWindowDocumentSource,
+    )> {
+        self.window_execution_context_identity_is_current(identity)
+            .then(|| identity.dispatch_scope())
+            .and_then(|scope| self.renderer_window_document_source_for_dispatch_scope(scope))
+    }
+
+    /// Captures the source-side facts for a top-level navigation before target
+    /// selection enters another Window realm or hands scheduling to another
+    /// Page. The source URL follows the inherited creator URL for initial
+    /// `about:` Documents, matching the policy-container authority already
+    /// used by child-frame and popup navigation requests.
+    pub(crate) fn renderer_top_level_navigation_source_for_dispatch_scope(
+        &self,
+        dispatch_scope: OwnerDispatchScope,
+        suppress_referrer: bool,
+    ) -> Option<RendererTopLevelNavigationSource> {
+        let (_, root_document, window) =
+            self.renderer_window_document_source_for_dispatch_scope(dispatch_scope)?;
+        let (document, policy) = match dispatch_scope {
+            OwnerDispatchScope::Top => (
+                self.document_handle(),
+                self.document_policy_container().clone(),
+            ),
+            OwnerDispatchScope::Child(handle) => (
+                self.child_browsing_context_document_handle(handle)?,
+                self.child_browsing_context_policy_container_snapshot(handle)?,
+            ),
+        };
+        let raw_source_url = self.document_url_for_handle(document);
+        let source_url = if raw_source_url.scheme() == "about" {
+            url::Url::parse(&policy.document_referrer).unwrap_or(raw_source_url)
+        } else {
+            raw_source_url
+        };
+        Some(RendererTopLevelNavigationSource::new(
+            root_document,
+            window,
+            source_url.to_string(),
+            policy.referrer_policy,
+            suppress_referrer,
+        ))
+    }
+
+    pub(crate) fn renderer_top_level_navigation_source_for_identity(
+        &self,
+        identity: WindowExecutionContextIdentity,
+        suppress_referrer: bool,
+    ) -> Option<RendererTopLevelNavigationSource> {
+        self.window_execution_context_identity_is_current(identity)
+            .then(|| identity.dispatch_scope())
+            .and_then(|scope| {
+                self.renderer_top_level_navigation_source_for_dispatch_scope(
+                    scope,
+                    suppress_referrer,
+                )
+            })
+    }
+
+    pub(crate) fn renderer_top_level_navigation_source_for_node(
+        &self,
+        node: DomHandle,
+        suppress_referrer: bool,
+    ) -> Option<RendererTopLevelNavigationSource> {
+        self.renderer_top_level_navigation_source_for_dispatch_scope(
+            self.owner_dispatch_scope_for_node(node)?,
+            suppress_referrer,
+        )
     }
 
     pub(crate) fn current_window_document_task_target_for_dispatch_scope(
@@ -212,11 +286,6 @@ impl JsContextHost {
             }
             OwnerDispatchScope::Child(handle) => {
                 WindowDocumentOwner::Frame(self.current_child_document_task_owner(handle)?)
-            }
-            OwnerDispatchScope::LightweightPopup(popup_id) => {
-                WindowDocumentOwner::LightweightPopup(
-                    self.current_lightweight_popup_document_owner(popup_id)?,
-                )
             }
         };
         Some(WindowDocumentTaskTarget::new(owner, dispatch_scope))
@@ -265,11 +334,6 @@ impl JsContextHost {
                 self.ensure_prebootstrapped_child_default_context(scope, handle)
                     .ok()?;
                 self.child_browsing_context_document_handle(handle)?
-            }
-            OwnerDispatchScope::LightweightPopup(popup_id) => {
-                self.ensure_lightweight_popup_execution_context(scope, popup_id)
-                    .then_some(())?;
-                self.lightweight_popup_document_handle(popup_id)?
             }
         };
         let identity = self.current_registered_window_execution_context_identity(dispatch_scope)?;

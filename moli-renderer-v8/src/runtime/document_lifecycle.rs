@@ -62,6 +62,24 @@ impl RendererDocumentToken {
     pub const fn successor_for_testing(self) -> Self {
         Self::with_id(self.page_id, self.lifecycle_document_id.successor())
     }
+
+    pub(crate) const fn lifecycle_document_id_for_wire(self) -> u64 {
+        self.lifecycle_document_id.0
+    }
+
+    pub(crate) const fn from_wire_parts(
+        page_id: PageId,
+        lifecycle_document_id: u64,
+    ) -> Option<Self> {
+        if lifecycle_document_id == 0 {
+            None
+        } else {
+            Some(Self::with_id(
+                page_id,
+                RendererLifecycleDocumentId(lifecycle_document_id),
+            ))
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -232,7 +250,7 @@ impl RendererDocumentLifecycleWaiter {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct RendererDocumentLifecycleIdentity {
     pub frame: RendererFrameToken,
     pub document: RendererDocumentToken,
@@ -326,14 +344,25 @@ impl RendererDocumentLifecycleJournalHandle {
         self.0.borrow().current_snapshot.into()
     }
 
-    pub(crate) fn bind_output_journal(&self, output_journal: super::RendererTurnOutputJournal) {
+    pub(crate) fn bind_output_journal(
+        &self,
+        output_journal: super::RendererTurnOutputJournal,
+        allow_page_agent_transition: bool,
+    ) {
         let mut journal = self.0.borrow_mut();
         if let Some(existing) = &journal.output_journal {
-            assert_eq!(
-                existing.stream(),
-                output_journal.stream(),
-                "one lifecycle journal cannot change renderer output streams"
-            );
+            if existing.stream() != output_journal.stream() {
+                assert!(
+                    allow_page_agent_transition,
+                    "one lifecycle journal cannot change renderer output streams outside a typed Page agent transition"
+                );
+                assert_eq!(
+                    existing.stream().residence(),
+                    output_journal.stream().residence(),
+                    "a lifecycle journal Page agent transition cannot change Page residence"
+                );
+                journal.output_journal = Some(output_journal);
+            }
             return;
         }
         journal.output_journal = Some(output_journal);

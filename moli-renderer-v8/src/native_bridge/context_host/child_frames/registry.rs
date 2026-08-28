@@ -39,10 +39,17 @@ impl JsContextHost {
 
     pub(in crate::native_bridge::context_host) fn retire_child_document_external_state(
         &mut self,
-        handle: DomHandle,
-        retired_owner: crate::frame_owner_model::FrameDocumentTaskOwner,
-        document_handle: DomHandle,
+        retirement: crate::frame_owner_model::FrameDocumentExternalStateRetirement,
     ) {
+        let handle = retirement.child_handle();
+        let retired_owner = retirement.retired_owner();
+        let document_handle = retirement.document_handle();
+        debug_assert_eq!(
+            self.frame_owner_store
+                .browsing_context_id_for_child_handle(handle),
+            Some(retirement.browsing_context_id()),
+            "child external-state retirement must name the current context adapter"
+        );
         let _ = self.retire_document_resource_loader(
             crate::native_bridge::WindowDocumentOwner::Frame(retired_owner),
         );
@@ -55,6 +62,7 @@ impl JsContextHost {
             .remove_document(retired_owner.document_owner());
         self.cancel_child_document_script_work_for_owner(handle, retired_owner);
         self.retire_child_frame_realm_materialization_request(handle, retired_owner);
+        self.retire_child_document_start_script_snapshot(retired_owner);
         self.note_style_subtree_context_change(document_handle);
         self.dom_host_mut()
             .mark_subtree_disconnected_preserving_owner_document(document_handle);
@@ -71,7 +79,18 @@ impl JsContextHost {
             .frame_owner_store
             .current_child_document_task_owner(handle)
         {
-            self.retire_child_document_external_state(handle, owner, document_handle);
+            let browsing_context_id = self
+                .frame_owner_store
+                .browsing_context_id_for_child_handle(handle)
+                .expect("current child document owner must retain its browsing context");
+            self.retire_child_document_external_state(
+                crate::frame_owner_model::FrameDocumentExternalStateRetirement::new(
+                    handle,
+                    browsing_context_id,
+                    owner,
+                    document_handle,
+                ),
+            );
             return Some(document_handle);
         }
         self.retire_image_state_for_document(document_handle);
@@ -184,7 +203,14 @@ impl JsContextHost {
                 let existing_document_policy = existing
                     .as_ref()
                     .map(|entry| entry.document_policy_container_snapshot());
-                let name = self.dom_host().get_attribute(handle, "name");
+                let browsing_context_name = existing
+                    .as_ref()
+                    .map(|entry| entry.browsing_context_name.clone())
+                    .unwrap_or_else(|| {
+                        self.dom_host()
+                            .get_attribute(handle, "name")
+                            .filter(|value| !value.is_empty())
+                    });
                 let id = self.dom_host().get_attribute(handle, "id");
                 let credentialless = self
                     .dom_host()
@@ -231,6 +257,12 @@ impl JsContextHost {
                     frame_id.clone(),
                     parent_frame_id.clone(),
                 );
+                let browsing_context_id = self
+                    .frame_owner_store
+                    .browsing_context_id_for_child_handle(handle)
+                    .expect("ensured child frame must expose its browsing-context identity");
+                self.child_window_proxy_records
+                    .bind_nested_browsing_context(handle, browsing_context_id);
                 self.apply_pending_parent_descendant_completions();
                 self.rebind_active_child_frame_load_to_parent(handle);
                 if is_new {
@@ -286,9 +318,8 @@ impl JsContextHost {
                     sandbox: if attribute_bootstrap_changed || is_new {
                         refresh_policy_source
                             .map(|policy| {
-                                policy.sandbox.with_response_content_security_policy(
-                                    sandbox_policy_from_owner,
-                                )
+                                sandbox_policy_from_owner
+                                    .with_response_content_security_policy(policy.sandbox)
                             })
                             .unwrap_or(sandbox_policy_from_owner)
                     } else {
@@ -309,6 +340,10 @@ impl JsContextHost {
                     content_security_reporting_endpoints: refresh_policy_source
                         .map(|policy| policy.content_security_reporting_endpoints.clone())
                         .unwrap_or_default(),
+                    top_navigation_without_user_gesture_is_restricted: refresh_policy_source
+                        .is_some_and(|policy| {
+                            policy.top_navigation_without_user_gesture_is_restricted
+                        }),
                 };
                 let initial_empty_document_init: Option<ChildInitialEmptyDocumentInit> = is_new
                     .then(|| {
@@ -324,7 +359,7 @@ impl JsContextHost {
                         current_document_loader_id: existing.as_ref().and_then(|entry| {
                             entry.current_document_loader_id().map(ToOwned::to_owned)
                         }),
-                        name: name.filter(|value| !value.is_empty()),
+                        browsing_context_name,
                         id: id.filter(|value| !value.is_empty()),
                         attribute_bootstrap,
                         pending_attribute_bootstrap_commit:
@@ -431,6 +466,7 @@ impl JsContextHost {
                             "new child frame refresh must capture initial-empty init inputs",
                         ),
                     );
+                    let _ = self.ensure_child_opaque_origin_nonce(handle);
                     if initial_about_blank_document_is_complete {
                         let _ = self.dispatch_ready_child_initial_empty_load_synchronously(
                             scope,
@@ -482,7 +518,7 @@ impl JsContextHost {
                 self.clear_child_window_event_listeners(handle);
                 self.close_broadcast_channels_for_child_context(handle);
                 self.disconnect_shared_worker_clients_for_child_context(handle);
-                self.child_web_storage_opaque_context_nonces.remove(&handle);
+                self.child_opaque_origin_nonce_bindings.remove(&handle);
                 self.retire_current_child_navigation_commit_task(handle);
                 self.cancel_child_document_script_work(handle);
                 None
@@ -536,8 +572,11 @@ impl JsContextHost {
         scope: &mut v8::PinScope<'_, '_>,
         root: DomHandle,
     ) -> Vec<FrameDocumentClassicScriptSchedulerWork> {
-        self.child_browsing_context_subtree_ready_work(scope, root)
-            .1
+        let ready_work = self
+            .child_browsing_context_subtree_ready_work(scope, root)
+            .1;
+        self.publish_related_page_remote_frame_tree();
+        ready_work
     }
 
     pub(crate) fn sync_child_browsing_context_subtree(
@@ -549,6 +588,7 @@ impl JsContextHost {
         for work in ready_work {
             self.push_child_document_script_ready_input(work);
         }
+        self.publish_related_page_remote_frame_tree();
         had_handles
     }
 
@@ -622,8 +662,9 @@ impl JsContextHost {
             self.clear_child_window_event_listeners(handle);
             self.close_broadcast_channels_for_child_context(handle);
             self.disconnect_shared_worker_clients_for_child_context(handle);
-            self.child_web_storage_opaque_context_nonces.remove(&handle);
+            self.child_opaque_origin_nonce_bindings.remove(&handle);
         }
+        self.publish_related_page_remote_frame_tree();
     }
 
     pub(crate) fn drop_child_browsing_contexts_moved_into_own_document_subtree(
@@ -666,11 +707,6 @@ impl JsContextHost {
             })
             .collect::<Vec<_>>();
         let mut handles = handles;
-        for popup_id in self.open_lightweight_popup_ids() {
-            if let Some(document_handle) = self.lightweight_popup_document_handle(popup_id) {
-                self.collect_child_browsing_context_host_handles(document_handle, &mut handles);
-            }
-        }
         handles.retain(|handle| {
             self.is_child_browsing_context_host_handle(*handle)
                 && self.child_browsing_context_host_is_active(*handle)
@@ -754,7 +790,7 @@ impl JsContextHost {
             .retain(|handle, _| live_handles.contains(handle));
         self.child_window_event_listeners
             .retain(|handle, _| live_handles.contains(handle));
-        self.child_web_storage_opaque_context_nonces
+        self.child_opaque_origin_nonce_bindings
             .retain(|handle, _| live_handles.contains(handle));
         self.pending_child_document_navigations
             .retain(|_, pending| live_handles.contains(&pending.target.child_handle()));

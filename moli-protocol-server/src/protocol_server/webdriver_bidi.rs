@@ -195,6 +195,18 @@ async fn handle_bidi_session_socket_local(
                     break;
                 }
             }
+            maybe_continuation = receivers.document_continuation_completion_rx.recv() => {
+                let Some(continuation) = maybe_continuation else {
+                    break;
+                };
+                if !actor.handle_background_navigation_completion(
+                    &mut scheduler,
+                    &mut receivers,
+                    moli_protocol::BackgroundNavigationCompletion::document_continuation(continuation),
+                ).await {
+                    break;
+                }
+            }
             maybe_completion = receivers.background_navigation_completion_rx.recv() => {
                 let Some(completion) = maybe_completion else {
                     break;
@@ -3173,7 +3185,7 @@ async fn drain_bidi_background_navigation_before_command(
 ) -> Result<BidiDevToolsEventSources, BidiRendererOutputTransportFailure> {
     let mut event_sources = drain_ready_bidi_background_navigation(scheduler, receivers).await?;
     while scheduler.has_inflight_background_navigation() {
-        let Some(completion) = receivers.background_navigation_completion_rx.recv().await else {
+        let Some(completion) = receivers.recv_navigation_completion().await else {
             return Ok(event_sources);
         };
         match scheduler
@@ -3202,7 +3214,7 @@ async fn drain_ready_bidi_background_navigation(
         scheduler
             .drain_background_events_around_inflight_navigation(&mut receivers.background_event_rx),
     );
-    while let Ok(completion) = receivers.background_navigation_completion_rx.try_recv() {
+    while let Some(completion) = receivers.try_recv_navigation_completion() {
         match scheduler
             .drain_background_navigation_completion_with_progress_barrier(completion, receivers)
             .await

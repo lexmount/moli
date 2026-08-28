@@ -20,7 +20,6 @@ pub(crate) enum PageDomManipulationTestFamily {
     ElementToggle,
     FileEntryFileCallback,
     ImageLoadEvent,
-    PopupLoadEvent,
     ConnectedStyleEvent,
     TextTrackDefaultMode,
     TextTrackLoad,
@@ -49,9 +48,6 @@ impl PageDomManipulationTestFamily {
             ) | (
                 Self::ImageLoadEvent,
                 RendererPageDomManipulationOwner::ImageLoadEvent(_)
-            ) | (
-                Self::PopupLoadEvent,
-                RendererPageDomManipulationOwner::PopupLoadEvent(_)
             ) | (
                 Self::ConnectedStyleEvent,
                 RendererPageDomManipulationOwner::ConnectedStyleEvent(_)

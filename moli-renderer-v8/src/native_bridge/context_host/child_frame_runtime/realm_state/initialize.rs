@@ -9,6 +9,7 @@ use crate::{
         WINDOW_NAME_SLOT, bind_window_navigator_identity_seed, bind_window_performance_seed,
         install_navigation_bootstrap_entry_for_holder,
         reset_window_location_history_navigation_runtime_state, set_window_origin_runtime_state,
+        sync_window_document_cached_accessor,
         sync_window_location_history_navigation_runtime_surface,
     },
     native_bridge::{
@@ -44,7 +45,7 @@ pub(in crate::native_bridge::context_host::child_frame_runtime) fn initialize_ch
     install_child_window_identity_slots(scope, global, init.handle, parent, top);
     initialize_child_window_realm_environment(scope, global, init.handle)?;
     if let Some(identity) = host
-        .document_resource_loader_for_owner(init.expected_owner)
+        .document_resource_loader_for_owner(init.projection.owner())
         .map(|loader| loader.request_client().browser_identity().clone())
     {
         bind_window_navigator_identity_seed(scope, global, &identity)?;
@@ -63,6 +64,7 @@ pub(in crate::native_bridge::context_host::child_frame_runtime) fn initialize_ch
         .child_browsing_context_document_wrapper(scope, init.handle)
         .ok_or_else(|| anyhow::anyhow!("missing child Document wrapper"))?;
     sync_child_document_window_slots(scope, document, global, true);
+    sync_window_document_cached_accessor(scope, global, document);
     set_object_slot(scope, global, "document", document.into());
     validate_child_window_realm_snapshot(host, &snapshot)?;
 
@@ -87,23 +89,26 @@ pub(in crate::native_bridge::context_host::child_frame_runtime) fn rebind_child_
     );
     let init = ChildWindowRealmInit {
         handle: rebind.handle,
-        expected_owner: rebind.current_owner,
-        realm_token: rebind.realm_token,
-        world: WindowWorldKind::Isolated {
-            access_policy: host
-                .current_runtime_window_execution_context_identity_for_dispatch_scope(
-                    scope,
-                    OwnerDispatchScope::Child(rebind.handle),
-                )
-                .map(|identity| {
-                    if identity.grants_universal_access() {
-                        crate::native_bridge::WindowExecutionContextAccessPolicy::Universal
-                    } else {
-                        crate::native_bridge::WindowExecutionContextAccessPolicy::EnforceWebOrigin
-                    }
-                })
-                .unwrap_or_default(),
-        },
+        projection: crate::browsing_context_model::RealmHostProjection::new(
+            rebind.browsing_context_id,
+            rebind.current_owner,
+            rebind.realm_token,
+            WindowWorldKind::Isolated {
+                access_policy: host
+                    .current_runtime_window_execution_context_identity_for_dispatch_scope(
+                        scope,
+                        OwnerDispatchScope::Child(rebind.handle),
+                    )
+                    .map(|identity| {
+                        if identity.grants_universal_access() {
+                            crate::native_bridge::WindowExecutionContextAccessPolicy::Universal
+                        } else {
+                            crate::native_bridge::WindowExecutionContextAccessPolicy::EnforceWebOrigin
+                        }
+                    })
+                    .unwrap_or_default(),
+            },
+        ),
     };
     validate_registered_realm(host, scope, init)?;
     let snapshot = capture_child_window_realm_snapshot(host, init)?;
@@ -124,6 +129,7 @@ pub(in crate::native_bridge::context_host::child_frame_runtime) fn rebind_child_
         .child_browsing_context_document_wrapper(scope, rebind.handle)
         .ok_or_else(|| anyhow::anyhow!("missing rebound child Document wrapper"))?;
     sync_child_document_window_slots(scope, document, global, true);
+    sync_window_document_cached_accessor(scope, global, document);
     set_object_slot(scope, global, "document", document.into());
     validate_child_window_realm_snapshot(host, &snapshot)
 }
@@ -140,14 +146,15 @@ fn validate_registered_realm(
         )
         .ok_or_else(|| anyhow::anyhow!("child Window realm is not registered"))?;
     ensure!(
-        identity.owner() == WindowExecutionContextOwner::Frame(init.expected_owner.local_window_id)
-            && identity.realm_token() == init.realm_token,
+        identity.owner()
+            == WindowExecutionContextOwner::Frame(init.projection.owner().local_window_id)
+            && identity.realm_token() == init.projection.realm_token(),
         "child Window realm registration does not match its typed initializer"
     );
     ensure!(
         identity.grants_universal_access()
             == matches!(
-                init.world.access_policy(),
+                init.projection.world().access_policy(),
                 crate::native_bridge::WindowExecutionContextAccessPolicy::Universal
             ),
         "child Window realm access policy changed during initialization"

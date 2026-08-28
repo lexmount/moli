@@ -1,4 +1,4 @@
-use super::{JsContextHost, WindowDocumentTaskTarget};
+use super::{JsContextHost, OwnerDispatchScope, WindowDocumentTaskTarget};
 use crate::runtime::{
     RendererJavaScriptDialogId, RendererJavaScriptDialogResult, RendererPendingJavaScriptDialog,
 };
@@ -17,6 +17,37 @@ impl PendingJavaScriptDialogRecord {
 }
 
 impl JsContextHost {
+    pub(crate) fn open_beforeunload_dialog_for_dispatch_scope(
+        &mut self,
+        dispatch_scope: OwnerDispatchScope,
+        force_browser_handler: bool,
+    ) -> Option<RendererJavaScriptDialogResult> {
+        let (target, source_document, source) =
+            self.renderer_window_document_source_for_dispatch_scope(dispatch_scope)?;
+        let source_url = match dispatch_scope {
+            OwnerDispatchScope::Top => self.document_url().to_string(),
+            OwnerDispatchScope::Child(handle) => {
+                self.document_url_for_child_context(handle).to_string()
+            }
+        };
+        let dialog_id = self.allocate_javascript_dialog_id();
+        let dialog = RendererPendingJavaScriptDialog::new(
+            dialog_id,
+            source_document,
+            source,
+            source_url,
+            "beforeunload".to_owned(),
+            String::new(),
+            String::new(),
+            None,
+        );
+        if force_browser_handler {
+            self.open_modal_javascript_dialog_with_browser_handler(dialog)
+        } else {
+            self.open_modal_javascript_dialog(target, dialog)
+        }
+    }
+
     pub(crate) fn set_javascript_dialog_handler_enabled(&mut self, enabled: bool) {
         self.javascript_dialog_handler_enabled = enabled;
     }
@@ -58,11 +89,19 @@ impl JsContextHost {
             self.record_pending_javascript_dialog(target, dialog);
             return None;
         }
+        self.open_modal_javascript_dialog_with_browser_handler(dialog)
+    }
+
+    fn open_modal_javascript_dialog_with_browser_handler(
+        &mut self,
+        dialog: RendererPendingJavaScriptDialog,
+    ) -> Option<RendererJavaScriptDialogResult> {
         let (dialog, modal) = self.javascript_dialog_runtime.begin_modal(dialog);
         if self.append_live_turn_owner_action(
             crate::runtime::RendererOwnerAction::JavaScriptDialog(dialog),
-        ) && self.publish_live_turn_output_prefix()
+        ) && let Some(predecessor) = self.publish_live_turn_output_prefix()
         {
+            modal.publish(predecessor);
             return Some(modal.wait());
         }
         modal.cancel();

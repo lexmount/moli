@@ -106,34 +106,16 @@ pub(super) fn document_create_event_callback<'s>(
     }
 }
 
-pub(super) fn document_has_focus_callback(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments<'_>,
+pub(super) fn document_has_focus_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let document = args.this();
-    let focused = document
-        .get(scope, v8str(scope, "defaultView").into())
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-        .map(|default_view| {
-            default_view
-                .get(scope, v8str(scope, "frameElement").into())
-                .filter(|value| !value.is_null_or_undefined())
-                .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-                .map(|frame_element| {
-                    frame_element
-                        .get(scope, v8str(scope, "ownerDocument").into())
-                        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-                        .and_then(|owner_document| {
-                            owner_document.get(scope, v8str(scope, "activeElement").into())
-                        })
-                        .is_some_and(|active_element| {
-                            active_element.strict_equals(frame_element.into())
-                        })
-                })
-                .unwrap_or(true)
-        })
-        .unwrap_or(false);
+    let focused =
+        crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, args.this())
+            .is_ok_and(|(runtime_ptr, document_handle)| {
+                unsafe { &*runtime_ptr }.document_has_focus(document_handle)
+            });
     rv.set_bool(focused);
 }
 

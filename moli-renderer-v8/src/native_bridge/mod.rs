@@ -7,8 +7,8 @@ mod collections;
 mod context_host;
 mod current_input;
 pub(crate) use context_host::{
-    JsContextHost, JsContextHostPageTaskCapabilities, PendingScrollObservableEffects,
-    PostParseAutofocusAdmission, ServiceWorkerWindowOwner,
+    ChildDocumentStartScriptSnapshot, JsContextHost, JsContextHostPageTaskCapabilities,
+    PendingScrollObservableEffects, PostParseAutofocusAdmission, ServiceWorkerWindowOwner,
 };
 pub(crate) use current_input::{
     CurrentInputEvent, CurrentInputEventScope, InputNavigationPolicy, navigation_policy_from_event,
@@ -16,6 +16,7 @@ pub(crate) use current_input::{
 pub(crate) mod document;
 pub(crate) mod element;
 mod helpers;
+pub(crate) use helpers::set_object_slot;
 mod history_queue;
 pub(super) mod identity;
 mod node;
@@ -39,33 +40,31 @@ use identity::{BridgeHandle, BridgeIdentityStore, DomTokenListKind};
 use identity::{CollectionKind, LiveCollectionDescriptor, LiveCollectionQueryKind};
 pub(crate) use identity::{
     ComputedStyleDescriptor, ComputedStylePseudoKey, ComputedStyleTargetKey,
-    clear_context_wrapper_cache_for_teardown,
+    clear_context_embedder_state_for_teardown,
 };
 
 pub(crate) use active_child_window::{
     active_child_window_handle, child_window_handle_from_marker_data,
     defer_active_child_window_restore, enter_active_child_window_scope,
-    entered_child_window_handle, restore_active_child_window_scope,
-    restore_deferred_active_child_window_scope_if_present,
+    restore_active_child_window_scope, restore_deferred_active_child_window_scope_if_present,
 };
 pub(crate) use child_window_surface::CALLBACK_ERROR_WINDOW_HANDLE_SLOT;
 pub(crate) use collections::{
     blob_parts_platform_collection_kind, install_collection_template_bindings,
 };
 pub(crate) use context_host::{
-    DetachedChildBrowsingContextDocumentSnapshot, ImageDecodeRequestId,
-    RuntimeObservableContextToken, cross_origin_lightweight_popup_id,
-    current_runtime_observable_context_token, defer_active_lightweight_popup_restore,
-    enter_active_lightweight_popup_scope, enter_top_level_lightweight_popup_scope,
-    install_child_window_proxy_access_check_handlers,
-    install_runtime_observable_context_token_for_context, is_cross_origin_top_window_proxy,
-    lightweight_popup_id_from_window, restore_active_lightweight_popup_scope,
-    restore_deferred_active_lightweight_popup_scope_if_present,
+    ChildBrowsingContextNavigationRequest, DetachedChildBrowsingContextDocumentSnapshot,
+    ImageDecodeRequestId, RuntimeObservableContextToken, cross_origin_remote_frame_window_target,
+    cross_origin_remote_top_window_target, cross_origin_window_target_host_ptr,
+    current_runtime_observable_context_token, install_child_window_proxy_access_check_handlers,
+    install_cross_origin_window_internal_method_intrinsics,
+    install_runtime_observable_context_token_for_context, is_cross_origin_related_top_window_proxy,
+    is_cross_origin_remote_frame_window_proxy, is_cross_origin_top_window_proxy,
+    renderer_owned_auxiliary_popup_id, set_renderer_owned_auxiliary_popup_id,
     throw_cross_origin_location_security_error, throw_cross_origin_type_error,
+    top_level_window_proxy_is_finally_closed,
 };
-
 pub(crate) const ACTIVE_CHILD_WINDOW_HANDLE_SLOT: &str = "__moliActiveChildWindowHandle";
-pub(crate) const ENTERED_CHILD_WINDOW_HANDLE_SLOT: &str = "__moliEnteredChildWindowHandle";
 
 pub(crate) use bridge::wrapped_handle_value;
 pub(super) use bridge::*;

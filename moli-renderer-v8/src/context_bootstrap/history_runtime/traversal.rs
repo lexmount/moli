@@ -437,9 +437,6 @@ fn history_traversal_target_window<'s>(
         crate::native_bridge::OwnerDispatchScope::Child(child_handle) => {
             host.child_browsing_context_window_wrapper(scope, child_handle)
         }
-        crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id) => {
-            host.lightweight_popup_window(scope, popup_id)
-        }
     }
 }
 

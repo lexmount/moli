@@ -46,13 +46,13 @@ pub(in crate::context_bootstrap) use self::event_target::idb_version_change_even
 
 pub(crate) use self::runtime::{
     bind_indexed_db_factory_to_window_execution_context, indexed_db_has_pending_tasks,
-    materialized_indexed_db_factory_for_window, scoped_indexed_db_factory,
-    set_worker_indexed_db_task_wake_for_context,
+    materialized_indexed_db_factory_for_window, set_worker_indexed_db_task_wake_for_context,
 };
 pub(crate) use self::tasks::{
     discard_indexed_db_task_by_id, flush_indexed_db_task_by_id, flush_next_indexed_db_task,
 };
 pub(crate) use self::typed_state::IndexedDbTaskId;
+pub(crate) use self::typed_state::clear_indexed_db_runtime_state_table_for_context_teardown;
 pub(crate) use self::typed_state::deactivate_indexed_db_transaction_after_microtask_checkpoint;
 pub(in crate::context_bootstrap::indexed_db) use self::typed_state::schedule_indexed_db_transaction_deactivation_after_microtask_checkpoint;
 

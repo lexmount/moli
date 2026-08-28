@@ -26,7 +26,6 @@ pub(in crate::native_bridge::context_host) use frame_owner_resource_timing::{
 pub(super) use initial_empty::ChildInitialEmptyDocumentInit;
 pub(crate) use loads::{ChildDocumentLoadApplication, ChildDocumentLoadBodyActivity};
 pub(in crate::native_bridge::context_host) use parser_store::ChildDocumentParserStore;
-pub(in crate::native_bridge::context_host) use snapshots::child_document_content_type_from_headers;
 
 fn configure_child_document_navigation_request(
     request: moli_fetch::Request,
@@ -37,6 +36,32 @@ fn configure_child_document_navigation_request(
         .with_browser_site_context(browser_context.clone())
         .with_subframe_navigation_cookie_context()
         .with_initiator_url(initiator_url)
+}
+
+impl super::JsContextHost {
+    fn inferred_child_document_navigation_referrer(
+        &self,
+        handle: crate::document_runtime::DomHandle,
+        target_url: &Url,
+    ) -> String {
+        let source_policy = self
+            .child_browsing_context_parent_handle(handle)
+            .and_then(|parent| self.child_browsing_context_policy_container_snapshot(parent))
+            .unwrap_or_else(|| self.document_policy_container().clone());
+        let raw_source_url = self.document_url_for_child_context(handle);
+        let source_url = if raw_source_url.scheme() == "about" {
+            Url::parse(&source_policy.document_referrer).unwrap_or(raw_source_url)
+        } else {
+            raw_source_url
+        };
+        moli_fetch::navigation_referrer_value(
+            &source_url,
+            target_url,
+            None,
+            source_policy.referrer_policy.as_deref(),
+        )
+        .unwrap_or_default()
+    }
 }
 
 #[derive(Debug, Clone)]

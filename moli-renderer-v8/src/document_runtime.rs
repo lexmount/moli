@@ -686,23 +686,43 @@ pub(crate) struct DocumentPolicyContainer {
         crate::content_security_policy::ContentSecurityPolicyReportingEndpoints,
     pub(crate) credentialless: bool,
     pub(crate) credentialless_storage_nonce: Option<moli_storage_key::OpaqueOriginNonce>,
+    /// Chromium's policy-container guard for sandboxed `allow-top-navigation`.
+    ///
+    /// The inverse representation keeps the default policy permissive while
+    /// allowing child commits to freeze a stricter inherited decision.
+    pub(crate) top_navigation_without_user_gesture_is_restricted: bool,
     pub(crate) sandbox: DocumentSandboxPolicy,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct DocumentSandboxPolicy {
+    pub(crate) sandboxes_navigation: bool,
     pub(crate) forces_opaque_origin: bool,
     pub(crate) allows_scripts: bool,
+    pub(crate) allows_forms: bool,
+    pub(crate) allows_popups: bool,
     pub(crate) allows_popups_to_escape: bool,
+    pub(crate) allows_top_navigation: bool,
+    pub(crate) allows_top_navigation_by_user_activation: bool,
+    /// Whether the committed frame-owner policy explicitly carried
+    /// `allow-top-navigation`. Response CSP cannot grant this exception.
+    pub(crate) frame_owner_explicitly_allows_top_navigation: bool,
     pub(crate) sandboxes_document_domain: bool,
 }
 
 impl Default for DocumentSandboxPolicy {
     fn default() -> Self {
         Self {
+            sandboxes_navigation: false,
             forces_opaque_origin: false,
             allows_scripts: true,
+            allows_forms: true,
+            allows_popups: true,
             allows_popups_to_escape: false,
+            allows_top_navigation: true,
+            allows_top_navigation_by_user_activation: true,
+            frame_owner_explicitly_allows_top_navigation: false,
             sandboxes_document_domain: false,
         }
     }
@@ -711,6 +731,10 @@ impl Default for DocumentSandboxPolicy {
 impl DocumentSandboxPolicy {
     pub(crate) fn from_response_content_security_policies(policies: &[String]) -> Self {
         Self {
+            sandboxes_navigation:
+                crate::content_security_policy::content_security_policy_sandboxes_navigation(
+                    policies,
+                ),
             forces_opaque_origin:
                 crate::content_security_policy::content_security_policy_forces_opaque_origin(
                     policies,
@@ -719,10 +743,27 @@ impl DocumentSandboxPolicy {
                 crate::content_security_policy::content_security_policy_sandbox_allows_scripts(
                     policies,
                 ),
+            allows_forms:
+                crate::content_security_policy::content_security_policy_sandbox_allows_forms(
+                    policies,
+                ),
+            allows_popups:
+                crate::content_security_policy::content_security_policy_sandbox_allows_popups(
+                    policies,
+                ),
             allows_popups_to_escape:
                 crate::content_security_policy::content_security_policy_sandbox_allows_popups_to_escape(
                     policies,
                 ),
+            allows_top_navigation:
+                crate::content_security_policy::content_security_policy_sandbox_allows_top_navigation(
+                    policies,
+                ),
+            allows_top_navigation_by_user_activation:
+                crate::content_security_policy::content_security_policy_sandbox_allows_top_navigation_by_user_activation(
+                    policies,
+                ),
+            frame_owner_explicitly_allows_top_navigation: false,
             sandboxes_document_domain:
                 crate::content_security_policy::content_security_policy_sandboxes_document_domain(
                     policies,
@@ -731,17 +772,108 @@ impl DocumentSandboxPolicy {
     }
 
     pub(crate) fn with_response_content_security_policy(mut self, response: Self) -> Self {
-        if response.sandboxes_document_domain {
+        if response.sandboxes_navigation {
             self.forces_opaque_origin |= response.forces_opaque_origin;
             self.allows_scripts &= response.allows_scripts;
-            self.allows_popups_to_escape = if self.sandboxes_document_domain {
+            self.allows_forms &= response.allows_forms;
+            self.allows_popups &= response.allows_popups;
+            self.allows_top_navigation &= response.allows_top_navigation;
+            self.allows_top_navigation_by_user_activation &=
+                response.allows_top_navigation_by_user_activation;
+            self.allows_popups_to_escape = if self.sandboxes_navigation {
                 self.allows_popups_to_escape && response.allows_popups_to_escape
             } else {
                 response.allows_popups_to_escape
             };
         }
+        self.sandboxes_navigation |= response.sandboxes_navigation;
         self.sandboxes_document_domain |= response.sandboxes_document_domain;
         self
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct AuxiliaryBrowsingContextCreationPolicy {
+    policy_container: DocumentPolicyContainer,
+}
+
+impl AuxiliaryBrowsingContextCreationPolicy {
+    pub(crate) fn into_policy_container(self) -> DocumentPolicyContainer {
+        self.policy_container
+    }
+
+    pub(crate) fn renderer_auxiliary_browsing_context_policy(
+        &self,
+    ) -> crate::runtime::RendererAuxiliaryBrowsingContextPolicy {
+        crate::runtime::RendererAuxiliaryBrowsingContextPolicy::from_sandbox(
+            self.policy_container.sandbox,
+        )
+    }
+}
+
+/// Renderer-owned result of admitting one newly created auxiliary browsing
+/// context. Existing-target navigation never constructs this type.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct AuxiliaryBrowsingContextCreationAdmission {
+    creation_policy: AuxiliaryBrowsingContextCreationPolicy,
+    user_activation: crate::runtime::RendererPopupCreationUserActivation,
+}
+
+impl AuxiliaryBrowsingContextCreationAdmission {
+    pub(crate) fn new(
+        creation_policy: AuxiliaryBrowsingContextCreationPolicy,
+        user_activation: crate::runtime::RendererPopupCreationUserActivation,
+    ) -> Self {
+        Self {
+            creation_policy,
+            user_activation,
+        }
+    }
+
+    pub(crate) fn renderer_auxiliary_browsing_context_policy(
+        &self,
+    ) -> crate::runtime::RendererAuxiliaryBrowsingContextPolicy {
+        self.creation_policy
+            .renderer_auxiliary_browsing_context_policy()
+    }
+
+    pub(crate) const fn user_activation(
+        &self,
+    ) -> crate::runtime::RendererPopupCreationUserActivation {
+        self.user_activation
+    }
+
+    pub(crate) fn into_creation_policy(self) -> AuxiliaryBrowsingContextCreationPolicy {
+        self.creation_policy
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AuxiliaryBrowsingContextCreationDenial {
+    SandboxedWithoutAllowPopups,
+    BlockedWithoutTransientUserActivation,
+}
+
+impl DocumentPolicyContainer {
+    /// Freezes the sandbox decision for one newly created auxiliary context.
+    ///
+    /// Existing-target lookup must happen before calling this method. A
+    /// sandboxed creator needs `allow-popups` to pass admission, while
+    /// `allow-popups-to-escape-sandbox` only decides whether the accepted
+    /// context inherits the creator's active sandbox flags.
+    pub(crate) fn into_auxiliary_browsing_context_creation_policy(
+        mut self,
+    ) -> Result<AuxiliaryBrowsingContextCreationPolicy, AuxiliaryBrowsingContextCreationDenial>
+    {
+        if self.sandbox.sandboxes_document_domain && !self.sandbox.allows_popups {
+            return Err(AuxiliaryBrowsingContextCreationDenial::SandboxedWithoutAllowPopups);
+        }
+        if !self.sandbox.sandboxes_document_domain || self.sandbox.allows_popups_to_escape {
+            self.sandbox = DocumentSandboxPolicy::default();
+        }
+        Ok(AuxiliaryBrowsingContextCreationPolicy {
+            policy_container: self,
+        })
     }
 }
 

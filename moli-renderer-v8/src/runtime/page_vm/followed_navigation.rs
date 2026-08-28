@@ -2,7 +2,6 @@ use std::{future::Future, pin::Pin, time::Instant};
 
 use anyhow::{Result, anyhow, ensure};
 use moli_fetch::{BrowserNavigationRequestKind, FetchCancelHandle, Request, StreamingRawResponse};
-use percent_encoding::percent_decode_str;
 use tokio::sync::oneshot;
 use tracing::debug;
 use url::Url;
@@ -20,18 +19,10 @@ use crate::runtime::{
     PageVmPendingPhaseOneNavigation, PendingDocumentLifecycleTurn, RendererBrowserContextRuntime,
     RendererDocumentLifecycleTransition, RendererDocumentTerminationReason,
     RendererLifecycleStartReason, RendererPendingDownloadActivation,
-    RendererPendingDownloadResponse,
+    RendererPendingDownloadResponse, RendererTopLevelNavigationSource,
 };
 
 use super::{PageVm, PageVmEnvConfig, PageVmRuntimeHooks};
-
-fn javascript_location_navigation_source(url: &Url) -> String {
-    let source = url
-        .as_str()
-        .strip_prefix("javascript:")
-        .unwrap_or_else(|| url.path());
-    percent_decode_str(source).decode_utf8_lossy().into_owned()
-}
 
 pub(super) enum LoadedFollowedLocationNavigation {
     NoDocument,
@@ -47,6 +38,16 @@ pub(super) enum LoadedFollowedLocationNavigation {
         response_headers: Vec<(String, String)>,
         raw_body: ExternalRawDocumentBodyStream,
     },
+}
+
+impl LoadedFollowedLocationNavigation {
+    pub(super) fn final_document_url(&self) -> Option<&Url> {
+        match self {
+            Self::NoDocument | Self::Download(_) => None,
+            Self::StreamingDocument { response, .. } => Some(&response.final_url),
+            Self::ExternalDocument { final_url, .. } => Some(final_url),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -74,7 +75,8 @@ impl LoadedFollowedLocationNavigation {
 
 pub(super) async fn load_followed_location_navigation(
     loader: &ResourceRequestClient,
-    initiator_url: Url,
+    target_document_url: Url,
+    navigation_source: Option<&RendererTopLevelNavigationSource>,
     url: Url,
     request_method: String,
     request_body: Option<Vec<u8>>,
@@ -117,7 +119,8 @@ pub(super) async fn load_followed_location_navigation(
         });
     }
     let request = build_followed_location_navigation_request(
-        &initiator_url,
+        &target_document_url,
+        navigation_source,
         &url,
         &request_method,
         request_body,
@@ -366,6 +369,7 @@ fn page_vm_env_for_navigation_bootstrap(
     env.document_policy_container.cross_origin_embedder_policy = Default::default();
     env.document_policy_container.cross_origin_isolated = false;
     env.document_policy_container.sandbox = Default::default();
+    env.cross_origin_opener_policy = Default::default();
     env.top_level_storage_key = None;
     env.navigation_bootstrap_entry = navigation_bootstrap_entry;
     env.reserved_service_worker_client_id = reserved_service_worker_client_id;
@@ -466,19 +470,50 @@ fn external_raw_document_body_from_materialized_response(
 }
 
 fn build_followed_location_navigation_request(
-    initiator_url: &Url,
+    target_document_url: &Url,
+    navigation_source: Option<&RendererTopLevelNavigationSource>,
     url: &Url,
     request_method: &str,
     request_body: Option<Vec<u8>>,
     request_headers: Vec<(String, String)>,
     browser_navigation_kind: BrowserNavigationRequestKind,
 ) -> Result<Request> {
+    let source_url = navigation_source.and_then(|source| Url::parse(source.source_url()).ok());
+    let initiator_url = source_url.as_ref().unwrap_or(target_document_url);
     Request::new_bytes(request_method, url.as_str(), request_body, request_headers).map(|request| {
-        request
+        let mut request = request
             .with_top_level_navigation_cookie_context()
             .with_browser_navigation_kind(browser_navigation_kind)
-            .with_initiator_url(initiator_url)
+            .with_initiator_url(initiator_url);
+        if let Some(source) = navigation_source {
+            request = if source.suppresses_referrer() {
+                request.without_inferred_referrer()
+            } else {
+                request.with_referrer_policies(None, source.referrer_policy().map(str::to_owned))
+            };
+        }
+        request
     })
+}
+
+pub(super) fn followed_navigation_document_referrer(
+    navigation_source: Option<&RendererTopLevelNavigationSource>,
+    final_url: &Url,
+) -> Option<String> {
+    let source = navigation_source?;
+    if source.suppresses_referrer() {
+        return Some(String::new());
+    }
+    let source_url = Url::parse(source.source_url()).ok()?;
+    Some(
+        moli_fetch::navigation_referrer_value(
+            &source_url,
+            final_url,
+            None,
+            source.referrer_policy(),
+        )
+        .unwrap_or_default(),
+    )
 }
 
 fn about_blank_navigation_response(url: &Url) -> Option<moli_fetch::Response> {
@@ -529,6 +564,7 @@ pub(in crate::runtime) struct PageVmPreparedFollowedNavigationCommit {
     initiator_url: Url,
     navigation_handoff: crate::page_task_queue::RendererTopLevelNavigationHandoff,
     loaded: LoadedFollowedLocationNavigation,
+    initial_document_referrer: Option<String>,
     navigation_bootstrap_entry: Option<crate::native_bridge::NavigationHistoryEntrySeed>,
     reserved_service_worker_client_id: Option<crate::service_worker_runtime::ServiceWorkerClientId>,
     service_worker_client_navigate: Option<crate::types::ServiceWorkerClientNavigateContinuation>,
@@ -681,6 +717,30 @@ impl PageVm {
                 PageVmFollowNavigationTurnOutcome::Completed,
             )));
         };
+        if pending.url.scheme() == "javascript" {
+            let mut batch = vec![pending];
+            batch.extend(
+                self.vm_mut()
+                    .take_pending_javascript_location_navigation_batch(),
+            );
+            let mut batch_outcome = PageVmFollowNavigationTurnOutcome::Completed;
+            for pending in batch {
+                let outcome = self
+                    .follow_taken_javascript_location_navigation_task_async(
+                        pending,
+                        pending_document_lifecycle_turn,
+                        stage,
+                    )
+                    .await?;
+                if !matches!(outcome, PageVmFollowNavigationTurnOutcome::Completed) {
+                    batch_outcome = outcome;
+                }
+            }
+            return Ok(PageVmDocumentCommitPreparation::Uncommitted(Box::new(
+                batch_outcome,
+            )));
+        }
+
         let initiator_url = self.vm().document_runtime.document_url().clone();
         let navigation_handoff = pending.handoff;
         let url = pending.url.clone();
@@ -688,68 +748,17 @@ impl PageVm {
         let request_body = pending.request_body.clone();
         let request_headers = pending.request_headers.clone();
         let browser_navigation_kind = pending.browser_navigation_kind;
+        let navigation_source = pending.navigation_source.clone();
         let reserved_service_worker_client_id = pending
             .reserved_service_worker_client
             .map(|reserved| reserved.release());
         let service_worker_client_navigate = pending.service_worker_client_navigate;
         tracing::debug!(stage = ?stage, %url, "following pending location navigation asynchronously");
 
-        if url.scheme() == "javascript" {
-            if let Some(client_id) = reserved_service_worker_client_id {
-                self.vm_mut()
-                    .unregister_reserved_service_worker_client_after_navigation_abort(client_id);
-            }
-            let replacement_lifecycle_snapshot =
-                self.document_replacement_lifecycle_action_snapshot();
-            let source_document = self.document_lifecycle.identity();
-            let outcome =
-                self.follow_taken_javascript_location_navigation(initiator_url, url, stage);
-            let reconciliation = self
-                .reconcile_javascript_navigation_lifecycle_after_owner_action(
-                    replacement_lifecycle_snapshot,
-                    pending_document_lifecycle_turn,
-                    source_document,
-                )
-                .await;
-            let outcome = match (outcome, reconciliation) {
-                (Ok(PageVmFollowNavigationTurnOutcome::Completed), Ok(reconciliation)) => {
-                    Ok(reconciliation.into_follow_outcome_after_completed_javascript_url())
-                }
-                (Ok(outcome), Ok(_)) => Ok(outcome),
-                (Err(navigation_error), Ok(_)) => Err(navigation_error),
-                (Ok(_), Err(reconciliation_error)) => Err(reconciliation_error),
-                (Err(navigation_error), Err(reconciliation_error)) => Err(anyhow!(
-                    "javascript: navigation failed ({navigation_error:#}) and its Document replacement lifecycle reconciliation also failed ({reconciliation_error:#})"
-                )),
-            };
-            if let Some(continuation) = service_worker_client_navigate {
-                match &outcome {
-                    Ok(PageVmFollowNavigationTurnOutcome::Download(_)) => self
-                        .vm_mut()
-                        .reject_pending_service_worker_client_navigate_after_follow(
-                            continuation,
-                            "Cannot navigate to URL.".to_owned(),
-                        ),
-                    Ok(PageVmFollowNavigationTurnOutcome::Completed)
-                    | Ok(PageVmFollowNavigationTurnOutcome::PostParseLifecycle { .. })
-                    | Ok(PageVmFollowNavigationTurnOutcome::TriggeredNavigation { .. }) => self
-                        .vm_mut()
-                        .complete_pending_service_worker_client_navigate_after_follow(continuation),
-                    Err(error) => self
-                        .vm_mut()
-                        .reject_pending_service_worker_client_navigate_after_follow(
-                            continuation,
-                            format!("Cannot navigate to URL: {error}"),
-                        ),
-                }
-            }
-            return outcome
-                .map(|outcome| PageVmDocumentCommitPreparation::Uncommitted(Box::new(outcome)));
-        }
-
         let loaded = match load_followed_location_navigation(
             &self.request_client,
             initiator_url.clone(),
+            navigation_source.as_ref(),
             url,
             request_method,
             request_body,
@@ -793,6 +802,9 @@ impl PageVm {
             loaded @ (LoadedFollowedLocationNavigation::StreamingDocument { .. }
             | LoadedFollowedLocationNavigation::ExternalDocument { .. }) => loaded,
         };
+        let initial_document_referrer = loaded.final_document_url().and_then(|final_url| {
+            followed_navigation_document_referrer(navigation_source.as_ref(), final_url)
+        });
 
         let termination = self.document_lifecycle.request_termination(
             self.document_lifecycle.identity(),
@@ -814,6 +826,7 @@ impl PageVm {
                 initiator_url,
                 navigation_handoff,
                 loaded,
+                initial_document_referrer,
                 navigation_bootstrap_entry: pending.entry_seed,
                 reserved_service_worker_client_id,
                 service_worker_client_navigate,
@@ -831,6 +844,7 @@ impl PageVm {
         let PageVmPreparedFollowedNavigationCommit {
             initiator_url,
             loaded,
+            initial_document_referrer,
             navigation_bootstrap_entry,
             reserved_service_worker_client_id,
             service_worker_client_navigate,
@@ -840,6 +854,7 @@ impl PageVm {
         let outcome = match self
             .bootstrap_followed_location_navigation(
                 loaded,
+                initial_document_referrer,
                 navigation_bootstrap_entry,
                 reserved_service_worker_client_id,
                 stage,
@@ -933,6 +948,85 @@ impl PageVm {
         })
     }
 
+    async fn follow_taken_javascript_location_navigation_task_async(
+        &mut self,
+        pending: crate::native_bridge::PendingLocationNavigation,
+        pending_document_lifecycle_turn: &mut Option<PendingDocumentLifecycleTurn>,
+        stage: PageVmInitStage,
+    ) -> Result<PageVmFollowNavigationTurnOutcome> {
+        let initiator_url = self.vm().document_runtime.document_url().clone();
+        let url = pending.url.clone();
+        let reserved_service_worker_client_id = pending
+            .reserved_service_worker_client
+            .map(|reserved| reserved.release());
+        let service_worker_client_navigate = pending.service_worker_client_navigate;
+        tracing::debug!(stage = ?stage, %url, "following pending javascript URL task asynchronously");
+        if let Some(client_id) = reserved_service_worker_client_id {
+            self.vm_mut()
+                .unregister_reserved_service_worker_client_after_navigation_abort(client_id);
+        }
+        let current_target_document = self.document_lifecycle.identity();
+        let outcome = if pending
+            .target_document
+            .is_some_and(|target| target != current_target_document)
+        {
+            tracing::debug!(
+                stage = ?stage,
+                %url,
+                queued_target_document = ?pending.target_document,
+                ?current_target_document,
+                "discarding javascript URL task for a retired target Document"
+            );
+            Ok(PageVmFollowNavigationTurnOutcome::Completed)
+        } else {
+            let replacement_lifecycle_snapshot =
+                self.document_replacement_lifecycle_action_snapshot();
+            let source_document = current_target_document;
+            let outcome =
+                self.follow_taken_javascript_location_navigation(initiator_url, url, stage);
+            let reconciliation = self
+                .reconcile_javascript_navigation_lifecycle_after_owner_action(
+                    replacement_lifecycle_snapshot,
+                    pending_document_lifecycle_turn,
+                    source_document,
+                )
+                .await;
+            match (outcome, reconciliation) {
+                (Ok(PageVmFollowNavigationTurnOutcome::Completed), Ok(reconciliation)) => {
+                    Ok(reconciliation.into_follow_outcome_after_completed_javascript_url())
+                }
+                (Ok(outcome), Ok(_)) => Ok(outcome),
+                (Err(navigation_error), Ok(_)) => Err(navigation_error),
+                (Ok(_), Err(reconciliation_error)) => Err(reconciliation_error),
+                (Err(navigation_error), Err(reconciliation_error)) => Err(anyhow!(
+                    "javascript: navigation failed ({navigation_error:#}) and its Document replacement lifecycle reconciliation also failed ({reconciliation_error:#})"
+                )),
+            }
+        };
+        if let Some(continuation) = service_worker_client_navigate {
+            match &outcome {
+                Ok(PageVmFollowNavigationTurnOutcome::Download(_)) => self
+                    .vm_mut()
+                    .reject_pending_service_worker_client_navigate_after_follow(
+                        continuation,
+                        "Cannot navigate to URL.".to_owned(),
+                    ),
+                Ok(PageVmFollowNavigationTurnOutcome::Completed)
+                | Ok(PageVmFollowNavigationTurnOutcome::PostParseLifecycle { .. })
+                | Ok(PageVmFollowNavigationTurnOutcome::TriggeredNavigation { .. }) => self
+                    .vm_mut()
+                    .complete_pending_service_worker_client_navigate_after_follow(continuation),
+                Err(error) => self
+                    .vm_mut()
+                    .reject_pending_service_worker_client_navigate_after_follow(
+                        continuation,
+                        format!("Cannot navigate to URL: {error}"),
+                    ),
+            }
+        }
+        outcome
+    }
+
     pub(in crate::runtime) fn commit_prepared_followed_location_navigation(
         &mut self,
         prepared: PageVmPreparedFollowedNavigationCommit,
@@ -941,12 +1035,13 @@ impl PageVm {
             initiator_url,
             navigation_handoff,
             loaded,
+            initial_document_referrer,
             navigation_bootstrap_entry,
             reserved_service_worker_client_id,
             service_worker_client_navigate,
             stage,
         } = prepared;
-        let env = self.followed_location_navigation_env();
+        let env = self.followed_location_navigation_env(initial_document_referrer);
         let runtime_hooks = self.runtime_hooks.clone().for_cross_document_commit();
         let browser_context_runtime = runtime_hooks.browser_context_runtime.clone();
         let local_executor = self.local_executor.clone();
@@ -987,7 +1082,7 @@ impl PageVm {
         })
     }
 
-    fn prepare_replacement_document_commit(
+    pub(in crate::runtime) fn prepare_replacement_document_commit(
         &mut self,
         handoff: crate::page_task_queue::RendererTopLevelNavigationHandoff,
     ) -> Result<()> {
@@ -1101,32 +1196,58 @@ impl PageVm {
         let Some(pending) = self.vm_mut().take_pending_location_navigation_with_seed() else {
             return Ok(PageVmFollowNavigationTurnOutcome::Completed);
         };
-        let initiator_url = self.vm().document_runtime.document_url().clone();
-        let service_worker_client_navigate = pending.service_worker_client_navigate;
-        let outcome =
-            self.follow_taken_javascript_location_navigation(initiator_url, pending.url, stage);
-        if let Some(continuation) = service_worker_client_navigate {
-            match &outcome {
-                Ok(PageVmFollowNavigationTurnOutcome::Download(_)) => self
-                    .vm_mut()
-                    .reject_pending_service_worker_client_navigate_after_follow(
-                        continuation,
-                        "Cannot navigate to URL.".to_owned(),
-                    ),
+        let mut batch = vec![pending];
+        batch.extend(
+            self.vm_mut()
+                .take_pending_javascript_location_navigation_batch(),
+        );
+        let mut batch_outcome = PageVmFollowNavigationTurnOutcome::Completed;
+        for pending in batch {
+            let initiator_url = self.vm().document_runtime.document_url().clone();
+            let service_worker_client_navigate = pending.service_worker_client_navigate;
+            let current_target_document = self.document_lifecycle.identity();
+            let outcome = if pending
+                .target_document
+                .is_some_and(|target| target != current_target_document)
+            {
+                tracing::debug!(
+                    stage = ?stage,
+                    url = %pending.url,
+                    queued_target_document = ?pending.target_document,
+                    ?current_target_document,
+                    "discarding bootstrap javascript URL task for a retired target Document"
+                );
                 Ok(PageVmFollowNavigationTurnOutcome::Completed)
-                | Ok(PageVmFollowNavigationTurnOutcome::PostParseLifecycle { .. })
-                | Ok(PageVmFollowNavigationTurnOutcome::TriggeredNavigation { .. }) => self
-                    .vm_mut()
-                    .complete_pending_service_worker_client_navigate_after_follow(continuation),
-                Err(error) => self
-                    .vm_mut()
-                    .reject_pending_service_worker_client_navigate_after_follow(
-                        continuation,
-                        format!("Cannot navigate to URL: {error}"),
-                    ),
+            } else {
+                self.follow_taken_javascript_location_navigation(initiator_url, pending.url, stage)
+            };
+            if let Some(continuation) = service_worker_client_navigate {
+                match &outcome {
+                    Ok(PageVmFollowNavigationTurnOutcome::Download(_)) => self
+                        .vm_mut()
+                        .reject_pending_service_worker_client_navigate_after_follow(
+                            continuation,
+                            "Cannot navigate to URL.".to_owned(),
+                        ),
+                    Ok(PageVmFollowNavigationTurnOutcome::Completed)
+                    | Ok(PageVmFollowNavigationTurnOutcome::PostParseLifecycle { .. })
+                    | Ok(PageVmFollowNavigationTurnOutcome::TriggeredNavigation { .. }) => self
+                        .vm_mut()
+                        .complete_pending_service_worker_client_navigate_after_follow(continuation),
+                    Err(error) => self
+                        .vm_mut()
+                        .reject_pending_service_worker_client_navigate_after_follow(
+                            continuation,
+                            format!("Cannot navigate to URL: {error}"),
+                        ),
+                }
+            }
+            let outcome = outcome?;
+            if !matches!(outcome, PageVmFollowNavigationTurnOutcome::Completed) {
+                batch_outcome = outcome;
             }
         }
-        outcome
+        Ok(batch_outcome)
     }
 
     fn follow_taken_javascript_location_navigation(
@@ -1135,17 +1256,43 @@ impl PageVm {
         url: Url,
         stage: PageVmInitStage,
     ) -> Result<PageVmFollowNavigationTurnOutcome> {
-        let source = javascript_location_navigation_source(&url);
         tracing::debug!(
             stage = ?stage,
             %url,
-            source_len = source.len(),
             "executing pending javascript location navigation"
         );
         self.vm_mut()
             .restore_top_level_location_runtime_state(&initiator_url);
-        let replacement_html = self.vm_mut().eval_javascript_url_runtime_turn(&source)?;
-        if let Some(replacement_html) = replacement_html {
+        let Some(source) = self
+            .vm_mut()
+            .javascript_url_source_allowed_by_target_policy_selected_task_body(&url)?
+        else {
+            tracing::debug!(
+                stage = ?stage,
+                %url,
+                "blocked pending javascript location navigation by the target Document policy"
+            );
+            return Ok(PageVmFollowNavigationTurnOutcome::Completed);
+        };
+        let navigation_handoff_before_execution = self.vm().pending_location_navigation_handoff();
+        let replacement_html = match self.vm_mut().eval_javascript_url_runtime_turn(&source) {
+            Ok(completion) => completion,
+            Err(error) => {
+                tracing::warn!(
+                    stage = ?stage,
+                    %url,
+                    error = %error,
+                    "javascript URL execution failed without replacing its target Document"
+                );
+                None
+            }
+        };
+        let navigation_handoff_after_execution = self.vm().pending_location_navigation_handoff();
+        let execution_started_navigation = navigation_handoff_after_execution.is_some()
+            && navigation_handoff_after_execution != navigation_handoff_before_execution;
+        if let Some(replacement_html) = replacement_html
+            && !execution_started_navigation
+        {
             self.document_lifecycle.set_next_document_open_start_reason(
                 RendererLifecycleStartReason::JavascriptDocumentReplacement,
             );
@@ -1166,9 +1313,15 @@ impl PageVm {
         }
     }
 
-    fn followed_location_navigation_env(&self) -> PageVmEnvConfig {
+    fn followed_location_navigation_env(
+        &self,
+        initial_document_referrer: Option<String>,
+    ) -> PageVmEnvConfig {
         PageVmEnvConfig {
             main_document_commit: None,
+            initial_document_referrer,
+            initial_top_level_browsing_context_name: None,
+            auxiliary_browsing_context_policy: None,
             web_storage: self.vm().web_storage_handles(),
             document_start_scripts: self.document_start_scripts.clone(),
             runtime_bindings: self.runtime_bindings.clone(),
@@ -1181,6 +1334,7 @@ impl PageVm {
                 document_content_security_policies: self.vm().document_content_security_policies(),
                 ..Default::default()
             },
+            cross_origin_opener_policy: Default::default(),
             document_default_language: None,
             document_last_modified: None,
             locale_override: self.locale_override.clone(),
@@ -1211,6 +1365,7 @@ impl PageVm {
     async fn bootstrap_followed_location_navigation(
         &mut self,
         loaded: LoadedFollowedLocationNavigation,
+        initial_document_referrer: Option<String>,
         navigation_bootstrap_entry: Option<crate::native_bridge::NavigationHistoryEntrySeed>,
         reserved_service_worker_client_id: Option<
             crate::service_worker_runtime::ServiceWorkerClientId,
@@ -1227,7 +1382,7 @@ impl PageVm {
             LoadedFollowedLocationNavigation::StreamingDocument { .. }
                 | LoadedFollowedLocationNavigation::ExternalDocument { .. }
         ));
-        let env = self.followed_location_navigation_env();
+        let env = self.followed_location_navigation_env(initial_document_referrer);
         let runtime_hooks = self.runtime_hooks.clone().for_cross_document_commit();
         if runtime_hooks.has_renderer_page_script_environment() {
             self.commit_main_window_proxy_navigation()?;
@@ -1250,7 +1405,11 @@ impl PageVm {
 
 #[cfg(test)]
 mod tests {
-    use super::{about_blank_navigation_response, build_followed_location_navigation_request};
+    use super::{
+        about_blank_navigation_response, build_followed_location_navigation_request,
+        followed_navigation_document_referrer,
+    };
+    use crate::runtime::RendererTopLevelNavigationSource;
     use moli_fetch::{BrowserNavigationRequestKind, outgoing_request_headers};
     use url::Url;
 
@@ -1262,6 +1421,7 @@ mod tests {
 
         let request = build_followed_location_navigation_request(
             &initiator_url,
+            None,
             &target_url,
             "GET",
             None,
@@ -1305,6 +1465,7 @@ mod tests {
 
         let request = build_followed_location_navigation_request(
             &initiator_url,
+            None,
             &target_url,
             "GET",
             None,
@@ -1335,6 +1496,7 @@ mod tests {
 
         let request = build_followed_location_navigation_request(
             &initiator_url,
+            None,
             &target_url,
             "POST",
             Some(body.clone()),
@@ -1372,6 +1534,83 @@ mod tests {
                 .find(|(name, _)| name.eq_ignore_ascii_case("content-type"))
                 .map(|(_, value)| value.as_str()),
             Some("text/html; charset=utf-8")
+        );
+    }
+
+    #[test]
+    fn followed_navigation_uses_typed_source_policy_instead_of_target_document() {
+        let target_document_url = Url::parse("about:blank").unwrap();
+        let source_url = Url::parse("https://source.test/path/page?query=1#fragment").unwrap();
+        let destination = Url::parse("https://destination.test/start").unwrap();
+        let source = RendererTopLevelNavigationSource::browser_context(
+            source_url.to_string(),
+            Some("origin".to_owned()),
+            false,
+        );
+
+        let request = build_followed_location_navigation_request(
+            &target_document_url,
+            Some(&source),
+            &destination,
+            "GET",
+            None,
+            Vec::new(),
+            BrowserNavigationRequestKind::Navigate,
+        )
+        .unwrap();
+        let headers = outgoing_request_headers(&Default::default(), &request, None);
+
+        assert_eq!(
+            request.cookie_context.initiator_url.as_ref(),
+            Some(&source_url)
+        );
+        assert_eq!(
+            request
+                .subresource_request_metadata()
+                .and_then(|metadata| metadata.document_referrer_policy.as_deref()),
+            Some("origin")
+        );
+        assert_eq!(
+            headers
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case("referer"))
+                .map(|(_, value)| value.as_str()),
+            Some("https://source.test/")
+        );
+        assert_eq!(
+            followed_navigation_document_referrer(Some(&source), &destination).as_deref(),
+            Some("https://source.test/")
+        );
+    }
+
+    #[test]
+    fn followed_navigation_typed_source_can_suppress_referrers() {
+        let target_document_url = Url::parse("about:blank").unwrap();
+        let source_url = Url::parse("https://source.test/path/page").unwrap();
+        let destination = Url::parse("https://destination.test/start").unwrap();
+        let source =
+            RendererTopLevelNavigationSource::browser_context(source_url.to_string(), None, true);
+
+        let request = build_followed_location_navigation_request(
+            &target_document_url,
+            Some(&source),
+            &destination,
+            "GET",
+            None,
+            Vec::new(),
+            BrowserNavigationRequestKind::Navigate,
+        )
+        .unwrap();
+        let headers = outgoing_request_headers(&Default::default(), &request, None);
+
+        assert!(
+            headers
+                .iter()
+                .all(|(name, _)| !name.eq_ignore_ascii_case("referer"))
+        );
+        assert_eq!(
+            followed_navigation_document_referrer(Some(&source), &destination).as_deref(),
+            Some("")
         );
     }
 }

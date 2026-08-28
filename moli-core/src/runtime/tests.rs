@@ -14,8 +14,8 @@ use crate::{
         RendererDocumentQuerySelectorNode, RendererDocumentQuerySelectorResolution,
         RendererRuntimeInspectorMessage, SubresourceResourceType, SubresourceResponseWaitCriteria,
     },
-    renderer::RendererPageCommand,
     renderer::{PageId, RendererOwnerCommand, RendererOwnerHandle, materialize_page_created_reply},
+    renderer::{RendererPageCommand, RendererPageReply},
     runtime::BrowserConfig as AppConfig,
 };
 use anyhow::{Context, Result, anyhow};
@@ -129,32 +129,64 @@ async fn recv_subresource_fetch_pause_for_page(
             let RendererOutputTransportMessage::Publication(publication) = message else {
                 continue;
             };
-            if !matches!(
-                publication.cursor().stream().residence(),
-                RendererOutputResidenceIdentity::Page {
-                    owner_local_host_id: output_owner,
-                    page_id: output_page,
-                } if output_owner == owner_local_host_id && output_page == page_id
-            ) {
+            if publication.cursor().stream().residence()
+                != (RendererOutputResidenceIdentity::Page {
+                    owner_local_host_id,
+                    page_id,
+                })
+            {
                 continue;
             }
-            if let Some(info) =
-                publication
-                    .records()
-                    .iter()
-                    .find_map(|record| match record.item() {
-                        RendererOutputItem::OwnerAction(
-                            RendererOwnerAction::SubresourceFetchPause { info, .. },
-                        ) => Some(info.as_ref().clone()),
-                        _ => None,
-                    })
-            {
-                return Ok(info);
+            for record in publication.into_records() {
+                let (_, item) = record.into_parts();
+                if let RendererOutputItem::OwnerAction(
+                    RendererOwnerAction::SubresourceFetchPause { info, .. },
+                ) = item
+                {
+                    return Ok(*info);
+                }
             }
         }
     })
     .await
     .context("timed out waiting for concrete subresource Fetch pause")?
+}
+
+async fn build_renderer_output_observed_page(
+    document_url: Url,
+) -> Result<(NavigationEngine, Page, RendererOutputTransportReceiver)> {
+    let mut engine = NavigationEngine::new();
+    let (output_tx, output_rx) = crate::renderer_output_transport_channel();
+    engine.set_renderer_output_transport_sender(output_tx);
+    let page = engine
+        .build_inline_html_document_page_with_storage_best_effort_async(
+            NavigationPageStorageHandles::new(
+                new_shared_browser_cookie_store(),
+                new_shared_web_storage_store(),
+                new_shared_web_storage_store(),
+                None,
+                None,
+            ),
+            document_url,
+            None,
+            "<!doctype html><html><body></body></html>".to_owned(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            None,
+            None,
+            false,
+            1.0,
+            Default::default(),
+            None,
+            false,
+            Vec::new(),
+            false,
+            None,
+        )
+        .await?
+        .page;
+    Ok((engine, page, output_rx))
 }
 
 async fn query_selector_node_from_live_document(
@@ -221,7 +253,9 @@ async fn page_creation_diagnostics_include_default_runtime_context_event() -> Re
     );
 
     let reply = renderer_owner
-        .dispatch_command(RendererOwnerCommand::CreateHtmlPage(create_page_request))
+        .dispatch_command(RendererOwnerCommand::CreateHtmlPage(Box::new(
+            create_page_request,
+        )))
         .await?;
     let (handle, page_state, diagnostics, artifacts, pending_download) =
         renderer_owner.materialize_page_created_reply_parts(reply)?;
@@ -312,7 +346,9 @@ async fn page_creation_diagnostics_fence_initial_runtime_observable_output() -> 
     );
 
     let reply = renderer_owner
-        .dispatch_command(RendererOwnerCommand::CreateHtmlPage(create_page_request))
+        .dispatch_command(RendererOwnerCommand::CreateHtmlPage(Box::new(
+            create_page_request,
+        )))
         .await?;
     let (handle, page_state, diagnostics, _artifacts, pending_download) =
         renderer_owner.materialize_page_created_reply_parts(reply)?;
@@ -1646,10 +1682,12 @@ async fn navigation_engine_bypasses_service_worker_for_main_resource() -> Result
             None,
             BrowserNavigationRequestKind::Navigate,
             false,
+            None,
             "GET",
             &format!("{base_url}/app/controlled.html"),
             None,
             Vec::new(),
+            None,
             None,
         )
         .await?;
@@ -1720,10 +1758,12 @@ async fn navigation_engine_service_worker_main_resource_has_no_network_transport
             None,
             BrowserNavigationRequestKind::Navigate,
             false,
+            None,
             "GET",
             &format!("{base_url}/app/controlled.html"),
             None,
             Vec::new(),
+            None,
             None,
         )
         .await?;
@@ -1836,6 +1876,30 @@ async fn wait_for_renderer_owner_page_removed(
     .await;
 }
 
+async fn evaluate_browser_owner_page(
+    renderer_owner: &RendererOwnerHandle,
+    owner_local_host_id: moli_renderer_v8::RendererOwnerLocalHostId,
+    page_id: PageId,
+    expression: impl Into<String>,
+) -> Result<serde_json::Value> {
+    let output = renderer_owner
+        .dispatch_browser_owner_page_command(
+            owner_local_host_id,
+            page_id,
+            RendererPageCommand::EvaluateExpression {
+                expression: expression.into(),
+                await_promise: false,
+            },
+        )
+        .await?;
+    let RendererPageReply::RuntimeEvaluationResult(result) = output.completion().reply() else {
+        return Err(anyhow!(
+            "direct Browser owner expression returned an unexpected reply"
+        ));
+    };
+    Ok(result.as_protocol_payload().clone())
+}
+
 async fn assert_unrelated_evaluate_runs_while_wait_command_is_pending(
     page: &mut Page,
     pending_wait: PendingPageCommand,
@@ -1856,19 +1920,11 @@ async fn assert_unrelated_evaluate_runs_while_wait_command_is_pending(
 #[tokio::test(flavor = "multi_thread")]
 async fn networkidle_times_out_while_intercepted_fetch_request_is_paused() -> Result<()> {
     let server = FixtureServer::spawn().await?;
-    let browser = Browser::new(AppConfig::default())?;
-    let (output_tx, mut output_rx) = crate::renderer_output_transport_channel();
-    browser
-        .js_runtime
-        .set_renderer_output_transport_sender(output_tx);
-
-    let mut page = browser
-        .fetch_with_wait_until(
-            &server.url("/static"),
-            RenderedDomWaitUntil::Load,
-            Duration::from_secs(5),
-        )
-        .await?;
+    let (engine, mut page, mut output_rx) =
+        build_renderer_output_observed_page(Url::parse(&server.url("/static"))?).await?;
+    let loader = engine
+        .resource_request_client()
+        .context("NavigationEngine should retain its resource request client")?;
 
     page.set_fetch_subresource_interception_async(true, Some(SubresourceResourceType::Fetch))
         .await?;
@@ -1878,10 +1934,7 @@ async fn networkidle_times_out_while_intercepted_fetch_request_is_paused() -> Re
     .await?;
 
     let error = page
-        .wait_for_network_idle(
-            &browser.resource_request_client(),
-            Duration::from_millis(100),
-        )
+        .wait_for_network_idle(&loader, Duration::from_millis(100))
         .await
         .unwrap_err();
     assert!(error.to_string().contains("timed out"));
@@ -1894,19 +1947,11 @@ async fn networkidle_times_out_while_intercepted_fetch_request_is_paused() -> Re
 #[tokio::test(flavor = "multi_thread")]
 async fn networkidle_recovers_after_continuing_intercepted_fetch_request() -> Result<()> {
     let server = FixtureServer::spawn().await?;
-    let browser = Browser::new(AppConfig::default())?;
-    let (output_tx, mut output_rx) = crate::renderer_output_transport_channel();
-    browser
-        .js_runtime
-        .set_renderer_output_transport_sender(output_tx);
-
-    let mut page = browser
-        .fetch_with_wait_until(
-            &server.url("/static"),
-            RenderedDomWaitUntil::Load,
-            Duration::from_secs(5),
-        )
-        .await?;
+    let (engine, mut page, mut output_rx) =
+        build_renderer_output_observed_page(Url::parse(&server.url("/static"))?).await?;
+    let loader = engine
+        .resource_request_client()
+        .context("NavigationEngine should retain its resource request client")?;
 
     page.set_fetch_subresource_interception_async(true, Some(SubresourceResourceType::Fetch))
         .await?;
@@ -1932,7 +1977,7 @@ async fn networkidle_recovers_after_continuing_intercepted_fetch_request() -> Re
         PendingSubresourceContinueOutcome::Started
     ));
 
-    page.wait_for_network_idle(&browser.resource_request_client(), Duration::from_secs(2))
+    page.wait_for_network_idle(&loader, Duration::from_secs(2))
         .await?;
     assert!(
         page.serialize_html_async()
@@ -3492,6 +3537,531 @@ async fn fetch_registers_page_in_renderer_registry_until_page_is_closed_async() 
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn direct_browser_owner_drives_related_auxiliary_page_and_remote_opener_message() -> Result<()>
+{
+    let server = FixtureServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let renderer_owner = browser.js_runtime.renderer_owner_handle();
+    let mut page = browser.fetch(&server.url("/static")).await?;
+    let root_page_id = page.renderer_page_id();
+    let popup_relative_path = "location-nav/target?from=standalone-related-relative-first";
+    let popup_second_relative_path = "location-nav/target?from=standalone-related-relative-second";
+    let burst_size = 256;
+    let popup_document_source = format!(
+        r#"<script>
+opener.postMessage("standalone-auxiliary-ready", "*");
+for (let index = 0; index < {burst_size}; index += 1) {{
+  opener.postMessage(`standalone-order:${{index}}`, "*");
+}}
+</script>"#
+    );
+    let popup_document = format!(
+        "data:text/html,{}",
+        url::form_urlencoded::byte_serialize(popup_document_source.as_bytes())
+            .collect::<String>()
+            .replace('+', "%20")
+    );
+
+    let open_result = page
+        .evaluate_runtime_expression_async(&format!(
+            r#"
+globalThis.__standaloneAuxiliaryReady = false;
+globalThis.__standaloneAuxiliaryMessageOrder = [];
+addEventListener("message", event => {{
+  if (event.data === "standalone-auxiliary-ready") {{
+    globalThis.__standaloneAuxiliaryReady = true;
+  }} else if (typeof event.data === "string" && event.data.startsWith("standalone-order:")) {{
+    globalThis.__standaloneAuxiliaryMessageOrder.push(Number(event.data.slice(17)));
+  }}
+}});
+globalThis.__standaloneAuxiliaryChild = window.open("about:blank", "standalone-auxiliary-child");
+__standaloneAuxiliaryChild.location.href = {popup_relative_path:?};
+__standaloneAuxiliaryChild !== null
+"#
+        ))
+        .await?;
+    assert_eq!(open_result["value"], serde_json::json!(true));
+
+    browser
+        .wait_for_script_truthy(
+            &mut page,
+            &format!(
+                "globalThis.__standaloneAuxiliaryChild?.location.pathname === {:?}",
+                "/location-nav/target"
+            ),
+            Duration::from_secs(5),
+        )
+        .await?;
+    let second_relative_result = page
+        .evaluate_runtime_expression_async(&format!(
+            "__standaloneAuxiliaryChild.location.href = {popup_second_relative_path:?}; true"
+        ))
+        .await?;
+    assert_eq!(second_relative_result["value"], serde_json::json!(true));
+    browser
+        .wait_for_script_truthy(
+            &mut page,
+            &format!(
+                "globalThis.__standaloneAuxiliaryChild?.location.href === {:?}",
+                server.url("/location-nav/target?from=standalone-related-relative-second")
+            ),
+            Duration::from_secs(5),
+        )
+        .await?;
+    assert_eq!(
+        page.evaluate_runtime_expression_async(
+            "globalThis.__standaloneAuxiliaryChild.document.referrer",
+        )
+        .await?["value"],
+        serde_json::json!(server.url("/static")),
+        "the standalone target commit must use the incumbent opener as its Document referrer",
+    );
+    let navigate_result = page
+        .evaluate_runtime_expression_async(&format!(
+            "__standaloneAuxiliaryChild.location.href = {popup_document:?}; true"
+        ))
+        .await?;
+    assert_eq!(navigate_result["value"], serde_json::json!(true));
+    browser
+        .wait_for_script_truthy(
+            &mut page,
+            "globalThis.__standaloneAuxiliaryReady === true",
+            Duration::from_secs(5),
+        )
+        .await?;
+    browser
+        .wait_for_script_truthy(
+            &mut page,
+            &format!("globalThis.__standaloneAuxiliaryMessageOrder.length === {burst_size}"),
+            Duration::from_secs(5),
+        )
+        .await?;
+    let expected_message_order = (0..burst_size)
+        .map(|index| index.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    assert_eq!(
+        page.evaluate_runtime_expression_async(
+            "globalThis.__standaloneAuxiliaryMessageOrder.join(',')",
+        )
+        .await?["value"],
+        serde_json::json!(expected_message_order),
+        "standalone owner output order must become external Page ingress order before waiters are spawned",
+    );
+    assert_eq!(
+        renderer_owner.len(),
+        2,
+        "the direct Browser must retain one real auxiliary Page beside the caller-owned root"
+    );
+
+    let close_result = page
+        .evaluate_runtime_expression_async(
+            "__standaloneAuxiliaryChild.close(); __standaloneAuxiliaryChild.closed",
+        )
+        .await?;
+    assert_eq!(close_result["value"], serde_json::json!(true));
+    wait_for_renderer_owner_state(
+        &renderer_owner,
+        |renderer_owner| renderer_owner.len() == 1 && renderer_owner.record(root_page_id).is_some(),
+        "accepted popup close should retire only the direct Browser's auxiliary Page",
+    )
+    .await;
+
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn direct_browser_owner_routes_named_reuse_to_externally_held_root_page() -> Result<()> {
+    let server = FixtureServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let renderer_owner = browser.js_runtime.renderer_owner_handle();
+    let mut page = browser.fetch(&server.url("/static")).await?;
+    let root_page_id = page.renderer_page_id();
+    let destination = server.url("/location-nav/target?from=standalone-named-root");
+
+    let open_result = page
+        .evaluate_runtime_expression_async(&format!(
+            "window.name = 'standalone-root-target'; window.open({destination:?}, 'standalone-root-target') !== null"
+        ))
+        .await?;
+    assert_eq!(open_result["value"], serde_json::json!(true));
+
+    wait_for_renderer_owner_state(
+        &renderer_owner,
+        |renderer_owner| {
+            renderer_owner
+                .record(root_page_id)
+                .is_some_and(|record| record.final_url.as_str() == destination)
+        },
+        "named target reuse should navigate the exact externally held root Page",
+    )
+    .await;
+    assert_eq!(
+        renderer_owner.len(),
+        1,
+        "named reuse must not create a popup"
+    );
+    assert_eq!(
+        page.evaluate_runtime_expression_async("location.href")
+            .await?["value"],
+        serde_json::json!(destination)
+    );
+
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn direct_browser_owner_preserves_root_history_across_cross_document_back_and_forward()
+-> Result<()> {
+    let server = FixtureServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let renderer_owner = browser.js_runtime.renderer_owner_handle();
+    let original_url = server.url("/static");
+    let destination_url = server.url("/location-nav/target?from=standalone-root-history");
+    let mut page = browser.fetch(&original_url).await?;
+    let page_id = page.renderer_page_id();
+
+    page.evaluate_runtime_expression_async(
+        "history.replaceState({ marker: 'root-entry' }, '', location.href); true",
+    )
+    .await?;
+    let queued = page
+        .evaluate_runtime_expression_async(&format!(
+            "location.href = {destination_url:?}; 'queued'"
+        ))
+        .await?;
+    assert_eq!(queued["value"], serde_json::json!("queued"));
+    wait_for_renderer_owner_state(
+        &renderer_owner,
+        |renderer_owner| {
+            renderer_owner
+                .record(page_id)
+                .is_some_and(|record| record.final_url.as_str() == destination_url)
+        },
+        "standalone root Page should commit its initial cross-Document navigation",
+    )
+    .await;
+
+    page.evaluate_runtime_expression_async(
+        "history.replaceState({ marker: 'target-entry' }, '', location.href); true",
+    )
+    .await?;
+    let history_length = page
+        .evaluate_runtime_expression_async("history.length")
+        .await?["value"]
+        .clone();
+
+    page.evaluate_runtime_expression_async("history.back(); 'queued'")
+        .await?;
+    wait_for_renderer_owner_state(
+        &renderer_owner,
+        |renderer_owner| {
+            renderer_owner
+                .record(page_id)
+                .is_some_and(|record| record.final_url.as_str() == original_url)
+        },
+        "direct Browser owner should route root history.back() to the previous Document",
+    )
+    .await;
+    assert_eq!(
+        page.evaluate_runtime_expression_async(
+            "`${location.href}|${history.state?.marker}|${history.length}`",
+        )
+        .await?["value"],
+        serde_json::json!(format!(
+            "{original_url}|root-entry|{}",
+            history_length.as_u64().context("root history length")?
+        )),
+        "back traversal must reinstall the exact prior entry without replacing the stable Page",
+    );
+
+    page.evaluate_runtime_expression_async("history.forward(); 'queued'")
+        .await?;
+    wait_for_renderer_owner_state(
+        &renderer_owner,
+        |renderer_owner| {
+            renderer_owner
+                .record(page_id)
+                .is_some_and(|record| record.final_url.as_str() == destination_url)
+        },
+        "direct Browser owner should route root history.forward() to the retained destination",
+    )
+    .await;
+    assert_eq!(
+        page.evaluate_runtime_expression_async(
+            "`${location.href}|${history.state?.marker}|${history.length}`",
+        )
+        .await?["value"],
+        serde_json::json!(format!(
+            "{destination_url}|target-entry|{}",
+            history_length.as_u64().context("target history length")?
+        )),
+        "forward traversal must retain the destination entry state and Page identity",
+    );
+    assert_eq!(page.renderer_page_id(), page_id);
+
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn direct_browser_owner_preserves_auxiliary_history_across_cross_document_traversal()
+-> Result<()> {
+    let server = FixtureServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let renderer_owner = browser.js_runtime.renderer_owner_handle();
+    let mut opener = browser.fetch(&server.url("/static")).await?;
+    let owner_local_host_id = opener.renderer_owner_local_host_id();
+    let first_url = server.url("/location-nav/target?from=standalone-popup-history-first");
+    let second_url = server.url("/location-nav/target?from=standalone-popup-history-second");
+
+    let opened = opener
+        .evaluate_runtime_expression_async(&format!(
+            r#"
+globalThis.__standaloneHistoryChild = window.open("about:blank", "standalone-history-child");
+__standaloneHistoryChild.location.href = {first_url:?};
+__standaloneHistoryChild !== null
+"#,
+        ))
+        .await?;
+    assert_eq!(opened["value"], serde_json::json!(true));
+    browser
+        .wait_for_script_truthy(
+            &mut opener,
+            &format!("__standaloneHistoryChild.location.href === {first_url:?}"),
+            Duration::from_secs(5),
+        )
+        .await?;
+
+    opener
+        .evaluate_runtime_expression_async(
+            "__standaloneHistoryChild.history.replaceState({ marker: 'first-entry' }, '', __standaloneHistoryChild.location.href); true",
+        )
+        .await?;
+    opener
+        .evaluate_runtime_expression_async(&format!(
+            "__standaloneHistoryChild.location.href = {second_url:?}; true"
+        ))
+        .await?;
+    browser
+        .wait_for_script_truthy(
+            &mut opener,
+            &format!("__standaloneHistoryChild.location.href === {second_url:?}"),
+            Duration::from_secs(5),
+        )
+        .await?;
+    let popup_page_id = renderer_owner
+        .active_page_records()
+        .into_iter()
+        .find_map(|(page_id, record)| (record.final_url.as_str() == second_url).then_some(page_id))
+        .context("standalone history popup should have one exact active Page")?;
+
+    assert_eq!(
+        evaluate_browser_owner_page(
+            &renderer_owner,
+            owner_local_host_id,
+            popup_page_id,
+            "history.replaceState({ marker: 'second-entry' }, '', location.href); history.back(); 'queued'",
+        )
+        .await?["value"],
+        serde_json::json!("queued")
+    );
+    wait_for_renderer_owner_state(
+        &renderer_owner,
+        |renderer_owner| {
+            renderer_owner
+                .record(popup_page_id)
+                .is_some_and(|record| record.final_url.as_str() == first_url)
+        },
+        "standalone auxiliary actor should commit history.back() in the exact popup Page",
+    )
+    .await;
+
+    assert_eq!(
+        evaluate_browser_owner_page(
+            &renderer_owner,
+            owner_local_host_id,
+            popup_page_id,
+            "`${location.href}|${history.state?.marker}`",
+        )
+        .await?["value"],
+        serde_json::json!(format!("{first_url}|first-entry"))
+    );
+
+    assert_eq!(
+        evaluate_browser_owner_page(
+            &renderer_owner,
+            owner_local_host_id,
+            popup_page_id,
+            "history.forward(); 'queued'",
+        )
+        .await?["value"],
+        serde_json::json!("queued")
+    );
+    wait_for_renderer_owner_state(
+        &renderer_owner,
+        |renderer_owner| {
+            renderer_owner
+                .record(popup_page_id)
+                .is_some_and(|record| record.final_url.as_str() == second_url)
+        },
+        "standalone auxiliary actor should retain the same Page through history.forward()",
+    )
+    .await;
+    assert_eq!(
+        evaluate_browser_owner_page(
+            &renderer_owner,
+            owner_local_host_id,
+            popup_page_id,
+            "`${location.href}|${history.state?.marker}`",
+        )
+        .await?["value"],
+        serde_json::json!(format!("{second_url}|second-entry"))
+    );
+
+    let _ = renderer_owner
+        .dispatch_browser_owner_page_command(
+            owner_local_host_id,
+            popup_page_id,
+            RendererPageCommand::EvaluateExpression {
+                expression: "window.close(); true".to_owned(),
+                await_promise: false,
+            },
+        )
+        .await?;
+    wait_for_renderer_owner_page_removed(
+        &renderer_owner,
+        popup_page_id,
+        "standalone history popup should retire after close",
+    )
+    .await;
+
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn direct_browser_owner_gives_fresh_page_an_isolated_session_storage_namespace() -> Result<()>
+{
+    let server = FixtureServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let renderer_owner = browser.js_runtime.renderer_owner_handle();
+    let mut page = browser.fetch(&server.url("/static")).await?;
+    let root_page_id = page.renderer_page_id();
+    let owner_local_host_id = page.renderer_owner_local_host_id();
+
+    let open_result = page
+        .evaluate_runtime_expression_async(
+            r#"
+sessionStorage.setItem("standalone-fresh-marker", "creator");
+window.open("about:blank", "_blank", "noopener") === null
+"#,
+        )
+        .await?;
+    assert_eq!(open_result["value"], serde_json::json!(true));
+
+    wait_for_renderer_owner_state(
+        &renderer_owner,
+        |renderer_owner| renderer_owner.len() == 2,
+        "direct Browser owner should adopt the Fresh auxiliary Page",
+    )
+    .await;
+    let popup_page_id = renderer_owner
+        .active_page_records()
+        .into_iter()
+        .map(|(page_id, _)| page_id)
+        .find(|page_id| *page_id != root_page_id)
+        .context("Fresh auxiliary Page should be present in the renderer owner records")?;
+
+    let output = renderer_owner
+        .dispatch_browser_owner_page_command(
+            owner_local_host_id,
+            popup_page_id,
+            RendererPageCommand::EvaluateExpression {
+                expression: "sessionStorage.getItem('standalone-fresh-marker')".to_owned(),
+                await_promise: false,
+            },
+        )
+        .await?;
+    let RendererPageReply::RuntimeEvaluationResult(result) = output.completion().reply() else {
+        return Err(anyhow!(
+            "Fresh auxiliary Page evaluation returned an unexpected reply"
+        ));
+    };
+    assert_eq!(
+        result.as_protocol_payload()["value"],
+        serde_json::Value::Null,
+        "a Fresh auxiliary Page must not alias the direct root Page's sessionStorage namespace"
+    );
+
+    let _ = renderer_owner
+        .dispatch_browser_owner_page_command(
+            owner_local_host_id,
+            popup_page_id,
+            RendererPageCommand::EvaluateExpression {
+                expression: "window.close(); true".to_owned(),
+                await_promise: false,
+            },
+        )
+        .await?;
+    wait_for_renderer_owner_state(
+        &renderer_owner,
+        |renderer_owner| renderer_owner.len() == 1 && renderer_owner.record(root_page_id).is_some(),
+        "closing the Fresh popup should retire only its isolated Page",
+    )
+    .await;
+
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn direct_browser_owner_does_not_navigate_a_synchronously_closed_popup() -> Result<()> {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    listener.set_nonblocking(true)?;
+    let destination = format!("http://{}/must-not-start", listener.local_addr()?);
+    let server = FixtureServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let renderer_owner = browser.js_runtime.renderer_owner_handle();
+    let mut page = browser.fetch(&server.url("/static")).await?;
+    let root_page_id = page.renderer_page_id();
+
+    let close_result = page
+        .evaluate_runtime_expression_async(&format!(
+            r#"
+(() => {{
+  const popup = window.open({destination:?}, "standalone-synchronous-close");
+  const initialDocument = popup.document;
+  popup.close();
+  return `${{popup.closed}}|${{popup.document === initialDocument}}`;
+}})()
+"#
+        ))
+        .await?;
+    assert_eq!(
+        close_result["value"],
+        serde_json::json!("true|true"),
+        "close() must synchronously expose Closing without retiring the initial Document"
+    );
+
+    wait_for_renderer_owner_state(
+        &renderer_owner,
+        |renderer_owner| renderer_owner.len() == 1 && renderer_owner.record(root_page_id).is_some(),
+        "a synchronously closed popup should retire after its staged close FIFO settles",
+    )
+    .await;
+    assert!(
+        matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock),
+        "window.open(url); popup.close() must not start the destination fetch"
+    );
+
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn location_navigation_keeps_same_renderer_page_id() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
@@ -3579,7 +4149,9 @@ async fn renderer_owner_create_page_command_produces_page() -> Result<()> {
     );
 
     let reply = renderer_owner
-        .dispatch_command(RendererOwnerCommand::CreateHtmlPage(create_page_request))
+        .dispatch_command(RendererOwnerCommand::CreateHtmlPage(Box::new(
+            create_page_request,
+        )))
         .await?;
     assert_eq!(
         renderer_owner.len(),
@@ -3641,7 +4213,9 @@ async fn renderer_owner_created_page_runs_common_page_commands() -> Result<()> {
     );
 
     let reply = renderer_owner
-        .dispatch_command(RendererOwnerCommand::CreateHtmlPage(create_page_request))
+        .dispatch_command(RendererOwnerCommand::CreateHtmlPage(Box::new(
+            create_page_request,
+        )))
         .await?;
     let mut page = materialize_page_created_reply(&renderer_owner, reply)?;
 
@@ -4626,7 +5200,9 @@ async fn renderer_owner_created_page_runs_runtime_protocol_commands() -> Result<
     );
 
     let reply = renderer_owner
-        .dispatch_command(RendererOwnerCommand::CreateHtmlPage(create_page_request))
+        .dispatch_command(RendererOwnerCommand::CreateHtmlPage(Box::new(
+            create_page_request,
+        )))
         .await?;
     let mut page = materialize_page_created_reply(&renderer_owner, reply)?;
 
@@ -4691,7 +5267,9 @@ async fn renderer_owner_created_page_runs_document_start_commands() -> Result<()
     );
 
     let reply = renderer_owner
-        .dispatch_command(RendererOwnerCommand::CreateHtmlPage(create_page_request))
+        .dispatch_command(RendererOwnerCommand::CreateHtmlPage(Box::new(
+            create_page_request,
+        )))
         .await?;
     let mut page = materialize_page_created_reply(&renderer_owner, reply)?;
 
@@ -4871,7 +5449,9 @@ async fn renderer_owner_created_page_runs_input_commands() -> Result<()> {
     );
 
     let reply = renderer_owner
-        .dispatch_command(RendererOwnerCommand::CreateHtmlPage(create_page_request))
+        .dispatch_command(RendererOwnerCommand::CreateHtmlPage(Box::new(
+            create_page_request,
+        )))
         .await?;
     let mut page = materialize_page_created_reply(&renderer_owner, reply)?;
 
@@ -4946,7 +5526,9 @@ async fn renderer_owner_created_page_runs_input_query_commands() -> Result<()> {
     );
 
     let reply = renderer_owner
-        .dispatch_command(RendererOwnerCommand::CreateHtmlPage(create_page_request))
+        .dispatch_command(RendererOwnerCommand::CreateHtmlPage(Box::new(
+            create_page_request,
+        )))
         .await?;
     let mut page = materialize_page_created_reply(&renderer_owner, reply)?;
 
@@ -5042,7 +5624,9 @@ async fn renderer_owner_created_page_reports_real_client_rect_for_positioned_nod
     );
 
     let reply = renderer_owner
-        .dispatch_command(RendererOwnerCommand::CreateHtmlPage(create_page_request))
+        .dispatch_command(RendererOwnerCommand::CreateHtmlPage(Box::new(
+            create_page_request,
+        )))
         .await?;
     let mut page = materialize_page_created_reply(&renderer_owner, reply)?;
 
@@ -5125,7 +5709,9 @@ async fn renderer_owner_created_page_resolves_backend_node_runtime_object() -> R
     );
 
     let reply = renderer_owner
-        .dispatch_command(RendererOwnerCommand::CreateHtmlPage(create_page_request))
+        .dispatch_command(RendererOwnerCommand::CreateHtmlPage(Box::new(
+            create_page_request,
+        )))
         .await?;
     let mut page = materialize_page_created_reply(&renderer_owner, reply)?;
 
@@ -5210,7 +5796,9 @@ async fn runtime_object_resolve_uses_live_backend_node_for_stale_snapshot_path()
     );
 
     let reply = renderer_owner
-        .dispatch_command(RendererOwnerCommand::CreateHtmlPage(create_page_request))
+        .dispatch_command(RendererOwnerCommand::CreateHtmlPage(Box::new(
+            create_page_request,
+        )))
         .await?;
     let mut page = materialize_page_created_reply(&renderer_owner, reply)?;
 
@@ -5345,7 +5933,9 @@ async fn renderer_owner_created_page_runs_inline_stylesheet_commands() -> Result
     );
 
     let reply = renderer_owner
-        .dispatch_command(RendererOwnerCommand::CreateHtmlPage(create_page_request))
+        .dispatch_command(RendererOwnerCommand::CreateHtmlPage(Box::new(
+            create_page_request,
+        )))
         .await?;
     let mut page = materialize_page_created_reply(&renderer_owner, reply)?;
 
@@ -5422,46 +6012,11 @@ async fn renderer_owner_created_page_runs_inline_stylesheet_commands() -> Result
 #[tokio::test(flavor = "multi_thread")]
 async fn renderer_owner_created_page_runs_subresource_interception_commands() -> Result<()> {
     let server = FixtureServer::spawn().await?;
-    let browser = Browser::new(AppConfig::default())?;
-    let (output_tx, mut output_rx) = crate::renderer_output_transport_channel();
-    browser
-        .js_runtime
-        .set_renderer_output_transport_sender(output_tx);
-    let renderer_owner = browser.js_runtime.renderer_owner_handle();
-
-    let request = Request::get(&server.url("/static"))?;
-    let requested_url = request.url.clone();
-    let response = browser.resource_request_client().fetch(request).await?;
-    let (response_head, response_body) = response.into_text_parts();
-    let create_page_request = renderer_owner.build_create_html_page_request(
-        requested_url,
-        None,
-        false,
-        0,
-        response_head.status,
-        response_head.headers,
-        &browser.resource_request_client(),
-        moli_renderer_v8::RendererWebStorageHandles::new(
-            browser.partition.web_storage_store(),
-            browser.partition.session_storage_store(),
-        ),
-        response_head.final_url,
-        response_body,
-        vec![],
-        vec![],
-        vec![],
-        vec![],
-        false,
-        Vec::new(),
-        false,
-        None,
-        super::PageVmInitStage::Load,
-    );
-
-    let reply = renderer_owner
-        .dispatch_command(RendererOwnerCommand::CreateHtmlPage(create_page_request))
-        .await?;
-    let mut page = materialize_page_created_reply(&renderer_owner, reply)?;
+    let (engine, mut page, mut output_rx) =
+        build_renderer_output_observed_page(Url::parse(&server.url("/static"))?).await?;
+    let loader = engine
+        .resource_request_client()
+        .context("NavigationEngine should retain its resource request client")?;
 
     page.set_fetch_subresource_interception_async(true, Some(SubresourceResourceType::Fetch))
         .await?;
@@ -5487,7 +6042,7 @@ async fn renderer_owner_created_page_runs_subresource_interception_commands() ->
         PendingSubresourceContinueOutcome::Started
     ));
 
-    page.wait_for_network_idle(&browser.resource_request_client(), Duration::from_secs(2))
+    page.wait_for_network_idle(&loader, Duration::from_secs(2))
         .await?;
     assert!(
         page.serialize_html_async()

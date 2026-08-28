@@ -105,6 +105,13 @@ impl BackgroundTarget {
         self.session_id.is_some()
     }
 
+    #[cfg(test)]
+    pub(crate) fn auxiliary_browsing_context_id(&self) -> Option<u64> {
+        self.runtime_slot
+            .page_slot()
+            .auxiliary_browsing_context_id()
+    }
+
     pub(crate) fn is_session(&self, session_id: &str) -> bool {
         self.session_id() == Some(session_id)
     }
@@ -1113,6 +1120,15 @@ impl TargetOwnerState {
 
     pub(crate) fn clear_pending_navigation_history_update(&mut self) {
         self.navigation_history_state.clear_pending_update();
+    }
+
+    pub(crate) fn resolve_no_commit_response_navigation_history(&mut self) {
+        if self.is_on_initial_empty_document() == Some(true) {
+            self.navigation_history_state
+                .retain_pending_initial_empty_document_replacement();
+        } else {
+            self.navigation_history_state.clear_pending_update();
+        }
     }
 
     pub(crate) fn navigation_history_entry_url(

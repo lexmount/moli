@@ -2,6 +2,7 @@ use super::*;
 use crate::{util::get_private_value, webidl};
 use moli_web_errors::{DOM_EXCEPTION_CONSTANTS, dom_exception_legacy_code};
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject, WebApiTemplateValue};
+use std::cell::RefCell;
 
 const DOM_EXCEPTION_BRAND_SLOT: &str = "__lmDomExceptionBrand";
 const DOM_EXCEPTION_MESSAGE_SLOT: &str = "__lmDomExceptionMessage";
@@ -18,8 +19,31 @@ const WEBSOCKET_ERROR_CLOSE_CODE_SLOT: &str = "__lmWebSocketErrorCloseCode";
 const WEBSOCKET_ERROR_REASON_SLOT: &str = "__lmWebSocketErrorReason";
 
 #[derive(Debug)]
-struct DomExceptionPrototypeSlot {
-    prototype: v8::Global<v8::Object>,
+pub(crate) struct DomExceptionPrototypeSlot {
+    prototype: RefCell<DomExceptionPrototypeHandle>,
+}
+
+#[derive(Debug)]
+enum DomExceptionPrototypeHandle {
+    Strong(v8::Global<v8::Object>),
+    Weak(v8::Weak<v8::Object>),
+}
+
+impl DomExceptionPrototypeHandle {
+    fn to_local<'s>(&self, scope: &mut v8::PinScope<'s, '_>) -> Option<v8::Local<'s, v8::Object>> {
+        match self {
+            Self::Strong(prototype) => Some(v8::Local::new(scope, prototype)),
+            Self::Weak(prototype) => prototype.to_local(scope),
+        }
+    }
+
+    fn weaken(&mut self, scope: &mut v8::PinScope<'_, '_>) {
+        let Self::Strong(prototype) = self else {
+            return;
+        };
+        let prototype = v8::Local::new(scope, &*prototype);
+        *self = Self::Weak(v8::Weak::new(scope, prototype));
+    }
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -218,8 +242,20 @@ pub(crate) fn finalize_dom_exception_realm_bindings(
     let _ = scope
         .get_current_context()
         .set_slot(std::rc::Rc::new(DomExceptionPrototypeSlot {
-            prototype: v8::Global::new(scope, prototype),
+            prototype: RefCell::new(DomExceptionPrototypeHandle::Strong(v8::Global::new(
+                scope, prototype,
+            ))),
         }));
+}
+
+pub(crate) fn weaken_dom_exception_prototype_for_context_teardown(
+    scope: &mut v8::PinScope<'_, '_>,
+) -> Option<std::rc::Rc<DomExceptionPrototypeSlot>> {
+    let slot = scope
+        .get_current_context()
+        .get_slot::<DomExceptionPrototypeSlot>()?;
+    slot.prototype.borrow_mut().weaken(scope);
+    Some(slot)
 }
 
 fn dom_exception_receiver<'s>(
@@ -568,10 +604,10 @@ pub(crate) fn new_dom_exception_value<'s>(
     if let Some(prototype) = scope
         .get_current_context()
         .get_slot::<DomExceptionPrototypeSlot>()
+        .and_then(|slot| slot.prototype.borrow().to_local(scope))
     {
         let exception = v8::Object::new(scope);
         initialize_dom_exception(scope, exception, message, name);
-        let prototype = v8::Local::new(scope, &prototype.prototype);
         let _ = exception.set_prototype(scope, prototype.into());
         return exception.into();
     }

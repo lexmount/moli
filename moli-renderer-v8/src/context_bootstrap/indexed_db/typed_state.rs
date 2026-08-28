@@ -608,6 +608,14 @@ fn ensure_indexed_db_runtime_state_table_for_context(
     table
 }
 
+pub(crate) fn clear_indexed_db_runtime_state_table_for_context_teardown(
+    context: v8::Local<'_, v8::Context>,
+) {
+    if let Some(table) = context.get_slot::<RefCell<IndexedDbRuntimeStateTable>>() {
+        *table.borrow_mut() = IndexedDbRuntimeStateTable::default();
+    }
+}
+
 fn indexed_db_runtime_state_table_for_object(
     scope: &mut v8::PinScope<'_, '_>,
     object: v8::Local<'_, v8::Object>,
@@ -1444,9 +1452,6 @@ pub(super) fn indexed_db_execution_owner_for_object(
 fn inferred_indexed_db_dispatch_scope(
     scope: &mut v8::PinScope<'_, '_>,
 ) -> crate::native_bridge::OwnerDispatchScope {
-    if let Some(popup_id) = crate::native_bridge::active_lightweight_popup_id(scope) {
-        return crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id);
-    }
     crate::context_bootstrap::current_child_browsing_context_handle_for_runtime_scope(scope)
         .map(crate::native_bridge::OwnerDispatchScope::Child)
         .unwrap_or(crate::native_bridge::OwnerDispatchScope::Top)

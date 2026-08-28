@@ -4,6 +4,7 @@ pub(crate) mod bridge_descriptor;
 mod broadcast_channel;
 mod canvas;
 mod constructors;
+pub(crate) use constructors::weaken_dom_exception_prototype_for_context_teardown;
 mod crypto;
 mod css_fontface_runtime;
 mod css_runtime;
@@ -33,6 +34,7 @@ pub(crate) use exposed_interfaces::{
     ready_interface_template_names as lazy_ready_constructor_template_names,
     storage_interface_materialization_count as lazy_storage_constructor_materialization_count,
 };
+pub(crate) use indexed_db::clear_indexed_db_runtime_state_table_for_context_teardown;
 mod location_history_storage;
 mod location_navigation;
 mod location_runtime;
@@ -105,7 +107,9 @@ mod storage_buckets;
 pub(crate) use self::storage_access::request_storage_access_with_types;
 pub(crate) use self::window_runtime::{
     LegacyStorageQuotaCallbackOutcome, LegacyStorageQuotaCallbackTask,
-    LegacyStorageQuotaCallbackTaskEffect,
+    LegacyStorageQuotaCallbackTaskEffect, accept_remote_top_level_browsing_context_focus,
+    dispatch_top_level_browsing_context_close_unload, request_top_level_browsing_context_close,
+    request_top_level_browsing_context_focus,
 };
 
 pub use moli_storage_service::DEFAULT_ORIGIN_STORAGE_QUOTA_BYTES;
@@ -132,6 +136,10 @@ pub(crate) use location_navigation::{
     navigate_location_object_with_source_element, navigate_top_level_meta_refresh,
     navigate_top_level_same_document_from_browser,
 };
+pub(crate) use location_runtime::{
+    navigate_top_level_window_location_from_cross_origin,
+    resolve_location_navigation_target_against_entered_base,
+};
 pub(crate) use navigation_cancellation::inform_about_canceled_navigation_for_window;
 pub(crate) use navigation_events::dispatch_cross_document_navigation_navigate_event_for_window_with_form_data;
 pub(crate) use navigation_events::{
@@ -146,6 +154,7 @@ pub(crate) use navigation_result::{
     NavigationFinishedResultApplication, apply_pending_navigation_finished_result,
 };
 pub(crate) use navigation_traversal_execution::apply_authorized_history_traversal_task;
+pub(crate) use navigation_window::runtime_window_dispatch_scope;
 pub(crate) use performance_runtime::PERFORMANCE_TIME_ORIGIN_SLOT;
 pub(crate) use performance_runtime::performance_slot_number;
 pub(crate) use selection_surface::{
@@ -274,8 +283,7 @@ pub use self::indexed_db::{
     new_indexed_db_manager,
 };
 pub(crate) use self::indexed_db::{
-    bind_indexed_db_factory_to_window_execution_context,
-    materialized_indexed_db_factory_for_window, scoped_indexed_db_factory,
+    bind_indexed_db_factory_to_window_execution_context, materialized_indexed_db_factory_for_window,
 };
 #[cfg(test)]
 pub(crate) use self::indexed_db::{
@@ -288,7 +296,7 @@ pub(in crate::context_bootstrap) use self::indexed_db::{
 pub(crate) use self::location_runtime::sync_global_location_runtime_state;
 pub(crate) use self::location_runtime::{
     sync_document_location_runtime_state_from_window,
-    sync_window_location_history_navigation_runtime_surface, sync_window_location_runtime_state,
+    sync_window_location_history_navigation_runtime_surface,
 };
 pub(crate) use self::media_cues::set_text_track_cue_track;
 pub(crate) use self::media_queries::{
@@ -314,15 +322,12 @@ pub(crate) use self::message_ports::{
     ensure_message_port_wrapper_for_id_in_realm, message_port_id_from_object,
 };
 pub(crate) use self::microtask_checkpoint::{
+    clear_agent_microtask_checkpoint_tasks_for_context_teardown,
     install_agent_microtask_checkpoint_tasks, run_end_of_microtask_checkpoint_tasks,
 };
-pub(crate) use self::navigation_bootstrap::{
-    install_window_location_history_navigation_runtime_state,
-    reset_window_location_history_navigation_runtime_state,
-};
+pub(crate) use self::navigation_bootstrap::reset_window_location_history_navigation_runtime_state;
 pub(crate) use self::navigation_events::dispatch_cross_document_navigation_navigate_event_for_window;
 pub(crate) use self::navigation_events::dispatch_srcdoc_navigation_navigate_event_for_window;
-pub(crate) use self::navigation_mutation::apply_local_window_location_navigation;
 pub(crate) use self::navigation_restore::{
     install_navigation_bootstrap_entry, install_navigation_bootstrap_entry_for_holder,
 };
@@ -353,11 +358,14 @@ use self::range_live::{
     update_live_ranges_for_text_split,
 };
 pub(super) use self::runtime_state::finish_context_bootstrap;
+pub(crate) use self::runtime_state::inherit_auxiliary_window_viewport_surface;
 pub(crate) use self::runtime_state::install_child_window_eval_runtime_state;
 pub(crate) use self::runtime_state::install_webassembly_runtime_state;
 #[cfg(feature = "wpt-extensions")]
 pub(crate) use self::runtime_state::install_wpt_webdriver_runtime_state;
 pub(crate) use self::runtime_state::set_window_origin_runtime_state;
+pub(crate) use self::runtime_state::sync_window_document_cached_accessor;
+pub(crate) use self::runtime_state::window_origin_runtime_state;
 pub(crate) use self::runtime_state::{
     ORIGINAL_WEBASSEMBLY_COMPILE_ERROR_CONSTRUCTOR_SLOT,
     ORIGINAL_WEBASSEMBLY_GLOBAL_VALUE_GETTER_SLOT, ORIGINAL_WEBASSEMBLY_INSTANCE_CONSTRUCTOR_SLOT,
@@ -371,7 +379,7 @@ pub(in crate::context_bootstrap) use self::shared::*;
 pub(crate) use self::shared::{
     CHILD_BROWSING_CONTEXT_HANDLE_SLOT, DOCUMENT_SELECTION_CHANGE_LISTENER_SLOT,
     READABLE_STREAM_CHILD_REALM_HANDLED_REJECTION_SLOT, WINDOW_CUSTOM_ELEMENTS_SLOT,
-    WINDOW_NAME_SLOT,
+    WINDOW_NAME_SLOT, WINDOW_OPENER_SLOT,
 };
 pub(crate) use self::shared::{
     RuntimeMessageSourceSecurity, current_runtime_message_agent_cluster,
@@ -379,6 +387,8 @@ pub(crate) use self::shared::{
     structured_clone_value_with_options, structured_deserialize_value_for_message_event,
     structured_serialize_value_for_post_message,
     structured_serialize_value_for_post_message_with_source_port,
+    structured_serialize_value_for_remote_window_post_message,
+    structured_serialize_value_for_remote_window_post_message_options,
     structured_serialize_value_for_window_post_message,
     structured_serialize_value_for_window_post_message_options,
     wasm_module_message_allowed_for_target, wasm_module_message_allowed_for_target_origin,
@@ -424,13 +434,13 @@ pub(crate) use self::trusted_types::trusted_types_lazy_state_materialized;
 pub(crate) use self::trusted_types::{
     TrustedTypesCodeGenerationCheck, install_trusted_types_eval_runtime_state,
     install_trusted_types_runtime_state, trusted_html_string_or_throw, trusted_html_value_string,
+    trusted_script_string_for_javascript_navigation,
     trusted_script_string_for_script_element_execution, trusted_script_string_or_type_error,
     trusted_script_url_string_or_throw, trusted_types_code_generation_check,
     trusted_types_code_generation_check_callback,
 };
 pub(crate) use self::url_form::object_prototype_matches;
 pub(crate) use self::url_search_params_runtime::url_search_params_request_body;
-pub(crate) use self::web_storage::install_storage_aliases_for_window;
 pub use self::web_storage::{
     SharedWebStorageStore, WebStorageAreaKind, WebStorageMutation, WebStorageMutationRecord,
     WebStorageMutationSubscription, WebStorageString, deep_clone_shared_web_storage_store,
@@ -518,13 +528,6 @@ pub(crate) fn child_browsing_context_handle_for_current_realm_scope(
     }
     let owner = self::navigation_window::runtime_window_owner(scope, global);
     self::navigation_window::child_browsing_context_handle_for_runtime_owner(scope, owner)
-}
-
-pub(crate) fn build_lightweight_popup_window_navigator_object<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    owner_popup: u64,
-) -> Result<v8::Local<'s, v8::Object>> {
-    navigator_runtime::build_lightweight_popup_window_navigator_object(scope, owner_popup)
 }
 
 fn find_constructor_spec(name: &str) -> Result<self::specs::ConstructorSpec> {

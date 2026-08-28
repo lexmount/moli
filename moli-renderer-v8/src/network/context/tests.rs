@@ -7,9 +7,7 @@ use crate::network::{
 };
 use crate::{
     frame_owner_model::{DocumentId, FrameDocumentTaskOwner, FrameSchedulerLaneId, LocalWindowId},
-    native_bridge::{
-        LightweightPopupDocumentId, LightweightPopupDocumentOwner, WindowDocumentOwner,
-    },
+    native_bridge::WindowDocumentOwner,
     network::ResourceRequestClient,
 };
 
@@ -323,34 +321,6 @@ async fn detached_document_can_spawn_network_only_keepalive_from_captured_contex
         runtime.detached_keepalive_diagnostics().active_load_count,
         0
     );
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn popup_and_frame_documents_have_independent_authorities() {
-    let transport =
-        ResourceRequestClient::new(&FetchConfig::default()).expect("resource transport");
-    let frame = document_loader(transport.handle(), 1, "https://example.test/frame");
-    let popup_owner = WindowDocumentOwner::LightweightPopup(LightweightPopupDocumentOwner::new(
-        23,
-        LightweightPopupDocumentId::new(41),
-    ));
-    let popup_url = Url::parse("https://example.test/popup").expect("popup URL");
-    let popup = frame.fork_for_document(DocumentFetchContext::new(
-        popup_owner,
-        popup_url.clone(),
-        popup_url.clone(),
-        moli_url::origin_ascii_serialization(&popup_url),
-    ));
-    let registry = DocumentResourceLoaderRegistry::default();
-    registry.register(WindowDocumentOwner::Frame(owner(1)), frame.clone());
-    registry.register(popup_owner, popup.clone());
-
-    let retired = registry.retire(popup_owner).expect("popup authority");
-
-    assert_eq!(retired.state(), DocumentResourceLoaderState::Detached);
-    assert!(registry.get(popup_owner).is_none());
-    assert!(registry.get(WindowDocumentOwner::Frame(owner(1))).is_some());
-    assert_eq!(frame.state(), DocumentResourceLoaderState::Active);
 }
 
 #[tokio::test(flavor = "current_thread")]

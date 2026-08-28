@@ -1288,6 +1288,7 @@ impl JsContextHost {
                             scope,
                             script_context,
                             job,
+                            true,
                         ) {
                             tracing::warn!(
                                 child_handle = ?child_handle,
@@ -1318,25 +1319,32 @@ impl JsContextHost {
         self.apply_child_document_write_classic_completion(scope, completion)
     }
 
-    fn execute_child_frame_script_job_on_current_stack(
+    pub(crate) fn execute_child_frame_script_job_on_current_stack(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         script_context: v8::Local<'_, v8::Context>,
         mut job: FrameScriptJob,
+        drain_microtasks: bool,
     ) -> anyhow::Result<()> {
-        let child_handle = self.frame_owner_child_handle_for_script_job(&job);
+        let child_handle = self
+            .frame_owner_child_handle_for_script_job(&job)
+            .ok_or_else(|| anyhow::anyhow!("child frame script job lost its exact owner"))?;
+        let dispatch_scope = crate::native_bridge::OwnerDispatchScope::Child(child_handle);
         let host_ptr = self as *mut JsContextHost;
         let allowed = {
             let script_scope = &mut v8::ContextScope::new(scope, script_context);
-            crate::native_bridge::element::prepare_inline_classic_frame_script_job_for_execution(
+            let previous_dispatch_scope = dispatch_scope.enter(script_scope);
+            let prepared =
+                crate::native_bridge::element::prepare_inline_classic_frame_script_job_for_execution(
                 script_scope,
                 host_ptr,
                 &mut job,
-            )?
+            );
+            dispatch_scope.restore(script_scope, previous_dispatch_scope);
+            prepared?
         };
         if !allowed {
-            if let Some(document_handle) = child_handle
-                .and_then(|child_handle| self.child_browsing_context_document_handle(child_handle))
+            if let Some(document_handle) = self.child_browsing_context_document_handle(child_handle)
             {
                 self.sync_child_browsing_context_subtree(scope, document_handle);
             }
@@ -1353,15 +1361,18 @@ impl JsContextHost {
         let result = match source {
             FrameScriptSource::SourceText(source) => {
                 let script_scope = &mut v8::ContextScope::new(scope, script_context);
-                crate::script_vm::execute_source_text_on_current_stack(
+                let previous_dispatch_scope = dispatch_scope.enter(script_scope);
+                let result = crate::script_vm::execute_source_text_on_current_stack(
                     script_scope,
                     &source,
                     Some(&script_url),
                     Some(&base_url),
                     0,
                     script_nonce.as_deref(),
-                    true,
-                )
+                    drain_microtasks,
+                );
+                dispatch_scope.restore(script_scope, previous_dispatch_scope);
+                result
             }
             #[cfg(test)]
             FrameScriptSource::FunctionConstructor(_) => Err(anyhow::anyhow!(
@@ -1371,9 +1382,7 @@ impl JsContextHost {
         if let Some(current_script) = current_script {
             self.pop_child_current_script(current_script);
         }
-        if let Some(document_handle) = child_handle
-            .and_then(|child_handle| self.child_browsing_context_document_handle(child_handle))
-        {
+        if let Some(document_handle) = self.child_browsing_context_document_handle(child_handle) {
             self.sync_child_browsing_context_subtree(scope, document_handle);
         }
         result

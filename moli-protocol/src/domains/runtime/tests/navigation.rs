@@ -9,12 +9,7 @@ async fn enable_with_background_event_sender_defers_initial_document_page_build(
     bc.set_target_url("about:blank".into());
     ctx.conn.browser_context = Some(bc);
 
-    let (background_tx, _) = tokio::sync::mpsc::unbounded_channel();
-    let (completion_tx, _) =
-        tokio::sync::mpsc::unbounded_channel::<BackgroundNavigationCompletion>();
-    ctx.conn.set_background_event_sender(background_tx);
-    ctx.conn
-        .set_background_navigation_completion_sender(completion_tx);
+    ctx.enable_background_navigation_scheduler_for_test();
 
     ctx.process_async(json!({
         "id": 21,

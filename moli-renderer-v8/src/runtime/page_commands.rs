@@ -86,6 +86,44 @@ impl PageVm {
                 .vm_mut()
                 .navigate_top_level_same_document_from_browser(&url)
                 .map(RendererPageReply::Bool),
+            RendererPageCommand::FollowTopLevelNavigationInStandaloneAdapter {
+                request,
+                navigation_history_entry_seed,
+            } => {
+                self.vm_mut()
+                    .record_pending_renderer_top_level_navigation_request(
+                        request,
+                        navigation_history_entry_seed.map(|seed| *seed),
+                    );
+                Ok(RendererPageReply::Bool(
+                    self.vm().has_pending_location_navigation(),
+                ))
+            }
+            RendererPageCommand::DispatchRemoteWindowProxyCommand(command) => self
+                .vm_mut()
+                .dispatch_remote_window_proxy_command(command)
+                .map(RendererPageReply::Bool),
+            RendererPageCommand::RequestBrowserPageClose => self
+                .vm_mut()
+                .request_browser_page_close()
+                .map(RendererPageReply::Bool),
+            RendererPageCommand::AcknowledgeBrowserPageCloseNetworkDrained(source) => self
+                .vm_mut()
+                .acknowledge_browser_page_close_network_drained(source)
+                .map(RendererPageReply::Bool),
+            RendererPageCommand::DispatchPageCloseUnload(source) => self
+                .vm_mut()
+                .dispatch_browser_page_close_unload(source)
+                .map(RendererPageReply::Bool),
+            RendererPageCommand::RunPendingJavascriptUrlTasksBeforeBrowserNavigation => {
+                Err(anyhow!(
+                    "pending javascript URL tasks must be routed through the renderer owner continuation"
+                ))
+            }
+            RendererPageCommand::SetTopLevelPageFocus { active, focused } => self
+                .vm_mut()
+                .set_top_level_page_focus(active, focused)
+                .map(RendererPageReply::Bool),
             RendererPageCommand::DispatchMouseEventAtPoint {
                 x,
                 y,

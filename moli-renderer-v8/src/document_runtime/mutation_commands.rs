@@ -1774,19 +1774,39 @@ pub(super) fn finish_runtime_mutation_effects(
     }
 
     for candidate in runtime_script_start_candidates {
-        let (node, host_script_handle) = candidate.into_parts();
-        let Some(plan) = runtime.host_plan_script_start(node, &host_script_handle) else {
-            continue;
-        };
-        match unsafe { &mut *host_ptr }.commit_current_main_runtime_script_start(runtime, plan) {
-            Ok(Some(committed)) => {
-                execute_committed_inline_classic_script(runtime, scope, host_ptr, committed);
+        match candidate {
+            crate::mutation_coordinator::RuntimeScriptStartCandidate::MainDocument {
+                node,
+                host_script_handle,
+            } => {
+                let Some(plan) = runtime.host_plan_script_start(node, &host_script_handle) else {
+                    continue;
+                };
+                match unsafe { &mut *host_ptr }
+                    .commit_current_main_runtime_script_start(runtime, plan)
+                {
+                    Ok(Some(committed)) => {
+                        execute_committed_inline_classic_script(runtime, scope, host_ptr, committed);
+                    }
+                    Ok(None) => {}
+                    Err(message) => {
+                        if let Some(message) = v8::String::new(scope, &message) {
+                            let exception = v8::Exception::error(scope, message);
+                            scope.throw_exception(exception);
+                        }
+                    }
+                }
             }
-            Ok(None) => {}
-            Err(message) => {
-                if let Some(message) = v8::String::new(scope, &message) {
-                    let exception = v8::Exception::error(scope, message);
-                    scope.throw_exception(exception);
+            crate::mutation_coordinator::RuntimeScriptStartCandidate::ChildDocumentInlineClassic(
+                work,
+            ) => {
+                if let Err(error) = unsafe { &mut *host_ptr }
+                    .execute_child_dynamic_inline_classic_script_on_current_stack(scope, work)
+                {
+                    tracing::warn!(
+                        %error,
+                        "synchronous child dynamic inline classic script failed"
+                    );
                 }
             }
         }

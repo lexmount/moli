@@ -206,12 +206,14 @@ impl CdpConnection {
             command @ (DevToolsCommand::CloseTarget(_)
             | DevToolsCommand::ActivateTarget(_)
             | DevToolsCommand::RemoveBrowserContext(_)) => {
-                Box::pin(
+                let (result, events, predecessor) = Box::pin(
                     crate::domains::target::execute_devtools_target_command_async_with_protocol_events(
                         self, command,
                     ),
                 )
-                .await
+                .await;
+                renderer_output_predecessor = predecessor;
+                (result, events)
             }
             command @ (DevToolsCommand::Navigate(_)
             | DevToolsCommand::Reload(_)

@@ -147,34 +147,3 @@ pub(super) async fn drain_service_worker_test_turn(
     }
     true
 }
-
-pub(super) async fn drain_service_worker_test_until_popup_loads_settle(
-    page: &mut crate::runtime::PageVmTaskExecutorTestHarness,
-    browser_context_runtime: &crate::runtime::RendererBrowserContextRuntime,
-    loader: &ResourceRequestClient,
-    context: &str,
-) {
-    let mut consecutive_idle_turns = 0;
-    for completed_turns in 0..=MAX_SERVICE_WORKER_TEST_SETTLE_TURNS {
-        if !page.has_pending_lightweight_popup_document_loads() {
-            return;
-        }
-        if completed_turns == MAX_SERVICE_WORKER_TEST_SETTLE_TURNS {
-            panic!(
-                "{context} popup document completion did not settle after \
-                 {completed_turns} task turns"
-            );
-        }
-        if drain_service_worker_test_turn(page, browser_context_runtime, loader).await {
-            consecutive_idle_turns = 0;
-        } else {
-            consecutive_idle_turns += 1;
-            assert!(
-                consecutive_idle_turns < MAX_SERVICE_WORKER_TEST_CONSECUTIVE_IDLE_TURNS,
-                "{context} popup document completion stayed idle after {} task turns",
-                completed_turns + 1
-            );
-        }
-    }
-    unreachable!("bounded ServiceWorker popup settle loop must return or panic")
-}

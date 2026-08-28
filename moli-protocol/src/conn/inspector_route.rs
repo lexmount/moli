@@ -164,6 +164,32 @@ impl CdpConnection {
         Ok(transaction)
     }
 
+    pub(crate) fn commit_renderer_agent_candidate_for_stable_page_replacement_for_session_owner(
+        &mut self,
+        session_id: Option<&str>,
+        candidate: PreparedRendererAgentAttachment,
+        expected: &super::StablePageNavigationCommitTarget,
+    ) -> Result<CommittedRendererAgentAttachment, String> {
+        self.validate_navigation_target_owner(session_id, candidate.navigation())?;
+        if !self.target_page_residence_identity_is_current_for_session(
+            session_id,
+            expected.target_page(),
+        ) || self.renderer_page_residence_identity_for_session_owner(session_id)
+            != Some(expected.renderer_page())
+        {
+            return Err("StableNavigationPageSuperseded".to_owned());
+        }
+        let transaction = self
+            .runtime_session_owner_slot_mut(session_id)?
+            .commit_renderer_agent_candidate_transaction(candidate, expected.renderer_page())
+            .map_err(|error| error.to_string())?;
+        self.bind_renderer_page_output_owner(
+            expected.renderer_page(),
+            expected.target_page().clone(),
+        );
+        Ok(transaction)
+    }
+
     pub(crate) fn rollback_committed_renderer_agent_candidate_for_session_owner(
         &mut self,
         session_id: Option<&str>,

@@ -261,8 +261,8 @@ fn history_length_floor_from_visible_entries<'s>(
     }
 
     // A child sees the joint session-history length. The primary top-level
-    // runtime keeps one hidden initial about:blank predecessor, while a
-    // lightweight popup's first navigation replaces its initial empty entry.
+    // runtime keeps one hidden initial about:blank predecessor, while an
+    // auxiliary Page's first navigation replaces its initial empty entry.
     // Project the offset of the owning root instead of assuming every child
     // belongs to the primary top-level runtime.
     let top_owner = runtime_top_window_owner(scope, owner);

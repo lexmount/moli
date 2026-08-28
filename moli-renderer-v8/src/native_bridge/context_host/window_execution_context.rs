@@ -24,5 +24,4 @@ pub(crate) use registry::{
 };
 pub(super) use registry::{
     WindowExecutionContextRealmRecords, WindowExecutionContextRealmRegistration,
-    WindowExecutionContextScopedRealmRegistration,
 };

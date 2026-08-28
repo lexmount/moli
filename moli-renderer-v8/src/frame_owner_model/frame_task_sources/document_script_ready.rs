@@ -12,37 +12,6 @@ use crate::frame_owner_model::{
 use url::Url;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct PendingChildDynamicDocumentScript {
-    pub(crate) child_handle: DomHandle,
-    pub(crate) owner: FrameDocumentTaskOwner,
-    pub(crate) realm_id: Option<FrameRealmId>,
-    pub(crate) script_handle: DomHandle,
-    pub(crate) source: String,
-    pub(crate) script_nonce: Option<String>,
-    pub(crate) script_integrity: Option<String>,
-}
-
-impl DocumentScriptReadyActionRoute<FrameDocumentOwner> for PendingChildDynamicDocumentScript {
-    fn payload_document_owner(&self) -> FrameDocumentOwner {
-        self.owner.document_owner()
-    }
-}
-
-impl DocumentScriptReadyActionDispatchRoute<FrameDocumentReadyActionRoute>
-    for PendingChildDynamicDocumentScript
-{
-    fn dispatch_route(&self) -> FrameDocumentReadyActionRoute {
-        FrameDocumentReadyActionRoute::from_frame_document_parts(
-            Some(self.child_handle),
-            self.owner,
-            self.realm_id,
-            self.realm_id.is_some(),
-            self.script_handle,
-        )
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PendingChildExternalClassicDocumentScript {
     pub(crate) child_handle: DomHandle,
     pub(crate) owner: FrameDocumentTaskOwner,
@@ -98,14 +67,12 @@ pub(crate) struct PendingChildJavascriptUrlDocumentScript {
 /// before the prerequisite turn.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum FrameDocumentUnboundScriptWork {
-    DynamicClassic(PendingChildDynamicDocumentScript),
     ExternalClassic(PendingChildExternalClassicDocumentScript),
     JavascriptUrl(PendingChildJavascriptUrlDocumentScript),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum FrameDocumentRealmBoundScriptWork {
-    DynamicClassic(PendingChildDynamicDocumentScript),
     ExternalClassic(PendingChildExternalClassicDocumentScript),
     JavascriptUrl(PendingChildJavascriptUrlDocumentScript),
 }
@@ -125,7 +92,6 @@ impl FrameDocumentScriptWorkAdmission {
 impl FrameDocumentUnboundScriptWork {
     pub(crate) fn child_handle(&self) -> DomHandle {
         match self {
-            Self::DynamicClassic(work) => work.child_handle,
             Self::ExternalClassic(work) => work.child_handle,
             Self::JavascriptUrl(work) => work.child_handle,
         }
@@ -133,7 +99,6 @@ impl FrameDocumentUnboundScriptWork {
 
     pub(crate) fn owner(&self) -> FrameDocumentTaskOwner {
         match self {
-            Self::DynamicClassic(work) => work.owner,
             Self::ExternalClassic(work) => work.owner,
             Self::JavascriptUrl(work) => work.owner,
         }
@@ -141,7 +106,6 @@ impl FrameDocumentUnboundScriptWork {
 
     pub(crate) fn expected_realm_id(&self) -> Option<FrameRealmId> {
         match self {
-            Self::DynamicClassic(work) => work.realm_id,
             Self::ExternalClassic(work) => work.realm_id,
             Self::JavascriptUrl(work) => work.realm_id,
         }
@@ -155,10 +119,6 @@ impl FrameDocumentUnboundScriptWork {
     pub(crate) fn bind_to_realm(self, realm_id: FrameRealmId) -> FrameDocumentRealmBoundScriptWork {
         debug_assert!(self.can_materialize_in_realm(realm_id));
         match self {
-            Self::DynamicClassic(mut work) => {
-                work.realm_id = Some(realm_id);
-                FrameDocumentRealmBoundScriptWork::DynamicClassic(work)
-            }
             Self::ExternalClassic(mut work) => {
                 work.realm_id = Some(realm_id);
                 FrameDocumentRealmBoundScriptWork::ExternalClassic(work)
@@ -173,7 +133,6 @@ impl FrameDocumentUnboundScriptWork {
 
 #[derive(Debug)]
 pub(crate) enum PendingChildDocumentScriptExecutionWork {
-    DynamicClassic(PendingChildDynamicDocumentScript),
     ExternalClassic(PendingChildExternalClassicDocumentScript),
     JavascriptUrl(PendingChildJavascriptUrlDocumentScript),
     ModuleScript(Box<FrameDocumentModuleScriptReadyWork>),
@@ -196,7 +155,6 @@ impl FrameDocumentScriptReadyTaskWork {
         match self {
             Self::Scheduler(work) => work.dispatch_route(),
             Self::DocumentScriptExecution(work) => match work.as_ref() {
-                FrameDocumentRealmBoundScriptWork::DynamicClassic(work) => work.dispatch_route(),
                 FrameDocumentRealmBoundScriptWork::ExternalClassic(work) => work.dispatch_route(),
                 FrameDocumentRealmBoundScriptWork::JavascriptUrl(work) => {
                     FrameDocumentReadyActionRoute::from_frame_document_parts(
@@ -216,20 +174,6 @@ impl From<FrameDocumentRealmBoundScriptWork> for FrameDocumentScriptReadyTaskWor
     fn from(work: FrameDocumentRealmBoundScriptWork) -> Self {
         Self::DocumentScriptExecution(Box::new(work))
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct FrameDocumentDynamicClassicScriptExecutionTarget {
-    child_handle: DomHandle,
-    task_owner: FrameDocumentTaskOwner,
-    realm_id: FrameRealmId,
-    script_handle: DomHandle,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct FrameDocumentDynamicClassicScriptExecutionAction {
-    target: FrameDocumentDynamicClassicScriptExecutionTarget,
-    job: FrameScriptJob,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -272,7 +216,6 @@ pub(crate) enum FrameDocumentExternalClassicScriptExecution {
 
 #[derive(Debug)]
 pub(crate) enum FrameDocumentScriptExecutionWork {
-    DynamicClassic(Box<FrameDocumentDynamicClassicScriptExecutionAction>),
     ExternalClassic(FrameDocumentExternalClassicScriptExecutionAction),
     JavascriptUrl(Box<FrameDocumentJavascriptUrlScriptExecutionAction>),
     ModuleScript(Box<FrameDocumentModuleScriptReadyWork>),
@@ -280,7 +223,6 @@ pub(crate) enum FrameDocumentScriptExecutionWork {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum FrameDocumentScriptExecutionResult {
-    DynamicClassic(FrameDocumentDynamicClassicExecutionFollowup),
     ExternalClassic(FrameDocumentExternalClassicExecutionResult),
     JavascriptUrl(FrameDocumentJavascriptUrlExecutionResult),
     ModuleScript(
@@ -292,7 +234,6 @@ pub(crate) enum FrameDocumentScriptExecutionResult {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FrameDocumentScriptPrepareFollowup {
-    DynamicClassic(FrameDocumentDynamicClassicPrepareFollowup),
     ExternalClassic(FrameDocumentExternalClassicPrepareFollowup),
     JavascriptUrl(FrameDocumentJavascriptUrlPrepareFollowup),
     ModuleScript(crate::document_script_scheduler::DocumentScriptExecutionOutcome),
@@ -300,7 +241,6 @@ pub(crate) enum FrameDocumentScriptPrepareFollowup {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum FrameDocumentScriptExecutionFollowup {
-    DynamicClassic(FrameDocumentDynamicClassicExecutionFollowup),
     ExternalClassic(FrameDocumentExternalClassicPostExecutionAction),
     JavascriptUrl(FrameDocumentJavascriptUrlPostExecutionAction),
     ModuleScript(
@@ -308,29 +248,6 @@ pub(crate) enum FrameDocumentScriptExecutionFollowup {
             crate::document_script_scheduler::DocumentScriptExecutionOutcome,
         >,
     ),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum FrameDocumentDynamicClassicPrepareSkipReason {
-    RealmMaterializationFailed,
-    MissingCurrentRealm,
-    StaleRealm {
-        expected: FrameRealmId,
-        current: FrameRealmId,
-    },
-    ExecutionActionUnavailable,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct FrameDocumentDynamicClassicPrepareFollowup {
-    prepared_execution_action: bool,
-    skip_reason: Option<FrameDocumentDynamicClassicPrepareSkipReason>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct FrameDocumentDynamicClassicExecutionFollowup {
-    attempted_script_job: bool,
-    failed_script_job: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -437,57 +354,6 @@ pub(crate) struct FrameDocumentJavascriptUrlPostExecutionApplication {
     pub(crate) owner_transition: Option<FrameDocumentOwnerTransition>,
 }
 
-impl FrameDocumentDynamicClassicScriptExecutionTarget {
-    pub(crate) fn new(
-        child_handle: DomHandle,
-        task_owner: FrameDocumentTaskOwner,
-        realm_id: FrameRealmId,
-        script_handle: DomHandle,
-    ) -> Self {
-        Self {
-            child_handle,
-            task_owner,
-            realm_id,
-            script_handle,
-        }
-    }
-
-    pub(crate) fn child_handle(&self) -> DomHandle {
-        self.child_handle
-    }
-
-    pub(crate) fn owner(&self) -> FrameDocumentOwner {
-        self.task_owner.document_owner()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn task_owner(&self) -> FrameDocumentTaskOwner {
-        self.task_owner
-    }
-
-    pub(crate) fn realm_id(&self) -> FrameRealmId {
-        self.realm_id
-    }
-
-    pub(crate) fn script_handle(&self) -> DomHandle {
-        self.script_handle
-    }
-}
-
-impl PendingChildDynamicDocumentScript {
-    pub(crate) fn execution_target(
-        &self,
-        realm_id: FrameRealmId,
-    ) -> FrameDocumentDynamicClassicScriptExecutionTarget {
-        FrameDocumentDynamicClassicScriptExecutionTarget::new(
-            self.child_handle,
-            self.owner,
-            realm_id,
-            self.script_handle,
-        )
-    }
-}
-
 impl PendingChildExternalClassicDocumentScript {
     pub(crate) fn execution_target(
         &self,
@@ -514,23 +380,6 @@ impl PendingChildJavascriptUrlDocumentScript {
             realm_id,
             self.navigation_load,
         )
-    }
-}
-
-impl FrameDocumentDynamicClassicScriptExecutionAction {
-    pub(crate) fn new(
-        target: FrameDocumentDynamicClassicScriptExecutionTarget,
-        job: FrameScriptJob,
-    ) -> Self {
-        Self { target, job }
-    }
-
-    pub(crate) fn target(&self) -> FrameDocumentDynamicClassicScriptExecutionTarget {
-        self.target
-    }
-
-    pub(crate) fn into_job(self) -> FrameScriptJob {
-        self.job
     }
 }
 
@@ -676,12 +525,6 @@ impl FrameDocumentExternalClassicScriptExecution {
 }
 
 impl FrameDocumentScriptExecutionWork {
-    pub(crate) fn dynamic_classic(
-        action: FrameDocumentDynamicClassicScriptExecutionAction,
-    ) -> Self {
-        Self::DynamicClassic(Box::new(action))
-    }
-
     pub(crate) fn external_classic(
         action: FrameDocumentExternalClassicScriptExecutionAction,
     ) -> Self {
@@ -700,55 +543,10 @@ impl FrameDocumentScriptExecutionWork {
 impl FrameDocumentScriptPrepareFollowup {
     pub(crate) fn made_progress(&self) -> bool {
         match self {
-            Self::DynamicClassic(followup) => followup.made_progress(),
             Self::ExternalClassic(followup) => followup.made_progress(),
             Self::JavascriptUrl(followup) => followup.made_progress(),
             Self::ModuleScript(outcome) => outcome.made_progress(),
         }
-    }
-}
-
-impl FrameDocumentDynamicClassicPrepareFollowup {
-    pub(crate) fn prepared_execution_action() -> Self {
-        Self {
-            prepared_execution_action: true,
-            skip_reason: None,
-        }
-    }
-
-    pub(crate) fn skipped(reason: FrameDocumentDynamicClassicPrepareSkipReason) -> Self {
-        Self {
-            prepared_execution_action: false,
-            skip_reason: Some(reason),
-        }
-    }
-
-    pub(crate) fn made_progress(&self) -> bool {
-        self.prepared_execution_action || self.skip_reason.is_some()
-    }
-}
-
-impl FrameDocumentDynamicClassicExecutionFollowup {
-    pub(crate) fn completed_script_job() -> Self {
-        Self {
-            attempted_script_job: true,
-            failed_script_job: false,
-        }
-    }
-
-    pub(crate) fn failed_script_job() -> Self {
-        Self {
-            attempted_script_job: true,
-            failed_script_job: true,
-        }
-    }
-
-    pub(crate) fn made_progress(&self) -> bool {
-        self.attempted_script_job
-    }
-
-    pub(crate) fn attempted_script_job(&self) -> bool {
-        self.attempted_script_job
     }
 }
 

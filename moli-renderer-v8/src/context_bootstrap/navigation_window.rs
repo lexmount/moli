@@ -36,12 +36,18 @@ pub(super) fn runtime_window_is_global<'s>(
 ) -> bool {
     match runtime_window_dispatch_scope(scope, window) {
         Some(crate::native_bridge::OwnerDispatchScope::Top) => true,
-        Some(
-            crate::native_bridge::OwnerDispatchScope::Child(_)
-            | crate::native_bridge::OwnerDispatchScope::LightweightPopup(_),
-        ) => false,
+        Some(crate::native_bridge::OwnerDispatchScope::Child(_)) => false,
         None => window.strict_equals(scope.get_current_context().global(scope).into()),
     }
+}
+
+pub(super) fn navigation_document_is_initial_empty<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+) -> bool {
+    runtime_window_is_global(scope, owner)
+        && context_host_ptr_from_global_bridge(scope)
+            .is_some_and(|host_ptr| unsafe { &*host_ptr }.root_document_is_initial_empty())
 }
 
 pub(super) fn runtime_window_uses_top_level_history_model<'s>(
@@ -49,7 +55,6 @@ pub(super) fn runtime_window_uses_top_level_history_model<'s>(
     window: v8::Local<'s, v8::Object>,
 ) -> bool {
     runtime_window_is_global(scope, window)
-        || crate::native_bridge::lightweight_popup_id_from_window(scope, window).is_some()
 }
 
 pub(super) fn runtime_top_window_owner<'s>(
@@ -106,15 +111,10 @@ pub(in crate::context_bootstrap) fn child_browsing_context_handle_for_runtime_ow
         })
 }
 
-fn runtime_window_dispatch_scope<'s>(
+pub(crate) fn runtime_window_dispatch_scope<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     window: v8::Local<'s, v8::Object>,
 ) -> Option<crate::native_bridge::OwnerDispatchScope> {
-    if let Some(popup_id) = crate::native_bridge::lightweight_popup_id_from_window(scope, window) {
-        return Some(crate::native_bridge::OwnerDispatchScope::LightweightPopup(
-            popup_id,
-        ));
-    }
     if let Some(handle) = get_private_value(scope, window, WINDOW_CHILD_CONTEXT_HANDLE_SLOT)
         .and_then(|value| dom_handle_from_marker_value(scope, value))
     {
@@ -177,7 +177,11 @@ pub(super) fn navigation_document_has_opaque_origin<'s>(
     };
     let host = unsafe { &*host_ptr };
     if runtime_window_is_global(scope, owner) {
-        return top_level_navigation_document_has_opaque_origin(host.document_url());
+        return host
+            .document_policy_container()
+            .sandbox
+            .forces_opaque_origin
+            || top_level_navigation_document_has_opaque_origin(host.document_url());
     }
     let Some(handle) = child_browsing_context_handle_for_runtime_owner(scope, owner) else {
         return false;

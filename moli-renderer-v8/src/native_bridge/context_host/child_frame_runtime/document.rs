@@ -98,6 +98,21 @@ impl JsContextHost {
                     window,
                     !self.child_browsing_context_has_uncommitted_navigation_seed(handle),
                 );
+                // During LocalWindow replacement the stable proxy is still
+                // attached to the retiring Context at this point. Updating
+                // V8's cached accessor there would rewrite the old realm's
+                // `document`. A preserved initial-empty LocalWindow retains a
+                // current registration and must switch its cache in place.
+                if self
+                    .current_registered_window_execution_context_identity(
+                        crate::native_bridge::OwnerDispatchScope::Child(handle),
+                    )
+                    .is_some()
+                {
+                    crate::context_bootstrap::sync_window_document_cached_accessor(
+                        scope, window, document,
+                    );
+                }
                 crate::native_bridge::helpers::set_object_slot(
                     scope,
                     window,
@@ -646,6 +661,8 @@ impl JsContextHost {
             let current_owner = transition
                 .current_owner()
                 .expect("committed child document-open replacement must install an owner");
+            host.retire_child_document_start_script_snapshot(retired_owner);
+            host.capture_child_document_start_script_snapshot(current_owner);
             host.replace_document_resource_loader_for_document_open(
                 crate::native_bridge::WindowDocumentOwner::Frame(retired_owner),
                 crate::network::context::DocumentFetchContext::new(

@@ -66,10 +66,10 @@ struct WindowEarlyTemplateMethodsDeclaration {
     #[webapi(method, length = 0, callback = window_open_callback)]
     open: (),
 
-    #[webapi(method, length = 0, callback = window_noop_callback)]
+    #[webapi(method, length = 0, callback = window_close_callback)]
     close: (),
 
-    #[webapi(method, length = 0, callback = window_noop_callback)]
+    #[webapi(method, length = 0, callback = window_focus_callback)]
     focus: (),
 
     #[webapi(method, length = 0, callback = window_noop_callback)]
@@ -226,7 +226,14 @@ struct WindowIdentityAccessorsDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(name = "Window", enumerable)]
 struct WindowPostRuntimeAccessorsDeclaration {
-    #[webapi(accessor_property, getter = window_opener_getter)]
+    #[webapi(accessor_property, getter = window_closed_getter)]
+    closed: (),
+
+    #[webapi(
+        accessor_property,
+        getter = window_opener_getter,
+        setter = window_opener_setter
+    )]
     opener: (),
 
     #[webapi(accessor_property, getter = window_inner_width_getter)]

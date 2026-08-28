@@ -106,6 +106,13 @@ pub(crate) fn runtime_ptr_from_object(
     scope: &mut v8::PinScope<'_, '_>,
     object: v8::Local<'_, v8::Object>,
 ) -> std::result::Result<*mut JsContextHost, String> {
+    if crate::util::page_context_is_disconnected(scope.get_current_context())
+        || object
+            .get_creation_context(scope)
+            .is_some_and(crate::util::page_context_is_disconnected)
+    {
+        return Err("native bridge object belongs to a closed Page".to_owned());
+    }
     let value = object
         .get_internal_field(scope, 0)
         .ok_or_else(|| "native bridge object missing runtime field".to_owned())?;

@@ -1,5 +1,5 @@
 use super::{
-    CdpConnection, CommandOwnerScope, NoneSessionOwnerRouteOverrideScope,
+    CdpConnection, CommandOwnerRouteOverrideScope, CommandOwnerScope,
     TargetPageProtocolAttachmentIdentity, state::PendingBidiChannelListener,
 };
 
@@ -42,7 +42,7 @@ impl BidiChannelPageOwner {
     pub(crate) fn enter<'a>(
         &self,
         conn: &'a mut CdpConnection,
-    ) -> NoneSessionOwnerRouteOverrideScope<'a> {
+    ) -> CommandOwnerRouteOverrideScope<'a> {
         self.owner_scope.enter(conn)
     }
 

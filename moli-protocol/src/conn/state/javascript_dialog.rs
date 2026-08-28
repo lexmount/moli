@@ -79,23 +79,6 @@ impl TargetJavaScriptDialogScopeObserver {
     }
 }
 
-/// Destination policy frozen when a renderer dialog leaves its source Page.
-///
-/// Root and child-frame dialogs already belong to the attachment that captured
-/// them. A lightweight popup has not necessarily acquired a protocol target
-/// yet, so it retains the renderer popup/document identity until that target
-/// is created. It must never fall back to the opener's root frame.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum TargetPreparedJavaScriptDialogRoute {
-    AttachedPage {
-        source_frame_id: String,
-    },
-    LightweightPopup {
-        popup_id: u64,
-        popup_document_id: u64,
-    },
-}
-
 /// One concrete dialog output between renderer capture and protocol install.
 ///
 /// The exact source attachment and weak Page-dialog scope authorize the
@@ -106,7 +89,7 @@ pub(crate) enum TargetPreparedJavaScriptDialogRoute {
 pub(crate) struct TargetPreparedJavaScriptDialog {
     source_attachment: TargetPageProtocolAttachmentIdentity,
     source_dialog_scope: TargetJavaScriptDialogScopeObserver,
-    route: TargetPreparedJavaScriptDialogRoute,
+    source_frame_id: String,
     renderer_dialog: Option<RendererPendingJavaScriptDialog>,
 }
 
@@ -117,29 +100,14 @@ impl TargetPreparedJavaScriptDialog {
         root_frame_id: &str,
         renderer_dialog: RendererPendingJavaScriptDialog,
     ) -> Self {
-        let route = match renderer_dialog.source() {
-            RendererJavaScriptDialogSource::RootFrame => {
-                TargetPreparedJavaScriptDialogRoute::AttachedPage {
-                    source_frame_id: root_frame_id.to_owned(),
-                }
-            }
-            RendererJavaScriptDialogSource::ChildFrame { frame_id, .. } => {
-                TargetPreparedJavaScriptDialogRoute::AttachedPage {
-                    source_frame_id: frame_id.clone(),
-                }
-            }
-            RendererJavaScriptDialogSource::LightweightPopup {
-                popup_id,
-                popup_document_id,
-            } => TargetPreparedJavaScriptDialogRoute::LightweightPopup {
-                popup_id: *popup_id,
-                popup_document_id: *popup_document_id,
-            },
+        let source_frame_id = match renderer_dialog.source() {
+            RendererJavaScriptDialogSource::RootFrame => root_frame_id.to_owned(),
+            RendererJavaScriptDialogSource::ChildFrame { frame_id, .. } => frame_id.clone(),
         };
         Self {
             source_attachment,
             source_dialog_scope,
-            route,
+            source_frame_id,
             renderer_dialog: Some(renderer_dialog),
         }
     }
@@ -152,17 +120,8 @@ impl TargetPreparedJavaScriptDialog {
         &self.source_dialog_scope
     }
 
-    pub(crate) fn route(&self) -> &TargetPreparedJavaScriptDialogRoute {
-        &self.route
-    }
-
-    pub(crate) fn popup_id(&self) -> Option<u64> {
-        match &self.route {
-            TargetPreparedJavaScriptDialogRoute::AttachedPage { .. } => None,
-            TargetPreparedJavaScriptDialogRoute::LightweightPopup { popup_id, .. } => {
-                Some(*popup_id)
-            }
-        }
+    pub(crate) fn source_frame_id(&self) -> &str {
+        &self.source_frame_id
     }
 
     pub(crate) fn id(&self) -> RendererJavaScriptDialogId {
@@ -410,10 +369,7 @@ mod tests {
             RendererPendingJavaScriptDialog::new(
                 RendererJavaScriptDialogId::new(1),
                 source_document,
-                RendererJavaScriptDialogSource::LightweightPopup {
-                    popup_id: 3,
-                    popup_document_id: 4,
-                },
+                RendererJavaScriptDialogSource::RootFrame,
                 "about:blank".to_owned(),
                 "alert".to_owned(),
                 "dismiss on drop".to_owned(),

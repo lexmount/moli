@@ -12,6 +12,23 @@ pub fn referrer_header_value(
     if !matches!(request_url.scheme(), "http" | "https") {
         return None;
     }
+
+    navigation_referrer_value(
+        referrer_url,
+        request_url,
+        referrer_policy,
+        document_referrer_policy,
+    )
+}
+
+/// Resolves the referrer stored on a navigation independently of whether its
+/// destination can carry an HTTP `Referer` header.
+pub fn navigation_referrer_value(
+    referrer_url: &Url,
+    request_url: &Url,
+    referrer_policy: Option<&str>,
+    document_referrer_policy: Option<&str>,
+) -> Option<String> {
     if !matches!(referrer_url.scheme(), "http" | "https") {
         return None;
     }
@@ -85,7 +102,7 @@ fn full_referrer_url(url: &Url) -> String {
 }
 
 fn is_downgrade_request(referrer_url: &Url, request_url: &Url) -> bool {
-    referrer_url.scheme() == "https" && request_url.scheme() == "http"
+    referrer_url.scheme() == "https" && request_url.scheme() != "https"
 }
 
 #[cfg(test)]
@@ -205,6 +222,49 @@ mod tests {
                 None,
             ),
             None
+        );
+    }
+
+    #[test]
+    fn navigation_referrer_is_distinct_from_http_header_eligibility() {
+        let data_url = url("data:text/html,popup");
+
+        assert_eq!(
+            navigation_referrer_value(
+                &url("http://example.com/docs/page.html?x=1#section"),
+                &data_url,
+                None,
+                None,
+            ),
+            Some("http://example.com/".to_owned())
+        );
+        assert_eq!(
+            navigation_referrer_value(
+                &url("https://example.com/docs/page.html?x=1#section"),
+                &data_url,
+                None,
+                None,
+            ),
+            None
+        );
+        assert_eq!(
+            navigation_referrer_value(
+                &url("https://example.com/docs/page.html?x=1#section"),
+                &data_url,
+                Some("unsafe-url"),
+                None,
+            ),
+            Some("https://example.com/docs/page.html?x=1".to_owned())
+        );
+        assert_eq!(
+            referrer_header_value(
+                &url("http://example.com/docs/page.html"),
+                &data_url,
+                None,
+                None,
+            ),
+            None,
+            "a non-HTTP navigation can carry a Document referrer without emitting a header"
         );
     }
 }

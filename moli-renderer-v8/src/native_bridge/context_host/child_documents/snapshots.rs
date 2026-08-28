@@ -91,7 +91,9 @@ impl JsContextHost {
         owner_node: crate::document_runtime::DomHandle,
         url: &Url,
     ) -> Option<ChildBrowsingContextSnapshot> {
-        if let Some(snapshot) = self.materialize_local_child_snapshot_for_url(url) {
+        if let Some(mut snapshot) = self.materialize_local_child_snapshot_for_url(url) {
+            snapshot.policy_container.document_referrer =
+                self.inferred_child_document_navigation_referrer(owner_node, url);
             return Some(self.apply_page_csp_bypass_to_child_snapshot(snapshot));
         }
         if !matches!(url.scheme(), "http" | "https") {
@@ -122,10 +124,12 @@ impl JsContextHost {
             &head.headers,
             Some(&fallback),
         );
-        let policy_container = DocumentPolicyContainer::from_navigation_response_headers(
+        let mut policy_container = DocumentPolicyContainer::from_navigation_response_headers(
             &head.headers,
             &head.final_url,
         );
+        policy_container.document_referrer =
+            self.inferred_child_document_navigation_referrer(owner_node, url);
         Some(
             self.apply_page_csp_bypass_to_child_snapshot(
                 ChildBrowsingContextSnapshot::with_character_set(
@@ -157,15 +161,26 @@ impl JsContextHost {
                     ),
                 )
             }
-            ChildBrowsingContextBootstrap::Srcdoc { base_url, markup } => Some(
-                self.apply_page_csp_bypass_to_child_snapshot(ChildBrowsingContextSnapshot::srcdoc(
-                    base_url.clone(),
-                    markup.clone(),
-                    self.document_character_set().to_owned(),
-                )),
-            ),
+            ChildBrowsingContextBootstrap::Srcdoc { base_url, markup } => {
+                let policy_container =
+                    self.initial_child_about_blank_policy_container_from_parent(handle);
+                Some(
+                    self.apply_page_csp_bypass_to_child_snapshot(
+                        ChildBrowsingContextSnapshot::srcdoc(
+                            base_url.clone(),
+                            markup.clone(),
+                            self.document_character_set().to_owned(),
+                        )
+                        .with_policy_container(policy_container),
+                    ),
+                )
+            }
             ChildBrowsingContextBootstrap::Url(url) => {
-                self.materialize_local_child_snapshot_for_navigation_url(handle, url)
+                let mut snapshot =
+                    self.materialize_local_child_snapshot_for_navigation_url(handle, url)?;
+                snapshot.policy_container.document_referrer =
+                    self.inferred_child_document_navigation_referrer(handle, url);
+                Some(snapshot)
             }
             ChildBrowsingContextBootstrap::Request(_) => None,
         }

@@ -119,8 +119,14 @@ use super::document::{
 };
 use activation::navigate_form_target_browsing_context;
 pub(crate) use activation::{
-    SpecialBrowsingContextTarget, navigate_existing_browsing_context_target,
-    navigate_named_iframe_target,
+    SpecialBrowsingContextTarget,
+    cancel_pending_renderer_owned_javascript_url_navigation_for_window,
+    existing_browsing_context_target_window, navigate_existing_browsing_context_target,
+    queue_renderer_owned_top_level_javascript_url_navigation_for_window,
+    queue_renderer_owned_top_level_navigation_for_window,
+    resolve_named_browsing_context_target_for_navigation,
+    source_javascript_url_allowed_by_csp_for_owner,
+    source_javascript_url_allows_new_context_by_policy,
 };
 pub(crate) use activation::{
     activate_handle_via_click, activate_handle_via_click_with_detail_and_modifiers,
@@ -131,10 +137,6 @@ pub(crate) use activation::{
     scroll_to_url_fragment_or_top, select_contenteditable_contents,
 };
 pub(super) use activation::{input_show_picker_callback, node_click_callback};
-use activation::{
-    queue_deferred_named_iframe_target_navigation_from_document,
-    queue_deferred_named_iframe_target_request,
-};
 pub(super) use anchors::{
     anchor_text_getter_function, anchor_text_setter_function, anchor_to_string_callback,
     area_to_string_callback,
@@ -214,7 +216,7 @@ pub(crate) use focus::{
     perform_tab_focus_default_action_for_dispatched_event, post_parse_autofocus_is_pending,
     process_post_parse_autofocus, reset_focus_from_previous_handle,
     reset_focus_from_previous_handle_with_previous_focus_within, schedule_focus_blur_if_needed,
-    update_focus,
+    update_focus, update_top_level_page_focus,
 };
 use focus::{is_disabled_form_control, is_focusable};
 pub(super) use focus::{node_blur_callback, node_focus_callback};
@@ -3327,7 +3329,7 @@ fn iframe_content_window_getter_function<'s>(
         runtime.child_browsing_context_is_same_origin_with_top(handle);
     let window = runtime.child_browsing_context_window_proxy_for_top(scope, handle);
     if window.is_some() {
-        runtime.mark_child_browsing_context_window_wrapper_exposed_to_top(handle);
+        runtime.mark_child_browsing_context_window_proxy_exposed(handle);
     }
     if exposes_same_origin_wrapper && window.is_some() {
         runtime.request_child_frame_realm_materialization(handle);

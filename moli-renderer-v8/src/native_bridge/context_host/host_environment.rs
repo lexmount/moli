@@ -72,6 +72,31 @@ fn hover_chain_for_input_hit(runtime: &JsContextHost, hit: Option<DomHandle>) ->
     hovered
 }
 
+/// Document-start registry observed when one exact child Document is created.
+///
+/// Realm materialization can happen after a later DevTools command has changed
+/// the Page-wide registry. Keeping the exact-owner snapshot here prevents that
+/// later command from being replayed retroactively into an older child
+/// Document.
+#[derive(Clone)]
+pub(crate) struct ChildDocumentStartScriptSnapshot {
+    scripts: Vec<crate::DocumentStartScript>,
+}
+
+impl ChildDocumentStartScriptSnapshot {
+    pub(crate) fn scripts(&self) -> &[crate::DocumentStartScript] {
+        &self.scripts
+    }
+
+    pub(crate) fn default_world_scripts(
+        &self,
+    ) -> impl Iterator<Item = &crate::DocumentStartScript> {
+        self.scripts
+            .iter()
+            .filter(|script| script.world_name.is_none())
+    }
+}
+
 impl JsContextHost {
     pub(crate) fn documents_with_adopted_style_sheets(&self) -> Vec<DomHandle> {
         self.style_engine.documents_with_adopted_style_sheets()
@@ -449,16 +474,38 @@ impl JsContextHost {
         self.stored_document_start_scripts = scripts.to_vec();
     }
 
-    pub(crate) fn stored_default_document_start_scripts(&self) -> Vec<crate::DocumentStartScript> {
-        self.stored_document_start_scripts
-            .iter()
-            .filter(|script| script.world_name.is_none())
-            .cloned()
-            .collect()
+    pub(crate) fn capture_child_document_start_script_snapshot(
+        &mut self,
+        owner: crate::frame_owner_model::FrameDocumentTaskOwner,
+    ) {
+        let replaced = self.child_document_start_script_snapshots.insert(
+            owner,
+            ChildDocumentStartScriptSnapshot {
+                scripts: self.stored_document_start_scripts.clone(),
+            },
+        );
+        debug_assert!(
+            replaced.is_none(),
+            "a child Document owner must capture its preload registry exactly once"
+        );
     }
 
-    pub(crate) fn stored_document_start_scripts(&self) -> Vec<crate::DocumentStartScript> {
-        self.stored_document_start_scripts.clone()
+    pub(crate) fn child_document_start_script_snapshot(
+        &self,
+        owner: crate::frame_owner_model::FrameDocumentTaskOwner,
+    ) -> Option<ChildDocumentStartScriptSnapshot> {
+        self.child_document_start_script_snapshots
+            .get(&owner)
+            .cloned()
+    }
+
+    pub(crate) fn retire_child_document_start_script_snapshot(
+        &mut self,
+        owner: crate::frame_owner_model::FrameDocumentTaskOwner,
+    ) -> bool {
+        self.child_document_start_script_snapshots
+            .remove(&owner)
+            .is_some()
     }
 
     pub(crate) fn stored_default_runtime_binding_names(&self) -> Vec<String> {
@@ -522,6 +569,17 @@ impl JsContextHost {
     ) -> Option<DocumentResourceLoader> {
         let target = self.current_window_document_task_target_for_dispatch_scope(dispatch_scope)?;
         self.document_resource_loader_for_window_owner(target.owner())
+    }
+
+    pub(crate) fn document_resource_loader_for_window_execution_context_identity(
+        &self,
+        identity: crate::native_bridge::WindowExecutionContextIdentity,
+    ) -> Option<DocumentResourceLoader> {
+        self.window_execution_context_identity_is_current(identity)
+            .then(|| identity.dispatch_scope())
+            .and_then(|dispatch_scope| {
+                self.document_resource_loader_for_dispatch_scope(dispatch_scope)
+            })
     }
 
     pub(crate) fn parent_document_resource_loader_for_child_context(
@@ -729,22 +787,6 @@ impl JsContextHost {
 
     pub(crate) fn idle_override(&self) -> Option<crate::protocol_types::EmulatedIdleOverride> {
         self.idle_override
-    }
-
-    pub(crate) fn begin_protocol_user_gesture_activation(&mut self) {
-        self.protocol_user_gesture_activation_depth = self
-            .protocol_user_gesture_activation_depth
-            .saturating_add(1);
-    }
-
-    pub(crate) fn end_protocol_user_gesture_activation(&mut self) {
-        self.protocol_user_gesture_activation_depth = self
-            .protocol_user_gesture_activation_depth
-            .saturating_sub(1);
-    }
-
-    pub(crate) fn protocol_user_gesture_activation(&self) -> bool {
-        self.protocol_user_gesture_activation_depth > 0
     }
 
     pub(crate) fn replace_current_input_event(
@@ -1390,15 +1432,8 @@ impl JsContextHost {
 
     fn style_source_document_context_for_read_document(
         &self,
-        read_document: DomHandle,
+        _read_document: DomHandle,
     ) -> OwnedStyleSourceDocumentContext {
-        if read_document != self.document_handle()
-            && self
-                .lightweight_popup_id_for_document_handle(read_document)
-                .is_some()
-        {
-            return OwnedStyleSourceDocumentContext::new(read_document);
-        }
         self.style_source_document_context()
     }
 
@@ -1784,7 +1819,11 @@ impl JsContextHost {
     }
 
     pub(crate) fn set_document_url(&mut self, url: url::Url) -> bool {
-        let target_change = DocumentRuntime::set_document_url(self, url);
+        let target_change = if self.root_document_is_initial_empty() {
+            DocumentRuntime::set_document_url_preserving_fallback_base(self, url)
+        } else {
+            DocumentRuntime::set_document_url(self, url)
+        };
         if let Some((previous_target, next_target)) = target_change {
             self.note_target_style_activity(previous_target, next_target);
         }

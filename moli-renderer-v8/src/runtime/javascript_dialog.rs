@@ -11,6 +11,31 @@ pub struct RendererJavaScriptDialogResult {
     pub user_input: String,
 }
 
+#[derive(Debug)]
+pub struct RendererPageCommandInterruptedByJavaScriptDialog {
+    renderer_output_predecessor: super::RendererOutputFence,
+}
+
+impl RendererPageCommandInterruptedByJavaScriptDialog {
+    pub(crate) fn new(renderer_output_predecessor: super::RendererOutputFence) -> Self {
+        Self {
+            renderer_output_predecessor,
+        }
+    }
+
+    pub fn renderer_output_predecessor(&self) -> super::RendererOutputFence {
+        self.renderer_output_predecessor.clone()
+    }
+}
+
+impl std::fmt::Display for RendererPageCommandInterruptedByJavaScriptDialog {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("renderer page observation interrupted by an open JavaScript dialog")
+    }
+}
+
+impl std::error::Error for RendererPageCommandInterruptedByJavaScriptDialog {}
+
 #[derive(Clone, Debug)]
 pub struct RendererJavaScriptDialogCompletion {
     inner: Arc<RendererJavaScriptDialogCompletionInner>,
@@ -68,6 +93,7 @@ impl Eq for RendererJavaScriptDialogCompletion {}
 struct RendererJavaScriptDialogBrokerState {
     pending: VecDeque<RendererPendingJavaScriptDialog>,
     open_count: usize,
+    open_output_predecessor: Option<super::RendererOutputFence>,
 }
 
 #[derive(Debug)]
@@ -106,6 +132,17 @@ impl RendererJavaScriptDialogBroker {
             state.open_count += 1;
             state.pending.push_back(dialog);
         }
+    }
+
+    fn publish_open(&self, predecessor: super::RendererOutputFence) {
+        {
+            let mut state = self.inner.state.lock();
+            assert!(
+                state.open_count != 0,
+                "publishing a JavaScript dialog requires a matching open broker entry"
+            );
+            state.open_output_predecessor = Some(predecessor);
+        }
         self.inner.open_signal_tx.send_modify(|_| {});
     }
 
@@ -136,6 +173,9 @@ impl RendererJavaScriptDialogBroker {
             "closing a JavaScript dialog requires a matching open broker entry"
         );
         state.open_count -= 1;
+        if state.open_count == 0 {
+            state.open_output_predecessor = None;
+        }
     }
 
     pub(crate) fn watch(&self) -> RendererJavaScriptDialogWatch {
@@ -145,19 +185,26 @@ impl RendererJavaScriptDialogBroker {
         }
     }
 
-    fn has_open_dialog(&self) -> bool {
+    fn open_output_predecessor(&self) -> Option<super::RendererOutputFence> {
+        let state = self.inner.state.lock();
+        (state.open_count != 0)
+            .then(|| state.open_output_predecessor.clone())
+            .flatten()
+    }
+
+    pub(crate) fn has_open_dialog(&self) -> bool {
         self.inner.state.lock().open_count != 0
     }
 }
 
 impl RendererJavaScriptDialogWatch {
-    pub(crate) async fn wait_until_open(mut self) {
+    pub(crate) async fn wait_until_open(mut self) -> super::RendererOutputFence {
         loop {
-            if self.broker.has_open_dialog() {
-                return;
+            if let Some(predecessor) = self.broker.open_output_predecessor() {
+                return predecessor;
             }
             if self.open_signal_rx.changed().await.is_err() {
-                return;
+                panic!("JavaScript dialog broker closed while a Page command was watching it");
             }
         }
     }
@@ -199,6 +246,10 @@ pub(crate) struct RendererModalJavaScriptDialog {
 }
 
 impl RendererModalJavaScriptDialog {
+    pub(crate) fn publish(&self, predecessor: super::RendererOutputFence) {
+        self.broker.publish_open(predecessor);
+    }
+
     pub(crate) fn wait(self) -> RendererJavaScriptDialogResult {
         let result = self.completion.wait();
         self.broker.close(&self.completion);
@@ -277,13 +328,19 @@ mod tests {
         let completion = dialog.completion_for_test().unwrap();
         broker.open(dialog);
         assert_eq!(broker.take_pending().len(), 1);
+        let stream = crate::runtime::RendererOutputStreamIdentity::new_page_for_protocol_test(
+            crate::runtime::PageId::new_for_testing(91),
+        );
+        let cursor = crate::runtime::RendererOutputCursor::new_for_test(stream, 1);
+        broker.publish_open(crate::runtime::RendererOutputFence::new_for_test(cursor));
 
-        tokio::time::timeout(
+        let predecessor = tokio::time::timeout(
             std::time::Duration::from_millis(100),
             watch.wait_until_open(),
         )
         .await
         .expect("an open modal must interrupt renderer observation commands");
+        assert_eq!(predecessor.cursor(), cursor);
 
         completion.finish(false, String::new());
         broker.close(&completion);

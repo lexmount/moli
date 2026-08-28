@@ -390,7 +390,11 @@ fn invoke_event_handler_property<'s>(
     }
     if let Some(returned) = returned {
         let returned = v8::Local::new(scope, returned);
-        if returned.is_boolean() && !returned.boolean_value(scope) {
+        if event_type == "beforeunload" && !returned.is_null_or_undefined() {
+            if let Some(returned) = returned.to_string(scope) {
+                let _ = event.set(scope, v8str(scope, "returnValue").into(), returned.into());
+            }
+        } else if returned.is_boolean() && !returned.boolean_value(scope) {
             let _ = event.set(
                 scope,
                 v8str(scope, "defaultPrevented").into(),
@@ -517,8 +521,7 @@ pub(crate) fn report_event_callback_exception<'s>(
     let child_handle = child_handle.or_else(|| {
         relevant_identity.and_then(|identity| match identity.dispatch_scope() {
             crate::native_bridge::OwnerDispatchScope::Child(handle) => Some(handle),
-            crate::native_bridge::OwnerDispatchScope::Top
-            | crate::native_bridge::OwnerDispatchScope::LightweightPopup(_) => None,
+            crate::native_bridge::OwnerDispatchScope::Top => None,
         })
     });
     if let Some(handle) = child_handle {

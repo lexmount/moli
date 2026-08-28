@@ -974,9 +974,11 @@ mod tests {
             request_body: None,
             request_body_bytes: None,
             request_headers: vec![("Accept".to_owned(), "text/html".to_owned())],
+            navigation_history_entry_seed: None,
             request_load_policy: crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
             timestamp: 12.5,
             source_document_security: Default::default(),
+            service_worker_clients_open_window_continuation: None,
         }
     }
 
@@ -1600,7 +1602,9 @@ mod tests {
             "the same durable owner-action residence must observe the terminal"
         );
         let outcome = conn.complete_ready_protocol_scheduler_work_turn(work).await;
-        let (_, scheduler_events) = outcome.into_protocol_event_parts();
+        let (_, scheduler_events, renderer_output_predecessor) =
+            outcome.into_protocol_event_parts();
+        assert!(renderer_output_predecessor.is_none());
         assert!(
             scheduler_events.iter().all(|event| !matches!(
                 event,

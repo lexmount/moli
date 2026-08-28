@@ -2,6 +2,14 @@ use super::helpers::{
     window_child_context_handle, window_hidden_value, window_host_ptr, window_receiver,
 };
 use super::*;
+use crate::util::{throw_type_error, v8str};
+
+fn window_uses_page_top_level_opener_edge<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+) -> bool {
+    window_child_context_handle(scope, receiver).is_none()
+}
 
 fn window_inner_surface_dimension<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -104,8 +112,51 @@ pub(in crate::context_bootstrap) fn window_opener_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if window_receiver(scope, &args).is_some() {
-        rv.set_null();
+    let Some(receiver) = window_receiver(scope, &args) else {
+        return;
+    };
+    if window_uses_page_top_level_opener_edge(scope, receiver)
+        && let Some(host_ptr) = window_host_ptr(scope, receiver)
+        && let Some(opener) = unsafe { &*host_ptr }.top_level_opener_value(scope)
+    {
+        rv.set(opener);
+        return;
+    }
+    rv.set(
+        window_hidden_value(scope, receiver, WINDOW_OPENER_SLOT)
+            .unwrap_or_else(|| v8::null(scope).into()),
+    );
+}
+
+pub(in crate::context_bootstrap) fn window_opener_setter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some(receiver) = window_receiver(scope, &args) else {
+        return;
+    };
+    let value = args.get(0);
+    if value.is_null() {
+        // `null` disowns the browsing context. Other values only shadow the
+        // accessor with an ordinary own data property and leave the opener
+        // relationship intact, matching Blink's setOpenerForBindings().
+        if window_uses_page_top_level_opener_edge(scope, receiver)
+            && let Some(host_ptr) = window_host_ptr(scope, receiver)
+        {
+            let _ = unsafe { &*host_ptr }.sever_top_level_opener(scope);
+        }
+        set_private_value(scope, receiver, WINDOW_OPENER_SLOT, value);
+    }
+    match receiver.define_own_property(
+        scope,
+        v8str(scope, "opener").into(),
+        value,
+        v8::PropertyAttribute::NONE,
+    ) {
+        Some(true) => {}
+        Some(false) => throw_type_error(scope, "Cannot redefine the Window.opener property."),
+        None => {}
     }
 }
 

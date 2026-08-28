@@ -24,15 +24,12 @@ pub(super) struct MutationCoordinatorApplyResult {
 }
 
 #[derive(Debug)]
-pub(super) struct RuntimeScriptStartCandidate {
-    node: NativeNodeId,
-    host_script_handle: String,
-}
-
-impl RuntimeScriptStartCandidate {
-    pub(super) fn into_parts(self) -> (NativeNodeId, String) {
-        (self.node, self.host_script_handle)
-    }
+pub(super) enum RuntimeScriptStartCandidate {
+    MainDocument {
+        node: NativeNodeId,
+        host_script_handle: String,
+    },
+    ChildDocumentInlineClassic(native_bridge::ChildDynamicInlineClassicScriptStart),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -392,7 +389,7 @@ impl MutationCoordinator {
         }
         let owner_document_handle = dom_host.owner_document_handle(node)?;
         if owner_document_handle != dom_host.document_handle() {
-            self.start_connected_child_document_script(
+            return self.start_connected_child_document_script(
                 scope,
                 host_ptr,
                 dom_host,
@@ -400,7 +397,6 @@ impl MutationCoordinator {
                 owner_document_handle,
                 document,
             );
-            return None;
         }
         let wrapper = unsafe { &mut *host_ptr }
             .native_bridge_mut()
@@ -422,7 +418,7 @@ impl MutationCoordinator {
                     handle
                 },
             );
-        Some(RuntimeScriptStartCandidate {
+        Some(RuntimeScriptStartCandidate::MainDocument {
             node,
             host_script_handle,
         })
@@ -436,7 +432,10 @@ impl MutationCoordinator {
         node: NativeNodeId,
         owner_document_handle: NativeNodeId,
         document: &HostDocumentState,
-    ) {
+    ) -> Option<RuntimeScriptStartCandidate> {
+        if !unsafe { &*host_ptr }.document_scripting_enabled(owner_document_handle) {
+            return None;
+        }
         let (preparation, decision) = ScriptElementLoader::prepare(
             dom_host,
             document,
@@ -453,16 +452,17 @@ impl MutationCoordinator {
                 }
             }
             RuntimeScriptStartDecision::ExecuteInlineClassic { source } => {
-                if unsafe { &mut *host_ptr }
-                    .queue_child_dynamic_inline_classic_script_for_current_document(
+                let candidate = unsafe { &mut *host_ptr }
+                    .prepare_child_dynamic_inline_classic_script_for_current_document(
                         scope,
                         owner_document_handle,
                         node,
                         source,
-                    )
-                {
+                    );
+                if candidate.is_some() {
                     let _ = dom_host.set_script_already_started(node, true);
                 }
+                return candidate.map(RuntimeScriptStartCandidate::ChildDocumentInlineClassic);
             }
             RuntimeScriptStartDecision::Queue {
                 source,
@@ -502,6 +502,7 @@ impl MutationCoordinator {
             | RuntimeScriptStartDecision::RejectExternalImportMap
             | RuntimeScriptStartDecision::QueueFailed { .. } => {}
         }
+        None
     }
 }
 

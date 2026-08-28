@@ -62,8 +62,5 @@ pub(crate) fn dispatch_window_promise_rejection_event<'s>(
                 )
                 .map(|dispatch| dispatch.allows_default())
         }
-        crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id) => {
-            Ok(runtime.dispatch_lightweight_popup_window_event(scope, popup_id, event_type, event))
-        }
     }
 }

@@ -1,4 +1,4 @@
-use super::{AbortDispatchSnapshot, AbortStore};
+use super::{AbortAlgorithm, AbortDispatchSnapshot, AbortStore};
 use crate::context_bootstrap::{
     EVENT_PASSIVE_SLOT, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT, event_internal_bool_flag,
     set_event_internal_flag,
@@ -12,11 +12,11 @@ pub(super) fn invoke_abort_algorithms<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     signal: v8::Local<'_, v8::Object>,
     reason: v8::Local<'s, v8::Value>,
-    abort_algorithms: Vec<v8::Global<v8::Function>>,
+    abort_algorithms: Vec<AbortAlgorithm>,
 ) {
     let signal = local_object_in_scope(scope, signal);
     for algorithm in abort_algorithms {
-        let algorithm = v8::Local::new(scope, &algorithm);
+        let algorithm = v8::Local::new(scope, &algorithm.callback);
         let _ = invoke_callback(
             scope,
             "AbortSignal abort algorithm",

@@ -61,6 +61,7 @@ impl RendererDevToolsTargetHandle {
         self.io.detach_session(agent_token, session);
     }
 
+    #[cfg(test)]
     pub(crate) fn close(&self, message: &str) -> bool {
         self.pause.close_target();
         self.main.close(message);
@@ -68,19 +69,55 @@ impl RendererDevToolsTargetHandle {
         self.io.terminate_execution_for_target_close()
     }
 
+    pub(crate) fn close_page_target(
+        &self,
+        page_id: PageId,
+        agent_token: RendererDevToolsAgentToken,
+        message: &str,
+    ) -> bool {
+        if !self.pause.close_page_target(page_id, agent_token) {
+            return false;
+        }
+        self.main.close_agent(agent_token, message);
+        self.io.close_agent(agent_token, message);
+        self.io.terminate_execution_for_target_close()
+    }
+
+    pub(crate) fn cancel_terminate_execution_for_target_close(&self) -> bool {
+        self.io.cancel_terminate_execution_for_target_close()
+    }
+
     /// Executes Chromium's terminal `Page.crash` IO control boundary.
     ///
     /// Unlike ordinary IO-agent commands, a crash must not wait for or occupy
     /// the target Inspector task runner. Seal both command receivers first,
     /// then interrupt any active JavaScript so the owner can retire the Page.
+    #[cfg(test)]
     pub(crate) fn crash_from_io(&self) {
         let _ = self.close("Inspector target crashed through Page.crash");
     }
 
-    pub(crate) fn detach_page(&self, page_id: PageId, message: &str) {
-        if self.pause.detach_page(page_id) {
-            self.main.cancel_all_queued(message);
-            self.io.cancel_all_queued(message);
+    pub(crate) fn crash_page_target_from_io(
+        &self,
+        page_id: PageId,
+        agent_token: RendererDevToolsAgentToken,
+    ) {
+        let _ = self.close_page_target(
+            page_id,
+            agent_token,
+            "Inspector target crashed through Page.crash",
+        );
+    }
+
+    pub(crate) fn detach_page(
+        &self,
+        page_id: PageId,
+        agent_token: RendererDevToolsAgentToken,
+        message: &str,
+    ) {
+        if self.pause.detach_page(page_id, agent_token) {
+            self.main.close_agent(agent_token, message);
+            self.io.close_agent(agent_token, message);
         }
     }
 }

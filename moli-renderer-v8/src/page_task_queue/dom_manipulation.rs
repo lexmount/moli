@@ -27,10 +27,6 @@ use super::{
         RendererPageImageLoadEventOwner, RendererPageImageLoadEventSender,
         RendererPageImageLoadEventTask,
     },
-    popup_load_event::{
-        RendererPagePopupLoadEventOwner, RendererPagePopupLoadEventSender,
-        RendererPagePopupLoadEventTask,
-    },
     storage_event_delivery::{
         RendererPageStorageEventDeliveryOwner, RendererPageStorageEventDeliverySender,
         RendererPageStorageEventDeliveryTask,
@@ -65,7 +61,6 @@ pub(crate) enum RendererPageDomManipulationOwner {
     ElementToggle(RendererPageElementToggleEventOwner),
     FileEntryFileCallback(RendererPageFileEntryFileCallbackOwner),
     ImageLoadEvent(RendererPageImageLoadEventOwner),
-    PopupLoadEvent(RendererPagePopupLoadEventOwner),
     ConnectedStyleEvent(RendererPageStylesheetTaskOwner),
     TextTrackDefaultMode(RendererPageTextTrackDefaultModeOwner),
     TextTrackLoad(RendererPageTextTrackLoadOwner),
@@ -81,7 +76,6 @@ pub(crate) enum RendererPageDomManipulationTask {
     ElementToggle(RendererPageElementToggleEventTask),
     FileEntryFileCallback(RendererPageFileEntryFileCallbackTask),
     ImageLoadEvent(RendererPageImageLoadEventTask),
-    PopupLoadEvent(RendererPagePopupLoadEventTask),
     ConnectedStyleEvent(RendererPageConnectedStyleEventTask),
     TextTrackDefaultMode(RendererPageTextTrackDefaultModeTask),
     TextTrackLoad(RendererPageTextTrackLoadTask),
@@ -106,9 +100,6 @@ impl RendererPageDomManipulationTask {
             }
             Self::ImageLoadEvent(task) => {
                 RendererPageDomManipulationOwner::ImageLoadEvent(task.owner())
-            }
-            Self::PopupLoadEvent(task) => {
-                RendererPageDomManipulationOwner::PopupLoadEvent(task.owner())
             }
             Self::ConnectedStyleEvent(task) => {
                 RendererPageDomManipulationOwner::ConnectedStyleEvent(task.owner())
@@ -143,7 +134,6 @@ pub(crate) enum PageDomManipulationTurnAction {
     ElementToggle(super::PageElementToggleEventTurnAction),
     FileEntryFileCallback(super::PageFileEntryFileCallbackTurnAction),
     ImageLoadEvent(super::PageImageLoadEventTurnAction),
-    PopupLoadEvent(super::PagePopupLoadEventTurnAction),
     ConnectedStyleEvent(PageConnectedStyleEventTurnAction),
     TextTrackDefaultMode(super::PageTextTrackDefaultModeTurnAction),
     TextTrackLoad(super::PageTextTrackLoadTurnAction),
@@ -197,10 +187,6 @@ impl RendererPageDomManipulationSender {
 
     pub(crate) fn image_load_event(&self) -> RendererPageImageLoadEventSender {
         RendererPageImageLoadEventSender::new(self.route.clone(), self.root_document)
-    }
-
-    pub(crate) fn popup_load_event(&self) -> RendererPagePopupLoadEventSender {
-        RendererPagePopupLoadEventSender::new(self.route.clone(), self.root_document)
     }
 
     pub(crate) fn text_track_default_mode(&self) -> RendererPageTextTrackDefaultModeSender {

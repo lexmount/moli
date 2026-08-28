@@ -265,6 +265,61 @@ pub(crate) fn trusted_script_string_for_script_element_execution(
     None
 }
 
+/// Runs Trusted Types' pre-navigation check for a decoded JavaScript-URL
+/// script in the currently entered Window realm.
+///
+/// Navigation is not a synchronous JavaScript sink: a missing/rejected
+/// default policy blocks an enforcing Document without surfacing an exception
+/// to the producer. Report-only policy still reports the mismatch and lets the
+/// original source continue. A successful default policy may rewrite the
+/// source, but its result must still form a valid `javascript:` URL.
+pub(crate) fn trusted_script_string_for_javascript_navigation(
+    scope: &mut v8::PinScope<'_, '_>,
+    original: &str,
+    requirements: TrustedTypesForScriptRequirements,
+) -> Option<String> {
+    if !requirements.requires_conversion() {
+        return Some(original.to_owned());
+    }
+
+    let default_policy = {
+        // Default-policy callbacks are invoked by the later navigation task.
+        // Their exceptions are deliberately consumed at this boundary rather
+        // than escaping through the API call that scheduled the navigation.
+        let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
+        let mut scope = try_catch.init();
+        apply_default_trusted_type_policy_outcome(
+            &mut scope,
+            original,
+            TrustedTypeKind::Script,
+            "Location href",
+        )
+    };
+    if let DefaultTrustedTypePolicyOutcome::Value(value) = &default_policy
+        && javascript_navigation_default_policy_result_is_valid(value)
+    {
+        return Some(value.clone());
+    }
+
+    dispatch_trusted_types_sink_violation_event_without_stack(scope, "Location href", original);
+    (!requirements.is_enforced()).then(|| original.to_owned())
+}
+
+fn javascript_navigation_default_policy_result_is_valid(source: &str) -> bool {
+    url::Url::parse(&format!("javascript:{source}")).is_ok()
+}
+
+#[cfg(test)]
+#[test]
+fn javascript_navigation_default_policy_rejects_an_invalid_reconstructed_url() {
+    assert!(javascript_navigation_default_policy_result_is_valid(
+        "globalThis.accepted = true"
+    ));
+    assert!(!javascript_navigation_default_policy_result_is_valid(
+        "//make:invalid/"
+    ));
+}
+
 pub(crate) enum TrustedTypesCodeGenerationCheck {
     AllowOriginal,
     AllowModified(String),

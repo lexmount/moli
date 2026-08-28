@@ -1,6 +1,7 @@
 use super::super::navigation_window::{
     navigation_document_has_opaque_origin, runtime_window_owner,
 };
+use super::super::window_origin_runtime_state;
 use super::helpers::{
     location_host_string, navigate_modified_location_url, parsed_location_url,
     require_location_href_slot, set_return_string, v8_value_to_string,
@@ -355,7 +356,14 @@ fn location_attribute_getter<'s>(
                 "null".to_owned()
             } else {
                 parsed_location_url(scope, holder)
-                    .map(|url| moli_url::origin_ascii_serialization(&url))
+                    .map(|url| {
+                        if moli_url::is_about_blank(&url) {
+                            window_origin_runtime_state(scope, owner)
+                                .unwrap_or_else(|| moli_url::origin_ascii_serialization(&url))
+                        } else {
+                            moli_url::origin_ascii_serialization(&url)
+                        }
+                    })
                     .unwrap_or_default()
             };
             set_return_string(scope, rv, &origin);

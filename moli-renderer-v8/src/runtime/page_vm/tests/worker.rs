@@ -2762,85 +2762,6 @@ async fn child_worker_message_without_listener_drops_and_restores_top_owner_scop
 }
 
 #[tokio::test]
-async fn message_port_handler_worker_uses_lightweight_popup_owner_scope() {
-    run_page_vm_async_test(async move {
-        let document_url = Url::parse("https://message-port-worker-popup-owner.test/page.html")
-            .expect("document url");
-        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
-        let (mut page_vm, _resource_source, _owner_wake_rx) =
-            page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
-        let local_executor = page_vm.local_executor.clone();
-
-        local_executor
-            .run(async move {
-                page_vm.vm_mut().eval(
-                    r#"
-                    (() => {
-                        globalThis.__wsEvents = [];
-                        globalThis.__wsDone = false;
-                        const topChannel = new BroadcastChannel("message-port-popup-worker-owner");
-                        topChannel.onmessage = event => {
-                            __wsEvents.push("top-bc:" + event.data + ":" + event.origin);
-                        };
-                        addEventListener("message", event => {
-                            const value = String(event.data);
-                            __wsEvents.push(value + ":" + event.origin);
-                            if (value === "popup-worker:worker-origin") {
-                                __wsDone = true;
-                            }
-                        });
-
-                        const popup = open("https://message-port-popup-worker-child.test/page.html");
-                        popup.onmessage = event => {
-                            if (event.data !== "setup") {
-                                return;
-                            }
-                            const popupChannel = new BroadcastChannel("message-port-popup-worker-owner");
-                            popupChannel.onmessage = channelEvent => {
-                                event.source.postMessage("popup-worker:" + channelEvent.data, event.origin);
-                            };
-                            const channel = new MessageChannel();
-                            channel.port2.onmessage = () => {
-                                const workerSource = `
-                                    const channel = new BroadcastChannel("message-port-popup-worker-owner");
-                                    channel.postMessage("worker-origin");
-                                    channel.onmessage = event => channel.postMessage(event.origin);
-                                `;
-                                const workerUrl = URL.createObjectURL(
-                                    new Blob([workerSource], { type: "text/javascript" })
-                                );
-                                const worker = new Worker(workerUrl);
-                                worker.onerror = error => event.source.postMessage("worker-error:" + error.message, event.origin);
-                            };
-                            channel.port1.postMessage("start");
-                        };
-                        popup.postMessage("setup", "*");
-                    })()
-                    "#,
-                )?;
-
-                drive_websocket_until_done(
-                    &mut page_vm,
-                    "String(globalThis.__wsDone === true)",
-                    "popup MessagePort handler Worker should use popup owner scope",
-                )
-                .await?;
-
-                assert_eq!(
-                    page_vm
-                        .vm_mut()
-                        .eval("JSON.stringify(globalThis.__wsEvents)")?,
-                    r#"["popup-worker:worker-origin:https://message-port-popup-worker-child.test"]"#
-                );
-                anyhow::Ok(())
-            })
-            .await
-            .expect("popup MessagePort Worker owner test should run on owner lane");
-    })
-    .await;
-}
-
-#[tokio::test]
 async fn worker_pending_activity_diagnostics_split_loading_and_running_worker_isolates() {
     run_page_vm_async_test(async move {
         let (base_url, server) = spawn_path_response_http_server(vec![(
@@ -6762,19 +6683,25 @@ async fn run_audio_worklet_static_invalid_module_type_import_test(
     module_type: &'static str,
     dependency_file: &'static str,
 ) {
-    let (base_url, dependency_request_rx, server) =
-        spawn_audio_worklet_static_invalid_module_type_server(module_type, dependency_file).await;
-    let document_url = Url::parse(&format!("{base_url}/page.html")).expect("document url");
-    let module_url = format!("{base_url}/worklet/entry.js");
-    let module_url_literal =
-        serde_json::to_string(&module_url).expect("serialize worklet module URL");
-    let mut page_vm = test_page_vm_with_document_url(document_url);
-    let local_executor = page_vm.local_executor.clone();
+    run_page_vm_async_test(async move {
+        let (base_url, dependency_request_rx, server) =
+            spawn_audio_worklet_static_invalid_module_type_server(module_type, dependency_file)
+                .await;
+        let document_url = Url::parse(&format!("{base_url}/page.html")).expect("document url");
+        let module_url = format!("{base_url}/worklet/entry.js");
+        let module_url_literal =
+            serde_json::to_string(&module_url).expect("serialize worklet module URL");
+        let mut page_vm = test_page_vm_with_document_url(document_url);
+        let local_executor = page_vm.local_executor.clone();
 
-    let result = local_executor
-        .run(async move {
-            page_vm.vm_mut().eval(&format!(
-                r#"
+        let result = local_executor
+            // Keep the module-graph owner future heap-bound. The invalid
+            // import path enters V8 from a deeply nested owner turn, and
+            // embedding this future in every caller can exhaust nextest's
+            // test-thread stack before V8 gets its own usable stack budget.
+            .run(Box::pin(async move {
+                page_vm.vm_mut().eval(&format!(
+                    r#"
                     (() => {{
                         globalThis.__audioWorkletInvalidTypeResult = null;
                         globalThis.__audioWorkletInvalidTypeDone = false;
@@ -6791,37 +6718,39 @@ async fn run_audio_worklet_static_invalid_module_type_import_test(
                             }}
                         );
                     }})()
-                "#
-            ))?;
-            drive_websocket_until_done(
-                &mut page_vm,
-                "String(globalThis.__audioWorkletInvalidTypeDone === true)",
-                "AudioWorklet addModule invalid static module type should settle",
-            )
-            .await?;
-            page_vm
-                .vm_mut()
-                .eval("globalThis.__audioWorkletInvalidTypeResult")
-        })
-        .await
-        .expect("AudioWorklet invalid static module type test should run on owner lane");
+                    "#
+                ))?;
+                drive_websocket_until_done(
+                    &mut page_vm,
+                    "String(globalThis.__audioWorkletInvalidTypeDone === true)",
+                    "AudioWorklet addModule invalid static module type should settle",
+                )
+                .await?;
+                page_vm
+                    .vm_mut()
+                    .eval("globalThis.__audioWorkletInvalidTypeResult")
+            }))
+            .await
+            .expect("AudioWorklet invalid static module type test should run on owner lane");
 
-    let dependency_request = dependency_request_rx
-        .await
-        .expect("AudioWorklet invalid static module type dependency probe should finish");
-    server
-        .await
-        .expect("AudioWorklet invalid static module type server should finish");
-    assert!(
-        result.contains(&format!(
-            "module type `{module_type}` is not a valid module type"
-        )),
-        "unexpected AudioWorklet invalid static module type result: {result}"
-    );
-    assert_eq!(
-        dependency_request, None,
-        "AudioWorklet invalid static module type must fail before fetching dependency"
-    );
+        let dependency_request = dependency_request_rx
+            .await
+            .expect("AudioWorklet invalid static module type dependency probe should finish");
+        server
+            .await
+            .expect("AudioWorklet invalid static module type server should finish");
+        assert!(
+            result.contains(&format!(
+                "module type `{module_type}` is not a valid module type"
+            )),
+            "unexpected AudioWorklet invalid static module type result: {result}"
+        );
+        assert_eq!(
+            dependency_request, None,
+            "AudioWorklet invalid static module type must fail before fetching dependency"
+        );
+    })
+    .await;
 }
 
 async fn spawn_audio_worklet_static_invalid_module_type_server(

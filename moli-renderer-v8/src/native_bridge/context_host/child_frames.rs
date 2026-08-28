@@ -8,8 +8,8 @@ use crate::{
     context_bootstrap::set_top_level_history_length_at_least_for_runtime_owner,
     document_runtime::{DocumentPolicyContainer, DocumentSandboxPolicy, DomHandle},
     frame_owner_model::{
-        ChildFrameOwnerSnapshot, FrameDocumentTaskOwner, FrameId, FrameRealmId, FrameScriptJob,
-        FrameScriptJobKind,
+        BrowsingContextId, ChildFrameOwnerSnapshot, FrameDocumentNavigationLoadBinding,
+        FrameDocumentTaskOwner, FrameId, FrameRealmId, FrameScriptJob, FrameScriptJobKind,
     },
     protocol_types::ChildFrameDocumentNetworkSnapshot,
     service_worker_runtime::ServiceWorkerClientId,
@@ -38,11 +38,139 @@ pub(in crate::native_bridge::context_host) use request_scope::{
     document_sandbox_policy_from_attribute, sandbox_attribute_forces_opaque_origin,
 };
 
+/// Stable route to the child browsing context that owns one scheduled form
+/// navigation. Related Page routes deliberately retain renderer Page and root
+/// Document identities instead of a `JsContextHost` pointer; the live host is
+/// resolved again only while a later form submission is being dispatched.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FormSubmissionChildNavigationTarget {
+    CurrentPage {
+        browsing_context_id: BrowsingContextId,
+    },
+    RelatedPage {
+        page: crate::RendererResolvedPopupTarget,
+        root_document: crate::runtime::RendererDocumentLifecycleIdentity,
+        browsing_context_id: BrowsingContextId,
+    },
+    RemotePage {
+        page: crate::RendererResolvedPopupTarget,
+        channel: crate::runtime::RendererRemoteWindowProxyChannel,
+        frame: crate::script_vm::RendererRemoteFrameToken,
+    },
+}
+
+impl FormSubmissionChildNavigationTarget {
+    pub(crate) const fn current_page(browsing_context_id: BrowsingContextId) -> Self {
+        Self::CurrentPage {
+            browsing_context_id,
+        }
+    }
+
+    pub(crate) const fn related_page(
+        page: crate::RendererResolvedPopupTarget,
+        root_document: crate::runtime::RendererDocumentLifecycleIdentity,
+        browsing_context_id: BrowsingContextId,
+    ) -> Self {
+        Self::RelatedPage {
+            page,
+            root_document,
+            browsing_context_id,
+        }
+    }
+
+    pub(crate) const fn remote_page(
+        page: crate::RendererResolvedPopupTarget,
+        channel: crate::runtime::RendererRemoteWindowProxyChannel,
+        frame: crate::script_vm::RendererRemoteFrameToken,
+    ) -> Self {
+        Self::RemotePage {
+            page,
+            channel,
+            frame,
+        }
+    }
+
+    pub(crate) const fn browsing_context_id(self) -> BrowsingContextId {
+        match self {
+            Self::CurrentPage {
+                browsing_context_id,
+            }
+            | Self::RelatedPage {
+                browsing_context_id,
+                ..
+            } => browsing_context_id,
+            Self::RemotePage { frame, .. } => frame.browsing_context_id,
+        }
+    }
+}
+
+/// Exact target-side scheduler generation retained by the source form.
+///
+/// The navigation-load binding prevents a stale form record from canceling a
+/// newer, unrelated navigation that happens to reuse the same child context.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PendingFormSubmissionChildNavigation {
+    target: FormSubmissionChildNavigationTarget,
+    scheduler: PendingFormSubmissionChildNavigationScheduler,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PendingFormSubmissionChildNavigationScheduler {
+    Local(FrameDocumentNavigationLoadBinding),
+    Remote(crate::runtime::RendererRemoteFrameNavigationId),
+}
+
+impl PendingFormSubmissionChildNavigation {
+    pub(crate) const fn new(
+        target: FormSubmissionChildNavigationTarget,
+        navigation_load: FrameDocumentNavigationLoadBinding,
+    ) -> Self {
+        Self {
+            target,
+            scheduler: PendingFormSubmissionChildNavigationScheduler::Local(navigation_load),
+        }
+    }
+
+    pub(crate) const fn remote(
+        target: FormSubmissionChildNavigationTarget,
+        scheduler_id: crate::runtime::RendererRemoteFrameNavigationId,
+    ) -> Self {
+        Self {
+            target,
+            scheduler: PendingFormSubmissionChildNavigationScheduler::Remote(scheduler_id),
+        }
+    }
+
+    pub(crate) const fn target(self) -> FormSubmissionChildNavigationTarget {
+        self.target
+    }
+
+    pub(crate) const fn navigation_load(self) -> Option<FrameDocumentNavigationLoadBinding> {
+        match self.scheduler {
+            PendingFormSubmissionChildNavigationScheduler::Local(navigation_load) => {
+                Some(navigation_load)
+            }
+            PendingFormSubmissionChildNavigationScheduler::Remote(_) => None,
+        }
+    }
+
+    pub(crate) const fn remote_scheduler_id(
+        self,
+    ) -> Option<crate::runtime::RendererRemoteFrameNavigationId> {
+        match self.scheduler {
+            PendingFormSubmissionChildNavigationScheduler::Remote(scheduler_id) => {
+                Some(scheduler_id)
+            }
+            PendingFormSubmissionChildNavigationScheduler::Local(_) => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(super) struct ChildBrowsingContextEntry {
     frame_id: String,
     current_document_loader_id: Option<String>,
-    name: Option<String>,
+    browsing_context_name: Option<String>,
     id: Option<String>,
     attribute_bootstrap: ChildBrowsingContextBootstrap,
     pending_attribute_bootstrap_commit: bool,
@@ -109,7 +237,7 @@ pub(in crate::native_bridge::context_host) struct ChildBrowsingContextFrameIdent
 
 impl ChildBrowsingContextEntry {
     fn matches_browsing_context_name(&self, key: &str) -> bool {
-        self.name.as_deref() == Some(key)
+        self.browsing_context_name.as_deref() == Some(key)
     }
 
     pub(super) fn clear_document_runtime_state(&mut self) {
@@ -130,11 +258,11 @@ impl ChildBrowsingContextEntry {
     }
 
     pub(super) fn window_name(&self) -> &str {
-        self.name.as_deref().unwrap_or("")
+        self.browsing_context_name.as_deref().unwrap_or("")
     }
 
     pub(super) fn set_window_name(&mut self, name: String) {
-        self.name = Some(name);
+        self.browsing_context_name = Some(name);
     }
 
     pub(super) fn live_bootstrap(&self) -> ChildBrowsingContextBootstrap {
@@ -263,6 +391,14 @@ impl ChildBrowsingContextEntry {
         self.document_policy_container.sandbox = sandbox;
     }
 
+    pub(super) fn set_top_navigation_without_user_gesture_is_restricted(
+        &mut self,
+        restricted: bool,
+    ) {
+        self.document_policy_container
+            .top_navigation_without_user_gesture_is_restricted = restricted;
+    }
+
     pub(super) fn document_sandbox_forces_opaque_origin(&self) -> bool {
         self.document_sandbox_policy().forces_opaque_origin
     }
@@ -308,6 +444,8 @@ impl ChildBrowsingContextEntry {
         credentialless: bool,
         credentialless_storage_nonce: Option<moli_storage_key::OpaqueOriginNonce>,
     ) {
+        self.document_policy_container.document_referrer =
+            policy_container.document_referrer.clone();
         self.document_policy_container.referrer_policy = policy_container.referrer_policy.clone();
         self.document_policy_container.cross_origin_embedder_policy =
             policy_container.cross_origin_embedder_policy;
@@ -344,6 +482,8 @@ impl ChildBrowsingContextEntry {
         let credentialless = self.document_policy_container.credentialless;
         let credentialless_storage_nonce =
             self.document_policy_container.credentialless_storage_nonce;
+        self.document_policy_container.document_referrer =
+            snapshot.policy_container.document_referrer.clone();
         self.document_policy_container.referrer_policy =
             snapshot.policy_container.referrer_policy.clone();
         self.document_policy_container.cross_origin_embedder_policy =
@@ -489,7 +629,7 @@ impl ChildBrowsingContextEntry {
     pub(super) fn frame_identity_snapshot(&self) -> ChildBrowsingContextFrameIdentitySnapshot {
         ChildBrowsingContextFrameIdentitySnapshot {
             frame_id: self.frame_id.clone(),
-            name: self.name.clone(),
+            name: self.browsing_context_name.clone(),
             owner_element_id: self.id.clone(),
             security_origin_inherited: self.security_origin_inherited(),
         }
@@ -716,8 +856,12 @@ impl ChildBrowsingContextEntry {
         }
     }
 
-    pub(super) fn apply_deferred_navigation_to_entry_seed(&mut self, url: &Url) {
-        self.apply_navigation_to_entry_seed(url);
+    pub(super) fn apply_deferred_navigation_to_entry_seed(
+        &mut self,
+        url: &Url,
+        replace_current: bool,
+    ) {
+        self.apply_queued_navigation_to_entry_seed(url, replace_current);
         self.clear_pending_top_level_history_length_increment();
     }
 
@@ -888,7 +1032,8 @@ impl ChildBrowsingContextEntry {
     }
 
     pub(super) fn clear_pending_form_submission_navigation(&mut self) {
-        self.pending_live_navigation = None;
+        self.clear_pending_navigation();
+        self.restore_navigation_entry_seed_from_committed();
         self.clear_pending_top_level_history_length_increment();
     }
 
@@ -996,6 +1141,11 @@ impl ChildBrowsingContextEntry {
             || matches!(
                 self.pending_live_navigation,
                 Some(ChildBrowsingContextBootstrap::Url(ref url)) if url.scheme() == "javascript"
+            )
+            || matches!(
+                self.pending_live_navigation,
+                Some(ChildBrowsingContextBootstrap::Request(ref request))
+                    if request.url.scheme() == "javascript"
             )
     }
 
@@ -1133,25 +1283,98 @@ impl JsContextHost {
             .is_some_and(ChildBrowsingContextEntry::has_pending_javascript_url_navigation)
     }
 
-    pub(crate) fn cancel_previous_pending_form_submission_child_navigation(
+    pub(crate) fn take_previous_pending_form_submission_child_navigations(
         &mut self,
         form: DomHandle,
-        target: DomHandle,
+        target: FormSubmissionChildNavigationTarget,
+    ) -> Vec<PendingFormSubmissionChildNavigation> {
+        let Some(previous) = self.pending_form_submission_child_targets.remove(&form) else {
+            return Vec::new();
+        };
+        let (matching, remaining): (Vec<_>, Vec<_>) = previous
+            .into_iter()
+            .partition(|pending| pending.target() == target);
+        if !remaining.is_empty() {
+            self.pending_form_submission_child_targets
+                .insert(form, remaining);
+        }
+        matching
+    }
+
+    pub(crate) fn take_pending_form_submission_child_navigations_for_form(
+        &mut self,
+        form: DomHandle,
+    ) -> Vec<PendingFormSubmissionChildNavigation> {
+        self.pending_form_submission_child_targets
+            .remove(&form)
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn mark_pending_form_submission_child_navigation(
+        &mut self,
+        form: DomHandle,
+        pending: PendingFormSubmissionChildNavigation,
     ) {
-        let mut remove_form_entry = false;
-        let Some(previous_targets) = self.pending_form_submission_child_targets.get_mut(&form)
+        let pending_navigations = self
+            .pending_form_submission_child_targets
+            .entry(form)
+            .or_default();
+        pending_navigations.retain(|candidate| candidate.target() != pending.target());
+        pending_navigations.push(pending);
+    }
+
+    pub(crate) fn clear_pending_form_submission_child_target(
+        &mut self,
+        target: DomHandle,
+        navigation_load: FrameDocumentNavigationLoadBinding,
+    ) {
+        let Some(browsing_context_id) = self
+            .frame_owner_store
+            .browsing_context_id_for_child_handle(target)
         else {
             return;
         };
-        if !previous_targets.contains(&target) {
-            return;
-        }
-        previous_targets.retain(|candidate| *candidate != target);
-        if previous_targets.is_empty() {
-            remove_form_entry = true;
-        }
-        if remove_form_entry {
-            self.pending_form_submission_child_targets.remove(&form);
+        self.pending_form_submission_child_targets
+            .retain(|_, pending_navigations| {
+                pending_navigations.retain(|candidate| {
+                    candidate.target()
+                        != FormSubmissionChildNavigationTarget::current_page(browsing_context_id)
+                        || candidate.navigation_load() != Some(navigation_load)
+                });
+                !pending_navigations.is_empty()
+            });
+    }
+
+    pub(crate) fn child_browsing_context_handle_for_id(
+        &self,
+        browsing_context_id: BrowsingContextId,
+    ) -> Option<DomHandle> {
+        self.child_browsing_contexts.keys().copied().find(|handle| {
+            self.frame_owner_store
+                .browsing_context_id_for_child_handle(*handle)
+                == Some(browsing_context_id)
+        })
+    }
+
+    pub(crate) fn child_browsing_context_id_for_handle(
+        &self,
+        handle: DomHandle,
+    ) -> Option<BrowsingContextId> {
+        self.frame_owner_store
+            .browsing_context_id_for_child_handle(handle)
+    }
+
+    pub(crate) fn cancel_pending_form_submission_child_navigation_if_matches(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        browsing_context_id: BrowsingContextId,
+        navigation_load: FrameDocumentNavigationLoadBinding,
+    ) -> bool {
+        let Some(target) = self.child_browsing_context_handle_for_id(browsing_context_id) else {
+            return false;
+        };
+        if self.current_child_navigation_load(target) != Some(navigation_load) {
+            return false;
         }
         if let Some(entry) = self.child_browsing_contexts.get_mut(&target) {
             entry.clear_pending_form_submission_navigation();
@@ -1159,48 +1382,51 @@ impl JsContextHost {
         self.clear_pending_service_worker_child_client(target);
         self.retire_current_child_navigation_commit_task(target);
         self.cancel_child_document_script_work(target);
-        self.clear_pending_child_document_loads_for_handle(target);
+        self.cancel_pending_child_document_load_for_navigation(target, navigation_load);
+        let _ = self.finish_child_frame_navigation_without_load_dispatch(target, navigation_load);
+        self.sync_existing_child_browsing_context_window_state(scope, target);
+        true
     }
 
-    pub(crate) fn cancel_pending_form_submission_child_navigations_for_form(
+    pub(crate) fn record_pending_remote_frame_navigation(
         &mut self,
-        form: DomHandle,
+        scheduler_id: crate::runtime::RendererRemoteFrameNavigationId,
+        token: crate::script_vm::RendererRemoteFrameToken,
+        navigation_load: FrameDocumentNavigationLoadBinding,
     ) {
-        let Some(previous_targets) = self.pending_form_submission_child_targets.remove(&form)
+        self.pending_remote_frame_navigations
+            .insert(scheduler_id, (token, navigation_load));
+    }
+
+    pub(in crate::native_bridge::context_host) fn clear_pending_remote_frame_navigation_for_load(
+        &mut self,
+        navigation_load: FrameDocumentNavigationLoadBinding,
+    ) {
+        self.pending_remote_frame_navigations
+            .retain(|_, (_, pending_load)| *pending_load != navigation_load);
+    }
+
+    pub(crate) fn cancel_pending_remote_frame_navigation(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        scheduler_id: crate::runtime::RendererRemoteFrameNavigationId,
+        token: crate::script_vm::RendererRemoteFrameToken,
+    ) -> bool {
+        let Some((pending_token, navigation_load)) =
+            self.pending_remote_frame_navigations.remove(&scheduler_id)
         else {
-            return;
+            return false;
         };
-        for target in previous_targets {
-            if let Some(entry) = self.child_browsing_contexts.get_mut(&target) {
-                entry.clear_pending_form_submission_navigation();
-            }
-            self.clear_pending_service_worker_child_client(target);
-            self.retire_current_child_navigation_commit_task(target);
-            self.cancel_child_document_script_work(target);
-            self.clear_pending_child_document_loads_for_handle(target);
+        if pending_token != token
+            || self.root_document_lifecycle_identity() != Some(token.root_document)
+        {
+            return false;
         }
-    }
-
-    pub(crate) fn mark_pending_form_submission_child_navigation(
-        &mut self,
-        form: DomHandle,
-        target: DomHandle,
-    ) {
-        let targets = self
-            .pending_form_submission_child_targets
-            .entry(form)
-            .or_default();
-        if !targets.contains(&target) {
-            targets.push(target);
-        }
-    }
-
-    pub(crate) fn clear_pending_form_submission_child_target(&mut self, target: DomHandle) {
-        self.pending_form_submission_child_targets
-            .retain(|_, targets| {
-                targets.retain(|candidate| *candidate != target);
-                !targets.is_empty()
-            });
+        self.cancel_pending_form_submission_child_navigation_if_matches(
+            scope,
+            token.browsing_context_id,
+            navigation_load,
+        )
     }
 
     pub(crate) fn child_browsing_context_content_security_policies(
@@ -1235,6 +1461,7 @@ impl JsContextHost {
             return;
         };
         entry.set_window_name(name);
+        self.publish_related_page_remote_frame_tree();
     }
 }
 

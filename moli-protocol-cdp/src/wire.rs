@@ -232,6 +232,7 @@ pub struct CdpRendererCommandPolicy {
     renderer_replacement: CdpRendererCommandReplacement,
     renderer_replay_dispatch: CdpRendererCommandReplayDispatch,
     executes_page_javascript: bool,
+    waits_for_document_continuation: bool,
 }
 
 impl CdpRendererCommandPolicy {
@@ -253,6 +254,10 @@ impl CdpRendererCommandPolicy {
 
     pub const fn executes_page_javascript(self) -> bool {
         self.executes_page_javascript
+    }
+
+    pub const fn waits_for_document_continuation(self) -> bool {
+        self.waits_for_document_continuation
     }
 }
 
@@ -398,6 +403,18 @@ impl ParsedCdpCommand {
     pub fn renderer_replay_dispatch(&self) -> CdpRendererCommandReplayDispatch {
         self.renderer_policy.replay_dispatch()
     }
+
+    /// Whether this command reads protocol-owned state that is finalized by
+    /// the committed Document's typed continuation.
+    ///
+    /// A committed renderer attachment is usable while its parser is still
+    /// blocked: Runtime/DOM commands must be able to observe that `loading`
+    /// Document. Keep this narrower than the main-thread renderer access
+    /// classification, which protects commands from binding to the attachment
+    /// being replaced.
+    pub fn waits_for_document_continuation_to_finish(&self) -> bool {
+        self.renderer_policy.waits_for_document_continuation()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -472,6 +489,7 @@ impl RuntimeWireAction {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PageWireAction {
     MainThread,
+    NavigationHistory,
     Crash,
     Other,
 }
@@ -487,6 +505,7 @@ impl PageWireAction {
             | "searchInResource"
             | "getLayoutMetrics"
             | "printToPDF" => Self::MainThread,
+            "getNavigationHistory" => Self::NavigationHistory,
             "crash" => Self::Crash,
             _ => Self::Other,
         }
@@ -573,6 +592,7 @@ impl CdpRendererCommandPolicy {
                 renderer_replacement: CdpRendererCommandReplacement::Replay,
                 renderer_replay_dispatch: CdpRendererCommandReplayDispatch::Direct,
                 executes_page_javascript: false,
+                waits_for_document_continuation: false,
             };
         };
         let domain = CdpMethodDomain::parse(domain);
@@ -612,7 +632,9 @@ impl CdpRendererCommandPolicy {
                 }
             }
             CdpMethodDomain::Page => match PageWireAction::parse(action) {
-                PageWireAction::MainThread => CdpRendererCommandAccess::MainThread,
+                PageWireAction::MainThread | PageWireAction::NavigationHistory => {
+                    CdpRendererCommandAccess::MainThread
+                }
                 PageWireAction::Crash => CdpRendererCommandAccess::Io,
                 PageWireAction::Other => CdpRendererCommandAccess::OwnerIndependent,
             },
@@ -650,6 +672,8 @@ impl CdpRendererCommandPolicy {
             executes_page_javascript: runtime_action
                 .is_some_and(RuntimeWireAction::executes_page_javascript)
                 || debugger_action.is_some_and(DebuggerWireAction::executes_page_javascript),
+            waits_for_document_continuation: domain == CdpMethodDomain::Page
+                && PageWireAction::parse(action) == PageWireAction::NavigationHistory,
         }
     }
 }
@@ -676,6 +700,7 @@ mod tests {
             command.renderer_access(),
             CdpRendererCommandAccess::MainThread
         );
+        assert!(!command.waits_for_document_continuation_to_finish());
     }
 
     #[test]
@@ -690,6 +715,7 @@ mod tests {
             command.renderer_access(),
             CdpRendererCommandAccess::OwnerIndependent
         );
+        assert!(!command.waits_for_document_continuation_to_finish());
     }
 
     #[test]
@@ -855,6 +881,7 @@ mod tests {
             command.renderer_access(),
             CdpRendererCommandAccess::MainThread
         );
+        assert!(!command.waits_for_document_continuation_to_finish());
     }
 
     #[test]
@@ -1011,5 +1038,17 @@ mod tests {
                 "params": { "name": "exposed" },
             })
         );
+    }
+
+    #[test]
+    fn navigation_history_waits_for_committed_document_continuation() {
+        let command =
+            parse(r#"{"id":12,"method":"Page.getNavigationHistory","params":{},"sessionId":"s1"}"#);
+
+        assert_eq!(
+            command.renderer_access(),
+            CdpRendererCommandAccess::MainThread
+        );
+        assert!(command.waits_for_document_continuation_to_finish());
     }
 }

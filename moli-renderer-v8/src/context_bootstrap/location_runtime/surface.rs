@@ -73,18 +73,19 @@ pub(crate) fn sync_global_location_runtime_state(scope: &mut v8::PinScope<'_, '_
     sync_location_object(scope, location, href);
 }
 
-pub(crate) fn sync_window_location_runtime_state<'s>(
+pub(crate) fn navigate_top_level_window_location_from_cross_origin<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     window: v8::Local<'s, v8::Object>,
-    href: &str,
-) {
+    kind: LocationNavigationKind,
+    raw_target: String,
+) -> bool {
     let Some(location) = window_location_slot_value(scope, window)
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
     else {
-        return;
+        return false;
     };
-    sync_location_object(scope, location, href);
-    install_public_window_location_accessor(scope, window);
+    navigate_location_object(scope, location, kind, Some(raw_target));
+    true
 }
 
 pub(crate) fn sync_window_location_history_navigation_runtime_surface<'s>(

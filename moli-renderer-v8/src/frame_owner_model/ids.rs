@@ -1,12 +1,13 @@
 use super::load_delivery_tasks::FrameDocumentLoadDeliveryAdmissionId;
 use super::records::FrameRealmId;
 use super::records::{
-    DocumentId, DocumentLoadDelayTokenId, FrameNavigationId, FrameRequestId, FrameSchedulerLaneId,
-    LocalWindowId, WindowProxyId,
+    BrowsingContextId, DocumentId, DocumentLoadDelayTokenId, FrameNavigationId, FrameRequestId,
+    FrameSchedulerLaneId, LocalWindowId, WindowProxyId,
 };
 
 #[derive(Debug)]
 pub(super) struct FrameOwnerIdAllocator {
+    next_nested_browsing_context_id: u64,
     next_window_proxy_id: u64,
     next_local_window_id: u64,
     next_document_id: u64,
@@ -21,6 +22,7 @@ pub(super) struct FrameOwnerIdAllocator {
 impl Default for FrameOwnerIdAllocator {
     fn default() -> Self {
         Self {
+            next_nested_browsing_context_id: 1,
             next_window_proxy_id: 1,
             next_local_window_id: 1,
             next_document_id: 1,
@@ -35,6 +37,15 @@ impl Default for FrameOwnerIdAllocator {
 }
 
 impl FrameOwnerIdAllocator {
+    pub(super) fn nested_browsing_context(&mut self) -> BrowsingContextId {
+        let id = BrowsingContextId::nested(self.next_nested_browsing_context_id);
+        self.next_nested_browsing_context_id = self
+            .next_nested_browsing_context_id
+            .checked_add(1)
+            .expect("nested browsing-context id overflow");
+        id
+    }
+
     pub(super) fn window_proxy(&mut self) -> WindowProxyId {
         WindowProxyId(take_next_u64(
             &mut self.next_window_proxy_id,

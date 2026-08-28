@@ -77,6 +77,24 @@ impl EventCallbackRegistry {
         self.records.retain(|id, _| !owned.contains(id));
         owned
     }
+
+    fn take_owned_by_context_token(
+        &mut self,
+        context_token: super::RuntimeObservableContextToken,
+    ) -> HashSet<EventCallbackId> {
+        let owned = self
+            .records
+            .iter()
+            .filter_map(|(id, record)| {
+                record
+                    .relevant_identity
+                    .is_some_and(|identity| identity.realm_token() == context_token)
+                    .then_some(*id)
+            })
+            .collect::<HashSet<_>>();
+        self.records.retain(|id, _| !owned.contains(id));
+        owned
+    }
 }
 
 impl JsContextHost {
@@ -399,6 +417,20 @@ impl JsContextHost {
         owner: WindowExecutionContextOwner,
     ) {
         let retired = self.event_callbacks.take_owned_by(owner);
+        self.retire_event_callback_records(retired);
+    }
+
+    pub(in crate::native_bridge) fn retire_event_callbacks_for_context_token(
+        &mut self,
+        context_token: super::RuntimeObservableContextToken,
+    ) {
+        let retired = self
+            .event_callbacks
+            .take_owned_by_context_token(context_token);
+        self.retire_event_callback_records(retired);
+    }
+
+    fn retire_event_callback_records(&mut self, retired: HashSet<EventCallbackId>) {
         if retired.is_empty() {
             return;
         }

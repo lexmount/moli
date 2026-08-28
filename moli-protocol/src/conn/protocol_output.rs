@@ -1,4 +1,4 @@
-use super::{CdpConnection, CdpTurnOutcome};
+use super::{CdpConnection, CdpRendererOwnerTurnOutcome, CdpTurnOutcome};
 use crate::domains::activity::{
     ReadyProtocolSchedulerWork, RuntimeCommandOutputBarrierCompletion,
     RuntimeCommandOutputBarrierPermit, RuntimeCommandOutputBarriers,
@@ -87,14 +87,39 @@ impl CdpConnection {
         );
     }
 
+    pub(crate) fn bind_renderer_page_output_owner_reservation(
+        &mut self,
+        renderer_page: super::RendererPageResidenceIdentity,
+        reservation_id: moli_core::RendererPageOutputOwnerReservationId,
+        page_owner: super::TargetPageResidenceIdentity,
+    ) {
+        let owner = crate::domains::activity::RendererPublicationOwner::PageTarget {
+            browser_context_id: page_owner.browser_context_id().to_owned(),
+            target_id: page_owner.target_id().map(str::to_owned),
+            renderer_page,
+            page_owner,
+        };
+        self.scheduler_state
+            .renderer_output_ingress
+            .bind_page_owner_reservation(
+                moli_core::RendererOutputResidenceIdentity::Page {
+                    owner_local_host_id: renderer_page.owner_local_host_id(),
+                    page_id: renderer_page.page_id(),
+                },
+                reservation_id,
+                owner,
+            );
+    }
+
     pub(crate) fn release_renderer_page_output_owner_reservation(
         &mut self,
         owner_local_host_id: moli_core::RendererOwnerLocalHostId,
         page_id: moli_core::PageId,
+        reservation_id: moli_core::RendererPageOutputOwnerReservationId,
     ) {
         self.scheduler_state
             .renderer_output_ingress
-            .release_page_owner_reservation(owner_local_host_id, page_id);
+            .release_page_owner_reservation(owner_local_host_id, page_id, reservation_id);
     }
 
     pub(crate) fn declare_renderer_output_cursor_lease(
@@ -159,8 +184,8 @@ impl CdpConnection {
     pub async fn complete_ready_protocol_scheduler_work_turn(
         &mut self,
         work: crate::domains::activity::ProtocolSchedulerWork,
-    ) -> CdpTurnOutcome {
-        match work.into_ready() {
+    ) -> CdpRendererOwnerTurnOutcome {
+        let outcome = match work.into_ready() {
             ReadyProtocolSchedulerWork::ProtocolObservation(work) => {
                 CdpTurnOutcome::new_with_protocol_events(
                     work.into_background_events(self),
@@ -213,13 +238,20 @@ impl CdpConnection {
                 crate::domains::target::complete_popup_target_activation_action_async(self, action)
                     .await
             }
+            ReadyProtocolSchedulerWork::PageTargetCloseRequestOwnerAction(action) => {
+                crate::domains::page::complete_page_target_close_request_owner_action_async(
+                    self, action,
+                )
+                .await
+            }
             ReadyProtocolSchedulerWork::PageTargetTerminationOwnerAction(action) => {
                 crate::domains::page::complete_page_target_termination_owner_action_async(
                     self, action,
                 )
                 .await
             }
-        }
+        };
+        outcome.with_renderer_output_predecessor(None)
     }
 
     /// Ingests one concrete renderer publication and returns the protocol

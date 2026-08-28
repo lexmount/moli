@@ -16,8 +16,8 @@ use crate::{
 use anyhow::{Context, Result, anyhow};
 use moli_cookie_jar::{SharedBrowserCookieStore, new_shared_browser_cookie_store};
 use moli_fetch::{
-    BrowserNavigationRequestKind, FetchCancelHandle, FetchConfig, NetworkFetchResult, Request,
-    StreamingRawResponse, ensure_http_status_success,
+    BrowserNavigationRequestKind, FetchCancelHandle, FetchConfig, NetworkFetchResult,
+    RedirectResponseFollowPolicy, Request, StreamingRawResponse, ensure_http_status_success,
 };
 use moli_page_types::{LayoutPolicy, OptionalResourceFetchMask};
 use moli_renderer_v8::{
@@ -188,6 +188,12 @@ pub struct BuiltDocumentPage {
     pub pending_download: Option<RendererPendingDownloadActivation>,
 }
 
+pub struct CommittedDocumentPageReplacement {
+    pub page_creation_diagnostics: RendererPageCreationDiagnostics,
+    pub page_creation_artifacts: RendererPageCreationArtifacts,
+    pub pending_download: Option<RendererPendingDownloadActivation>,
+}
+
 /// A renderer document whose isolate and DevTools agent are reserved, but
 /// whose parser and execution contexts have not started.
 pub struct PreparedDocumentPage {
@@ -304,6 +310,41 @@ impl PreparedDocumentPage {
             .context("failed to commit prepared streaming raw page")?;
         Ok(BuiltDocumentPage {
             page: Page::from_attached_handle(handle, page_state),
+            page_creation_diagnostics,
+            page_creation_artifacts,
+            pending_download,
+        })
+    }
+
+    /// Commits the prepared Document into `page` without replacing its owning
+    /// handle. The Page identity is checked before the renderer crosses the
+    /// old-Document teardown boundary.
+    pub async fn commit_page_replacement(
+        self,
+        permit: PreparedDocumentPageCommitPermit,
+        page: &mut Page,
+    ) -> std::result::Result<
+        CommittedDocumentPageReplacement,
+        moli_renderer_v8::RendererPageReplacementCommitError,
+    > {
+        if self.renderer_owner_local_host_id() != page.renderer_owner_local_host_id()
+            || self.renderer_page_id() != page.renderer_page_id()
+        {
+            return Err(
+                moli_renderer_v8::RendererPageReplacementCommitError::page_preserved(anyhow!(
+                    "prepared Document belongs to a different live Page"
+                )),
+            );
+        }
+        let replacement = self.prepared.commit_page_replacement(permit.permit).await?;
+        let (page_creation_diagnostics, page_creation_artifacts, pending_download) = page
+            .adopt_renderer_page_replacement(replacement)
+            .map_err(|error| {
+                moli_renderer_v8::RendererPageReplacementCommitError::page_retired(
+                    error.context("failed to adopt committed live Page replacement"),
+                )
+            })?;
+        Ok(CommittedDocumentPageReplacement {
             page_creation_diagnostics,
             page_creation_artifacts,
             pending_download,
@@ -456,6 +497,13 @@ impl NavigationEngine {
     /// parser or author-script output becomes publishable.
     pub fn reserve_page_for_creation(&self) -> moli_renderer_v8::RendererPageReservationToken {
         self.js_runtime.reserve_page_for_creation()
+    }
+
+    pub fn owns_page_reservation(
+        &self,
+        reservation: moli_renderer_v8::RendererPageReservationToken,
+    ) -> bool {
+        self.js_runtime.owns_page_reservation(reservation)
     }
 
     pub fn new() -> Self {
@@ -661,6 +709,10 @@ impl NavigationEngine {
 
     pub fn renderer_owner_id_for_diagnostics(&self) -> u64 {
         self.js_runtime.renderer_owner_id_for_diagnostics()
+    }
+
+    pub fn renderer_owner_local_host_id(&self) -> moli_renderer_v8::RendererOwnerLocalHostId {
+        self.js_runtime.renderer_owner_local_host_id()
     }
 
     pub fn shares_renderer_owner_with(&self, other: &Self) -> bool {
@@ -912,6 +964,7 @@ impl NavigationEngine {
         body: Option<Vec<u8>>,
         request_headers: Vec<(String, String)>,
         auth: Option<SubresourceAuthCredentials>,
+        redirect_response_follow_policy: Option<RedirectResponseFollowPolicy>,
     ) -> Result<NetworkFetchResult<NavigationResponse>> {
         let mut request = Request::new_bytes(method, raw_url, body, request_headers)
             .map(|request| {
@@ -927,6 +980,9 @@ impl NavigationEngine {
                 }
             })
             .context("failed to build request")?;
+        if let Some(policy) = redirect_response_follow_policy {
+            request = request.with_redirect_response_follow_policy(policy);
+        }
         request.set_auth(auth.map(Into::into));
         let navigation_loader = self.navigation_resource_loader(
             cookie_store,
@@ -950,6 +1006,7 @@ impl NavigationEngine {
         body: Option<String>,
         request_headers: Vec<(String, String)>,
         auth: Option<SubresourceAuthCredentials>,
+        redirect_response_follow_policy: Option<RedirectResponseFollowPolicy>,
     ) -> Result<NetworkFetchResult<NavigationResponse>> {
         let cookie_store = storage.into_cookie_store();
         self.fetch_navigation_response_async(
@@ -962,6 +1019,7 @@ impl NavigationEngine {
             body.map(String::into_bytes),
             request_headers,
             auth,
+            redirect_response_follow_policy,
         )
         .await
     }
@@ -972,11 +1030,13 @@ impl NavigationEngine {
         initiator_url: Option<&Url>,
         browser_navigation_kind: BrowserNavigationRequestKind,
         infer_referrer_from_initiator: bool,
+        document_referrer_policy: Option<&str>,
         method: &str,
         raw_url: &str,
         body: Option<Vec<u8>>,
         request_headers: Vec<(String, String)>,
         auth: Option<SubresourceAuthCredentials>,
+        redirect_response_follow_policy: Option<RedirectResponseFollowPolicy>,
         cancel_handle: FetchCancelHandle,
     ) -> Result<NavigationStreamingRawResponse> {
         let mut request = Request::new_bytes(method, raw_url, body, request_headers)
@@ -986,6 +1046,10 @@ impl NavigationEngine {
                 if !infer_referrer_from_initiator {
                     request = request.without_inferred_referrer();
                 }
+                if document_referrer_policy.is_some() {
+                    request = request
+                        .with_referrer_policies(None, document_referrer_policy.map(str::to_owned));
+                }
                 if let Some(initiator_url) = initiator_url {
                     request.with_initiator_url(initiator_url)
                 } else {
@@ -993,6 +1057,9 @@ impl NavigationEngine {
                 }
             })
             .context("failed to build request")?;
+        if let Some(policy) = redirect_response_follow_policy {
+            request = request.with_redirect_response_follow_policy(policy);
+        }
         request.set_auth(auth.map(Into::into));
         let navigation_loader =
             self.navigation_resource_loader(cookie_store, request.url.clone(), cancel_handle)?;
@@ -1032,11 +1099,13 @@ impl NavigationEngine {
         initiator_url: Option<&Url>,
         browser_navigation_kind: BrowserNavigationRequestKind,
         infer_referrer_from_initiator: bool,
+        document_referrer_policy: Option<&str>,
         method: &str,
         raw_url: &str,
         body: Option<String>,
         request_headers: Vec<(String, String)>,
         auth: Option<SubresourceAuthCredentials>,
+        redirect_response_follow_policy: Option<RedirectResponseFollowPolicy>,
     ) -> Result<NavigationStreamingRawResponse> {
         let cookie_store = storage.into_cookie_store();
         self.fetch_navigation_streaming_raw_response_async(
@@ -1044,11 +1113,13 @@ impl NavigationEngine {
             initiator_url,
             browser_navigation_kind,
             infer_referrer_from_initiator,
+            document_referrer_policy,
             method,
             raw_url,
             body.map(String::into_bytes),
             request_headers,
             auth,
+            redirect_response_follow_policy,
             FetchCancelHandle::new(),
         )
         .await
@@ -1061,11 +1132,13 @@ impl NavigationEngine {
         initiator_url: Option<&Url>,
         browser_navigation_kind: BrowserNavigationRequestKind,
         infer_referrer_from_initiator: bool,
+        document_referrer_policy: Option<&str>,
         method: &str,
         raw_url: &str,
         body: Option<Vec<u8>>,
         request_headers: Vec<(String, String)>,
         auth: Option<SubresourceAuthCredentials>,
+        redirect_response_follow_policy: Option<RedirectResponseFollowPolicy>,
         cancel_handle: FetchCancelHandle,
     ) -> Result<NavigationStreamingRawResponse> {
         let cookie_store = storage.into_cookie_store();
@@ -1074,11 +1147,13 @@ impl NavigationEngine {
             initiator_url,
             browser_navigation_kind,
             infer_referrer_from_initiator,
+            document_referrer_policy,
             method,
             raw_url,
             body,
             request_headers,
             auth,
+            redirect_response_follow_policy,
             cancel_handle,
         )
         .await
@@ -1498,6 +1573,11 @@ impl NavigationEngine {
         root_frame_id: Option<String>,
         top_level_storage_key: Option<moli_storage_key::MoliStorageKey>,
         main_document_commit: Option<RendererMainDocumentCommit>,
+        initial_document_referrer: Option<String>,
+        initial_top_level_browsing_context_name: Option<String>,
+        auxiliary_browsing_context_policy: Option<
+            crate::page::RendererAuxiliaryBrowsingContextPolicy,
+        >,
     ) -> Result<PendingBuiltDocumentPage> {
         let loader = self.ensure_resource_request_client(cookie_store)?;
         loader.set_extra_http_headers(&extra_http_headers);
@@ -1538,6 +1618,9 @@ impl NavigationEngine {
                 top_level_storage_key,
                 moli_renderer_v8::RendererTopLevelNavigationDispatch::DelegateToBrowser,
                 main_document_commit,
+                initial_document_referrer,
+                initial_top_level_browsing_context_name,
+                auxiliary_browsing_context_policy,
             )?;
         Ok(PendingBuiltDocumentPage { pending })
     }
@@ -1598,6 +1681,9 @@ impl NavigationEngine {
             None,
             None,
             None,
+            None,
+            None,
+            None,
         )
     }
 
@@ -1632,6 +1718,11 @@ impl NavigationEngine {
         root_frame_id: Option<String>,
         top_level_storage_key: Option<moli_storage_key::MoliStorageKey>,
         main_document_commit: Option<RendererMainDocumentCommit>,
+        initial_document_referrer: Option<String>,
+        initial_top_level_browsing_context_name: Option<String>,
+        auxiliary_browsing_context_policy: Option<
+            crate::page::RendererAuxiliaryBrowsingContextPolicy,
+        >,
     ) -> Result<PendingBuiltDocumentPage> {
         let (cookie_store, web_storage, indexed_db_manager, storage_bucket_store) =
             storage.into_parts();
@@ -1667,6 +1758,9 @@ impl NavigationEngine {
             root_frame_id,
             top_level_storage_key,
             main_document_commit,
+            initial_document_referrer,
+            initial_top_level_browsing_context_name,
+            auxiliary_browsing_context_policy,
         )
     }
 
@@ -2435,7 +2529,10 @@ impl NavigationEngine {
 
 #[cfg(test)]
 mod tests {
-    use super::{CommittedDocumentResourceSource, NavigationEngine, NavigationRuntimeConfig};
+    use super::{
+        CommittedDocumentResourceSource, NavigationEngine, NavigationRuntimeConfig,
+        PageVmInitStage, PreparedDocumentPage,
+    };
     use crate::{
         LayoutPolicy, OptionalResourceFetchMask,
         network::ResourceRequestClient,
@@ -2443,6 +2540,7 @@ mod tests {
     };
     use moli_cookie_jar::new_shared_browser_cookie_store;
     use moli_fetch::FetchConfig;
+    use tokio::sync::oneshot;
     use url::Url;
 
     static_assertions::assert_not_impl_any!(Browser: Send, Sync);
@@ -2736,5 +2834,145 @@ mod tests {
                 .to_string()
                 .contains("does not belong to the NavigationEngine browser resource runtime")
         );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn core_page_adopts_prepared_renderer_replacement_without_replacing_ownership() {
+        let mut engine = NavigationEngine::new();
+        let initial_url =
+            Url::parse("https://example.test/core-replacement/initial").expect("initial URL");
+        let built = engine
+            .build_inline_html_document_page_best_effort_with_inspector_session_restores_async(
+                new_shared_browser_cookie_store(),
+                moli_renderer_v8::RendererWebStorageHandles::ephemeral(),
+                None,
+                None,
+                initial_url,
+                None,
+                "<!doctype html><body>initial core Page</body>".to_owned(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                None,
+                None,
+                false,
+                1.0,
+                Default::default(),
+                None,
+                false,
+                Vec::new(),
+                false,
+                None,
+                None,
+                None,
+            )
+            .await
+            .expect("initial core Page should build");
+        let mut page = built.page;
+        let page_id = page.renderer_page_id();
+        let owner_local_host_id = page.renderer_owner_local_host_id();
+        let initial_agent = page.renderer_devtools_agent_token();
+        let reservation = page
+            .reserve_renderer_document_replacement()
+            .await
+            .expect("core Page should reserve its live renderer generation");
+        let replacement_url =
+            Url::parse("https://example.test/core-replacement/next").expect("replacement URL");
+        let (completion_tx, completion_rx) = oneshot::channel();
+        let (body_tx, raw_body) =
+            moli_renderer_v8::ExternalRawDocumentBodyStream::channel(completion_rx);
+        body_tx
+            .send(
+                b"<!doctype html><body><main id='core-replacement'>replacement core Page</main></body>"
+                    .to_vec(),
+            )
+            .await
+            .expect("replacement body should send");
+        drop(body_tx);
+        completion_tx
+            .send(Ok(()))
+            .expect("replacement body completion should send");
+        let loader = engine
+            .resource_request_client()
+            .expect("engine loader should exist");
+        let prepared = engine
+            .js_runtime
+            .prepare_streaming_raw_document_from_external_body_with_inspector_session_restores(
+                reservation,
+                replacement_url.clone(),
+                replacement_url.clone(),
+                None,
+                false,
+                0,
+                Vec::new(),
+                200,
+                vec![("content-type".to_owned(), "text/html".to_owned())],
+                &loader,
+                moli_renderer_v8::RendererWebStorageHandles::ephemeral(),
+                raw_body,
+                None,
+                None,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                None,
+                None,
+                false,
+                false,
+                1.0,
+                Default::default(),
+                None,
+                false,
+                Vec::new(),
+                false,
+                None,
+                Vec::new(),
+                false,
+                PageVmInitStage::Load,
+                moli_renderer_v8::RendererReplyBoundary::Stage,
+                moli_renderer_v8::RendererTopLevelNavigationDispatch::DelegateToBrowser,
+                moli_renderer_v8::RendererNavigationReplyPolicy::ReturnWithPendingNavigation,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .expect("core replacement should prepare");
+        let replacement_agent = prepared.renderer_devtools_agent_token();
+        assert_ne!(replacement_agent, initial_agent);
+        let prepared = PreparedDocumentPage { prepared };
+        let permit = prepared.issue_commit_permit();
+        let committed = prepared
+            .commit_page_replacement(permit, &mut page)
+            .await
+            .expect("core Page should adopt its renderer replacement");
+
+        assert_eq!(page.renderer_page_id(), page_id);
+        assert_eq!(page.renderer_owner_local_host_id(), owner_local_host_id);
+        assert_eq!(page.renderer_devtools_agent_token(), replacement_agent);
+        assert_eq!(page.final_url(), &replacement_url);
+        assert!(committed.pending_download.is_none());
+        assert!(
+            committed
+                .page_creation_artifacts
+                .lifecycle_snapshot
+                .load
+                .is_some()
+        );
+        let value = page
+            .evaluate_runtime_expression_async(
+                "document.querySelector('#core-replacement').textContent",
+            )
+            .await
+            .expect("replacement core Page should evaluate through its original owner");
+        assert_eq!(
+            value.get("value"),
+            Some(&serde_json::json!("replacement core Page"))
+        );
+        page.close_async()
+            .await
+            .expect("replacement core Page should close through its original owner");
     }
 }

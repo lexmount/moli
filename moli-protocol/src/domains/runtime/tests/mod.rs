@@ -1,13 +1,13 @@
 use super::test_support::{
     create_isolated_world_async, enable_runtime_and_take_execution_context_id_async,
     take_response_by_id, wait_for_response_by_id_async, with_loaded_document_async,
-    with_loaded_document_for_active_target_async, with_loaded_http_document_async,
+    with_loaded_document_for_active_target_async, with_loaded_document_for_target_async,
+    with_loaded_http_document_async,
 };
 use crate::conn::{
     BrowserContext, CdpCommandTaskStep, CdpSchedulerEvent, NETWORK_ERROR_PAGE_URL,
     PendingCdpCommandDispatch,
 };
-use crate::domains::page::BackgroundNavigationCompletion;
 use crate::testing::{
     TestContext, spawn_connection_drop_server, wait_until_message, wait_until_messages,
 };

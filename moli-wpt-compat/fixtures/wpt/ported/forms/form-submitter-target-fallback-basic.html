@@ -50,8 +50,13 @@ function append_form(target, caseName) {
   return form;
 }
 
-const emptyOverrideFrame = append_target_frame("empty-override-target");
-const emptyOverrideForm = append_form("empty-override-target", "empty-override");
+const base = document.createElement("base");
+document.head.appendChild(base);
+
+base.target = "empty-override-base-target";
+const emptyOverrideBaseFrame = append_target_frame("empty-override-base-target");
+const emptyOverrideFormFrame = append_target_frame("empty-override-form-target");
+const emptyOverrideForm = append_form("empty-override-form-target", "empty-override");
 let emptyOverrideSubmitCount = 0;
 emptyOverrideForm.addEventListener("submit", function () {
   emptyOverrideSubmitCount += 1;
@@ -62,8 +67,10 @@ emptyOverrideSubmitter.setAttribute("formtarget", "");
 emptyOverrideForm.appendChild(emptyOverrideSubmitter);
 emptyOverrideForm.requestSubmit(emptyOverrideSubmitter);
 
-const missingOverrideFrame = append_target_frame("missing-override-target");
-const missingOverrideForm = append_form("missing-override-target", "missing-override");
+base.target = "missing-override-base-target";
+const missingOverrideBaseFrame = append_target_frame("missing-override-base-target");
+const missingOverrideFormFrame = append_target_frame("missing-override-form-target");
+const missingOverrideForm = append_form("missing-override-form-target", "missing-override");
 let missingOverrideSubmitCount = 0;
 missingOverrideForm.addEventListener("submit", function () {
   missingOverrideSubmitCount += 1;
@@ -73,8 +80,10 @@ missingOverrideSubmitter.type = "submit";
 missingOverrideForm.appendChild(missingOverrideSubmitter);
 missingOverrideForm.requestSubmit(missingOverrideSubmitter);
 
-const externalEmptyOverrideFrame = append_target_frame("external-empty-override-target");
-const externalEmptyOverrideForm = append_form("external-empty-override-target", "external-empty-override");
+base.target = "external-empty-override-base-target";
+const externalEmptyOverrideBaseFrame = append_target_frame("external-empty-override-base-target");
+const externalEmptyOverrideFormFrame = append_target_frame("external-empty-override-form-target");
+const externalEmptyOverrideForm = append_form("external-empty-override-form-target", "external-empty-override");
 externalEmptyOverrideForm.id = "external-empty-override-form";
 let externalEmptyOverrideSubmitCount = 0;
 let externalEmptyOverrideSubmitterSeen = null;
@@ -89,8 +98,10 @@ externalEmptyOverrideSubmitter.setAttribute("formtarget", "");
 document.body.appendChild(externalEmptyOverrideSubmitter);
 externalEmptyOverrideForm.requestSubmit(externalEmptyOverrideSubmitter);
 
-const externalMissingOverrideFrame = append_target_frame("external-missing-override-target");
-const externalMissingOverrideForm = append_form("external-missing-override-target", "external-missing-override");
+base.target = "external-missing-override-base-target";
+const externalMissingOverrideBaseFrame = append_target_frame("external-missing-override-base-target");
+const externalMissingOverrideFormFrame = append_target_frame("external-missing-override-form-target");
+const externalMissingOverrideForm = append_form("external-missing-override-form-target", "external-missing-override");
 externalMissingOverrideForm.id = "external-missing-override-form";
 let externalMissingOverrideSubmitCount = 0;
 let externalMissingOverrideSubmitterSeen = null;
@@ -105,10 +116,14 @@ document.body.appendChild(externalMissingOverrideSubmitter);
 externalMissingOverrideForm.requestSubmit(externalMissingOverrideSubmitter);
 
 test(function () {
-  assert_equals(read_frame_text(emptyOverrideFrame), "", "empty formtarget target should start blank");
-  assert_equals(read_frame_text(missingOverrideFrame), "", "missing formtarget target should start blank");
-  assert_equals(read_frame_text(externalEmptyOverrideFrame), "", "external empty formtarget target should start blank");
-  assert_equals(read_frame_text(externalMissingOverrideFrame), "", "external missing formtarget target should start blank");
+  assert_equals(read_frame_text(emptyOverrideBaseFrame), "", "empty formtarget base target should start blank");
+  assert_equals(read_frame_text(emptyOverrideFormFrame), "", "empty formtarget form target should start blank");
+  assert_equals(read_frame_text(missingOverrideBaseFrame), "", "missing formtarget base target should start blank");
+  assert_equals(read_frame_text(missingOverrideFormFrame), "", "missing formtarget form target should start blank");
+  assert_equals(read_frame_text(externalEmptyOverrideBaseFrame), "", "external empty formtarget base target should start blank");
+  assert_equals(read_frame_text(externalEmptyOverrideFormFrame), "", "external empty formtarget form target should start blank");
+  assert_equals(read_frame_text(externalMissingOverrideBaseFrame), "", "external missing formtarget base target should start blank");
+  assert_equals(read_frame_text(externalMissingOverrideFormFrame), "", "external missing formtarget form target should start blank");
   assert_equals(emptyOverrideSubmitCount, 1, "empty formtarget submitter should dispatch submit");
   assert_equals(missingOverrideSubmitCount, 1, "missing formtarget submitter should dispatch submit");
   assert_equals(externalEmptyOverrideSubmitCount, 1, "external empty formtarget submitter should dispatch submit");
@@ -127,37 +142,57 @@ test(function () {
 
 promise_test(async function () {
   await wait_for_value(function () {
-    return read_frame_text(emptyOverrideFrame);
-  }, "a-page", "empty formtarget fallback load");
+    return read_frame_text(emptyOverrideBaseFrame);
+  }, "a-page", "empty formtarget base target load");
   await wait_for_value(function () {
-    return read_frame_text(missingOverrideFrame);
-  }, "a-page", "missing formtarget fallback load");
+    return read_frame_text(missingOverrideFormFrame);
+  }, "a-page", "missing formtarget form target load");
   await wait_for_value(function () {
-    return read_frame_text(externalEmptyOverrideFrame);
-  }, "a-page", "external empty formtarget fallback load");
+    return read_frame_text(externalEmptyOverrideBaseFrame);
+  }, "a-page", "external empty formtarget base target load");
   await wait_for_value(function () {
-    return read_frame_text(externalMissingOverrideFrame);
-  }, "a-page", "external missing formtarget fallback load");
+    return read_frame_text(externalMissingOverrideFormFrame);
+  }, "a-page", "external missing formtarget form target load");
 
   assert_equals(
-    read_frame_text(emptyOverrideFrame),
+    read_frame_text(emptyOverrideBaseFrame),
     "a-page",
-    "empty formtarget should fall back to the form target",
+    "empty formtarget should override the form target and fall back to the base target",
   );
   assert_equals(
-    read_frame_text(missingOverrideFrame),
+    read_frame_text(emptyOverrideFormFrame),
+    "",
+    "empty formtarget should not navigate the form target",
+  );
+  assert_equals(
+    read_frame_text(missingOverrideFormFrame),
     "a-page",
     "missing formtarget should use the form target",
   );
   assert_equals(
-    read_frame_text(externalEmptyOverrideFrame),
-    "a-page",
-    "external empty formtarget should fall back to the form target",
+    read_frame_text(missingOverrideBaseFrame),
+    "",
+    "missing formtarget should not navigate the base target",
   );
   assert_equals(
-    read_frame_text(externalMissingOverrideFrame),
+    read_frame_text(externalEmptyOverrideBaseFrame),
+    "a-page",
+    "external empty formtarget should override the form target and fall back to the base target",
+  );
+  assert_equals(
+    read_frame_text(externalEmptyOverrideFormFrame),
+    "",
+    "external empty formtarget should not navigate the form target",
+  );
+  assert_equals(
+    read_frame_text(externalMissingOverrideFormFrame),
     "a-page",
     "external missing formtarget should use the form target",
+  );
+  assert_equals(
+    read_frame_text(externalMissingOverrideBaseFrame),
+    "",
+    "external missing formtarget should not navigate the base target",
   );
   assert_equals(emptyOverrideSubmitCount, 1, "empty formtarget submitter should submit exactly once");
   assert_equals(missingOverrideSubmitCount, 1, "missing formtarget submitter should submit exactly once");
@@ -171,5 +206,5 @@ promise_test(async function () {
     1,
     "external missing formtarget submitter should submit exactly once",
   );
-}, "Empty and missing submitter formtarget both navigate the form target");
+}, "Empty submitter formtarget uses the base target while missing formtarget uses the form target");
 </script>

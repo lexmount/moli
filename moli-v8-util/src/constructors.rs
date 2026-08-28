@@ -2,32 +2,78 @@ use v8::{Local, Object, PinScope, PropertyAttribute};
 
 use crate::properties::new_null_prototype_object;
 use crate::strings::{v8_string, v8str};
-use crate::symbols::{get_private_object, set_private_value};
 
 const INTRINSIC_CONSTRUCTORS_SLOT: &str = "__moliIntrinsicConstructors";
 const INTRINSIC_PROTOTYPES_SLOT: &str = "__moliIntrinsicPrototypes";
 const PUBLIC_INTERFACE_OBJECTS_SLOT: &str = "__moliPublicInterfaceObjects";
+const INTRINSIC_INTERFACE_REGISTRY_EMBEDDER_DATA_SLOT: i32 = 0;
+
+#[derive(Debug)]
+struct IntrinsicInterfaceRegistryEmbedderDataMarker;
+
+fn intrinsic_registry_owner<'s>(scope: &mut PinScope<'s, '_>) -> Local<'s, Object> {
+    let context = scope.get_current_context();
+    if context
+        .get_slot::<IntrinsicInterfaceRegistryEmbedderDataMarker>()
+        .is_some()
+    {
+        return context
+            .get_embedder_data(scope, INTRINSIC_INTERFACE_REGISTRY_EMBEDDER_DATA_SLOT)
+            .and_then(|value| Local::<Object>::try_from(value).ok())
+            .expect("initialized intrinsic registry embedder data must be an Object");
+    }
+
+    let owner = new_null_prototype_object(scope);
+    context.set_embedder_data(
+        INTRINSIC_INTERFACE_REGISTRY_EMBEDDER_DATA_SLOT,
+        owner.into(),
+    );
+    let previous = context.set_slot(std::rc::Rc::new(
+        IntrinsicInterfaceRegistryEmbedderDataMarker,
+    ));
+    debug_assert!(previous.is_none());
+    owner
+}
 
 fn intrinsic_registry_object<'s>(
     scope: &mut PinScope<'s, '_>,
-    global: Local<'s, Object>,
-    slot: &str,
+    _global: Local<'s, Object>,
+    slot: &'static str,
 ) -> Local<'s, Object> {
-    if let Some(registry) = get_private_object(scope, global, slot) {
+    let owner = intrinsic_registry_owner(scope);
+    let key = v8str(scope, slot);
+    if let Some(registry) = owner
+        .get(scope, key.into())
+        .and_then(|value| Local::<Object>::try_from(value).ok())
+    {
         return registry;
     }
 
     let registry = new_null_prototype_object(scope);
-    set_private_value(scope, global, slot, registry.into());
+    assert!(
+        owner
+            .define_own_property(
+                scope,
+                key.into(),
+                registry.into(),
+                PropertyAttribute::DONT_ENUM
+                    | PropertyAttribute::READ_ONLY
+                    | PropertyAttribute::DONT_DELETE,
+            )
+            .unwrap_or(false),
+        "failed to install intrinsic interface registry map"
+    );
     registry
 }
 
-/// Ensures that a realm global owns its native-only intrinsic interface maps.
+/// Ensures that a V8 Context owns its native-only intrinsic interface maps.
 ///
-/// The maps are stored under V8 private symbols, so author code cannot observe
-/// or replace them through JavaScript reflection. They intentionally contain
-/// realm-local V8 objects rather than Rust `Global` handles, allowing V8 to
-/// reclaim the whole realm graph when its context becomes unreachable.
+/// The traceable owner lives in Context embedder data rather than on the
+/// stable outer global proxy. The traceable owner itself is inaccessible to
+/// author code, so its maps cannot be observed or replaced through JavaScript
+/// reflection. They contain realm-local V8 objects rather than Rust `Global`
+/// handles, allowing V8 to reclaim the whole realm graph when its Context
+/// becomes unreachable.
 pub fn initialize_intrinsic_interface_registry<'s>(
     scope: &mut PinScope<'s, '_>,
     global: Local<'s, Object>,
@@ -35,6 +81,36 @@ pub fn initialize_intrinsic_interface_registry<'s>(
     let _ = intrinsic_registry_object(scope, global, INTRINSIC_CONSTRUCTORS_SLOT);
     let _ = intrinsic_registry_object(scope, global, INTRINSIC_PROTOTYPES_SLOT);
     let _ = intrinsic_registry_object(scope, global, PUBLIC_INTERFACE_OBJECTS_SLOT);
+}
+
+/// Replaces all native-only interface maps for a newly attached realm.
+///
+/// `Context::global()` is V8's stable outer global proxy. Navigation can
+/// detach that proxy and attach it to a new Context, so private properties on
+/// the proxy are not a per-Context owner boundary. Reusing an existing map
+/// would make the new realm retain constructors, prototypes, and closures from
+/// the detached realm. Call this exactly once at the start of each real realm
+/// bootstrap, before any interface can be materialized.
+pub fn reset_intrinsic_interface_registry<'s>(
+    scope: &mut PinScope<'s, '_>,
+    global: Local<'s, Object>,
+) {
+    let context = scope.get_current_context();
+    let owner = new_null_prototype_object(scope);
+    context.set_embedder_data(
+        INTRINSIC_INTERFACE_REGISTRY_EMBEDDER_DATA_SLOT,
+        owner.into(),
+    );
+    if context
+        .get_slot::<IntrinsicInterfaceRegistryEmbedderDataMarker>()
+        .is_none()
+    {
+        let previous = context.set_slot(std::rc::Rc::new(
+            IntrinsicInterfaceRegistryEmbedderDataMarker,
+        ));
+        debug_assert!(previous.is_none());
+    }
+    initialize_intrinsic_interface_registry(scope, global);
 }
 
 fn define_intrinsic<'s>(
@@ -121,11 +197,14 @@ pub fn register_public_interface_object<'s>(
 
 fn registered_intrinsic<'s>(
     scope: &mut PinScope<'s, '_>,
-    global: Local<'s, Object>,
-    slot: &str,
+    _global: Local<'s, Object>,
+    slot: &'static str,
     name: &str,
 ) -> Option<Local<'s, Object>> {
-    let registry = get_private_object(scope, global, slot)?;
+    let owner = intrinsic_registry_owner(scope);
+    let registry = owner
+        .get(scope, v8str(scope, slot).into())
+        .and_then(|value| Local::<Object>::try_from(value).ok())?;
     let key = v8_string(scope, name)?;
     registry
         .get(scope, key.into())
@@ -214,7 +293,7 @@ mod tests {
         INTRINSIC_CONSTRUCTORS_SLOT, INTRINSIC_PROTOTYPES_SLOT, global_constructor_object,
         global_constructor_prototype, initialize_intrinsic_interface_registry,
         register_intrinsic_interface, registered_intrinsic_constructor,
-        registered_intrinsic_prototype,
+        registered_intrinsic_prototype, reset_intrinsic_interface_registry,
     };
     use crate::strings::v8str;
 
@@ -347,6 +426,81 @@ mod tests {
                 .map(|value| value.to_rust_string_lossy(scope));
             assert_ne!(name.as_deref(), Some(INTRINSIC_CONSTRUCTORS_SLOT));
             assert_ne!(name.as_deref(), Some(INTRINSIC_PROTOTYPES_SLOT));
+        }
+    }
+
+    #[test]
+    fn reused_global_proxy_keeps_intrinsic_maps_isolated_by_context() {
+        ensure_v8();
+        let mut isolate = v8::Isolate::new(v8::CreateParams::default());
+        let scope = pin!(v8::HandleScope::new(&mut isolate));
+        let scope = &mut scope.init();
+        let global_template = v8::ObjectTemplate::new(scope);
+        let old_context = v8::Context::new(
+            scope,
+            v8::ContextOptions {
+                global_template: Some(global_template),
+                ..Default::default()
+            },
+        );
+        let stable_proxy;
+        let old_constructor_global;
+        {
+            let old_scope = &mut v8::ContextScope::new(scope, old_context);
+            stable_proxy = old_context.global(old_scope);
+            reset_intrinsic_interface_registry(old_scope, stable_proxy);
+            let old_constructor = v8::Object::new(old_scope);
+            let old_prototype = v8::Object::new(old_scope);
+            assert!(register_intrinsic_interface(
+                old_scope,
+                stable_proxy,
+                "Sample",
+                old_constructor,
+                old_prototype,
+            ));
+            old_constructor_global = v8::Global::new(old_scope, old_constructor);
+        }
+        old_context.detach_global();
+
+        let new_context = v8::Context::new(
+            scope,
+            v8::ContextOptions {
+                global_template: Some(global_template),
+                global_object: Some(stable_proxy.into()),
+                ..Default::default()
+            },
+        );
+        {
+            let new_scope = &mut v8::ContextScope::new(scope, new_context);
+            let rebound_proxy = new_context.global(new_scope);
+            assert!(rebound_proxy.strict_equals(stable_proxy.into()));
+            reset_intrinsic_interface_registry(new_scope, rebound_proxy);
+            assert!(registered_intrinsic_constructor(new_scope, rebound_proxy, "Sample").is_none());
+            let new_constructor = v8::Object::new(new_scope);
+            let new_prototype = v8::Object::new(new_scope);
+            assert!(register_intrinsic_interface(
+                new_scope,
+                rebound_proxy,
+                "Sample",
+                new_constructor,
+                new_prototype,
+            ));
+            let registered = registered_intrinsic_constructor(new_scope, rebound_proxy, "Sample")
+                .expect("new Context intrinsic registration should be readable");
+            assert!(
+                registered.strict_equals(new_constructor.into()),
+                "new Context intrinsic registry returned a different constructor"
+            );
+        }
+
+        {
+            let old_scope = &mut v8::ContextScope::new(scope, old_context);
+            let old_global = old_context.global(old_scope);
+            let old_constructor = v8::Local::new(old_scope, &old_constructor_global);
+            assert!(
+                registered_intrinsic_constructor(old_scope, old_global, "Sample")
+                    .is_some_and(|value| value.strict_equals(old_constructor.into()))
+            );
         }
     }
 }

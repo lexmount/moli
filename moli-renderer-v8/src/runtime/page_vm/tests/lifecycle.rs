@@ -929,6 +929,507 @@ globalThis.__events.push('after setter');
 }
 
 #[tokio::test]
+async fn javascript_location_navigation_checks_the_current_target_document_csp() {
+    run_page_vm_async_test(async move {
+        let page_vm = test_page_vm_with_document_url(
+            Url::parse("https://javascript-target-csp.test/start.html").unwrap(),
+        );
+        let local_executor = page_vm.local_executor.clone();
+
+        let (outcome_is_completed, marker, href) = local_executor
+            .run(async move {
+                let mut page_vm = page_vm;
+                let mut pending_document_lifecycle_turn = None;
+                page_vm
+                    .vm_mut()
+                    .set_response_content_security_policies(&["script-src 'none'".to_owned()]);
+                page_vm.vm_mut().eval(
+                    r#"
+globalThis.__blockedTargetJavascriptUrl = false;
+location.href = "javascript:globalThis.__blockedTargetJavascriptUrl = true";
+"queued"
+"#,
+                )?;
+                let outcome = page_vm
+                    .follow_pending_location_navigation_one_turn_async(
+                        &mut pending_document_lifecycle_turn,
+                        PageVmInitStage::Load,
+                    )
+                    .await?;
+                let marker = page_vm
+                    .vm_mut()
+                    .eval("String(globalThis.__blockedTargetJavascriptUrl)")?;
+                let href = page_vm.vm_mut().eval("location.href")?;
+                Ok::<_, anyhow::Error>((
+                    matches!(
+                        outcome,
+                        crate::runtime::PageVmFollowNavigationTurnOutcome::Completed
+                    ),
+                    marker,
+                    href,
+                ))
+            })
+            .await
+            .expect("target-owned javascript URL CSP check should complete");
+
+        assert!(outcome_is_completed);
+        assert_eq!(marker, "false");
+        assert_eq!(href, "https://javascript-target-csp.test/start.html");
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn javascript_location_navigation_enforces_target_trusted_types_without_throwing() {
+    run_page_vm_async_test(async move {
+        let page_vm = test_page_vm_with_document_url(
+            Url::parse("https://javascript-target-trusted-types.test/start.html").unwrap(),
+        );
+        let local_executor = page_vm.local_executor.clone();
+
+        let (outcome_is_completed, state) = local_executor
+            .run(async move {
+                let mut page_vm = page_vm;
+                let mut pending_document_lifecycle_turn = None;
+                page_vm
+                    .vm_mut()
+                    .set_response_content_security_policies(&[
+                        "require-trusted-types-for 'script'".to_owned(),
+                    ]);
+                page_vm.vm_mut().eval(
+                    r#"
+globalThis.__targetTrustedTypesRan = false;
+globalThis.__targetTrustedTypesViolations = [];
+document.addEventListener("securitypolicyviolation", event => {
+  __targetTrustedTypesViolations.push([
+    event.disposition,
+    event.effectiveDirective,
+    event.sample
+  ].join("|"));
+});
+let synchronousException = "none";
+try {
+  location.href = "javascript:globalThis.__targetTrustedTypesRan = true";
+} catch (error) {
+  synchronousException = error.name;
+}
+globalThis.__targetTrustedTypesSynchronousException = synchronousException;
+"queued"
+"#,
+                )?;
+                let outcome = page_vm
+                    .follow_pending_location_navigation_one_turn_async(
+                        &mut pending_document_lifecycle_turn,
+                        PageVmInitStage::Load,
+                    )
+                    .await?;
+                assert_eq!(
+                    page_vm
+                        .vm_mut()
+                        .drain_pre_domcontentloaded_content_security_policy_violation_tasks_for_test(),
+                    1
+                );
+                let state = page_vm.vm_mut().eval(
+                    r#"
+JSON.stringify({
+  ran: __targetTrustedTypesRan,
+  synchronousException: __targetTrustedTypesSynchronousException,
+  violations: __targetTrustedTypesViolations
+})
+"#,
+                )?;
+                Ok::<_, anyhow::Error>((
+                    matches!(
+                        outcome,
+                        crate::runtime::PageVmFollowNavigationTurnOutcome::Completed
+                    ),
+                    state,
+                ))
+            })
+            .await
+            .expect("target Trusted Types rejection should complete the navigation task");
+
+        assert!(outcome_is_completed);
+        assert_eq!(
+            state,
+            r#"{"ran":false,"synchronousException":"none","violations":["enforce|require-trusted-types-for|Location href|globalThis.__targetTrustedTypesRan = tru"]}"#
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn javascript_location_navigation_uses_the_target_default_policy_rewrite() {
+    run_page_vm_async_test(async move {
+        let page_vm = test_page_vm_with_document_url(
+            Url::parse("https://javascript-target-default-policy.test/start.html").unwrap(),
+        );
+        let local_executor = page_vm.local_executor.clone();
+
+        let state = local_executor
+            .run(async move {
+                let mut page_vm = page_vm;
+                let mut pending_document_lifecycle_turn = None;
+                page_vm
+                    .vm_mut()
+                    .set_response_content_security_policies(&[
+                        "require-trusted-types-for 'script'".to_owned(),
+                    ]);
+                page_vm.vm_mut().eval(
+                    r#"
+globalThis.__targetOriginalScriptRan = false;
+globalThis.__targetRewrittenScriptRan = false;
+globalThis.__targetDefaultPolicyCalls = [];
+trustedTypes.createPolicy("default", {
+  createScript(value, type, sink) {
+    __targetDefaultPolicyCalls.push([value, type, sink]);
+    return value.replace("__targetOriginalScriptRan", "__targetRewrittenScriptRan");
+  }
+});
+location.href = "javascript:globalThis.__targetOriginalScriptRan = true";
+"queued"
+"#,
+                )?;
+                page_vm
+                    .follow_pending_location_navigation_one_turn_async(
+                        &mut pending_document_lifecycle_turn,
+                        PageVmInitStage::Load,
+                    )
+                    .await?;
+                assert_eq!(
+                    page_vm
+                        .vm_mut()
+                        .drain_pre_domcontentloaded_content_security_policy_violation_tasks_for_test(),
+                    0
+                );
+                page_vm.vm_mut().eval(
+                    r#"
+JSON.stringify({
+  original: __targetOriginalScriptRan,
+  rewritten: __targetRewrittenScriptRan,
+  calls: __targetDefaultPolicyCalls
+})
+"#,
+                )
+            })
+            .await
+            .expect("target default policy should rewrite JavaScript URL source");
+
+        assert_eq!(
+            state,
+            r#"{"original":false,"rewritten":true,"calls":[["globalThis.__targetOriginalScriptRan = true","TrustedScript","Location href"]]}"#
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn javascript_location_navigation_report_only_default_policy_exception_continues_original() {
+    run_page_vm_async_test(async move {
+        let page_vm = test_page_vm_with_document_url(
+            Url::parse("https://javascript-target-report-only.test/start.html").unwrap(),
+        );
+        let local_executor = page_vm.local_executor.clone();
+
+        let state = local_executor
+            .run(async move {
+                let mut page_vm = page_vm;
+                let mut pending_document_lifecycle_turn = None;
+                page_vm
+                    .vm_mut()
+                    .set_response_content_security_report_only_policies(&[
+                        "require-trusted-types-for 'script'".to_owned(),
+                    ]);
+                page_vm.vm_mut().eval(
+                    r#"
+globalThis.__targetReportOnlyRan = false;
+globalThis.__targetReportOnlyViolations = [];
+document.addEventListener("securitypolicyviolation", event => {
+  __targetReportOnlyViolations.push([
+    event.disposition,
+    event.effectiveDirective,
+    event.sample
+  ].join("|"));
+});
+trustedTypes.createPolicy("default", {
+  createScript() { throw new Error("navigation default policy failure"); }
+});
+location.href = "javascript:globalThis.__targetReportOnlyRan = true";
+"queued"
+"#,
+                )?;
+                page_vm
+                    .follow_pending_location_navigation_one_turn_async(
+                        &mut pending_document_lifecycle_turn,
+                        PageVmInitStage::Load,
+                    )
+                    .await?;
+                assert_eq!(
+                    page_vm
+                        .vm_mut()
+                        .drain_pre_domcontentloaded_content_security_policy_violation_tasks_for_test(),
+                    1
+                );
+                page_vm.vm_mut().eval(
+                    r#"
+JSON.stringify({
+  ran: __targetReportOnlyRan,
+  violations: __targetReportOnlyViolations
+})
+"#,
+                )
+            })
+            .await
+            .expect("report-only target Trusted Types failure should preserve original source");
+
+        assert_eq!(
+            state,
+            r#"{"ran":true,"violations":["report|require-trusted-types-for|Location href|globalThis.__targetReportOnlyRan = true"]}"#
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn javascript_location_navigations_share_one_target_document_fifo_task_queue() {
+    run_page_vm_async_test(async move {
+        let page_vm = test_page_vm_with_document_url(
+            Url::parse("https://javascript-task-queue.test/start.html").unwrap(),
+        );
+        let local_executor = page_vm.local_executor.clone();
+
+        let (events, pending_after_batch) = local_executor
+            .run(async move {
+                let mut page_vm = page_vm;
+                let mut pending_document_lifecycle_turn = None;
+                page_vm.vm_mut().eval(
+                    r#"
+globalThis.__javascriptUrlTaskQueue = [];
+location.href = "javascript:globalThis.__javascriptUrlTaskQueue.push('first')";
+location.href = "javascript:globalThis.__javascriptUrlTaskQueue.push('second')";
+"queued"
+"#,
+                )?;
+                page_vm
+                    .follow_pending_location_navigation_one_turn_async(
+                        &mut pending_document_lifecycle_turn,
+                        PageVmInitStage::Load,
+                    )
+                    .await?;
+                let pending_after_batch = page_vm.vm().has_pending_location_navigation();
+                let events = page_vm
+                    .vm_mut()
+                    .eval("JSON.stringify(globalThis.__javascriptUrlTaskQueue)")?;
+                Ok::<_, anyhow::Error>((events, pending_after_batch))
+            })
+            .await
+            .expect("queued javascript URL tasks should execute in FIFO order");
+
+        assert_eq!(events, r#"["first","second"]"#);
+        assert!(!pending_after_batch);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn javascript_url_batch_continues_after_an_earlier_task_starts_navigation() {
+    run_page_vm_async_test(async move {
+        let page_vm = test_page_vm_with_document_url(
+            Url::parse("https://javascript-batch-navigation.test/start.html").unwrap(),
+        );
+        let local_executor = page_vm.local_executor.clone();
+
+        let (triggered_navigation, events, pending_url) = local_executor
+            .run(async move {
+                let mut page_vm = page_vm;
+                let mut pending_document_lifecycle_turn = None;
+                page_vm.vm_mut().eval(
+                    r#"
+globalThis.__javascriptUrlNavigationBatch = [];
+location.href = "javascript:(location.href = 'https://javascript-batch-navigation.test/surviving.html', globalThis.__javascriptUrlNavigationBatch.push('first'))";
+location.href = "javascript:globalThis.__javascriptUrlNavigationBatch.push('second')";
+"queued"
+"#,
+                )?;
+                let outcome = page_vm
+                    .follow_pending_location_navigation_one_turn_async(
+                        &mut pending_document_lifecycle_turn,
+                        PageVmInitStage::Load,
+                    )
+                    .await?;
+                let events = page_vm
+                    .vm_mut()
+                    .eval("JSON.stringify(globalThis.__javascriptUrlNavigationBatch)")?;
+                let pending_url = page_vm
+                    .vm_mut()
+                    .take_pending_location_navigation_with_seed()
+                    .map(|pending| pending.url.to_string());
+                Ok::<_, anyhow::Error>((
+                    matches!(
+                        outcome,
+                        crate::runtime::PageVmFollowNavigationTurnOutcome::TriggeredNavigation {
+                            stage: PageVmInitStage::Load
+                        }
+                    ),
+                    events,
+                    pending_url,
+                ))
+            })
+            .await
+            .expect("a queued javascript URL batch should outlive an earlier task's navigation");
+
+        assert!(triggered_navigation);
+        assert_eq!(events, r#"["first","second"]"#);
+        assert_eq!(
+            pending_url.as_deref(),
+            Some("https://javascript-batch-navigation.test/surviving.html")
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn javascript_url_string_replacement_retires_the_rest_of_its_document_batch() {
+    run_page_vm_async_test(async move {
+        let page_vm = test_page_vm_with_document_url(
+            Url::parse("https://javascript-batch-replacement.test/start.html").unwrap(),
+        );
+        let local_executor = page_vm.local_executor.clone();
+
+        let (events, body_text) = local_executor
+            .run(async move {
+                let mut page_vm = page_vm;
+                let mut pending_document_lifecycle_turn = None;
+                page_vm.vm_mut().eval(
+                    r#"
+globalThis.__javascriptUrlReplacementBatch = [];
+location.href = "javascript:(globalThis.__javascriptUrlReplacementBatch.push('first'), '<body>replacement</body>')";
+location.href = "javascript:globalThis.__javascriptUrlReplacementBatch.push('retired-second')";
+"queued"
+"#,
+                )?;
+                page_vm
+                    .follow_pending_location_navigation_one_turn_async(
+                        &mut pending_document_lifecycle_turn,
+                        PageVmInitStage::Load,
+                    )
+                    .await?;
+                let events = page_vm
+                    .vm_mut()
+                    .eval("JSON.stringify(globalThis.__javascriptUrlReplacementBatch)")?;
+                let body_text = page_vm.vm_mut().eval("document.body.textContent")?;
+                Ok::<_, anyhow::Error>((events, body_text))
+            })
+            .await
+            .expect("string replacement should retire the old Document's remaining URL tasks");
+
+        assert_eq!(events, r#"["first"]"#);
+        assert_eq!(body_text, "replacement");
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn javascript_string_completion_does_not_replace_after_execution_starts_navigation() {
+    run_page_vm_async_test(async move {
+        let page_vm = test_page_vm_with_document_url(
+            Url::parse("https://javascript-currentness.test/start.html").unwrap(),
+        );
+        let local_executor = page_vm.local_executor.clone();
+
+        let (triggered_navigation, body_text, pending_url) = local_executor
+            .run(async move {
+                let mut page_vm = page_vm;
+                let mut pending_document_lifecycle_turn = None;
+                page_vm.vm_mut().eval(
+                    r#"
+document.body.textContent = "original";
+location.href = "javascript:(location.href = 'https://javascript-currentness.test/surviving.html', '<body>stale string completion</body>')";
+"queued"
+"#,
+                )?;
+                let outcome = page_vm
+                    .follow_pending_location_navigation_one_turn_async(
+                        &mut pending_document_lifecycle_turn,
+                        PageVmInitStage::Load,
+                    )
+                    .await?;
+                let body_text = page_vm.vm_mut().eval("document.body.textContent")?;
+                let pending_url = page_vm
+                    .vm_mut()
+                    .take_pending_location_navigation_with_seed()
+                    .map(|pending| pending.url.to_string());
+                Ok::<_, anyhow::Error>((
+                    matches!(
+                        outcome,
+                        crate::runtime::PageVmFollowNavigationTurnOutcome::TriggeredNavigation {
+                            stage: PageVmInitStage::Load
+                        }
+                    ),
+                    body_text,
+                    pending_url,
+                ))
+            })
+            .await
+            .expect("javascript URL currentness check should complete");
+
+        assert!(triggered_navigation);
+        assert_eq!(body_text, "original");
+        assert_eq!(
+            pending_url.as_deref(),
+            Some("https://javascript-currentness.test/surviving.html")
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn javascript_url_exception_does_not_fail_or_replace_the_target_page() {
+    run_page_vm_async_test(async move {
+        let page_vm = test_page_vm_with_document_url(
+            Url::parse("https://javascript-exception.test/start.html").unwrap(),
+        );
+        let local_executor = page_vm.local_executor.clone();
+
+        let (outcome_is_completed, body_text, href) = local_executor
+            .run(async move {
+                let mut page_vm = page_vm;
+                let mut pending_document_lifecycle_turn = None;
+                page_vm.vm_mut().eval(
+                    r#"
+document.body.textContent = "preserved";
+location.href = "javascript:throw new Error('javascript URL failure')";
+"queued"
+"#,
+                )?;
+                let outcome = page_vm
+                    .follow_pending_location_navigation_one_turn_async(
+                        &mut pending_document_lifecycle_turn,
+                        PageVmInitStage::Load,
+                    )
+                    .await?;
+                let body_text = page_vm.vm_mut().eval("document.body.textContent")?;
+                let href = page_vm.vm_mut().eval("location.href")?;
+                Ok::<_, anyhow::Error>((
+                    matches!(
+                        outcome,
+                        crate::runtime::PageVmFollowNavigationTurnOutcome::Completed
+                    ),
+                    body_text,
+                    href,
+                ))
+            })
+            .await
+            .expect("javascript URL exception should remain a completed target task");
+
+        assert!(outcome_is_completed);
+        assert_eq!(body_text, "preserved");
+        assert_eq!(href, "https://javascript-exception.test/start.html");
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn javascript_string_completion_restarts_renderer_lifecycle_on_same_document_token() {
     run_page_vm_async_test(async move {
         let page_vm = test_page_vm_with_document_url(

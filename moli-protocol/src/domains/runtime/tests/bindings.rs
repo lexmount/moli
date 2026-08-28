@@ -739,7 +739,7 @@ async fn remove_binding_prevents_scoped_binding_replay_across_navigation() {
     }));
 
     ctx.sent.clear();
-    ctx.process_async(json!({
+    ctx.process_and_wait_for_response_async(json!({
         "id": 509,
         "method": "Page.navigate",
         "sessionId": "SID-1",

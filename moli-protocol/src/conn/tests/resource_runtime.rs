@@ -58,6 +58,9 @@ async fn commit_navigation_outcome_for_test(
         NavigationLoadOutcome::Download(_) => {
             panic!("test navigation should not resolve to a download")
         }
+        NavigationLoadOutcome::NoCommitResponse(_) => {
+            panic!("test navigation should not resolve to a no-commit response")
+        }
         NavigationLoadOutcome::NetworkFailure(error_text) => {
             panic!("test navigation should not fail: {error_text}")
         }
@@ -1800,7 +1803,7 @@ async fn direct_runtime_evaluate_javascript_dialog_uses_inactive_background_owne
 }
 
 #[tokio::test]
-async fn direct_runtime_evaluate_popup_creates_target_in_inactive_background_owner() {
+async fn direct_runtime_evaluate_foreground_popup_activates_its_inactive_owner() {
     let mut ctx = crate::testing::TestContext::new();
     let page_url = "data:text/html,<!doctype html><title>popup-owner</title>";
     let background = BackgroundTarget::with_url(
@@ -1860,26 +1863,24 @@ async fn direct_runtime_evaluate_popup_creates_target_in_inactive_background_own
         created["params"]["targetInfo"]["openerId"],
         json!("TID-popup-background")
     );
-    assert!(
-        ctx.conn.browser_context.is_none(),
-        "direct Runtime.evaluate popup output should not activate the inactive owner"
-    );
     let popup_target_id = created["params"]["targetInfo"]["targetId"]
         .as_str()
         .expect("popup target id")
         .to_owned();
-    let inactive = ctx
+    let active = ctx
         .conn
-        .inactive_browser_contexts
-        .iter()
-        .find(|bc| bc.id == "BID-popup-background")
-        .expect("inactive owner should remain parked");
+        .browser_context
+        .as_ref()
+        .expect("foreground popup should activate its owner browser context");
+    assert_eq!(active.id, "BID-popup-background");
+    assert_eq!(active.active_target_id(), Some(popup_target_id.as_str()));
     assert!(
-        inactive
-            .background_target(&popup_target_id)
-            .is_some_and(|target| target.target_url() == "https://example.com/owner-popup"),
-        "popup target should be staged in the inactive owner browser context"
+        active
+            .target_url_for_target(&popup_target_id)
+            .is_some_and(|url| url == "https://example.com/owner-popup"),
+        "foreground popup should retain its exact target URL after activation"
     );
+    assert!(active.background_target("TID-popup-background").is_some());
 }
 
 #[tokio::test]

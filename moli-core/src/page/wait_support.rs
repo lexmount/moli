@@ -6,11 +6,36 @@ use super::RendererPageDiagnosticsSnapshot;
 use super::protocol_support::SubresourceResponseWaitCriteria;
 use super::{CompletedPageCommand, Page, PendingPageCommand, RendererCommandTurnOutput};
 use crate::{
+    RendererOutputFence,
     network::ResourceRequestClient,
     renderer::{RendererDocumentQuerySelectorNode, RendererPageCommand, RendererPageReply},
 };
 
 impl Page {
+    /// Runs an already-queued target-Document `javascript:` URL task at the
+    /// protocol navigation owner boundary.
+    ///
+    /// The command completion is the causal barrier that prevents a browser
+    /// navigation commit from replacing the target Document first.  Its
+    /// concrete renderer output remains on the Page stream and the returned
+    /// fence is available to owners that also need to order protocol output.
+    pub async fn run_pending_javascript_url_tasks_before_browser_navigation(
+        &mut self,
+    ) -> Result<Option<RendererOutputFence>> {
+        let pending = self.start_page_command(
+            RendererPageCommand::RunPendingJavascriptUrlTasksBeforeBrowserNavigation,
+        )?;
+        let completion = pending.wait().await?;
+        let renderer_output_predecessor = completion.renderer_output_predecessor();
+        let reply = self.finish_page_command(completion);
+        expect_page_reply!(
+            reply,
+            "pending javascript URL task command",
+            "a unit reply",
+            RendererPageReply::Unit => Ok(renderer_output_predecessor),
+        )
+    }
+
     pub async fn ms_to_next_timeout(&mut self) -> Result<Option<u64>> {
         let reply = self
             .dispatch_page_command_async(RendererPageCommand::MsToNextTimeout)

@@ -17,22 +17,7 @@ fn idb_factory_effective_execution_owner<'s>(
     factory: v8::Local<'s, v8::Object>,
 ) -> Option<IndexedDbExecutionOwner> {
     let stored_owner = indexed_db_typed_execution_owner(scope, factory)?;
-    let Some(popup_id) = crate::native_bridge::active_lightweight_popup_id(scope) else {
-        return Some(stored_owner);
-    };
-    let runtime_factory = indexed_db_runtime_factory(scope)?;
-    if !factory.strict_equals(runtime_factory.into()) {
-        return Some(stored_owner);
-    }
-    let host_ptr = context_host_ptr_from_global_bridge(scope)?;
-    let execution_context = unsafe { &*host_ptr }
-        .current_runtime_window_execution_context_identity_for_dispatch_scope(
-            scope,
-            crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id),
-        )?;
-    Some(IndexedDbExecutionOwner::for_window_execution_context(
-        execution_context,
-    ))
+    Some(stored_owner)
 }
 
 fn idb_factory_effective_storage_scope<'s>(

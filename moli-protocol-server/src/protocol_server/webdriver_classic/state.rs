@@ -1362,6 +1362,19 @@ async fn classic_session_runtime_loop(
                 adapter_scheduler.schedule_turn_if_needed(&scheduler, page_javascript_blocked);
                 tokio::select! {
                     biased;
+                    continuation = receivers.document_continuation_completion_rx.recv() => {
+                        let Some(continuation) = continuation else {
+                            break;
+                        };
+                        if !attached.actor.handle_background_navigation_completion(
+                                &mut scheduler,
+                                &mut receivers,
+                                moli_protocol::BackgroundNavigationCompletion::document_continuation(continuation),
+                            ).await
+                        {
+                            detach_bidi = true;
+                        }
+                    }
                     completion = receivers.background_navigation_completion_rx.recv() => {
                         let Some(completion) = completion else {
                             break;
@@ -1497,6 +1510,21 @@ async fn classic_session_runtime_loop(
             adapter_scheduler.schedule_turn_if_needed(&scheduler, page_javascript_blocked);
             tokio::select! {
                 biased;
+                continuation = receivers.document_continuation_completion_rx.recv() => {
+                    let Some(continuation) = continuation else {
+                        break;
+                    };
+                    if scheduler
+                        .drain_background_navigation_completion_with_progress_barrier(
+                            moli_protocol::BackgroundNavigationCompletion::document_continuation(continuation),
+                            &mut receivers,
+                        )
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
                 completion = receivers.background_navigation_completion_rx.recv() => {
                     let Some(completion) = completion else {
                         break;

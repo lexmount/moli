@@ -877,7 +877,7 @@ pub(crate) fn emit_cdp_network_automation_event(
             );
         }
         AutomationEvent::NetworkFetchError(network_event) => {
-            let params = json!({
+            let mut params = json!({
                 "requestId": network_event.request_id.as_str(),
                 "timestamp": network_event.timestamp.unwrap_or_default(),
                 "type": network_event
@@ -887,6 +887,9 @@ pub(crate) fn emit_cdp_network_automation_event(
                 "errorText": network_event.error_text.as_deref().unwrap_or_default(),
                 "canceled": network_event.loading_failed_canceled,
             });
+            if network_event.error_text.as_deref() == Some("net::ERR_BLOCKED_BY_RESPONSE") {
+                params["blockedReason"] = json!("CoopSandboxedIframeCannotNavigateToCoopPage");
+            }
             out.push_network_automation_event(
                 "Network.loadingFailed",
                 params,

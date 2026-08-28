@@ -163,7 +163,7 @@ async fn close_target_inner_async(
             .and_then(|target| target.session_id().map(str::to_owned));
         let owner_scope = crate::conn::CommandOwnerScope::from_session_and_owner_route(
             session_id.as_deref(),
-            session_id.is_none().then_some(target_route),
+            Some(target_route),
         );
         let renderer_output_predecessor =
             events::fail_pending_fetch_state_for_target_background_events_async(
@@ -238,15 +238,13 @@ async fn close_target_inner_async(
     Ok(DevToolsCloseTargetResult { success: true })
 }
 
-/// Preserves the final renderer publication without changing the ordinary
+/// Preserves final renderer publications without changing the ordinary
 /// `Target.closeTarget` transaction boundary.
 ///
-/// Most target closes produce no renderer output. Those closes still complete
-/// synchronously and return their detach/destroy side effects with the command,
-/// matching Chromium's target-domain behavior. A paused request can first
-/// produce a terminal renderer record, however. Only that case must defer
-/// target retirement until the command's exact cursor has crossed ordered
-/// ingress; otherwise retiring the route would discard that final record.
+/// A loaded target appends pagehide/unload and a typed ACK; paused network work
+/// can append terminal records before that ACK. Target retirement therefore
+/// waits for the command's exact latest cursor to cross ordered ingress, or it
+/// could discard output produced by the Page being closed.
 async fn settle_target_close_after_pending_fetches_async(
     conn: &mut CdpConnection,
     out: &mut events::TargetProtocolSideEffects,
@@ -255,17 +253,31 @@ async fn settle_target_close_after_pending_fetches_async(
     owner_scope: crate::conn::CommandOwnerScope,
     target_id: String,
 ) {
+    if let Some(predecessor) = renderer_output_predecessor {
+        command_context.set_renderer_output_predecessor(predecessor);
+    }
+
+    // Browser-owned Target.closeTarget must not resolve while its target is
+    // merely waiting for a later unload publication. The Page command appends
+    // pagehide/unload and a typed ACK after any network terminals already in
+    // this stream; retaining that latest cursor on the command lets ingress
+    // perform teardown before the DevTools result is exposed.
+    if crate::domains::page::dispatch_browser_owned_close_unload_before_command_response(
+        conn,
+        &owner_scope,
+        moli_core::RendererTopLevelCloseSource::Target,
+        command_context,
+    )
+    .await
+    {
+        return;
+    }
+
     let action = crate::domains::page::PageTargetTerminationOwnerAction::new(
         owner_scope,
         target_id,
         crate::domains::page::PageTargetTerminationKind::TargetClose,
     );
-    if let Some(predecessor) = renderer_output_predecessor {
-        command_context.set_renderer_output_predecessor(predecessor);
-        conn.publish_page_target_termination_owner_action(action);
-        return;
-    }
-
     let outcome =
         crate::domains::page::complete_page_target_termination_owner_action_async(conn, action)
             .await;

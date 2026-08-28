@@ -5266,6 +5266,12 @@ async fn close_aborts_paused_response_stage_runtime_xhr_subresource() {
         "sessionId": "SID-1"
     }))
     .await;
+    ctx.wait_until_scheduler_state("Page.close unload ACK teardown", |conn| {
+        conn.browser_context
+            .as_ref()
+            .is_some_and(|browser_context| !browser_context.has_active_target())
+    })
+    .await;
     ctx.expect_result(898, json!({}), Some("SID-1"));
 
     let failed = ctx
@@ -5609,6 +5615,12 @@ async fn close_aborts_paused_runtime_xhr_auth_subresource() {
         "method": "Page.close",
         "sessionId": "SID-1"
     }))
+    .await;
+    ctx.wait_until_scheduler_state("Page.close unload ACK teardown", |conn| {
+        conn.browser_context
+            .as_ref()
+            .is_some_and(|browser_context| !browser_context.has_active_target())
+    })
     .await;
     ctx.expect_result(7944, json!({}), Some("SID-1"));
 

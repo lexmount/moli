@@ -102,8 +102,7 @@ pub(crate) fn abort_signal_any_callback<'s>(
             .abort
             .signal_state(source_signal_id)
             .filter(|state| state.aborted)
-            .and_then(|state| state.reason.as_ref())
-            .map(|reason| v8::Local::new(scope, reason))
+            .and_then(|_| AbortStore::signal_reason_from_object(scope, *source_signal))
         else {
             continue;
         };

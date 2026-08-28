@@ -252,6 +252,15 @@ fn followed_navigation_returns_at_document_commit_before_parsing_buffered_body()
                 .expect("complete response should publish its terminal");
 
             let creation_executor = local_executor.clone();
+            let mut env = super::tests::default_test_page_vm_env_config();
+            env.document_start_scripts.push(crate::DocumentStartScript {
+                registry_key: Some("commit-boundary-probe".to_owned()),
+                source: "globalThis.__documentStartAfterCommit = true".to_owned(),
+                world_name: None,
+                has_bidi_channel_argument: false,
+                browser_internal: false,
+                bidi_channel_handoffs: Vec::new(),
+            });
             let creation = super::access::run_named_owner_local_task(
                 local_executor,
                 "followed-navigation commit bootstrap channel closed",
@@ -260,7 +269,7 @@ fn followed_navigation_returns_at_document_commit_before_parsing_buffered_body()
                         page_id,
                         creation_executor,
                         &loader,
-                        &super::tests::default_test_page_vm_env_config(),
+                        &env,
                         hooks,
                         PageVmInitStage::Load,
                         Instant::now(),
@@ -299,6 +308,64 @@ fn followed_navigation_returns_at_document_commit_before_parsing_buffered_body()
             assert!(
                 !parsed_target,
                 "buffered response bytes must remain parser input until after Document publication"
+            );
+            let observation_executor = residence.page_vm().local_executor.clone();
+            let (residence, document_start_before_commit) =
+                super::access::run_named_owner_local_task(
+                    observation_executor,
+                    "followed-navigation pre-commit document-start observation closed",
+                    async move {
+                        let mut residence = residence;
+                        let observed = residence.page_vm_mut().vm_mut().eval(
+                            "String(globalThis.__documentStartAfterCommit === true)",
+                        )?;
+                        Ok::<_, anyhow::Error>((residence, observed))
+                    },
+                )
+                .await
+                .expect("pre-commit document-start observation should run");
+            assert_eq!(
+                document_start_before_commit, "false",
+                "document-start scripts must remain in the phase-one residence until after Document publication"
+            );
+
+            let resumed = resume_phase_one_once(
+                residence,
+                "followed-navigation post-commit document-start continuation closed",
+            )
+            .await;
+            let observation_executor = match &resumed {
+                ParseTimePageVmCreationOutcome::PendingPhaseOne(residence) => residence.page_vm(),
+                ParseTimePageVmCreationOutcome::TriggeredNavigation { page_vm, .. }
+                | ParseTimePageVmCreationOutcome::ContinuePhaseTwo { page_vm, .. } => page_vm,
+            }
+            .local_executor
+            .clone();
+            let (_, document_start_after_commit) = super::access::run_named_owner_local_task(
+                observation_executor,
+                "followed-navigation post-commit document-start observation closed",
+                async move {
+                    let mut resumed = resumed;
+                    let page_vm = match &mut resumed {
+                        ParseTimePageVmCreationOutcome::PendingPhaseOne(residence) => {
+                            residence.page_vm_mut()
+                        }
+                        ParseTimePageVmCreationOutcome::TriggeredNavigation { page_vm, .. }
+                        | ParseTimePageVmCreationOutcome::ContinuePhaseTwo { page_vm, .. } => {
+                            page_vm
+                        }
+                    };
+                    let observed = page_vm
+                        .vm_mut()
+                        .eval("String(globalThis.__documentStartAfterCommit === true)")?;
+                    Ok::<_, anyhow::Error>((resumed, observed))
+                },
+            )
+            .await
+            .expect("post-commit document-start observation should run");
+            assert_eq!(
+                document_start_after_commit, "true",
+                "the exact phase-one continuation must execute deferred document-start scripts after commit"
             );
         }));
     });

@@ -47,6 +47,13 @@ pub(crate) fn runtime_binding_callback(
     let Ok(data) = v8::Local::<v8::Object>::try_from(args.data()) else {
         return;
     };
+    if crate::util::page_context_is_disconnected(scope.get_current_context())
+        || data
+            .get_creation_context(scope)
+            .is_some_and(crate::util::page_context_is_disconnected)
+    {
+        return;
+    }
     let Some(host_value) = data.get(scope, v8str(scope, "host").into()) else {
         return;
     };

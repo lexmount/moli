@@ -335,6 +335,18 @@ impl ServiceWorkerRuntimeService {
         &self.inner.service_lane
     }
 
+    pub(super) fn open_window_completion_queue(
+        &self,
+    ) -> &Arc<super::service_lane::ServiceWorkerOpenWindowCompletionQueue> {
+        &self.inner.open_window_completion_queue
+    }
+
+    pub(crate) fn clients_open_window_completion_endpoint(
+        &self,
+    ) -> super::service_lane::ServiceWorkerOpenWindowCompletionEndpoint {
+        self.inner.open_window_completion_queue.endpoint()
+    }
+
     pub(crate) fn add_owner_wake_sender(&self, sender: ServiceWorkerRuntimeOwnerWakeSender) {
         self.inner.owner_wake.add_owner_wake_sender(sender.clone());
         if self.pending_service_lane_event_count() > 0 {
@@ -3555,6 +3567,96 @@ mod tests {
             .client_navigate_result_for_current_window_client(version_id, about_blank_client_id)
             .expect("about:blank client should resolve as a successful null result");
         assert_eq!(about_blank_result, None);
+
+        {
+            let mut state = service.inner.state.lock();
+            state
+                .live_clients
+                .get_mut(&controlled_client_id)
+                .expect("controlled client should remain live")
+                .execution_ready = false;
+            state
+                .live_clients
+                .get_mut(&out_of_scope_same_origin_client_id)
+                .expect("same-origin client should remain live")
+                .discarded_or_frozen = true;
+        }
+        assert_eq!(
+            service
+                .client_navigate_result_for_current_window_client(version_id, controlled_client_id)
+                .expect("not-ready client should produce a successful null result"),
+            None
+        );
+        assert_eq!(
+            service
+                .client_navigate_result_for_current_window_client(
+                    version_id,
+                    out_of_scope_same_origin_client_id
+                )
+                .expect("discarded client should produce a successful null result"),
+            None
+        );
+    }
+
+    #[test]
+    fn clients_open_window_page_completion_requires_exact_reserved_page_identity() {
+        let service = new_service_worker_runtime_service();
+        let registration_id = ServiceWorkerRegistrationId(1);
+        let version_id = ServiceWorkerVersionId(1);
+        insert_registered_version(
+            &service,
+            registration_id,
+            version_id,
+            url("https://example.test/app/worker.js"),
+            url("https://example.test/app/"),
+            [],
+        );
+        let client_id =
+            register_client_for_test(&service, url("https://example.test/app/opened.html"));
+        let expected_page_id = crate::runtime::PageId::new_for_testing(41);
+        let different_page_id = crate::runtime::PageId::new_for_testing(42);
+
+        let exact = crate::service_worker_runtime::ServiceWorkerOpenWindowPageCompletion {
+            expected_page_id,
+            committed_page: Some((expected_page_id, client_id.as_u64())),
+            request_id: 51,
+            source_version_id: version_id,
+            source_run: crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
+        };
+        let exposed = service
+            .clients_open_window_result_for_page_completion(&exact)
+            .expect("exact committed Page should produce a result")
+            .expect("same-origin current WindowClient should be exposed");
+        assert_eq!(exposed.id, client_id);
+
+        let mismatched = crate::service_worker_runtime::ServiceWorkerOpenWindowPageCompletion {
+            expected_page_id,
+            committed_page: Some((different_page_id, client_id.as_u64())),
+            request_id: 52,
+            source_version_id: version_id,
+            source_run: crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
+        };
+        assert_eq!(
+            service
+                .clients_open_window_result_for_page_completion(&mismatched)
+                .expect("a mismatched Page should resolve successfully"),
+            None,
+            "a concurrent same-URL Page must not complete another reservation"
+        );
+
+        let uncommitted = crate::service_worker_runtime::ServiceWorkerOpenWindowPageCompletion {
+            expected_page_id,
+            committed_page: None,
+            request_id: 53,
+            source_version_id: version_id,
+            source_run: crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
+        };
+        assert_eq!(
+            service
+                .clients_open_window_result_for_page_completion(&uncommitted)
+                .expect("an uncommitted open should resolve successfully"),
+            None
+        );
     }
 
     #[test]

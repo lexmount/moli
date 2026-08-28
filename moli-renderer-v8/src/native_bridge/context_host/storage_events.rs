@@ -19,8 +19,7 @@ impl JsContextHost {
         area_key: &str,
         data: RendererPageStorageEventData,
     ) -> usize {
-        let targets =
-            self.storage_event_delivery_targets(source, data.is_session(), origin, area_key);
+        let targets = self.storage_event_delivery_targets(source, origin, area_key);
         let sender = self.page_storage_event_delivery_sender();
         let mut queued = 0;
         for target in targets {
@@ -42,7 +41,6 @@ impl JsContextHost {
     fn storage_event_delivery_targets(
         &mut self,
         source: WindowTaskTarget,
-        is_session: bool,
         origin: &str,
         area_key: &str,
     ) -> Vec<WindowTaskTarget> {
@@ -50,8 +48,7 @@ impl JsContextHost {
         let top_origin = moli_url::origin_ascii_serialization(self.document_url());
 
         let source_scope = source.dispatch_scope();
-        let top_is_eligible = !matches!(source_scope, OwnerDispatchScope::Top)
-            && (!is_session || !matches!(source_scope, OwnerDispatchScope::LightweightPopup(_)));
+        let top_is_eligible = !matches!(source_scope, OwnerDispatchScope::Top);
         if top_is_eligible {
             let target_scope = self.top_web_storage_scope();
             if target_scope.origin() == origin && target_scope.area_key() == area_key {
@@ -59,43 +56,20 @@ impl JsContextHost {
             }
         }
 
-        let child_contexts_are_eligible =
-            !is_session || !matches!(source_scope, OwnerDispatchScope::LightweightPopup(_));
-        if child_contexts_are_eligible {
-            for handle in self.child_browsing_context_handles_in_document_order() {
-                let dispatch_scope = OwnerDispatchScope::Child(handle);
-                if dispatch_scope == source_scope {
-                    continue;
-                }
-                let Some(target_scope) =
-                    self.child_browsing_context_web_storage_scope(handle, &top_origin)
-                else {
-                    continue;
-                };
-                if target_scope.origin() != origin || target_scope.area_key() != area_key {
-                    continue;
-                }
-                self.push_current_storage_event_target(dispatch_scope, &mut targets);
+        for handle in self.child_browsing_context_handles_in_document_order() {
+            let dispatch_scope = OwnerDispatchScope::Child(handle);
+            if dispatch_scope == source_scope {
+                continue;
             }
-        }
-
-        if !is_session {
-            for popup_id in self.open_lightweight_popup_ids() {
-                let dispatch_scope = OwnerDispatchScope::LightweightPopup(popup_id);
-                if dispatch_scope == source_scope {
-                    continue;
-                }
-                let Some(target_context) = self.storage_context_for_lightweight_popup(popup_id)
-                else {
-                    continue;
-                };
-                if target_context.origin() != origin
-                    || target_context.web_storage_area_key() != area_key
-                {
-                    continue;
-                }
-                self.push_current_storage_event_target(dispatch_scope, &mut targets);
+            let Some(target_scope) =
+                self.child_browsing_context_web_storage_scope(handle, &top_origin)
+            else {
+                continue;
+            };
+            if target_scope.origin() != origin || target_scope.area_key() != area_key {
+                continue;
             }
+            self.push_current_storage_event_target(dispatch_scope, &mut targets);
         }
 
         targets
@@ -158,25 +132,6 @@ impl JsContextHost {
                     return false;
                 };
                 self.dispatch_child_window_event(scope, handle, "storage", event);
-                true
-            }
-            OwnerDispatchScope::LightweightPopup(popup_id) => {
-                if !self.ensure_lightweight_popup_execution_context(scope, popup_id) {
-                    return false;
-                }
-                let Some((_, context)) =
-                    self.window_execution_context(scope, target.owner(), target.dispatch_scope())
-                else {
-                    return false;
-                };
-                let scope = &mut v8::ContextScope::new(scope, context);
-                let Some(window) = self.lightweight_popup_window(scope, popup_id) else {
-                    return false;
-                };
-                let Some(event) = self.storage_event_for_target(scope, window, data) else {
-                    return false;
-                };
-                self.dispatch_lightweight_popup_window_event(scope, popup_id, "storage", event);
                 true
             }
         }

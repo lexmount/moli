@@ -8081,7 +8081,7 @@ async fn websocket_bidi_call_function_user_activation_controls_navigator_and_cop
         );
     }
 
-    let restored = send_bidi_command(
+    let persisted = send_bidi_command(
         &mut socket,
         5,
         "script.callFunction",
@@ -8095,20 +8095,42 @@ async fn websocket_bidi_call_function_user_activation_controls_navigator_and_cop
     )
     .await;
     assert_eq!(
-        restored["result"]["result"],
+        persisted["result"]["result"],
         json!({
             "type": "boolean",
-            "value": false
+            "value": true
         }),
-        "BiDi userActivation should be scoped to the wrapped call: {restored:?}"
+        "BiDi userActivation should persist until expiry or consumption: {persisted:?}"
+    );
+
+    let consumed = send_bidi_command(
+        &mut socket,
+        6,
+        "script.callFunction",
+        json!({
+            "functionDeclaration": "() => { const opened = window.open(); return opened !== null && !navigator.userActivation.isActive && navigator.userActivation.hasBeenActive; }",
+            "awaitPromise": true,
+            "target": {
+                "context": context_id.clone()
+            }
+        }),
+    )
+    .await;
+    assert_eq!(
+        consumed["result"]["result"],
+        json!({
+            "type": "boolean",
+            "value": true
+        }),
+        "window.open() should consume transient BiDi activation but retain sticky activation: {consumed:?}"
     );
 
     let spoofed_global = send_bidi_command(
         &mut socket,
-        6,
+        7,
         "script.evaluate",
         json!({
-            "expression": "globalThis.__moliWebDriverBidiUserActivation = true; navigator.userActivation.isActive || navigator.userActivation.hasBeenActive",
+            "expression": "globalThis.__moliWebDriverBidiUserActivation = true; navigator.userActivation.isActive",
             "awaitPromise": true,
             "target": {
                 "context": context_id.clone()
@@ -8125,7 +8147,7 @@ async fn websocket_bidi_call_function_user_activation_controls_navigator_and_cop
         "page globals must not spoof BiDi userActivation: {spoofed_global:?}"
     );
 
-    for (id, user_activation, expected) in [(7_u64, false, false), (8, true, true)] {
+    for (id, user_activation, expected) in [(8_u64, false, false), (9, true, true)] {
         let response = send_bidi_command(
             &mut socket,
             id,

@@ -4998,7 +4998,7 @@ async fn cross_origin_window_proxy_exposes_standard_noop_shape() -> Result<()> {
                 let documentAccess;\
                 try {\
                   void win.document;\
-                  documentAccess = 'read';\
+                  documentAccess = win.document === win[1] ? 'named-child' : 'read';\
                 } catch (error) {\
                   documentAccess = `${error && error.name}:${error instanceof DOMException}`;\
                 }\
@@ -5109,7 +5109,13 @@ async fn cross_origin_window_proxy_exposes_standard_noop_shape() -> Result<()> {
                   'replace',\
                   '__moliChildBrowsingContextHandle',\
                   'unknownCrossOriginProbe'\
-                ].map((name) => `${name}:${name in win.location}:${Object.prototype.hasOwnProperty.call(win.location, name)}`);\
+                ].map((name) => {\
+                  try {\
+                    return `${name}:${name in win.location}:${Object.prototype.hasOwnProperty.call(win.location, name)}`;\
+                  } catch (error) {\
+                    return `${name}:${error && error.name}:${error instanceof DOMException}`;\
+                  }\
+                });\
                 const calls = ['blur', 'focus', 'close'].map((name) => {\
                   try {\
                     return `${name}:${String(win[name]())}`;\
@@ -5146,14 +5152,36 @@ async fn cross_origin_window_proxy_exposes_standard_noop_shape() -> Result<()> {
                 const lengthDescriptor = Object.getOwnPropertyDescriptor(win, 'length');\
                 const locationDescriptor = Object.getOwnPropertyDescriptor(win, 'location');\
                 const locationHrefDescriptor = Object.getOwnPropertyDescriptor(win.location, 'href');\
-                const locationHashDescriptor = Object.getOwnPropertyDescriptor(win.location, 'hash');\
+                let locationHashDescriptorShape;\
+                try {\
+                  const locationHashDescriptor = Object.getOwnPropertyDescriptor(win.location, 'hash');\
+                  locationHashDescriptorShape = {\
+                    enumerable: locationHashDescriptor?.enumerable,\
+                    configurable: locationHashDescriptor?.configurable,\
+                    getterType: typeof locationHashDescriptor?.get,\
+                    setterType: typeof locationHashDescriptor?.set\
+                  };\
+                } catch (error) {\
+                  locationHashDescriptorShape = { error: `${error && error.name}:${error instanceof DOMException}` };\
+                }\
                 const postMessageDescriptor = Object.getOwnPropertyDescriptor(win, 'postMessage');\
                 const noopDescriptors = ['blur', 'focus', 'close'].map((name) => {\
                   const descriptor = Object.getOwnPropertyDescriptor(win, name);\
                   return `${name}:${descriptor?.enumerable}:${descriptor?.configurable}:${descriptor?.writable}:${typeof descriptor?.value}:${descriptor?.value?.name}:${descriptor?.value?.length}`;\
                 });\
                 const locationReplaceDescriptor = Object.getOwnPropertyDescriptor(win.location, 'replace');\
-                const setTimeoutDescriptor = Object.getOwnPropertyDescriptor(win, 'setTimeout');\
+                let setTimeoutDescriptorShape;\
+                try {\
+                  const setTimeoutDescriptor = Object.getOwnPropertyDescriptor(win, 'setTimeout');\
+                  setTimeoutDescriptorShape = {\
+                    enumerable: setTimeoutDescriptor?.enumerable,\
+                    configurable: setTimeoutDescriptor?.configurable,\
+                    getterType: typeof setTimeoutDescriptor?.get,\
+                    setterType: typeof setTimeoutDescriptor?.set\
+                  };\
+                } catch (error) {\
+                  setTimeoutDescriptorShape = { error: `${error && error.name}:${error instanceof DOMException}` };\
+                }\
                 let locationReplaceInvalidReceiver;\
                 try {\
                   win.location.replace.call({}, '/compat/window-child-browsing-context-target-name-a?via=bad-replace-receiver');\
@@ -5196,6 +5224,8 @@ async fn cross_origin_window_proxy_exposes_standard_noop_shape() -> Result<()> {
                   documentDescriptorShape = {\
                     enumerable: documentDescriptor?.enumerable,\
                     configurable: documentDescriptor?.configurable,\
+                    writable: documentDescriptor?.writable,\
+                    valueIsSecondIndex: documentDescriptor?.value === win[1],\
                     getterType: typeof documentDescriptor?.get,\
                     setterType: typeof documentDescriptor?.set\
                   };\
@@ -5229,8 +5259,9 @@ async fn cross_origin_window_proxy_exposes_standard_noop_shape() -> Result<()> {
                   selfDescriptor: {\
                     enumerable: selfDescriptor?.enumerable,\
                     configurable: selfDescriptor?.configurable,\
-                    writable: selfDescriptor?.writable,\
-                    valueIsSelf: selfDescriptor?.value === win\
+                    getterType: typeof selfDescriptor?.get,\
+                    setterType: typeof selfDescriptor?.set,\
+                    getterValueIsSelf: selfDescriptor?.get?.call(win) === win\
                   },\
                   lengthDescriptor: {\
                     enumerable: lengthDescriptor?.enumerable,\
@@ -5250,12 +5281,7 @@ async fn cross_origin_window_proxy_exposes_standard_noop_shape() -> Result<()> {
                     getterType: typeof locationHrefDescriptor?.get,\
                     setterType: typeof locationHrefDescriptor?.set\
                   },\
-                  locationHashDescriptor: {\
-                    enumerable: locationHashDescriptor?.enumerable,\
-                    configurable: locationHashDescriptor?.configurable,\
-                    getterType: typeof locationHashDescriptor?.get,\
-                    setterType: typeof locationHashDescriptor?.set\
-                  },\
+                  locationHashDescriptor: locationHashDescriptorShape,\
                   postMessageDescriptor: {\
                     enumerable: postMessageDescriptor?.enumerable,\
                     configurable: postMessageDescriptor?.configurable,\
@@ -5277,12 +5303,7 @@ async fn cross_origin_window_proxy_exposes_standard_noop_shape() -> Result<()> {
                   locationReplaceForgedReceiver,\
                   locationHrefSetterInvalidReceiver,\
                   locationGetterInvalidReceiver,\
-                  setTimeoutDescriptor: {\
-                    enumerable: setTimeoutDescriptor?.enumerable,\
-                    configurable: setTimeoutDescriptor?.configurable,\
-                    getterType: typeof setTimeoutDescriptor?.get,\
-                    setterType: typeof setTimeoutDescriptor?.set\
-                  },\
+                  setTimeoutDescriptor: setTimeoutDescriptorShape,\
                   documentDescriptor: documentDescriptorShape,\
                   windowLocationAssignResult,\
                   locationStableAfterWindowAssign: win.location === locationBeforeWindowAssign,\
@@ -5300,7 +5321,271 @@ async fn cross_origin_window_proxy_exposes_standard_noop_shape() -> Result<()> {
     assert_eq!(
         result,
         Some(
-            r#"{"self":true,"window":true,"frames":true,"parent":true,"top":true,"opener":true,"thenType":"undefined","length":3,"closed":false,"blurType":"function","focusType":"function","closeType":"function","postMessageType":"function","restrictedMutationProbe":["deleteDocument:SecurityError","deleteSetTimeout:SecurityError","defineDocument:SecurityError","definePostMessage:SecurityError","deleteLocationHref:SecurityError","defineLocationHref:SecurityError"],"hasProbe":["document:true:true","setTimeout:true:true","postMessage:true:true","location:true:true","self:true:true","window:true:true","frames:true:true","parent:true:true","top:true:true","closed:true:true","opener:true:true","then:true:true","__moliChildBrowsingContextHandle:SecurityError:true","__moliCrossOriginWindowLocation:SecurityError:true","unknownCrossOriginProbe:SecurityError:true"],"locationHasProbe":["href:true:true","hash:true:true","replace:true:true","__moliChildBrowsingContextHandle:false:false","unknownCrossOriginProbe:false:false"],"calls":["blur:undefined","focus:undefined","close:undefined"],"invalidNoopReceivers":["blur:TypeError:true","focus:TypeError:true","close:TypeError:true"],"postMessageWindowReceiver":"ok","postMessageInvalidReceiver":"TypeError:true","ownNamesLeakInternal":false,"ownKeysLeakInternal":false,"locationOwnNamesLeakInternal":false,"selfDescriptor":{"enumerable":false,"configurable":false,"writable":false,"valueIsSelf":true},"lengthDescriptor":{"enumerable":false,"configurable":false,"getterType":"function","setterType":"function"},"locationDescriptor":{"enumerable":false,"configurable":false,"getterType":"function","setterType":"function"},"locationHrefDescriptor":{"enumerable":false,"configurable":false,"getterType":"undefined","setterType":"function"},"locationHashDescriptor":{"enumerable":false,"configurable":false,"getterType":"function","setterType":"function"},"postMessageDescriptor":{"enumerable":false,"configurable":false,"writable":false,"valueType":"function","valueName":"postMessage","valueLength":1},"noopDescriptors":["blur:false:false:false:function:blur:0","focus:false:false:false:function:focus:0","close:false:false:false:function:close:0"],"locationReplaceDescriptor":{"enumerable":false,"configurable":false,"writable":false,"valueType":"function","valueName":"replace","valueLength":1},"locationReplaceInvalidReceiver":"TypeError:true","locationReplaceForgedReceiver":"TypeError:true","locationHrefSetterInvalidReceiver":"TypeError:true","locationGetterInvalidReceiver":"TypeError:true","setTimeoutDescriptor":{"enumerable":false,"configurable":false,"getterType":"function","setterType":"function"},"documentDescriptor":{"enumerable":false,"configurable":false,"getterType":"function","setterType":"function"},"windowLocationAssignResult":"ok","locationStableAfterWindowAssign":true,"deniedWindowProbe":["document:SecurityError:true","frameElement:SecurityError:true","history:SecurityError:true","navigation:SecurityError:true","localStorage:SecurityError:true","sessionStorage:SecurityError:true","indexedDB:SecurityError:true","customElements:SecurityError:true","navigator:SecurityError:true","performance:SecurityError:true","console:SecurityError:true","screen:SecurityError:true","visualViewport:SecurityError:true","crypto:SecurityError:true","caches:SecurityError:true","clientInformation:SecurityError:true","cookieStore:SecurityError:true","credentialless:SecurityError:true","crossOriginIsolated:SecurityError:true","documentPictureInPicture:SecurityError:true","fetch:SecurityError:true","isSecureContext:SecurityError:true","origin:SecurityError:true","originAgentCluster:SecurityError:true","scheduler:SecurityError:true","speechSynthesis:SecurityError:true","structuredClone:SecurityError:true","trustedTypes:SecurityError:true","setTimeout:SecurityError:true","clearImmediate:SecurityError:true","addEventListener:SecurityError:true","dispatchEvent:SecurityError:true","queueMicrotask:SecurityError:true","requestAnimationFrame:SecurityError:true","getComputedStyle:SecurityError:true","getSelection:SecurityError:true","matchMedia:SecurityError:true","event:SecurityError:true","onerror:SecurityError:true","innerWidth:SecurityError:true","innerHeight:SecurityError:true","devicePixelRatio:SecurityError:true","scrollX:SecurityError:true","pageYOffset:SecurityError:true","scrollTo:SecurityError:true","open:SecurityError:true","stop:SecurityError:true","print:SecurityError:true","find:SecurityError:true","alert:SecurityError:true","confirm:SecurityError:true","prompt:SecurityError:true","reportError:SecurityError:true","btoa:SecurityError:true","atob:SecurityError:true"],"documentAccess":"SecurityError:true"}"#.to_owned(),
+            r#"{"self":true,"window":true,"frames":true,"parent":true,"top":true,"opener":true,"thenType":"undefined","length":3,"closed":false,"blurType":"function","focusType":"function","closeType":"function","postMessageType":"function","restrictedMutationProbe":["deleteDocument:SecurityError","deleteSetTimeout:SecurityError","defineDocument:SecurityError","definePostMessage:SecurityError","deleteLocationHref:SecurityError","defineLocationHref:SecurityError"],"hasProbe":["document:true:true","setTimeout:SecurityError:true","postMessage:true:true","location:true:true","self:true:true","window:true:true","frames:true:true","parent:true:true","top:true:true","closed:true:true","opener:true:true","then:true:true","__moliChildBrowsingContextHandle:SecurityError:true","__moliCrossOriginWindowLocation:SecurityError:true","unknownCrossOriginProbe:SecurityError:true"],"locationHasProbe":["href:true:true","hash:SecurityError:true","replace:true:true","__moliChildBrowsingContextHandle:SecurityError:true","unknownCrossOriginProbe:SecurityError:true"],"calls":["blur:undefined","focus:undefined","close:undefined"],"invalidNoopReceivers":["blur:TypeError:true","focus:TypeError:true","close:TypeError:true"],"postMessageWindowReceiver":"ok","postMessageInvalidReceiver":"TypeError:true","ownNamesLeakInternal":false,"ownKeysLeakInternal":false,"locationOwnNamesLeakInternal":false,"selfDescriptor":{"enumerable":false,"configurable":true,"getterType":"function","setterType":"undefined","getterValueIsSelf":true},"lengthDescriptor":{"enumerable":false,"configurable":true,"getterType":"function","setterType":"undefined"},"locationDescriptor":{"enumerable":false,"configurable":true,"getterType":"function","setterType":"function"},"locationHrefDescriptor":{"enumerable":false,"configurable":true,"getterType":"undefined","setterType":"function"},"locationHashDescriptor":{"error":"SecurityError:true"},"postMessageDescriptor":{"enumerable":false,"configurable":true,"writable":false,"valueType":"function","valueName":"postMessage","valueLength":1},"noopDescriptors":["blur:false:true:false:function:blur:0","focus:false:true:false:function:focus:0","close:false:true:false:function:close:0"],"locationReplaceDescriptor":{"enumerable":false,"configurable":true,"writable":false,"valueType":"function","valueName":"replace","valueLength":1},"locationReplaceInvalidReceiver":"TypeError:true","locationReplaceForgedReceiver":"TypeError:true","locationHrefSetterInvalidReceiver":"TypeError:true","locationGetterInvalidReceiver":"TypeError:true","setTimeoutDescriptor":{"error":"SecurityError:true"},"documentDescriptor":{"enumerable":false,"configurable":true,"writable":false,"valueIsSecondIndex":true,"getterType":"undefined","setterType":"undefined"},"windowLocationAssignResult":"ok","locationStableAfterWindowAssign":true,"deniedWindowProbe":["document:read","frameElement:SecurityError:true","history:SecurityError:true","navigation:SecurityError:true","localStorage:SecurityError:true","sessionStorage:SecurityError:true","indexedDB:SecurityError:true","customElements:SecurityError:true","navigator:SecurityError:true","performance:SecurityError:true","console:SecurityError:true","screen:SecurityError:true","visualViewport:SecurityError:true","crypto:SecurityError:true","caches:SecurityError:true","clientInformation:SecurityError:true","cookieStore:SecurityError:true","credentialless:SecurityError:true","crossOriginIsolated:SecurityError:true","documentPictureInPicture:SecurityError:true","fetch:SecurityError:true","isSecureContext:SecurityError:true","origin:SecurityError:true","originAgentCluster:SecurityError:true","scheduler:SecurityError:true","speechSynthesis:SecurityError:true","structuredClone:SecurityError:true","trustedTypes:SecurityError:true","setTimeout:SecurityError:true","clearImmediate:SecurityError:true","addEventListener:SecurityError:true","dispatchEvent:SecurityError:true","queueMicrotask:SecurityError:true","requestAnimationFrame:SecurityError:true","getComputedStyle:SecurityError:true","getSelection:SecurityError:true","matchMedia:SecurityError:true","event:SecurityError:true","onerror:SecurityError:true","innerWidth:SecurityError:true","innerHeight:SecurityError:true","devicePixelRatio:SecurityError:true","scrollX:SecurityError:true","pageYOffset:SecurityError:true","scrollTo:SecurityError:true","open:SecurityError:true","stop:SecurityError:true","print:SecurityError:true","find:SecurityError:true","alert:SecurityError:true","confirm:SecurityError:true","prompt:SecurityError:true","reportError:SecurityError:true","btoa:SecurityError:true","atob:SecurityError:true"],"documentAccess":"named-child"}"#.to_owned(),
+        ),
+        "{}",
+        page.serialize_html_async().await.unwrap()
+    );
+
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn cross_origin_property_wrappers_are_cached_per_accessing_realm() -> Result<()> {
+    let server = FixtureServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let parent_url = server
+        .url("/compat/window-child-browsing-context-external-script-cookie-parent")
+        .replace("127.0.0.1", "localhost");
+
+    let mut page = browser.fetch(&parent_url).await?;
+    browser
+        .wait_for_script_truthy(
+            &mut page,
+            "document.body.getAttribute('data-child-ready') === 'true'",
+            Duration::from_secs(2),
+        )
+        .await?;
+
+    let result = evaluated_string(
+        page.evaluate_runtime_expression_with_await_async(
+            r#"(async () => {
+              try {
+                const target = document.getElementById('child').contentWindow;
+                const observer = document.createElement('iframe');
+                const loaded = new Promise((resolve, reject) => {
+                  observer.addEventListener('load', resolve, { once: true });
+                  observer.addEventListener('error', reject, { once: true });
+                });
+                observer.srcdoc = '<!doctype html><title>same-origin observer</title>';
+                document.body.append(observer);
+                await loaded;
+
+              const probeSource = `
+                const methodNames = ['close', 'focus', 'blur', 'postMessage'];
+                const methodLengths = [0, 0, 0, 1];
+                const attributeNames = [
+                  'location', 'window', 'frames', 'self', 'top', 'parent',
+                  'opener', 'closed', 'length'
+                ];
+                const errorShape = operation => {
+                  try {
+                    operation();
+                    return 'ok';
+                  } catch (error) {
+                    return [
+                      error && error.name,
+                      error instanceof TypeError,
+                      error instanceof DOMException
+                    ].join(':');
+                  }
+                };
+                const methods = methodNames.map((name, index) => {
+                  const first = target[name];
+                  const second = target[name];
+                  const descriptor = Object.getOwnPropertyDescriptor(target, name);
+                  return [
+                    name,
+                    first === second,
+                    first === descriptor?.value,
+                    first?.name,
+                    first?.length,
+                    Object.getPrototypeOf(first) === Function.prototype,
+                    first?.length === methodLengths[index]
+                  ].join(':');
+                });
+                const getters = attributeNames.map(name => {
+                  const first = Object.getOwnPropertyDescriptor(target, name);
+                  const second = Object.getOwnPropertyDescriptor(target, name);
+                  const getter = first?.get;
+                  return [
+                    name,
+                    typeof getter,
+                    getter === second?.get,
+                    getter?.name,
+                    getter?.length,
+                    typeof getter === 'function' &&
+                      Object.getPrototypeOf(getter) === Function.prototype
+                  ].join(':');
+                });
+                const locationDescriptor = Object.getOwnPropertyDescriptor(target, 'location');
+                const secondLocationDescriptor = Object.getOwnPropertyDescriptor(target, 'location');
+                const replace = target.location.replace;
+                const secondReplace = target.location.replace;
+                const replaceDescriptor = Object.getOwnPropertyDescriptor(target.location, 'replace');
+                const hrefDescriptor = Object.getOwnPropertyDescriptor(target.location, 'href');
+                const secondHrefDescriptor = Object.getOwnPropertyDescriptor(target.location, 'href');
+                const parentDescriptor = Object.getOwnPropertyDescriptor(target, 'parent');
+                return {
+                  report: {
+                    methods,
+                    getters,
+                    readonlySettersUndefined: attributeNames
+                      .filter(name => name !== 'location')
+                      .every(name => Object.getOwnPropertyDescriptor(target, name)?.set === undefined),
+                    locationSetter: [
+                      locationDescriptor?.set === secondLocationDescriptor?.set,
+                      locationDescriptor?.set?.name,
+                      locationDescriptor?.set?.length,
+                      typeof locationDescriptor?.set === 'function' &&
+                        Object.getPrototypeOf(locationDescriptor.set) === Function.prototype
+                    ],
+                    replace: [
+                      replace === secondReplace,
+                      replace === replaceDescriptor?.value,
+                      replace?.name,
+                      replace?.length,
+                      Object.getPrototypeOf(replace) === Function.prototype
+                    ],
+                    hrefSetter: [
+                      hrefDescriptor?.set === secondHrefDescriptor?.set,
+                      hrefDescriptor?.set?.name,
+                      hrefDescriptor?.set?.length,
+                      typeof hrefDescriptor?.set === 'function' &&
+                        Object.getPrototypeOf(hrefDescriptor.set) === Function.prototype
+                    ],
+                    receiverErrors: [
+                      errorShape(() => target.close.call({})),
+                      errorShape(() => parentDescriptor?.get.call({})),
+                      errorShape(() => locationDescriptor?.set.call({}, '/invalid-window-location')),
+                      errorShape(() => replace.call({}, '/invalid-location-replace')),
+                      errorShape(() => hrefDescriptor?.set.call({}, '/invalid-location-href')),
+                      errorShape(() => Object.getOwnPropertyDescriptor(target, 'unknownPerRealmProbe'))
+                    ]
+                  },
+                  refs: {
+                    methods: methodNames.map(name => target[name]),
+                    getters: attributeNames.map(
+                      name => Object.getOwnPropertyDescriptor(target, name)?.get
+                    ),
+                    locationSetter: locationDescriptor?.set,
+                    replace,
+                    hrefSetter: hrefDescriptor?.set,
+                    window: target.window,
+                    location: target.location
+                  }
+                };
+              `;
+              const local = Function('target', probeSource)(target);
+              const other = observer.contentWindow.Function('target', probeSource)(target);
+              const report = {
+                local: local.report,
+                observerMatchesLocalShape:
+                  JSON.stringify(other.report) === JSON.stringify(local.report),
+                distinctPerRealm: [
+                  local.refs.methods.every((value, index) => value !== other.refs.methods[index]),
+                  local.refs.getters.every((value, index) => value !== other.refs.getters[index]),
+                  local.refs.locationSetter !== other.refs.locationSetter,
+                  local.refs.replace !== other.refs.replace,
+                  local.refs.hrefSetter !== other.refs.hrefSetter
+                ],
+                sharedTargetIdentity: [
+                  local.refs.window === other.refs.window,
+                  local.refs.location === other.refs.location
+                ]
+              };
+              observer.remove();
+              return JSON.stringify(report);
+              } catch (error) {
+                return JSON.stringify({
+                  probeError: `${error && error.name}:${error && error.message}`
+                });
+              }
+            })()"#,
+            true,
+        )
+        .await?,
+    );
+
+    assert_eq!(
+        result,
+        Some(
+            r#"{"local":{"methods":["close:true:true:close:0:true:true","focus:true:true:focus:0:true:true","blur:true:true:blur:0:true:true","postMessage:true:true:postMessage:1:true:true"],"getters":["location:function:true:get location:0:true","window:function:true:get window:0:true","frames:function:true:get frames:0:true","self:function:true:get self:0:true","top:function:true:get top:0:true","parent:function:true:get parent:0:true","opener:function:true:get opener:0:true","closed:function:true:get closed:0:true","length:function:true:get length:0:true"],"readonlySettersUndefined":true,"locationSetter":[true,"set location",1,true],"replace":[true,true,"replace",1,true],"hrefSetter":[true,"set href",1,true],"receiverErrors":["TypeError:true:false","TypeError:true:false","TypeError:true:false","TypeError:true:false","TypeError:true:false","SecurityError:false:true"]},"observerMatchesLocalShape":true,"distinctPerRealm":[true,true,true,true,true],"sharedTargetIdentity":[true,true]}"#
+                .to_owned(),
+        ),
+        "{}",
+        page.serialize_html_async().await.unwrap()
+    );
+
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn cross_origin_child_endpoint_projection_is_relative_to_the_observer() -> Result<()> {
+    let server = FixtureServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let parent_url = server
+        .url("/compat/window-child-browsing-context-external-script-cookie-parent")
+        .replace("127.0.0.1", "localhost");
+
+    let mut page = browser.fetch(&parent_url).await?;
+    browser
+        .wait_for_script_truthy(
+            &mut page,
+            "document.body.getAttribute('data-child-ready') === 'true'",
+            Duration::from_secs(2),
+        )
+        .await?;
+
+    let result = evaluated_string(
+        page.evaluate_runtime_expression_with_await_async(
+            r#"(async () => {
+              const observerFrame = document.getElementById('child');
+              const targetFrame = document.createElement('iframe');
+              targetFrame.name = 'observerTarget';
+              const loaded = new Promise((resolve, reject) => {
+                targetFrame.addEventListener('load', resolve, { once: true });
+                targetFrame.addEventListener('error', reject, { once: true });
+              });
+              targetFrame.src = new URL(
+                '/compat/window-child-browsing-context-target-name-a',
+                observerFrame.src
+              ).href;
+              document.body.append(targetFrame);
+              await loaded;
+
+              const topReference = targetFrame.contentWindow;
+              const replyType = 'observer-endpoint-reply';
+              const reply = new Promise(resolve => {
+                addEventListener('message', function onMessage(event) {
+                  if (!event.data || event.data.type !== replyType) return;
+                  removeEventListener('message', onMessage);
+                  resolve(event.data);
+                });
+              });
+              observerFrame.contentWindow.postMessage({
+                type: 'probe-same-origin-sibling-endpoint',
+                replyType,
+                targetIndex: 1
+              }, '*');
+              const observer = await reply;
+              const denied = operation => {
+                try {
+                  operation();
+                  return 'ok';
+                } catch (error) {
+                  return `${error && error.name}:${error instanceof DOMException}`;
+                }
+              };
+              return JSON.stringify({
+                observer,
+                stableTopIdentity: targetFrame.contentWindow === topReference,
+                topDocumentAccess: denied(() => topReference.document),
+                topMarkerAccess: denied(() => topReference.__observerEndpointMarker)
+              });
+            })()"#,
+            true,
+        )
+        .await?,
+    );
+
+    assert_eq!(
+        result,
+        Some(
+            r#"{"observer":{"type":"observer-endpoint-reply","repeatedIdentity":true,"namedIdentity":true,"descriptorIdentity":true,"namedDescriptorIdentity":true,"documentText":"name-a","documentDefaultView":true,"locationPathname":"/compat/window-child-browsing-context-target-name-a","marker":"same-origin-observer","distinctArrayRealm":true,"parentIdentity":true,"topIdentity":true},"stableTopIdentity":true,"topDocumentAccess":"SecurityError:true","topMarkerAccess":"SecurityError:true"}"#
+                .to_owned(),
         ),
         "{}",
         page.serialize_html_async().await.unwrap()
@@ -5404,7 +5689,7 @@ async fn cross_origin_window_proxy_exposes_named_child_frames() -> Result<()> {
               let documentAccess;\
               try {\
                 void win.document;\
-                documentAccess = 'read';\
+                documentAccess = win.document === win[1] ? 'named-child' : 'read';\
               } catch (error) {\
                 documentAccess = `${error && error.name}:${error instanceof DOMException}`;\
               }\
@@ -5414,9 +5699,11 @@ async fn cross_origin_window_proxy_exposes_named_child_frames() -> Result<()> {
                 hasDocumentCollision: Object.prototype.hasOwnProperty.call(win, 'document'),\
                 hasFocusCollision: Object.prototype.hasOwnProperty.call(win, 'focus'),\
                 sameAsIndexed: named === indexed,\
+                documentSameAsIndexed: win.document === win[1],\
                 documentDescriptor: {\
                   enumerable: documentDescriptor?.enumerable,\
                   configurable: documentDescriptor?.configurable,\
+                  writable: documentDescriptor?.writable,\
                   getterType: typeof documentDescriptor?.get,\
                   setterType: typeof documentDescriptor?.set,\
                   valueType: typeof documentDescriptor?.value\
@@ -5450,7 +5737,85 @@ async fn cross_origin_window_proxy_exposes_named_child_frames() -> Result<()> {
     assert_eq!(
         before,
         Some(
-            r#"{"hasNamed":true,"ownNamed":true,"hasDocumentCollision":true,"hasFocusCollision":true,"sameAsIndexed":true,"documentDescriptor":{"enumerable":false,"configurable":false,"getterType":"function","setterType":"function","valueType":"undefined"},"focusDescriptor":{"enumerable":false,"configurable":false,"writable":false,"valueType":"function"},"documentAccess":"SecurityError:true","focusType":"function","namedSelf":true,"namedWindow":true,"namedFrames":true,"namedParent":true,"namedTop":true,"namedLength":0,"descriptor":{"enumerable":false,"configurable":true,"writable":false,"valueType":"object"}}"#
+            r#"{"hasNamed":true,"ownNamed":true,"hasDocumentCollision":true,"hasFocusCollision":true,"sameAsIndexed":true,"documentSameAsIndexed":true,"documentDescriptor":{"enumerable":false,"configurable":true,"writable":false,"getterType":"undefined","setterType":"undefined","valueType":"object"},"focusDescriptor":{"enumerable":false,"configurable":true,"writable":false,"valueType":"function"},"documentAccess":"named-child","focusType":"function","namedSelf":true,"namedWindow":true,"namedFrames":true,"namedParent":true,"namedTop":true,"namedLength":0,"descriptor":{"enumerable":false,"configurable":true,"writable":false,"valueType":"object"}}"#
+                .to_owned(),
+        ),
+        "{}",
+        page.serialize_html_async().await.unwrap()
+    );
+
+    let live_mutation = evaluated_string(
+        page.evaluate_runtime_expression_with_await_async(
+            "(() => new Promise(resolve => {\
+              const win = document.getElementById('child').contentWindow;\
+              const retainedNested = win[0];\
+              const retainedDocument = win[1];\
+              const retainedFocus = win[2];\
+              const replyType = `nested-mutation-${Math.random()}`;\
+              const probe = operation => {\
+                try {\
+                  return String(operation());\
+                } catch (error) {\
+                  return `${error && error.name}:${error instanceof DOMException}`;\
+                }\
+              };\
+              window.addEventListener('message', function onMessage(event) {\
+                if (!event.data || event.data.type !== replyType) {\
+                  return;\
+                }\
+                window.removeEventListener('message', onMessage);\
+                if (event.data.error) {\
+                  resolve(JSON.stringify({ fixtureError: event.data.error }));\
+                  return;\
+                }\
+                try {\
+                const names = Object.getOwnPropertyNames(win);\
+                const renamedDescriptor = Object.getOwnPropertyDescriptor(win, 'renamedNested');\
+                const thenDescriptor = Object.getOwnPropertyDescriptor(win, 'then');\
+                resolve(JSON.stringify({\
+                  childReport: [event.data.childLength, event.data.renamedName, event.data.thenName],\
+                  length: win.length,\
+                  indices: [win[0] === retainedNested, win[1] === retainedFocus,\
+                            win[1] !== retainedDocument, win[2] === win.then],\
+                  named: [win.renamedNested === win[0], win.then === win[2], typeof win.focus],\
+                  childRestriction: [probe(() => win[0].document),\
+                                     probe(() => win[1].document),\
+                                     probe(() => win[2].document)],\
+                  stale: [\
+                    probe(() => 'nestedNamed' in win),\
+                    probe(() => Object.prototype.hasOwnProperty.call(win, 'nestedNamed')),\
+                    probe(() => typeof win.nestedNamed),\
+                    probe(() => Object.getOwnPropertyDescriptor(win, 'nestedNamed')),\
+                    probe(() => 'document' in win),\
+                    probe(() => Object.getOwnPropertyDescriptor(win, 'document'))\
+                  ],\
+                  descriptors: [\
+                    [renamedDescriptor?.value === win[0], renamedDescriptor?.writable,\
+                     renamedDescriptor?.enumerable, renamedDescriptor?.configurable],\
+                    [thenDescriptor?.value === win[2], thenDescriptor?.writable,\
+                     thenDescriptor?.enumerable, thenDescriptor?.configurable]\
+                  ],\
+                  keys: Object.keys(win),\
+                  names: [names.includes('renamedNested'), names.includes('nestedNamed'),\
+                          names.filter(name => name === 'then').length]\
+                }));\
+                } catch (error) {\
+                  resolve(JSON.stringify({\
+                    parentError: `${error && error.name}:${error instanceof DOMException}`\
+                  }));\
+                }\
+              });\
+              win.postMessage({ type: 'mutate-nested-children', replyType }, '*');\
+            }))()",
+            true,
+        )
+        .await?,
+    );
+
+    assert_eq!(
+        live_mutation,
+        Some(
+            r#"{"childReport":[3,"renamedNested","then"],"length":3,"indices":[true,true,true,true],"named":[true,true,"function"],"childRestriction":["SecurityError:true","SecurityError:true","SecurityError:true"],"stale":["SecurityError:true","SecurityError:true","SecurityError:true","SecurityError:true","SecurityError:true","SecurityError:true"],"descriptors":[[true,false,false,true],[true,false,false,true]],"keys":["0","1","2"],"names":[false,false,1]}"#
                 .to_owned(),
         ),
         "{}",
@@ -5493,7 +5858,7 @@ async fn cross_origin_window_proxy_exposes_named_child_frames() -> Result<()> {
                 afterOwnNamed: probe(() => Object.prototype.hasOwnProperty.call(refreshed, 'nestedNamed')),\
                 afterNamedType: probe(() => typeof refreshed.nestedNamed),\
                 afterLength: refreshed.length,\
-                afterDocumentDescriptorGetter: typeof Object.getOwnPropertyDescriptor(refreshed, 'document')?.get,\
+                afterDocumentDescriptorGetter: probe(() => typeof Object.getOwnPropertyDescriptor(refreshed, 'document')?.get),\
                 afterFocusType: typeof refreshed.focus\
               });\
             })()",
@@ -5504,7 +5869,7 @@ async fn cross_origin_window_proxy_exposes_named_child_frames() -> Result<()> {
     assert_eq!(
         after,
         Some(
-            r#"{"afterHasNamed":"SecurityError:true","afterOwnNamed":"SecurityError:true","afterNamedType":"SecurityError:true","afterLength":0,"afterDocumentDescriptorGetter":"function","afterFocusType":"function"}"#
+            r#"{"afterHasNamed":"SecurityError:true","afterOwnNamed":"SecurityError:true","afterNamedType":"SecurityError:true","afterLength":0,"afterDocumentDescriptorGetter":"SecurityError:true","afterFocusType":"function"}"#
                 .to_owned(),
         ),
         "{}",

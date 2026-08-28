@@ -20,6 +20,7 @@ use crate::Object;
 use crate::PropertyAttribute;
 use crate::PropertyEnumeratorCallback;
 use crate::PropertyHandlerFlags;
+use crate::Private;
 use crate::SideEffectType;
 use crate::Signature;
 use crate::String;
@@ -75,6 +76,15 @@ unsafe extern "C" {
     side_effect_type: SideEffectType,
     c_functions: *const CFunction,
     c_functions_len: usize,
+  ) -> *const FunctionTemplate;
+  fn v8__FunctionTemplate__NewWithCache(
+    isolate: *mut RealIsolate,
+    callback: FunctionCallback,
+    cache_property: *const Private,
+    data_or_null: *const Value,
+    signature_or_null: *const Signature,
+    length: i32,
+    side_effect_type: SideEffectType,
   ) -> *const FunctionTemplate;
   fn v8__FunctionTemplate__GetFunction(
     this: *const FunctionTemplate,
@@ -896,6 +906,35 @@ impl FunctionTemplate {
     callback: FunctionCallback,
   ) -> Local<'s, FunctionTemplate> {
     Self::builder_raw(callback).build(scope)
+  }
+
+  /// Creates a function template whose return value is cached in a private
+  /// property on the receiver. V8 uses this for accessors that must keep a
+  /// realm-local value when a global proxy is detached and reused.
+  #[inline(always)]
+  pub fn new_with_cache<'s>(
+    scope: &PinScope<'s, '_, ()>,
+    callback: impl MapFnTo<FunctionCallback>,
+    cache_property: Local<Private>,
+    data: Option<Local<Value>>,
+    signature: Option<Local<Signature>>,
+    length: i32,
+    side_effect_type: SideEffectType,
+  ) -> Local<'s, FunctionTemplate> {
+    unsafe {
+      scope.cast_local(|sd| {
+        v8__FunctionTemplate__NewWithCache(
+          sd.get_isolate_ptr(),
+          callback.map_fn_to(),
+          &*cache_property,
+          data.map_or_else(null, |value| &*value),
+          signature.map_or_else(null, |signature| &*signature),
+          length,
+          side_effect_type,
+        )
+      })
+    }
+    .unwrap()
   }
 
   /// Returns the unique function instance in the current execution context.

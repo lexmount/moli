@@ -246,6 +246,10 @@ impl DocumentResourceLoader {
         &self.request_client
     }
 
+    pub(crate) fn document_origin(&self) -> String {
+        self.authority.lifecycle.lock().context.origin().to_owned()
+    }
+
     #[cfg(test)]
     pub(crate) fn owner(&self) -> crate::native_bridge::WindowDocumentOwner {
         self.authority.lifecycle.lock().context.owner()

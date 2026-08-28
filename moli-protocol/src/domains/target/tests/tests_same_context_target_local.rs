@@ -171,7 +171,7 @@ async fn get_target_info_reports_background_target_in_same_browser_context() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn popup_target_diagnostics_report_distinct_page_vm_document_isolates() {
+async fn popup_initial_about_blank_adopts_renderer_page_and_related_script_agent() {
     let mut ctx = TestContext::new();
     ctx.conn.auto_attach = true;
     let browser_context = ctx
@@ -195,6 +195,7 @@ async fn popup_target_diagnostics_report_distinct_page_vm_document_isolates() {
         )
         .await
         .expect("opener page should load");
+    let opener_renderer_page_id = opener_page.renderer_page_id().as_u64();
     let opener_url = opener_page.final_url().as_str().to_owned();
     {
         let browser_context = ctx
@@ -251,25 +252,64 @@ async fn popup_target_diagnostics_report_distinct_page_vm_document_isolates() {
         })
         .cloned()
         .unwrap_or_else(|| panic!("popup target should be auto-attached: {:?}", ctx.sent));
-    let popup_session_id = attached["params"]["sessionId"]
-        .as_str()
-        .expect("popup session id should be present")
-        .to_owned();
+    assert!(
+        attached["params"]["sessionId"].as_str().is_some(),
+        "popup session id should be present"
+    );
     ctx.sent.clear();
 
-    ctx.process_async(json!({
-        "id": 104_216,
-        "method": "Page.navigate",
-        "sessionId": popup_session_id,
-        "params": {
-            "url": "data:text/html,<!doctype html><title>popup</title><body>popup</body>"
-        }
-    }))
-    .await;
-    consume_main_document_navigation_start(&mut ctx);
-    let navigation = take_response_by_id(&mut ctx, 104_216);
-    assert_eq!(navigation["result"]["frameId"], json!(popup_target_id));
-    ctx.sent.clear();
+    let opener_script_agent_id = ctx
+        .conn
+        .browser_context
+        .as_mut()
+        .and_then(|browser_context| browser_context.loaded_page_for_target_mut("TID-popup-opener"))
+        .expect("opener should remain loaded")
+        .runtime_heap_usage_async()
+        .await
+        .expect("opener heap diagnostics should be available")
+        .moli
+        .runtime
+        .script_agent_id;
+    let (popup_renderer_page_id, popup_browsing_context_id, popup_script_agent_id) = {
+        let popup_browsing_context_id = ctx
+            .conn
+            .browser_context
+            .as_ref()
+            .and_then(|browser_context| {
+                browser_context.auxiliary_browsing_context_id_for_target(&popup_target_id)
+            })
+            .expect("popup target should retain its renderer browsing-context identity");
+        let popup_page = ctx
+            .conn
+            .browser_context
+            .as_mut()
+            .and_then(|browser_context| {
+                browser_context.loaded_page_for_target_mut(&popup_target_id)
+            })
+            .expect("popup initial empty Document should be loaded");
+        let popup_renderer_page_id = popup_page.renderer_page_id().as_u64();
+        let popup_script_agent_id = popup_page
+            .runtime_heap_usage_async()
+            .await
+            .expect("popup heap diagnostics should be available")
+            .moli
+            .runtime
+            .script_agent_id;
+        (
+            popup_renderer_page_id,
+            popup_browsing_context_id,
+            popup_script_agent_id,
+        )
+    };
+    assert_ne!(popup_renderer_page_id, opener_renderer_page_id);
+    assert_eq!(
+        popup_renderer_page_id, popup_browsing_context_id,
+        "protocol must build the popup's initial Document with the renderer-reserved Page identity"
+    );
+    assert_eq!(
+        popup_script_agent_id, opener_script_agent_id,
+        "the renderer-reserved initial popup Page should join its opener's script agent"
+    );
 
     ctx.process_async(json!({
         "id": 104_217,
@@ -285,14 +325,19 @@ async fn popup_target_diagnostics_report_distinct_page_vm_document_isolates() {
         "opener and loaded popup target should share one renderer owner: {diagnostics:?}"
     );
     assert_eq!(
+        isolate_scope["loadedDocumentScriptAgentCount"],
+        json!(1),
+        "the renderer-reserved popup Page should join its opener's explicit script agent: {diagnostics:?}"
+    );
+    assert_eq!(
         isolate_scope["estimatedDocumentIsolateCount"],
-        json!(2),
-        "loaded popup PageVM must own a distinct document isolate: {diagnostics:?}"
+        json!(1),
+        "two related PageVM realms should be hosted by one document script-agent isolate: {diagnostics:?}"
     );
     assert_eq!(
         isolate_scope["estimatedLiveV8IsolateCount"],
-        json!(2),
-        "opener plus popup without workers should report two live page document isolates: {diagnostics:?}"
+        json!(1),
+        "opener plus related popup without workers should report one live script-agent isolate: {diagnostics:?}"
     );
     assert_eq!(
         isolate_scope["documentContextCount"],
@@ -304,6 +349,377 @@ async fn popup_target_diagnostics_report_distinct_page_vm_document_isolates() {
         json!(1),
         "the popup should remain a loaded background target"
     );
+
+    ctx.sent.clear();
+    ctx.process_async(json!({
+        "id": 104_218,
+        "method": "Runtime.evaluate",
+        "sessionId": "SID-popup-opener",
+        "params": {
+            "expression": "window.open('about:blank#diagnostics-noopener', '_blank', 'noopener') === null",
+            "returnByValue": true
+        }
+    }))
+    .await;
+    let noopener_response = take_response_by_id(&mut ctx, 104_218);
+    assert_eq!(
+        noopener_response["result"]["result"]["value"],
+        json!(true),
+        "noopener window.open should return null after accepting the popup"
+    );
+    let noopener_target = ctx
+        .sent
+        .iter()
+        .find(|message| {
+            message["method"] == json!("Target.targetCreated")
+                && message["params"]["targetInfo"]["canAccessOpener"] == json!(false)
+        })
+        .cloned()
+        .unwrap_or_else(|| panic!("noopener popup target should be created: {:?}", ctx.sent));
+    let noopener_target_id = noopener_target["params"]["targetInfo"]["targetId"]
+        .as_str()
+        .expect("noopener popup target id should be present")
+        .to_owned();
+    let noopener_script_agent_id = {
+        let popup_browsing_context_id = ctx
+            .conn
+            .browser_context
+            .as_ref()
+            .and_then(|browser_context| {
+                browser_context.auxiliary_browsing_context_id_for_target(&noopener_target_id)
+            })
+            .expect("noopener popup should retain its auxiliary browsing-context identity");
+        let popup_page = ctx
+            .conn
+            .browser_context
+            .as_mut()
+            .and_then(|browser_context| {
+                browser_context.loaded_page_for_target_mut(&noopener_target_id)
+            })
+            .expect("noopener popup initial empty Document should be loaded");
+        assert_eq!(
+            popup_page.renderer_page_id().as_u64(),
+            popup_browsing_context_id,
+            "noopener popup must also adopt its renderer-reserved Page identity"
+        );
+        popup_page
+            .runtime_heap_usage_async()
+            .await
+            .expect("noopener popup heap diagnostics should be available")
+            .moli
+            .runtime
+            .script_agent_id
+    };
+    assert_ne!(
+        noopener_script_agent_id, opener_script_agent_id,
+        "opener suppression must keep the auxiliary Page in a fresh script agent"
+    );
+
+    ctx.sent.clear();
+    ctx.process_async(json!({
+        "id": 104_219,
+        "method": "HeapProfiler.moliDiagnostics"
+    }))
+    .await;
+    let diagnostics = take_response_by_id(&mut ctx, 104_219);
+    let isolate_scope = &diagnostics["result"]["isolateScope"];
+    assert_eq!(isolate_scope["loadedDocumentPageCount"], json!(3));
+    assert_eq!(isolate_scope["loadedDocumentScriptAgentCount"], json!(2));
+    assert_eq!(isolate_scope["estimatedDocumentIsolateCount"], json!(2));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cross_origin_popup_remote_window_proxy_routes_through_exact_target_capability() {
+    async fn opener_document() -> impl IntoResponse {
+        (
+            [(CONTENT_TYPE.as_str(), "text/html")],
+            "<!doctype html><title>remote opener</title><body>remote opener</body>",
+        )
+    }
+
+    async fn popup_document() -> impl IntoResponse {
+        (
+            [(CONTENT_TYPE.as_str(), "text/html")],
+            r#"<!doctype html><title>remote target</title><body>
+<script>
+globalThis.__lmProtocolRemoteMessages = [];
+addEventListener("message", event => {
+  globalThis.__lmProtocolRemoteMessages.push({
+    data: event.data,
+    origin: event.origin,
+    sourceIsOpener: event.source === window.opener,
+    sourceClosed: event.source && event.source.closed
+  });
+});
+</script></body>"#,
+        )
+    }
+
+    let opener_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let opener_addr = opener_listener.local_addr().unwrap();
+    let opener_server = tokio::spawn(async move {
+        axum::serve(
+            opener_listener,
+            Router::new().route("/opener", get(opener_document)),
+        )
+        .await
+        .unwrap();
+    });
+    let popup_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let popup_addr = popup_listener.local_addr().unwrap();
+    let popup_server = tokio::spawn(async move {
+        axum::serve(
+            popup_listener,
+            Router::new().route("/popup", get(popup_document)),
+        )
+        .await
+        .unwrap();
+    });
+    let opener_url = format!("http://{opener_addr}/opener");
+    let popup_url = format!("http://{popup_addr}/popup");
+    let opener_origin = format!("http://{opener_addr}");
+
+    let mut ctx = TestContext::new();
+    ctx.conn.auto_attach = true;
+    let mut browser_context = BrowserContext::new("BID-remote-window-proxy".to_owned());
+    browser_context.set_active_target_id("TID-remote-window-opener");
+    browser_context.attach_active_session("SID-remote-window-opener");
+    ctx.conn.browser_context = Some(browser_context);
+    ctx.install_navigation_fixture_for_session_owner(&opener_url, Some("SID-remote-window-opener"))
+        .await;
+    ctx.sent.clear();
+
+    ctx.process_async(json!({
+        "id": 104_220,
+        "method": "Runtime.evaluate",
+        "sessionId": "SID-remote-window-opener",
+        "params": {
+            "expression": "globalThis.__lmProtocolRemotePopup = window.open('about:blank', 'protocolRemoteTarget'); __lmProtocolRemotePopup !== null",
+            "returnByValue": true
+        }
+    }))
+    .await;
+    let open_response = take_response_by_id(&mut ctx, 104_220);
+    assert_eq!(open_response["result"]["result"]["value"], json!(true));
+    let target_created = ctx
+        .sent
+        .iter()
+        .find(|message| message["method"] == json!("Target.targetCreated"))
+        .cloned()
+        .unwrap_or_else(|| panic!("remote popup target should be created: {:?}", ctx.sent));
+    let popup_target_id = target_created["params"]["targetInfo"]["targetId"]
+        .as_str()
+        .expect("remote popup target id")
+        .to_owned();
+    let attached = ctx
+        .sent
+        .iter()
+        .find(|message| {
+            message["method"] == json!("Target.attachedToTarget")
+                && message["params"]["targetInfo"]["targetId"] == json!(popup_target_id)
+        })
+        .cloned()
+        .unwrap_or_else(|| panic!("remote popup target should auto-attach: {:?}", ctx.sent));
+    let popup_session_id = attached["params"]["sessionId"]
+        .as_str()
+        .expect("remote popup session id")
+        .to_owned();
+    ctx.sent.clear();
+
+    ctx.process_async(json!({
+        "id": 104_221,
+        "method": "Page.navigate",
+        "sessionId": popup_session_id,
+        "params": { "url": popup_url }
+    }))
+    .await;
+    let navigation = take_response_by_id(&mut ctx, 104_221);
+    assert_eq!(navigation["result"]["frameId"], json!(popup_target_id));
+    ctx.sent.clear();
+
+    let opener_heap = ctx
+        .conn
+        .browser_context
+        .as_mut()
+        .and_then(|browser_context| {
+            browser_context.loaded_page_for_target_mut("TID-remote-window-opener")
+        })
+        .expect("remote opener Page")
+        .runtime_heap_usage_async()
+        .await
+        .expect("remote opener diagnostics");
+    let popup_heap = ctx
+        .conn
+        .browser_context
+        .as_mut()
+        .and_then(|browser_context| browser_context.loaded_page_for_target_mut(&popup_target_id))
+        .expect("remote popup Page")
+        .runtime_heap_usage_async()
+        .await
+        .expect("remote popup diagnostics");
+    assert_eq!(
+        opener_heap.moli.runtime.browsing_context_group_id,
+        popup_heap.moli.runtime.browsing_context_group_id,
+        "cross-origin related Pages must remain in one browsing-context group"
+    );
+    assert_ne!(
+        opener_heap.moli.runtime.script_agent_id, popup_heap.moli.runtime.script_agent_id,
+        "cross-origin target commit must move the popup LocalWindow to another script agent"
+    );
+
+    ctx.process_async(json!({
+        "id": 104_222,
+        "method": "Runtime.evaluate",
+        "sessionId": "SID-remote-window-opener",
+        "params": {
+            "expression": "window.open('', 'protocolRemoteTarget') === __lmProtocolRemotePopup",
+            "returnByValue": true
+        }
+    }))
+    .await;
+    let reuse = take_response_by_id(&mut ctx, 104_222);
+    assert_eq!(reuse["result"]["result"]["value"], json!(true));
+    assert_eq!(
+        ctx.conn
+            .browser_context
+            .as_ref()
+            .expect("remote popup browser context")
+            .background_targets
+            .len(),
+        1,
+        "remote named lookup must not create a duplicate protocol target"
+    );
+    ctx.sent.clear();
+
+    ctx.process_async(json!({
+        "id": 104_223,
+        "method": "Runtime.evaluate",
+        "sessionId": "SID-remote-window-opener",
+        "params": {
+            "expression": "__lmProtocolRemotePopup.postMessage({ routed: 'protocol-owner' }, '*'); 'queued'",
+            "returnByValue": true
+        }
+    }))
+    .await;
+    let posted = take_response_by_id(&mut ctx, 104_223);
+    assert_eq!(posted["result"]["result"]["value"], json!("queued"));
+    ctx.sent.clear();
+
+    ctx.enable_document_continuation_scheduler_for_test();
+    ctx.process_async(json!({
+        "id": 104_224,
+        "method": "Runtime.evaluate",
+        "sessionId": popup_session_id,
+        "params": {
+            "expression": r#"(async () => {
+  await new Promise(resolve => setTimeout(resolve, 0));
+  await new Promise(resolve => setTimeout(resolve, 0));
+  return JSON.stringify(__lmProtocolRemoteMessages);
+})()"#,
+            "awaitPromise": true,
+            "returnByValue": true
+        }
+    }))
+    .await;
+    let received = ctx
+        .wait_for_scheduler_message("remote message Runtime.evaluate response", |message| {
+            message["id"] == json!(104_224)
+        })
+        .await;
+    let received = received["result"]["result"]["value"]
+        .as_str()
+        .expect("remote message evaluation should return JSON");
+    let received: Value =
+        serde_json::from_str(received).expect("remote message payload should be valid JSON");
+    assert_eq!(
+        received,
+        json!([{
+            "data": { "routed": "protocol-owner" },
+            "origin": opener_origin,
+            "sourceIsOpener": true,
+            "sourceClosed": false
+        }]),
+        "protocol output ingress must route the command to the exact background target and await its ACK"
+    );
+
+    ctx.sent.clear();
+    ctx.process_async(json!({
+        "id": 104_225,
+        "method": "Page.crash",
+        "sessionId": popup_session_id
+    }))
+    .await;
+    let crash = take_response_by_id(&mut ctx, 104_225);
+    assert_eq!(crash["result"], json!({}));
+    assert!(
+        ctx.conn
+            .browser_context
+            .as_ref()
+            .is_some_and(|browser_context| {
+                browser_context
+                    .devtools_target_info(&popup_target_id)
+                    .is_some()
+                    && browser_context
+                        .loaded_page_for_target(&popup_target_id)
+                        .is_none()
+            }),
+        "crashing the remote owner must retire its exact renderer Page"
+    );
+    let crashed_target_url = ctx
+        .conn
+        .browser_context
+        .as_ref()
+        .and_then(|browser_context| browser_context.target_url_for_target(&popup_target_id))
+        .expect("crashed popup target should remain addressable")
+        .to_owned();
+
+    ctx.sent.clear();
+    ctx.process_async(json!({
+        "id": 104_226,
+        "method": "Runtime.evaluate",
+        "sessionId": "SID-remote-window-opener",
+        "params": {
+            "expression": r#"(() => {
+  const before = __lmProtocolRemotePopup.closed;
+  __lmProtocolRemotePopup.postMessage({ routed: 'after-crash' }, '*');
+  __lmProtocolRemotePopup.location.href = 'about:blank#must-not-revive';
+  return { before, after: __lmProtocolRemotePopup.closed };
+})()"#,
+            "returnByValue": true
+        }
+    }))
+    .await;
+    let disconnected = take_response_by_id(&mut ctx, 104_226);
+    assert_eq!(
+        disconnected["result"]["result"]["value"],
+        json!({ "before": true, "after": true }),
+        "a retained proxy must become disconnected and remain safely callable after target Page loss"
+    );
+    let browser_context = ctx
+        .conn
+        .browser_context
+        .as_ref()
+        .expect("remote popup browser context");
+    assert!(
+        browser_context
+            .loaded_page_for_target("TID-remote-window-opener")
+            .is_some(),
+        "the explicit opener session must preserve its exact Page"
+    );
+    assert!(
+        browser_context
+            .loaded_page_for_target(&popup_target_id)
+            .is_none(),
+        "a stale remote command must not revive the crashed popup Page"
+    );
+    assert_eq!(
+        browser_context.target_url_for_target(&popup_target_id),
+        Some(crashed_target_url.as_str()),
+        "a stale remote command must not retarget or alias the crashed popup"
+    );
+
+    opener_server.abort();
+    popup_server.abort();
 }
 
 #[tokio::test(flavor = "multi_thread")]

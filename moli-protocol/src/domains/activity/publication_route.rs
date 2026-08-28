@@ -33,6 +33,7 @@ pub(crate) enum RendererPublicationOwner {
 pub(crate) enum RendererPublicationRoute {
     AttachedSession {
         session_id: String,
+        owner_route: CdpSessionRoute,
         projection: RendererPublicationProjection,
     },
     UnattachedOwner {
@@ -57,12 +58,6 @@ impl RendererPublicationRoute {
         session_id: Option<String>,
         projection: RendererPublicationProjection,
     ) -> Self {
-        if let Some(session_id) = session_id {
-            return Self::AttachedSession {
-                session_id,
-                projection,
-            };
-        }
         let owner_route = match target_id {
             Some(target_id) => CdpSessionRoute::BackgroundTarget {
                 browser_context_id,
@@ -73,6 +68,13 @@ impl RendererPublicationRoute {
                 target_id: None,
             },
         };
+        if let Some(session_id) = session_id {
+            return Self::AttachedSession {
+                session_id,
+                owner_route,
+                projection,
+            };
+        }
         Self::UnattachedOwner {
             owner_route,
             projection,

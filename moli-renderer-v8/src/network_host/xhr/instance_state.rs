@@ -176,10 +176,6 @@ enum XhrExecutionContextAddress {
         child_handle: usize,
         local_window_id: u64,
     },
-    LightweightPopup {
-        popup_id: u64,
-        local_window_id: u64,
-    },
 }
 
 #[derive(serde::Deserialize, serde::Serialize)]
@@ -205,17 +201,6 @@ impl XhrExecutionContextSnapshot {
                 child_handle: child_handle.index(),
                 local_window_id: local_window_id.0,
             },
-            (
-                WindowExecutionContextOwner::LightweightPopup {
-                    popup_id,
-                    local_window_id,
-                },
-                OwnerDispatchScope::LightweightPopup(dispatch_popup_id),
-            ) if popup_id == dispatch_popup_id => XhrExecutionContextAddress::LightweightPopup {
-                popup_id,
-                local_window_id: local_window_id.as_u64(),
-            },
-            _ => return None,
         };
         Some(Self {
             address,
@@ -229,10 +214,7 @@ impl XhrExecutionContextSnapshot {
         crate::native_bridge::WindowExecutionContextOwner,
         crate::native_bridge::OwnerDispatchScope,
     ) {
-        use crate::native_bridge::{
-            LightweightPopupLocalWindowId, OwnerDispatchScope, WindowExecutionContextOwner,
-        };
-
+        use crate::native_bridge::{OwnerDispatchScope, WindowExecutionContextOwner};
         match self.address {
             XhrExecutionContextAddress::Top { local_window_id } => (
                 WindowExecutionContextOwner::Frame(crate::frame_owner_model::LocalWindowId(
@@ -248,16 +230,6 @@ impl XhrExecutionContextSnapshot {
                     local_window_id,
                 )),
                 OwnerDispatchScope::Child(crate::document_runtime::DomHandle::new(child_handle)),
-            ),
-            XhrExecutionContextAddress::LightweightPopup {
-                popup_id,
-                local_window_id,
-            } => (
-                WindowExecutionContextOwner::LightweightPopup {
-                    popup_id,
-                    local_window_id: LightweightPopupLocalWindowId::new(local_window_id),
-                },
-                OwnerDispatchScope::LightweightPopup(popup_id),
             ),
         }
     }

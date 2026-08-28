@@ -60,6 +60,40 @@ pub(crate) fn run_end_of_microtask_checkpoint_tasks(scope: &mut v8::PinScope<'_,
     }
 }
 
+/// Removes checkpoint work owned by a retiring Document realm without
+/// disturbing tasks queued by the other related Pages sharing this isolate.
+/// The isolate-level queue otherwise forms a strong Global edge to the old
+/// Context even after every Context-local execution registry has been reset.
+pub(crate) fn clear_agent_microtask_checkpoint_tasks_for_context_teardown(
+    scope: &mut v8::PinScope<'_, '_>,
+    retiring_context: v8::Local<'_, v8::Context>,
+) {
+    let Some(tasks) = scope
+        .get_slot_mut::<AgentMicrotaskCheckpointTasks>()
+        .map(|state| std::mem::take(&mut state.tasks))
+    else {
+        return;
+    };
+
+    let mut remaining = Vec::with_capacity(tasks.len());
+    for task in tasks {
+        let task_context = match &task {
+            AgentMicrotaskCheckpointTask::DeactivateIndexedDbTransaction { context, .. } => {
+                v8::Local::new(scope, context)
+            }
+        };
+        if task_context != retiring_context {
+            remaining.push(task);
+        }
+    }
+
+    scope
+        .get_slot_mut::<AgentMicrotaskCheckpointTasks>()
+        .expect("agent checkpoint state must remain installed through Context teardown")
+        .tasks
+        .extend(remaining);
+}
+
 fn run_indexed_db_transaction_deactivation(
     scope: &mut v8::PinScope<'_, '_>,
     context: v8::Global<v8::Context>,

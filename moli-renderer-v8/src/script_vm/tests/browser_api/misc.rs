@@ -25,7 +25,6 @@ use tokio::{
 
 use super::service_worker_drain::{
     drain_service_worker_test_turn, drain_service_worker_test_until_eval_equals,
-    drain_service_worker_test_until_popup_loads_settle,
     run_service_worker_client_focus_request_task_for_test,
     run_service_worker_client_navigate_request_task_for_test,
     run_service_worker_clients_open_window_request_task_for_test,
@@ -87,6 +86,283 @@ fn service_worker_csp_report_seen(
         )
     });
     report_body_seen || report_record_seen
+}
+
+async fn read_storage_bucket_partition_request_head(
+    stream: &mut tokio::net::TcpStream,
+) -> std::io::Result<String> {
+    let mut buf = Vec::new();
+    let mut chunk = [0_u8; 512];
+    loop {
+        let n = stream.read(&mut chunk).await?;
+        if n == 0 {
+            break;
+        }
+        buf.extend_from_slice(&chunk[..n]);
+        if buf.windows(4).any(|window| window == b"\r\n\r\n") {
+            break;
+        }
+    }
+    Ok(String::from_utf8_lossy(&buf).into_owned())
+}
+
+async fn spawn_storage_bucket_partition_child_server() -> (String, JoinHandle<String>) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind storage bucket partition child server");
+    let addr = listener
+        .local_addr()
+        .expect("storage bucket partition child server addr");
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener
+            .accept()
+            .await
+            .expect("accept storage bucket partition child request");
+        let request = read_storage_bucket_partition_request_head(&mut stream)
+            .await
+            .expect("read storage bucket partition child request");
+        let status = if request.starts_with("GET /storage-bucket-child.html ") {
+            "200 OK"
+        } else {
+            "404 Not Found"
+        };
+        let body = r#"<!doctype html>
+<meta charset="utf-8">
+<script>
+(async () => {
+  const bucket = await navigator.storageBuckets.open("partitioned-bucket");
+  parent.postMessage(JSON.stringify({
+    bucketName: bucket.name,
+    keys: await navigator.storageBuckets.keys()
+  }), "*");
+})().catch(error => {
+  parent.postMessage("error:" + (error && error.name), "*");
+});
+</script>"#;
+        let response = format!(
+            "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        stream
+            .write_all(response.as_bytes())
+            .await
+            .expect("write storage bucket partition child response");
+        request
+    });
+    (
+        format!("http://localhost:{}/storage-bucket-child.html", addr.port()),
+        server,
+    )
+}
+
+async fn spawn_service_worker_response_server(
+    responses: Vec<(&'static str, &'static str, &'static str)>,
+) -> (String, JoinHandle<()>) {
+    spawn_service_worker_response_server_with_headers(
+        responses
+            .into_iter()
+            .map(|(path, content_type, body)| (path, content_type, Vec::new(), body))
+            .collect(),
+    )
+    .await
+}
+
+async fn spawn_service_worker_response_server_with_headers(
+    responses: Vec<(
+        &'static str,
+        &'static str,
+        Vec<(&'static str, &'static str)>,
+        &'static str,
+    )>,
+) -> (String, JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind service worker response server");
+    let addr = listener
+        .local_addr()
+        .expect("service worker response server addr");
+    let server = tokio::spawn(async move {
+        let mut responses: std::collections::VecDeque<_> = responses.into_iter().collect();
+        while let Some((expected_path, content_type, extra_headers, body)) = responses.pop_front() {
+            let (mut stream, _) = listener
+                .accept()
+                .await
+                .expect("accept service worker response request");
+            let request = read_storage_bucket_partition_request_head(&mut stream)
+                .await
+                .expect("read service worker response request");
+            let path = request
+                .lines()
+                .next()
+                .and_then(|line| line.split_whitespace().nth(1))
+                .expect("service worker response request path");
+            assert_eq!(path, expected_path);
+            let extra_headers = extra_headers
+                .into_iter()
+                .map(|(name, value)| format!("{name}: {value}\r\n"))
+                .collect::<String>();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\n{extra_headers}Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream
+                .write_all(response.as_bytes())
+                .await
+                .expect("write service worker response");
+        }
+    });
+    (format!("http://127.0.0.1:{}", addr.port()), server)
+}
+
+async fn spawn_service_worker_redirect_response_server() -> (String, JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind service worker redirect response server");
+    let addr = listener
+        .local_addr()
+        .expect("service worker redirect response server addr");
+    let server = tokio::spawn(async move {
+        for _ in 0..3 {
+            let (mut stream, _) = listener
+                .accept()
+                .await
+                .expect("accept service worker redirect response request");
+            let request = read_storage_bucket_partition_request_head(&mut stream)
+                .await
+                .expect("read service worker redirect response request");
+            let path = request
+                .lines()
+                .next()
+                .and_then(|line| line.split_whitespace().nth(1))
+                .expect("service worker redirect response request path");
+            assert_eq!(path, "/redirect-start");
+            let response = concat!(
+                "HTTP/1.1 302 Found\r\n",
+                "Location: /redirect-target\r\n",
+                "Access-Control-Allow-Origin: *\r\n",
+                "Content-Length: 0\r\n",
+                "Connection: close\r\n",
+                "\r\n"
+            );
+            stream
+                .write_all(response.as_bytes())
+                .await
+                .expect("write service worker redirect response");
+        }
+    });
+    (
+        format!("http://127.0.0.1:{}/redirect-start", addr.port()),
+        server,
+    )
+}
+
+async fn spawn_service_worker_headers_first_body_server()
+-> (String, JoinHandle<()>, tokio::sync::oneshot::Sender<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind service worker headers-first server");
+    let addr = listener
+        .local_addr()
+        .expect("service worker headers-first server addr");
+    let (release_body_tx, release_body_rx) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(async move {
+        let (mut worker_stream, _) = listener
+            .accept()
+            .await
+            .expect("accept service worker script request");
+        let request = read_storage_bucket_partition_request_head(&mut worker_stream)
+            .await
+            .expect("read service worker script request");
+        let path = request
+            .lines()
+            .next()
+            .and_then(|line| line.split_whitespace().nth(1))
+            .expect("service worker script request path");
+        assert_eq!(path, "/app/worker.js");
+        let worker_body = r#"
+            self.addEventListener("install", event => {
+              event.waitUntil(Promise.resolve());
+            });
+            self.addEventListener("activate", event => {
+              event.waitUntil(clients.claim());
+            });
+            self.addEventListener("fetch", event => {
+              event.respondWith(fetch(event.request));
+            });
+        "#;
+        let worker_response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/javascript; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            worker_body.len(),
+            worker_body
+        );
+        worker_stream
+            .write_all(worker_response.as_bytes())
+            .await
+            .expect("write service worker script response");
+
+        let (mut api_stream, _) = listener
+            .accept()
+            .await
+            .expect("accept service worker proxied API request");
+        let request = read_storage_bucket_partition_request_head(&mut api_stream)
+            .await
+            .expect("read service worker proxied API request");
+        let path = request
+            .lines()
+            .next()
+            .and_then(|line| line.split_whitespace().nth(1))
+            .expect("service worker proxied API request path");
+        assert_eq!(path, "/app/api/headers-first.txt");
+        let body = "delayed-body";
+        let headers = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
+        api_stream
+            .write_all(headers.as_bytes())
+            .await
+            .expect("write service worker proxied API headers");
+        api_stream
+            .flush()
+            .await
+            .expect("flush service worker proxied API headers");
+        let _ = release_body_rx.await;
+        let _ = api_stream.write_all(body.as_bytes()).await;
+    });
+    (
+        format!("http://127.0.0.1:{}", addr.port()),
+        server,
+        release_body_tx,
+    )
+}
+
+async fn spawn_service_worker_script_server(paths: Vec<&'static str>) -> (String, JoinHandle<()>) {
+    spawn_service_worker_response_server(
+        paths
+            .into_iter()
+            .map(|path| {
+                (
+                    path,
+                    "text/javascript; charset=utf-8",
+                    "self.addEventListener('install', () => {});",
+                )
+            })
+            .collect(),
+    )
+    .await
+}
+
+fn service_worker_http_cache_test_root(label: &str) -> std::path::PathBuf {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock should be after epoch")
+        .as_nanos();
+    std::env::temp_dir().join(format!(
+        "moli-renderer-v8-service-worker-http-cache-{label}-{}-{nonce}",
+        std::process::id()
+    ))
 }
 
 #[test]
@@ -10872,71 +11148,6 @@ async fn third_party_iframe_storage_bucket_manager_uses_partitioned_storage_key(
     );
 }
 
-#[tokio::test]
-async fn retained_popup_storage_managers_use_bound_popup_owner() {
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
-    loader.set_network_offline(true);
-    let mut vm =
-        new_storage_test_vm_with_loader("https://popup-storage-owner.test/page.html", &loader);
-
-    vm.exec(
-        r#"
-globalThis.__popupStorageOwnerProbe = "pending";
-(async () => {
-  const popup = open("https://popup-storage-owner-child.test/page.html");
-  popup.localStorage.setItem("popup-local", "value");
-  const storage = popup.navigator.storage;
-  const buckets = popup.navigator.storageBuckets;
-  const bucket = await buckets.open("popup-retained", { quota: 2048 });
-  const popupEstimate = await storage.estimate();
-  const topEstimate = await navigator.storage.estimate();
-  return {
-    storageIsTopStorage: storage === navigator.storage,
-    bucketsIsTopBuckets: buckets === navigator.storageBuckets,
-    popupUsagePositive: popupEstimate.usage > 0,
-    topUsage: topEstimate.usage,
-    bucketName: bucket.name,
-    popupKeys: await buckets.keys(),
-    topKeys: await navigator.storageBuckets.keys()
-  };
-})().then(
-  value => { globalThis.__popupStorageOwnerProbe = JSON.stringify(value); },
-  error => { globalThis.__popupStorageOwnerProbe = `error:${error && error.name}:${error && error.message}`; }
-);
-"#,
-        None,
-    )
-    .expect("popup storage owner probe should schedule");
-
-    let result = vm
-        .eval("String(globalThis.__popupStorageOwnerProbe)")
-        .expect("popup storage owner probe should settle");
-    assert_eq!(
-        result,
-        r#"{"storageIsTopStorage":false,"bucketsIsTopBuckets":false,"popupUsagePositive":true,"topUsage":0,"bucketName":"popup-retained","popupKeys":["popup-retained"],"topKeys":[]}"#
-    );
-    assert_eq!(
-        vm.storage_bucket_keys_for_test(
-            &moli_storage_key::MoliStorageKey::first_party_from_url(
-                &url::Url::parse("https://popup-storage-owner-child.test").unwrap(),
-                None,
-            )
-            .serialized_storage_key()
-        ),
-        vec!["popup-retained"]
-    );
-    assert_eq!(
-        vm.storage_bucket_keys_for_test(
-            &moli_storage_key::MoliStorageKey::first_party_from_url(
-                &url::Url::parse("https://popup-storage-owner.test").unwrap(),
-                None,
-            )
-            .serialized_storage_key()
-        ),
-        Vec::<String>::new()
-    );
-}
-
 #[test]
 fn storage_bucket_manager_methods_reject_after_iframe_detaches() {
     let mut vm = new_storage_test_vm("https://storage-buckets-detached.test/");
@@ -12051,127 +12262,6 @@ async fn worker_csp_report_fetch_pause_continue_preserves_service_worker_dispatc
     server
         .await
         .expect("paused worker CSP report destination server should finish");
-}
-
-#[tokio::test]
-async fn navigator_service_worker_intercepts_popup_csp_report_destination() {
-    let (base_url, server) = spawn_service_worker_response_server_with_headers(vec![
-        (
-            "/app/worker.js",
-            "text/javascript; charset=utf-8",
-            Vec::new(),
-            r#"
-        self.addEventListener("install", event => {
-          event.waitUntil(Promise.resolve());
-        });
-        self.addEventListener("activate", event => {
-          event.waitUntil(clients.claim());
-        });
-        self.addEventListener("fetch", event => {
-          const url = new URL(event.request.url);
-          if (url.pathname === "/app/csp-report") {
-            event.respondWith((async () => {
-              const client = await clients.get(event.clientId);
-              const clientPath = client ? new URL(client.url).pathname : "";
-              return new Response([
-                "destination=" + event.request.destination,
-                "mode=" + event.request.mode,
-                "credentials=" + event.request.credentials,
-                "method=" + event.request.method,
-                "client=" + (event.clientId.length > 0),
-                "clientPath=" + clientPath
-              ].join("|"));
-            })());
-          }
-        });
-        "#,
-        ),
-        (
-            "/app/popup.html",
-            "text/html; charset=utf-8",
-            vec![(
-                "Content-Security-Policy",
-                "connect-src 'none'; report-uri /app/csp-report",
-            )],
-            r#"<!doctype html>
-        <script>
-        let violationSeen = false;
-        self.addEventListener("securitypolicyviolation", event => {
-          violationSeen = event.type === "securitypolicyviolation" &&
-            event.effectiveDirective === "connect-src" &&
-            event.violatedDirective === "connect-src" &&
-            event.blockedURI.endsWith("/app/blocked-data") &&
-            event.disposition === "enforce" &&
-            event instanceof SecurityPolicyViolationEvent;
-        });
-        (async () => {
-          await fetch("blocked-data").catch(() => {});
-          opener.postMessage("blocked:" + violationSeen, "*");
-        })().catch(error => {
-          opener.postMessage("error:" + String(error && error.message), "*");
-        });
-        </script>"#,
-        ),
-    ])
-    .await;
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
-    let (mut vm, browser_context_runtime) =
-        new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
-            &format!("{base_url}/app/page.html"),
-            &loader,
-        );
-
-    vm.eval(
-        r#"
-            (() => {
-              globalThis.__serviceWorkerPopupCspReportProbe = "pending";
-              addEventListener("message", event => {
-                globalThis.__serviceWorkerPopupCspReportProbe = String(event.data);
-              });
-              (async () => {
-                await navigator.serviceWorker.register("worker.js", { scope: "./" });
-                await navigator.serviceWorker.ready;
-                window.open("popup.html");
-              })().catch((error) => {
-                globalThis.__serviceWorkerPopupCspReportProbe =
-                  "error:" + String(error && error.message);
-              });
-            })()
-            "#,
-    )
-    .expect("service worker popup CSP report destination setup should evaluate");
-
-    drain_service_worker_test_until_eval_equals(
-        &mut vm,
-        &browser_context_runtime,
-        &loader,
-        "String(globalThis.__serviceWorkerPopupCspReportProbe)",
-        "blocked:true",
-    )
-    .await;
-
-    let report_url = format!("{base_url}/app/csp-report");
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    let mut items = Vec::new();
-    loop {
-        items.extend(vm.take_network_output().into_items());
-        if service_worker_csp_report_seen(
-            &items,
-            &report_url,
-            "destination=report|mode=no-cors|credentials=same-origin|method=POST|client=true|clientPath=/app/popup.html",
-        ) {
-            break;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "popup CSP report destination did not settle: {items:?}"
-        );
-        drain_service_worker_test_turn(&mut vm, &browser_context_runtime, &loader).await;
-    }
-
-    server
-        .await
-        .expect("popup CSP report destination server should finish");
 }
 
 #[tokio::test]
@@ -18414,140 +18504,6 @@ async fn navigator_service_worker_client_message_transfers_readable_stream_to_pa
 }
 
 #[tokio::test]
-async fn navigator_service_worker_popup_post_message_uses_popup_source_url() {
-    let (base_url, server) = spawn_service_worker_response_server(vec![
-        (
-            "/app/worker.js",
-            "text/javascript; charset=utf-8",
-            r#"
-            self.addEventListener("install", event => {
-              event.waitUntil(self.skipWaiting());
-            });
-            self.addEventListener("activate", event => {
-              event.waitUntil(clients.claim());
-            });
-            self.addEventListener("message", event => {
-              event.waitUntil(Promise.resolve().then(() => {
-                const source = event.source;
-                event.source.postMessage([
-                  "reply",
-                  event.data,
-                  event.constructor && event.constructor.name,
-                  event instanceof ExtendableMessageEvent,
-                  event instanceof ExtendableEvent,
-                  event instanceof Event,
-                  Object.prototype.toString.call(event),
-                  event.origin,
-                  event.lastEventId,
-                  event.ports.length,
-                  event.ports[0] instanceof MessagePort,
-                  source && source.constructor && source.constructor.name,
-                  source instanceof WindowClient,
-                  source instanceof Client,
-                  source && source.url,
-                  source && source.type,
-                  source && source.frameType,
-                  source && source.visibilityState,
-                  source && source.focused
-                ].join("|"));
-              }));
-            });
-            "#,
-        ),
-        (
-            "/app/popup.html",
-            "text/html; charset=utf-8",
-            "<!doctype html><title>popup</title>",
-        ),
-    ])
-    .await;
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
-    let (mut vm, browser_context_runtime) =
-        new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
-            &format!("{base_url}/app/page.html"),
-            &loader,
-        );
-
-    vm.eval(
-        r#"
-        (() => {
-          globalThis.__serviceWorkerPopupSourceProbe = "pending";
-          (async () => {
-            const registration = await navigator.serviceWorker.register("worker.js", {
-              scope: "./"
-            });
-            await navigator.serviceWorker.ready;
-            const popup = open("popup.html", "sw-source-popup");
-            if (!popup) {
-              globalThis.__serviceWorkerPopupSourceProbe = "open-null";
-            }
-            globalThis.__serviceWorkerPopupSourceWindow = popup;
-          })().catch(error => {
-            globalThis.__serviceWorkerPopupSourceProbe = "error:" + String(error);
-          });
-        })()
-        "#,
-    )
-    .expect("service worker popup source probe should evaluate");
-
-    drain_service_worker_test_until_eval_equals(
-        &mut vm,
-        &browser_context_runtime,
-        &loader,
-        r#"String(globalThis.__serviceWorkerPopupSourceWindow && globalThis.__serviceWorkerPopupSourceWindow.document && globalThis.__serviceWorkerPopupSourceWindow.document.title)"#,
-        "popup",
-    )
-    .await;
-
-    vm.eval(
-        r#"
-        (() => {
-          const popup = globalThis.__serviceWorkerPopupSourceWindow;
-          const sw = popup.navigator.serviceWorker;
-          sw.onmessage = event => {
-            globalThis.__serviceWorkerPopupSourceProbe = event.data;
-          };
-          const controller = sw.controller;
-          if (!controller) {
-            globalThis.__serviceWorkerPopupSourceProbe = "no-controller";
-            return;
-          }
-          const channel = new MessageChannel();
-          controller.postMessage("from-popup", [channel.port2]);
-          globalThis.__serviceWorkerPopupSourcePostResult = [
-            typeof sw,
-            typeof controller,
-            controller && controller.state
-          ].join("|");
-        })()
-        "#,
-    )
-    .expect("service worker popup controller postMessage should evaluate");
-
-    assert_eq!(
-        vm.eval("String(globalThis.__serviceWorkerPopupSourcePostResult)")
-            .expect("service worker popup post result should evaluate"),
-        "object|object|activated"
-    );
-
-    let expected_popup_url = format!("{base_url}/app/popup.html");
-    let expected = format!(
-        "reply|from-popup|ExtendableMessageEvent|true|true|true|[object ExtendableMessageEvent]|{base_url}||1|true|WindowClient|true|true|{expected_popup_url}|window|top-level|visible|false"
-    );
-    drain_service_worker_test_until_eval_equals(
-        &mut vm,
-        &browser_context_runtime,
-        &loader,
-        "String(globalThis.__serviceWorkerPopupSourceProbe)",
-        &expected,
-    )
-    .await;
-    server
-        .await
-        .expect("service worker popup source server should finish");
-}
-
-#[tokio::test]
 async fn navigator_service_worker_message_ports_transfer_both_directions() {
     let (base_url, server) = spawn_service_worker_response_server(vec![(
         "/app/worker.js",
@@ -20294,13 +20250,13 @@ async fn service_worker_window_client_owner_requests_reject_on_stale_document_ow
             request_id: 103,
             source_version_id: crate::runtime::ServiceWorkerVersionId::from_u64_for_test(1),
             source_run: crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
+            source_script_url: url::Url::parse(&format!("{base_url}/app/worker.js")).unwrap(),
             url: url::Url::parse(&format!("{base_url}/app/opened.html")).unwrap(),
         },
     )
     .await;
     assert_eq!(service.pending_service_lane_event_count(), 3);
     assert!(vm.take_pending_popup_activations().is_empty());
-    assert!(!vm.has_pending_lightweight_popup_document_loads());
 
     assert_eq!(
         browser_context_runtime.drain_service_worker_service_lane(),
@@ -20408,11 +20364,10 @@ async fn service_worker_client_focus_request_marks_current_page_focused() {
 
 #[tokio::test]
 async fn service_worker_clients_open_window_request_records_popup_activation() {
-    let (base_url, server) = spawn_service_worker_response_server(vec![
-        (
-            "/app/worker.js",
-            "text/javascript; charset=utf-8",
-            r#"
+    let (base_url, server) = spawn_service_worker_response_server(vec![(
+        "/app/worker.js",
+        "text/javascript; charset=utf-8",
+        r#"
             self.addEventListener("install", event => {
               event.waitUntil(self.skipWaiting());
             });
@@ -20420,13 +20375,7 @@ async fn service_worker_clients_open_window_request_records_popup_activation() {
               event.waitUntil(clients.claim());
             });
             "#,
-        ),
-        (
-            "/app/opened.html",
-            "text/html; charset=utf-8",
-            "<!doctype html><title>opened</title>",
-        ),
-    ])
+    )])
     .await;
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let (mut vm, browser_context_runtime) =
@@ -20434,6 +20383,7 @@ async fn service_worker_clients_open_window_request_records_popup_activation() {
             &format!("{base_url}/app/page.html"),
             &loader,
         );
+    vm.bind_auxiliary_page_reservation_allocator_for_test();
 
     vm.eval(
         r#"
@@ -20476,6 +20426,7 @@ async fn service_worker_clients_open_window_request_records_popup_activation() {
             request_id: 88,
             source_version_id: crate::runtime::ServiceWorkerVersionId::from_u64_for_test(1),
             source_run: crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
+            source_script_url: url::Url::parse(&format!("{base_url}/app/worker.js")).unwrap(),
             url: url::Url::parse(&format!("{base_url}/app/opened.html")).unwrap(),
         },
     )
@@ -20483,83 +20434,106 @@ async fn service_worker_clients_open_window_request_records_popup_activation() {
 
     let popups = vm.take_pending_popup_activations();
     assert_eq!(popups.len(), 1);
-    assert!(popups[0].popup_id().is_some());
-    let popup_id = popups[0].popup_id().expect("openWindow popup id");
-    assert_eq!(popups[0].url(), format!("{base_url}/app/opened.html"));
-    assert_eq!(popups[0].target_name(), "_blank");
+    let activation = &popups[0];
+    assert_eq!(activation.popup_id(), None);
+    assert_eq!(activation.url(), format!("{base_url}/app/opened.html"));
+    assert_eq!(activation.target_name(), "_blank");
     assert!(matches!(
-        popups[0].source(),
+        activation.source(),
         crate::RendererPopupActivationSource::BrowserContext
     ));
     assert_eq!(
         popups[0].disposition(),
         crate::RendererPopupDisposition::Foreground
     );
-    assert!(vm.has_pending_lightweight_popup_document_loads());
+    assert_eq!(
+        activation.new_target_disposition(),
+        Some(crate::RendererPopupNewTargetDisposition::FreshUnnamed)
+    );
+    let pending_page = activation
+        .pending_auxiliary_page()
+        .expect("openWindow must reserve its real auxiliary Page");
+    let continuation = activation
+        .service_worker_clients_open_window_continuation()
+        .expect("clients.openWindow must retain its exact Page completion");
+    assert_eq!(
+        continuation.expected_page_id(),
+        pending_page.page_reservation().page_id()
+    );
+    let navigation_source = activation
+        .navigation_source()
+        .expect("openWindow navigation must retain its worker source");
+    assert!(navigation_source.is_browser_context());
+    assert_eq!(navigation_source.root_document(), None);
+    assert_eq!(navigation_source.window(), None);
+    assert_eq!(
+        navigation_source.source_url(),
+        format!("{base_url}/app/worker.js")
+    );
+    assert_eq!(
+        activation.navigation_referrer(),
+        Some(format!("{base_url}/app/worker.js").as_str())
+    );
+    assert_eq!(activation.initial_document_referrer(), Some(""));
+    assert_eq!(
+        activation.document_referrer(),
+        Some(format!("{base_url}/app/worker.js").as_str())
+    );
 
-    drain_service_worker_test_until_popup_loads_settle(
+    assert_eq!(
+        browser_context_runtime
+            .service_worker_runtime()
+            .pending_service_lane_event_count(),
+        0
+    );
+    continuation.resolve_null();
+    continuation.resolve_null();
+    assert_eq!(
+        browser_context_runtime
+            .service_worker_runtime()
+            .pending_service_lane_event_count(),
+        1,
+        "the exact-Page continuation must complete at most once"
+    );
+    assert_eq!(
+        browser_context_runtime.drain_service_worker_service_lane(),
+        1
+    );
+    assert_eq!(
+        browser_context_runtime
+            .service_worker_runtime()
+            .pending_service_lane_event_count(),
+        0
+    );
+
+    run_service_worker_clients_open_window_request_task_for_test(
         &mut vm,
-        &browser_context_runtime,
         &loader,
-        "service worker openWindow",
-    )
-    .await;
-
-    let clients = browser_context_runtime
-        .service_worker_runtime()
-        .query_clients(&crate::runtime::ServiceWorkerClientQuery {
+        "abandoned Page openWindow request",
+        crate::types::ServiceWorkerClientsOpenWindowRequestCompletion {
+            host: current_target,
             request_id: 89,
-            registration_id: crate::runtime::ServiceWorkerRegistrationId::from_u64_for_test(1),
-            version_id: crate::runtime::ServiceWorkerVersionId::from_u64_for_test(1),
-            kind: crate::runtime::ServiceWorkerClientQueryKind::MatchAll {
-                options: crate::runtime::ServiceWorkerClientQueryOptions {
-                    include_uncontrolled: true,
-                    client_type: crate::runtime::ServiceWorkerClientQueryType::Window,
-                },
-            },
-        });
-    let opened = clients
-        .clients
-        .iter()
-        .find(|client| client.url.as_str() == format!("{base_url}/app/opened.html"))
-        .expect("opened popup should be registered as a service worker window client");
-    assert!(opened.controlled);
-    let opened_client_id = opened.id;
-    let opened_exposed_client_id = opened.exposed_id.clone();
-    let popup_document_owner = vm
-        ._context_host
-        .borrow()
-        .current_lightweight_popup_document_owner(popup_id)
-        .expect("openWindow popup document owner");
-
-    run_service_worker_client_focus_request_task_for_test(
-        &mut vm,
-        &loader,
-        "current popup focus request",
-        crate::types::ServiceWorkerClientFocusRequestCompletion {
-            target: service_worker_window_client_target_for_test(
-                opened_client_id,
-                crate::native_bridge::WindowDocumentOwner::LightweightPopup(popup_document_owner),
-            ),
-            request_id: 90,
             source_version_id: crate::runtime::ServiceWorkerVersionId::from_u64_for_test(1),
             source_run: crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
+            source_script_url: url::Url::parse(&format!("{base_url}/app/worker.js")).unwrap(),
+            url: url::Url::parse(&format!("{base_url}/app/abandoned.html")).unwrap(),
         },
     )
     .await;
-    browser_context_runtime.drain_service_worker_service_lane();
-    let focused_clients = browser_context_runtime
-        .service_worker_runtime()
-        .query_clients(&crate::runtime::ServiceWorkerClientQuery {
-            request_id: 91,
-            registration_id: crate::runtime::ServiceWorkerRegistrationId::from_u64_for_test(1),
-            version_id: crate::runtime::ServiceWorkerVersionId::from_u64_for_test(1),
-            kind: crate::runtime::ServiceWorkerClientQueryKind::Get {
-                exposed_client_id: opened_exposed_client_id,
-            },
-        });
-    assert_eq!(focused_clients.clients.len(), 1);
-    assert!(focused_clients.clients[0].focused);
+    let abandoned = vm.take_pending_popup_activations();
+    assert_eq!(abandoned.len(), 1);
+    drop(abandoned);
+    assert_eq!(
+        browser_context_runtime
+            .service_worker_runtime()
+            .pending_service_lane_event_count(),
+        1,
+        "dropping an unconsumed Fresh Page activation must settle openWindow as null"
+    );
+    assert_eq!(
+        browser_context_runtime.drain_service_worker_service_lane(),
+        1
+    );
 
     server
         .await
@@ -20567,297 +20541,7 @@ async fn service_worker_clients_open_window_request_records_popup_activation() {
 }
 
 #[tokio::test]
-async fn service_worker_popup_client_survives_javascript_reopen() {
-    let (base_url, server) = spawn_service_worker_response_server(vec![
-        (
-            "/app/worker.js",
-            "text/javascript; charset=utf-8",
-            r#"
-            self.addEventListener("install", event => {
-              event.waitUntil(self.skipWaiting());
-            });
-            self.addEventListener("activate", event => {
-              event.waitUntil(clients.claim());
-            });
-            "#,
-        ),
-        (
-            "/app/popup.html",
-            "text/html; charset=utf-8",
-            "<!doctype html><title>popup</title>",
-        ),
-        (
-            "/app/replaced.html",
-            "text/html; charset=utf-8",
-            "<!doctype html><title>replacement</title>",
-        ),
-    ])
-    .await;
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
-    let (mut vm, browser_context_runtime) =
-        new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
-            &format!("{base_url}/app/page.html"),
-            &loader,
-        );
-
-    vm.eval(
-        r#"
-        (() => {
-          globalThis.__serviceWorkerPopupReopenProbe = "pending";
-          (async () => {
-            const registration = await navigator.serviceWorker.register("worker.js", {
-              scope: "./"
-            });
-            await navigator.serviceWorker.ready;
-            globalThis.__serviceWorkerPopupReopenProbe = registration.active.state;
-          })().catch(error => {
-            globalThis.__serviceWorkerPopupReopenProbe = "error:" + String(error);
-          });
-        })()
-        "#,
-    )
-    .expect("service worker popup reopen setup should evaluate");
-
-    drain_service_worker_test_until_eval_equals(
-        &mut vm,
-        &browser_context_runtime,
-        &loader,
-        "String(globalThis.__serviceWorkerPopupReopenProbe)",
-        "activated",
-    )
-    .await;
-
-    let popup_url = format!("{base_url}/app/popup.html");
-    let popup_url_literal = serde_json::to_string(&popup_url).expect("serialize popup url");
-    let opened = vm
-        .eval(&format!(
-            r#"
-(() => {{
-  globalThis.__serviceWorkerReopenPopup = open({popup_url_literal}, "sw-popup");
-  return String(globalThis.__serviceWorkerReopenPopup !== null);
-}})()
-"#
-        ))
-        .expect("service worker popup open should evaluate");
-    assert_eq!(opened, "true");
-    let popup_id = vm
-        .take_pending_popup_activations()
-        .into_iter()
-        .next()
-        .and_then(|activation| activation.popup_id())
-        .expect("service worker popup activation id");
-
-    drain_service_worker_test_until_popup_loads_settle(
-        &mut vm,
-        &browser_context_runtime,
-        &loader,
-        "service worker popup",
-    )
-    .await;
-
-    let clients_before = browser_context_runtime
-        .service_worker_runtime()
-        .query_clients(&crate::runtime::ServiceWorkerClientQuery {
-            request_id: 96,
-            registration_id: crate::runtime::ServiceWorkerRegistrationId::from_u64_for_test(1),
-            version_id: crate::runtime::ServiceWorkerVersionId::from_u64_for_test(1),
-            kind: crate::runtime::ServiceWorkerClientQueryKind::MatchAll {
-                options: crate::runtime::ServiceWorkerClientQueryOptions {
-                    include_uncontrolled: true,
-                    client_type: crate::runtime::ServiceWorkerClientQueryType::Window,
-                },
-            },
-        });
-    let popup_client_id = clients_before
-        .clients
-        .iter()
-        .find(|client| client.url.as_str() == popup_url)
-        .expect("popup should be registered as a service worker window client")
-        .id;
-    let initial_document_owner = vm
-        ._context_host
-        .borrow()
-        .current_lightweight_popup_document_owner(popup_id)
-        .expect("initial service worker popup document owner");
-    let initial_local_window_id = vm
-        ._context_host
-        .borrow()
-        .current_lightweight_popup_local_window_id(popup_id)
-        .expect("initial service worker popup LocalWindow owner");
-
-    let reopened = vm
-        .eval(
-            r#"
-(() => {
-  globalThis.__serviceWorkerPopupJavascriptRan = false;
-  const reopened = open(
-    "javascript:window.opener.__serviceWorkerPopupJavascriptRan = true",
-    "sw-popup"
-  );
-  return [
-    reopened === globalThis.__serviceWorkerReopenPopup,
-    globalThis.__serviceWorkerReopenPopup.location.href
-  ].join("|");
-})()
-"#,
-        )
-        .expect("service worker popup javascript reopen should evaluate");
-    assert_eq!(reopened, format!("true|{popup_url}"));
-
-    for _ in 0..4 {
-        if vm
-            .eval("String(globalThis.__serviceWorkerPopupJavascriptRan)")
-            .expect("popup javascript reopen flag should evaluate")
-            == "true"
-        {
-            break;
-        }
-        drain_service_worker_test_turn(&mut vm, &browser_context_runtime, &loader).await;
-    }
-    assert_eq!(
-        vm.eval("String(globalThis.__serviceWorkerPopupJavascriptRan)")
-            .expect("popup javascript reopen flag should evaluate"),
-        "true"
-    );
-
-    let clients_after = browser_context_runtime
-        .service_worker_runtime()
-        .query_clients(&crate::runtime::ServiceWorkerClientQuery {
-            request_id: 97,
-            registration_id: crate::runtime::ServiceWorkerRegistrationId::from_u64_for_test(1),
-            version_id: crate::runtime::ServiceWorkerVersionId::from_u64_for_test(1),
-            kind: crate::runtime::ServiceWorkerClientQueryKind::MatchAll {
-                options: crate::runtime::ServiceWorkerClientQueryOptions {
-                    include_uncontrolled: true,
-                    client_type: crate::runtime::ServiceWorkerClientQueryType::Window,
-                },
-            },
-        });
-    let popup_after = clients_after
-        .clients
-        .iter()
-        .find(|client| client.id == popup_client_id)
-        .expect("javascript: reopen should keep the existing popup service worker client");
-    assert_eq!(popup_after.url.as_str(), popup_url);
-    assert!(popup_after.controlled);
-    assert_eq!(
-        vm._context_host
-            .borrow()
-            .current_lightweight_popup_document_owner(popup_id),
-        Some(initial_document_owner),
-        "javascript: execution without a string replacement must not rotate popup document identity"
-    );
-    assert_eq!(
-        vm._context_host
-            .borrow()
-            .current_lightweight_popup_local_window_id(popup_id),
-        Some(initial_local_window_id),
-        "javascript: execution without replacement must preserve popup LocalWindow identity"
-    );
-
-    let replacement_url = format!("{base_url}/app/replaced.html");
-    let replacement_url_literal =
-        serde_json::to_string(&replacement_url).expect("serialize popup replacement url");
-    let replacement_started = vm
-        .eval(&format!(
-            r#"
-(() => {{
-  const reopened = open({replacement_url_literal}, "sw-popup");
-  return String(reopened === globalThis.__serviceWorkerReopenPopup);
-}})()
-"#
-        ))
-        .expect("service worker popup network replacement should evaluate");
-    assert_eq!(replacement_started, "true");
-    drain_service_worker_test_until_popup_loads_settle(
-        &mut vm,
-        &browser_context_runtime,
-        &loader,
-        "service worker popup replacement",
-    )
-    .await;
-
-    let replacement_document_owner = vm
-        ._context_host
-        .borrow()
-        .current_lightweight_popup_document_owner(popup_id)
-        .expect("replacement service worker popup document owner");
-    assert_ne!(replacement_document_owner, initial_document_owner);
-    let replacement_local_window_id = vm
-        ._context_host
-        .borrow()
-        .current_lightweight_popup_local_window_id(popup_id)
-        .expect("replacement service worker popup LocalWindow owner");
-    assert_ne!(replacement_local_window_id, initial_local_window_id);
-    run_service_worker_client_focus_request_task_for_test(
-        &mut vm,
-        &loader,
-        "stale popup focus request",
-        crate::types::ServiceWorkerClientFocusRequestCompletion {
-            target: service_worker_window_client_target_for_test(
-                popup_client_id,
-                crate::native_bridge::WindowDocumentOwner::LightweightPopup(initial_document_owner),
-            ),
-            request_id: 98,
-            source_version_id: crate::runtime::ServiceWorkerVersionId::from_u64_for_test(1),
-            source_run: crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
-        },
-    )
-    .await;
-    browser_context_runtime.drain_service_worker_service_lane();
-    let stale_focus = browser_context_runtime
-        .service_worker_runtime()
-        .query_clients(&crate::runtime::ServiceWorkerClientQuery {
-            request_id: 99,
-            registration_id: crate::runtime::ServiceWorkerRegistrationId::from_u64_for_test(1),
-            version_id: crate::runtime::ServiceWorkerVersionId::from_u64_for_test(1),
-            kind: crate::runtime::ServiceWorkerClientQueryKind::Get {
-                exposed_client_id: popup_after.exposed_id.clone(),
-            },
-        });
-    assert_eq!(stale_focus.clients.len(), 1);
-    assert!(!stale_focus.clients[0].focused);
-    assert_eq!(stale_focus.clients[0].id, popup_client_id);
-    assert_eq!(stale_focus.clients[0].url.as_str(), replacement_url);
-
-    run_service_worker_client_focus_request_task_for_test(
-        &mut vm,
-        &loader,
-        "current replacement popup focus request",
-        crate::types::ServiceWorkerClientFocusRequestCompletion {
-            target: service_worker_window_client_target_for_test(
-                popup_client_id,
-                crate::native_bridge::WindowDocumentOwner::LightweightPopup(
-                    replacement_document_owner,
-                ),
-            ),
-            request_id: 100,
-            source_version_id: crate::runtime::ServiceWorkerVersionId::from_u64_for_test(1),
-            source_run: crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
-        },
-    )
-    .await;
-    browser_context_runtime.drain_service_worker_service_lane();
-    let current_focus = browser_context_runtime
-        .service_worker_runtime()
-        .query_clients(&crate::runtime::ServiceWorkerClientQuery {
-            request_id: 101,
-            registration_id: crate::runtime::ServiceWorkerRegistrationId::from_u64_for_test(1),
-            version_id: crate::runtime::ServiceWorkerVersionId::from_u64_for_test(1),
-            kind: crate::runtime::ServiceWorkerClientQueryKind::Get {
-                exposed_client_id: popup_after.exposed_id.clone(),
-            },
-        });
-    assert_eq!(current_focus.clients.len(), 1);
-    assert!(current_focus.clients[0].focused);
-
-    server
-        .await
-        .expect("service worker popup reopen server should finish");
-}
-
-#[tokio::test]
-async fn service_worker_clients_open_window_about_blank_request_creates_no_popup() {
+async fn service_worker_clients_open_window_about_url_canonicalizes_to_fresh_page() {
     let (base_url, server) = spawn_service_worker_response_server(vec![(
         "/app/worker.js",
         "text/javascript; charset=utf-8",
@@ -20877,6 +20561,7 @@ async fn service_worker_clients_open_window_about_blank_request_creates_no_popup
             &format!("{base_url}/app/page.html"),
             &loader,
         );
+    vm.bind_auxiliary_page_reservation_allocator_for_test();
 
     vm.eval(
         r#"
@@ -20913,21 +20598,47 @@ async fn service_worker_clients_open_window_about_blank_request_creates_no_popup
     run_service_worker_clients_open_window_request_task_for_test(
         &mut vm,
         &loader,
-        "about:blank openWindow request",
+        "about:crash openWindow request",
         crate::types::ServiceWorkerClientsOpenWindowRequestCompletion {
             host: current_target,
             request_id: 92,
             source_version_id: crate::runtime::ServiceWorkerVersionId::from_u64_for_test(1),
             source_run: crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
-            url: url::Url::parse("about:blank").unwrap(),
+            source_script_url: url::Url::parse(&format!("{base_url}/app/worker.js")).unwrap(),
+            url: url::Url::parse("about:crash").unwrap(),
         },
     )
     .await;
 
     let popups = vm.take_pending_popup_activations();
-    assert!(popups.is_empty());
-    assert!(!vm.has_pending_lightweight_popup_document_loads());
-    browser_context_runtime.drain_service_worker_service_lane();
+    assert_eq!(popups.len(), 1);
+    let activation = &popups[0];
+    assert_eq!(activation.popup_id(), None);
+    assert_eq!(activation.url(), "about:blank");
+    assert_eq!(
+        activation.new_target_disposition(),
+        Some(crate::RendererPopupNewTargetDisposition::FreshUnnamed)
+    );
+    let pending_page = activation
+        .pending_auxiliary_page()
+        .expect("about: URL must still reserve a real auxiliary Page");
+    let continuation = activation
+        .service_worker_clients_open_window_continuation()
+        .expect("about: URL must retain its exact Page completion");
+    assert_eq!(
+        continuation.expected_page_id(),
+        pending_page.page_reservation().page_id()
+    );
+    assert!(
+        activation
+            .navigation_source()
+            .is_some_and(crate::RendererTopLevelNavigationSource::is_browser_context)
+    );
+    continuation.resolve_null();
+    assert_eq!(
+        browser_context_runtime.drain_service_worker_service_lane(),
+        1
+    );
 
     server
         .await
@@ -20935,7 +20646,7 @@ async fn service_worker_clients_open_window_about_blank_request_creates_no_popup
 }
 
 #[tokio::test]
-async fn service_worker_clients_open_window_cross_origin_result_stays_null() {
+async fn service_worker_clients_open_window_cross_origin_keeps_worker_referrer_source() {
     let (base_url, server) = spawn_service_worker_response_server(vec![(
         "/app/worker.js",
         "text/javascript; charset=utf-8",
@@ -20962,6 +20673,7 @@ async fn service_worker_clients_open_window_cross_origin_result_stays_null() {
             &format!("{base_url}/app/page.html"),
             &loader,
         );
+    vm.bind_auxiliary_page_reservation_allocator_for_test();
 
     vm.eval(
         r#"
@@ -21004,6 +20716,7 @@ async fn service_worker_clients_open_window_cross_origin_result_stays_null() {
             request_id: 94,
             source_version_id: crate::runtime::ServiceWorkerVersionId::from_u64_for_test(1),
             source_run: crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
+            source_script_url: url::Url::parse(&format!("{base_url}/app/worker.js")).unwrap(),
             url: url::Url::parse(&popup_url).unwrap(),
         },
     )
@@ -21011,45 +20724,42 @@ async fn service_worker_clients_open_window_cross_origin_result_stays_null() {
 
     let popups = vm.take_pending_popup_activations();
     assert_eq!(popups.len(), 1);
-    assert!(popups[0].popup_id().is_some());
-    assert_eq!(popups[0].url(), popup_url);
-    assert_eq!(popups[0].target_name(), "_blank");
-    assert!(vm.has_pending_lightweight_popup_document_loads());
-
-    drain_service_worker_test_until_popup_loads_settle(
-        &mut vm,
-        &browser_context_runtime,
-        &loader,
-        "cross-origin service worker openWindow",
-    )
-    .await;
-
-    let clients = browser_context_runtime
-        .service_worker_runtime()
-        .query_clients(&crate::runtime::ServiceWorkerClientQuery {
-            request_id: 95,
-            registration_id: crate::runtime::ServiceWorkerRegistrationId::from_u64_for_test(1),
-            version_id: crate::runtime::ServiceWorkerVersionId::from_u64_for_test(1),
-            kind: crate::runtime::ServiceWorkerClientQueryKind::MatchAll {
-                options: crate::runtime::ServiceWorkerClientQueryOptions {
-                    include_uncontrolled: true,
-                    client_type: crate::runtime::ServiceWorkerClientQueryType::Window,
-                },
-            },
-        });
-    assert!(
-        clients
-            .clients
-            .iter()
-            .all(|client| client.url.as_str() != popup_url)
+    let activation = &popups[0];
+    assert_eq!(activation.popup_id(), None);
+    assert_eq!(activation.url(), popup_url);
+    assert_eq!(activation.target_name(), "_blank");
+    assert_eq!(
+        activation.new_target_disposition(),
+        Some(crate::RendererPopupNewTargetDisposition::FreshUnnamed)
     );
+    assert!(activation.pending_auxiliary_page().is_some());
+    assert_eq!(
+        activation.navigation_referrer(),
+        Some(format!("{base_url}/").as_str())
+    );
+    let navigation_source = activation
+        .navigation_source()
+        .expect("cross-origin openWindow must retain its worker source");
+    assert!(navigation_source.is_browser_context());
+    assert_eq!(
+        navigation_source.source_url(),
+        format!("{base_url}/app/worker.js")
+    );
+
+    activation
+        .service_worker_clients_open_window_continuation()
+        .expect("cross-origin openWindow completion")
+        .resolve_null();
+    assert_eq!(
+        browser_context_runtime.drain_service_worker_service_lane(),
+        1
+    );
+
+    popup_server.abort();
 
     server
         .await
         .expect("service worker cross-origin openWindow script server should finish");
-    popup_server
-        .await
-        .expect("service worker cross-origin popup server should finish");
 }
 
 #[tokio::test]
@@ -21464,6 +21174,7 @@ async fn navigator_service_worker_notification_action_navigate_records_popup_act
             &format!("{base_url}/app/page.html"),
             &loader,
         );
+    vm.bind_auxiliary_page_reservation_allocator_for_test();
     vm.set_permission_overrides(&[crate::protocol_types::PermissionOverrideRegistration {
         permission: serde_json::Value::String("notifications".to_owned()),
         setting: "granted".to_owned(),
@@ -21519,10 +21230,30 @@ async fn navigator_service_worker_notification_action_navigate_records_popup_act
 
     let popups = vm.take_pending_popup_activations();
     assert_eq!(popups.len(), 1);
-    assert!(popups[0].popup_id().is_some());
-    assert_eq!(popups[0].url(), "about:blank");
-    assert_eq!(popups[0].target_name(), "_blank");
-    assert!(!vm.has_pending_lightweight_popup_document_loads());
+    let activation = &popups[0];
+    assert_eq!(activation.popup_id(), None);
+    assert_eq!(activation.url(), "about:blank");
+    assert_eq!(activation.target_name(), "_blank");
+    assert!(matches!(
+        activation.source(),
+        crate::RendererPopupActivationSource::BrowserContext
+    ));
+    assert_eq!(
+        activation.new_target_disposition(),
+        Some(crate::RendererPopupNewTargetDisposition::FreshUnnamed)
+    );
+    assert!(activation.pending_auxiliary_page().is_some());
+    assert!(
+        activation
+            .navigation_source()
+            .is_some_and(crate::RendererTopLevelNavigationSource::is_browser_context)
+    );
+    assert!(
+        activation
+            .service_worker_clients_open_window_continuation()
+            .is_none(),
+        "notification navigation has no clients.openWindow Promise"
+    );
     assert_eq!(
         vm.eval("String(globalThis.__serviceWorkerNotificationActionNavigateProbe)")
             .expect("notification action navigate probe should be readable"),
@@ -23253,7 +22984,7 @@ fn window_dialog_and_open_arguments_use_webidl_conversion() {
 
     assert_eq!(
         result,
-        "undefined|TypeError|false|RangeError|null|TypeError|[object Window]|TypeError|TypeError|RangeError"
+        "undefined|TypeError|false|RangeError|null|TypeError|null|TypeError|TypeError|RangeError"
     );
 }
 
@@ -23281,3346 +23012,6 @@ fn standalone_dialog_handler_without_page_residence_uses_headless_defaults() {
     );
 }
 
-#[test]
-fn window_open_rejects_invalid_urls_before_selecting_a_target() {
-    let mut vm = new_storage_test_vm("https://example.com/");
-
-    let result = vm
-        .eval(
-            r#"
-            (() => {
-              const probe = target => {
-                try {
-                  open("https://example.com\0mozilla.org", target);
-                  return "allowed";
-                } catch (error) {
-                  return [
-                    error.name,
-                    error instanceof DOMException,
-                    error.code
-                  ].join(":");
-                }
-              };
-              return [probe(), probe("_self")].join("|");
-            })()
-            "#,
-        )
-        .expect("invalid window.open URL probe should evaluate");
-
-    assert_eq!(result, "SyntaxError:true:12|SyntaxError:true:12");
-}
-
-#[test]
-fn window_open_about_blank_returns_lightweight_popup_window() {
-    let mut vm = new_storage_test_vm("https://example.com/");
-
-    let result = vm
-        .eval(
-            r##"
-            (() => {
-              const popup = open("about:blank#1");
-              const closeDescriptor = Object.getOwnPropertyDescriptor(popup, "close");
-              const closeValue = closeDescriptor && closeDescriptor.value;
-              const closeShape = [
-                typeof closeValue,
-                closeValue && closeValue.name,
-                closeValue && closeValue.length,
-                closeDescriptor && closeDescriptor.enumerable,
-                closeDescriptor && closeDescriptor.configurable,
-                closeDescriptor && closeDescriptor.writable,
-                /\[native code\]/.test(String(closeValue))
-              ].join(":");
-              popup.navigation.oncurrententrychange = () => {
-                popup.__unexpectedCurrentEntryChange = true;
-              };
-              const before = [
-                String(popup),
-                popup.opener === window,
-                popup.location.href,
-                popup.navigation.currentEntry === null,
-                closeShape,
-                String(popup.close())
-              ].join("|");
-              popup.location.href = "about:blank#2";
-              return [
-                before,
-                popup.location.href,
-                popup.__unexpectedCurrentEntryChange === true
-              ].join(";");
-            })()
-            "##,
-        )
-        .expect("about:blank popup probe should evaluate");
-
-    assert_eq!(
-        result,
-        "[object Window]|true|about:blank#1|true|function:close:0:false:true:true:true|undefined;about:blank#2;false"
-    );
-}
-
-#[test]
-fn window_open_existing_context_special_targets_never_enter_the_popup_carrier() {
-    for target in ["_self", "_parent", "_top", "_SeLf", "_PaReNt", "_TOP"] {
-        let mut vm = new_storage_test_vm("https://example.com/source");
-        let result = vm
-            .eval(&format!(
-                "String(window.open('https://example.com/{target}', '{target}'))"
-            ))
-            .expect("special-target window.open should evaluate");
-        assert_eq!(result, "[object Window]");
-        assert!(
-            vm.take_pending_popup_activations().is_empty(),
-            "{target} must use existing-context navigation authority"
-        );
-        let navigation = vm
-            .take_pending_location_navigation_with_seed()
-            .unwrap_or_else(|| panic!("{target} should record existing-context navigation"));
-        assert_eq!(
-            navigation.url.as_str(),
-            format!("https://example.com/{target}")
-        );
-    }
-}
-
-#[test]
-fn window_open_special_target_parsing_is_case_insensitive_but_does_not_trim() {
-    let mut blank_vm = new_storage_test_vm("https://example.com/source");
-    assert_eq!(
-        blank_vm
-            .eval("String(window.open('about:blank#mixed-blank', '_BlAnK'))")
-            .expect("mixed-case _blank should evaluate"),
-        "[object Window]"
-    );
-    let blank_activations = blank_vm.take_pending_popup_activations();
-    assert_eq!(blank_activations.len(), 1);
-    assert_eq!(blank_activations[0].target_name(), "_BlAnK");
-    assert!(
-        blank_vm
-            .take_pending_location_navigation_with_seed()
-            .is_none(),
-        "_blank must not enter existing-context navigation"
-    );
-
-    let mut named_vm = new_storage_test_vm("https://example.com/source");
-    assert_eq!(
-        named_vm
-            .eval(
-                "(() => {\
-                    const spaced = window.open('about:blank#spaced-name', ' _self ');\
-                    return JSON.stringify({\
-                        spacedString: String(spaced),\
-                        spacedName: spaced.name,\
-                    });\
-                })()",
-            )
-            .expect("whitespace-padded target name should evaluate"),
-        r#"{"spacedString":"[object Window]","spacedName":" _self "}"#
-    );
-    let named_activations = named_vm.take_pending_popup_activations();
-    assert_eq!(named_activations.len(), 1);
-    assert_eq!(named_activations[0].target_name(), " _self ");
-    assert!(
-        named_vm
-            .take_pending_location_navigation_with_seed()
-            .is_none(),
-        "Chromium passes the raw target to FrameTree; whitespace must not turn a name into _self"
-    );
-}
-
-#[test]
-fn window_open_lightweight_popup_location_assignment_uses_window_setter() {
-    let mut vm = new_storage_test_vm("https://example.com/");
-
-    let result = vm
-        .eval(
-            r##"
-            (() => {
-              const popup = open("about:blank#initial");
-              const descriptor = Object.getOwnPropertyDescriptor(popup, "location");
-              popup.location = "about:blank#assigned";
-              return [
-                typeof descriptor.get,
-                descriptor.get.name,
-                typeof descriptor.set,
-                descriptor.set.name,
-                descriptor.enumerable,
-                descriptor.configurable,
-                popup.location.href
-              ].join("|");
-            })()
-            "##,
-        )
-        .expect("popup Window.location assignment probe should evaluate");
-
-    assert_eq!(
-        result,
-        "function|get location|function|set location|true|false|about:blank#assigned"
-    );
-}
-
-#[tokio::test]
-async fn lightweight_popup_fragment_navigation_dispatches_popstate_and_hashchange() {
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
-    let mut vm =
-        new_storage_page_task_executor_test_vm_with_loader("https://example.com/", &loader);
-
-    let after_set = vm
-        .eval(
-            r##"
-(() => {
-  const popup = open("about:blank#one");
-  globalThis.__popupFragmentEvents = [];
-  popup.addEventListener("popstate", event => {
-    __popupFragmentEvents.push([
-      "popstate",
-      event.target === popup,
-      event.currentTarget === popup,
-      event.state === null,
-      popup.location.href
-    ].join(":"));
-  });
-  popup.addEventListener("hashchange", event => {
-    __popupFragmentEvents.push([
-      "hashchange",
-      event.oldURL,
-      event.newURL,
-      event.target === popup,
-      event.currentTarget === popup,
-      popup.location.href
-    ].join(":"));
-  });
-  popup.location.href = "about:blank#two";
-  return [
-    popup.location.href,
-    __popupFragmentEvents.join("|")
-  ].join("|");
-})()
-"##,
-        )
-        .expect("popup fragment navigation setup should evaluate");
-
-    assert_eq!(
-        after_set,
-        "about:blank#two|popstate:true:true:true:about:blank#two"
-    );
-
-    assert!(
-        !vm.has_ready_timeout(),
-        "popup hashchange must not acquire a PageTimer descriptor"
-    );
-    assert!(
-        vm.run_one_dom_manipulation_task_executor_turn(
-            PageDomManipulationTestFamily::HashChange,
-            &loader,
-        )
-        .await
-        .expect("popup fragment hashchange task should run")
-    );
-    assert_eq!(
-        vm.eval("__popupFragmentEvents.join('|')")
-            .expect("popup fragment events should evaluate"),
-        "popstate:true:true:true:about:blank#two|hashchange:about:blank#one:about:blank#two:true:true:about:blank#two"
-    );
-}
-
-#[test]
-fn window_open_noopener_false_preserves_opener() {
-    let mut vm = new_storage_test_vm("https://example.com/");
-
-    let result = vm
-        .eval(
-            r#"
-(() => {
-  const popup = open("about:blank#keeps-opener", "", "noopener=false");
-  const zeroPopup = open("about:blank#zero-opener", "", "noopener=0");
-  return [
-    popup !== null,
-    popup.opener === window,
-    zeroPopup !== null,
-    zeroPopup.opener === window
-  ].join("|");
-})()
-"#,
-        )
-        .expect("noopener=false popup probe should evaluate");
-
-    assert_eq!(result, "true|true|true|true");
-}
-
-#[test]
-fn window_open_lightweight_popup_clones_and_isolates_session_storage() {
-    let mut vm = new_storage_test_vm("https://example.com/");
-
-    let result = vm
-        .eval(
-            r##"
-            (() => {
-              sessionStorage.clear();
-              sessionStorage.setItem("FOO", "BAR");
-              const popup = open("about:blank#session");
-              const initial = popup.sessionStorage.getItem("FOO");
-              sessionStorage.setItem("BAZ", "QUX");
-              popup.sessionStorage.setItem("FOO", "BAR-POPUP");
-              return JSON.stringify({
-                distinctArea: popup.sessionStorage !== sessionStorage,
-                stableArea: popup.sessionStorage === popup.sessionStorage,
-                initial,
-                popupFoo: popup.sessionStorage.getItem("FOO"),
-                openerFoo: sessionStorage.getItem("FOO"),
-                popupBaz: popup.sessionStorage.getItem("BAZ"),
-                openerBaz: sessionStorage.getItem("BAZ")
-              });
-            })()
-            "##,
-        )
-        .expect("popup sessionStorage clone probe should evaluate");
-
-    assert_eq!(
-        result,
-        r#"{"distinctArea":true,"stableArea":true,"initial":"BAR","popupFoo":"BAR-POPUP","openerFoo":"BAR","popupBaz":null,"openerBaz":"QUX"}"#
-    );
-}
-
-#[tokio::test]
-async fn storage_manager_estimate_uses_lightweight_popup_session_storage_owner() {
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
-    let mut vm = new_page_task_executor_test_vm_with_loader("https://example.com/", &loader);
-
-    let result = vm
-        .eval(
-            r##"
-(() => {
-  globalThis.__popupStorageEstimateMessages = [];
-  addEventListener("message", event => {
-    __popupStorageEstimateMessages.push(String(event.data));
-  });
-  localStorage.clear();
-  sessionStorage.clear();
-  sessionStorage.setItem("top", "AAAAA");
-  const html = `
-    <!doctype html>
-    <script>
-      sessionStorage.setItem("popup", "BBBBBBBBBBB");
-      navigator.storage.estimate().then(
-        estimate => opener.postMessage(JSON.stringify({
-          usage: estimate.usage,
-          indexedDB: estimate.usageDetails.indexedDB ?? null,
-          topValue: sessionStorage.getItem("top"),
-          popupValue: sessionStorage.getItem("popup")
-        }), "*"),
-        error => opener.postMessage("error:" + (error && error.name), "*")
-      );
-    <\/script>
-  `;
-  const popup = open(URL.createObjectURL(new Blob([html], { type: "text/html" })));
-  sessionStorage.setItem("top", "T");
-  return String(__popupStorageEstimateMessages.length) + "|" + (popup !== null);
-})()
-"##,
-        )
-        .expect("popup StorageManager estimate setup should evaluate");
-    assert_eq!(result, "0|true");
-
-    advance_page_task_executor_until_eval_equals(
-        &mut vm,
-        &loader,
-        "String(__popupStorageEstimateMessages.length)",
-        "1",
-        "popup StorageManager estimate",
-    )
-    .await;
-
-    assert_eq!(
-        vm.eval("__popupStorageEstimateMessages[0]")
-            .expect("popup StorageManager estimate message should evaluate"),
-        r#"{"usage":16,"indexedDB":null,"topValue":"AAAAA","popupValue":"BBBBBBBBBBB"}"#
-    );
-}
-
-#[test]
-fn window_open_named_lightweight_popup_reuses_without_recloning_session_storage() {
-    let mut vm = new_storage_test_vm("https://example.com/");
-
-    let result = vm
-        .eval(
-            r##"
-            (() => {
-              sessionStorage.clear();
-              const popup = open("", "sessionStorageTestWindow");
-              const initial = popup.sessionStorage.getItem("FOO");
-              sessionStorage.setItem("FOO", "BAR");
-              const reopened = open("", "sessionStorageTestWindow");
-              return JSON.stringify({
-                sameWindow: popup === reopened,
-                popupName: popup.name,
-                initial,
-                openerFoo: sessionStorage.getItem("FOO"),
-                popupFoo: popup.sessionStorage.getItem("FOO")
-              });
-            })()
-            "##,
-        )
-        .expect("named popup sessionStorage reopen probe should evaluate");
-
-    assert_eq!(
-        result,
-        r#"{"sameWindow":true,"popupName":"sessionStorageTestWindow","initial":null,"openerFoo":"BAR","popupFoo":null}"#
-    );
-}
-
-#[tokio::test]
-async fn window_open_named_lightweight_popup_reuse_pushes_history_and_back_traverses() {
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
-    let mut vm =
-        new_page_task_executor_test_vm_with_loader("https://example.com/base/page.html", &loader);
-
-    let setup = vm
-        .eval(
-            r#"
-(() => {
-  globalThis.__namedPopupHistoryEvents = [];
-  const firstHtml = `<!doctype html><script>
-    opener.__namedPopupHistoryEvents.push("first:" + location.href);
-  <\/script>`;
-  const secondHtml = `<!doctype html><script>
-    opener.__namedPopupHistoryEvents.push("second:" + history.length + ":" + location.href);
-  <\/script>`;
-  globalThis.__namedPopupFirstUrl = URL.createObjectURL(new Blob([firstHtml], { type: "text/html" }));
-  globalThis.__namedPopupSecondUrl = URL.createObjectURL(new Blob([secondHtml], { type: "text/html" }));
-  globalThis.__namedPopup = open(__namedPopupFirstUrl, "namedPopupHistoryWindow");
-  return [
-    __namedPopup.location.href === __namedPopupFirstUrl,
-    __namedPopup.history.length,
-    __namedPopupHistoryEvents.length
-  ].join("|");
-})()
-"#,
-        )
-        .expect("named popup history setup should evaluate");
-    assert_eq!(setup, "true|1|0");
-    advance_page_task_executor_until_eval_equals(
-        &mut vm,
-        &loader,
-        "String(globalThis.__namedPopupHistoryEvents.length)",
-        "1",
-        "first named popup document should load",
-    )
-    .await;
-
-    let reopened = vm
-        .eval(
-            r#"
-(() => {
-  const reopened = open(__namedPopupSecondUrl, "namedPopupHistoryWindow");
-  return JSON.stringify({
-    sameWindow: reopened === __namedPopup,
-    hrefIsSecond: reopened.location.href === __namedPopupSecondUrl,
-    historyLength: reopened.history.length,
-    eventCount: __namedPopupHistoryEvents.length
-  });
-})()
-"#,
-        )
-        .expect("named popup reopen should evaluate");
-    assert_eq!(
-        reopened,
-        r#"{"sameWindow":true,"hrefIsSecond":true,"historyLength":2,"eventCount":1}"#
-    );
-    advance_page_task_executor_until_eval_equals(
-        &mut vm,
-        &loader,
-        "String(globalThis.__namedPopupHistoryEvents.length)",
-        "2",
-        "second named popup document should load",
-    )
-    .await;
-
-    vm.eval("__namedPopup.history.back()")
-        .expect("named popup history.back should queue");
-    advance_page_task_executor_until_eval_equals(
-        &mut vm,
-        &loader,
-        "String(globalThis.__namedPopupHistoryEvents.length)",
-        "3",
-        "named popup back traversal should load previous document",
-    )
-    .await;
-
-    let result = vm
-        .eval(
-            r#"
-JSON.stringify({
-  hrefIsFirst: __namedPopup.location.href === __namedPopupFirstUrl,
-  events: __namedPopupHistoryEvents.map(value => value.split(":")[0])
-})
-"#,
-        )
-        .expect("named popup back traversal result should evaluate");
-    assert_eq!(
-        result,
-        r#"{"hrefIsFirst":true,"events":["first","second","first"]}"#
-    );
-}
-
-#[tokio::test]
-async fn lightweight_popup_cross_document_navigation_clears_old_onload_handler() {
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
-    let mut vm =
-        new_page_task_executor_test_vm_with_loader("https://example.com/base/page.html", &loader);
-
-    let setup = vm
-        .eval(
-            r#"
-(() => {
-  globalThis.__popupOnloadEvents = [];
-  globalThis.__popupSecondLoadDone = false;
-  const firstHtml = `<!doctype html><script>
-    opener.__popupOnloadEvents.push("first-script");
-    window.onload = () => opener.__popupOnloadEvents.push("first-load");
-    window.addEventListener("load", () => opener.__popupOnloadEvents.push("first-listener"));
-  <\/script>`;
-  const secondHtml = `<!doctype html><script>
-    opener.__popupOnloadEvents.push("second-script:" + (window.onload === null));
-    window.addEventListener("load", () => {
-      opener.__popupOnloadEvents.push("second-load");
-      opener.__popupSecondLoadDone = true;
-    });
-  <\/script>`;
-  globalThis.__popupOnloadFirstUrl = URL.createObjectURL(new Blob([firstHtml], { type: "text/html" }));
-  globalThis.__popupOnloadSecondUrl = URL.createObjectURL(new Blob([secondHtml], { type: "text/html" }));
-  globalThis.__popupOnloadWindow = open(__popupOnloadFirstUrl, "popupOnloadClearWindow");
-  return String(__popupOnloadEvents.length);
-})()
-"#,
-        )
-        .expect("popup onload clear setup should evaluate");
-    assert_eq!(setup, "0");
-    advance_page_task_executor_until_eval_equals(
-        &mut vm,
-        &loader,
-        "String(globalThis.__popupOnloadEvents.length)",
-        "3",
-        "first popup document script and load listeners should run",
-    )
-    .await;
-
-    let reopened = vm
-        .eval(
-            r#"
-(() => {
-  const reopened = open(__popupOnloadSecondUrl, "popupOnloadClearWindow");
-  return [
-    reopened === __popupOnloadWindow,
-    reopened.history.length,
-    __popupOnloadEvents.join("|")
-  ].join("|");
-})()
-"#,
-        )
-        .expect("popup onload clear reopen should evaluate");
-    assert_eq!(reopened, "true|2|first-script|first-load|first-listener");
-    advance_page_task_executor_until_eval_equals(
-        &mut vm,
-        &loader,
-        "String(globalThis.__popupSecondLoadDone)",
-        "true",
-        "second popup document load listener should run",
-    )
-    .await;
-
-    let result = vm
-        .eval("globalThis.__popupOnloadEvents.join('|')")
-        .expect("popup onload clear events should evaluate");
-    assert_eq!(
-        result,
-        "first-script|first-load|first-listener|second-script:true|second-load"
-    );
-}
-
-#[test]
-fn window_open_closed_named_lightweight_popup_creates_new_window() {
-    let mut vm = new_storage_test_vm("https://example.com/");
-
-    let result = vm
-        .eval(
-            r##"
-            (() => {
-              const first = open("about:blank#first", "closedNamedPopup");
-              first.close();
-              const second = open("about:blank#second", "closedNamedPopup");
-              return JSON.stringify({
-                sameWindow: first === second,
-                firstClosed: first.closed,
-                secondClosed: second.closed,
-                secondName: second.name,
-                secondHref: second.location.href
-              });
-            })()
-            "##,
-        )
-        .expect("closed named popup reopen probe should evaluate");
-
-    assert_eq!(
-        result,
-        r##"{"sameWindow":false,"firstClosed":true,"secondClosed":false,"secondName":"closedNamedPopup","secondHref":"about:blank#second"}"##
-    );
-}
-
-#[tokio::test]
-async fn window_open_noopener_lightweight_popup_uses_fresh_session_storage() {
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
-    let mut vm =
-        new_broadcast_channel_page_test_vm_with_loader("https://example.com/page.html", &loader);
-
-    let result = vm
-        .eval(
-            r#"
-(() => {
-  sessionStorage.clear();
-  sessionStorage.setItem("FOO", "BAR");
-  globalThis.__noopenerPopupMessages = [];
-  const channel = new BroadcastChannel("storage-session-window-noopener-reduced");
-  channel.onmessage = event => __noopenerPopupMessages.push(event.data);
-  const html = `
-    <!doctype html>
-    <script>
-      const assertions = {
-        openerIsNull: opener === null && window.opener === null,
-        initial: sessionStorage.getItem("FOO")
-      };
-      sessionStorage.setItem("FOO", "BAR-NEWWINDOW");
-      assertions.afterSet = sessionStorage.getItem("FOO");
-      new BroadcastChannel("storage-session-window-noopener-reduced").postMessage(assertions);
-      window.close();
-    <\/script>
-  `;
-  const url = URL.createObjectURL(new Blob([html], { type: "text/html" }));
-  const popup = open(url, "_blank", "noopener");
-  return JSON.stringify({
-    returnedNull: popup === null,
-    openerFoo: sessionStorage.getItem("FOO"),
-    messages: __noopenerPopupMessages.length
-  });
-})()
-"#,
-        )
-        .expect("noopener popup setup should evaluate");
-
-    assert_eq!(
-        result,
-        r#"{"returnedNull":true,"openerFoo":"BAR","messages":0}"#
-    );
-    advance_page_task_executor_until_eval_equals(
-        &mut vm,
-        &loader,
-        "String(__noopenerPopupMessages.length)",
-        "1",
-        "noopener popup should publish its session-storage result",
-    )
-    .await;
-    assert_eq!(
-        vm.eval(
-            r#"JSON.stringify({
-              popup: __noopenerPopupMessages[0],
-              openerFoo: sessionStorage.getItem("FOO")
-            })"#,
-        )
-        .expect("noopener popup message should evaluate"),
-        r#"{"popup":{"openerIsNull":true,"initial":null,"afterSet":"BAR-NEWWINDOW"},"openerFoo":"BAR"}"#
-    );
-    let popups = vm.take_pending_popup_activations();
-    assert_eq!(popups.len(), 1);
-    assert!(matches!(
-        popups[0].source(),
-        crate::RendererPopupActivationSource::Window {
-            window: crate::RendererWindowDocumentSource::RootFrame,
-            exposes_opener: false,
-            ..
-        }
-    ));
-}
-
-#[tokio::test]
-async fn lightweight_popup_session_storage_events_do_not_fire_on_opener() {
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
-    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
-        "https://example.com/page.html",
-        &loader,
-    );
-
-    let result = vm
-        .eval(
-            r##"
-            (() => {
-              sessionStorage.clear();
-              globalThis.__popupStorageEvents = [];
-              addEventListener("storage", event => {
-                __popupStorageEvents.push(`${event.key}:${event.newValue}`);
-              });
-              const popup = open("about:blank#session-event");
-              popup.sessionStorage.setItem("k", "v");
-              return __popupStorageEvents.length;
-            })()
-            "##,
-        )
-        .expect("popup sessionStorage event setup should evaluate");
-
-    assert_eq!(result, "0");
-    for _ in 0..4 {
-        let _ = vm
-            .run_one_dom_manipulation_task_executor_turn(
-                PageDomManipulationTestFamily::StorageEvent,
-                &loader,
-            )
-            .await
-            .expect("selected dispatcher should drain popup sessionStorage tasks");
-    }
-    assert_eq!(
-        vm.eval("__popupStorageEvents.join('|')")
-            .expect("popup sessionStorage event log should evaluate"),
-        ""
-    );
-}
-
-#[tokio::test]
-async fn lightweight_popup_local_storage_events_fire_on_opener() {
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
-    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
-        "https://example.com/page.html",
-        &loader,
-    );
-
-    let result = vm
-        .eval(
-            r##"
-            (() => {
-              localStorage.clear();
-              globalThis.__popupLocalStorageEvents = [];
-              addEventListener("storage", event => {
-                __popupLocalStorageEvents.push({
-                  key: event.key,
-                  oldValue: event.oldValue,
-                  newValue: event.newValue,
-                  url: event.url,
-                  storageArea: event.storageArea === localStorage
-                });
-              });
-              const popup = open("about:blank#local-event");
-              popup.localStorage.setItem("k", "v");
-              return __popupLocalStorageEvents.length;
-            })()
-            "##,
-        )
-        .expect("popup localStorage event setup should evaluate");
-
-    assert_eq!(result, "0");
-    for _ in 0..4 {
-        if vm
-            .eval("__popupLocalStorageEvents.length")
-            .expect("popup localStorage event length should evaluate")
-            == "1"
-        {
-            break;
-        }
-        let _ = vm
-            .run_one_dom_manipulation_task_executor_turn(
-                PageDomManipulationTestFamily::StorageEvent,
-                &loader,
-            )
-            .await
-            .expect("selected dispatcher should drain popup localStorage tasks");
-    }
-    assert_eq!(
-        vm.eval("JSON.stringify(__popupLocalStorageEvents)")
-            .expect("popup localStorage event log should evaluate"),
-        r##"[{"key":"k","oldValue":null,"newValue":"v","url":"about:blank#local-event","storageArea":true}]"##
-    );
-}
-
-#[test]
-fn window_open_lightweight_popup_inherits_opener_viewport_surface() {
-    let mut vm = new_storage_test_vm("https://example.com/");
-
-    let result = vm
-        .eval(
-            r##"
-            (() => {
-              for (const [name, value] of Object.entries({
-                innerWidth: 320,
-                innerHeight: 240,
-                outerWidth: 321,
-                outerHeight: 241,
-                devicePixelRatio: 2.5
-              })) {
-                Object.defineProperty(globalThis, name, {
-                  configurable: true,
-                  get: () => value
-                });
-              }
-              const popup = open("about:blank#surface");
-              return JSON.stringify({
-                width: popup.innerWidth,
-                height: popup.innerHeight,
-                outerWidth: popup.outerWidth,
-                outerHeight: popup.outerHeight,
-                dpr: popup.devicePixelRatio
-              });
-            })()
-            "##,
-        )
-        .expect("popup viewport surface probe should evaluate");
-
-    assert_eq!(
-        result,
-        r#"{"width":320,"height":240,"outerWidth":321,"outerHeight":241,"dpr":2.5}"#
-    );
-}
-
-#[tokio::test]
-async fn window_open_non_about_returns_lightweight_popup_and_dispatches_load() {
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
-    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
-        "https://example.com/base/page.html",
-        &loader,
-    );
-
-    let result = vm
-        .eval(
-            r#"
-            (() => {
-              globalThis.__popupLoadEvents = [];
-              const url = URL.createObjectURL(new Blob(["<!doctype html><title>popup</title>"], { type: "text/html" }));
-              const popup = open(url);
-              popup.onload = () => {
-                __popupLoadEvents.push([
-                  popup.location.href.startsWith("blob:https://example.com/"),
-                  popup.opener === window,
-                  typeof popup.close
-                ].join("|"));
-              };
-              return [
-                String(popup),
-                popup.location.href.startsWith("blob:https://example.com/"),
-                popup.opener === window,
-                typeof popup.close
-              ].join("|");
-            })()
-            "#,
-        )
-        .expect("non-about popup should be returned synchronously");
-
-    assert_eq!(result, "[object Window]|true|true|function");
-    advance_page_task_executor_until_eval_equals(
-        &mut vm,
-        &loader,
-        "String(__popupLoadEvents.length)",
-        "1",
-        "non-about popup load event",
-    )
-    .await;
-    assert_eq!(
-        vm.eval("globalThis.__popupLoadEvents.join(',')")
-            .expect("popup load event log should evaluate"),
-        "true|true|function"
-    );
-}
-
-#[tokio::test]
-async fn lightweight_popup_document_write_during_load_replaces_existing_body() {
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
-    let mut vm =
-        new_page_task_executor_test_vm_with_loader("https://example.com/base/page.html", &loader);
-
-    let result = vm
-        .eval(
-            r#"
-            (() => {
-              globalThis.__popupWriteDuringLoad = "pending";
-              const html = `
-                <!doctype html>
-                <script>
-                  onload = () => {
-                    document.write("<body>Filler Text<div id='log'></div>");
-                    opener.__popupWriteDuringLoad = document.body.textContent;
-                  };
-                <\/script>
-                <body>FAIL`;
-              const url = URL.createObjectURL(new Blob([html], { type: "text/html" }));
-              const popup = open(url);
-              return popup !== null && __popupWriteDuringLoad;
-            })()
-            "#,
-        )
-        .expect("popup document.write during load setup should evaluate");
-
-    assert_eq!(result, "pending");
-    advance_page_task_executor_until_eval_equals(
-        &mut vm,
-        &loader,
-        "String(__popupWriteDuringLoad)",
-        "Filler Text",
-        "popup document.write during load",
-    )
-    .await;
-
-    assert_eq!(
-        vm.eval("__popupWriteDuringLoad")
-            .expect("popup document.write during load result should evaluate"),
-        "Filler Text"
-    );
-}
-
-#[tokio::test]
-async fn lightweight_popup_promise_handshake_survives_source_close() {
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
-    let mut vm = new_page_task_executor_test_vm_with_loader(
-        "https://popup-message-handshake.test/page.html",
-        &loader,
-    );
-
-    let result = vm
-        .eval(
-            r#"
-(() => {
-  globalThis.__popupHandshakeResult = "pending";
-  let resolveReady;
-  const ready = new Promise(resolve => { resolveReady = resolve; });
-  let popup;
-  addEventListener("message", event => {
-    if (event.data === "ready") {
-      resolveReady({ source: event.source, origin: event.origin });
-      return;
-    }
-    if (event.data && event.data.kind === "response") {
-      __popupHandshakeResult = JSON.stringify({
-        responseOrigin: event.origin,
-        sourceIsPopup: event.source === popup,
-        popupClosed: popup.closed,
-        sourceWasOpener: event.data.sourceWasOpener,
-        requestOrigin: event.data.requestOrigin
-      });
-    }
-  });
-  const html = `<!doctype html><script>
-    addEventListener("message", event => {
-      event.source.postMessage({
-        kind: "response",
-        sourceWasOpener: event.source === opener,
-        requestOrigin: event.origin
-      }, event.origin);
-      close();
-    });
-    opener.postMessage("ready", "*");
-  <\/script>`;
-  popup = open(URL.createObjectURL(new Blob([html], { type: "text/html" })));
-  ready.then(({ source, origin }) => {
-    source.postMessage("request", origin);
-  });
-  return __popupHandshakeResult;
-})()
-"#,
-        )
-        .expect("popup message handshake should schedule");
-
-    assert_eq!(result, "pending");
-    advance_page_task_executor_until_eval_equals(
-        &mut vm,
-        &loader,
-        "String(globalThis.__popupHandshakeResult === 'pending')",
-        "false",
-        "popup ready/request/response handshake",
-    )
-    .await;
-
-    assert_eq!(
-        vm.eval("String(globalThis.__popupHandshakeResult)")
-            .expect("popup message handshake result should evaluate"),
-        r#"{"responseOrigin":"https://popup-message-handshake.test","sourceIsPopup":true,"popupClosed":true,"sourceWasOpener":true,"requestOrigin":"https://popup-message-handshake.test"}"#
-    );
-}
-
-#[tokio::test]
-async fn lightweight_popup_parent_is_self_and_parent_post_message_stays_in_popup() {
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
-    let mut vm =
-        new_page_task_executor_test_vm_with_loader("https://example.com/base/page.html", &loader);
-
-    let result = vm
-        .eval(
-            r#"
-(() => {
-  globalThis.__popupParentProbe = [];
-  globalThis.__popupParentMessages = [];
-  addEventListener("message", event => {
-    __popupParentMessages.push(String(event.data));
-  });
-  const html = `
-    <!doctype html>
-    <script>
-      opener.__popupParentProbe.push({
-        parentEqSelf: parent === self,
-        topEqSelf: top === self,
-        openerEqWindowOpener: opener === window.opener
-      });
-      const send = data => {
-        if (window.parent !== null) {
-          window.parent.postMessage("parent:" + data, "*");
-        }
-        if (window.opener !== null) {
-          window.opener.postMessage("opener:" + data, "*");
-        }
-      };
-      send("one");
-      send("two");
-      send("three");
-    <\/script>
-  `;
-  open(URL.createObjectURL(new Blob([html], { type: "text/html" })));
-  return __popupParentMessages.length;
-})()
-"#,
-        )
-        .expect("popup parent postMessage probe should evaluate");
-
-    assert_eq!(result, "0");
-    advance_page_task_executor_until_eval_equals(
-        &mut vm,
-        &loader,
-        "String(__popupParentMessages.length)",
-        "3",
-        "popup parent messages",
-    )
-    .await;
-
-    assert_eq!(
-        vm.eval("JSON.stringify({probe: __popupParentProbe, messages: __popupParentMessages})")
-            .expect("popup parent postMessage result should evaluate"),
-        r#"{"probe":[{"parentEqSelf":true,"topEqSelf":true,"openerEqWindowOpener":true}],"messages":["opener:one","opener:two","opener:three"]}"#
-    );
-}
-
-#[tokio::test]
-async fn lightweight_popup_child_frame_can_message_popup_opener() {
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
-    let mut vm =
-        new_page_task_executor_test_vm_with_loader("https://example.com/base/page.html", &loader);
-
-    let result = vm
-        .eval(
-            r#"
-(() => {
-  globalThis.__popupChildFrameMessages = [];
-  addEventListener("message", event => {
-    __popupChildFrameMessages.push(String(event.data));
-  });
-  const html = `
-    <!doctype html>
-    <script>
-      opener.__popupChildFrameMessages.push("popup-start:" + Boolean(document.documentElement));
-      const frame = document.createElement("iframe");
-      frame.srcdoc = \`
-        <script>
-          const payload = [
-            parent !== self,
-            top === parent,
-            parent.opener !== null,
-            typeof parent.opener.postMessage
-          ].join("|");
-          parent.opener.postMessage("child:" + payload, "*");
-        <\\/script>
-      \`;
-      (document.body || document.documentElement || document).appendChild(frame);
-    <\/script>
-  `;
-  open(URL.createObjectURL(new Blob([html], { type: "text/html" })));
-  return __popupChildFrameMessages.length;
-})()
-"#,
-        )
-        .expect("popup child frame opener setup should evaluate");
-
-    assert_eq!(result, "0");
-    advance_page_task_executor_until_eval_equals(
-        &mut vm,
-        &loader,
-        "__popupChildFrameMessages.length",
-        "2",
-        "popup child frame message",
-    )
-    .await;
-
-    assert_eq!(
-        vm.eval("__popupChildFrameMessages.join('|')")
-            .expect("popup child frame message should evaluate"),
-        "popup-start:true|child:true|true|true|function"
-    );
-}
-
-#[tokio::test]
-async fn lightweight_popup_external_child_frame_can_message_popup_opener() {
-    let (child_url, server) = spawn_popup_external_child_frame_server().await;
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
-    let mut vm =
-        new_page_task_executor_test_vm_with_loader("https://example.com/base/page.html", &loader);
-    let child_url_literal = serde_json::to_string(&child_url).expect("child URL should serialize");
-
-    let result = vm
-        .eval(&format!(
-            r#"
-(() => {{
-  globalThis.__popupExternalChildFrameMessages = [];
-  addEventListener("message", event => {{
-    __popupExternalChildFrameMessages.push(String(event.data));
-  }});
-    const html = `
-      <!doctype html>
-      <iframe src={child_url_literal}></iframe>
-      <script>opener.__popupExternalChildFrameMessages.push("popup-start");<\/script>
-    `;
-  open(URL.createObjectURL(new Blob([html], {{ type: "text/html" }})));
-  return __popupExternalChildFrameMessages.length;
-}})()
-"#
-        ))
-        .expect("popup external child frame setup should evaluate");
-
-    assert_eq!(result, "0");
-    advance_page_task_executor_until_eval_equals(
-        &mut vm,
-        &loader,
-        "__popupExternalChildFrameMessages.length",
-        "2",
-        "popup external child frame message",
-    )
-    .await;
-
-    assert_eq!(
-        vm.eval("__popupExternalChildFrameMessages.join('|')")
-            .expect("popup external child frame message should evaluate"),
-        "popup-start|external:true|true|function"
-    );
-    server
-        .await
-        .expect("popup external child frame server should finish");
-}
-
-#[tokio::test]
-async fn lightweight_popup_load_waits_for_external_child_frame_and_focus_handlers() {
-    let (child_url, server) = spawn_popup_external_child_frame_server().await;
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
-    let mut vm =
-        new_page_task_executor_test_vm_with_loader("https://example.com/base/page.html", &loader);
-    let child_url_literal = serde_json::to_string(&child_url).expect("child URL should serialize");
-
-    let result = vm
-        .eval(&format!(
-            r##"
-(() => {{
-  globalThis.__popupChildLoadFocusEvents = [];
-  addEventListener("message", event => {{
-    __popupChildLoadFocusEvents.push(String(event.data));
-  }});
-  const html = `
-    <!doctype html>
-    <input id="popup-input">
-    <iframe src={child_url_literal}></iframe>
-    <script>
-      const frame = document.querySelector("iframe");
-      frame.addEventListener("load", () => {{
-        opener.__popupChildLoadFocusEvents.push("iframe-load");
-      }});
-      window.addEventListener("load", () => {{
-        opener.__popupChildLoadFocusEvents.push("popup-load");
-        frame.focus();
-        document.querySelector("#popup-input").focus();
-      }});
-    <\/script>
-  `;
-  open(URL.createObjectURL(new Blob([html], {{ type: "text/html" }})));
-  return __popupChildLoadFocusEvents.length;
-}})()
-"##
-        ))
-        .expect("popup child load/focus setup should evaluate");
-
-    assert_eq!(result, "0");
-    advance_page_task_executor_until_eval_equals(
-        &mut vm,
-        &loader,
-        "String(__popupChildLoadFocusEvents.length)",
-        "5",
-        "popup child load/focus events",
-    )
-    .await;
-
-    assert_eq!(
-        vm.eval(
-            r#"JSON.stringify({
-  iframeBeforePopup: __popupChildLoadFocusEvents.indexOf("iframe-load") < __popupChildLoadFocusEvents.indexOf("popup-load"),
-  popupBeforeFocus: __popupChildLoadFocusEvents.indexOf("popup-load") < __popupChildLoadFocusEvents.indexOf("child-window-focus"),
-  focusBeforeBlur: __popupChildLoadFocusEvents.indexOf("child-window-focus") < __popupChildLoadFocusEvents.indexOf("child-window-blur"),
-  externalLoadObserved: __popupChildLoadFocusEvents.some(value => value.startsWith("external:"))
-})"#
-        )
-        .expect("popup child load/focus ordering should evaluate"),
-        r#"{"iframeBeforePopup":true,"popupBeforeFocus":true,"focusBeforeBlur":true,"externalLoadObserved":true}"#
-    );
-    server
-        .await
-        .expect("popup external child frame server should finish");
-}
-
-#[tokio::test]
-async fn lightweight_popup_post_message_interleaves_opener_promise_waiters() {
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
-    let mut vm =
-        new_page_task_executor_test_vm_with_loader("https://example.com/base/page.html", &loader);
-
-    let result = vm
-        .eval(
-            r#"
-(() => {
-  globalThis.__popupWatcherLog = [];
-  let waiting = "first";
-  addEventListener("message", event => {
-    if (!waiting) {
-      __popupWatcherLog.push("unexpected:" + event.data);
-      return;
-    }
-    __popupWatcherLog.push("message:" + event.data + ":" + waiting);
-    waiting = "";
-    Promise.resolve().then(() => {
-      __popupWatcherLog.push("microtask-after:" + event.data);
-      if (__popupWatcherLog.filter(item => item.startsWith("message:")).length < 3) {
-        waiting = "next";
-      }
-    });
-  });
-  const html = `
-    <!doctype html>
-    <script>
-      function post_message(data) {
-        if (window.parent !== null) {
-          window.parent.postMessage(data, { targetOrigin: "*" });
-        }
-        if (window.opener !== null) {
-          window.opener.postMessage(data, { targetOrigin: "*" });
-        }
-      }
-      Promise.reject(new DOMException("", "SecurityError"))
-        .catch(error => post_message("open:" + error.name));
-      Promise.reject(new DOMException("", "SecurityError"))
-        .catch(error => post_message("keys:" + error.name));
-      Promise.reject(new DOMException("", "SecurityError"))
-        .catch(error => post_message("delete:" + error.name));
-    <\/script>
-  `;
-  open(URL.createObjectURL(new Blob([html], { type: "text/html" })));
-  return __popupWatcherLog.length;
-})()
-"#,
-        )
-        .expect("popup EventWatcher-like postMessage setup should evaluate");
-
-    assert_eq!(result, "0");
-    advance_page_task_executor_until_eval_equals(
-        &mut vm,
-        &loader,
-        "String(__popupWatcherLog.filter(item => item.startsWith('message:')).length)",
-        "3",
-        "popup watcher messages",
-    )
-    .await;
-
-    assert_eq!(
-        vm.eval("JSON.stringify(__popupWatcherLog)")
-            .expect("popup watcher log should evaluate"),
-        r#"["message:open:SecurityError:first","microtask-after:open:SecurityError","message:keys:SecurityError:next","microtask-after:keys:SecurityError","message:delete:SecurityError:next","microtask-after:delete:SecurityError"]"#
-    );
-}
-
-#[tokio::test]
-async fn csp_sandbox_popup_storage_bucket_messages_reach_opener_once() {
-    let (popup_url, server) = spawn_csp_sandbox_storage_bucket_popup_server().await;
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
-    let document_url = Url::parse(&popup_url)
-        .expect("popup url")
-        .join("/base/page.html")
-        .expect("document url");
-    let mut vm = new_storage_page_task_executor_test_vm_with_loader(document_url.as_str(), &loader);
-    let popup_url_literal = serde_json::to_string(&popup_url).expect("serialize popup url");
-
-    let result = vm
-        .eval(&format!(
-            r#"
-(() => {{
-  globalThis.__cspSandboxPopupMessages = [];
-  let waiting = "first";
-  addEventListener("message", event => {{
-    if (!waiting) {{
-      __cspSandboxPopupMessages.push("unexpected:" + event.data);
-      return;
-    }}
-    __cspSandboxPopupMessages.push(String(event.data) + ":" + waiting);
-    waiting = "";
-    Promise.resolve().then(() => {{
-      if (__cspSandboxPopupMessages.filter(item => !item.startsWith("unexpected:")).length < 3) {{
-        waiting = "next";
-      }}
-    }});
-  }});
-  const popup = open({popup_url_literal});
-  return String(__cspSandboxPopupMessages.length) + "|" + (popup !== null);
-}})()
-"#
-        ))
-        .expect("CSP sandbox popup storage bucket setup should evaluate");
-
-    assert_eq!(result, "0|true");
-    advance_page_task_executor_until_eval_equals(
-        &mut vm,
-        &loader,
-        "__cspSandboxPopupMessages.length",
-        "3",
-        "CSP sandbox popup messages",
-    )
-    .await;
-    server
-        .await
-        .expect("CSP sandbox popup server should finish");
-
-    assert_eq!(
-        vm.eval("JSON.stringify(__cspSandboxPopupMessages)")
-            .expect("CSP sandbox popup messages should evaluate"),
-        r#"["navigator.storageBuckets.open(): REJECTED: SecurityError:first","navigator.storageBuckets.keys(): REJECTED: SecurityError:next","navigator.storageBuckets.delete(): REJECTED: SecurityError:next"]"#
-    );
-}
-
-#[tokio::test]
-async fn sandbox_child_about_blank_popup_reloads_self_without_escape_and_messages_top() {
-    assert_sandbox_child_about_blank_popup_reloads_self_and_messages_top(
-        "allow-scripts allow-popups",
-        "null",
-    )
-    .await;
-}
-
-#[tokio::test]
-async fn sandbox_child_about_blank_popup_reloads_self_with_escape_and_messages_top() {
-    assert_sandbox_child_about_blank_popup_reloads_self_and_messages_top(
-        "allow-scripts allow-popups allow-popups-to-escape-sandbox",
-        "http://127.0.0.1",
-    )
-    .await;
-}
-
-#[tokio::test]
-async fn sandbox_child_inside_popup_cannot_navigate_popup_top() {
-    let (popup_url, server) = spawn_sandbox_child_top_navigation_popup_server().await;
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
-    let document_url = Url::parse(&popup_url)
-        .expect("popup url")
-        .join("/base/page.html")
-        .expect("document url");
-    let mut vm = new_storage_page_task_executor_test_vm_with_loader(document_url.as_str(), &loader);
-    let popup_url_literal = serde_json::to_string(&popup_url).expect("serialize popup url");
-
-    let setup = vm
-        .eval(&format!(
-            r#"
-(() => {{
-  globalThis.__sandboxPopupTopNavigationMessages = [];
-  addEventListener("message", event => {{
-    __sandboxPopupTopNavigationMessages.push(String(event.data));
-    event.source.close();
-  }});
-  window.open({popup_url_literal});
-  return __sandboxPopupTopNavigationMessages.length;
-}})()
-"#
-        ))
-        .expect("sandbox popup top navigation setup should evaluate");
-    assert_eq!(setup, "0");
-
-    advance_page_task_executor_until_eval_equals(
-        &mut vm,
-        &loader,
-        "__sandboxPopupTopNavigationMessages.length",
-        "1",
-        "sandbox popup top navigation message",
-    )
-    .await;
-    server
-        .await
-        .expect("sandbox popup top navigation server should finish");
-
-    assert_eq!(
-        vm.eval("__sandboxPopupTopNavigationMessages.join('|')")
-            .expect("sandbox popup top navigation message should evaluate"),
-        "cannot navigate"
-    );
-}
-
-async fn assert_sandbox_child_about_blank_popup_reloads_self_and_messages_top(
-    sandbox: &str,
-    expected_popup_origin_prefix: &str,
-) {
-    let (helper_url, server) = spawn_sandbox_popup_helper_server().await;
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
-    let helper_url_parsed = Url::parse(&helper_url).expect("helper url");
-    let document_url = format!(
-        "http://127.0.0.1:{}/parent.html",
-        helper_url_parsed
-            .port()
-            .expect("helper url should carry a port")
-    );
-    let mut vm = new_storage_page_task_executor_test_vm_with_loader(&document_url, &loader);
-    let helper_url_literal = serde_json::to_string(&helper_url).expect("serialize helper url");
-    let sandbox_literal = serde_json::to_string(sandbox).expect("serialize sandbox");
-
-    let setup = vm
-        .eval(&format!(
-            r#"
-(() => {{
-  globalThis.__sandboxPopupMessages = [];
-  addEventListener("message", event => {{
-    __sandboxPopupMessages.push({{
-      origin: event.origin,
-      data: event.data,
-      sourceIsFrame: event.source === frame.contentWindow
-    }});
-  }});
-  const frame = document.createElement("iframe");
-  frame.sandbox = {sandbox_literal};
-  frame.src = {helper_url_literal};
-  (document.body || document.documentElement || document).appendChild(frame);
-  return "queued";
-}})()
-"#
-        ))
-        .expect("sandbox popup helper setup should evaluate");
-    assert_eq!(setup, "queued");
-    advance_page_task_executor_until_eval_equals(
-        &mut vm,
-        &loader,
-        "__sandboxPopupMessages.length",
-        "1",
-        "sandbox popup message",
-    )
-    .await;
-    server
-        .await
-        .expect("sandbox popup helper server should finish");
-
-    let result = vm
-        .eval("JSON.stringify(__sandboxPopupMessages)")
-        .expect("sandbox popup messages should evaluate");
-    if expected_popup_origin_prefix == "null" {
-        assert_eq!(
-            result,
-            r#"[{"origin":"null","data":{"origin":"null"},"sourceIsFrame":true}]"#
-        );
-    } else {
-        assert!(
-            result.contains(r#""origin":"null""#),
-            "sandbox child should still message top with opaque origin: {result}"
-        );
-        assert!(
-            result.contains(expected_popup_origin_prefix),
-            "escaped popup should report non-opaque opener event origin: {result}"
-        );
-    }
-}
-
-#[tokio::test]
-async fn window_open_204_popup_ignores_navigation_and_preserves_initial_empty_history() {
-    let (popup_url, loaded_url, server) = spawn_lightweight_popup_204_then_loaded_server().await;
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
-    let document_url = Url::parse(&popup_url)
-        .expect("popup url")
-        .join("/base/page.html")
-        .expect("document url");
-    let mut vm = new_storage_page_task_executor_test_vm_with_loader(document_url.as_str(), &loader);
-    let popup_url_literal = serde_json::to_string(&popup_url).expect("serialize popup url");
-
-    let setup = vm
-        .eval(&format!(
-            r#"
-(() => {{
-  globalThis.__popup204Events = [];
-  const popup = open({popup_url_literal});
-  popup.onload = () => __popup204Events.push("load");
-  globalThis.__popup204 = popup;
-  return [
-    popup.location.href,
-    popup.history.length
-  ].join("|");
-}})()
-"#
-        ))
-        .expect("204 popup setup should evaluate");
-    assert_eq!(setup, format!("{popup_url}|1"));
-
-    let result = vm
-        .eval(
-            r#"
-(() => {
-  __popup204.location.href = "about:blank#foo";
-  return [
-    __popup204.location.href,
-    __popup204.location.hash,
-    __popup204.history.length,
-    __popup204Events.join("|")
-  ].join("|");
-})()
-"#,
-        )
-        .expect("204 popup fragment navigation result should evaluate");
-
-    assert_eq!(result, "about:blank#foo|#foo|1|");
-
-    wait_for_one_page_resource_completion_executor_test_turn(&mut vm, "popup 204 completion").await;
-    vm.drain_ready_page_task_executor_turns_for_setup(&loader, 128)
-        .await
-        .expect("post-fragment popup work should use the selected-task dispatcher");
-    assert_eq!(
-        vm.eval("[__popup204.location.href, __popup204.location.hash, __popup204.history.length, __popup204Events.join('|')].join('|')")
-            .expect("post-204 ignored popup fragment state should evaluate"),
-        "about:blank#foo|#foo|1|"
-    );
-
-    let after_navigation = vm
-        .eval(
-            r#"
-(() => {
-  globalThis.__popup204Messages = [];
-  addEventListener("message", event => __popup204Messages.push(event.data));
-  const code = `
-    window.onload = () => {
-      window.opener.postMessage("loaded", "*")
-    }
-  `;
-  __popup204.location.href = "resources/code-injector.html?2&pipe=sub(none)&code=" + encodeURIComponent(code);
-  return [
-    __popup204.location.href,
-    __popup204.history.length,
-    __popup204Messages.length
-  ].join("|");
-})()
-"#
-        )
-        .expect("204 popup follow-up navigation should evaluate");
-    let expected_loaded_url_prefix =
-        loaded_url.trim_end_matches("loaded.html").to_owned() + "resources/code-injector.html";
-    let after_navigation_parts = after_navigation.split('|').collect::<Vec<_>>();
-    assert_eq!(after_navigation_parts.len(), 3);
-    assert!(
-        after_navigation_parts[0].starts_with(&expected_loaded_url_prefix),
-        "unexpected popup loaded URL: {}",
-        after_navigation_parts[0]
-    );
-    assert_eq!(after_navigation_parts[1], "1");
-    assert_eq!(after_navigation_parts[2], "0");
-
-    advance_page_task_executor_until_eval_equals(
-        &mut vm,
-        &loader,
-        "__popup204Messages.length",
-        "1",
-        "popup 204 follow-up load message",
-    )
-    .await;
-    server.await.expect("popup 204 server should finish");
-    assert_eq!(
-        vm.eval(
-            "[__popup204.location.href, __popup204.history.length, __popup204Messages.join('|')].join('|')"
-        )
-        .expect("popup 204 loaded result should evaluate"),
-        format!("{}|1|loaded", after_navigation_parts[0])
-    );
-}
-
-#[tokio::test]
-async fn window_open_without_url_replaces_initial_empty_history_on_first_navigation() {
-    let (origin, server) = spawn_lightweight_popup_relative_navigation_server().await;
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
-    let document_url = Url::parse(&origin)
-        .expect("popup server origin")
-        .join("/base/page.html")
-        .expect("document url");
-    let mut vm = new_storage_page_task_executor_test_vm_with_loader(document_url.as_str(), &loader);
-    let setup = vm
-        .eval(
-            r#"
-(() => {
-  globalThis.__initialEmptyPopupMessages = [];
-  addEventListener("message", event => __initialEmptyPopupMessages.push(event.data));
-  const popup = open();
-  globalThis.__initialEmptyPopup = popup;
-  const initial = [popup.location.href, popup.history.length].join("|");
-  popup.location.href = "resources/popup.html?1";
-  return [initial, __initialEmptyPopupMessages.length].join("|");
-})()
-"#,
-        )
-        .expect("initial empty popup navigation setup should evaluate");
-    assert_eq!(setup, "about:blank|1|0");
-
-    advance_page_task_executor_until_eval_equals(
-        &mut vm,
-        &loader,
-        "__initialEmptyPopupMessages.length",
-        "1",
-        "initial empty popup replacement load message",
-    )
-    .await;
-    assert_eq!(
-        vm.eval(
-            "[__initialEmptyPopup.location.href, __initialEmptyPopup.history.length, __initialEmptyPopupMessages.join('|')].join('|')"
-        )
-        .expect("initial empty popup replacement result should evaluate"),
-        format!("{origin}/base/resources/popup.html?1|1|loaded")
-    );
-
-    vm.eval("__initialEmptyPopup.location.href = 'resources/popup.html?2'")
-        .expect("second opener-relative popup navigation should evaluate");
-    advance_page_task_executor_until_eval_equals(
-        &mut vm,
-        &loader,
-        "__initialEmptyPopupMessages.length",
-        "2",
-        "second opener-relative popup load message",
-    )
-    .await;
-    assert_eq!(
-        vm.eval(
-            "[__initialEmptyPopup.location.href, __initialEmptyPopup.history.length, __initialEmptyPopupMessages.join('|')].join('|')"
-        )
-        .expect("second opener-relative popup result should evaluate"),
-        format!("{origin}/base/resources/popup.html?2|2|loaded|loaded")
-    );
-    let request_paths = server
-        .await
-        .expect("popup relative navigation server should finish");
-    assert_eq!(
-        request_paths,
-        vec![
-            "/base/resources/popup.html?1".to_owned(),
-            "/base/resources/popup.html?2".to_owned(),
-        ]
-    );
-}
-
-#[tokio::test]
-async fn window_open_document_with_initial_iframe_keeps_one_joint_history_entry() {
-    let (popup_url, server) = spawn_lightweight_popup_response_html_server(
-        "popup initial iframe history test server",
-        "popup initial iframe history",
-        "",
-        r#"<!doctype html>
-<script>
-  opener.postMessage("script:" + history.length, "*");
-  onload = () => opener.postMessage("load:" + history.length, "*");
-</script>
-<iframe srcdoc="<!doctype html><p>child</p>"></iframe>"#,
-    )
-    .await;
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
-    let mut vm = new_storage_page_task_executor_test_vm_with_loader(&popup_url, &loader);
-    let popup_url_literal = serde_json::to_string(&popup_url).expect("serialize popup url");
-
-    let setup = vm
-        .eval(&format!(
-            r#"
-(() => {{
-  globalThis.__popupInitialIframeHistory = [];
-  addEventListener("message", event => {{
-    __popupInitialIframeHistory.push(String(event.data));
-  }});
-  window.open({popup_url_literal});
-  return __popupInitialIframeHistory.length;
-}})()
-"#
-        ))
-        .expect("popup initial iframe history setup should evaluate");
-    assert_eq!(setup, "0");
-
-    advance_page_task_executor_until_eval_equals(
-        &mut vm,
-        &loader,
-        "__popupInitialIframeHistory.length",
-        "2",
-        "popup initial iframe history messages",
-    )
-    .await;
-    server
-        .await
-        .expect("popup initial iframe history server should finish");
-    assert_eq!(
-        vm.eval("__popupInitialIframeHistory.join('|')")
-            .expect("popup initial iframe history result should evaluate"),
-        "script:1|load:1"
-    );
-}
-
-#[tokio::test]
-async fn lightweight_popup_javascript_url_navigation_runs_async_with_opener() {
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
-    let mut vm = new_storage_test_vm_with_loader("https://example.com/base/page.html", &loader);
-
-    let setup = vm
-        .eval(
-            r#"
-(() => {
-  globalThis.__topMarker = 7;
-  globalThis.__popupHrefEvents = [];
-  const popup = open();
-  popup.location.href = "javascript:window.opener.__popupHrefEvents.push('href:' + (window.opener.__topMarker === 7) + ':' + (document.defaultView === window));";
-  __popupHrefEvents.push("after-setter");
-  return [
-    __popupHrefEvents.join("|"),
-    popup.location.href,
-    popup.opener === window
-  ].join("|");
-})()
-"#,
-    )
-    .expect("popup javascript location setup should evaluate");
-
-    assert_eq!(setup, "after-setter|about:blank|true");
-    vm.drain_pending_child_frame_work_for_test();
-    assert!(
-        vm.run_next_due_timer_callback_for_test(&loader)
-            .await
-            .expect("popup javascript location timer should run"),
-        "javascript: location navigation must enter through its exact timer turn"
-    );
-    vm.drain_pending_child_frame_work_for_test();
-    assert_eq!(
-        vm.eval("__popupHrefEvents.join('|')")
-            .expect("popup href javascript URL events should evaluate"),
-        "after-setter|href:true:true"
-    );
-
-    let setup = vm
-        .eval(
-            r#"
-(() => {
-  globalThis.__popupOpenEvents = [];
-  const popup = open("javascript:window.opener.__popupOpenEvents.push('open:' + (window.opener.__topMarker === 7) + ':' + (document.defaultView === window));");
-  __popupOpenEvents.push("after-open");
-  return [
-    __popupOpenEvents.join("|"),
-    popup.location.href,
-    popup.opener === window
-  ].join("|");
-})()
-"#,
-    )
-    .expect("popup javascript open setup should evaluate");
-
-    assert_eq!(setup, "after-open|about:blank|true");
-    vm.drain_pending_child_frame_work_for_test();
-    assert!(
-        vm.run_next_due_timer_callback_for_test(&loader)
-            .await
-            .expect("popup javascript open timer should run"),
-        "javascript: open navigation must enter through its exact timer turn"
-    );
-    vm.drain_pending_child_frame_work_for_test();
-    assert_eq!(
-        vm.eval("__popupOpenEvents.join('|')")
-            .expect("popup open javascript URL events should evaluate"),
-        "after-open|open:true:true"
-    );
-}
-
-#[tokio::test]
-async fn lightweight_popup_javascript_url_uses_inline_navigation_csp_not_eval_csp() {
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
-    let mut allowed = new_storage_page_task_executor_test_vm_with_loader(
-        "https://example.com/base/page.html",
-        &loader,
-    );
-    allowed.set_response_content_security_policies(&[
-        "script-src 'unsafe-hashes' 'sha256-IIiAJ8UuliU8o1qAv6CV4P3R8DeTf/v3MrsCwXW171Y='"
-            .to_owned(),
-    ]);
-
-    assert_eq!(
-        allowed
-            .eval(
-                r#"
-(() => {
-  globalThis.__javascriptUrlMessages = [];
-  globalThis.__javascriptUrlViolations = [];
-  onmessage = event => __javascriptUrlMessages.push(event.data);
-  document.addEventListener("securitypolicyviolation", event => {
-    __javascriptUrlViolations.push(`${event.effectiveDirective}:${event.blockedURI}`);
-  });
-  return open("javascript:opener.postMessage('pass', '*')") !== null;
-})()
-"#,
-            )
-            .expect("allowed javascript URL setup should evaluate"),
-        "true"
-    );
-    for _ in 0..4 {
-        if allowed
-            .eval("__javascriptUrlMessages.length")
-            .expect("javascript URL message count should evaluate")
-            == "1"
-        {
-            break;
-        }
-        let _ = allowed
-            .run_one_oldest_ready_page_task_executor_turn(&loader)
-            .await
-            .expect("wait driver should advance javascript URL task");
-    }
-    assert_eq!(
-        allowed
-            .eval("JSON.stringify([__javascriptUrlMessages, __javascriptUrlViolations])")
-            .expect("javascript URL CSP result should evaluate"),
-        r#"[["pass"],[]]"#
-    );
-
-    let mut blocked = new_storage_page_task_executor_test_vm_with_loader(
-        "https://example.com/base/page.html",
-        &loader,
-    );
-    blocked.set_response_content_security_policies(&["script-src 'none'".to_owned()]);
-    assert_eq!(
-        blocked
-            .eval(
-                r#"
-(() => {
-  const violations = [];
-  document.addEventListener("securitypolicyviolation", event => {
-    violations.push(`${event.effectiveDirective}:${event.blockedURI}`);
-  });
-  globalThis.__blockedJavascriptUrlViolations = violations;
-  const popup = open("javascript:opener.postMessage('blocked', '*')");
-  return `${popup === null}|${violations.join(',')}`;
-})()
-"#,
-            )
-            .expect("blocked javascript URL setup should evaluate"),
-        "true|"
-    );
-    assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut blocked),
-        1
-    );
-    assert_eq!(
-        blocked
-            .eval("globalThis.__blockedJavascriptUrlViolations.join(',')")
-            .expect("queued javascript URL CSP violation should be observable"),
-        "script-src-elem:inline"
-    );
-}
-
-#[tokio::test]
-async fn lightweight_popup_post_message_round_trips_with_wasm_module() {
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
-    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
-        "https://example.com/base/page.html",
-        &loader,
-    );
-
-    let result = vm
-        .eval(
-            r#"
-(() => {
-  globalThis.__popupMessageEvents = [];
-  const popup = open(URL.createObjectURL(new Blob(["<!doctype html>"], { type: "text/html" })));
-  const module = new WebAssembly.Module(
-    new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0])
-  );
-  popup.onmessage = event => {
-    const instance = new WebAssembly.Instance(event.data.module, {});
-    __popupMessageEvents.push({
-      target: "popup",
-      module: event.data.module instanceof WebAssembly.Module,
-      clone: event.data.module !== module,
-      sourceIsTop: event.source === window,
-      origin: event.origin,
-      exports: Object.keys(instance.exports).length
-    });
-    popup.opener.postMessage({ message: "reply", module: event.data.module }, "*");
-  };
-  onmessage = event => {
-    const instance = new WebAssembly.Instance(event.data.module, {});
-    __popupMessageEvents.push({
-      target: "top",
-      module: event.data.module instanceof WebAssembly.Module,
-      sourceIsPopup: event.source === popup,
-      origin: event.origin,
-      exports: Object.keys(instance.exports).length
-    });
-  };
-  popup.postMessage({ message: "send module", module }, "*");
-  return __popupMessageEvents.length;
-})()
-"#,
-        )
-        .expect("lightweight popup postMessage setup should evaluate");
-
-    assert_eq!(result, "0");
-    advance_page_task_executor_until_eval_equals(
-        &mut vm,
-        &loader,
-        "__popupMessageEvents.length",
-        "2",
-        "typed popup Window.postMessage roundtrip",
-    )
-    .await;
-    assert_eq!(
-        vm.eval("JSON.stringify(__popupMessageEvents)")
-            .expect("popup message events should evaluate"),
-        r#"[{"target":"popup","module":true,"clone":true,"sourceIsTop":true,"origin":"https://example.com","exports":0},{"target":"top","module":true,"sourceIsPopup":true,"origin":"https://example.com","exports":0}]"#
-    );
-}
-#[tokio::test]
-async fn lightweight_popup_blob_document_executes_before_load_and_handles_wasm_message() {
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
-    let mut vm =
-        new_page_task_executor_test_vm_with_loader("https://example.com/base/page.html", &loader);
-
-    let result = vm
-        .eval(
-            r#"
-(() => {
-  globalThis.__popupEvents = [];
-  const html = `
-    <!doctype html>
-    <script>
-      opener.__popupEvents.push("script:" + (document.defaultView === self) + ":" + (opener === window.opener));
-      self.onmessage = ({ data }) => {
-        const instance = new WebAssembly.Instance(data.module, {});
-        opener.__popupEvents.push("popup:" + (data.module instanceof WebAssembly.Module) + ":" + Object.keys(instance.exports).length);
-        opener.postMessage({ message: "module received", module: data.module }, "*");
-      };
-    <\/script>
-  `;
-  const popup = open(URL.createObjectURL(new Blob([html], { type: "text/html" })));
-  const module = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
-  onmessage = event => {
-    const instance = new WebAssembly.Instance(event.data.module, {});
-    __popupEvents.push("top:" + (event.source === popup) + ":" + (event.data.module instanceof WebAssembly.Module) + ":" + Object.keys(instance.exports).length);
-  };
-  popup.onload = () => {
-    __popupEvents.push("load:" + (popup.document.defaultView === popup));
-    popup.postMessage({ message: "send module", module }, "*");
-  };
-  return __popupEvents.length;
-})()
-"#,
-        )
-        .expect("popup blob document setup should evaluate");
-
-    assert_eq!(result, "0");
-    advance_page_task_executor_until_eval_equals(
-        &mut vm,
-        &loader,
-        "String(__popupEvents.length)",
-        "4",
-        "popup blob document and message round trip",
-    )
-    .await;
-    assert_eq!(
-        vm.eval("__popupEvents.join('|')")
-            .expect("popup event log should evaluate"),
-        "script:true:true|load:true|popup:true:0|top:true:true:0"
-    );
-}
-
-#[tokio::test]
-async fn lightweight_popup_document_script_scan_uses_native_dom_after_page_method_tamper() {
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
-    let mut vm =
-        new_page_task_executor_test_vm_with_loader("https://example.com/base/page.html", &loader);
-
-    let result = vm
-        .eval(
-            r#"
-(() => {
-  globalThis.__popupNativeScanEvents = [];
-  const html = `
-    <!doctype html>
-    <script>
-      opener.__popupNativeScanEvents.push("first");
-      document.getElementsByTagName = () => {
-        opener.__popupNativeScanEvents.push("getElementsByTagName");
-        throw new Error("popup script runner should not call page document methods");
-      };
-      Element.prototype.getAttribute = function() {
-        opener.__popupNativeScanEvents.push("getAttribute");
-        throw new Error("popup script runner should not call page element methods");
-      };
-      Object.defineProperty(Node.prototype, "textContent", {
-        configurable: true,
-        get() {
-          opener.__popupNativeScanEvents.push("textContent");
-          throw new Error("popup script runner should not read page textContent");
-        }
-      });
-    <\/script>
-    <script>
-      opener.__popupNativeScanEvents.push("second:" + document.currentScript.tagName);
-    <\/script>
-  `;
-  const popup = open(URL.createObjectURL(new Blob([html], { type: "text/html" })));
-  popup.onload = () => {
-    __popupNativeScanEvents.push("load");
-  };
-  return __popupNativeScanEvents.length;
-})()
-"#,
-        )
-        .expect("popup native scan setup should evaluate");
-
-    assert_eq!(result, "0");
-    advance_page_task_executor_until_eval_equals(
-        &mut vm,
-        &loader,
-        "String(__popupNativeScanEvents.length)",
-        "3",
-        "popup native script scan",
-    )
-    .await;
-    assert_eq!(
-        vm.eval("__popupNativeScanEvents.join('|')")
-            .expect("popup native scan event log should evaluate"),
-        "first|second:SCRIPT|load"
-    );
-}
-
-#[tokio::test]
-async fn lightweight_popup_external_classic_script_does_not_block_page_owner() {
-    let listener =
-        std::net::TcpListener::bind("127.0.0.1:0").expect("bind delayed popup script server");
-    let addr = listener.local_addr().expect("delayed popup script address");
-    let (script_requested_tx, script_requested_rx) = std::sync::mpsc::sync_channel(1);
-    let (release_script_tx, release_script_rx) = std::sync::mpsc::sync_channel(1);
-    let server = std::thread::spawn(move || {
-        use std::io::{Read, Write};
-
-        let mut document_stream = accept_popup_redirect_test_connection(&listener)
-            .expect("accept delayed popup document request");
-        let mut buffer = [0; 1024];
-        let _ = document_stream
-            .read(&mut buffer)
-            .expect("read delayed popup document request");
-        let body = r#"<!doctype html>
-<script>opener.__popupAsyncScriptEvents.push("inline-before");</script>
-<script src="/slow.js"></script>
-<script>opener.__popupAsyncScriptEvents.push("inline-after");</script>"#;
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            body.len(),
-            body
-        );
-        document_stream
-            .write_all(response.as_bytes())
-            .expect("write delayed popup document response");
-
-        let mut script_stream = accept_popup_redirect_test_connection(&listener)
-            .expect("accept delayed popup script request");
-        let _ = script_stream
-            .read(&mut buffer)
-            .expect("read delayed popup script request");
-        script_requested_tx
-            .send(())
-            .expect("publish delayed popup script request");
-        let released_by_page_test = release_script_rx
-            .recv_timeout(std::time::Duration::from_secs(3))
-            .is_ok();
-        let body = r#"opener.__popupAsyncScriptEvents.push("external");"#;
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/javascript\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            body.len(),
-            body
-        );
-        script_stream
-            .write_all(response.as_bytes())
-            .expect("write delayed popup script response");
-        released_by_page_test
-    });
-
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
-    let document_url = format!("http://{addr}/owner.html");
-    let popup_url = format!("http://{addr}/popup.html");
-    let mut vm = new_storage_page_task_executor_test_vm_with_loader(&document_url, &loader);
-    let popup_url_literal = serde_json::to_string(&popup_url).expect("serialize popup url");
-    assert_eq!(
-        vm.eval(&format!(
-            r#"
-(() => {{
-  globalThis.__popupAsyncScriptEvents = [];
-  const popup = open({popup_url_literal});
-  popup.onload = () => __popupAsyncScriptEvents.push("load");
-  return __popupAsyncScriptEvents.length;
-}})()
-"#
-        ))
-        .expect("open delayed-script popup"),
-        "0"
-    );
-
-    wait_for_one_page_resource_completion_selected_task_executor_test_turn(
-        &mut vm,
-        &loader,
-        "delayed popup document completion",
-    )
-    .await;
-    script_requested_rx
-        .recv_timeout(std::time::Duration::from_secs(1))
-        .expect("popup external script request should start asynchronously");
-    assert_eq!(
-        vm.eval("JSON.stringify([1 + 1, __popupAsyncScriptEvents])")
-            .expect("Page owner should remain script-responsive"),
-        r#"[2,["inline-before"]]"#
-    );
-
-    assert!(
-        release_script_tx.send(()).is_ok(),
-        "popup document completion returned only after the script gate watchdog fired"
-    );
-    assert!(
-        server
-            .join()
-            .expect("delayed popup script server should finish"),
-        "popup script response was released by the watchdog, not by a responsive Page owner"
-    );
-    advance_page_task_executor_until_eval_equals(
-        &mut vm,
-        &loader,
-        "String(__popupAsyncScriptEvents.length)",
-        "4",
-        "delayed popup script continuation and load",
-    )
-    .await;
-    assert_eq!(
-        vm.eval("__popupAsyncScriptEvents.join('|')")
-            .expect("read delayed popup script ordering"),
-        "inline-before|external|inline-after|load"
-    );
-}
-
-#[tokio::test]
-async fn lightweight_popup_document_csp_blocks_inline_scripts() {
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
-    let mut vm =
-        new_page_task_executor_test_vm_with_loader("https://example.com/base/page.html", &loader);
-
-    let result = vm
-        .eval(
-            r#"
-(() => {
-  globalThis.__popupCspEvents = [];
-  const html = `
-    <!doctype html>
-    <meta http-equiv="Content-Security-Policy" content="script-src 'none'">
-    <script>opener.__popupCspEvents.push("script");<\/script>
-  `;
-  const popup = open(URL.createObjectURL(new Blob([html], { type: "text/html" })));
-  popup.onload = () => {
-    __popupCspEvents.push("load:" + (popup.document.defaultView === popup));
-  };
-  return __popupCspEvents.length;
-})()
-"#,
-        )
-        .expect("popup CSP setup should evaluate");
-
-    assert_eq!(result, "0");
-    advance_page_task_executor_until_eval_equals(
-        &mut vm,
-        &loader,
-        "String(__popupCspEvents.length)",
-        "1",
-        "popup CSP load dispatch",
-    )
-    .await;
-    assert_eq!(
-        vm.eval("__popupCspEvents.join('|')")
-            .expect("popup CSP event log should evaluate"),
-        "load:true"
-    );
-}
-#[tokio::test]
-async fn lightweight_popup_document_response_csp_blocks_inline_scripts() {
-    let (popup_url, server) = spawn_lightweight_popup_response_csp_server().await;
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
-    let document_url = Url::parse(&popup_url)
-        .expect("popup url")
-        .join("/base/page.html")
-        .expect("document url");
-    let mut vm = new_storage_page_task_executor_test_vm_with_loader(document_url.as_str(), &loader);
-    let popup_url_literal = serde_json::to_string(&popup_url).expect("serialize popup url");
-
-    let result = vm
-        .eval(&format!(
-            r#"
-(() => {{
-  globalThis.__popupResponseCspEvents = [];
-  const popup = open({popup_url_literal});
-  popup.onload = () => {{
-    __popupResponseCspEvents.push("load:" + (popup.document.defaultView === popup));
-  }};
-  return __popupResponseCspEvents.length;
-}})()
-"#
-        ))
-        .expect("popup response CSP setup should evaluate");
-
-    assert_eq!(result, "0");
-    wait_for_one_page_resource_completion_selected_task_executor_test_turn(
-        &mut vm,
-        &loader,
-        "popup response CSP completion",
-    )
-    .await;
-    server
-        .await
-        .expect("popup response CSP server should finish");
-    advance_page_task_executor_until_eval_equals(
-        &mut vm,
-        &loader,
-        "String(__popupResponseCspEvents.length)",
-        "1",
-        "popup response CSP load event",
-    )
-    .await;
-    assert_eq!(
-        vm.eval("__popupResponseCspEvents.join('|')")
-            .expect("popup response CSP event log should evaluate"),
-        "load:true"
-    );
-}
-
-#[tokio::test]
-async fn lightweight_popup_response_csp_sandbox_without_allow_scripts_blocks_inline_scripts() {
-    let (popup_url, server) = spawn_lightweight_popup_response_html_server(
-        "response CSP sandbox popup test server",
-        "response CSP sandbox popup",
-        "Content-Security-Policy: sandbox allow-same-origin",
-        r#"<!doctype html><script>opener.__popupResponseSandboxScriptEvents.push("script");</script><noscript><span id="popup-response-sandbox-fallback"></span></noscript>"#,
-    )
-    .await;
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
-    let document_url = Url::parse(&popup_url)
-        .expect("popup url")
-        .join("/base/page.html")
-        .expect("document url");
-    let mut vm = new_storage_page_task_executor_test_vm_with_loader(document_url.as_str(), &loader);
-    let popup_url_literal = serde_json::to_string(&popup_url).expect("serialize popup url");
-
-    let result = vm
-        .eval(&format!(
-            r#"
-(() => {{
-  globalThis.__popupResponseSandboxScriptEvents = [];
-  const popup = open({popup_url_literal});
-  popup.onload = () => {{
-    const fallback = popup.document.createElement("div");
-    fallback.innerHTML =
-      "<noscript><span id=popup-sandbox-fallback></span></noscript>";
-    (popup.document.body || popup.document.documentElement).appendChild(fallback);
-    __popupResponseSandboxScriptEvents.push([
-      "load",
-      popup.document.defaultView === popup,
-      popup.document.getElementById("popup-response-sandbox-fallback") !== null,
-      popup.document.getElementById("popup-sandbox-fallback") !== null
-    ].join(":"));
-  }};
-  return __popupResponseSandboxScriptEvents.length;
-}})()
-"#
-        ))
-        .expect("popup response CSP sandbox script setup should evaluate");
-
-    assert_eq!(result, "0");
-    wait_for_one_page_resource_completion_selected_task_executor_test_turn(
-        &mut vm,
-        &loader,
-        "popup response CSP sandbox completion",
-    )
-    .await;
-    server
-        .await
-        .expect("popup response CSP sandbox server should finish");
-    advance_page_task_executor_until_eval_equals(
-        &mut vm,
-        &loader,
-        "String(__popupResponseSandboxScriptEvents.length)",
-        "1",
-        "popup response CSP sandbox load event",
-    )
-    .await;
-    assert_eq!(
-        vm.eval("__popupResponseSandboxScriptEvents.join('|')")
-            .expect("popup response CSP sandbox event log should evaluate"),
-        "load:true:true:true"
-    );
-}
-
-#[tokio::test]
-async fn lightweight_popup_document_domain_self_assignment_uses_popup_owner_state() {
-    let (popup_url, server) = spawn_lightweight_popup_document_domain_server(None).await;
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
-    let document_url = Url::parse(&popup_url)
-        .expect("popup url")
-        .join("/base/page.html")
-        .expect("document url");
-    let mut vm = new_storage_page_task_executor_test_vm_with_loader(document_url.as_str(), &loader);
-    let popup_url_literal = serde_json::to_string(&popup_url).expect("serialize popup url");
-
-    let result = vm
-        .eval(&format!(
-            r#"
-(() => {{
-  globalThis.__popupDomainProbe = [];
-  const popup = open({popup_url_literal});
-  popup.onload = () => {{
-    try {{
-      const initial = popup.document.domain;
-      popup.document.domain = popup.document.domain;
-      __popupDomainProbe.push(`${{initial}}|${{popup.document.domain}}`);
-    }} catch (error) {{
-      __popupDomainProbe.push(`${{error.name}}:${{error instanceof DOMException}}:${{error.code}}`);
-    }}
-  }};
-  return __popupDomainProbe.length;
-}})()
-"#
-        ))
-        .expect("popup document.domain setup should evaluate");
-
-    assert_eq!(result, "0");
-    wait_for_one_page_resource_completion_selected_task_executor_test_turn(
-        &mut vm,
-        &loader,
-        "popup document-domain completion",
-    )
-    .await;
-    server
-        .await
-        .expect("popup document-domain server should finish");
-    advance_page_task_executor_until_eval_equals(
-        &mut vm,
-        &loader,
-        "String(__popupDomainProbe.length)",
-        "1",
-        "popup document-domain load event",
-    )
-    .await;
-
-    assert_eq!(
-        vm.eval("__popupDomainProbe.join('|')")
-            .expect("popup document-domain result should evaluate"),
-        "127.0.0.1|127.0.0.1"
-    );
-}
-
-#[tokio::test]
-async fn lightweight_popup_response_csp_sandbox_disallows_document_domain_setter() {
-    let (popup_url, server) = spawn_lightweight_popup_document_domain_server(Some(
-        "Content-Security-Policy: sandbox allow-scripts allow-same-origin",
-    ))
-    .await;
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
-    let document_url = Url::parse(&popup_url)
-        .expect("popup url")
-        .join("/base/page.html")
-        .expect("document url");
-    let mut vm = new_storage_page_task_executor_test_vm_with_loader(document_url.as_str(), &loader);
-    let popup_url_literal = serde_json::to_string(&popup_url).expect("serialize popup url");
-
-    let result = vm
-        .eval(&format!(
-            r#"
-(() => {{
-  globalThis.__popupResponseSandboxDomainProbe = [];
-  const popup = open({popup_url_literal});
-  popup.onload = () => {{
-    try {{
-      const initial = popup.document.domain;
-      popup.document.domain = popup.document.domain;
-      __popupResponseSandboxDomainProbe.push(`${{initial}}|${{popup.document.domain}}`);
-    }} catch (error) {{
-      __popupResponseSandboxDomainProbe.push(`${{error.name}}:${{error instanceof DOMException}}:${{error.code}}`);
-    }}
-  }};
-  return __popupResponseSandboxDomainProbe.length;
-}})()
-"#
-        ))
-        .expect("popup response CSP sandbox document.domain setup should evaluate");
-
-    assert_eq!(result, "0");
-    wait_for_one_page_resource_completion_selected_task_executor_test_turn(
-        &mut vm,
-        &loader,
-        "popup response CSP sandbox document-domain completion",
-    )
-    .await;
-    server
-        .await
-        .expect("popup response CSP sandbox server should finish");
-    advance_page_task_executor_until_eval_equals(
-        &mut vm,
-        &loader,
-        "String(__popupResponseSandboxDomainProbe.length)",
-        "1",
-        "popup response CSP sandbox document-domain load event",
-    )
-    .await;
-
-    assert_eq!(
-        vm.eval("__popupResponseSandboxDomainProbe.join('|')")
-            .expect("popup response CSP sandbox document-domain result should evaluate"),
-        "SecurityError:true:18"
-    );
-}
-
-#[tokio::test]
-async fn lightweight_popup_document_response_csp_blocks_external_scripts() {
-    let (popup_url, server) = spawn_lightweight_popup_response_csp_external_script_server().await;
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
-    let document_url = Url::parse(&popup_url)
-        .expect("popup url")
-        .join("/base/page.html")
-        .expect("document url");
-    let mut vm = new_storage_page_task_executor_test_vm_with_loader(document_url.as_str(), &loader);
-    let popup_url_literal = serde_json::to_string(&popup_url).expect("serialize popup url");
-
-    let result = vm
-        .eval(&format!(
-            r#"
-(() => {{
-  globalThis.__popupResponseCspExternalEvents = [];
-  const popup = open({popup_url_literal});
-  popup.onload = () => {{
-    __popupResponseCspExternalEvents.push("load:" + (popup.document.defaultView === popup));
-  }};
-  return __popupResponseCspExternalEvents.length;
-}})()
-"#
-        ))
-        .expect("popup response external CSP setup should evaluate");
-
-    assert_eq!(result, "0");
-    wait_for_one_page_resource_completion_selected_task_executor_test_turn(
-        &mut vm,
-        &loader,
-        "popup response external CSP completion",
-    )
-    .await;
-    let external_script_requested = server
-        .await
-        .expect("popup response external CSP server should finish");
-    advance_page_task_executor_until_eval_equals(
-        &mut vm,
-        &loader,
-        "String(__popupResponseCspExternalEvents.length)",
-        "1",
-        "popup response external CSP load event",
-    )
-    .await;
-
-    assert!(
-        !external_script_requested,
-        "response CSP should block external popup scripts before fetch"
-    );
-    assert_eq!(
-        vm.eval("__popupResponseCspExternalEvents.join('|')")
-            .expect("popup response external CSP event log should evaluate"),
-        "load:true"
-    );
-}
-#[tokio::test]
-async fn lightweight_popup_external_script_redirect_final_url_obeys_csp() {
-    let (popup_url, final_script_url, source_server, target_server) =
-        spawn_lightweight_popup_response_csp_redirect_external_script_servers().await;
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
-    let document_url = Url::parse(&popup_url)
-        .expect("popup url")
-        .join("/base/page.html")
-        .expect("document url");
-    let mut vm = new_storage_page_task_executor_test_vm_with_loader(document_url.as_str(), &loader);
-    let popup_url_literal = serde_json::to_string(&popup_url).expect("serialize popup url");
-
-    let result = vm
-        .eval(&format!(
-            r#"
-(() => {{
-  globalThis.__popupRedirectCspEvents = [];
-  const popup = open({popup_url_literal});
-  popup.addEventListener("securitypolicyviolation", event => {{
-    __popupRedirectCspEvents.push([
-      event.blockedURI,
-      event.effectiveDirective,
-      event.disposition,
-      event instanceof SecurityPolicyViolationEvent
-    ].join("|"));
-  }});
-  popup.onload = () => {{
-    __popupRedirectCspEvents.push("load:" + (popup.document.defaultView === popup));
-  }};
-  return __popupRedirectCspEvents.length;
-}})()
-"#
-        ))
-        .expect("popup redirect final URL CSP setup should evaluate");
-
-    assert_eq!(result, "0");
-    wait_for_one_page_resource_completion_selected_task_executor_test_turn(
-        &mut vm,
-        &loader,
-        "popup redirect CSP completion",
-    )
-    .await;
-    source_server
-        .join()
-        .expect("popup redirect CSP source server should finish");
-    target_server
-        .join()
-        .expect("popup redirect CSP target server should finish");
-    advance_page_task_executor_until_eval_equals(
-        &mut vm,
-        &loader,
-        "String(__popupRedirectCspEvents.length)",
-        "2",
-        "popup redirect CSP load event",
-    )
-    .await;
-
-    assert_eq!(
-        vm.eval("__popupRedirectCspEvents.join('||')")
-            .expect("popup redirect final URL CSP event log should evaluate"),
-        format!("{final_script_url}|script-src-elem|enforce|true||load:true")
-    );
-}
-
-async fn spawn_lightweight_popup_204_then_loaded_server()
--> (String, String, tokio::task::JoinHandle<()>) {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind popup 204 loaded test server");
-    let addr = listener.local_addr().expect("popup 204 loaded server addr");
-    let server = tokio::spawn(async move {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-        let (mut stream, _) = listener.accept().await.expect("accept popup 204 request");
-        let mut buffer = [0; 1024];
-        let _ = stream
-            .read(&mut buffer)
-            .await
-            .expect("read popup 204 request");
-        let response = "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
-        stream
-            .write_all(response.as_bytes())
-            .await
-            .expect("write popup 204 response");
-
-        let (mut stream, _) = listener
-            .accept()
-            .await
-            .expect("accept popup loaded request");
-        let mut buffer = [0; 1024];
-        let _ = stream
-            .read(&mut buffer)
-            .await
-            .expect("read popup loaded request");
-        let body = r#"<!doctype html><script>window.onload = () => window.opener.postMessage("loaded", "*");</script>"#;
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            body.len(),
-            body
-        );
-        stream
-            .write_all(response.as_bytes())
-            .await
-            .expect("write popup loaded response");
-    });
-    (
-        format!("http://{addr}/popup-204.html"),
-        format!("http://{addr}/base/loaded.html"),
-        server,
-    )
-}
-
-async fn spawn_lightweight_popup_relative_navigation_server()
--> (String, tokio::task::JoinHandle<Vec<String>>) {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind popup relative navigation test server");
-    let addr = listener
-        .local_addr()
-        .expect("popup relative navigation server addr");
-    let server = tokio::spawn(async move {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-        let mut request_paths = Vec::new();
-        for _ in 0..2 {
-            let (mut stream, _) = listener
-                .accept()
-                .await
-                .expect("accept popup relative navigation request");
-            let mut buffer = [0; 2048];
-            let read = stream
-                .read(&mut buffer)
-                .await
-                .expect("read popup relative navigation request");
-            let request = String::from_utf8_lossy(&buffer[..read]);
-            let request_path = request
-                .lines()
-                .next()
-                .and_then(|line| line.split_ascii_whitespace().nth(1))
-                .expect("popup relative navigation request target")
-                .to_owned();
-            request_paths.push(request_path);
-            let body = r#"<!doctype html><script>window.onload = () => window.opener.postMessage("loaded", "*");</script>"#;
-            let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                body.len(),
-                body
-            );
-            stream
-                .write_all(response.as_bytes())
-                .await
-                .expect("write popup relative navigation response");
-        }
-        request_paths
-    });
-    (format!("http://{addr}"), server)
-}
-
-async fn spawn_lightweight_popup_response_csp_server() -> (String, tokio::task::JoinHandle<()>) {
-    spawn_lightweight_popup_response_html_server(
-        "popup response CSP test server",
-        "popup response CSP",
-        "Content-Security-Policy: script-src 'none'",
-        r#"<!doctype html><script>opener.__popupResponseCspEvents.push("script");</script>"#,
-    )
-    .await
-}
-
-async fn spawn_lightweight_popup_response_html_server(
-    bind_label: &'static str,
-    io_label: &'static str,
-    policy_header: &'static str,
-    body: &'static str,
-) -> (String, tokio::task::JoinHandle<()>) {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .unwrap_or_else(|_| panic!("bind {bind_label}"));
-    let addr = listener
-        .local_addr()
-        .unwrap_or_else(|_| panic!("{bind_label} addr"));
-    let server = tokio::spawn(async move {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-        let (mut stream, _) = listener
-            .accept()
-            .await
-            .unwrap_or_else(|_| panic!("accept {io_label} request"));
-        let mut buffer = [0; 1024];
-        let _ = stream
-            .read(&mut buffer)
-            .await
-            .unwrap_or_else(|_| panic!("read {io_label} request"));
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n{policy_header}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            body.len(),
-            body
-        );
-        stream
-            .write_all(response.as_bytes())
-            .await
-            .unwrap_or_else(|_| panic!("write {io_label} response"));
-    });
-    (format!("http://{addr}/popup.html"), server)
-}
-
-async fn spawn_lightweight_popup_document_domain_server(
-    policy_header: Option<&'static str>,
-) -> (String, tokio::task::JoinHandle<()>) {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind popup document-domain test server");
-    let addr = listener
-        .local_addr()
-        .expect("popup document-domain server addr");
-    let server = tokio::spawn(async move {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-        let (mut stream, _) = listener
-            .accept()
-            .await
-            .expect("accept popup document-domain request");
-        let mut buffer = [0; 1024];
-        let _ = stream
-            .read(&mut buffer)
-            .await
-            .expect("read popup document-domain request");
-        let body = "<!doctype html><title>popup</title>";
-        let policy_header = policy_header
-            .map(|header| format!("{header}\r\n"))
-            .unwrap_or_default();
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n{}Content-Length: {}\r\nConnection: close\r\n\r\n{}",
-            policy_header,
-            body.len(),
-            body
-        );
-        stream
-            .write_all(response.as_bytes())
-            .await
-            .expect("write popup document-domain response");
-    });
-    (format!("http://{addr}/popup.html"), server)
-}
-
-async fn spawn_storage_bucket_partition_child_server() -> (String, JoinHandle<String>) {
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind storage bucket partition child server");
-    let addr = listener
-        .local_addr()
-        .expect("storage bucket partition child server addr");
-    let server = tokio::spawn(async move {
-        let (mut stream, _) = listener
-            .accept()
-            .await
-            .expect("accept storage bucket partition child request");
-        let request = read_storage_bucket_partition_request_head(&mut stream)
-            .await
-            .expect("read storage bucket partition child request");
-        let status = if request.starts_with("GET /storage-bucket-child.html ") {
-            "200 OK"
-        } else {
-            "404 Not Found"
-        };
-        let body = r#"<!doctype html>
-<meta charset="utf-8">
-<script>
-(async () => {
-  const bucket = await navigator.storageBuckets.open("partitioned-bucket");
-  parent.postMessage(JSON.stringify({
-    bucketName: bucket.name,
-    keys: await navigator.storageBuckets.keys()
-  }), "*");
-})().catch(error => {
-  parent.postMessage("error:" + (error && error.name), "*");
-});
-</script>"#;
-        let response = format!(
-            "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            body.len(),
-            body
-        );
-        stream
-            .write_all(response.as_bytes())
-            .await
-            .expect("write storage bucket partition child response");
-        request
-    });
-    (
-        format!("http://localhost:{}/storage-bucket-child.html", addr.port()),
-        server,
-    )
-}
-
-async fn spawn_service_worker_response_server(
-    responses: Vec<(&'static str, &'static str, &'static str)>,
-) -> (String, JoinHandle<()>) {
-    spawn_service_worker_response_server_with_headers(
-        responses
-            .into_iter()
-            .map(|(path, content_type, body)| (path, content_type, Vec::new(), body))
-            .collect(),
-    )
-    .await
-}
-
-async fn spawn_service_worker_response_server_with_headers(
-    responses: Vec<(
-        &'static str,
-        &'static str,
-        Vec<(&'static str, &'static str)>,
-        &'static str,
-    )>,
-) -> (String, JoinHandle<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind service worker response server");
-    let addr = listener
-        .local_addr()
-        .expect("service worker response server addr");
-    let server = tokio::spawn(async move {
-        let mut responses: std::collections::VecDeque<_> = responses.into_iter().collect();
-        while let Some((expected_path, content_type, extra_headers, body)) = responses.pop_front() {
-            let (mut stream, _) = listener
-                .accept()
-                .await
-                .expect("accept service worker response request");
-            let request = read_storage_bucket_partition_request_head(&mut stream)
-                .await
-                .expect("read service worker response request");
-            let path = request
-                .lines()
-                .next()
-                .and_then(|line| line.split_whitespace().nth(1))
-                .expect("service worker response request path");
-            assert_eq!(path, expected_path);
-            let extra_headers = extra_headers
-                .into_iter()
-                .map(|(name, value)| format!("{name}: {value}\r\n"))
-                .collect::<String>();
-            let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\n{extra_headers}Content-Length: {}\r\nConnection: close\r\n\r\n{}",
-                body.len(),
-                body
-            );
-            stream
-                .write_all(response.as_bytes())
-                .await
-                .expect("write service worker response");
-        }
-    });
-    (format!("http://127.0.0.1:{}", addr.port()), server)
-}
-
-async fn spawn_service_worker_redirect_response_server() -> (String, JoinHandle<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind service worker redirect response server");
-    let addr = listener
-        .local_addr()
-        .expect("service worker redirect response server addr");
-    let server = tokio::spawn(async move {
-        for _ in 0..3 {
-            let (mut stream, _) = listener
-                .accept()
-                .await
-                .expect("accept service worker redirect response request");
-            let request = read_storage_bucket_partition_request_head(&mut stream)
-                .await
-                .expect("read service worker redirect response request");
-            let path = request
-                .lines()
-                .next()
-                .and_then(|line| line.split_whitespace().nth(1))
-                .expect("service worker redirect response request path");
-            assert_eq!(path, "/redirect-start");
-            let response = concat!(
-                "HTTP/1.1 302 Found\r\n",
-                "Location: /redirect-target\r\n",
-                "Access-Control-Allow-Origin: *\r\n",
-                "Content-Length: 0\r\n",
-                "Connection: close\r\n",
-                "\r\n"
-            );
-            stream
-                .write_all(response.as_bytes())
-                .await
-                .expect("write service worker redirect response");
-        }
-    });
-    (
-        format!("http://127.0.0.1:{}/redirect-start", addr.port()),
-        server,
-    )
-}
-
-async fn spawn_service_worker_headers_first_body_server()
--> (String, JoinHandle<()>, tokio::sync::oneshot::Sender<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind service worker headers-first server");
-    let addr = listener
-        .local_addr()
-        .expect("service worker headers-first server addr");
-    let (release_body_tx, release_body_rx) = tokio::sync::oneshot::channel::<()>();
-    let server = tokio::spawn(async move {
-        let (mut worker_stream, _) = listener
-            .accept()
-            .await
-            .expect("accept service worker script request");
-        let request = read_storage_bucket_partition_request_head(&mut worker_stream)
-            .await
-            .expect("read service worker script request");
-        let path = request
-            .lines()
-            .next()
-            .and_then(|line| line.split_whitespace().nth(1))
-            .expect("service worker script request path");
-        assert_eq!(path, "/app/worker.js");
-        let worker_body = r#"
-            self.addEventListener("install", event => {
-              event.waitUntil(Promise.resolve());
-            });
-            self.addEventListener("activate", event => {
-              event.waitUntil(clients.claim());
-            });
-            self.addEventListener("fetch", event => {
-              event.respondWith(fetch(event.request));
-            });
-        "#;
-        let worker_response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: text/javascript; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            worker_body.len(),
-            worker_body
-        );
-        worker_stream
-            .write_all(worker_response.as_bytes())
-            .await
-            .expect("write service worker script response");
-
-        let (mut api_stream, _) = listener
-            .accept()
-            .await
-            .expect("accept service worker proxied API request");
-        let request = read_storage_bucket_partition_request_head(&mut api_stream)
-            .await
-            .expect("read service worker proxied API request");
-        let path = request
-            .lines()
-            .next()
-            .and_then(|line| line.split_whitespace().nth(1))
-            .expect("service worker proxied API request path");
-        assert_eq!(path, "/app/api/headers-first.txt");
-        let body = "delayed-body";
-        let headers = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-            body.len()
-        );
-        api_stream
-            .write_all(headers.as_bytes())
-            .await
-            .expect("write service worker proxied API headers");
-        api_stream
-            .flush()
-            .await
-            .expect("flush service worker proxied API headers");
-        let _ = release_body_rx.await;
-        let _ = api_stream.write_all(body.as_bytes()).await;
-    });
-    (
-        format!("http://127.0.0.1:{}", addr.port()),
-        server,
-        release_body_tx,
-    )
-}
-
-async fn spawn_service_worker_script_server(paths: Vec<&'static str>) -> (String, JoinHandle<()>) {
-    spawn_service_worker_response_server(
-        paths
-            .into_iter()
-            .map(|path| {
-                (
-                    path,
-                    "text/javascript; charset=utf-8",
-                    "self.addEventListener('install', () => {});",
-                )
-            })
-            .collect(),
-    )
-    .await
-}
-
-fn service_worker_http_cache_test_root(label: &str) -> std::path::PathBuf {
-    let nonce = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("system clock should be after epoch")
-        .as_nanos();
-    std::env::temp_dir().join(format!(
-        "moli-renderer-v8-service-worker-http-cache-{label}-{}-{nonce}",
-        std::process::id()
-    ))
-}
-
-async fn read_storage_bucket_partition_request_head(
-    stream: &mut tokio::net::TcpStream,
-) -> std::io::Result<String> {
-    let mut buf = Vec::new();
-    let mut chunk = [0_u8; 512];
-    loop {
-        let n = stream.read(&mut chunk).await?;
-        if n == 0 {
-            break;
-        }
-        buf.extend_from_slice(&chunk[..n]);
-        if buf.windows(4).any(|window| window == b"\r\n\r\n") {
-            break;
-        }
-    }
-    Ok(String::from_utf8_lossy(&buf).into_owned())
-}
-
-async fn spawn_popup_external_child_frame_server() -> (String, tokio::task::JoinHandle<()>) {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind popup external child frame server");
-    let addr = listener
-        .local_addr()
-        .expect("popup external child frame server addr");
-    let server = tokio::spawn(async move {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-        let (mut stream, _) = listener
-            .accept()
-            .await
-            .expect("accept popup external child frame request");
-        let mut buffer = [0; 1024];
-        let _ = stream
-            .read(&mut buffer)
-            .await
-            .expect("read popup external child frame request");
-        let body = r#"<!doctype html>
-<script>
-window.onfocus = () => {
-  parent.opener.postMessage("child-window-focus", "*");
-};
-window.onblur = () => {
-  parent.opener.postMessage("child-window-blur", "*");
-};
-window.addEventListener("load", () => {
-  parent.opener.postMessage(
-    "external:" + (parent !== self) + "|" + (top === parent) + "|" + (typeof parent.opener.postMessage),
-    "*"
-  );
-});
-</script>"#;
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            body.len(),
-            body
-        );
-        stream
-            .write_all(response.as_bytes())
-            .await
-            .expect("write popup external child frame response");
-    });
-    (format!("http://{addr}/child.html"), server)
-}
-
-async fn spawn_csp_sandbox_storage_bucket_popup_server() -> (String, tokio::task::JoinHandle<()>) {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind CSP sandbox popup test server");
-    let addr = listener
-        .local_addr()
-        .expect("CSP sandbox popup server addr");
-    let server = tokio::spawn(async move {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-        let (mut stream, _) = listener
-            .accept()
-            .await
-            .expect("accept CSP sandbox popup request");
-        let mut buffer = [0; 1024];
-        let _ = stream
-            .read(&mut buffer)
-            .await
-            .expect("read CSP sandbox popup request");
-        let body = r#"<!doctype html>
-<script>
-function post_message(data) {
-  if (window.parent !== null) {
-    window.parent.postMessage(data, { targetOrigin: "*" });
-  }
-  if (window.opener !== null) {
-    window.opener.postMessage(data, { targetOrigin: "*" });
-  }
-}
-navigator.storageBuckets.open("opaque-origin-bucket")
-  .then(() => post_message("navigator.storageBuckets.open(): FULFILLED"))
-  .catch(error => post_message("navigator.storageBuckets.open(): REJECTED: " + error.name));
-navigator.storageBuckets.keys()
-  .then(() => post_message("navigator.storageBuckets.keys(): FULFILLED"))
-  .catch(error => post_message("navigator.storageBuckets.keys(): REJECTED: " + error.name));
-navigator.storageBuckets.delete("opaque-origin-bucket")
-  .then(() => post_message("navigator.storageBuckets.delete(): FULFILLED"))
-  .catch(error => post_message("navigator.storageBuckets.delete(): REJECTED: " + error.name));
-</script>"#;
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Security-Policy: sandbox allow-scripts\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            body.len(),
-            body
-        );
-        stream
-            .write_all(response.as_bytes())
-            .await
-            .expect("write CSP sandbox popup response");
-    });
-    (format!("http://{addr}/popup.html"), server)
-}
-
-async fn spawn_sandbox_popup_helper_server() -> (String, tokio::task::JoinHandle<()>) {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind sandbox popup helper server");
-    let addr = listener
-        .local_addr()
-        .expect("sandbox popup helper server addr");
-    let server = tokio::spawn(async move {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-        for _ in 0..2 {
-            let (mut stream, _) = listener
-                .accept()
-                .await
-                .expect("accept sandbox popup helper request");
-            let mut buffer = [0; 1024];
-            let _ = stream
-                .read(&mut buffer)
-                .await
-                .expect("read sandbox popup helper request");
-            let body = r#"<!doctype html>
-<script>
-  if (opener) {
-    opener.postMessage(undefined, "*");
-    self.close();
-  } else {
-    onmessage = function (e) {
-      parent.postMessage({ data: e.data, origin: e.origin }, "*");
-    };
-    var popupWin = window.open();
-    popupWin.location.href = location.href;
-  }
-</script>"#;
-            let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                body.len(),
-                body
-            );
-            stream
-                .write_all(response.as_bytes())
-                .await
-                .expect("write sandbox popup helper response");
-        }
-    });
-    (
-        format!("http://{addr}/iframe_sandbox_popups_helper-3.html"),
-        server,
-    )
-}
-
-async fn spawn_sandbox_child_top_navigation_popup_server() -> (String, tokio::task::JoinHandle<()>)
-{
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind sandbox child top navigation popup server");
-    let addr = listener
-        .local_addr()
-        .expect("sandbox child top navigation popup server addr");
-    let server = tokio::spawn(async move {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-        for _ in 0..2 {
-            let (mut stream, _) = listener
-                .accept()
-                .await
-                .expect("accept sandbox child top navigation popup request");
-            let mut buffer = [0; 1024];
-            let n = stream
-                .read(&mut buffer)
-                .await
-                .expect("read sandbox child top navigation popup request");
-            let request = String::from_utf8_lossy(&buffer[..n]);
-            let body = if request.starts_with("GET /popup.html ") {
-                r#"<!doctype html>
-<iframe sandbox="allow-scripts"></iframe>
-<script>
-  onmessage = event => opener.postMessage(event.data, "*");
-  document.querySelector("iframe").src = "/child.html";
-</script>"#
-            } else {
-                r#"<!doctype html>
-<script>
-  onload = () => {
-    try {
-      top.location = "/navigated.html";
-      top.postMessage("can navigate", "*");
-    } catch (error) {
-      top.postMessage("cannot navigate", "*");
-    }
-  };
-</script>"#
-            };
-            let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                body.len(),
-                body
-            );
-            stream
-                .write_all(response.as_bytes())
-                .await
-                .expect("write sandbox child top navigation popup response");
-        }
-    });
-    (format!("http://{addr}/popup.html"), server)
-}
-
-async fn spawn_lightweight_popup_response_csp_external_script_server()
--> (String, tokio::task::JoinHandle<bool>) {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind popup response external CSP test server");
-    let addr = listener
-        .local_addr()
-        .expect("popup response external CSP server addr");
-    let server = tokio::spawn(async move {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-        let (mut stream, _) = listener
-            .accept()
-            .await
-            .expect("accept popup response external CSP request");
-        let mut buffer = [0; 1024];
-        let _ = stream
-            .read(&mut buffer)
-            .await
-            .expect("read popup response external CSP request");
-        let body = r#"<!doctype html><script src="/blocked.js"></script>"#;
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Security-Policy: script-src 'none'\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            body.len(),
-            body
-        );
-        stream
-            .write_all(response.as_bytes())
-            .await
-            .expect("write popup response external CSP response");
-
-        let Ok(Ok((mut script_stream, _))) =
-            tokio::time::timeout(std::time::Duration::from_millis(250), listener.accept()).await
-        else {
-            return false;
-        };
-        let _ = script_stream.read(&mut buffer).await;
-        let body = r#"opener.__popupResponseCspExternalEvents.push("script");"#;
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/javascript\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            body.len(),
-            body
-        );
-        let _ = script_stream.write_all(response.as_bytes()).await;
-        true
-    });
-    (format!("http://{addr}/popup.html"), server)
-}
-async fn spawn_lightweight_popup_response_csp_redirect_external_script_servers() -> (
-    String,
-    String,
-    std::thread::JoinHandle<()>,
-    std::thread::JoinHandle<()>,
-) {
-    let target_listener =
-        std::net::TcpListener::bind("127.0.0.1:0").expect("bind popup redirect CSP target server");
-    let target_addr = target_listener
-        .local_addr()
-        .expect("popup redirect CSP target addr");
-    let final_script_url = format!("http://{target_addr}/final.js");
-    let final_script_url_for_source = final_script_url.clone();
-    let target_server = std::thread::spawn(move || {
-        use std::io::{Read, Write};
-
-        let mut stream = accept_popup_redirect_test_connection(&target_listener)
-            .expect("accept popup redirect CSP final script request");
-        let mut buffer = [0; 1024];
-        let _ = stream
-            .read(&mut buffer)
-            .expect("read popup redirect CSP final script request");
-        let body = r#"opener.__popupRedirectCspEvents.push("script");"#;
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: *\r\nContent-Type: application/javascript\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            body.len(),
-            body
-        );
-        stream
-            .write_all(response.as_bytes())
-            .expect("write popup redirect CSP final script response");
-    });
-
-    let source_listener =
-        std::net::TcpListener::bind("127.0.0.1:0").expect("bind popup redirect CSP source server");
-    let source_addr = source_listener
-        .local_addr()
-        .expect("popup redirect CSP source addr");
-    let source_server = std::thread::spawn(move || {
-        use std::io::{Read, Write};
-
-        let mut stream = accept_popup_redirect_test_connection(&source_listener)
-            .expect("accept popup redirect CSP document request");
-        let mut buffer = [0; 1024];
-        let _ = stream
-            .read(&mut buffer)
-            .expect("read popup redirect CSP document request");
-        let body = r#"<!doctype html><script src="/redirect.js"></script>"#;
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Security-Policy: script-src 'self'\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            body.len(),
-            body
-        );
-        stream
-            .write_all(response.as_bytes())
-            .expect("write popup redirect CSP document response");
-
-        let mut stream = accept_popup_redirect_test_connection(&source_listener)
-            .expect("accept popup redirect CSP script request");
-        let _ = stream
-            .read(&mut buffer)
-            .expect("read popup redirect CSP script request");
-        let response = format!(
-            "HTTP/1.1 302 Found\r\nLocation: {final_script_url_for_source}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-        );
-        stream
-            .write_all(response.as_bytes())
-            .expect("write popup redirect CSP redirect response");
-    });
-    (
-        format!("http://{source_addr}/popup.html"),
-        final_script_url,
-        source_server,
-        target_server,
-    )
-}
-
-fn accept_popup_redirect_test_connection(
-    listener: &std::net::TcpListener,
-) -> std::io::Result<std::net::TcpStream> {
-    listener.set_nonblocking(true)?;
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    loop {
-        match listener.accept() {
-            Ok((stream, _)) => {
-                // Accepted sockets can inherit O_NONBLOCK from the listener on
-                // some platforms. The request bytes are allowed to arrive
-                // after accept, so restore blocking I/O with a bounded timeout
-                // before the fixture reads the request head.
-                stream.set_nonblocking(false)?;
-                stream.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
-                stream.set_write_timeout(Some(std::time::Duration::from_secs(5)))?;
-                return Ok(stream);
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                if std::time::Instant::now() >= deadline {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::TimedOut,
-                        "timed out waiting for popup redirect test connection",
-                    ));
-                }
-                std::thread::sleep(std::time::Duration::from_millis(5));
-            }
-            Err(error) => return Err(error),
-        }
-    }
-}
 #[test]
 fn details_dialog_string_boundaries_use_webidl_conversion() {
     let mut vm = new_storage_test_vm("https://example.com/");

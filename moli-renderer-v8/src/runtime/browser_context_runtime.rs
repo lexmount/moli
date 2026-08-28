@@ -52,7 +52,8 @@ impl RendererOutputTransportSenderSlot {
 
 pub(crate) use crate::service_worker_runtime::ServiceWorkerControlState;
 pub use service_workers::{
-    RendererReservedServiceWorkerClient, RendererServiceWorkerMainResourceFetch,
+    RendererReservedServiceWorkerClient, RendererServiceWorkerClientsOpenWindowContinuation,
+    RendererServiceWorkerMainResourceFetch,
 };
 
 /// Browser-context/partition scoped renderer runtime state.
@@ -148,6 +149,24 @@ impl RendererProducerRegistrar {
     }
 }
 
+/// Embedder policy for script-created auxiliary browsing contexts.
+///
+/// Chromium keeps this decision outside Blink's frame activation state: Chrome
+/// normally requires a transient activation, while content embedders and
+/// automation profiles may allow script-created windows unconditionally. The
+/// renderer still consumes an available activation after either policy admits
+/// a new context.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum RendererPopupBlockerPolicy {
+    /// Preserve Moli's headless-automation default and Chromium's
+    /// embedder/content-setting bypass behavior.
+    #[default]
+    AllowWithoutTransientActivation,
+    /// Block a new auxiliary context unless its source frame tree currently
+    /// owns an unconsumed transient user activation.
+    RequireTransientActivation,
+}
+
 /// Worker-thread view of browser-context runtime state.
 ///
 /// Workers inherit owner-scoped communication registries, but they are not
@@ -177,13 +196,15 @@ struct RendererBrowserContextRuntimeInner {
     shared_worker_runtime: crate::shared_worker_runtime::SharedWorkerRuntimeService,
     service_worker_runtime: crate::service_worker_runtime::ServiceWorkerRuntimeService,
     storage_partition_identity: RendererStoragePartitionIdentity,
-    next_web_storage_opaque_context_nonce: AtomicU64,
+    next_opaque_origin_nonce: AtomicU64,
     next_child_document_loader_id: AtomicU64,
     next_detached_parser_script_fetch_id: AtomicU64,
     next_dedicated_worker_instance_id: AtomicU64,
     dedicated_worker_devtools_handles: Mutex<HashMap<u64, crate::worker::WorkerDevToolsHandle>>,
     dedicated_worker_pause_on_start_for_devtools: AtomicBool,
     javascript_dialog_handler_enabled: AtomicBool,
+    popup_blocker_requires_transient_activation: AtomicBool,
+    allow_scripts_to_close_windows: AtomicBool,
     renderer_output_transport_tx: RendererOutputTransportSenderSlot,
 }
 
@@ -516,13 +537,15 @@ impl RendererBrowserContextRuntime {
                 shared_worker_runtime,
                 service_worker_runtime,
                 storage_partition_identity,
-                next_web_storage_opaque_context_nonce: AtomicU64::default(),
+                next_opaque_origin_nonce: AtomicU64::default(),
                 next_child_document_loader_id: AtomicU64::default(),
                 next_detached_parser_script_fetch_id: AtomicU64::default(),
                 next_dedicated_worker_instance_id: AtomicU64::default(),
                 dedicated_worker_devtools_handles: Mutex::new(HashMap::new()),
                 dedicated_worker_pause_on_start_for_devtools: AtomicBool::new(false),
                 javascript_dialog_handler_enabled: AtomicBool::new(false),
+                popup_blocker_requires_transient_activation: AtomicBool::new(false),
+                allow_scripts_to_close_windows: AtomicBool::new(false),
                 renderer_output_transport_tx,
             }),
         }
@@ -636,12 +659,10 @@ impl RendererBrowserContextRuntime {
         self.inner.service_worker_runtime.clone()
     }
 
-    pub(crate) fn next_web_storage_opaque_context_nonce(
-        &self,
-    ) -> moli_storage_key::OpaqueOriginNonce {
+    pub(crate) fn next_opaque_origin_nonce(&self) -> moli_storage_key::OpaqueOriginNonce {
         moli_storage_key::OpaqueOriginNonce::new(
             self.inner
-                .next_web_storage_opaque_context_nonce
+                .next_opaque_origin_nonce
                 .fetch_add(1, Ordering::Relaxed)
                 .saturating_add(1),
         )
@@ -695,6 +716,44 @@ impl RendererBrowserContextRuntime {
     pub fn javascript_dialog_handler_enabled(&self) -> bool {
         self.inner
             .javascript_dialog_handler_enabled
+            .load(Ordering::Relaxed)
+    }
+
+    pub fn set_popup_blocker_policy(&self, policy: RendererPopupBlockerPolicy) {
+        self.inner
+            .popup_blocker_requires_transient_activation
+            .store(
+                policy == RendererPopupBlockerPolicy::RequireTransientActivation,
+                Ordering::Relaxed,
+            );
+    }
+
+    pub fn popup_blocker_policy(&self) -> RendererPopupBlockerPolicy {
+        if self
+            .inner
+            .popup_blocker_requires_transient_activation
+            .load(Ordering::Relaxed)
+        {
+            RendererPopupBlockerPolicy::RequireTransientActivation
+        } else {
+            RendererPopupBlockerPolicy::AllowWithoutTransientActivation
+        }
+    }
+
+    /// Browser/embedder override for the HTML script-closable check.
+    ///
+    /// The default is Chromium's ordinary browser behavior. Automation
+    /// embedders may opt into allowing script to close non-DOM-created Pages
+    /// even after their session history grows.
+    pub fn set_allow_scripts_to_close_windows(&self, allow: bool) {
+        self.inner
+            .allow_scripts_to_close_windows
+            .store(allow, Ordering::Relaxed);
+    }
+
+    pub fn allow_scripts_to_close_windows(&self) -> bool {
+        self.inner
+            .allow_scripts_to_close_windows
             .load(Ordering::Relaxed)
     }
 }
@@ -911,7 +970,10 @@ mod tests {
             RendererOutputTransportMessage::PageReservationReleased {
                 owner_local_host_id,
                 page_id,
-            } if owner_local_host_id == token.local_host_id() && page_id == token.page_id()
+                reservation_id,
+            } if owner_local_host_id == token.local_host_id()
+                && page_id == token.page_id()
+                && reservation_id == token.output_owner_reservation_id()
         ));
         assert!(matches!(
             output_rx.try_recv(),

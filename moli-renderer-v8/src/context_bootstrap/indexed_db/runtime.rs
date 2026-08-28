@@ -253,14 +253,6 @@ fn ensure_runtime_factory_field<'s>(
     Some(factory)
 }
 
-pub(crate) fn scoped_indexed_db_factory<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    storage_key: &str,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let storage_scope = storage_scope_for_current_partition(scope, storage_key)?;
-    build_scoped_indexed_db_factory(scope, storage_scope)
-}
-
 pub(super) fn build_scoped_indexed_db_factory<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     storage_scope: IndexedDbStorageScope,

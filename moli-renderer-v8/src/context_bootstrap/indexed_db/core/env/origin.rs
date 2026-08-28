@@ -40,9 +40,6 @@ pub(in crate::context_bootstrap::indexed_db) fn storage_scope_for_window_executi
         crate::native_bridge::OwnerDispatchScope::Child(handle) => {
             host.storage_context_for_child_browsing_context(handle)?
         }
-        crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id) => {
-            host.storage_context_for_lightweight_popup(popup_id)?
-        }
     };
     let identity = host.browser_context_runtime().storage_partition_identity();
     Some(IndexedDbStorageScope::new(

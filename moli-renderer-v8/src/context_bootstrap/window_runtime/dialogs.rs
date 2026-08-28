@@ -1,23 +1,28 @@
-use super::super::{
-    location_navigation::{LocationNavigationKind, navigate_location_object},
-    navigation_cancellation::inform_about_canceled_navigation_for_window,
-};
+use super::super::navigation_cancellation::inform_about_canceled_navigation_for_window;
 use crate::{
-    context_bootstrap::CHILD_BROWSING_CONTEXT_HANDLE_SLOT,
-    document_runtime::{DocumentPolicyContainer, DomHandle},
     native_bridge::{
-        InputNavigationPolicy, child_window_handle_from_marker_data,
+        InputNavigationPolicy, WindowExecutionContextBinding, WindowOperationReceiver,
+        WindowOperationReceiverCaptureError,
         element::{
-            SpecialBrowsingContextTarget, navigate_existing_browsing_context_target,
-            navigate_named_iframe_target,
+            SpecialBrowsingContextTarget,
+            cancel_pending_renderer_owned_javascript_url_navigation_for_window,
+            existing_browsing_context_target_window, navigate_existing_browsing_context_target,
+            queue_renderer_owned_top_level_javascript_url_navigation_for_window,
+            queue_renderer_owned_top_level_navigation_for_window,
+            resolve_named_browsing_context_target_for_navigation,
+            source_javascript_url_allowed_by_csp_for_owner,
+            source_javascript_url_allows_new_context_by_policy,
         },
-        entered_child_window_handle,
     },
     runtime::{
         RendererPendingJavaScriptDialog, RendererPendingPopupActivation,
-        RendererPendingWindowOpenEvent,
+        RendererPendingWindowOpenEvent, RendererPopupNewTargetDisposition,
+        RendererTopLevelNavigationRequest,
     },
-    util::{context_host_ptr_from_global_bridge, get_private_value},
+    util::{
+        context_host_ptr_from_context_slot, context_host_ptr_from_global_bridge,
+        context_host_ptr_from_window_object,
+    },
     webidl,
 };
 use url::Url;
@@ -122,21 +127,59 @@ pub(crate) fn window_open_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(parsed) = webidl::parse_args::<WindowOpenArgs>(scope, &args) else {
-        return;
-    };
-    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+    let Some(accessing_host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         rv.set(v8::null(scope).into());
         return;
     };
-    let entered_window = {
-        let host = unsafe { &*host_ptr };
-        window_open_entered_window(scope, host).unwrap_or_else(|| args.this())
+    let receiver_host_ptr =
+        context_host_ptr_from_window_object(scope, args.this()).unwrap_or(accessing_host_ptr);
+    let receiver = match WindowOperationReceiver::capture_and_authorize(
+        scope,
+        args.this(),
+        unsafe { &*receiver_host_ptr },
+        unsafe { &*accessing_host_ptr },
+    ) {
+        Ok(receiver) => receiver,
+        Err(WindowOperationReceiverCaptureError::IllegalInvocation) => {
+            crate::util::throw_type_error(
+                scope,
+                "Failed to execute 'open' on 'Window': Illegal invocation",
+            );
+            return;
+        }
+        Err(WindowOperationReceiverCaptureError::CrossOrigin) => {
+            crate::native_bridge::throw_cross_origin_location_security_error(scope);
+            return;
+        }
     };
+    let Some(parsed) = webidl::parse_args::<WindowOpenArgs>(scope, &args) else {
+        return;
+    };
+    let Some(receiver_binding) = receiver.resolve_live_binding(unsafe { &*receiver_host_ptr })
+    else {
+        rv.set(v8::null(scope).into());
+        return;
+    };
+    let Some(receiver_identity) = receiver_binding.resolve_identity(unsafe { &*receiver_host_ptr })
+    else {
+        rv.set(v8::null(scope).into());
+        return;
+    };
+    let receiver_context = receiver_binding.context(scope);
+    let receiver_window = receiver_context.global(scope);
+    let Some((entry_host_ptr, entry_identity, entry_binding)) =
+        entered_window_execution_context_binding(scope)
+    else {
+        rv.set(v8::null(scope).into());
+        return;
+    };
+
     let special_target = SpecialBrowsingContextTarget::parse(&parsed.target_name);
-    let entered_base_url = {
-        let host = unsafe { &*host_ptr };
-        entered_window_api_base_url(scope, host)
+    let Some(entered_base_url) = (unsafe { &*entry_host_ptr })
+        .navigation_api_base_url_for_identity_without_scope(entry_identity)
+    else {
+        rv.set(v8::null(scope).into());
+        return;
     };
     let url = if parsed.raw_url.is_empty() {
         Url::parse("about:blank").expect("about:blank should parse")
@@ -156,72 +199,146 @@ pub(crate) fn window_open_callback<'s>(
             }
         }
     };
-    if special_target == Some(SpecialBrowsingContextTarget::Current) {
-        navigate_window_open_self(scope, entered_window, url.as_str(), &mut rv);
-        return;
-    }
     let parsed_features = WindowOpenFeatures::parse(&parsed.features);
     let suppress_opener = parsed_features.suppresses_opener();
-    let mut creator_policy_container = {
-        let host = unsafe { &*host_ptr };
-        window_open_entered_policy_container(scope, host)
+    let suppress_referrer = parsed_features.suppresses_referrer();
+    let Some(mut creator_policy_container) = (unsafe { &*entry_host_ptr })
+        .document_policy_container_snapshot_for_identity(entry_identity)
+    else {
+        rv.set(v8::null(scope).into());
+        return;
     };
-    creator_policy_container.document_referrer = if suppress_opener {
+    let Some(entered_document_url) = (unsafe { &*entry_host_ptr })
+        .document_url_for_window_execution_context_identity(entry_identity)
+    else {
+        rv.set(v8::null(scope).into());
+        return;
+    };
+    let initial_document_referrer = if suppress_referrer {
         String::new()
     } else {
-        let host = unsafe { &*host_ptr };
-        window_open_entered_document_url(scope, host).to_string()
+        entered_document_url.to_string()
     };
-    if url.scheme() == "javascript" {
-        let source = crate::native_bridge::javascript_url_csp_source(&url);
-        let host = unsafe { &mut *host_ptr };
-        let owner = host.entered_owner_dispatch_scope(scope);
-        if !host.allows_inline_javascript_navigation_by_csp(scope, owner, &source) {
-            rv.set(v8::null(scope).into());
-            return;
-        }
-    }
+    creator_policy_container.document_referrer = initial_document_referrer.clone();
+    let navigation_referrer = if suppress_referrer {
+        String::new()
+    } else {
+        moli_fetch::referrer_header_value(
+            &entered_document_url,
+            &url,
+            None,
+            creator_policy_container.referrer_policy.as_deref(),
+        )
+        .unwrap_or_default()
+    };
+    let document_referrer = if suppress_referrer {
+        String::new()
+    } else if moli_url::is_about_blank(&url) {
+        initial_document_referrer.clone()
+    } else {
+        moli_fetch::navigation_referrer_value(
+            &entered_document_url,
+            &url,
+            None,
+            creator_policy_container.referrer_policy.as_deref(),
+        )
+        .unwrap_or_default()
+    };
+    let uses_synchronous_initial_empty_document =
+        moli_url::is_about_blank(&url) && url.query().is_none() && url.fragment().is_none();
+    let is_javascript_url = url.scheme() == "javascript";
     let url = url.to_string();
+    let navigation_source = unsafe { &*entry_host_ptr }
+        .renderer_top_level_navigation_source_for_identity(entry_identity, suppress_referrer);
+    let mut navigation_request = RendererTopLevelNavigationRequest::get(url.clone());
+    if let Some(source) = navigation_source.clone() {
+        navigation_request = navigation_request.with_source(source);
+    }
+    let javascript_navigation_request = is_javascript_url.then(|| navigation_request.clone());
     if let Some(
-        target @ (SpecialBrowsingContextTarget::Parent | SpecialBrowsingContextTarget::Top),
+        target @ (SpecialBrowsingContextTarget::Current
+        | SpecialBrowsingContextTarget::Parent
+        | SpecialBrowsingContextTarget::Top),
     ) = special_target
     {
-        match navigate_existing_browsing_context_target(scope, host_ptr, target, &url) {
+        let Some(target_window) =
+            existing_browsing_context_target_window(scope, receiver_window, target)
+        else {
+            rv.set(v8::null(scope).into());
+            return;
+        };
+        if !window_open_entry_javascript_url_allowed_by_csp(
+            scope,
+            entry_host_ptr,
+            &entry_binding,
+            &url,
+        ) {
+            rv.set(target_window.into());
+            return;
+        }
+        match navigate_existing_browsing_context_target(
+            scope,
+            receiver_host_ptr,
+            receiver_window,
+            receiver_identity,
+            target,
+            &url,
+            navigation_source.clone(),
+        ) {
             Some(window) => rv.set(window.into()),
             None => rv.set(v8::null(scope).into()),
         }
         return;
     }
-    if let Some(target_window) =
-        existing_named_child_window_for_window_open(scope, host_ptr, &parsed.target_name)
-        && !suppress_opener
-        && navigate_named_iframe_target(scope, host_ptr, &parsed.target_name, &url, None)
+    let resolved_named_target =
+        trackable_named_popup_target_name(&parsed.target_name).and_then(|name| {
+            resolve_named_browsing_context_target_for_navigation(
+                scope,
+                receiver_host_ptr,
+                receiver_identity,
+                name,
+                &url,
+            )
+        });
+    let existing_named_target_allows_source_navigation = match resolved_named_target.as_ref() {
+        None => true,
+        Some(target) if !target.navigation_allowed() => false,
+        Some(_) => window_open_entry_javascript_url_allowed_by_csp(
+            scope,
+            entry_host_ptr,
+            &entry_binding,
+            &url,
+        ),
+    };
+    if let Some(target) = resolved_named_target.as_ref()
+        && target.related_top_level_page().is_none()
     {
-        rv.set(target_window.into());
+        if existing_named_target_allows_source_navigation {
+            let _ = target.navigate_existing_context(
+                scope,
+                receiver_host_ptr,
+                &url,
+                navigation_source.clone(),
+                None,
+            );
+        }
+        if suppress_opener {
+            rv.set(v8::null(scope).into());
+        } else {
+            rv.set(target.window().into());
+        }
         return;
     }
-    let host = unsafe { &mut *host_ptr };
-    let window_open_event = RendererPendingWindowOpenEvent {
-        url: url.clone(),
-        window_name: if parsed.target_name.is_empty() {
-            "_blank".to_owned()
-        } else {
-            parsed.target_name.clone()
-        },
-        window_features: parsed_features.enabled_feature_strings(),
-        user_gesture: host.protocol_user_gesture_activation(),
-    };
-    let source_scope = host.entered_owner_dispatch_scope(scope);
-    let Some((_, root_document, source)) =
-        host.renderer_window_document_source_for_dispatch_scope(source_scope)
+    // Popup creation and opener projection belong to the receiver browsing
+    // context. The destination request already carries the separate entry
+    // Window source used for URL/referrer/fetch policy.
+    let Some((_, root_document, source)) = (unsafe { &*receiver_host_ptr })
+        .renderer_window_document_source_for_identity(receiver_identity)
     else {
         rv.set(v8::null(scope).into());
         return;
     };
-    let opener = (!suppress_opener).then_some(entered_window);
-    let opener_child_handle =
-        opener.and_then(|opener| window_open_receiver_child_handle(scope, opener));
-    let popup_disposition = match host
+    let popup_disposition = match (unsafe { &*receiver_host_ptr })
         .current_input_event()
         .map(crate::native_bridge::CurrentInputEvent::navigation_policy)
     {
@@ -236,26 +353,235 @@ pub(crate) fn window_open_callback<'s>(
         )
         | None => crate::RendererPopupDisposition::Foreground,
     };
-    if popup_target_can_use_lightweight_window(&parsed.target_name, &url)
-        && let Some(opened_popup) = host.open_lightweight_popup_window(
-            scope,
-            host_ptr,
-            opener,
-            opener_child_handle,
-            &parsed.target_name,
-            &url,
-            entered_base_url,
-            creator_policy_container,
-        )
+    if let Some(target) = resolved_named_target.as_ref()
+        && let Some(resolved_target_page) = target.related_top_level_page()
     {
+        if !existing_named_target_allows_source_navigation {
+            if suppress_opener {
+                rv.set(v8::null(scope).into());
+            } else {
+                rv.set(target.window().into());
+            }
+            return;
+        }
+        if !suppress_opener
+            && !unsafe { &mut *receiver_host_ptr }.replace_related_page_top_level_opener(
+                scope,
+                resolved_target_page,
+                receiver_window,
+            )
+        {
+            rv.set(v8::null(scope).into());
+            return;
+        }
+        if target.related_local_top_level_context().is_some() {
+            if let Some(request) = javascript_navigation_request.clone()
+                && !queue_renderer_owned_top_level_javascript_url_navigation_for_window(
+                    scope,
+                    target.window(),
+                    request,
+                )
+            {
+                tracing::warn!(
+                    ?resolved_target_page,
+                    "selected related javascript URL target lost its renderer Page owner"
+                );
+            } else if !is_javascript_url {
+                cancel_pending_renderer_owned_javascript_url_navigation_for_window(
+                    scope,
+                    target.window(),
+                );
+            }
+        } else if is_javascript_url {
+            let command = (unsafe { &*entry_host_ptr })
+                .renderer_remote_javascript_url_source(entry_identity, suppress_referrer)
+                .zip(target.related_remote_top_level_target())
+                .and_then(|(source, target)| {
+                    match crate::runtime::RendererRemoteWindowProxyCommand::navigate_javascript_url(
+                        target.endpoint,
+                        target.residence,
+                        target.channel,
+                        crate::runtime::RendererRemoteWindowProxyNavigationKind::Assign,
+                        url.clone(),
+                        source,
+                    ) {
+                        Ok(command) => Some(command),
+                        Err(error) => {
+                            tracing::warn!(%error, "rejected remote window.open navigation command");
+                            None
+                        }
+                    }
+                });
+            if !command.is_some_and(|command| {
+                unsafe { &mut *receiver_host_ptr }.append_live_turn_owner_action(
+                    crate::runtime::RendererOwnerAction::RemoteWindowProxy(command),
+                )
+            }) {
+                tracing::warn!(
+                    ?resolved_target_page,
+                    "selected remote javascript URL target lost its exact source or owner route"
+                );
+            }
+        }
+        let activation = popup_activation_for_javascript_url(
+            RendererPendingPopupActivation::window(
+                root_document,
+                source,
+                !suppress_opener,
+                None,
+                url,
+                parsed.target_name,
+                popup_disposition,
+            )
+            .with_navigation_request(navigation_request.clone()),
+            is_javascript_url,
+        )
+        .with_navigation_referrers(
+            navigation_referrer,
+            initial_document_referrer,
+            document_referrer,
+        )
+        .with_resolved_target_page(resolved_target_page);
+        unsafe { &mut *receiver_host_ptr }.record_pending_popup_activation(activation, None);
+        if suppress_opener {
+            rv.set(v8::null(scope).into());
+        } else {
+            rv.set(target.window().into());
+        }
+        return;
+    }
+    let opener = (!suppress_opener).then_some(receiver_window);
+    let opener_child_handle = opener
+        .is_some()
+        .then(|| receiver_identity.dispatch_scope().child_window())
+        .flatten();
+    if !window_open_entry_javascript_url_allows_new_context_by_policy(
+        scope,
+        entry_host_ptr,
+        &entry_binding,
+        &url,
+    ) {
+        rv.set(v8::null(scope).into());
+        return;
+    }
+    let Some(receiver_creation_policy_container) = (unsafe { &*receiver_host_ptr })
+        .document_policy_container_snapshot_for_identity(receiver_identity)
+    else {
+        rv.set(v8::null(scope).into());
+        return;
+    };
+    let admission = match unsafe { &mut *receiver_host_ptr }
+        .admit_new_auxiliary_browsing_context(receiver_creation_policy_container)
+    {
+        Ok(admission) => admission,
+        Err(_) => {
+            rv.set(v8::null(scope).into());
+            return;
+        }
+    };
+    let creation_user_activation = admission.user_activation();
+    let auxiliary_browsing_context_policy = admission.renderer_auxiliary_browsing_context_policy();
+    let creator_policy = admission.into_creation_policy();
+    let window_open_event = RendererPendingWindowOpenEvent {
+        url: url.clone(),
+        window_name: if parsed.target_name.is_empty() {
+            "_blank".to_owned()
+        } else {
+            parsed.target_name.clone()
+        },
+        window_features: parsed_features.enabled_feature_strings(),
+        user_gesture: creation_user_activation.user_gesture(),
+    };
+    if suppress_opener
+        && popup_target_can_use_fresh_page_without_local_proxy(&parsed.target_name, &url)
+        && let Some(pending_auxiliary_page) =
+            unsafe { &mut *receiver_host_ptr }.reserve_pending_auxiliary_page(false)
+    {
+        let new_target_disposition =
+            if trackable_named_popup_target_name(&parsed.target_name).is_some() {
+                RendererPopupNewTargetDisposition::FreshNamed
+            } else {
+                RendererPopupNewTargetDisposition::FreshUnnamed
+            };
+        let activation = popup_activation_for_new_context_url(
+            RendererPendingPopupActivation::window(
+                root_document,
+                source,
+                false,
+                None,
+                url,
+                parsed.target_name,
+                popup_disposition,
+            )
+            .with_navigation_request(navigation_request.clone()),
+            is_javascript_url,
+            uses_synchronous_initial_empty_document,
+        )
+        .with_navigation_referrers(
+            navigation_referrer,
+            initial_document_referrer,
+            document_referrer,
+        )
+        .with_pending_auxiliary_page(Some(pending_auxiliary_page))
+        .with_auxiliary_browsing_context_policy(auxiliary_browsing_context_policy)
+        .with_new_target_disposition(new_target_disposition)
+        .with_creation_user_activation(creation_user_activation);
+        unsafe { &mut *receiver_host_ptr }
+            .record_pending_popup_activation(activation, Some(window_open_event));
+        rv.set(v8::null(scope).into());
+        return;
+    }
+    // Blink creates the FrameLoadRequest from the entry Window, while
+    // CreateNewWindow admits and propagates sandbox flags from the receiver
+    // frame. Preserve both owners in the initial Document policy.
+    creator_policy_container.sandbox = creator_policy.into_policy_container().sandbox;
+    let creator_resource_authority = unsafe { &*entry_host_ptr }
+        .document_resource_loader_for_window_execution_context_identity(entry_identity);
+    let opened_popup =
+        opener
+            .zip(creator_resource_authority)
+            .and_then(|(opener, creator_resource_authority)| {
+                popup_target_can_create_auxiliary_page(&parsed.target_name, &url)
+                    .then(|| {
+                        unsafe { &mut *receiver_host_ptr }
+                            .open_renderer_owned_related_auxiliary_page(
+                                scope,
+                                receiver_host_ptr,
+                                opener,
+                                opener_child_handle,
+                                &parsed.target_name,
+                                &url,
+                                entered_base_url.clone(),
+                                creator_policy_container.clone(),
+                                creator_resource_authority,
+                            )
+                    })
+                    .flatten()
+            });
+    if let Some(opened_popup) = opened_popup {
         let popup_id = opened_popup.popup_id;
-        let session_storage_store = host.lightweight_popup_session_storage_store(popup_id);
-        let initial_empty_document_storage_key =
-            host.lightweight_popup_initial_empty_document_storage_key(popup_id);
-        let window_open_event = opened_popup
-            .created_new_browsing_context
-            .then_some(window_open_event);
-        host.record_pending_popup_activation(
+        let session_storage_store = Some(opened_popup.captured_session_storage_store.clone());
+        let initial_empty_document_storage_key = Some(
+            opened_popup
+                .captured_initial_empty_document_storage_key
+                .clone(),
+        );
+        let pending_auxiliary_page = opened_popup.pending_auxiliary_page;
+        let new_target_disposition =
+            (!suppress_opener).then_some(RendererPopupNewTargetDisposition::Related);
+        let destination_queued = !uses_synchronous_initial_empty_document
+            && queue_renderer_owned_top_level_navigation_for_window(
+                scope,
+                opened_popup.window,
+                navigation_request.clone(),
+            );
+        if !uses_synchronous_initial_empty_document && !destination_queued {
+            tracing::warn!(
+                popup_id,
+                "new related target lost its staged renderer Page navigation owner"
+            );
+        }
+        let activation = popup_activation_for_new_context_url(
             RendererPendingPopupActivation::window(
                 root_document,
                 source,
@@ -265,12 +591,30 @@ pub(crate) fn window_open_callback<'s>(
                 parsed.target_name,
                 popup_disposition,
             )
-            .with_initial_auxiliary_state(
-                session_storage_store,
-                initial_empty_document_storage_key,
-            ),
-            window_open_event,
+            .with_navigation_request(navigation_request.clone()),
+            is_javascript_url,
+            uses_synchronous_initial_empty_document,
         );
+        let activation = if destination_queued {
+            activation.without_destination_navigation_with_requested_url_observation()
+        } else {
+            activation
+        }
+        .with_navigation_referrers(
+            navigation_referrer,
+            initial_document_referrer,
+            document_referrer,
+        )
+        .with_initial_auxiliary_state(session_storage_store, initial_empty_document_storage_key)
+        .with_pending_auxiliary_page(Some(pending_auxiliary_page));
+        let activation = if let Some(disposition) = new_target_disposition {
+            activation.with_new_target_disposition(disposition)
+        } else {
+            activation
+        };
+        let activation = activation.with_creation_user_activation(creation_user_activation);
+        unsafe { &mut *receiver_host_ptr }
+            .record_pending_popup_activation(activation, Some(window_open_event));
         if suppress_opener {
             rv.set(v8::null(scope).into());
         } else {
@@ -278,7 +622,7 @@ pub(crate) fn window_open_callback<'s>(
         }
         return;
     }
-    host.record_pending_popup_activation(
+    let activation = popup_activation_for_new_context_url(
         RendererPendingPopupActivation::window(
             root_document,
             source,
@@ -288,30 +632,99 @@ pub(crate) fn window_open_callback<'s>(
             parsed.target_name,
             popup_disposition,
         )
-        .with_initial_auxiliary_state(None, None),
-        Some(window_open_event),
-    );
+        .with_navigation_request(navigation_request),
+        is_javascript_url,
+        uses_synchronous_initial_empty_document,
+    )
+    .with_navigation_referrers(
+        navigation_referrer,
+        initial_document_referrer,
+        document_referrer,
+    )
+    .with_initial_auxiliary_state(None, None)
+    .with_creation_user_activation(creation_user_activation);
+    unsafe { &mut *receiver_host_ptr }
+        .record_pending_popup_activation(activation, Some(window_open_event));
     rv.set(v8::null(scope).into());
 }
 
-fn window_open_receiver_child_handle<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    receiver: v8::Local<'s, v8::Object>,
-) -> Option<DomHandle> {
-    get_private_value(scope, receiver, CHILD_BROWSING_CONTEXT_HANDLE_SLOT)
-        .and_then(|value| child_window_handle_from_marker_data(scope, value))
+fn entered_window_execution_context_binding(
+    scope: &mut v8::PinScope<'_, '_>,
+) -> Option<(
+    *mut crate::native_bridge::JsContextHost,
+    crate::native_bridge::WindowExecutionContextIdentity,
+    WindowExecutionContextBinding,
+)> {
+    let context = scope.get_entered_or_microtask_context();
+    let host_ptr = context_host_ptr_from_context_slot(context)?;
+    let host = unsafe { &*host_ptr };
+    let identity = host.window_execution_context_identity_for_v8_context_without_scope(context)?;
+    host.window_execution_context_identity_is_current(identity)
+        .then(|| {
+            let binding = WindowExecutionContextBinding::new(
+                identity.owner(),
+                identity.dispatch_scope(),
+                identity.realm_token(),
+                v8::Global::new(scope, context),
+            );
+            (host_ptr, identity, binding)
+        })
+}
+
+fn window_open_entry_javascript_url_allowed_by_csp(
+    scope: &mut v8::PinScope<'_, '_>,
+    entry_host_ptr: *mut crate::native_bridge::JsContextHost,
+    entry_binding: &WindowExecutionContextBinding,
+    resolved_url: &str,
+) -> bool {
+    entry_binding
+        .with_current_scope(scope, entry_host_ptr, |scope, owner| {
+            source_javascript_url_allowed_by_csp_for_owner(
+                scope,
+                unsafe { &mut *entry_host_ptr },
+                owner,
+                resolved_url,
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn window_open_entry_javascript_url_allows_new_context_by_policy(
+    scope: &mut v8::PinScope<'_, '_>,
+    entry_host_ptr: *mut crate::native_bridge::JsContextHost,
+    entry_binding: &WindowExecutionContextBinding,
+    resolved_url: &str,
+) -> bool {
+    entry_binding
+        .with_current_scope(scope, entry_host_ptr, |scope, owner| {
+            source_javascript_url_allows_new_context_by_policy(
+                scope,
+                unsafe { &mut *entry_host_ptr },
+                owner,
+                resolved_url,
+            )
+        })
+        .unwrap_or(false)
 }
 
 pub(in crate::context_bootstrap) fn entered_window_api_base_url(
     scope: &mut v8::PinScope<'_, '_>,
     host: &crate::native_bridge::JsContextHost,
 ) -> Url {
-    if let Some(handle) = entered_child_window_handle(scope)
-        && let Some(url) = host.child_browsing_context_base_url(handle)
-    {
-        return url;
+    let entry_context = scope.get_entered_or_microtask_context();
+    if let Some(entry_host_ptr) = context_host_ptr_from_context_slot(entry_context) {
+        let entry_host = unsafe { &*entry_host_ptr };
+        if let Some(identity) =
+            entry_host.window_execution_context_identity_for_v8_context_without_scope(entry_context)
+            && let Some(url) =
+                entry_host.navigation_api_base_url_for_identity_without_scope(identity)
+        {
+            return url;
+        }
     }
-    if let Some(url) = host.active_lightweight_popup_base_url(scope) {
+    if let Some(identity) = host.current_runtime_window_execution_context_identity(scope)
+        && let Some(url) = host.navigation_api_base_url_for_identity_without_scope(identity)
+    {
         return url;
     }
     host.dom_host()
@@ -323,11 +736,19 @@ fn window_open_entered_document_url(
     scope: &mut v8::PinScope<'_, '_>,
     host: &crate::native_bridge::JsContextHost,
 ) -> Url {
-    if let Some(handle) = entered_child_window_handle(scope) {
-        return host.document_url_for_child_context(handle);
+    let entry_context = scope.get_entered_or_microtask_context();
+    if let Some(entry_host_ptr) = context_host_ptr_from_context_slot(entry_context) {
+        let entry_host = unsafe { &*entry_host_ptr };
+        if let Some(identity) =
+            entry_host.window_execution_context_identity_for_v8_context_without_scope(entry_context)
+            && let Some(url) =
+                entry_host.document_url_for_window_execution_context_identity(identity)
+        {
+            return url;
+        }
     }
-    if let Some(popup_id) = crate::native_bridge::active_lightweight_popup_id(scope)
-        && let Some(url) = host.lightweight_popup_document_url(popup_id)
+    if let Some(identity) = host.current_runtime_window_execution_context_identity(scope)
+        && let Some(url) = host.document_url_for_window_execution_context_identity(identity)
     {
         return url;
     }
@@ -337,40 +758,7 @@ fn window_open_entered_document_url(
         .unwrap_or_else(|| host.document_url().clone())
 }
 
-fn window_open_entered_policy_container(
-    scope: &mut v8::PinScope<'_, '_>,
-    host: &crate::native_bridge::JsContextHost,
-) -> DocumentPolicyContainer {
-    if let Some(handle) = entered_child_window_handle(scope)
-        && let Some(policy_container) =
-            host.child_browsing_context_policy_container_snapshot(handle)
-    {
-        return policy_container;
-    }
-    if let Some(policy_container) = host.active_lightweight_popup_policy_container(scope) {
-        return policy_container.clone();
-    }
-    host.document_policy_container().clone()
-}
-
-fn window_open_entered_window<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    host: &crate::native_bridge::JsContextHost,
-) -> Option<v8::Local<'s, v8::Object>> {
-    match host.entered_owner_dispatch_scope(scope) {
-        crate::native_bridge::OwnerDispatchScope::Top => {
-            Some(scope.get_current_context().global(scope))
-        }
-        crate::native_bridge::OwnerDispatchScope::Child(handle) => {
-            host.existing_child_browsing_context_window_wrapper(scope, handle)
-        }
-        crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id) => {
-            host.lightweight_popup_window(scope, popup_id)
-        }
-    }
-}
-
-fn popup_target_can_use_lightweight_window(target_name: &str, href: &str) -> bool {
+fn popup_target_can_create_auxiliary_page(target_name: &str, href: &str) -> bool {
     Url::parse(href).is_ok()
         && (target_name.is_empty()
             || SpecialBrowsingContextTarget::parse(target_name)
@@ -378,45 +766,49 @@ fn popup_target_can_use_lightweight_window(target_name: &str, href: &str) -> boo
             || trackable_named_popup_target_name(target_name).is_some())
 }
 
+fn popup_target_can_use_fresh_page_without_local_proxy(target_name: &str, href: &str) -> bool {
+    Url::parse(href).is_ok()
+        && (target_name.is_empty()
+            || SpecialBrowsingContextTarget::parse(target_name)
+                == Some(SpecialBrowsingContextTarget::Blank)
+            || trackable_named_popup_target_name(target_name).is_some())
+}
+
+fn popup_activation_for_javascript_url(
+    activation: RendererPendingPopupActivation,
+    is_javascript_url: bool,
+) -> RendererPendingPopupActivation {
+    if is_javascript_url {
+        activation.without_destination_navigation_with_requested_url_observation()
+    } else {
+        activation
+    }
+}
+
+fn popup_activation_for_new_context_url(
+    activation: RendererPendingPopupActivation,
+    is_javascript_url: bool,
+    uses_synchronous_initial_empty_document: bool,
+) -> RendererPendingPopupActivation {
+    if is_javascript_url || uses_synchronous_initial_empty_document {
+        // `window.open("about:blank")` exposes the newly staged initial empty
+        // Document itself. It must not schedule a second about:blank
+        // navigation after browser-owner adoption. A query or fragment is
+        // still destination work on that Page and is deliberately excluded
+        // by the caller. Keep the requested URL for target observation just
+        // as the separately queued javascript: path does, while leaving the
+        // destination owner queue empty.
+        activation.without_destination_navigation_with_requested_url_observation()
+    } else {
+        activation
+    }
+}
+
 fn trackable_named_popup_target_name(target_name: &str) -> Option<&str> {
     if target_name.is_empty() || SpecialBrowsingContextTarget::parse(target_name).is_some() {
         return None;
     }
     Some(target_name)
-}
-
-fn navigate_window_open_self<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    receiver: v8::Local<'s, v8::Object>,
-    url: &str,
-    rv: &mut v8::ReturnValue<'_, v8::Value>,
-) {
-    let Some(location) =
-        super::super::navigation_window::window_location_for_holder(scope, receiver)
-    else {
-        rv.set(v8::null(scope).into());
-        return;
-    };
-    navigate_location_object(
-        scope,
-        location,
-        LocationNavigationKind::Assign,
-        Some(url.to_owned()),
-    );
-    rv.set(receiver.into());
-}
-
-fn existing_named_child_window_for_window_open<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut crate::native_bridge::JsContextHost,
-    target_name: &str,
-) -> Option<v8::Local<'s, v8::Object>> {
-    if target_name.is_empty() || SpecialBrowsingContextTarget::parse(target_name).is_some() {
-        return None;
-    }
-    let host = unsafe { &mut *host_ptr };
-    let handle = host.child_browsing_context_handle_by_name(target_name)?;
-    host.child_browsing_context_window_wrapper(scope, handle)
 }
 
 fn open_dialog(

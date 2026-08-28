@@ -104,6 +104,7 @@ impl ScriptVm {
             );
             rebound_isolated_world_count += self
                 .rebind_isolated_worlds_for_document_owner_transition(
+                    transition.browsing_context_id(),
                     transition.retired_owner(),
                     transition.current_owner(),
                 );

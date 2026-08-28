@@ -25,12 +25,12 @@ use url::Url;
 use crate::{
     BrowserNavigationRequestKind, BrowserRequestMetadata, FetchCancelHandle, FetchClient,
     FetchClientHandle, FetchConfig, FetchPriorityHint, FetchRuntimeJoinStatus,
-    NegotiatedHttpVersion, NetworkFetchFailureContext, RawResponse, Request, RequestAuth,
-    RequestAuthScheme, RequestAuthTarget, RequestCacheMode, RequestCredentialsMode, RequestMode,
-    RequestRedirectMode, RequestResourceType, Response, ResponseBody, ResponseHead,
-    ScriptFetchRequestMetadata, ScriptFetchSchedulerPriority, StreamingResponseCollector,
-    SubresourceRequestMetadata, WebBotAuthProfile, WebBotAuthSigner, http_cache_stats,
-    runtime::FetchRuntimeOwner,
+    NegotiatedHttpVersion, NetworkFetchFailureContext, RawResponse, RedirectResponseFollowPolicy,
+    Request, RequestAuth, RequestAuthScheme, RequestAuthTarget, RequestCacheMode,
+    RequestCredentialsMode, RequestMode, RequestRedirectMode, RequestResourceType, Response,
+    ResponseBody, ResponseHead, ScriptFetchRequestMetadata, ScriptFetchSchedulerPriority,
+    StreamingResponseCollector, SubresourceRequestMetadata, WebBotAuthProfile, WebBotAuthSigner,
+    http_cache_stats, runtime::FetchRuntimeOwner,
 };
 
 use self::support::{
@@ -163,6 +163,26 @@ async fn http_transport_rejects_file_urls_in_every_response_mode() -> Result<()>
         .expect_err("raw streaming transport must reject file URL");
     assert!(format!("{raw_stream_error:#}").contains(EXPECTED));
     Ok(())
+}
+
+#[test]
+fn request_redirect_response_policy_can_stop_follow_before_next_exchange() {
+    let request = Request::get("https://example.test/start")
+        .unwrap()
+        .with_redirect_response_follow_policy(RedirectResponseFollowPolicy::new(
+            |_url, headers| {
+                !headers
+                    .iter()
+                    .any(|(name, _)| name.eq_ignore_ascii_case("x-block-redirect"))
+            },
+        ));
+    let response_url = Url::parse("https://example.test/start").expect("valid URL");
+
+    assert!(request.redirect_response_allows_follow(&response_url, &[]));
+    assert!(!request.redirect_response_allows_follow(
+        &response_url,
+        &[("X-Block-Redirect".to_owned(), "1".to_owned())],
+    ));
 }
 
 #[test]

@@ -1410,17 +1410,7 @@ async fn first_main_document_transport_failure_commits_error_document() {
         "params": { "url": url }
     }))
     .await;
-    wait_until_messages(
-        &mut ctx,
-        Some("SID-1"),
-        "first error Document load",
-        |messages| {
-            messages
-                .iter()
-                .any(|message| message["method"] == json!("Page.loadEventFired"))
-        },
-    )
-    .await;
+    wait_for_network_error_document_load(&mut ctx, "SID-1").await;
 
     let messages = ctx.take_all();
     let request_index = messages
@@ -1469,7 +1459,6 @@ async fn first_main_document_transport_failure_commits_error_document() {
         response["result"]["errorText"],
         failed["params"]["errorText"]
     );
-
     let frame_index = messages
         .iter()
         .position(|message| {
@@ -1645,12 +1634,7 @@ async fn main_document_navigation_failure_emits_one_failed_and_finished_terminal
     }))
     .await;
 
-    wait_until_messages(&mut ctx, Some("SID-1"), "error Document load", |messages| {
-        messages
-            .iter()
-            .any(|message| message["method"] == json!("Page.loadEventFired"))
-    })
-    .await;
+    wait_for_network_error_document_load(&mut ctx, "SID-1").await;
     let messages = ctx.take_all();
     assert!(!messages.iter().any(|message| {
         matches!(

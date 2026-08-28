@@ -280,6 +280,7 @@ mod navigation_dispatch_tests {
     fn published_page_creation_discards_reply_policy_when_observer_detaches() {
         let completion = LivePagePendingNavigationCompletion::PublishedPageCreation {
             navigation_reply_policy: NavigationReplyPolicy::ReturnWithPendingNavigation,
+            document_continuation_publisher: None,
         };
 
         let (completion, detached) = completion.detach_command_observer();
@@ -303,6 +304,7 @@ mod navigation_dispatch_tests {
     fn already_published_page_creation_reports_later_navigation_failure_as_background() {
         let completion = LivePagePendingNavigationCompletion::PublishedPageCreation {
             navigation_reply_policy: NavigationReplyPolicy::FollowBeforeReply,
+            document_continuation_publisher: None,
         };
 
         assert_eq!(

@@ -9,10 +9,28 @@
 use moli_core::{RendererDocumentLifecycleIdentity, RendererOutputResidenceIdentity};
 
 use crate::{
-    DeferredMainDocumentLoadCompletionOutputInterest, DeferredMainDocumentLoadObservationId,
-    ProtocolSchedulerWork,
+    BackgroundNavigationGateKey, DeferredMainDocumentLoadCompletionOutputInterest,
+    DeferredMainDocumentLoadObservationId, ProtocolSchedulerWork,
     conn::{CdpConnection, DocumentNavigationToken, RendererPageResidenceIdentity},
 };
+
+/// Constructs the exact key carried by a synthetic Document-continuation
+/// completion in scheduler-only tests.
+pub fn background_navigation_gate_key(
+    target_id: Option<String>,
+    session_id: Option<String>,
+    frame_id: String,
+    loader_id: String,
+    navigation_request_id: Option<u64>,
+) -> BackgroundNavigationGateKey {
+    BackgroundNavigationGateKey::from_test_parts(
+        target_id,
+        session_id,
+        frame_id,
+        loader_id,
+        navigation_request_id,
+    )
+}
 
 /// Opaque exact-token fixture for scheduler tests that need a real
 /// target-owned background navigation request.

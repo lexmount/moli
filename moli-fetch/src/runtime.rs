@@ -1506,6 +1506,9 @@ impl RuntimeOwner {
         };
         if let Some(next_url) = next_url
             && job.request.follow_redirects
+            && job
+                .request
+                .redirect_response_allows_follow(&response.final_url, &response.headers)
         {
             let redirect_has_extra_info = request_extra_info.is_some() && !response.from_cache;
             job.redirect_chain.push(RedirectInfo {
@@ -1773,6 +1776,9 @@ impl RuntimeOwner {
         };
         if let Some(next_url) = next_url
             && job.request.follow_redirects
+            && job
+                .request
+                .redirect_response_allows_follow(&final_url, &headers)
         {
             let cache_body_writer = easy
                 .get_mut()
@@ -2153,7 +2159,11 @@ impl RuntimeOwner {
             }
         };
         if let Some(next_url) = next_url {
-            if job.request.follow_redirects {
+            if job.request.follow_redirects
+                && job
+                    .request
+                    .redirect_response_allows_follow(&final_url, &headers)
+            {
                 let cache_body_writer = easy
                     .get_mut()
                     .raw_streaming_mut()
@@ -2314,6 +2324,9 @@ impl RuntimeOwner {
         };
         if let Some(next_url) = next_url
             && job.request.follow_redirects
+            && job
+                .request
+                .redirect_response_allows_follow(&final_url, &cached.headers)
         {
             job.redirect_chain.push(RedirectInfo {
                 from_url: final_url,
@@ -2375,6 +2388,9 @@ impl RuntimeOwner {
         };
         if let Some(next_url) = next_url
             && job.request.follow_redirects
+            && job
+                .request
+                .redirect_response_allows_follow(&final_url, &cached.headers)
         {
             job.redirect_chain.push(RedirectInfo {
                 from_url: final_url,

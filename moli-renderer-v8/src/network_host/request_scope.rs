@@ -38,6 +38,7 @@ pub(crate) fn effective_subresource_policy_context(
     host: &JsContextHost,
     owner: crate::native_bridge::OwnerDispatchScope,
 ) -> crate::types::SubresourcePolicyContext {
+    let _ = scope;
     match owner {
         crate::native_bridge::OwnerDispatchScope::Top => crate::types::SubresourcePolicyContext {
             cross_origin_embedder_policy: host.cross_origin_embedder_policy(),
@@ -48,16 +49,6 @@ pub(crate) fn effective_subresource_policy_context(
             .frame_owner_current_child_snapshot(handle)
             .map(|snapshot| snapshot.settings.subresource_policy_context)
             .unwrap_or_default(),
-        crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id) => {
-            let _ = scope;
-            crate::types::SubresourcePolicyContext {
-                cross_origin_embedder_policy: host
-                    .lightweight_popup_cross_origin_embedder_policy(popup_id),
-                document_isolation_policy: host
-                    .lightweight_popup_document_isolation_policy(popup_id),
-                cross_origin_isolated: host.lightweight_popup_cross_origin_isolated(popup_id),
-            }
-        }
     }
 }
 
@@ -70,14 +61,6 @@ fn child_browsing_context_handle_from_object(
         .and_then(|value| value.number_value(scope))
         .filter(|value| value.is_finite() && *value >= 0.0 && value.fract() == 0.0)
         .map(|value| crate::document_runtime::DomHandle::new(value as usize))
-}
-
-fn lightweight_popup_id_from_object(
-    scope: &mut v8::PinScope<'_, '_>,
-    object: v8::Local<'_, v8::Object>,
-) -> Option<u64> {
-    let object = local_object_in_scope(scope, object);
-    crate::native_bridge::lightweight_popup_id_from_window(scope, object)
 }
 
 fn local_object_in_scope<'s>(
@@ -115,18 +98,6 @@ pub(in crate::network_host) fn effective_subresource_request_scope(
             crate::native_bridge::OwnerDispatchScope::Child(handle),
         );
     }
-    let popup_id = receiver
-        .and_then(|receiver| lightweight_popup_id_from_object(scope, receiver))
-        .or_else(|| crate::native_bridge::active_lightweight_popup_id(scope));
-    if let Some(popup_id) = popup_id
-        && let Some(document_url) = host.lightweight_popup_request_base_url(scope, popup_id)
-    {
-        return (
-            None,
-            document_url,
-            crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id),
-        );
-    }
     (
         None,
         host.document_url().clone(),
@@ -139,14 +110,12 @@ pub(in crate::network_host) fn subresource_request_scope_for_owner(
     host: &JsContextHost,
     owner: crate::native_bridge::OwnerDispatchScope,
 ) -> Option<(Option<String>, url::Url)> {
+    let _ = scope;
     match owner {
         crate::native_bridge::OwnerDispatchScope::Top => Some((None, host.document_url().clone())),
         crate::native_bridge::OwnerDispatchScope::Child(handle) => host
             .child_browsing_context_request_scope(handle)
             .map(|(frame_id, document_url)| (Some(frame_id), document_url)),
-        crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id) => host
-            .lightweight_popup_request_base_url(scope, popup_id)
-            .map(|document_url| (None, document_url)),
     }
 }
 
@@ -155,17 +124,13 @@ pub(in crate::network_host) fn effective_subresource_referrer_policy(
     host: &JsContextHost,
     owner: crate::native_bridge::OwnerDispatchScope,
 ) -> Option<String> {
+    let _ = scope;
     match owner {
         crate::native_bridge::OwnerDispatchScope::Top => {
             host.response_referrer_policy().map(ToOwned::to_owned)
         }
         crate::native_bridge::OwnerDispatchScope::Child(handle) => {
             host.child_browsing_context_response_referrer_policy(handle)
-        }
-        crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id) => {
-            let _ = scope;
-            host.lightweight_popup_referrer_policy(popup_id)
-                .map(ToOwned::to_owned)
         }
     }
 }

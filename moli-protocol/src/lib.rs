@@ -18,10 +18,10 @@ pub mod version;
 pub use devtools_runtime::*;
 
 pub use conn::{
-    BackgroundCommandResponsePayload, BackgroundProtocolEvent, CdpCommandTaskStep, CdpConnection,
-    CdpInitialStoragePartition, CdpRendererCommandAccess, CdpRendererCommandReplacement,
-    CdpRendererCommandReplayDispatch, CdpRendererOwnerTurnOutcome, CdpSchedulerEvent,
-    CdpTargetHostLifecycleDelta, CdpTargetHostLifecycleObserver, CdpTurnOutcome,
+    BackgroundCommandResponsePayload, BackgroundNavigationGateKey, BackgroundProtocolEvent,
+    CdpCommandTaskStep, CdpConnection, CdpInitialStoragePartition, CdpRendererCommandAccess,
+    CdpRendererCommandReplacement, CdpRendererCommandReplayDispatch, CdpRendererOwnerTurnOutcome,
+    CdpSchedulerEvent, CdpTargetHostLifecycleDelta, CdpTargetHostLifecycleObserver, CdpTurnOutcome,
     CommandDispatchContext, CommandResponseFlushContext, CommandResponseFlushPermit,
     CompletedCdpCommandDispatch, CompletedDeferredMainDocumentLoadCompletion,
     CompletedRuntimeProtocolMessageDispatch, DEFAULT_CDP_PAGE_TARGET_ID, DEFAULT_CDP_TAB_TARGET_ID,
@@ -39,9 +39,10 @@ pub use domains::activity::{
     RuntimeCommandOutputBarrierTerminal, RuntimeCommandOutputBarriers,
 };
 pub use domains::page::{
-    BackgroundNavigationCompletion, CompletedPageScreencastCapture,
-    PageScreencastCaptureCompletion, PageScreencastCaptureStart, PageScreencastRegistration,
-    PageScreencastSubscriptionStatus, PendingPageScreencastCapture, build_default_raster_pdf,
+    BackgroundDocumentContinuationCompletion, BackgroundNavigationCompletion,
+    CompletedPageScreencastCapture, PageScreencastCaptureCompletion, PageScreencastCaptureStart,
+    PageScreencastRegistration, PageScreencastSubscriptionStatus, PendingPageScreencastCapture,
+    build_default_raster_pdf,
 };
 pub use domains::runtime::{
     CompletedDevToolsRuntimeCommandDispatch, DevToolsRuntimeCommandTaskStep,

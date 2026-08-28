@@ -15,8 +15,7 @@ use crate::native_bridge::{JsContextHost, OwnerDispatchScope};
 use crate::network::ResourceRequestClient;
 use crate::runtime::{
     AuthorizedCurrentChildDocumentLoadCompletion, AuthorizedCurrentChildModuleFetchCompletion,
-    AuthorizedCurrentPopupClassicScriptLoadCompletion,
-    AuthorizedCurrentPopupDocumentLoadCompletion, CurrentChildDocumentLoadApplication,
+    CurrentChildDocumentLoadApplication,
 };
 use crate::types::{
     AsyncSubresourceFetchCompletion, AsyncSubresourceFetchEvent,
@@ -27,10 +26,9 @@ use crate::types::{
     PendingSubresourceAuthInfo, PendingSubresourceAuthState, PendingSubresourceContinuation,
     PendingSubresourceContinueEvent, PendingSubresourceContinueOutcome,
     PendingSubresourceFetchInfo, PendingSubresourceFetchState, PendingSubresourceResponseInfo,
-    PendingSubresourceResponseState, PopupClassicScriptLoadCompletion, PopupDocumentLoadCompletion,
-    RunningSubresourceFetchState, StreamingSubresourceFetchState, SubresourceNetworkRecord,
-    SubresourceNetworkRequestHandle, SubresourceRequestInitiatorType, SubresourceResourceType,
-    SubresourceResponseBody, SubresourceResponseBodyWriter,
+    PendingSubresourceResponseState, RunningSubresourceFetchState, StreamingSubresourceFetchState,
+    SubresourceNetworkRecord, SubresourceNetworkRequestHandle, SubresourceRequestInitiatorType,
+    SubresourceResourceType, SubresourceResponseBody, SubresourceResponseBodyWriter,
 };
 use crate::util::v8_string;
 
@@ -395,38 +393,23 @@ fn enter_subresource_owner_async_scope<'s>(
                     .enter_child_async_continuation_scope(scope, handle)
             })
         }
-        OwnerDispatchScope::LightweightPopup(popup_id) => {
-            let popup_context_exists = context_host
-                .borrow()
-                .lightweight_popup_request_base_url(scope, popup_id)
-                .is_some();
-            popup_context_exists.then(|| {
-                crate::native_bridge::enter_active_lightweight_popup_scope(scope, popup_id)
-            })
-        }
     }
 }
 
 /// Leave the Window attribution installed until the selected resource task's
 /// checkpoint. Promise reactions created by Fetch/XHR completion must observe
-/// the same child or popup Window as the body that settled them.
+/// the same child Window as the body that settled them.
 fn defer_subresource_owner_async_scope<'s>(
     context_host: &Rc<RefCell<JsContextHost>>,
     scope: &mut v8::PinScope<'s, '_>,
     owner: OwnerDispatchScope,
     previous: Option<v8::Local<'s, v8::Value>>,
 ) {
-    match (owner, previous) {
-        (OwnerDispatchScope::Child(_), Some(previous)) => {
-            crate::native_bridge::defer_active_child_window_restore(scope, previous);
-            context_host
-                .borrow_mut()
-                .defer_child_subresource_request_scope_pop_after_microtasks();
-        }
-        (OwnerDispatchScope::LightweightPopup(_), Some(previous)) => {
-            crate::native_bridge::defer_active_lightweight_popup_restore(scope, previous);
-        }
-        _ => {}
+    if let (OwnerDispatchScope::Child(_), Some(previous)) = (owner, previous) {
+        crate::native_bridge::defer_active_child_window_restore(scope, previous);
+        context_host
+            .borrow_mut()
+            .defer_child_subresource_request_scope_pop_after_microtasks();
     }
 }
 
@@ -6083,79 +6066,6 @@ impl ScriptVm {
                 network_result.as_ref(),
             );
         true
-    }
-
-    #[cfg(test)]
-    pub(crate) fn complete_popup_document_load(
-        &mut self,
-        completion: PopupDocumentLoadCompletion,
-    ) -> Result<()> {
-        let target = completion.target();
-        if self.current_lightweight_popup_document_fetch_target(target.load_id()) != Some(target) {
-            return Ok(());
-        }
-        let _ = self.apply_popup_document_load_completion_inner(completion)?;
-        Ok(())
-    }
-
-    pub(crate) fn current_lightweight_popup_document_fetch_target(
-        &self,
-        load_id: u64,
-    ) -> Option<crate::native_bridge::LightweightPopupDocumentFetchTarget> {
-        self._context_host
-            .borrow()
-            .current_lightweight_popup_document_fetch_target(load_id)
-    }
-
-    pub(crate) fn apply_current_popup_document_load_completion(
-        &mut self,
-        authorization: AuthorizedCurrentPopupDocumentLoadCompletion,
-    ) -> Result<crate::native_bridge::PopupDocumentLoadApplication> {
-        self.apply_popup_document_load_completion_inner(authorization.into_completion())
-    }
-
-    fn apply_popup_document_load_completion_inner(
-        &mut self,
-        completion: PopupDocumentLoadCompletion,
-    ) -> Result<crate::native_bridge::PopupDocumentLoadApplication> {
-        let context_host = self._context_host.clone();
-        self.with_default_context_scope(move |scope, _host_ptr| {
-            let application = context_host
-                .borrow_mut()
-                .apply_lightweight_popup_document_load_completion(scope, completion);
-            Ok(application)
-        })
-    }
-
-    pub(crate) fn current_lightweight_popup_classic_script_fetch_target(
-        &self,
-        load_id: u64,
-    ) -> Option<crate::native_bridge::LightweightPopupClassicScriptFetchTarget> {
-        self._context_host
-            .borrow()
-            .current_lightweight_popup_classic_script_fetch_target(load_id)
-    }
-
-    pub(crate) fn discard_stale_lightweight_popup_classic_script_completion(
-        &mut self,
-        target: crate::native_bridge::LightweightPopupClassicScriptFetchTarget,
-    ) {
-        self._context_host
-            .borrow_mut()
-            .discard_stale_lightweight_popup_classic_script_completion(target);
-    }
-
-    pub(crate) fn apply_current_popup_classic_script_load_completion(
-        &mut self,
-        authorization: AuthorizedCurrentPopupClassicScriptLoadCompletion,
-    ) -> Result<crate::native_bridge::PopupClassicScriptLoadApplication> {
-        let completion: PopupClassicScriptLoadCompletion = authorization.into_completion();
-        let context_host = self._context_host.clone();
-        self.with_default_context_scope(move |scope, _host_ptr| {
-            Ok(context_host
-                .borrow_mut()
-                .apply_lightweight_popup_classic_script_load_completion(scope, completion))
-        })
     }
 }
 

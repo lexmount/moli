@@ -885,7 +885,7 @@ async fn playwright_connect_over_cdp_auto_attach_child_frame_utility_script_uses
     ctx.expect_result(5314, json!({}), Some(&session_id));
 
     let warmup_url = format!("http://{addr}/warmup");
-    ctx.process_async(json!({
+    ctx.process_and_wait_for_response_async(json!({
         "id": 53_141,
         "method": "Page.navigate",
         "sessionId": session_id,
@@ -937,7 +937,7 @@ async fn playwright_connect_over_cdp_auto_attach_child_frame_utility_script_uses
 
     let replacement_output_start = ctx.sent.len();
     let url = format!("http://{addr}/parent");
-    ctx.process_async(json!({
+    ctx.process_and_wait_for_response_async(json!({
         "id": 5315,
         "method": "Page.navigate",
         "sessionId": session_id,
@@ -6079,6 +6079,7 @@ async fn playwright_over_cdp_script_execution_disabled_blocks_page_scripts_but_n
     let mut ctx = TestContext::new();
     let attached = create_attached_page_session_async(&mut ctx, 240, 241, 242, 2393, 243).await;
     let session_id = attached.session_id;
+    let target_id = attached.target_id;
 
     ctx.process_async(json!({
         "id": 244,
@@ -6125,7 +6126,7 @@ async fn playwright_over_cdp_script_execution_disabled_blocks_page_scripts_but_n
     crate::testing::wait_until_renderer_document_load(
         &mut ctx,
         Some(session_id.as_str()),
-        &attached.target_id,
+        &target_id,
         &loader_id,
     )
     .await;

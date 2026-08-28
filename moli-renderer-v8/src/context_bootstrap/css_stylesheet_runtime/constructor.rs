@@ -73,9 +73,7 @@ pub(crate) fn current_css_style_sheet_constructor_document_handle_for_context(
     let identity = host.current_runtime_window_execution_context_identity(scope)?;
     match identity.dispatch_scope() {
         OwnerDispatchScope::Child(handle) => host.child_browsing_context_document_handle(handle),
-        OwnerDispatchScope::Top | OwnerDispatchScope::LightweightPopup(_) => {
-            Some(host.document_handle())
-        }
+        OwnerDispatchScope::Top => Some(host.document_handle()),
     }
 }
 

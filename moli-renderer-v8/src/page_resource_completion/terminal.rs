@@ -5,8 +5,7 @@ use crate::types::{
     ChildClassicScriptLoadCompletion, ChildDocumentLoadCompletion,
     ChildDynamicImportFetchCompletion, ChildModuleDependencyFetchCompletion,
     ChildModulepreloadFetchCompletion, ChildParserModuleRootFetchCompletion,
-    DocumentWriteExternalScriptLoadCompletion, PopupClassicScriptLoadCompletion,
-    PopupDocumentLoadCompletion,
+    DocumentWriteExternalScriptLoadCompletion,
 };
 
 use super::{
@@ -84,12 +83,6 @@ pub(crate) enum RendererPageResourceTerminal {
     },
     ChildDocumentLoad {
         completion: Box<ChildDocumentLoadCompletion>,
-    },
-    PopupDocumentLoad {
-        completion: Box<PopupDocumentLoadCompletion>,
-    },
-    PopupClassicScript {
-        completion: Box<PopupClassicScriptLoadCompletion>,
     },
 }
 
@@ -270,30 +263,6 @@ impl RendererPageResourceCompletion {
         }
     }
 
-    pub(crate) fn popup_document_load(
-        root_document: RendererDocumentToken,
-        completion: PopupDocumentLoadCompletion,
-    ) -> Self {
-        Self {
-            root_document,
-            terminal: RendererPageResourceTerminal::PopupDocumentLoad {
-                completion: Box::new(completion),
-            },
-        }
-    }
-
-    pub(crate) fn popup_classic_script(
-        root_document: RendererDocumentToken,
-        completion: PopupClassicScriptLoadCompletion,
-    ) -> Self {
-        Self {
-            root_document,
-            terminal: RendererPageResourceTerminal::PopupClassicScript {
-                completion: Box::new(completion),
-            },
-        }
-    }
-
     pub(crate) fn owner(&self) -> RendererPageResourceCompletionOwner {
         match &self.terminal {
             RendererPageResourceTerminal::DocumentWriteExternalScript { completion } => {
@@ -382,18 +351,6 @@ impl RendererPageResourceCompletion {
                     completion.target(),
                 )
             }
-            RendererPageResourceTerminal::PopupDocumentLoad { completion } => {
-                RendererPageResourceCompletionOwner::popup_document_load(
-                    self.root_document,
-                    completion.target(),
-                )
-            }
-            RendererPageResourceTerminal::PopupClassicScript { completion } => {
-                RendererPageResourceCompletionOwner::popup_classic_script(
-                    self.root_document,
-                    completion.target(),
-                )
-            }
         }
     }
 
@@ -434,12 +391,6 @@ impl RendererPageResourceCompletion {
             }
             RendererPageResourceTerminal::ChildDocumentLoad { .. } => {
                 RendererOwnerResourceActivitySource::ChildDocument
-            }
-            RendererPageResourceTerminal::PopupDocumentLoad { .. } => {
-                RendererOwnerResourceActivitySource::PopupDocument
-            }
-            RendererPageResourceTerminal::PopupClassicScript { .. } => {
-                RendererOwnerResourceActivitySource::PopupDocument
             }
         }
     }

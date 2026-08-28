@@ -13,7 +13,7 @@ use crate::util::{
     constructor_object, constructor_prototype_object, initialize_intrinsic_interface_registry,
     register_intrinsic_interface, register_public_interface_object,
     registered_intrinsic_constructor, registered_intrinsic_prototype,
-    registered_public_interface_object, v8str,
+    registered_public_interface_object, reset_intrinsic_interface_registry, v8str,
 };
 
 pub(in crate::context_bootstrap) fn install_window_exposed_interfaces<'s>(
@@ -124,6 +124,13 @@ pub(crate) fn initialize_realm_interface_registry(
 ) -> Result<()> {
     let registry = ExposedInterfaceTemplateRegistry::current(scope)
         .ok_or_else(|| anyhow!("exposed interface template registry is unavailable"))?;
+    // A LocalWindow navigation reuses the stable outer WindowProxy, while
+    // constructor/prototype maps must remain owned by the newly attached
+    // Context. Reset the traceable Context embedder-data owner before any
+    // interface can materialize so the replacement realm cannot retain or
+    // reuse the detached realm's constructors and closures.
+    let global = scope.get_current_context().global(scope);
+    reset_intrinsic_interface_registry(scope, global);
     IntrinsicInterfaceRegistry::initialize_for_current_context(scope, registry.len(), realm_kind)?;
     Ok(())
 }

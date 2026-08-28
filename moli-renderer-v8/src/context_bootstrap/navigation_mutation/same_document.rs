@@ -4,8 +4,13 @@ pub(in crate::context_bootstrap) fn update_navigation_current_entry_for_same_doc
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
     href: &str,
-    kind: LocationNavigationKind,
+    mut kind: LocationNavigationKind,
 ) {
+    if matches!(kind, LocationNavigationKind::Assign)
+        && navigation_document_is_initial_empty(scope, owner)
+    {
+        kind = LocationNavigationKind::Replace;
+    }
     let Some(history) = window_history_for_holder(scope, owner) else {
         return;
     };
@@ -130,9 +135,14 @@ pub(in crate::context_bootstrap) fn apply_navigation_navigate_same_document<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
     href: &str,
-    kind: LocationNavigationKind,
+    mut kind: LocationNavigationKind,
     navigation_state: Option<v8::Local<'s, v8::Value>>,
 ) {
+    if matches!(kind, LocationNavigationKind::Assign)
+        && navigation_document_is_initial_empty(scope, owner)
+    {
+        kind = LocationNavigationKind::Replace;
+    }
     let Some(history) = window_history_for_holder(scope, owner) else {
         return;
     };

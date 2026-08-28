@@ -1,7 +1,7 @@
 //! Nested pause-loop coordination and causal Inspector output routing.
 
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     sync::{Arc, Weak},
 };
 
@@ -47,6 +47,7 @@ pub(crate) struct RendererInspectorPauseBridgeShared {
 
 #[derive(Clone)]
 struct RendererInspectorPauseRoute {
+    page_id: PageId,
     output_journal: RendererTurnOutputJournal,
 }
 
@@ -66,7 +67,7 @@ struct RendererInspectorPauseBridgeState {
     // so active and pending transition ownership are each singular.
     active_command_dispatch: Option<RendererInspectorPauseCommandDispatch>,
     pending_command_transition: Option<RendererInspectorPauseCommandTransition>,
-    route: Option<RendererInspectorPauseRoute>,
+    routes: HashMap<RendererDevToolsAgentToken, RendererInspectorPauseRoute>,
 }
 
 #[must_use]
@@ -130,7 +131,7 @@ impl RendererInspectorPauseBridge {
                 paused_sessions_awaiting_resumed: HashSet::new(),
                 active_command_dispatch: None,
                 pending_command_transition: None,
-                route: None,
+                routes: HashMap::new(),
             }),
             pause_loop_wake: Condvar::new(),
         });
@@ -148,6 +149,7 @@ impl std::fmt::Debug for RendererInspectorPauseBridge {
             .field("quit_requested", &state.quit_requested)
             .field("session_detach_arms", &state.session_detach_arms)
             .field("target_closed", &state.target_closed)
+            .field("target_route_count", &state.routes.len())
             .field("pending_prefaces", &state.pending_prefaces.len())
             .field(
                 "paused_sessions_awaiting_resumed",
@@ -185,12 +187,22 @@ impl RendererInspectorPauseBridge {
         }
     }
 
-    pub(crate) fn configure_page_route(&self, output_journal: RendererTurnOutputJournal) {
-        let RendererOutputResidenceIdentity::Page { .. } = output_journal.stream().residence()
-        else {
+    pub(crate) fn configure_page_route(
+        &self,
+        agent_token: RendererDevToolsAgentToken,
+        output_journal: RendererTurnOutputJournal,
+    ) {
+        let stream = output_journal.stream();
+        let RendererOutputResidenceIdentity::Page { page_id, .. } = stream.residence() else {
             panic!("an Inspector pause route requires a Page output stream");
         };
-        self.shared.state.lock().route = Some(RendererInspectorPauseRoute { output_journal });
+        self.shared.state.lock().routes.insert(
+            agent_token,
+            RendererInspectorPauseRoute {
+                page_id,
+                output_journal,
+            },
+        );
     }
 
     pub(crate) fn is_pause_active(&self) -> bool {
@@ -200,6 +212,7 @@ impl RendererInspectorPauseBridge {
     pub(crate) fn begin_command_dispatch(
         &self,
         command_id: u64,
+        agent_token: RendererDevToolsAgentToken,
         ticket: &RendererInspectorIngressTicket,
         effect: RendererInspectorPauseCommandEffect,
         response_call_id: Option<i32>,
@@ -221,7 +234,12 @@ impl RendererInspectorPauseBridge {
             call_id,
         );
         let mut state = self.shared.state.lock();
-        let awaiting_resumed = state.paused_sessions_awaiting_resumed.clone();
+        let awaiting_resumed = state
+            .paused_sessions_awaiting_resumed
+            .iter()
+            .filter(|(paused_agent_token, _)| *paused_agent_token == agent_token)
+            .cloned()
+            .collect();
         assert!(
             state.active_command_dispatch.is_none(),
             "Inspector pause commands must dispatch serially in the nested loop"
@@ -229,6 +247,7 @@ impl RendererInspectorPauseBridge {
         state.active_command_dispatch = Some(RendererInspectorPauseCommandDispatch {
             command_id,
             transition: RendererInspectorPauseCommandTransition {
+                agent_token,
                 causal_identity,
                 effect,
                 response_succeeded: false,
@@ -265,27 +284,36 @@ impl RendererInspectorPauseBridge {
 
     fn mark_command_response(
         &self,
+        agent_token: RendererDevToolsAgentToken,
         inspector_session_id: Option<&str>,
         call_id: i32,
         succeeded: bool,
     ) {
         let mut state = self.shared.state.lock();
-        let matches = |cause: &RendererRuntimeCommandCausalIdentity| {
-            cause.call_id() == call_id && cause.inspector_session_id() == inspector_session_id
+        let matches = |transition: &RendererInspectorPauseCommandTransition| {
+            transition.agent_token == agent_token
+                && transition.causal_identity.call_id() == call_id
+                && transition.causal_identity.inspector_session_id() == inspector_session_id
         };
         if let Some(dispatch) = state.active_command_dispatch.as_mut()
-            && matches(&dispatch.transition.causal_identity)
+            && matches(&dispatch.transition)
         {
             dispatch.transition.response_succeeded = succeeded;
         }
     }
 
-    /// Ends the bounded handoff from a resume/step command to the renderer turn
-    /// it released. A step that reaches the end of its task may never enter a
-    /// new pause; owner settlement is the terminal that prevents its cause from
-    /// leaking into a later, unrelated pause.
-    pub(crate) fn finish_owner_turn(&self) {
-        self.shared.state.lock().pending_command_transition = None;
+    /// Ends only this Page's bounded resume/step handoff. A related Page can
+    /// settle an owner turn on the same isolate without terminating the
+    /// initiating Page's transition.
+    pub(crate) fn finish_owner_turn(&self, agent_token: RendererDevToolsAgentToken) {
+        let mut state = self.shared.state.lock();
+        if state
+            .pending_command_transition
+            .as_ref()
+            .is_some_and(|transition| transition.agent_token == agent_token)
+        {
+            state.pending_command_transition = None;
+        }
     }
 
     fn stage_pause_preface(
@@ -298,7 +326,7 @@ impl RendererInspectorPauseBridge {
             return None;
         }
         let mut state = self.shared.state.lock();
-        if state.target_closed || state.route.is_none() {
+        if state.target_closed || !state.routes.contains_key(&agent_token) {
             return None;
         }
         let id = state.next_preface_id;
@@ -390,37 +418,86 @@ impl RendererInspectorPauseBridge {
         // execution chances.
     }
 
-    pub(crate) fn detach_page(&self, page_id: PageId) -> bool {
+    pub(crate) fn detach_page(
+        &self,
+        page_id: PageId,
+        agent_token: RendererDevToolsAgentToken,
+    ) -> bool {
+        self.remove_agent_route(page_id, agent_token)
+    }
+
+    pub(crate) fn close_page_target(
+        &self,
+        page_id: PageId,
+        agent_token: RendererDevToolsAgentToken,
+    ) -> bool {
+        self.remove_agent_route(page_id, agent_token)
+    }
+
+    fn remove_agent_route(&self, page_id: PageId, agent_token: RendererDevToolsAgentToken) -> bool {
         let mut state = self.shared.state.lock();
-        let route_page_id = state.route.as_ref().and_then(|route| {
-            match route.output_journal.stream().residence() {
-                RendererOutputResidenceIdentity::Page { page_id, .. } => Some(page_id),
-                RendererOutputResidenceIdentity::SharedWorker { .. }
-                | RendererOutputResidenceIdentity::ServiceWorker { .. } => None,
-            }
-        });
-        if route_page_id != Some(page_id) {
+        if !state
+            .routes
+            .get(&agent_token)
+            .is_some_and(|route| route.page_id == page_id)
+        {
             return false;
         }
-        state.route = None;
-        state.pending_prefaces.clear();
-        state.paused_sessions_awaiting_resumed.clear();
-        state.pending_command_transition = None;
-        match state.phase {
-            RendererInspectorPausePhase::Running => {}
-            RendererInspectorPausePhase::Entering => {
-                state.phase = RendererInspectorPausePhase::Running;
-                state.pause_loop_policy = RendererInspectorPauseLoopPolicy::MainAndIo;
-                state.quit_requested = false;
-            }
-            RendererInspectorPausePhase::Paused => {
-                state.quit_requested = true;
-                self.shared.pause_loop_wake.notify_all();
+        state.routes.remove(&agent_token);
+        state
+            .pending_prefaces
+            .retain(|preface| preface.agent_token != agent_token);
+        let mut removed_reported_pause = false;
+        state
+            .paused_sessions_awaiting_resumed
+            .retain(|(paused_agent_token, _)| {
+                let remove = *paused_agent_token == agent_token;
+                removed_reported_pause |= remove;
+                !remove
+            });
+        if let Some(dispatch) = state.active_command_dispatch.as_mut() {
+            dispatch
+                .transition
+                .awaiting_resumed
+                .retain(|(transition_agent_token, _)| *transition_agent_token != agent_token);
+            dispatch
+                .transition
+                .awaiting_repause
+                .retain(|(transition_agent_token, _)| *transition_agent_token != agent_token);
+        }
+        if let Some(transition) = state.pending_command_transition.as_mut() {
+            transition
+                .awaiting_resumed
+                .retain(|(transition_agent_token, _)| *transition_agent_token != agent_token);
+            transition
+                .awaiting_repause
+                .retain(|(transition_agent_token, _)| *transition_agent_token != agent_token);
+        }
+        if state
+            .pending_command_transition
+            .as_ref()
+            .is_some_and(RendererInspectorPauseCommandTransition::is_complete)
+        {
+            state.pending_command_transition = None;
+        }
+        if removed_reported_pause {
+            match state.phase {
+                RendererInspectorPausePhase::Running => {}
+                RendererInspectorPausePhase::Entering => {
+                    state.phase = RendererInspectorPausePhase::Running;
+                    state.pause_loop_policy = RendererInspectorPauseLoopPolicy::MainAndIo;
+                    state.quit_requested = false;
+                }
+                RendererInspectorPausePhase::Paused => {
+                    state.quit_requested = true;
+                    self.shared.pause_loop_wake.notify_all();
+                }
             }
         }
         true
     }
 
+    #[cfg(test)]
     pub(crate) fn close_target(&self) {
         let mut state = self.shared.state.lock();
         state.target_closed = true;
@@ -442,7 +519,7 @@ impl RendererInspectorPauseBridge {
             if state.target_closed {
                 return;
             }
-            state.route.clone()
+            state.routes.get(&agent_token).cloned()
         };
         let Some(route) = route else {
             return;
@@ -475,7 +552,9 @@ impl RendererInspectorPauseBridge {
         if state.target_closed {
             return RendererInspectorPauseNotificationRoute::Drop;
         }
-        if is_paused_notification && (state.route.is_none() || state.session_detach_arms != 0) {
+        if is_paused_notification
+            && (!state.routes.contains_key(&agent_token) || state.session_detach_arms != 0)
+        {
             return RendererInspectorPauseNotificationRoute::Drop;
         }
         let preface = if is_paused_notification {
@@ -592,6 +671,7 @@ impl RendererInspectorSessionOutboundRoute {
 
     pub(crate) fn mark_command_response(&self, call_id: i32, succeeded: bool) {
         self.target.pause_ref().mark_command_response(
+            self.agent_token,
             self.session.wire_session_id(),
             call_id,
             succeeded,

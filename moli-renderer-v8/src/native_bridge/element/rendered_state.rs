@@ -393,9 +393,7 @@ fn is_active_render_tree_root(runtime: &JsContextHost, handle: DomHandle) -> boo
     {
         return true;
     }
-    runtime
-        .lightweight_popup_id_for_document_handle(handle)
-        .is_some_and(|popup_id| runtime.lightweight_popup_is_open(popup_id))
+    false
 }
 
 #[derive(Default, webidl::WebIdlDictionary)]

@@ -13,6 +13,7 @@ pub(super) struct RendererInspectorPauseCommandDispatch {
 }
 
 pub(super) struct RendererInspectorPauseCommandTransition {
+    pub(super) agent_token: RendererDevToolsAgentToken,
     pub(super) causal_identity: RendererRuntimeCommandCausalIdentity,
     pub(super) effect: RendererInspectorPauseCommandEffect,
     pub(super) response_succeeded: bool,
@@ -37,7 +38,8 @@ impl RendererInspectorPauseCommandTransition {
         is_resumed_notification: bool,
         is_paused_notification: bool,
     ) -> bool {
-        if self.effect == RendererInspectorPauseCommandEffect::None {
+        if session.0 != self.agent_token || self.effect == RendererInspectorPauseCommandEffect::None
+        {
             return false;
         }
         if is_resumed_notification && self.awaiting_resumed.remove(session) {

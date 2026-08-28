@@ -19,6 +19,7 @@ use moli_webapi_declare::WebApiObject;
 use url::Url;
 
 const NAVIGATE_EVENT_SYNTHETIC_SLOT: &str = "__lmNavigateEventSynthetic";
+const WINDOW_MESSAGE_REMOTE_SOURCE_IS_OPENER_SLOT: &str = "__moliWindowMessageRemoteSourceIsOpener";
 const NAVIGATE_EVENT_INTERCEPTED_SLOT: &str = "__lmNavigateEventIntercepted";
 const NAVIGATION_DESTINATION_STATE_SLOT: &str = "__lmNavigationDestinationState";
 const NAVIGATE_EVENT_PRECOMMIT_SEEN_SLOT: &str = "__lmNavigateEventPrecommitSeen";
@@ -153,6 +154,33 @@ struct MessageEventInitDeclaration<'scope> {
     last_event_id: v8::Local<'scope, v8::String>,
     source: v8::Local<'scope, v8::Value>,
     ports: v8::Local<'scope, v8::Value>,
+}
+
+#[derive(WebApiObject)]
+#[webapi(interface = "Object", data_properties, enumerable)]
+struct RemoteOpenerMessageEventInitDeclaration<'scope> {
+    data: v8::Local<'scope, v8::Value>,
+    origin: v8::Local<'scope, v8::String>,
+    last_event_id: v8::Local<'scope, v8::String>,
+    #[webapi(accessor_property, getter = remote_message_event_opener_source_getter)]
+    source: (),
+    ports: v8::Local<'scope, v8::Value>,
+}
+
+fn remote_message_event_opener_source_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    _args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if let Some(opener) = scope
+        .get_current_context()
+        .global(scope)
+        .get(scope, v8str(scope, "opener").into())
+    {
+        rv.set(opener);
+    } else {
+        rv.set_null();
+    }
 }
 
 #[derive(WebApiObject)]
@@ -453,9 +481,24 @@ pub(in crate::context_bootstrap::events::subclasses) fn initialize_message_event
         init_value_property(scope, init, "source").unwrap_or_else(|| v8::null(scope).into());
     let ports = init_value_property(scope, init, "ports");
     let ports = frozen_message_event_ports(scope, ports);
-    MessageEventInitDeclaration::new(data, origin_value, last_event_id_value, source, ports)
+    let source_is_remote_opener = init.is_some_and(|init| {
+        get_private_value(scope, init, WINDOW_MESSAGE_REMOTE_SOURCE_IS_OPENER_SLOT)
+            .is_some_and(|marker| marker.boolean_value(scope))
+    });
+    if source_is_remote_opener {
+        RemoteOpenerMessageEventInitDeclaration::new(
+            data,
+            origin_value,
+            last_event_id_value,
+            ports,
+        )
         .initialize(scope, event)
-        .expect("MessageEvent init declaration should initialize");
+        .expect("remote opener MessageEvent init declaration should initialize");
+    } else {
+        MessageEventInitDeclaration::new(data, origin_value, last_event_id_value, source, ports)
+            .initialize(scope, event)
+            .expect("MessageEvent init declaration should initialize");
+    }
 }
 
 pub(in crate::context_bootstrap::events::subclasses) fn initialize_storage_event<'s>(

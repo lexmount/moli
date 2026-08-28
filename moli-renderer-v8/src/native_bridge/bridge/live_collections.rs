@@ -35,6 +35,16 @@ impl NativeDomBridge {
             .cache_live_collection_wrapper(scope, descriptor, wrapper);
     }
 
+    pub(in crate::native_bridge) fn bind_cached_live_collection_owner_realm(
+        &self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut super::super::JsContextHost,
+        descriptor: &LiveCollectionDescriptor,
+    ) -> Option<crate::document_runtime::DomHandle> {
+        self.identity
+            .bind_cached_live_collection_owner_realm(scope, host_ptr, descriptor)
+    }
+
     pub(in crate::native_bridge) fn register_static_handle_collection(
         &mut self,
         handles: Vec<crate::document_runtime::DomHandle>,

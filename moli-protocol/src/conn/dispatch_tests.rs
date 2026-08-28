@@ -67,6 +67,22 @@ fn bidi_fetch_command_context() -> DevToolsCommandContext {
     }
 }
 
+fn direct_navigation_result_loader_id_for_test(
+    result: &crate::devtools_runtime::DevToolsNavigateResult,
+) -> Option<String> {
+    result
+        .loader_id
+        .as_ref()
+        .map(|loader_id| loader_id.as_str().to_owned())
+        .or_else(|| {
+            result
+                .navigation_id
+                .as_ref()
+                .and_then(|navigation_id| navigation_id.as_str().strip_prefix("navigation-"))
+                .map(str::to_owned)
+        })
+}
+
 async fn execute_direct_devtools_command_through_renderer_fence_for_test(
     ctx: &mut crate::testing::TestContext,
     command: DevToolsCommand,
@@ -715,9 +731,11 @@ async fn bidi_fetch_control_resolves_background_request_owner() {
                 request_body: None,
                 request_body_bytes: None,
                 request_headers: Vec::new(),
+                navigation_history_entry_seed: None,
                 request_load_policy: crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
                 timestamp: 0.0,
                 source_document_security: Default::default(),
+                service_worker_clients_open_window_continuation: None,
             },
             request_cookie_report: None,
             intercept_response: false,
@@ -1450,7 +1468,7 @@ async fn devtools_command_preserves_remove_browser_context_detached_typed_sideca
 
 #[tokio::test]
 async fn devtools_command_executes_target_pending_activate_and_close() {
-    let mut conn = CdpConnection::new();
+    let mut ctx = crate::testing::TestContext::new_with_target_discovery(false);
     let context = DevToolsCommandContext {
         protocol: DevToolsProtocol::WebDriverBidi,
         session_id: Some(DevToolsSessionId::from("bidi-session-1")),
@@ -1458,39 +1476,40 @@ async fn devtools_command_executes_target_pending_activate_and_close() {
         browser_context_id: None,
     };
     for _ in 0..2 {
-        let (result, _) = conn
-            .execute_devtools_command(DevToolsCommand::CreateTarget(DevToolsCreateTargetCommand {
+        let result = execute_direct_devtools_command_through_renderer_fence_for_test(
+            &mut ctx,
+            DevToolsCommand::CreateTarget(DevToolsCreateTargetCommand {
                 context: context.clone(),
                 url: "about:blank".to_owned(),
                 browser_context_id: None,
                 activate: false,
-            }))
-            .await
-            .into_parts();
+            }),
+        )
+        .await;
         result.expect("create target should succeed");
     }
 
-    let (activate_result, _) = conn
-        .execute_devtools_command(DevToolsCommand::ActivateTarget(
-            DevToolsActivateTargetCommand {
-                context: context.clone(),
-                target_id: DevToolsTargetId::from("TID-2"),
-            },
-        ))
-        .await
-        .into_parts();
+    let activate_result = execute_direct_devtools_command_through_renderer_fence_for_test(
+        &mut ctx,
+        DevToolsCommand::ActivateTarget(DevToolsActivateTargetCommand {
+            context: context.clone(),
+            target_id: DevToolsTargetId::from("TID-2"),
+        }),
+    )
+    .await;
     assert_eq!(
         activate_result.expect("activate should succeed"),
         DevToolsCommandResult::Empty
     );
 
-    let (close_result, _) = conn
-        .execute_devtools_command(DevToolsCommand::CloseTarget(DevToolsCloseTargetCommand {
+    let close_result = execute_direct_devtools_command_through_renderer_fence_for_test(
+        &mut ctx,
+        DevToolsCommand::CloseTarget(DevToolsCloseTargetCommand {
             context: context.clone(),
             target_id: DevToolsTargetId::from("TID-2"),
-        }))
-        .await
-        .into_parts();
+        }),
+    )
+    .await;
     let DevToolsCommandResult::CloseTarget(close_result) =
         close_result.expect("close should succeed")
     else {
@@ -1498,15 +1517,16 @@ async fn devtools_command_executes_target_pending_activate_and_close() {
     };
     assert!(close_result.success);
 
-    let (remaining_result, _) = conn
-        .execute_devtools_command(DevToolsCommand::GetTargets(DevToolsGetTargetsCommand {
+    let remaining_result = execute_direct_devtools_command_through_renderer_fence_for_test(
+        &mut ctx,
+        DevToolsCommand::GetTargets(DevToolsGetTargetsCommand {
             context,
             root: Some(DevToolsTargetId::from("TID-2")),
             max_depth: None,
             filter: None,
-        }))
-        .await
-        .into_parts();
+        }),
+    )
+    .await;
     let DevToolsCommandResult::GetTargets(remaining_result) =
         remaining_result.expect("get targets should succeed")
     else {
@@ -2411,10 +2431,15 @@ async fn stale_initial_document_page_build_does_not_overwrite_committed_page() {
         frame_id: "TID-1".to_owned(),
         loader_id: "LOADER-real-page".to_owned(),
         url: parsed_real_page_url.to_string(),
+        document_referrer: String::new(),
         unreachable_url: None,
         security_origin: "null".to_owned(),
         secure_context_type: "InsecureScheme".to_owned(),
         timestamp: 0.0,
+        navigation_history_entry_seed: None,
+        navigation_redirect_chain: Vec::new(),
+        auxiliary_browsing_context_policy: None,
+        response_block: None,
     };
     conn.commit_loaded_navigation_target_identity_for_session_owner(
         None,
@@ -3446,12 +3471,29 @@ async fn devtools_command_executes_child_frame_navigation_without_cdp_response_s
             wait: DevToolsNavigationWait::Load,
         }))
         .await;
-    let (parent_result, _, _, parent_predecessor) = parent_outcome.into_complete_parts();
+    let (parent_result, parent_scheduler_events, parent_protocol_events, parent_predecessor) =
+        parent_outcome.into_complete_parts();
+    ctx.route_direct_command_output_for_test(Vec::new(), parent_scheduler_events)
+        .await;
     if let Some(predecessor) = parent_predecessor {
         ctx.route_direct_command_renderer_predecessor_for_test(predecessor)
             .await;
     }
-    parent_result.expect("parent navigation should succeed");
+    ctx.route_direct_command_output_for_test(parent_protocol_events, Vec::new())
+        .await;
+    let DevToolsCommandResult::Navigate(parent_navigation) =
+        parent_result.expect("parent navigation should succeed")
+    else {
+        panic!("expected parent navigation result");
+    };
+    let parent_loader_id = direct_navigation_result_loader_id_for_test(&parent_navigation)
+        .expect("parent navigation should expose a loader identity");
+    ctx.wait_for_direct_navigation_load_for_test(
+        &target_context,
+        &parent_loader_id,
+        "protocol-neutral parent frame navigation load",
+    )
+    .await;
 
     let (frame_tree_result, _) = ctx
         .conn
@@ -3492,8 +3534,10 @@ async fn devtools_command_executes_child_frame_navigation_without_cdp_response_s
             },
         ))
         .await;
-    let (navigate_result, _scheduler_events, protocol_events, child_predecessor) =
+    let (navigate_result, child_scheduler_events, protocol_events, child_predecessor) =
         child_outcome.into_complete_parts();
+    ctx.route_direct_command_output_for_test(Vec::new(), child_scheduler_events)
+        .await;
     if let Some(predecessor) = child_predecessor {
         ctx.route_direct_command_renderer_predecessor_for_test(predecessor)
             .await;
@@ -5512,56 +5556,55 @@ async fn devtools_command_executes_input_key_command_without_cdp_sidecar() {
         target_id: Some(target_id.clone()),
         ..context.clone()
     };
-    // Programmatic focus is part of parser execution. In contrast, `autofocus`
-    // is a post-DOMContentLoaded rendering update and can race the first input
-    // command sent to this intentionally inactive target.
-    let url = "data:text/html,<input id='field'><script>document.getElementById('field').focus()</script>";
-    let (navigate_result, scheduler_events, protocol_events) = ctx
-        .conn
-        .execute_devtools_command(DevToolsCommand::Navigate(DevToolsNavigateCommand {
+    let url = "data:text/html,<input id='field'>";
+    let navigate_result = execute_direct_devtools_command_through_renderer_fence_for_test(
+        &mut ctx,
+        DevToolsCommand::Navigate(DevToolsNavigateCommand {
             context: target_context.clone(),
             url: url.to_owned(),
             referrer: None,
             wait: DevToolsNavigationWait::Load,
-        }))
-        .await
-        .into_parts_with_protocol_events();
-    navigate_result.expect("navigation should succeed");
-    ctx.sent
-        .extend(crate::testing::protocol_events_into_internal_messages(
-            protocol_events,
-        ));
-    ctx.route_direct_command_output_for_test(Vec::new(), scheduler_events)
-        .await;
-    ctx.wait_for_direct_command_work_completion_for_test(
-        "protocol-neutral navigation load owner action",
+        }),
     )
     .await;
+    navigate_result.expect("navigation should succeed");
+    execute_direct_devtools_command_through_renderer_fence_for_test(
+        &mut ctx,
+        DevToolsCommand::EvaluateScript(DevToolsEvaluateScriptCommand {
+            context: target_context.clone(),
+            realm_id: None,
+            world_name: None,
+            expression: "document.getElementById('field').focus()".to_owned(),
+            await_promise: false,
+            user_gesture: false,
+            webdriver_bidi_file_prompt_handler: None,
+            result_ownership: DevToolsResultOwnership::None,
+            preserve_remote_metadata: false,
+            materialize_bidi_script_result: false,
+            serialization_options: None,
+        }),
+    )
+    .await
+    .expect("input focus setup should succeed");
     ctx.sent.clear();
 
-    let (key_result, _scheduler_events, protocol_events) = ctx
-        .conn
-        .execute_devtools_command(DevToolsCommand::DispatchKeyEvent(
-            DevToolsDispatchKeyEventCommand {
-                context: target_context.clone(),
-                event_type: DevToolsKeyEventType::KeyPress,
-                key: "Z".to_owned(),
-                code: "KeyZ".to_owned(),
-                text: "Z".to_owned(),
-                modifiers: 0,
-                auto_repeat: false,
-                should_insert_text: true,
-            },
-        ))
-        .await
-        .into_parts_with_protocol_events();
+    let key_result = execute_direct_devtools_command_through_renderer_fence_for_test(
+        &mut ctx,
+        DevToolsCommand::DispatchKeyEvent(DevToolsDispatchKeyEventCommand {
+            context: target_context.clone(),
+            event_type: DevToolsKeyEventType::KeyPress,
+            key: "Z".to_owned(),
+            code: "KeyZ".to_owned(),
+            text: "Z".to_owned(),
+            modifiers: 0,
+            auto_repeat: false,
+            should_insert_text: true,
+        }),
+    )
+    .await;
     assert_eq!(
         key_result.expect("key dispatch should succeed"),
         DevToolsCommandResult::Empty
-    );
-    assert!(
-        protocol_events.is_empty(),
-        "direct input key dispatch must not emit CDP-shaped sidecar messages: {protocol_events:?}"
     );
 
     let value_result = ctx

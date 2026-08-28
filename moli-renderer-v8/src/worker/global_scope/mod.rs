@@ -4491,7 +4491,12 @@ fn service_worker_clients_open_window_callback<'s>(
 }
 
 fn service_worker_clients_open_window_scheme_can_display(url: &Url) -> bool {
-    matches!(url.scheme(), "http" | "https")
+    // Chromium admits about:blank/about:crash through the ServiceWorker API
+    // and lets the browser-side OpenWindow path canonicalize them to the
+    // auxiliary about:blank Page. The Promise then resolves to null because
+    // no same-origin WindowClient can be exposed. File/view-source and other
+    // non-displayable schemes still fail before consuming window interaction.
+    matches!(url.scheme(), "http" | "https" | "about")
 }
 
 fn service_worker_client_query_options(

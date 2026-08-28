@@ -26,8 +26,11 @@ mod renderer_command_support;
 mod resource_search_support;
 mod same_document_navigation_support;
 mod settings_support;
+mod standalone_navigation_support;
 mod subresource_support;
 mod testing_support;
+mod top_level_close_support;
+mod top_level_focus_support;
 mod wait_support;
 
 use std::fmt;
@@ -35,7 +38,6 @@ use std::sync::Arc;
 
 use crate::renderer::{
     RendererPageCommand, RendererPageCommandPending, RendererPageHandle, RendererPageReply,
-    RendererPageState,
 };
 use anyhow::Result;
 pub use command_dispatch::{
@@ -84,16 +86,18 @@ pub use moli_renderer_v8::network::{
 pub use moli_renderer_v8::{
     DevToolsSessionKey, RendererActivityDiagnostics, RendererAgentAttachmentId,
     RendererAutofillAddressField, RendererAutofillCreditCard, RendererAutofillTriggerOutcome,
-    RendererAutofillTriggerRequest, RendererCaptureScreencastFrameReply,
-    RendererCaptureScreencastFrameRequest, RendererCaptureScreenshotReply,
-    RendererCaptureScreenshotRequest, RendererCommandTurnCompletion, RendererCommandTurnOutput,
-    RendererDedicatedWorkerTargetEvent, RendererDedicatedWorkerTargetInfo,
-    RendererDevToolsAgentToken, RendererDocumentHitTestResult,
-    RendererDocumentIsolateAccountingDiagnostics, RendererDocumentLifecycleEvent,
-    RendererDocumentLifecycleEventKind, RendererDocumentLifecycleIdentity,
-    RendererDocumentLifecycleMilestone, RendererDocumentLifecycleSnapshot,
-    RendererDocumentLifecycleWaitOutcome, RendererDocumentLifecycleWaiter,
-    RendererDocumentNodeGeometry, RendererDocumentSourcedSameDocumentNavigation,
+    RendererAutofillTriggerRequest, RendererAuxiliaryBrowsingContextPolicy,
+    RendererCaptureScreencastFrameReply, RendererCaptureScreencastFrameRequest,
+    RendererCaptureScreenshotReply, RendererCaptureScreenshotRequest,
+    RendererCommandTurnCompletion, RendererCommandTurnOutput, RendererDedicatedWorkerTargetEvent,
+    RendererDedicatedWorkerTargetInfo, RendererDevToolsAgentToken,
+    RendererDocumentContinuationCompletion, RendererDocumentContinuationObserver,
+    RendererDocumentHitTestResult, RendererDocumentIsolateAccountingDiagnostics,
+    RendererDocumentLifecycleEvent, RendererDocumentLifecycleEventKind,
+    RendererDocumentLifecycleIdentity, RendererDocumentLifecycleMilestone,
+    RendererDocumentLifecycleSnapshot, RendererDocumentLifecycleWaitOutcome,
+    RendererDocumentLifecycleWaiter, RendererDocumentNodeGeometry,
+    RendererDocumentSourcedSameDocumentNavigation,
     RendererDocumentSourcedTopLevelLocationNavigation, RendererDocumentTerminationReason,
     RendererDocumentToken, RendererDomAttributeMutation, RendererDomAttributeMutationOutcome,
     RendererDomDebuggerDomBreakpointResolution, RendererDomDebuggerEventListener,
@@ -105,15 +109,19 @@ pub use moli_renderer_v8::{
     RendererJavaScriptDialogCompletion, RendererJavaScriptDialogId, RendererJavaScriptDialogResult,
     RendererJavaScriptDialogSource, RendererLayoutMetrics, RendererLifecycleEpoch,
     RendererLifecycleEventStamp, RendererLifecycleStartReason, RendererLifecycleTerminationStamp,
-    RendererMainDocumentCommit, RendererPageCommandPostResponseContinuation,
-    RendererPageCreationArtifacts, RendererPageCreationDiagnostics,
-    RendererPageDiagnosticsSnapshot, RendererPageDumpFormat, RendererPageDumpOptions,
-    RendererPageDumpStripOptions, RendererPendingDownloadActivation,
+    RendererMainDocumentCommit, RendererMainDocumentResponseBlock,
+    RendererPageCommandPostResponseContinuation, RendererPageCreationArtifacts,
+    RendererPageCreationDiagnostics, RendererPageDiagnosticsSnapshot, RendererPageDumpFormat,
+    RendererPageDumpOptions, RendererPageDumpStripOptions, RendererPageReplacementCommitError,
+    RendererPageReplacementCommitFailureDisposition, RendererPageReplacementReservationPending,
+    RendererPageState, RendererPendingAuxiliaryPage, RendererPendingDownloadActivation,
     RendererPendingDownloadResponse, RendererPendingFileChooserActivation,
     RendererPendingJavaScriptDialog, RendererPendingPopupActivation,
     RendererPendingSameDocumentNavigation, RendererPendingTopLevelHistoryTraversal,
     RendererPendingWindowOpenEvent, RendererPerformanceMetricSnapshot,
     RendererPointerEventProperties, RendererPopupActivationSource, RendererPopupDisposition,
+    RendererPopupNewTargetDisposition, RendererRemoteWindowProxyCommand,
+    RendererRemoteWindowProxySource, RendererResolvedPopupTarget,
     RendererResourceTextSearchOutcome, RendererRuntimeCommandOutput, RendererRuntimeHeapUsage,
     RendererRuntimeInspectorIoCommandClaim, RendererRuntimeInspectorIoCommandRoute,
     RendererRuntimeInspectorMainCommandCompletion, RendererRuntimeInspectorMainCommandRoute,
@@ -122,14 +130,15 @@ pub use moli_renderer_v8::{
     RendererRuntimeObservableSourceItem, RendererRuntimeObservableSourceSummary,
     RendererRuntimeRealmInfo, RendererScreenshotClip, RendererScreenshotFormat,
     RendererScreenshotPurpose, RendererScreenshotRegion, RendererScrollIntoViewResult,
-    RendererServiceWorkerConsoleMessage, RendererServiceWorkerExceptionMessage,
-    RendererServiceWorkerFetchDiagnostic, RendererServiceWorkerFetchDiagnosticResult,
-    RendererServiceWorkerRunIdentity, RendererServiceWorkerTargetEvent,
-    RendererServiceWorkerTargetInfo, RendererServiceWorkerVersionStatus,
-    RendererSetDocumentContentResult, RendererSharedWorkerConsoleMessage,
-    RendererSharedWorkerTargetEvent, RendererSharedWorkerTargetInfo, RendererSyntheticResponseBody,
-    RendererTextSearchMatch, RendererTouchPoint, RendererVisualStateToken,
-    RendererWindowDocumentSource, RuntimeConsoleMessageSnapshot,
+    RendererServiceWorkerClientsOpenWindowContinuation, RendererServiceWorkerConsoleMessage,
+    RendererServiceWorkerExceptionMessage, RendererServiceWorkerFetchDiagnostic,
+    RendererServiceWorkerFetchDiagnosticResult, RendererServiceWorkerRunIdentity,
+    RendererServiceWorkerTargetEvent, RendererServiceWorkerTargetInfo,
+    RendererServiceWorkerVersionStatus, RendererSetDocumentContentResult,
+    RendererSharedWorkerConsoleMessage, RendererSharedWorkerTargetEvent,
+    RendererSharedWorkerTargetInfo, RendererSyntheticResponseBody, RendererTextSearchMatch,
+    RendererTopLevelNavigationRequest, RendererTopLevelNavigationSource, RendererTouchPoint,
+    RendererVisualStateToken, RendererWindowDocumentSource, RuntimeConsoleMessageSnapshot,
 };
 pub use moli_renderer_v8::{
     RendererAppManifest, RendererAppManifestDisplayMode, RendererAppManifestError,
@@ -207,6 +216,14 @@ impl fmt::Debug for Page {
 }
 
 impl Page {
+    #[doc(hidden)]
+    pub fn apply_renderer_document_continuation_state(
+        &mut self,
+        page_state: Arc<RendererPageState>,
+    ) {
+        self.replace_page_state(page_state);
+    }
+
     pub(crate) fn from_attached_handle(
         handle: RendererPageHandle,
         page_state: Arc<RendererPageState>,
@@ -232,6 +249,27 @@ impl Page {
             renderer_devtools_command_session_id: None,
             page_creation_artifacts: Some(Box::new(page_creation_artifacts)),
         }
+    }
+
+    pub(crate) fn adopt_renderer_page_replacement(
+        &mut self,
+        replacement: moli_renderer_v8::RendererPageReplacementCommit,
+    ) -> Result<(
+        RendererPageCreationDiagnostics,
+        RendererPageCreationArtifacts,
+        Option<RendererPendingDownloadActivation>,
+    )> {
+        self.handle.adopt_page_replacement(&replacement)?;
+        let (
+            _renderer_devtools_agent_token,
+            page_state,
+            creation_diagnostics,
+            creation_artifacts,
+            pending_download,
+        ) = replacement.into_parts();
+        self.page_state.replace(page_state);
+        self.page_creation_artifacts = None;
+        Ok((creation_diagnostics, creation_artifacts, pending_download))
     }
 
     /// Takes the renderer lifecycle facts captured while this page was created.
@@ -262,6 +300,22 @@ impl Page {
     #[doc(hidden)]
     pub fn set_renderer_devtools_command_session_id(&mut self, session_id: Option<String>) {
         self.renderer_devtools_command_session_id = session_id;
+    }
+
+    #[doc(hidden)]
+    pub async fn reserve_renderer_document_replacement(
+        &self,
+    ) -> Result<moli_renderer_v8::RendererPageReservationToken> {
+        self.handle
+            .reserve_replacement_document_for_navigation()
+            .await
+    }
+
+    #[doc(hidden)]
+    pub fn start_renderer_document_replacement_reservation(
+        &self,
+    ) -> RendererPageReplacementReservationPending {
+        self.handle.start_replacement_document_reservation()
     }
 
     #[doc(hidden)]

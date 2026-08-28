@@ -277,6 +277,7 @@ fn document_start_script_from_add_preload_command(
             source: source.clone(),
             world_name: command.world_name.clone(),
             has_bidi_channel_argument: false,
+            browser_internal: false,
             bidi_channel_handoffs: Vec::new(),
         }),
         DevToolsPreloadScriptSource::FunctionDeclaration {
@@ -301,6 +302,7 @@ fn document_start_script_from_add_preload_command(
                 source: source.source,
                 world_name: command.world_name.clone(),
                 has_bidi_channel_argument,
+                browser_internal: false,
                 bidi_channel_handoffs: source.channel_handoffs,
             })
         }
@@ -1853,6 +1855,7 @@ mod protocol_neutral_tests {
                 source: "globalThis.ready = true;".to_owned(),
                 world_name: None,
                 has_bidi_channel_argument: false,
+                browser_internal: false,
                 bidi_channel_handoffs: Vec::new(),
             },
         )];
@@ -1877,6 +1880,7 @@ mod protocol_neutral_tests {
                 source: "globalThis.ready = true;".to_owned(),
                 world_name: None,
                 has_bidi_channel_argument: false,
+                browser_internal: false,
                 bidi_channel_handoffs: Vec::new(),
             },
         )];
@@ -1902,6 +1906,7 @@ mod protocol_neutral_tests {
                 source: "globalThis.ready = true;".to_owned(),
                 world_name: Some("utility".to_owned()),
                 has_bidi_channel_argument: false,
+                browser_internal: false,
                 bidi_channel_handoffs: Vec::new(),
             },
         ));
@@ -1910,6 +1915,7 @@ mod protocol_neutral_tests {
             source: "globalThis.ready = true;".to_owned(),
             world_name: Some("utility".to_owned()),
             has_bidi_channel_argument: false,
+            browser_internal: false,
             bidi_channel_handoffs: Vec::new(),
         };
 
@@ -1941,6 +1947,7 @@ mod protocol_neutral_tests {
                 source: "globalThis.ready = true;".to_owned(),
                 world_name: None,
                 has_bidi_channel_argument: false,
+                browser_internal: false,
                 bidi_channel_handoffs: Vec::new(),
             },
         ));
@@ -1949,6 +1956,7 @@ mod protocol_neutral_tests {
             source: "globalThis.ready = true;".to_owned(),
             world_name: None,
             has_bidi_channel_argument: false,
+            browser_internal: false,
             bidi_channel_handoffs: Vec::new(),
         };
 

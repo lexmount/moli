@@ -19,9 +19,6 @@ impl JsContextHost {
         {
             return self.child_browsing_context_document_domain_value(child_handle);
         }
-        if let Some(popup_id) = self.lightweight_popup_id_for_document_handle(document_handle) {
-            return self.lightweight_popup_document_domain_value(popup_id);
-        }
         self.dom_host()
             .dom()
             .node(document_handle)
@@ -48,19 +45,23 @@ impl JsContextHost {
             if !document_domain_is_allowed_for_host(&current_host, &domain) {
                 return false;
             }
-            self.document_domain_override = Some(domain);
+            self.document_domain_override = Some(domain.clone());
+            if let Some(environment) = self.page_script_environment.as_ref() {
+                environment.replicate_current_top_level_document(
+                    self.document_url(),
+                    &self.main_document_serialized_origin,
+                    self.main_window_opaque_origin_nonce(),
+                    Some(domain),
+                );
+            }
             return true;
         }
-        let Some(child_handle) =
+        if let Some(child_handle) =
             self.child_browsing_context_handle_for_stored_document(document_handle)
-        else {
-            let Some(popup_id) = self.lightweight_popup_id_for_document_handle(document_handle)
-            else {
-                return false;
-            };
-            return self.set_lightweight_popup_document_domain(popup_id, document_handle, value);
-        };
-        self.set_child_browsing_context_document_domain(child_handle, value)
+        {
+            return self.set_child_browsing_context_document_domain(child_handle, value);
+        }
+        false
     }
 
     pub(crate) fn child_browsing_context_document_domain_override(
@@ -81,15 +82,6 @@ impl JsContextHost {
             return domain;
         }
         self.child_browsing_context_document_domain_host(handle)
-            .unwrap_or_default()
-    }
-
-    pub(crate) fn lightweight_popup_document_domain_value(&self, popup_id: u64) -> String {
-        if let Some(domain) = self.lightweight_popup_document_domain_override(popup_id) {
-            return domain;
-        }
-        self.lightweight_popup_document_url_for_domain(popup_id)
-            .and_then(|url| url_host_domain(&url))
             .unwrap_or_default()
     }
 
@@ -114,7 +106,17 @@ impl JsContextHost {
             return false;
         };
         match origin_owner {
-            ChildSecurityOriginOwner::Main => self.document_domain_override = Some(domain),
+            ChildSecurityOriginOwner::Main => {
+                self.document_domain_override = Some(domain.clone());
+                if let Some(environment) = self.page_script_environment.as_ref() {
+                    environment.replicate_current_top_level_document(
+                        self.document_url(),
+                        &self.main_document_serialized_origin,
+                        self.main_window_opaque_origin_nonce(),
+                        Some(domain),
+                    );
+                }
+            }
             ChildSecurityOriginOwner::Child(owner) => {
                 let Some(entry) = self.child_browsing_contexts.get_mut(&owner) else {
                     return false;
@@ -122,42 +124,8 @@ impl JsContextHost {
                 entry.set_document_domain_override(domain);
             }
         }
+        self.publish_related_page_remote_frame_tree();
         true
-    }
-
-    pub(crate) fn set_lightweight_popup_document_domain(
-        &mut self,
-        popup_id: u64,
-        document_handle: DomHandle,
-        value: &str,
-    ) -> bool {
-        if self.lightweight_popup_document_domain_is_sandboxed(popup_id) {
-            return false;
-        }
-        let Some(current_host) = self
-            .lightweight_popup_document_url_for_domain(popup_id)
-            .and_then(|url| url_host_domain(&url))
-            .or_else(|| {
-                self.dom_host()
-                    .dom()
-                    .node(document_handle)
-                    .and_then(Node::as_document)
-                    .and_then(|document| url_host_domain(document.url()))
-            })
-        else {
-            return false;
-        };
-        let Some(domain) = normalize_document_domain_value(value) else {
-            return false;
-        };
-        if !document_domain_is_allowed_for_host(&current_host, &domain) {
-            return false;
-        }
-        self.set_lightweight_popup_document_domain_override(popup_id, domain)
-    }
-
-    fn lightweight_popup_document_url_for_domain(&self, popup_id: u64) -> Option<Url> {
-        self.lightweight_popup_document_url(popup_id)
     }
 
     fn child_browsing_context_document_domain_host(&self, handle: DomHandle) -> Option<String> {

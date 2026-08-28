@@ -49,9 +49,6 @@ pub(crate) fn compile_event_attribute_handler_for_owner<'s>(
         OwnerDispatchScope::Child(handle) => host
             .child_browsing_context_base_url(handle)
             .unwrap_or_else(|| host.document_url().clone()),
-        OwnerDispatchScope::LightweightPopup(popup_id) => host
-            .lightweight_popup_request_base_url(scope, popup_id)
-            .unwrap_or_else(|| host.document_url().clone()),
     };
     let event_argument = v8_string(scope, "event")?;
     compile_event_attribute_handler_for_owner_with_context(

@@ -8,6 +8,11 @@ use crate::{document_runtime::DomHandle, structured_clone::V8StructuredClonePayl
 pub(crate) struct PendingWindowMessage {
     pub(crate) target: WindowTaskTarget,
     pub(crate) source: PendingWindowMessageSource,
+    pub(crate) source_window_proxy: Option<v8::Global<v8::Object>>,
+    /// Whether the source endpoint is the target's current opener. Its event
+    /// projection can then reuse the target realm's canonical `window.opener`
+    /// wrapper instead of exposing a second wrapper for the same endpoint.
+    pub(crate) source_is_target_opener: bool,
     pub(crate) data: V8StructuredClonePayload,
     pub(crate) origin: String,
     pub(crate) intended_target_origin: Option<String>,
@@ -21,8 +26,8 @@ pub(super) struct QueuedWindowMessage {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PendingWindowMessageSource {
     endpoint: PendingWindowMessageEndpoint,
-    owner: WindowExecutionContextOwner,
-    realm_token: RuntimeObservableContextToken,
+    owner: Option<WindowExecutionContextOwner>,
+    realm_token: Option<RuntimeObservableContextToken>,
 }
 
 impl PendingWindowMessageSource {
@@ -33,8 +38,16 @@ impl PendingWindowMessageSource {
     ) -> Self {
         Self {
             endpoint,
-            owner,
-            realm_token,
+            owner: Some(owner),
+            realm_token: Some(realm_token),
+        }
+    }
+
+    pub(crate) fn remote_top_level() -> Self {
+        Self {
+            endpoint: PendingWindowMessageEndpoint::TopWindow,
+            owner: None,
+            realm_token: None,
         }
     }
 
@@ -42,11 +55,11 @@ impl PendingWindowMessageSource {
         self.endpoint
     }
 
-    pub(crate) fn owner(self) -> WindowExecutionContextOwner {
+    pub(crate) fn owner(self) -> Option<WindowExecutionContextOwner> {
         self.owner
     }
 
-    pub(crate) fn realm_token(self) -> RuntimeObservableContextToken {
+    pub(crate) fn realm_token(self) -> Option<RuntimeObservableContextToken> {
         self.realm_token
     }
 }
@@ -55,7 +68,6 @@ impl PendingWindowMessageSource {
 pub(crate) enum PendingWindowMessageEndpoint {
     TopWindow,
     ChildWindow(DomHandle),
-    LightweightPopup(u64),
 }
 
 impl PendingWindowMessageEndpoint {
@@ -63,7 +75,6 @@ impl PendingWindowMessageEndpoint {
         match self {
             Self::TopWindow => OwnerDispatchScope::Top,
             Self::ChildWindow(handle) => OwnerDispatchScope::Child(handle),
-            Self::LightweightPopup(popup_id) => OwnerDispatchScope::LightweightPopup(popup_id),
         }
     }
 
@@ -71,12 +82,138 @@ impl PendingWindowMessageEndpoint {
         match dispatch_scope {
             OwnerDispatchScope::Top => Self::TopWindow,
             OwnerDispatchScope::Child(handle) => Self::ChildWindow(handle),
-            OwnerDispatchScope::LightweightPopup(popup_id) => Self::LightweightPopup(popup_id),
         }
     }
 }
 
 impl JsContextHost {
+    fn remote_window_message_source_projection<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        source: &crate::runtime::RendererRemoteWindowProxySource,
+    ) -> Option<(v8::Local<'s, v8::Object>, bool)> {
+        let source_endpoint = source.endpoint();
+        let source_target = self
+            .page_script_environment
+            .as_ref()?
+            .remote_top_level_target_snapshot(source_endpoint)?;
+        if source_target.residence != source.page() {
+            return None;
+        }
+        if let Some(frame) = source.frame() {
+            if frame.endpoint != source_endpoint
+                || self
+                    .page_script_environment
+                    .as_ref()?
+                    .remote_frame_snapshot(frame)
+                    .is_none()
+            {
+                return None;
+            }
+            return self
+                .remote_frame_window_proxy_for_token(scope, frame)
+                .map(|proxy| (proxy, false));
+        }
+
+        let source_is_target_opener =
+            self.page_script_environment
+                .as_ref()
+                .is_some_and(|environment| {
+                    environment.top_level_opener_endpoint() == Some(source_endpoint)
+                });
+        let opener_source = source_is_target_opener
+            .then(|| {
+                scope
+                    .get_current_context()
+                    .global(scope)
+                    .get(scope, crate::util::v8str(scope, "opener").into())
+            })
+            .flatten()
+            .and_then(|opener| v8::Local::<v8::Object>::try_from(opener).ok());
+        opener_source
+            .or_else(|| self.remote_top_level_window_proxy_for_endpoint(scope, source_endpoint))
+            .map(|proxy| (proxy, source_is_target_opener))
+    }
+
+    pub(crate) fn queue_remote_top_level_window_message(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        message: crate::runtime::RendererRemoteWindowProxyMessage,
+    ) -> bool {
+        let Some((source_window_proxy, source_is_target_opener)) =
+            self.remote_window_message_source_projection(scope, &message.source)
+        else {
+            return false;
+        };
+        let dispatch_scope = OwnerDispatchScope::Top;
+        let Some(owner) = self.current_window_execution_context_owner(dispatch_scope) else {
+            return false;
+        };
+        let target = WindowTaskTarget::new(dispatch_scope, owner);
+        let task_id = self.queue_window_message(PendingWindowMessage {
+            target,
+            source: PendingWindowMessageSource::remote_top_level(),
+            source_window_proxy: Some(v8::Global::new(scope, source_window_proxy)),
+            source_is_target_opener,
+            data: message.payload,
+            origin: message.source.serialized_origin().to_owned(),
+            intended_target_origin: message.intended_target_origin,
+        });
+        let sender = self.page_window_message_sender().clone();
+        if sender.send(target, task_id).is_err() {
+            let discarded = self.discard_pending_window_message_task(task_id);
+            assert!(
+                discarded,
+                "closed remote Window.postMessage route lost its local payload"
+            );
+            return false;
+        }
+        true
+    }
+
+    pub(crate) fn queue_remote_frame_window_message(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        handle: DomHandle,
+        message: crate::runtime::RendererRemoteWindowProxyMessage,
+    ) -> bool {
+        if self
+            .ensure_prebootstrapped_child_default_context(scope, handle)
+            .is_err()
+        {
+            return false;
+        }
+        let Some((source_window_proxy, _)) =
+            self.remote_window_message_source_projection(scope, &message.source)
+        else {
+            return false;
+        };
+        let dispatch_scope = OwnerDispatchScope::Child(handle);
+        let Some(owner) = self.current_window_execution_context_owner(dispatch_scope) else {
+            return false;
+        };
+        let target = WindowTaskTarget::new(dispatch_scope, owner);
+        let task_id = self.queue_window_message(PendingWindowMessage {
+            target,
+            source: PendingWindowMessageSource::remote_top_level(),
+            source_window_proxy: Some(v8::Global::new(scope, source_window_proxy)),
+            source_is_target_opener: false,
+            data: message.payload,
+            origin: message.source.serialized_origin().to_owned(),
+            intended_target_origin: message.intended_target_origin,
+        });
+        let sender = self.page_window_message_sender().clone();
+        if sender.send(target, task_id).is_err() {
+            let discarded = self.discard_pending_window_message_task(task_id);
+            assert!(
+                discarded,
+                "closed remote-frame Window.postMessage route lost its local payload"
+            );
+            return false;
+        }
+        true
+    }
+
     pub(crate) fn enter_window_message_source_scope(
         &mut self,
         source: PendingWindowMessageEndpoint,
@@ -174,7 +311,14 @@ impl JsContextHost {
         &mut self,
         message: &PendingWindowMessage,
     ) {
-        for port_id in message.data.transferred_message_ports() {
+        self.retire_transferred_window_message_payload(&message.data);
+    }
+
+    pub(crate) fn retire_transferred_window_message_payload(
+        &mut self,
+        payload: &V8StructuredClonePayload,
+    ) {
+        for port_id in payload.transferred_message_ports() {
             if !self.retire_message_port(*port_id) {
                 self.message_port_registry.close_message_port(*port_id);
             }
@@ -258,16 +402,5 @@ impl JsContextHost {
         &mut self,
     ) -> Option<Option<DomHandle>> {
         self.pending_active_child_window_restore.take()
-    }
-
-    pub(crate) fn defer_active_lightweight_popup_restore_after_microtasks(
-        &mut self,
-        previous: Option<u64>,
-    ) {
-        self.pending_active_lightweight_popup_restore = Some(previous);
-    }
-
-    pub(crate) fn take_deferred_active_lightweight_popup_restore(&mut self) -> Option<Option<u64>> {
-        self.pending_active_lightweight_popup_restore.take()
     }
 }

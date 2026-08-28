@@ -1,13 +1,19 @@
 use moli_core::page::{
     Page, RendererAgentAttachmentId, RendererDevToolsAgentToken, RendererDocumentLifecycleIdentity,
-    RendererRuntimeInspectorMessageBatch, ScriptNetworkOutputItem, SubresourceNetworkRequestHandle,
+    RendererPendingAuxiliaryPage, RendererRuntimeInspectorMessageBatch, ScriptNetworkOutputItem,
+    SubresourceNetworkRequestHandle,
 };
 #[cfg(test)]
 use moli_core::page::{RendererPageDiagnosticsSnapshot, RendererRuntimeObservableSourceSummary};
+use moli_core::runtime::RendererPageReservationToken;
 use serde_json::{Value, json};
 
 use crate::{
-    conn::{CapturedBody, ConnectionNetworkRequestIdAllocator},
+    conn::{
+        CapturedBody, ConnectionNetworkRequestIdAllocator, PopupTargetNavigationAuthorityState,
+        PopupTargetNavigationClaimIdentity, PopupTargetNavigationOwnerAction,
+        TargetPageResidenceIdentity,
+    },
     domains::{
         log_output_state::{TargetLogOutputQueueState, TargetNetworkLogEntry},
         network::{
@@ -56,6 +62,7 @@ pub(in crate::conn::state) struct TargetNetworkRequestCounters {
 #[derive(Debug, Default)]
 pub(crate) struct TargetRuntimeSlot {
     page_slot: TargetPageSlot,
+    popup_target_navigation_authority: Option<PopupTargetNavigationAuthorityState>,
     devtools_renderer_channel: DevToolsRendererChannel,
     pending_renderer_call_replacements: PreparedRendererCallReplacements,
     javascript_dialog_scope: TargetJavaScriptDialogScope,
@@ -151,6 +158,72 @@ impl TargetRuntimeSlot {
         self.page_slot.has_loaded_page()
     }
 
+    pub(crate) fn stage_initial_popup_target_navigation_owner_action(
+        &mut self,
+        action: PopupTargetNavigationOwnerAction,
+    ) -> bool {
+        if self.popup_target_navigation_authority.is_some() {
+            return false;
+        }
+        self.popup_target_navigation_authority =
+            Some(PopupTargetNavigationAuthorityState::Held(action));
+        true
+    }
+
+    pub(crate) fn stage_popup_target_without_destination_navigation(
+        &mut self,
+        page_owner: TargetPageResidenceIdentity,
+    ) -> bool {
+        if self.popup_target_navigation_authority.is_some() {
+            return false;
+        }
+        self.popup_target_navigation_authority = Some(
+            PopupTargetNavigationAuthorityState::NoDestination(page_owner),
+        );
+        true
+    }
+
+    pub(crate) fn take_held_initial_popup_target_navigation_owner_action(
+        &mut self,
+    ) -> Option<PopupTargetNavigationOwnerAction> {
+        let authority = self.popup_target_navigation_authority.take()?;
+        match authority {
+            PopupTargetNavigationAuthorityState::Held(action) => {
+                self.popup_target_navigation_authority = Some(
+                    PopupTargetNavigationAuthorityState::Published(action.claim_identity().clone()),
+                );
+                Some(action)
+            }
+            authority => {
+                self.popup_target_navigation_authority = Some(authority);
+                None
+            }
+        }
+    }
+
+    pub(crate) fn consume_published_popup_target_navigation_claim(
+        &mut self,
+        expected: &PopupTargetNavigationClaimIdentity,
+    ) -> bool {
+        let matches = matches!(
+            self.popup_target_navigation_authority.as_ref(),
+            Some(PopupTargetNavigationAuthorityState::Published(actual)) if actual == expected
+        );
+        if matches {
+            self.popup_target_navigation_authority = Some(
+                PopupTargetNavigationAuthorityState::Consumed(expected.clone()),
+            );
+        }
+        matches
+    }
+
+    pub(crate) fn has_popup_target_navigation_authority(&self) -> bool {
+        self.popup_target_navigation_authority
+            .as_ref()
+            .map(PopupTargetNavigationAuthorityState::page_owner)
+            .is_some()
+    }
+
     pub(crate) fn has_pending_initial_document_page_build(&self) -> bool {
         matches!(
             self.page_slot.loaded_page_absence_reason(),
@@ -174,6 +247,26 @@ impl TargetRuntimeSlot {
 
     pub(crate) fn start_initial_document_page_build(&mut self) {
         self.page_slot.start_initial_document_page_build();
+    }
+
+    pub(crate) fn stage_pending_auxiliary_page(
+        &mut self,
+        pending: RendererPendingAuxiliaryPage,
+        policy: Option<moli_core::page::RendererAuxiliaryBrowsingContextPolicy>,
+    ) -> bool {
+        self.page_slot.stage_pending_auxiliary_page(pending, policy)
+    }
+
+    pub(crate) fn auxiliary_browsing_context_policy(
+        &self,
+    ) -> Option<moli_core::page::RendererAuxiliaryBrowsingContextPolicy> {
+        self.page_slot.auxiliary_browsing_context_policy()
+    }
+
+    pub(crate) fn take_initial_document_page_reservation(
+        &mut self,
+    ) -> Option<RendererPageReservationToken> {
+        self.page_slot.take_initial_document_page_reservation()
     }
 
     pub(crate) fn bind_initial_document_page_build_renderer_page(
@@ -209,6 +302,25 @@ impl TargetRuntimeSlot {
     pub(crate) fn replace_loaded_page(&mut self, page: Option<Page>) -> Option<Page> {
         self.javascript_dialog_scope.retire();
         let mut page = page;
+        let retained_predecessor = self.rotate_current_document_output_for_replacement();
+        self.ensure_renderer_attachment_for_replacement(page.as_mut());
+        let previous = self.page_slot.replace_loaded_page(page);
+        if retained_predecessor {
+            self.reset_replacement_document_output_state();
+        } else {
+            self.reset_document_output_state();
+        }
+        self.ingest_owner_page_observable_output_updates();
+        previous
+    }
+
+    /// Moves the exact committed Document's request-id correlations out of
+    /// the current target queue before its successor becomes observable.
+    ///
+    /// This is Document-scoped rather than Page-scoped. A stable renderer Page
+    /// replaces only its resident Document, but the old realm can still append
+    /// cancellation terminals to the Page output stream during teardown.
+    fn rotate_current_document_output_for_replacement(&mut self) -> bool {
         let retiring_document = self
             .page_slot
             .loaded_page()
@@ -220,26 +332,17 @@ impl TargetRuntimeSlot {
                     binding.clone(),
                 )
             });
-        let retiring_document =
-            retiring_document.map(|(renderer_page, page_attachment_id, binding)| {
-                RetiringRendererDocumentOutput {
-                    renderer_page,
-                    page_attachment_id,
-                    binding,
-                    network_agent: self.network_agent.rotate_document_for_replacement(),
-                }
+        let Some((renderer_page, page_attachment_id, binding)) = retiring_document else {
+            return false;
+        };
+        self.retiring_renderer_document_outputs
+            .push(RetiringRendererDocumentOutput {
+                renderer_page,
+                page_attachment_id,
+                binding,
+                network_agent: self.network_agent.rotate_document_for_replacement(),
             });
-        self.ensure_renderer_attachment_for_replacement(page.as_mut());
-        let previous = self.page_slot.replace_loaded_page(page);
-        if let Some(retiring_document) = retiring_document {
-            self.retiring_renderer_document_outputs
-                .push(retiring_document);
-            self.reset_replacement_document_output_state();
-        } else {
-            self.reset_document_output_state();
-        }
-        self.ingest_owner_page_observable_output_updates();
-        previous
+        true
     }
 
     pub(crate) fn clear_loaded_page_with_reason(
@@ -438,6 +541,31 @@ impl TargetRuntimeSlot {
         Ok(())
     }
 
+    pub(crate) fn commit_loaded_navigation_document_replacement(
+        &mut self,
+        transaction: &CommittedRendererAgentAttachment,
+    ) -> Result<Option<RendererAgentAttachment>, DevToolsRendererChannelError> {
+        let current = transaction.current();
+        let page = self
+            .page_slot
+            .loaded_page_mut()
+            .ok_or(DevToolsRendererChannelError::CommittedCandidateMismatch)?;
+        if self.devtools_renderer_channel.current() != Some(current)
+            || page.renderer_devtools_agent_token() != current.agent_token()
+        {
+            return Err(DevToolsRendererChannelError::CommittedCandidateMismatch);
+        }
+        page.bind_renderer_agent_attachment(current.id());
+        self.javascript_dialog_scope.retire();
+        if self.rotate_current_document_output_for_replacement() {
+            self.reset_replacement_document_output_state();
+        } else {
+            self.reset_document_output_state();
+        }
+        self.ingest_owner_page_observable_output_updates();
+        Ok(transaction.previous())
+    }
+
     pub(crate) fn commit_loaded_navigation_renderer_attachment(
         &mut self,
         page: &mut Page,
@@ -604,6 +732,10 @@ impl TargetRuntimeSlot {
                 .loaded_page_absence_reason()
                 .map(TargetPageAbsenceReason::label),
             "pageAttachmentId": self.page_attachment_id().map(TargetPageAttachmentId::get),
+            "auxiliaryBrowsingContextId": self.page_slot.auxiliary_browsing_context_id(),
+            "hasStagedInitialDocumentPageReservation": self
+                .page_slot
+                .has_staged_initial_document_page_reservation(),
             "hasPendingDocumentNavigation": self.has_pending_document_navigation(),
             "rendererChannelClosed": self.devtools_renderer_channel.is_closed(),
             "rendererChannelHasCurrentAttachment":

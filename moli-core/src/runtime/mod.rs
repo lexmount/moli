@@ -1,6 +1,7 @@
 mod fetch_deadline;
 mod lifecycle_fetch;
 mod navigation_engine;
+mod standalone_auxiliary;
 pub mod storage_partition;
 
 pub use crate::config::BrowserConfig;
@@ -23,6 +24,7 @@ use moli_renderer_v8::network::{
 };
 use moli_url::is_about_blank as is_about_blank_url;
 use moli_web_mime::response_headers_indicate_raw_document;
+use standalone_auxiliary::StandaloneAuxiliaryPageOwner;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use std::time::Instant;
@@ -40,14 +42,15 @@ pub use moli_renderer_v8::{
     DetachedParserScriptFetchContinuation, RendererBrowserContextRuntime,
     RendererBrowserContextRuntimeOwner, RendererBrowserContextRuntimeOwnerAccess,
     RendererLifecycleDecider, RendererLifecycleDecision, RendererLifecycleSnapshot,
-    RendererPageReservationToken, RendererReservedServiceWorkerClient,
+    RendererPageOutputOwnerReservationId, RendererPageReservationToken, RendererPopupBlockerPolicy,
+    RendererReservedServiceWorkerClient, RendererServiceWorkerClientsOpenWindowContinuation,
     RendererServiceWorkerMainResourceFetch, RendererSharedWorkerRuntimeDiagnostics,
 };
 pub use navigation_engine::{
-    BuiltDocumentPage, CommittedDocumentResourceSource, NavigationEngine,
-    NavigationPageStorageHandles, NavigationResourceStorageHandles, NavigationRuntimeConfig,
-    PendingBuiltDocumentPage, PreparedDocumentPage, PreparedDocumentPageCommitConfiguration,
-    PreparedDocumentPageCommitPermit,
+    BuiltDocumentPage, CommittedDocumentPageReplacement, CommittedDocumentResourceSource,
+    NavigationEngine, NavigationPageStorageHandles, NavigationResourceStorageHandles,
+    NavigationRuntimeConfig, PendingBuiltDocumentPage, PreparedDocumentPage,
+    PreparedDocumentPageCommitConfiguration, PreparedDocumentPageCommitPermit,
 };
 
 static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
@@ -96,6 +99,7 @@ pub struct Browser {
 }
 
 struct BrowserLifetimeOwner {
+    standalone_auxiliary_owner: Option<StandaloneAuxiliaryPageOwner>,
     js_runtime: Option<JsRuntime>,
     browser_context_owner: moli_renderer_v8::RendererBrowserContextRuntimeOwner,
     partition: Arc<StoragePartitionState>,
@@ -122,6 +126,9 @@ impl std::fmt::Debug for Browser {
 
 impl Drop for BrowserLifetimeOwner {
     fn drop(&mut self) {
+        if let Some(owner) = self.standalone_auxiliary_owner.take() {
+            owner.shutdown_and_join();
+        }
         debug!("terminating browser renderer producers");
         if let Some(js_runtime) = self.js_runtime.take() {
             js_runtime.terminate_resource_producers_for_owner_shutdown();
@@ -251,7 +258,17 @@ impl Browser {
         js_runtime
             .renderer_owner_handle()
             .configure_layout_policy(config.layout_policy())?;
+        let standalone_auxiliary_owner = StandaloneAuxiliaryPageOwner::start(
+            js_runtime.clone(),
+            ResourceRequestClient::from_browser_resource_runtime_with_page_network_policy(
+                resource_runtime.clone(),
+                page_network_policy.clone(),
+            ),
+            Arc::clone(&partition),
+            &config,
+        )?;
         let lifetime_owner = Rc::new(BrowserLifetimeOwner {
+            standalone_auxiliary_owner: Some(standalone_auxiliary_owner),
             js_runtime: Some(js_runtime.clone()),
             browser_context_owner,
             partition: Arc::clone(&partition),
@@ -1102,6 +1119,7 @@ impl Browser {
                 source,
                 world_name: None,
                 has_bidi_channel_argument: false,
+                browser_internal: false,
                 bidi_channel_handoffs: Vec::new(),
             })
             .collect::<Vec<_>>();
@@ -1137,7 +1155,9 @@ impl Browser {
         create_page_request.indexed_db_manager = Some(self.partition.weak_indexed_db_manager());
         create_page_request.storage_bucket_store = Some(self.partition.storage_bucket_store());
         let reply = renderer_owner
-            .dispatch_command(RendererOwnerCommand::CreateHtmlPage(create_page_request))
+            .dispatch_command(RendererOwnerCommand::CreateHtmlPage(Box::new(
+                create_page_request,
+            )))
             .await?;
         let page = materialize_page_created_reply(&renderer_owner, reply)?;
         info!(
@@ -1230,6 +1250,7 @@ impl Browser {
                 source,
                 world_name: None,
                 has_bidi_channel_argument: false,
+                browser_internal: false,
                 bidi_channel_handoffs: Vec::new(),
             })
             .collect::<Vec<_>>();

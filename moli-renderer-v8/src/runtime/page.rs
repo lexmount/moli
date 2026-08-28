@@ -18,10 +18,11 @@ use super::{
     RendererBrowserContextRuntime, RendererBrowserContextRuntimeOwner,
     RendererBrowserContextRuntimeOwnerAccess, RendererDocumentCommitPermit,
     RendererDocumentIsolateAccountingDiagnostics, RendererInspectorSessionRestoreSnapshot,
-    RendererOwnerCommand, RendererOwnerHandle, RendererOwnerReply, RendererPageCreationArtifacts,
-    RendererPageCreationDiagnostics, RendererPageHandle, RendererPageReservationToken,
-    RendererPageState, RendererPendingDownloadActivation, RendererPerformanceMetricSnapshot,
-    RendererReservedServiceWorkerClient,
+    RendererOwnerCommand, RendererOwnerHandle, RendererOwnerLocalHostId, RendererOwnerReply,
+    RendererPageCreationArtifacts, RendererPageCreationDiagnostics, RendererPageHandle,
+    RendererPageReplacementCommit, RendererPageReplacementCommitError,
+    RendererPageReservationToken, RendererPageState, RendererPendingDownloadActivation,
+    RendererPerformanceMetricSnapshot, RendererReservedServiceWorkerClient,
 };
 
 pub(crate) struct PageVmStateCapture {
@@ -254,6 +255,9 @@ impl JsRuntime {
             None,
             crate::RendererTopLevelNavigationDispatch::FollowInStandaloneAdapter,
             None,
+            None,
+            None,
+            None,
         )
     }
 
@@ -293,7 +297,7 @@ impl JsRuntime {
     }
 
     pub fn document_isolate_model_for_diagnostics(&self) -> &'static str {
-        "page-vm"
+        "script-agent"
     }
 
     pub fn document_isolate_accounting_for_diagnostics(
@@ -303,7 +307,11 @@ impl JsRuntime {
     }
 
     pub fn renderer_owner_id_for_diagnostics(&self) -> u64 {
-        self.inner.renderer_owner.state.owner_local_host_id.as_u64()
+        self.renderer_owner_local_host_id().as_u64()
+    }
+
+    pub fn renderer_owner_local_host_id(&self) -> RendererOwnerLocalHostId {
+        self.inner.renderer_owner.state.owner_local_host_id
     }
 
     pub fn shares_renderer_owner_with(&self, other: &Self) -> bool {
@@ -472,7 +480,7 @@ impl JsRuntime {
         let reply = self
             .inner
             .renderer_owner
-            .dispatch_command(RendererOwnerCommand::CreateHtmlPage(request))
+            .dispatch_command(RendererOwnerCommand::CreateHtmlPage(Box::new(request)))
             .await?;
         self.inner
             .renderer_owner
@@ -548,6 +556,9 @@ impl JsRuntime {
             None,
             crate::RendererTopLevelNavigationDispatch::FollowInStandaloneAdapter,
             None,
+            None,
+            None,
+            None,
         )
     }
 
@@ -586,6 +597,9 @@ impl JsRuntime {
         top_level_storage_key: Option<moli_storage_key::MoliStorageKey>,
         top_level_navigation_dispatch: crate::RendererTopLevelNavigationDispatch,
         main_document_commit: Option<crate::RendererMainDocumentCommit>,
+        initial_document_referrer: Option<String>,
+        initial_top_level_browsing_context_name: Option<String>,
+        auxiliary_browsing_context_policy: Option<crate::RendererAuxiliaryBrowsingContextPolicy>,
     ) -> Result<PendingHtmlPage> {
         let mut request = self
             .inner
@@ -625,10 +639,13 @@ impl JsRuntime {
         request.top_level_storage_key = top_level_storage_key;
         request.top_level_navigation_dispatch = top_level_navigation_dispatch;
         request.main_document_commit = main_document_commit;
+        request.initial_document_referrer = initial_document_referrer;
+        request.initial_top_level_browsing_context_name = initial_top_level_browsing_context_name;
+        request.auxiliary_browsing_context_policy = auxiliary_browsing_context_policy;
         let reply_rx = self
             .inner
             .renderer_owner
-            .enqueue_command_with_reply(RendererOwnerCommand::CreateHtmlPage(request))?;
+            .enqueue_command_with_reply(RendererOwnerCommand::CreateHtmlPage(Box::new(request)))?;
         Ok(PendingHtmlPage {
             runtime: self.clone(),
             reply_rx,
@@ -643,6 +660,33 @@ impl JsRuntime {
     /// [`Self::start_create_html_page_from_response_with_inspector_session_restores`].
     pub fn reserve_page_for_creation(&self) -> RendererPageReservationToken {
         self.inner.renderer_owner.allocate_page_reservation_token()
+    }
+
+    /// Returns whether this runtime can consume an existing Page reservation.
+    ///
+    /// Auxiliary browsing contexts reserve their Page while the opener is
+    /// still executing. Protocol code must then select another engine wrapper
+    /// for this exact renderer owner instead of allocating a new owner from
+    /// browser-context metadata.
+    pub fn owns_page_reservation(&self, reservation: RendererPageReservationToken) -> bool {
+        reservation.local_host_id() == self.inner.renderer_owner.state.owner_local_host_id
+    }
+
+    #[cfg(test)]
+    pub(crate) fn reserve_related_page_for_creation_for_test(
+        &self,
+        source_page: &RendererPageHandle,
+    ) -> Result<RendererPageReservationToken> {
+        let local_host_id = self.inner.renderer_owner.state.owner_local_host_id;
+        anyhow::ensure!(
+            source_page.owner_local_host_id() == local_host_id,
+            "related-page script-agent admission requires the same renderer owner"
+        );
+        Ok(RendererPageReservationToken::new_related_auxiliary_page(
+            local_host_id,
+            self.inner.renderer_owner.allocate_page_id(),
+            source_page.renderer_page_id(),
+        ))
     }
 
     pub async fn create_streaming_raw_page_from_external_body(
@@ -910,7 +954,7 @@ impl JsRuntime {
             .renderer_owner
             .dispatch_command(RendererOwnerCommand::PrepareStreamingRawDocument {
                 token: page_reservation,
-                request,
+                request: Box::new(request),
             })
             .await?;
         match reply {
@@ -1048,6 +1092,47 @@ impl PreparedRendererDocument {
             .inner
             .renderer_owner
             .materialize_page_created_reply_parts(reply)
+    }
+
+    /// Commits this prepared Document into the stable Page that was used to
+    /// reserve it. The existing [`RendererPageHandle`] remains the only owning
+    /// handle; the returned value contains only replacement Document state.
+    pub async fn commit_page_replacement(
+        mut self,
+        permit: RendererDocumentCommitPermit,
+    ) -> std::result::Result<RendererPageReplacementCommit, RendererPageReplacementCommitError>
+    {
+        if permit.prepared_document() != self.token {
+            return Err(RendererPageReplacementCommitError::page_preserved(anyhow!(
+                "renderer document commit permit does not belong to this prepared document"
+            )));
+        }
+        self.cancel_on_drop = false;
+        let reply = match self
+            .runtime
+            .inner
+            .renderer_owner
+            .dispatch_command(
+                RendererOwnerCommand::CommitPreparedRendererPageReplacement { permit },
+            )
+            .await
+        {
+            Ok(reply) => reply,
+            Err(error) => {
+                return Err(
+                    match error.downcast::<RendererPageReplacementCommitError>() {
+                        Ok(error) => error,
+                        Err(error) => RendererPageReplacementCommitError::page_retired(error),
+                    },
+                );
+            }
+        };
+        match reply {
+            RendererOwnerReply::PageReplacementCommitted(replacement) => Ok(*replacement),
+            _ => Err(RendererPageReplacementCommitError::page_retired(anyhow!(
+                "renderer owner returned non-replacement reply for prepared Page replacement"
+            ))),
+        }
     }
 
     pub async fn cancel(mut self) -> Result<()> {

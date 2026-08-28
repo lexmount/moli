@@ -47,6 +47,60 @@ fn focus_prevent_scroll_controls_real_nested_scroll_container_reveal() {
 }
 
 #[test]
+fn document_has_focus_projects_the_page_focused_frame_ancestry() {
+    let mut vm = new_storage_test_vm("https://document-focus-tree.test/");
+
+    let focused_tree = vm
+        .eval(
+            r#"
+(() => {
+  const root = document.documentElement ||
+    document.appendChild(document.createElement('html'));
+  const body = document.body || root.appendChild(document.createElement('body'));
+  const first = body.appendChild(document.createElement('iframe'));
+  const second = body.appendChild(document.createElement('iframe'));
+  const firstInput = first.contentDocument.body.appendChild(
+    first.contentDocument.createElement('input'));
+  second.contentDocument.body.appendChild(second.contentDocument.createElement('input'));
+  firstInput.focus();
+  globalThis.__focusTree = { first, second, firstInput };
+  return JSON.stringify([
+    document.hasFocus(),
+    first.contentDocument.hasFocus(),
+    second.contentDocument.hasFocus(),
+    document.activeElement === first,
+    first.contentDocument.activeElement === firstInput
+  ]);
+})()
+"#,
+        )
+        .expect("focused-frame ancestry should evaluate");
+    assert_eq!(focused_tree, "[true,true,false,true,true]");
+
+    assert!(
+        vm.set_top_level_page_focus(false, false)
+            .expect("Page blur should complete")
+    );
+    let background = vm
+        .eval(
+            "JSON.stringify([document.hasFocus(), __focusTree.first.contentDocument.hasFocus(), __focusTree.second.contentDocument.hasFocus(), document.activeElement === __focusTree.first])",
+        )
+        .expect("background frame focus should evaluate");
+    assert_eq!(background, "[false,false,false,true]");
+
+    assert!(
+        vm.set_top_level_page_focus(true, true)
+            .expect("Page refocus should complete")
+    );
+    let restored = vm
+        .eval(
+            "JSON.stringify([document.hasFocus(), __focusTree.first.contentDocument.hasFocus(), __focusTree.second.contentDocument.hasFocus(), __focusTree.first.contentDocument.activeElement === __focusTree.firstInput])",
+        )
+        .expect("restored frame focus should evaluate");
+    assert_eq!(restored, "[true,true,false,true]");
+}
+
+#[test]
 fn focusing_contenteditable_in_child_frame_reveals_authored_frame_position() {
     let mut vm = new_storage_test_vm("https://focus-scroll.test/");
 

@@ -28,6 +28,52 @@ impl BrowserContext {
         self.active_target.runtime_slot.loaded_page()
     }
 
+    /// Resolves a loaded Page by logical target identity, independent of
+    /// whether foreground activation currently stores it in the active or a
+    /// background slot.
+    #[cfg(test)]
+    pub(crate) fn loaded_page_for_target(&self, target_id: &str) -> Option<&Page> {
+        if self.is_active_target(target_id) {
+            self.loaded_page()
+        } else {
+            self.background_target(target_id)
+                .and_then(BackgroundTarget::loaded_page)
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn loaded_page_for_target_mut(&mut self, target_id: &str) -> Option<&mut Page> {
+        if self.is_active_target(target_id) {
+            self.active_target.runtime_slot.loaded_page_mut()
+        } else {
+            self.background_target_mut(target_id)
+                .and_then(BackgroundTarget::loaded_page_mut)
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn target_url_for_target(&self, target_id: &str) -> Option<&str> {
+        if self.is_active_target(target_id) {
+            Some(self.target_url())
+        } else {
+            self.background_target(target_id)
+                .map(BackgroundTarget::target_url)
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn auxiliary_browsing_context_id_for_target(&self, target_id: &str) -> Option<u64> {
+        if self.is_active_target(target_id) {
+            self.active_target
+                .runtime_slot
+                .page_slot()
+                .auxiliary_browsing_context_id()
+        } else {
+            self.background_target(target_id)
+                .and_then(BackgroundTarget::auxiliary_browsing_context_id)
+        }
+    }
+
     pub(crate) fn has_loaded_page(&self) -> bool {
         self.active_target.runtime_slot.has_loaded_page()
     }
@@ -312,6 +358,65 @@ impl BrowserContext {
         }
         Ok(LoadedNavigationPageCommit {
             replaced_page_owner,
+            committed_document_post_response_continuation,
+        })
+    }
+
+    pub(crate) fn commit_loaded_navigation_document_replacement(
+        &mut self,
+        renderer_attachment_commit: CommittedRendererAgentAttachment,
+        history_url: &Url,
+    ) -> anyhow::Result<LoadedNavigationPageCommit> {
+        let primary_session_id = self.active_session_id_owned();
+        let previous_attachment = self
+            .active_target
+            .runtime_slot
+            .commit_loaded_navigation_document_replacement(&renderer_attachment_commit)?;
+        let page = self
+            .active_target
+            .runtime_slot
+            .loaded_page_mut()
+            .expect("committed stable navigation must retain its Page");
+        let new_attachment_id = page
+            .renderer_agent_attachment_id()
+            .expect("committed navigation Page must have a renderer attachment");
+        let committed_document_post_response_continuation =
+            page.take_committed_document_post_response_continuation();
+        if let Some(previous_attachment) = previous_attachment
+            && previous_attachment.id() != new_attachment_id
+        {
+            let replacements = prepare_renderer_call_replacements_for_devtools_sessions(
+                primary_session_id.as_deref(),
+                &mut self.devtools_session_state,
+                &mut self.auxiliary_devtools_session_states,
+                previous_attachment.id(),
+                new_attachment_id,
+            )?;
+            self.active_target
+                .runtime_slot
+                .install_pending_renderer_call_replacements(replacements);
+        }
+        let page_snapshot = self
+            .active_target
+            .runtime_slot
+            .loaded_page()
+            .map(|page| (history_url.to_string(), page.document_title()))
+            .expect("committed stable navigation must retain its Page");
+        self.active_target
+            .owner_state
+            .record_loaded_page_navigation_history(page_snapshot);
+        self.reset_subresource_network_cursor();
+        self.clear_websocket_network_artifacts();
+        self.active_target
+            .owner_state
+            .clear_committed_document_navigation_state();
+        self.clear_active_target_loaded_document_session_state();
+        self.clear_active_target_runtime_remote_object_tracking();
+        Ok(LoadedNavigationPageCommit {
+            // A renderer Document replacement keeps the same typed Page
+            // attachment in the public repository. Page-owned work therefore
+            // remains resident; Document currentness is tracked separately.
+            replaced_page_owner: None,
             committed_document_post_response_continuation,
         })
     }

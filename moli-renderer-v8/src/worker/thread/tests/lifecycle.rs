@@ -4937,7 +4937,7 @@ self.addEventListener("message", event => {
 }
 
 #[tokio::test]
-async fn service_worker_open_window_rejects_non_http_urls_before_parent_request() {
+async fn service_worker_open_window_admits_about_url_to_parent_and_rejects_file_scheme() {
     ensure_v8();
     let (bootstrap_tx, mut bootstrap_rx) =
         tokio::sync::mpsc::unbounded_channel::<crate::worker::WorkerBootstrapCompletion>();
@@ -4947,20 +4947,20 @@ async fn service_worker_open_window_rejects_non_http_urls_before_parent_request(
 self.addEventListener("message", event => {
     event.waitUntil((async () => {
         try {
-            await clients.openWindow("about:blank");
-            throw new Error("about:blank openWindow should reject");
+            await clients.openWindow("file:///");
+            throw new Error("file openWindow should reject");
         } catch (error) {
             if (error.name !== "TypeError" ||
                 error instanceof DOMException ||
-                error.message !== "'about:blank' cannot be opened.") {
-                throw new Error("unexpected about:blank openWindow rejection:" + JSON.stringify({
+                error.message !== "'file:///' cannot be opened.") {
+                throw new Error("unexpected file openWindow rejection:" + JSON.stringify({
                     name: error && error.name,
                     message: error && error.message,
                     isDomException: error instanceof DOMException
                 }));
             }
         }
-        const opened = await clients.openWindow("./opened.html");
+        const opened = await clients.openWindow("about:crash");
         if (opened !== null) {
             throw new Error("unexpected openWindow result:" + opened);
         }
@@ -5012,10 +5012,7 @@ self.addEventListener("message", event => {
             WorkerToParentMessage::ServiceWorkerClientsOpenWindow(open_window) => {
                 assert!(!saw_open_window);
                 assert_eq!(open_window.request_id, 1);
-                assert_eq!(
-                    open_window.url,
-                    url::Url::parse("https://example.test/app/opened.html").unwrap()
-                );
+                assert_eq!(open_window.url, url::Url::parse("about:crash").unwrap());
                 saw_open_window = true;
                 handle.dispatch_service_worker_clients_open_window_result(
                     crate::runtime::ServiceWorkerClientsOpenWindowResult {

@@ -12,7 +12,7 @@ use chromiumoxide_cdp::cdp::browser_protocol::page::{
 };
 use moli_core::page::{
     ChildFrameDocumentOpenedSnapshot, CompletedPageCommand, PendingPageCommand,
-    SameDocumentHistoryUpdate,
+    RendererPendingTopLevelHistoryTraversal, SameDocumentHistoryUpdate,
 };
 use moli_core::runtime::NavigationEngine;
 use moli_fetch::NET_ERR_ABORTED_ERROR_TEXT;
@@ -47,7 +47,10 @@ use super::{
         emit_child_frame_document_opened_background_events, emit_child_frame_lifecycle_terminal,
         emit_child_frame_navigation_commit, emit_navigation_started_background_events,
     },
-    navigation_commit::{commit_download_navigation_async, commit_loaded_navigation_async},
+    navigation_commit::{
+        commit_download_navigation_async, commit_loaded_navigation_async,
+        commit_stable_page_navigation_async,
+    },
 };
 
 pub(super) struct PendingNavigateLoadCommand {
@@ -394,6 +397,7 @@ pub(crate) struct MaterializedNavigationCompletion {
     state: NavigationDispatchState,
     navigation: network::MaterializedNavigationLoadOutcome,
     engine: Option<NavigationEngine>,
+    background_document_continuation: Option<BackgroundDocumentContinuationCompletion>,
 }
 
 impl MaterializedNavigationCompletion {
@@ -407,11 +411,20 @@ impl MaterializedNavigationCompletion {
             state,
             navigation,
             engine: None,
+            background_document_continuation: None,
         }
     }
 
     pub(crate) fn with_navigation_engine(mut self, engine: NavigationEngine) -> Self {
         self.engine = Some(engine);
+        self
+    }
+
+    pub(crate) fn with_background_document_continuation(
+        mut self,
+        completion: BackgroundDocumentContinuationCompletion,
+    ) -> Self {
+        self.background_document_continuation = Some(completion);
         self
     }
 
@@ -441,8 +454,15 @@ impl MaterializedNavigationCompletion {
         NavigationDispatchState,
         network::MaterializedNavigationLoadOutcome,
         Option<NavigationEngine>,
+        Option<BackgroundDocumentContinuationCompletion>,
     ) {
-        (self.token, self.state, self.navigation, self.engine)
+        (
+            self.token,
+            self.state,
+            self.navigation,
+            self.engine,
+            self.background_document_continuation,
+        )
     }
 }
 
@@ -537,6 +557,7 @@ impl BackgroundMainDocumentBodyCompletion {
 pub enum BackgroundNavigationCompletion {
     Lifecycle(Box<BackgroundNavigationLifecycleCompletion>),
     MainDocumentBody(Box<BackgroundMainDocumentBodyCompletion>),
+    DocumentContinuation(Box<BackgroundDocumentContinuationCompletion>),
 }
 
 impl BackgroundNavigationCompletion {
@@ -544,6 +565,7 @@ impl BackgroundNavigationCompletion {
         match self {
             Self::Lifecycle(completion) => completion.state.requested_url.as_str(),
             Self::MainDocumentBody(completion) => completion.state.requested_url.as_str(),
+            Self::DocumentContinuation(completion) => completion.requested_url.as_str(),
         }
     }
 
@@ -551,7 +573,100 @@ impl BackgroundNavigationCompletion {
         match self {
             Self::Lifecycle(_) => "lifecycle",
             Self::MainDocumentBody(_) => "main_document_body",
+            Self::DocumentContinuation(_) => "document_continuation",
         }
+    }
+
+    pub fn background_navigation_gate_key(
+        &self,
+    ) -> Option<crate::conn::BackgroundNavigationGateKey> {
+        match self {
+            Self::DocumentContinuation(completion) => {
+                completion.background_navigation_gate_key.clone()
+            }
+            Self::Lifecycle(_) | Self::MainDocumentBody(_) => None,
+        }
+    }
+
+    pub fn document_continuation_gate_key(
+        &self,
+    ) -> Option<crate::conn::BackgroundNavigationGateKey> {
+        match self {
+            Self::DocumentContinuation(completion) => {
+                Some(completion.document_continuation_gate_key.clone())
+            }
+            Self::Lifecycle(_) | Self::MainDocumentBody(_) => None,
+        }
+    }
+}
+
+/// Typed terminal for the post-commit renderer continuation.
+///
+/// `Page.navigate` may expose its response and install the committed renderer
+/// attachment before parser/document-start work reaches DOMContentLoaded. The
+/// navigation gate remains resident until that exact Document reaches the
+/// milestone or terminates/supersedes. This lets Debugger/Fetch control
+/// commands resume a commit-time V8 pause without allowing ordinary
+/// document-observing commands to overtake the continuation.
+pub struct BackgroundDocumentContinuationCompletion {
+    document_continuation_gate_key: crate::conn::BackgroundNavigationGateKey,
+    background_navigation_gate_key: Option<crate::conn::BackgroundNavigationGateKey>,
+    requested_url: String,
+    renderer_output_predecessor: Option<moli_core::RendererOutputFence>,
+    renderer_page_state: Option<std::sync::Arc<moli_core::page::RendererPageState>>,
+}
+
+impl BackgroundDocumentContinuationCompletion {
+    pub(crate) fn new(
+        gate_key: crate::conn::BackgroundNavigationGateKey,
+        requested_url: String,
+    ) -> Self {
+        Self {
+            document_continuation_gate_key: gate_key.clone(),
+            background_navigation_gate_key: Some(gate_key),
+            requested_url,
+            renderer_output_predecessor: None,
+            renderer_page_state: None,
+        }
+    }
+
+    fn for_foreground_navigation(
+        token: &DocumentNavigationToken,
+        state: &NavigationDispatchState,
+    ) -> Self {
+        Self {
+            document_continuation_gate_key:
+                crate::conn::BackgroundNavigationGateKey::for_navigation(token, state),
+            background_navigation_gate_key: None,
+            requested_url: state.requested_url.as_str().to_owned(),
+            renderer_output_predecessor: None,
+            renderer_page_state: None,
+        }
+    }
+
+    pub(crate) fn document_continuation_gate_key(
+        &self,
+    ) -> crate::conn::BackgroundNavigationGateKey {
+        self.document_continuation_gate_key.clone()
+    }
+
+    pub(crate) fn with_renderer_completion(
+        mut self,
+        completion: moli_core::page::RendererDocumentContinuationCompletion,
+    ) -> Self {
+        let (predecessor, page_state) = completion.into_parts();
+        self.renderer_output_predecessor = predecessor;
+        self.renderer_page_state = page_state;
+        self
+    }
+
+    pub(crate) fn into_renderer_completion_parts(
+        self,
+    ) -> (
+        Option<moli_core::RendererOutputFence>,
+        Option<std::sync::Arc<moli_core::page::RendererPageState>>,
+    ) {
+        (self.renderer_output_predecessor, self.renderer_page_state)
     }
 }
 
@@ -605,6 +720,13 @@ impl BackgroundNavigationLifecycleCompletion {
         self.state.requested_url.as_str()
     }
 
+    pub(crate) fn continuation_completion(&self) -> BackgroundDocumentContinuationCompletion {
+        BackgroundDocumentContinuationCompletion::new(
+            crate::conn::BackgroundNavigationGateKey::for_navigation(&self.token, &self.state),
+            self.state.requested_url.as_str().to_owned(),
+        )
+    }
+
     pub(crate) fn ready_elapsed_ms(&self) -> u128 {
         self.ready_at.elapsed().as_millis()
     }
@@ -620,6 +742,7 @@ impl BackgroundNavigationLifecycleCompletion {
         conn: &mut CdpConnection,
         retain_engine: bool,
     ) -> MaterializedNavigationCompletion {
+        let document_continuation = self.continuation_completion();
         let Self {
             token,
             state,
@@ -635,7 +758,8 @@ impl BackgroundNavigationLifecycleCompletion {
                     | NavigationLoadOutcome::Loaded(_))
             );
         let navigation = network::materialize_navigation_load_result(conn, &state, navigation);
-        let completion = MaterializedNavigationCompletion::new(token, state, navigation);
+        let completion = MaterializedNavigationCompletion::new(token, state, navigation)
+            .with_background_document_continuation(document_continuation);
         if should_retain_engine {
             completion.with_navigation_engine(engine)
         } else {
@@ -683,6 +807,10 @@ impl BackgroundNavigationCompletion {
             response_headers,
             response_from_cache,
         )))
+    }
+
+    pub fn document_continuation(completion: BackgroundDocumentContinuationCompletion) -> Self {
+        Self::DocumentContinuation(Box::new(completion))
     }
 }
 
@@ -1478,10 +1606,20 @@ fn session_owner_navigation_is_same_document_fragment(
     session_id: Option<&str>,
     target: &str,
 ) -> bool {
-    let Some(current) = conn.runtime_session_owner_target_url(session_id) else {
+    // The DevTools target URL is an observational projection and may already
+    // contain an accepted navigation's destination before that navigation
+    // executes. Classify against the installed renderer Page instead; using
+    // the projection can turn a cross-document `about:blank?…#…` form
+    // destination into a false same-document repeat.
+    let Some(mut current) = conn
+        .runtime_session_owner_slot(session_id)
+        .ok()
+        .and_then(|slot| slot.loaded_page())
+        .map(|page| page.final_url().clone())
+    else {
         return false;
     };
-    let (Ok(mut current), Ok(mut target)) = (Url::parse(&current), Url::parse(target)) else {
+    let Ok(mut target) = Url::parse(target) else {
         return false;
     };
     // Chromium treats an exact repeat of a fragment-free URL as a new
@@ -1936,8 +2074,9 @@ fn start_history_traversal_url_fallback(
 pub(super) fn start_session_owner_history_traversal_from_renderer(
     conn: &mut CdpConnection,
     session_id: Option<&str>,
-    delta: i64,
+    traversal: &RendererPendingTopLevelHistoryTraversal,
 ) -> PageCommandTaskStep {
+    let delta = traversal.delta();
     let reloaded_after_crash_session_ids =
         reloaded_after_crash_session_ids_for_session_owner(conn, session_id);
     let destination = DevToolsHistoryTraversalDestination::Delta(delta);
@@ -1957,6 +2096,10 @@ pub(super) fn start_session_owner_history_traversal_from_renderer(
                 return PageCommandTaskStep::Complete(CommandOutputPlan::success());
             }
         };
+    // Protocol targets retain the browser-side session-history controller as
+    // their authority. The renderer seed is a direct-Browser fallback and may
+    // describe only the realm-local suffix after browser-initiated navigation;
+    // it must not override or veto the browser-resolved entry here.
     start_resolved_history_traversal_command(
         conn,
         None,
@@ -2157,10 +2300,17 @@ pub(super) fn start_session_owner_navigation_from_renderer(
     conn: &mut CdpConnection,
     session_id: Option<&str>,
     url: &str,
+    source: Option<&moli_core::page::RendererTopLevelNavigationSource>,
+    referrer: Option<&str>,
+    document_referrer: Option<&str>,
     request_method: &str,
     request_body: Option<&[u8]>,
     request_headers: &[(String, String)],
     browser_navigation_kind: moli_fetch::BrowserNavigationRequestKind,
+    navigation_history_entry_seed: Option<&moli_page_types::NavigationHistoryEntrySeed>,
+    service_worker_clients_open_window_continuation: Option<
+        moli_core::page::RendererServiceWorkerClientsOpenWindowContinuation,
+    >,
 ) -> NavigateCommandStart {
     let reloaded_after_crash_session_ids =
         reloaded_after_crash_session_ids_for_session_owner(conn, session_id);
@@ -2177,6 +2327,12 @@ pub(super) fn start_session_owner_navigation_from_renderer(
         // classification as Page.navigate. In particular, a freshly created
         // popup's `about:blank#fragment` target must not discard its initial
         // Document by trying to fetch the non-fetchable about: URL.
+        if let Some(continuation) = service_worker_clients_open_window_continuation {
+            // No cross-Document WindowClient is installed. `about:` is the
+            // only admitted ServiceWorker producer that can reach this branch,
+            // and the specification exposes no WindowClient for it.
+            continuation.resolve_null();
+        }
         start_top_level_same_document_navigate(conn, session_id, url.to_owned(), result_payload)
     } else {
         let result_projection = NavigationResultProjection::Cdp(result_payload);
@@ -2185,11 +2341,15 @@ pub(super) fn start_session_owner_navigation_from_renderer(
             None,
             session_id,
             url,
-            None,
+            source,
+            referrer,
+            document_referrer,
             result_projection,
             request_method,
             request_body.map(<[u8]>::to_vec),
             request_headers.to_vec(),
+            navigation_history_entry_seed.cloned(),
+            service_worker_clients_open_window_continuation,
             // The renderer has already settled the browsing-context action;
             // fetching and committing the destination is a new navigation
             // lifecycle, not work that the current protocol projection may
@@ -2779,11 +2939,15 @@ fn start_navigate_to_url_command_with_background_policy(
         command_id,
         command_session_id,
         url,
+        None,
+        referrer,
         referrer,
         result_projection,
         "GET",
         None,
         Vec::new(),
+        None,
+        None,
         allow_background_navigation,
         request_load_policy,
         initiator,
@@ -2806,11 +2970,17 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
     command_id: Option<u64>,
     command_session_id: Option<&str>,
     url: &str,
+    source: Option<&moli_core::page::RendererTopLevelNavigationSource>,
     referrer: Option<&str>,
+    document_referrer: Option<&str>,
     result_projection: NavigationResultProjection,
     request_method: &str,
     request_body: Option<Vec<u8>>,
     request_headers: Vec<(String, String)>,
+    navigation_history_entry_seed: Option<moli_page_types::NavigationHistoryEntrySeed>,
+    service_worker_clients_open_window_continuation: Option<
+        moli_core::page::RendererServiceWorkerClientsOpenWindowContinuation,
+    >,
     allow_background_navigation: bool,
     request_load_policy: NavigationRequestLoadPolicy,
     initiator: NavigationStartInitiator,
@@ -2830,10 +3000,13 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
             error.to_string(),
         ));
     }
+    let request_has_explicit_referrer = request_headers
+        .iter()
+        .any(|(name, _)| name.eq_ignore_ascii_case("referer"));
     let mut navigation_preflight = conn.prepare_navigation_request_for_session_owner(
         command_session_id,
         &requested_url,
-        referrer,
+        if source.is_none() { referrer } else { None },
         url.starts_with("data:"),
     );
     let frame_id = navigation_preflight
@@ -2863,6 +3036,19 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
         .as_ref()
         .map(|preflight| preflight.inherited_secure_context_type.clone())
         .unwrap_or_else(|| "Secure".to_owned());
+    let source_document_security = NavigationSourceDocumentSecurityContext::new(
+        inherited_security_origin,
+        inherited_secure_context_type,
+        document_referrer
+            .or(referrer)
+            .unwrap_or_default()
+            .to_owned(),
+    );
+    let source_document_security = match source {
+        Some(source) => source_document_security
+            .with_renderer_navigation_source(source.clone(), request_has_explicit_referrer),
+        None => source_document_security,
+    };
     let mut navigation_state = NavigationDispatchState {
         navigate_id: command_id,
         navigate_session_id: command_session_id.map(str::to_owned),
@@ -2879,12 +3065,11 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
             .map(|body| String::from_utf8_lossy(body).into_owned()),
         request_body_bytes: request_body,
         request_headers,
+        navigation_history_entry_seed: navigation_history_entry_seed.map(Box::new),
         request_load_policy,
         timestamp,
-        source_document_security: NavigationSourceDocumentSecurityContext::new(
-            inherited_security_origin,
-            inherited_secure_context_type,
-        ),
+        source_document_security: Box::new(source_document_security),
+        service_worker_clients_open_window_continuation,
     };
     let mut pending_fetch_navigation = None;
 
@@ -2936,6 +3121,22 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
                     .document_auth_required_blocked_intercepts
                     .clone(),
             });
+        }
+    }
+    if source.is_some() && !request_has_explicit_referrer {
+        navigation_state
+            .request_headers
+            .retain(|(name, _)| !name.eq_ignore_ascii_case("referer"));
+        if let Some(referrer) = navigation_state
+            .source_document_security
+            .source_policy_referrer_for(&requested_url)
+        {
+            navigation_state
+                .request_headers
+                .push(("Referer".to_owned(), referrer));
+        }
+        if let Some(pending) = pending_fetch_navigation.as_mut() {
+            pending.navigation = navigation_state.clone();
         }
     }
 
@@ -3384,64 +3585,170 @@ pub(crate) async fn complete_materialized_navigation_into_buffer_async(
     state: NavigationDispatchState,
     navigation: network::MaterializedNavigationLoadOutcome,
     command_context: &mut crate::conn::CommandDispatchContext,
+    mut background_document_continuation: Option<BackgroundDocumentContinuationCompletion>,
 ) {
     let navigation_session_id = state.navigate_session_id.clone();
     let navigation_loader_id = state.loader_id.clone();
+    let service_worker_clients_open_window_continuation = state
+        .service_worker_clients_open_window_continuation
+        .clone();
+    let mut service_worker_open_window_document_committed = false;
+    let document_continuation_gate_key =
+        crate::conn::BackgroundNavigationGateKey::for_navigation(&token, &state);
+    let mut foreground_document_continuation_observer = None;
     match navigation {
         network::MaterializedNavigationLoadOutcome::ResponseCommitReady(navigation) => {
             let navigation = *navigation;
-            let configuration = conn.prepared_document_commit_configuration_for_session_owner(
+            let stable_page_target = navigation.stable_page_target().cloned();
+            let renderer_page = navigation.renderer_page_residence_identity();
+            let candidate = match conn.prepare_renderer_agent_candidate_token_for_session_owner(
                 state.navigate_session_id.as_deref(),
-                navigation.final_url(),
-            );
-            if let Err(error) = navigation.update_commit_configuration(configuration).await {
-                push_navigation_commit_error(out, &state, error);
-            } else {
-                let renderer_page = navigation.renderer_page_residence_identity();
-                let candidate = conn.prepare_renderer_agent_candidate_token_for_session_owner(
+                &token,
+                navigation.renderer_devtools_agent_token(),
+            ) {
+                Ok(candidate) => Some(candidate),
+                Err(error) => {
+                    tracing::debug!(
+                        %error,
+                        session_id = state.navigate_session_id.as_deref(),
+                        loader_id = token.loader_id,
+                        "dropping superseded response commit-ready navigation"
+                    );
+                    push_navigation_commit_error(out, &state, error);
+                    None
+                }
+            };
+            if let Some(candidate) = candidate {
+                let configuration = conn.prepared_document_commit_configuration_for_session_owner(
                     state.navigate_session_id.as_deref(),
-                    &token,
-                    navigation.renderer_devtools_agent_token(),
+                    navigation.final_url(),
                 );
-                match candidate.and_then(|candidate| {
-                    conn.commit_renderer_agent_candidate_for_session_owner(
-                        state.navigate_session_id.as_deref(),
-                        candidate,
-                        renderer_page,
-                    )
-                }) {
+                if let Err(error) = navigation.update_commit_configuration(configuration).await {
+                    push_navigation_commit_error(out, &state, error);
+                } else {
+                    match match stable_page_target.as_ref() {
+                        Some(expected) => conn
+                            .commit_renderer_agent_candidate_for_stable_page_replacement_for_session_owner(
+                                state.navigate_session_id.as_deref(),
+                                candidate,
+                                expected,
+                            ),
+                        None => conn.commit_renderer_agent_candidate_for_session_owner(
+                            state.navigate_session_id.as_deref(),
+                            candidate,
+                            renderer_page,
+                        ),
+                    } {
                     Ok(transaction) => {
                         let permit = navigation.issue_commit_permit();
-                        match navigation.commit(permit).await {
-                            Ok(navigation) => {
-                                let navigation = network::materialize_loaded_navigation_progress(
-                                    conn, &state, navigation,
-                                );
-                                commit_loaded_navigation_async(
-                                    conn,
-                                    out,
-                                    Some(&token),
-                                    state,
+                        if let Some(expected) = stable_page_target {
+                            let failed_url = navigation.final_url().clone();
+                            match conn
+                                .commit_stable_page_navigation_document_for_session_owner_async(
+                                    state.navigate_session_id.as_deref(),
+                                    &expected,
                                     navigation,
-                                    Some(transaction),
-                                    command_context,
+                                    permit,
                                 )
-                                .await;
-                            }
-                            Err(error) => {
-                                if let Err(rollback_error) = conn
-                                    .rollback_committed_renderer_agent_candidate_for_session_owner(
-                                        state.navigate_session_id.as_deref(),
+                                .await
+                            {
+                                Ok(navigation) => {
+                                    let mut navigation =
+                                        network::materialize_stable_page_navigation_progress(
+                                            conn, &state, navigation,
+                                        );
+                                    let is_network_error_page =
+                                        navigation.network_error_page.is_some();
+                                    foreground_document_continuation_observer =
+                                        schedule_renderer_document_continuation(
+                                            conn,
+                                            &token,
+                                            &state,
+                                            &mut background_document_continuation,
+                                            navigation.document_continuation_observer.take(),
+                                        );
+                                    service_worker_open_window_document_committed =
+                                        Box::pin(commit_stable_page_navigation_async(
+                                        conn,
+                                        out,
+                                        &token,
+                                        state,
+                                        navigation,
                                         transaction,
-                                    )
-                                {
-                                    tracing::warn!(
-                                        %rollback_error,
-                                        session_id = state.navigate_session_id.as_deref(),
-                                        "failed to roll back renderer channel after prepared document commit failure"
-                                    );
+                                    ))
+                                    .await
+                                            && !is_network_error_page;
                                 }
-                                push_navigation_commit_error(out, &state, error);
+                                Err(error) => {
+                                    if error.page_was_preserved() {
+                                        if let Err(rollback_error) = conn
+                                            .rollback_committed_renderer_agent_candidate_for_session_owner(
+                                                state.navigate_session_id.as_deref(),
+                                                transaction,
+                                            )
+                                        {
+                                            tracing::warn!(
+                                                %rollback_error,
+                                                session_id = state.navigate_session_id.as_deref(),
+                                                "failed to roll back renderer channel after pre-commit Page replacement failure"
+                                            );
+                                        }
+                                    } else {
+                                        let _ = conn
+                                            .discard_loaded_page_after_failed_navigation_for_session_owner_async(
+                                                state.navigate_session_id.as_deref(),
+                                                &failed_url,
+                                            )
+                                            .await;
+                                    }
+                                    push_navigation_commit_error(out, &state, error.to_string());
+                                }
+                            }
+                        } else {
+                            match navigation.commit(permit).await {
+                                Ok(navigation) => {
+                                    let mut navigation =
+                                        network::materialize_loaded_navigation_progress(
+                                            conn, &state, navigation,
+                                        );
+                                    let is_network_error_page =
+                                        navigation.network_error_page.is_some();
+                                    foreground_document_continuation_observer =
+                                        schedule_renderer_document_continuation(
+                                            conn,
+                                            &token,
+                                            &state,
+                                            &mut background_document_continuation,
+                                            navigation.document_continuation_observer.take(),
+                                        );
+                                    service_worker_open_window_document_committed =
+                                        commit_loaded_navigation_async(
+                                        conn,
+                                        out,
+                                        Some(&token),
+                                        state,
+                                        navigation,
+                                        Some(transaction),
+                                        command_context,
+                                    )
+                                    .await
+                                            && !is_network_error_page;
+                                }
+                                Err(error) => {
+                                    if let Err(rollback_error) = conn
+                                        .rollback_committed_renderer_agent_candidate_for_session_owner(
+                                            state.navigate_session_id.as_deref(),
+                                            transaction,
+                                        )
+                                    {
+                                        tracing::warn!(
+                                            %rollback_error,
+                                            session_id = state.navigate_session_id.as_deref(),
+                                            "failed to roll back renderer channel after prepared document commit failure"
+                                        );
+                                    }
+                                    push_navigation_commit_error(out, &state, error);
+                                }
                             }
                         }
                     }
@@ -3455,19 +3762,30 @@ pub(crate) async fn complete_materialized_navigation_into_buffer_async(
                         push_navigation_commit_error(out, &state, error);
                     }
                 }
+                }
             }
         }
         network::MaterializedNavigationLoadOutcome::Loaded(navigation) => {
-            commit_loaded_navigation_async(
+            let mut navigation = *navigation;
+            let is_network_error_page = navigation.network_error_page.is_some();
+            foreground_document_continuation_observer = schedule_renderer_document_continuation(
+                conn,
+                &token,
+                &state,
+                &mut background_document_continuation,
+                navigation.document_continuation_observer.take(),
+            );
+            service_worker_open_window_document_committed = commit_loaded_navigation_async(
                 conn,
                 out,
                 Some(&token),
                 state,
-                *navigation,
+                navigation,
                 None,
                 command_context,
             )
-            .await;
+            .await
+                && !is_network_error_page;
         }
         network::MaterializedNavigationLoadOutcome::Download(navigation) => {
             let _ = conn.clear_pending_navigation_history_update_for_session_owner(
@@ -3476,15 +3794,25 @@ pub(crate) async fn complete_materialized_navigation_into_buffer_async(
             commit_download_navigation_async(conn, out, state, navigation, command_context).await;
         }
         network::MaterializedNavigationLoadOutcome::Failed(navigation) => {
-            let _ = conn.clear_pending_navigation_history_update_for_session_owner(
-                state.navigate_session_id.as_deref(),
-            );
             let network::MaterializedFailedDocumentProgress {
                 error_text,
                 document_policy,
+                history_policy,
                 response_mode,
                 progress_gate,
             } = navigation;
+            match history_policy {
+                network::FailedNavigationHistoryPolicy::DiscardPendingUpdate => {
+                    let _ = conn.clear_pending_navigation_history_update_for_session_owner(
+                        state.navigate_session_id.as_deref(),
+                    );
+                }
+                network::FailedNavigationHistoryPolicy::RetainInitialEmptyDocumentReplacement => {
+                    let _ = conn.resolve_no_commit_response_navigation_history_for_session_owner(
+                        state.navigate_session_id.as_deref(),
+                    );
+                }
+            }
             if document_policy.invalidates_committed_document() {
                 let _ = conn
                     .discard_loaded_page_after_failed_navigation_for_session_owner_async(
@@ -3500,6 +3828,10 @@ pub(crate) async fn complete_materialized_navigation_into_buffer_async(
             )
             .emit_navigation_error_into_buffer(out, &error_text);
         }
+    }
+    if let Some(completion) = background_document_continuation {
+        let observer = conn.schedule_background_document_continuation_completion(completion, None);
+        debug_assert!(observer.is_none());
     }
     let primary_protocol_session_id = conn
         .runtime_session_owner_primary_session_id(navigation_session_id.as_deref())
@@ -3544,6 +3876,78 @@ pub(crate) async fn complete_materialized_navigation_into_buffer_async(
         navigation_session_id.as_deref(),
         &navigation_loader_id,
     );
+    settle_service_worker_clients_open_window_navigation(
+        conn,
+        navigation_session_id.as_deref(),
+        service_worker_clients_open_window_continuation,
+        service_worker_open_window_document_committed,
+    );
+    if let Some(observer) = foreground_document_continuation_observer {
+        let (predecessor, page_state) = observer.wait().await.into_parts();
+        let page_state_applied = page_state.is_some_and(|page_state| {
+            conn.apply_renderer_document_continuation_page_state(
+                &document_continuation_gate_key,
+                page_state,
+            )
+        });
+        if page_state_applied {
+            let _ = conn
+                .target_session_owner_navigation_history_snapshot(navigation_session_id.as_deref());
+            if let Some(target_id) = document_continuation_gate_key.target_id() {
+                command_context.protocol_events_mut().extend(
+                    conn.exact_target_info_changed_event_plan_for_target_delta(target_id)
+                        .into_background_events(),
+                );
+            }
+        }
+        if let Some(predecessor) = predecessor {
+            command_context.set_renderer_output_predecessor(predecessor);
+        }
+    }
+}
+
+fn settle_service_worker_clients_open_window_navigation(
+    conn: &CdpConnection,
+    session_id: Option<&str>,
+    continuation: Option<moli_core::page::RendererServiceWorkerClientsOpenWindowContinuation>,
+    document_committed: bool,
+) {
+    let Some(continuation) = continuation else {
+        return;
+    };
+    if !document_committed {
+        continuation.resolve_null();
+        return;
+    }
+    let Some(page) = conn
+        .runtime_session_owner_slot(session_id)
+        .ok()
+        .and_then(|slot| slot.loaded_page())
+    else {
+        continuation.resolve_null();
+        return;
+    };
+    continuation
+        .resolve_for_committed_page(page.renderer_page_id(), page.service_worker_client_id());
+}
+
+fn schedule_renderer_document_continuation(
+    conn: &mut CdpConnection,
+    token: &DocumentNavigationToken,
+    state: &NavigationDispatchState,
+    background_completion: &mut Option<BackgroundDocumentContinuationCompletion>,
+    observer: Option<moli_core::page::RendererDocumentContinuationObserver>,
+) -> Option<moli_core::page::RendererDocumentContinuationObserver> {
+    if let Some(completion) = background_completion.take() {
+        return conn.schedule_background_document_continuation_completion(completion, observer);
+    }
+    if let Some(observer) = observer {
+        return conn.schedule_background_document_continuation_completion(
+            BackgroundDocumentContinuationCompletion::for_foreground_navigation(token, state),
+            Some(observer),
+        );
+    }
+    None
 }
 
 fn push_navigation_commit_error(

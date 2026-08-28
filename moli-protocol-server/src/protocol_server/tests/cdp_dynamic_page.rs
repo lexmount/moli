@@ -357,19 +357,21 @@ async fn wait_for_target_list(
     label: &str,
     predicate: impl Fn(&[serde_json::Value]) -> bool,
 ) -> Vec<serde_json::Value> {
+    let mut last_targets = None;
     timeout(Duration::from_secs(5), async {
         loop {
             let response = fetch_server_json(addr, "/json/list").await;
-            if let Some(targets) = response.as_array()
-                && predicate(targets)
-            {
-                return targets.clone();
+            if let Some(targets) = response.as_array() {
+                if predicate(targets) {
+                    return targets.clone();
+                }
+                last_targets = Some(targets.clone());
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await
-    .unwrap_or_else(|_| panic!("{label}"))
+    .unwrap_or_else(|_| panic!("{label}; last target list: {last_targets:#?}"))
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

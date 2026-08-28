@@ -316,6 +316,22 @@ impl PageRuntimeTaskSource {
         Rc::as_ptr(&self.page_task_producer_routes) as usize
     }
 
+    pub(crate) fn signal_top_level_close_output_handoff(&self) {
+        if let Some(owner_wake) = &self.owner_wake {
+            owner_wake.signal_top_level_close_output_handoff();
+        }
+    }
+
+    /// Allocates one exact cross-Document commit identity from this stable
+    /// Page source. Prepared browser-owned navigation does not originate in a
+    /// ScriptVm, but it must share the same identity namespace as script
+    /// navigation so two replacement publications can never alias.
+    pub(crate) fn next_top_level_navigation_handoff(
+        &self,
+    ) -> super::RendererTopLevelNavigationHandoff {
+        self.wake.next_top_level_navigation_handoff()
+    }
+
     pub(crate) fn v8_foreground_task_sender(&self) -> Option<RendererPageV8ForegroundTaskSender> {
         self.page_task_producer_routes
             .borrow()
@@ -700,7 +716,7 @@ impl RendererTopLevelNavigationHandoffSender {
 
     /// Hand one exact request directly to the Page owner without manufacturing
     /// a Page scheduler task; the descriptor already occupies the ScriptVm's
-    /// unique pending-navigation slot.
+    /// replace-only ordinary slot or Document-local JavaScript URL task queue.
     pub(crate) fn send(&self, handoff: super::RendererTopLevelNavigationHandoff) -> bool {
         self.owner_wake
             .as_ref()

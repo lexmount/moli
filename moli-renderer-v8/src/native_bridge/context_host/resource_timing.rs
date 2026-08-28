@@ -19,6 +19,7 @@ impl ResourceTimingBufferId {
 }
 
 struct ResourceTimingBufferState {
+    owner_realm: Option<super::RuntimeObservableContextToken>,
     size_limit: u32,
     current_size: u32,
     secondary: VecDeque<v8::Global<v8::Object>>,
@@ -26,8 +27,9 @@ struct ResourceTimingBufferState {
 }
 
 impl ResourceTimingBufferState {
-    fn new(size_limit: u32) -> Self {
+    fn new(owner_realm: Option<super::RuntimeObservableContextToken>, size_limit: u32) -> Self {
         Self {
+            owner_realm,
             size_limit,
             current_size: 0,
             secondary: VecDeque::new(),
@@ -51,7 +53,11 @@ struct ResourceTimingBufferRegistry {
 }
 
 impl ResourceTimingBufferRegistry {
-    fn insert(&mut self, size_limit: u32) -> ResourceTimingBufferId {
+    fn insert(
+        &mut self,
+        owner_realm: Option<super::RuntimeObservableContextToken>,
+        size_limit: u32,
+    ) -> ResourceTimingBufferId {
         loop {
             self.next_id = self
                 .next_id
@@ -59,7 +65,7 @@ impl ResourceTimingBufferRegistry {
                 .expect("resource timing entry id space exhausted");
             let id = ResourceTimingBufferId(self.next_id);
             if let std::collections::hash_map::Entry::Vacant(entry) = self.buffers.entry(id) {
-                entry.insert(ResourceTimingBufferState::new(size_limit));
+                entry.insert(ResourceTimingBufferState::new(owner_realm, size_limit));
                 return id;
             }
         }
@@ -93,18 +99,46 @@ impl ResourceTimingBufferFinalizer {
 impl JsContextHost {
     pub(crate) fn create_resource_timing_buffer(
         &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
         size_limit: u32,
     ) -> (ResourceTimingBufferId, ResourceTimingBufferFinalizer) {
+        let owner_realm = super::current_runtime_observable_context_token(scope);
         let id = self
             .resource_timing_buffers
             .0
             .borrow_mut()
-            .insert(size_limit);
+            .insert(owner_realm, size_limit);
         let finalizer = ResourceTimingBufferFinalizer {
             registry: Rc::downgrade(&self.resource_timing_buffers.0),
             id,
         };
         (id, finalizer)
+    }
+
+    pub(crate) fn retire_resource_timing_buffers_for_context_token(
+        &mut self,
+        context_token: super::RuntimeObservableContextToken,
+    ) -> usize {
+        let mut registry = self.resource_timing_buffers.0.borrow_mut();
+        let before = registry.buffers.len();
+        registry
+            .buffers
+            .retain(|_, state| state.owner_realm != Some(context_token));
+        before.saturating_sub(registry.buffers.len())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn resource_timing_buffer_count_for_context_token_for_test(
+        &self,
+        context_token: super::RuntimeObservableContextToken,
+    ) -> usize {
+        self.resource_timing_buffers
+            .0
+            .borrow()
+            .buffers
+            .values()
+            .filter(|state| state.owner_realm == Some(context_token))
+            .count()
     }
 
     pub(crate) fn set_resource_timing_buffer_size_limit(
@@ -261,7 +295,7 @@ mod tests {
 
     #[test]
     fn scalar_buffer_state_keeps_pending_and_capacity_orthogonal() {
-        let mut state = ResourceTimingBufferState::new(1);
+        let mut state = ResourceTimingBufferState::new(None, 1);
         assert!(state.can_add_immediately());
 
         state.full_task_pending = true;
@@ -277,7 +311,7 @@ mod tests {
     #[test]
     fn registry_ids_are_nonzero_and_finalizer_removes_state() {
         let shared = SharedResourceTimingBufferRegistry::new();
-        let id = shared.0.borrow_mut().insert(250);
+        let id = shared.0.borrow_mut().insert(None, 250);
         assert_ne!(id.raw(), 0);
         let finalizer = ResourceTimingBufferFinalizer {
             registry: Rc::downgrade(&shared.0),

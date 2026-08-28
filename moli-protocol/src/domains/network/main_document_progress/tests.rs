@@ -1373,6 +1373,64 @@ fn progress_output_barrier_drains_source_generated_progress_before_cdp_output() 
 }
 
 #[test]
+fn completed_no_commit_response_progress_orders_response_before_canceled_failure() {
+    let final_url = Url::parse("http://example.test/no-content").unwrap();
+    let events = CompletedMainDocumentNetworkEvents::new(
+        "GET".to_owned(),
+        vec![("Accept".to_owned(), "text/html".to_owned())],
+        None,
+        204,
+        vec![("Content-Type".to_owned(), "text/plain".to_owned())],
+        Vec::new(),
+        Vec::new(),
+        false,
+        false,
+    );
+    let batches = completed_progress_context().no_commit_response_event_batches(
+        &events,
+        &final_url,
+        "net::ERR_ABORTED",
+    );
+    let mut drain =
+        MainDocumentProgressDrain::from_source(MainDocumentProgressSource::completed_body(batches));
+
+    let mut out = drain_into_protocol_messages(&mut drain);
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0]["method"], json!("Network.requestWillBeSent"));
+
+    drain.mark_output_visible_until(MainDocumentProgressOutputBoundary::ResponseMetadataVisible);
+    out = drain_into_protocol_messages(&mut drain);
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0]["method"], json!("Network.responseReceived"));
+    assert_eq!(out[0]["params"]["response"]["status"], json!(204));
+
+    drain.mark_output_visible_until(MainDocumentProgressOutputBoundary::BodyFinishedVisible);
+    out = drain_into_protocol_messages(&mut drain);
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0]["method"], json!("Network.loadingFailed"));
+    assert_eq!(out[0]["params"]["errorText"], json!("net::ERR_ABORTED"));
+    assert_eq!(out[0]["params"]["canceled"], json!(true));
+
+    let batches = completed_progress_context().no_commit_response_event_batches(
+        &events,
+        &final_url,
+        "net::ERR_ABORTED",
+    );
+    let mut gate = MainDocumentProgressGate::new(MainDocumentProgressDrain::from_source(
+        MainDocumentProgressSource::completed_body(batches),
+    ));
+    gate.make_body_finished_visible();
+    let mut terminal = Vec::new();
+    MainDocumentProgressBackgroundEventBarrier::background_events(&mut terminal, &mut gate)
+        .drain_progress();
+    let terminal = protocol_messages_from_background_events(terminal);
+    assert_eq!(terminal.len(), 3);
+    assert_eq!(terminal[0]["method"], json!("Network.requestWillBeSent"));
+    assert_eq!(terminal[1]["method"], json!("Network.responseReceived"));
+    assert_eq!(terminal[2]["method"], json!("Network.loadingFailed"));
+}
+
+#[test]
 fn failed_navigation_progress_drain_prequeues_loading_failed() {
     let target = MainDocumentProgressEventTarget {
         session_ids: vec![Some("SID-1".to_owned())],

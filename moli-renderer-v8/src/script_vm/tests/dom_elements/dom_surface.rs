@@ -8678,16 +8678,28 @@ fn assigning_document_does_not_replace_legacy_unforgeable_document_alias() {
     let result = vm
         .eval(
             r#"
-            [
-                document === globalThis.document,
-                typeof document.createElement,
-                document.hacked === true
-            ].join("|")
+            (() => {
+                const descriptor = Object.getOwnPropertyDescriptor(window, "document");
+                return JSON.stringify({
+                    sameDocument: document === globalThis.document,
+                    createElementType: typeof document.createElement,
+                    assignmentIgnored: document.hacked !== true,
+                    own: Object.hasOwn(window, "document"),
+                    getterType: typeof descriptor.get,
+                    getterName: descriptor.get.name,
+                    setterType: typeof descriptor.set,
+                    enumerable: descriptor.enumerable,
+                    configurable: descriptor.configurable
+                });
+            })()
             "#,
         )
         .expect("document alias reassignment probe should evaluate");
 
-    assert_eq!(result, "true|function|false");
+    assert_eq!(
+        result,
+        r#"{"sameDocument":true,"createElementType":"function","assignmentIgnored":true,"own":true,"getterType":"function","getterName":"get document","setterType":"undefined","enumerable":true,"configurable":false}"#
+    );
 }
 #[test]
 fn iframe_id_named_window_property_returns_element_not_child_window() {
@@ -9090,6 +9102,9 @@ link.target = 'target';
 root.appendChild(link);
 let seen = [];
 frame.contentWindow.navigation.onnavigate = e => {
+  const marker = document.createElement('span');
+  marker.id = 'reentrant-target-navigation';
+  root.appendChild(marker);
   seen.push([
     e.navigationType,
     e.cancelable,
@@ -9102,7 +9117,8 @@ frame.contentWindow.navigation.onnavigate = e => {
     e.destination.key,
     e.destination.id,
     e.destination.index,
-    e.sourceElement === link
+    e.sourceElement === link,
+    marker.ownerDocument === document
   ].join(','));
 };
 link.click();
@@ -9113,7 +9129,7 @@ seen.join('|')
 
     assert_eq!(
         result,
-        "push,true,true,false,false,true,https://targeted-child-navigate.test/next.html,false,,,-1,true"
+        "push,true,true,false,false,true,https://targeted-child-navigate.test/next.html,false,,,-1,true,true"
     );
 }
 #[test]
@@ -9457,6 +9473,86 @@ async fn queued_iframe_javascript_url_does_not_execute_after_scripting_is_disabl
             .child_browsing_context_pending_live_navigation_for_test(child_handle)
             .is_none(),
         "disabled javascript URL work must settle its exact pending navigation"
+    );
+}
+
+#[tokio::test]
+async fn iframe_javascript_url_uses_the_stable_child_target_trusted_types_policy() {
+    let mut vm = new_storage_test_vm("https://iframe-javascript-target-policy.test/");
+
+    vm.eval(
+        r#"
+(() => {
+  const frame = document.createElement("iframe");
+  frame.id = "trusted-types-javascript-url-frame";
+  (document.body || document.documentElement || document).appendChild(frame);
+})()
+"#,
+    )
+    .expect("child Trusted Types fixture should evaluate");
+    assert_initial_about_blank_child_completed_synchronously_for_test(
+        &mut vm,
+        "child Trusted Types fixture should initialize the child Document",
+    )
+    .await;
+    let child_context_id = materialize_single_child_default_realm_for_test(
+        &mut vm,
+        "child Trusted Types JavaScript URL target",
+    );
+
+    vm.eval_in_child_default_context(
+        child_context_id,
+        r#"
+(() => {
+  const meta = document.createElement("meta");
+  meta.httpEquiv = "Content-Security-Policy";
+  meta.content = "require-trusted-types-for 'script'";
+  (document.head || document.documentElement).appendChild(meta);
+  globalThis.__childOriginalJavascriptUrlRan = false;
+  globalThis.__childRewrittenJavascriptUrlRan = false;
+  globalThis.__childJavascriptUrlDefaultPolicyCalls = [];
+  trustedTypes.createPolicy("default", {
+    createScript(value, type, sink) {
+      __childJavascriptUrlDefaultPolicyCalls.push([value, type, sink]);
+      return value.replace(
+        "__childOriginalJavascriptUrlRan",
+        "__childRewrittenJavascriptUrlRan"
+      );
+    }
+  });
+  location.href =
+    "javascript:globalThis.__childOriginalJavascriptUrlRan = true";
+})()
+"#,
+    )
+    .expect("child JavaScript URL should queue under the target policy");
+    assert!(
+        vm.run_child_frame_task_source_once_for_test(ChildFrameSemanticTurnKind::NavigationCommit)
+            .await,
+        "child NavigationCommit should enqueue target-owned JavaScript URL work"
+    );
+    expect_child_frame_task_source_after_realm_prerequisite(
+        &mut vm,
+        ChildFrameSemanticTurnKind::DocumentScriptReady,
+        "child JavaScript URL should run after the stable target realm prerequisite",
+    )
+    .await;
+
+    let state = vm
+        .eval_in_child_default_context(
+            child_context_id,
+            r#"
+JSON.stringify({
+  original: __childOriginalJavascriptUrlRan,
+  rewritten: __childRewrittenJavascriptUrlRan,
+  calls: __childJavascriptUrlDefaultPolicyCalls
+})
+"#,
+        )
+        .expect("child target Trusted Types state should evaluate");
+    assert_eq!(
+        state,
+        r#"{"original":false,"rewritten":true,"calls":[["globalThis.__childOriginalJavascriptUrlRan = true","TrustedScript","Location href"]]}"#
     );
 }
 
@@ -12824,6 +12920,661 @@ async fn main_window_indexed_child_descriptor_matches_window_semantics() {
 }
 
 #[test]
+fn window_indexed_children_keep_frame_tree_creation_order_after_later_dom_insertion() {
+    let mut vm = new_storage_test_vm("https://web-platform.test:8443/page.html");
+
+    vm.exec(
+        r#"
+const slot = document.createElement("div");
+const insertionRoot = document.body || document.documentElement || document;
+insertionRoot.appendChild(slot);
+
+const first = document.createElement("iframe");
+first.srcdoc = "<p>first</p>";
+insertionRoot.appendChild(first);
+
+const second = document.createElement("iframe");
+second.srcdoc = "<p>second</p>";
+insertionRoot.appendChild(second);
+
+const crossOrigin = document.createElement("iframe");
+crossOrigin.src = "data:text/html,<body>cross-origin</body>";
+slot.appendChild(crossOrigin);
+
+globalThis.__lmFrameOrder = { first, second, crossOrigin };
+"#,
+        None,
+    )
+    .expect("frame-tree order setup should run");
+
+    vm.drain_pending_child_frame_work_for_test();
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const { first, second, crossOrigin } = globalThis.__lmFrameOrder;
+  const probe = callback => {
+    try {
+      callback();
+      return "no-throw";
+    } catch (error) {
+      return `${error && error.name}:${error instanceof DOMException}`;
+    }
+  };
+  return [
+    document.querySelector("iframe") === crossOrigin,
+    frames.length,
+    frames[0] === first.contentWindow,
+    frames[1] === second.contentWindow,
+    frames[2] === crossOrigin.contentWindow,
+    probe(() => frames[2].document)
+  ].join("|");
+})()
+"#,
+        )
+        .expect("frame-tree order probe should evaluate");
+
+    assert_eq!(
+        result, "true|3|true|true|true|SecurityError:true",
+        "Window indexed children follow browsing-context creation order, not current DOM order"
+    );
+
+    vm.exec(
+        r#"
+(() => {
+  const { first } = globalThis.__lmFrameOrder;
+  first.remove();
+  insertionRoot.appendChild(first);
+})();
+"#,
+        None,
+    )
+    .expect("detached frame should reinsert as a new frame-tree child");
+    vm.drain_pending_child_frame_work_for_test();
+
+    let reinserted = vm
+        .eval(
+            r#"
+(() => {
+  const { first, second, crossOrigin } = globalThis.__lmFrameOrder;
+  const probe = callback => {
+    try {
+      callback();
+      return "no-throw";
+    } catch (error) {
+      return `${error && error.name}:${error instanceof DOMException}`;
+    }
+  };
+  return [
+    frames[0] === second.contentWindow,
+    frames[1] === crossOrigin.contentWindow,
+    frames[2] === first.contentWindow,
+    probe(() => frames[1].document)
+  ].join("|");
+})()
+"#,
+        )
+        .expect("reinserted frame-tree order probe should evaluate");
+
+    assert_eq!(
+        reinserted, "true|true|true|SecurityError:true",
+        "detached frames reinsert at the end without reordering surviving children"
+    );
+}
+
+#[test]
+fn data_url_child_document_is_cross_origin_to_parent() {
+    let mut vm = new_storage_test_vm("https://data-url-child-origin.test/");
+
+    vm.exec(
+        r#"
+const aboutBlank = document.createElement('iframe');
+(document.body || document.documentElement || document).appendChild(aboutBlank);
+
+const dataFrame = document.createElement('iframe');
+dataFrame.src = 'data:text/html,<body><div id="opaque"></div></body>';
+(document.body || document.documentElement || document).appendChild(dataFrame);
+globalThis.__lmDataFrame = dataFrame;
+
+const indexedFrame = document.createElement('iframe');
+indexedFrame.src = "data:text/html,<iframe srcdoc='<p>first</p>'></iframe><iframe srcdoc='<p>second</p>'></iframe>";
+(document.body || document.documentElement || document).appendChild(indexedFrame);
+globalThis.__lmIndexedFrame = indexedFrame;
+
+const dataFrameForWindowLocation = document.createElement('iframe');
+dataFrameForWindowLocation.src = 'data:text/html,<body><div id="opaque-window-location"></div></body>';
+(document.body || document.documentElement || document).appendChild(dataFrameForWindowLocation);
+globalThis.__lmDataFrameForWindowLocation = dataFrameForWindowLocation;
+"#,
+        None,
+    )
+    .expect("data URL iframe setup should run");
+
+    vm.drain_pending_child_frame_work_for_test();
+
+    let result = vm
+        .eval(
+            r#"
+[
+    aboutBlank.contentDocument !== null,
+    dataFrame.contentDocument === null,
+    dataFrame.contentWindow !== null,
+    dataFrame.contentWindow === dataFrame.contentWindow,
+    dataFrame.contentWindow.self === dataFrame.contentWindow,
+    dataFrame.contentWindow.window === dataFrame.contentWindow,
+    dataFrame.contentWindow.frames === dataFrame.contentWindow,
+    dataFrame.contentWindow.parent === globalThis,
+    dataFrame.contentWindow.top === globalThis,
+    dataFrame.contentWindow.length,
+    dataFrame.contentWindow.closed,
+    typeof dataFrame.contentWindow.postMessage,
+    (() => {
+      try {
+        dataFrame.contentWindow.document;
+        return "no-throw";
+      } catch (error) {
+        return `${error && error.name}:${error instanceof DOMException}`;
+      }
+    })(),
+    (() => {
+      try {
+        dataFrame.contentWindow.location.href;
+        return "no-throw";
+      } catch (error) {
+        return `${error && error.name}:${error instanceof DOMException}`;
+      }
+    })()
+  ].join('|');
+"#,
+        )
+        .expect("data URL iframe origin boundary should evaluate");
+
+    assert_eq!(
+        result,
+        "true|true|true|true|true|true|true|true|true|0|false|function|SecurityError:true|SecurityError:true"
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const probe = callback => {
+    try {
+      callback();
+      return "no-throw";
+    } catch (error) {
+      return error && error.name;
+    }
+  };
+  const win = dataFrame.contentWindow;
+  const windowDenied = [
+    "external",
+    "locationbar",
+    "menubar",
+    "name",
+    "onload",
+    "onmessage",
+    "personalbar",
+    "scrollbars",
+    "statusbar",
+    "status",
+    "screenX",
+    "screenY",
+    "toolbar",
+    "moveBy",
+    "moveTo",
+    "resizeBy",
+    "resizeTo"
+  ].map(name => `${name}:${probe(() => win[name])}:${probe(() => Object.getOwnPropertyDescriptor(win, name))}`);
+  const locationDenied = [
+    "ancestorOrigins",
+    "assign",
+    "origin",
+    "reload",
+    "toString"
+  ].map(name => `${name}:${probe(() => win.location[name])}:${probe(() => Object.getOwnPropertyDescriptor(win.location, name))}`);
+  return [
+    windowDenied.join(","),
+    locationDenied.join(","),
+    "locationThen:" + String(win.location.then),
+    "locationOwnThen:" + Object.prototype.hasOwnProperty.call(win.location, "then")
+  ].join("|");
+})()
+"#,
+        )
+        .expect("expanded cross-origin denied surface should evaluate");
+
+    assert_eq!(
+        result,
+        "external:SecurityError:SecurityError,locationbar:SecurityError:SecurityError,menubar:SecurityError:SecurityError,name:SecurityError:SecurityError,onload:SecurityError:SecurityError,onmessage:SecurityError:SecurityError,personalbar:SecurityError:SecurityError,scrollbars:SecurityError:SecurityError,statusbar:SecurityError:SecurityError,status:SecurityError:SecurityError,screenX:SecurityError:SecurityError,screenY:SecurityError:SecurityError,toolbar:SecurityError:SecurityError,moveBy:SecurityError:SecurityError,moveTo:SecurityError:SecurityError,resizeBy:SecurityError:SecurityError,resizeTo:SecurityError:SecurityError|ancestorOrigins:SecurityError:SecurityError,assign:SecurityError:SecurityError,origin:SecurityError:SecurityError,reload:SecurityError:SecurityError,toString:SecurityError:SecurityError|locationThen:undefined|locationOwnThen:true"
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const win = indexedFrame.contentWindow;
+  const first = win[0];
+  const second = win[1];
+  const desc = Object.getOwnPropertyDescriptor(win, "0");
+  const probe = callback => {
+    try {
+      const value = callback();
+      return value === undefined ? "undefined" : String(value);
+    } catch (error) {
+      return error && error.name;
+    }
+  };
+  return [
+    win.length,
+    typeof first,
+    typeof second,
+    first === win[0],
+    Object.keys(win).join(","),
+    desc && desc.enumerable,
+    desc && desc.writable,
+    desc && desc.configurable,
+    Object.getPrototypeOf(first) === null,
+    first.parent === win,
+    first.top === globalThis,
+    first.self === first,
+    first.length,
+    typeof first.postMessage,
+    probe(() => first.close()),
+    Object.prototype.toString.call(first),
+    Object.getOwnPropertySymbols(first).map(String).sort().join(",")
+  ].join("|");
+})()
+"#,
+        )
+        .expect("cross-origin indexed child frame shape should evaluate");
+
+    assert_eq!(
+        result,
+        "2|object|object|true|0,1|true|false|true|true|true|true|true|0|function|undefined|[object Object]|Symbol(Symbol.hasInstance),Symbol(Symbol.isConcatSpreadable),Symbol(Symbol.toStringTag)"
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const probe = callback => {
+    try {
+      const value = callback();
+      return value === undefined ? "undefined" : String(value);
+    } catch (error) {
+      return `${error && error.name}:${error instanceof DOMException}`;
+    }
+  };
+  const prototypeShape = win => {
+    const legacyProto = Object.getOwnPropertyDescriptor(Object.prototype, "__proto__");
+    return [
+      probe(() => Object.getPrototypeOf(win) === null),
+      probe(() => legacyProto.get.call(win) === null),
+      probe(() => win.__proto__),
+      probe(() => { win.__proto__ = {}; }),
+      probe(() => legacyProto.set.call(win, {})),
+      probe(() => Object.setPrototypeOf(win, {})),
+      probe(() => Object.setPrototypeOf(win, null) === win),
+      probe(() => legacyProto.set.call(win, null)),
+      probe(() => Reflect.setPrototypeOf(win, null)),
+      probe(() => Reflect.setPrototypeOf(win, {})),
+      probe(() => Object.isExtensible(win)),
+      probe(() => Reflect.preventExtensions(win)),
+      probe(() => Object.preventExtensions(win)),
+      probe(() => Object.isExtensible(win))
+    ];
+  };
+  const ownKeyShape = (win, count) => {
+    const ownKeys = Reflect.ownKeys(win);
+    const stringKeys = ownKeys.filter(key => typeof key === "string");
+    return [
+      stringKeys.slice(0, count).join(","),
+      stringKeys[stringKeys.length - 1] === "then",
+      ownKeys.slice(-3).every(key => typeof key === "symbol"),
+      Object.getOwnPropertySymbols(win).map(String).join(",")
+    ];
+  };
+  const empty = dataFrame.contentWindow;
+  const indexed = indexedFrame.contentWindow;
+  const detached = indexed[0];
+  const ordinaryDelegation = (() => {
+    const first = {};
+    const firstPrototype = {};
+    const secondPrototype = {};
+    const legacyTarget = {};
+    const legacyProto = Object.getOwnPropertyDescriptor(Object.prototype, "__proto__");
+    const reflectPreventTarget = {};
+    const objectPreventTarget = {};
+    return [
+      Object.setPrototypeOf(first, firstPrototype) === first &&
+        Object.getPrototypeOf(first) === firstPrototype,
+      Reflect.setPrototypeOf(first, secondPrototype) &&
+        Object.getPrototypeOf(first) === secondPrototype,
+      (() => { legacyProto.set.call(legacyTarget, null); return Object.getPrototypeOf(legacyTarget) === null; })(),
+      Reflect.preventExtensions(reflectPreventTarget) &&
+        !Object.isExtensible(reflectPreventTarget),
+      Object.preventExtensions(objectPreventTarget) === objectPreventTarget &&
+        !Object.isExtensible(objectPreventTarget),
+      [
+        Object.setPrototypeOf.name,
+        Object.setPrototypeOf.length,
+        /\[native code\]/.test(String(Object.setPrototypeOf)),
+        Reflect.preventExtensions.name,
+        Reflect.preventExtensions.length,
+        /\[native code\]/.test(String(Reflect.preventExtensions)),
+        legacyProto.set.name,
+        legacyProto.set.length,
+        /\[native code\]/.test(String(legacyProto.set))
+      ]
+    ];
+  })();
+  return JSON.stringify({
+    unknownIndex: [
+      probe(() => empty[0]),
+      probe(() => Object.getOwnPropertyDescriptor(empty, "0")),
+      probe(() => Object.prototype.hasOwnProperty.call(empty, "0")),
+      probe(() => 0 in empty),
+      probe(() => indexed[2]),
+      probe(() => Object.getOwnPropertyDescriptor(indexed, "2")),
+      probe(() => Object.prototype.hasOwnProperty.call(indexed, "2")),
+      probe(() => 2 in indexed),
+      probe(() => detached[0]),
+      probe(() => Object.getOwnPropertyDescriptor(detached, "0")),
+      probe(() => Object.prototype.hasOwnProperty.call(detached, "0")),
+      probe(() => 0 in detached)
+    ],
+    mutation: [
+      probe(() => { empty[0] = null; }),
+      probe(() => { indexed[0] = null; }),
+      probe(() => delete indexed[0]),
+      probe(() => delete indexed[2]),
+      probe(() => Object.defineProperty(indexed, "0", { value: null })),
+      probe(() => Object.defineProperty(indexed, "2", { value: null })),
+      probe(() => { detached[0] = null; }),
+      probe(() => delete detached[0]),
+      probe(() => Object.defineProperty(detached, "0", { value: null }))
+    ],
+    prototype: [prototypeShape(empty), prototypeShape(detached)],
+    names: [
+      Object.getOwnPropertyNames(empty).sort(),
+      Object.getOwnPropertyNames(indexed).sort(),
+      Object.getOwnPropertyNames(detached).sort()
+    ],
+    ownKeys: [ownKeyShape(empty, 0), ownKeyShape(indexed, 2), ownKeyShape(detached, 0)],
+    ordinaryDelegation
+  });
+})()
+"#,
+        )
+        .expect("cross-origin Window internal-method matrix should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"unknownIndex":["SecurityError:true","SecurityError:true","SecurityError:true","SecurityError:true","SecurityError:true","SecurityError:true","SecurityError:true","SecurityError:true","SecurityError:true","SecurityError:true","SecurityError:true","SecurityError:true"],"mutation":["SecurityError:true","SecurityError:true","SecurityError:true","SecurityError:true","SecurityError:true","SecurityError:true","SecurityError:true","SecurityError:true","SecurityError:true"],"prototype":[["true","true","SecurityError:true","SecurityError:true","TypeError:false","TypeError:false","true","undefined","true","false","true","false","TypeError:false","true"],["true","true","SecurityError:true","SecurityError:true","TypeError:false","TypeError:false","true","undefined","true","false","true","false","TypeError:false","true"]],"names":[["blur","close","closed","focus","frames","length","location","opener","parent","postMessage","self","then","top","window"],["0","1","blur","close","closed","focus","frames","length","location","opener","parent","postMessage","self","then","top","window"],["blur","close","closed","focus","frames","length","location","opener","parent","postMessage","self","then","top","window"]],"ownKeys":[["",true,true,"Symbol(Symbol.toStringTag),Symbol(Symbol.hasInstance),Symbol(Symbol.isConcatSpreadable)"],["0,1",true,true,"Symbol(Symbol.toStringTag),Symbol(Symbol.hasInstance),Symbol(Symbol.isConcatSpreadable)"],["",true,true,"Symbol(Symbol.toStringTag),Symbol(Symbol.hasInstance),Symbol(Symbol.isConcatSpreadable)"]],"ordinaryDelegation":[true,true,true,true,true,["setPrototypeOf",2,true,"preventExtensions",1,true,"set __proto__",1,true]]}"#
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const win = dataFrame.contentWindow;
+  const symbols = object => Object.getOwnPropertySymbols(object).map(String).sort().join(",");
+  const symbolValues = object => [
+    object[Symbol.toStringTag],
+    object[Symbol.hasInstance],
+    object[Symbol.isConcatSpreadable]
+  ].map(String).join(",");
+  return [
+    Object.getPrototypeOf(win) === null,
+    Object.getPrototypeOf(win.location) === null,
+    Object.prototype.toString.call(win),
+    Object.prototype.toString.call(win.location),
+    symbols(win),
+    symbols(win.location),
+    symbolValues(win),
+    symbolValues(win.location)
+  ].join("|");
+})()
+"#,
+        )
+        .expect("cross-origin symbol and prototype shape should evaluate");
+
+    assert_eq!(
+        result,
+        "true|true|[object Object]|[object Object]|Symbol(Symbol.hasInstance),Symbol(Symbol.isConcatSpreadable),Symbol(Symbol.toStringTag)|Symbol(Symbol.hasInstance),Symbol(Symbol.isConcatSpreadable),Symbol(Symbol.toStringTag)|undefined,undefined,undefined|undefined,undefined,undefined"
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const probe = callback => {
+    try {
+      const value = callback();
+      return `${typeof value}:${String(value)}`;
+    } catch (error) {
+      return `${error && error.name}:${error instanceof TypeError}`;
+    }
+  };
+  const descriptorShape = descriptor => [
+    descriptor.enumerable,
+    descriptor.configurable,
+    Object.prototype.hasOwnProperty.call(descriptor, "writable") ? descriptor.writable : "accessor",
+    Object.prototype.hasOwnProperty.call(descriptor, "value")
+      ? (typeof descriptor.value === "object" && descriptor.value !== null
+          ? Object.prototype.toString.call(descriptor.value)
+          : descriptor.value)
+      : "no-value"
+  ].join(":");
+  const win = dataFrame.contentWindow;
+  const childWin = indexedFrame.contentWindow;
+  const nestedWin = childWin[0];
+  return [
+    descriptorShape(Object.getOwnPropertyDescriptor(win, Symbol.toStringTag)),
+    descriptorShape(Object.getOwnPropertyDescriptor(win.location, Symbol.toStringTag)),
+    descriptorShape(Object.getOwnPropertyDescriptor(nestedWin, Symbol.toStringTag)),
+    descriptorShape(Object.getOwnPropertyDescriptor(childWin, "0")),
+    Object.prototype.toString.call(nestedWin),
+    probe(() => Reflect.deleteProperty(win, Symbol.toStringTag)),
+    probe(() => Object.defineProperty(win, Symbol.toStringTag, { value: "Other" })),
+    probe(() => Reflect.deleteProperty(win.location, Symbol.toStringTag)),
+    probe(() => Object.defineProperty(win.location, Symbol.toStringTag, { value: "Other" })),
+    probe(() => Reflect.deleteProperty(nestedWin, Symbol.toStringTag)),
+    probe(() => Object.defineProperty(nestedWin, Symbol.toStringTag, { value: "Other" })),
+    probe(() => Reflect.deleteProperty(childWin, "0")),
+    probe(() => Object.defineProperty(childWin, "0", { value: 1 }))
+  ].join("|");
+})()
+"#,
+        )
+        .expect("cross-origin symbol and indexed descriptor hardening should evaluate");
+
+    assert_eq!(
+        result,
+        "false:true:false:|false:true:false:|false:true:false:|true:true:false:[object Object]|[object Object]|SecurityError:false|SecurityError:false|SecurityError:false|SecurityError:false|SecurityError:false|SecurityError:false|SecurityError:false|SecurityError:false"
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const describe = (owner, name) => {
+    const descriptor = Object.getOwnPropertyDescriptor(owner, name);
+    return [
+      name,
+      typeof descriptor.value,
+      descriptor.value.name,
+      descriptor.value.length,
+      descriptor.enumerable,
+      descriptor.configurable,
+      descriptor.writable,
+      new RegExp(`^function ${name}\\(`).test(String(descriptor.value)),
+      /\[native code\]/.test(String(descriptor.value))
+    ].join(":");
+  };
+  const win = dataFrame.contentWindow;
+  const location = win.location;
+  return [
+    describe(win, "postMessage"),
+    describe(win, "blur"),
+    describe(win, "close"),
+    describe(win, "focus"),
+    describe(location, "replace")
+  ].join("|");
+})()
+"#,
+        )
+        .expect("cross-origin method descriptor shape should evaluate");
+
+    assert_eq!(
+        result,
+        "postMessage:function:postMessage:1:false:true:false:true:true|blur:function:blur:0:false:true:false:true:true|close:function:close:0:false:true:false:true:true|focus:function:focus:0:false:true:false:true:true|replace:function:replace:1:false:true:false:true:true"
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const probe = callback => {
+    try {
+      const value = callback();
+      return value === undefined ? "undefined" : String(value);
+    } catch (error) {
+      return error && error.name;
+    }
+  };
+  return [
+    probe(() => dataFrame.contentWindow.location.replace()),
+    probe(() => dataFrame.contentWindow.location.replace(Symbol("url"))),
+    probe(() => dataFrame.contentWindow.location.replace({ toString() { throw new RangeError("url"); } })),
+    probe(() => { dataFrame.contentWindow.location.href = Symbol("href"); }),
+    probe(() => { dataFrame.contentWindow.location.href = { toString() { throw new RangeError("href"); } }; }),
+    probe(() => { Object.create(dataFrame.contentWindow.location).href = "about:blank"; }),
+    probe(() => Reflect.set(dataFrame.contentWindow.location, "href", "about:blank", {})),
+    probe(() => Object.getOwnPropertyDescriptor(dataFrame.contentWindow.location, "href").set.call(null, "about:blank")),
+    probe(() => Object.getOwnPropertyDescriptor(dataFrame.contentWindow.location, "replace").value.call(null, "about:blank")),
+    probe(() => { dataFrameForWindowLocation.contentWindow.location = Symbol("window-location"); }),
+    probe(() => { dataFrameForWindowLocation.contentWindow.location = { toString() { throw new RangeError("window-location"); } }; })
+  ].join("|");
+})()
+"#,
+        )
+        .expect("cross-origin location WebIDL boundary should evaluate");
+
+    assert_eq!(
+        result,
+        "TypeError|TypeError|RangeError|TypeError|RangeError|TypeError|TypeError|TypeError|TypeError|TypeError|RangeError"
+    );
+
+    vm.exec(
+        r#"
+__lmDataFrame.contentWindow.location.href = 'about:blank';
+"#,
+        None,
+    )
+    .expect("cross-origin location href write should navigate child frame");
+
+    vm.drain_pending_child_frame_work_for_test();
+
+    let result = vm
+        .eval(
+            r#"
+[
+  __lmDataFrame.contentDocument !== null,
+  __lmDataFrame.contentWindow.document === __lmDataFrame.contentDocument
+].join('|')
+"#,
+        )
+        .expect("cross-origin location href write result should evaluate");
+
+    assert_eq!(result, "true|true");
+
+    vm.exec(
+        r#"
+__lmDataFrameForWindowLocation.contentWindow.location = 'about:blank';
+"#,
+        None,
+    )
+    .expect("cross-origin window location assignment should navigate child frame");
+
+    vm.drain_pending_child_frame_work_for_test();
+
+    let result = vm
+        .eval(
+            r#"
+[
+  __lmDataFrameForWindowLocation.contentDocument !== null,
+  __lmDataFrameForWindowLocation.contentWindow.document === __lmDataFrameForWindowLocation.contentDocument
+].join('|')
+"#,
+        )
+        .expect("cross-origin window location assignment result should evaluate");
+
+    assert_eq!(result, "true|true");
+}
+
+#[tokio::test]
+async fn cross_origin_child_location_reborrows_host_after_target_navigate_event() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://cross-origin-child-reentry.test/",
+        &loader,
+    );
+
+    vm.exec(
+        r#"
+const childUrl = "data:text/html,<script>navigation.onnavigate=()=>{const marker=document.createElement('span');marker.id='reentrant-cross-origin-location';document.body.append(marker);parent.postMessage(marker.id,'*')}</script>";
+const frame = document.createElement("iframe");
+frame.src = childUrl;
+(document.body || document.documentElement || document).appendChild(frame);
+globalThis.__lmCrossOriginChildUrl = childUrl;
+globalThis.__lmCrossOriginChildFrame = frame;
+globalThis.__lmCrossOriginChildNavigationEvent = null;
+addEventListener("message", event => {
+  if (event.data === "reentrant-cross-origin-location") {
+    globalThis.__lmCrossOriginChildNavigationEvent = event.data;
+  }
+});
+"#,
+        None,
+    )
+    .expect("cross-origin child reentry fixture should initialize");
+    vm.drain_ready_page_task_executor_turns_for_setup(&loader, 128)
+        .await
+        .expect("cross-origin child fixture should finish loading");
+
+    vm.exec(
+        r##"
+__lmCrossOriginChildFrame.contentWindow.location.href =
+  __lmCrossOriginChildUrl + "#same-document";
+"##,
+        None,
+    )
+    .expect("cross-origin child fragment navigation should dispatch in the target realm");
+
+    for _ in 0..4 {
+        if vm
+            .eval("globalThis.__lmCrossOriginChildNavigationEvent")
+            .expect("cross-origin child event observation should evaluate")
+            == "reentrant-cross-origin-location"
+        {
+            break;
+        }
+        let _ = vm
+            .run_one_window_message_executor_turn(&loader)
+            .await
+            .expect("cross-origin child event message should drain");
+    }
+    assert_eq!(
+        vm.eval("globalThis.__lmCrossOriginChildNavigationEvent")
+            .expect("cross-origin child event observation should evaluate"),
+        "reentrant-cross-origin-location"
+    );
+}
+
+#[test]
 fn same_origin_child_window_migration_to_cross_origin_installs_denied_surface() {
     let mut vm = new_storage_test_vm("https://child-cross-origin-migration.test/");
 
@@ -12874,7 +13625,7 @@ frame.src = "data:text/html,<body>cross-origin</body>";
 
     assert_eq!(
         result,
-        "true|true|true|[object Window]|SecurityError:true|SecurityError:true|SecurityError:true|SecurityError:true|SecurityError:true"
+        "true|true|true|[object Object]|SecurityError:true|SecurityError:true|SecurityError:true|SecurityError:true|SecurityError:true"
     );
 }
 

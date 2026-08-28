@@ -131,7 +131,6 @@ mod page_owned_document_script_completion;
 mod page_owned_document_script_hooks;
 mod page_parser_async_module_admission;
 mod page_parser_owned_module_continuation;
-mod page_popup_load_event;
 mod page_rendering_update;
 #[cfg(test)]
 mod page_rendering_update_body_test_support;
@@ -221,7 +220,6 @@ pub(crate) use page_module_reaction::AuthorizedCurrentPageModuleReaction;
 pub(crate) use page_modulepreload_start::AuthorizedCurrentChildModulepreloadStartTask;
 pub(crate) use page_navigation_api_task::AuthorizedCurrentPageNavigationApiTask;
 pub(crate) use page_opfs_task::AuthorizedCurrentPageOpfsTask;
-pub(crate) use page_popup_load_event::AuthorizedCurrentPagePopupLoadEvent;
 pub(crate) use page_rendering_update::AuthorizedCurrentPageRenderingUpdate;
 pub(crate) use page_resource_completion::{
     AuthorizedCurrentChildDocumentLoadCompletion, AuthorizedCurrentChildModuleFetchCompletion,
@@ -229,9 +227,7 @@ pub(crate) use page_resource_completion::{
     AuthorizedCurrentMainDynamicImportGraphFetchCompletion,
     AuthorizedCurrentMainParserModuleGraphFetchCompletion,
     AuthorizedCurrentMainRuntimeModuleGraphFetchCompletion,
-    AuthorizedCurrentPopupClassicScriptLoadCompletion,
-    AuthorizedCurrentPopupDocumentLoadCompletion, AuthorizedLiveMainModulepreloadFetchCompletion,
-    CurrentChildDocumentLoadApplication,
+    AuthorizedLiveMainModulepreloadFetchCompletion, CurrentChildDocumentLoadApplication,
 };
 pub(crate) use page_service_worker_client_message::AuthorizedCurrentPageServiceWorkerClientMessage;
 pub(crate) use page_service_worker_internal::AuthorizedCurrentPageServiceWorkerInternalTask;
@@ -1064,6 +1060,10 @@ async fn execute_page_owned_work_on_script_execution_lane(
 pub(crate) struct PageVmEnvConfig {
     pub(crate) root_frame_id: Option<String>,
     pub(crate) main_document_commit: Option<super::RendererMainDocumentCommit>,
+    pub(crate) initial_document_referrer: Option<String>,
+    pub(crate) initial_top_level_browsing_context_name: Option<String>,
+    pub(crate) auxiliary_browsing_context_policy:
+        Option<super::RendererAuxiliaryBrowsingContextPolicy>,
     pub(crate) top_level_storage_key: Option<moli_storage_key::MoliStorageKey>,
     pub(crate) web_storage: crate::RendererWebStorageHandles,
     pub(crate) document_start_scripts: Vec<DocumentStartScript>,
@@ -1074,6 +1074,8 @@ pub(crate) struct PageVmEnvConfig {
     pub(crate) permission_overrides: Vec<crate::protocol_types::PermissionOverrideRegistration>,
     pub(crate) extra_http_headers: Vec<(String, String)>,
     pub(crate) document_policy_container: crate::document_runtime::DocumentPolicyContainer,
+    pub(crate) cross_origin_opener_policy:
+        crate::cross_origin_isolation::CrossOriginOpenerPolicyCommit,
     pub(crate) document_default_language: Option<String>,
     pub(crate) document_last_modified: Option<f64>,
     pub(crate) locale_override: Option<String>,
@@ -1098,6 +1100,17 @@ pub(crate) struct PageVmEnvConfig {
 }
 
 impl PageVmEnvConfig {
+    fn main_document_policy_container(&self) -> crate::document_runtime::DocumentPolicyContainer {
+        let mut policy_container = self.document_policy_container.clone();
+        if let Some(initial_document_referrer) = self.initial_document_referrer.as_ref() {
+            policy_container.document_referrer = initial_document_referrer.clone();
+        }
+        if let Some(commit) = self.main_document_commit.as_ref() {
+            policy_container.document_referrer = commit.document_referrer.clone();
+        }
+        policy_container
+    }
+
     pub(crate) fn apply_navigation_response_headers(
         &mut self,
         final_url: &Url,
@@ -1121,6 +1134,76 @@ impl PageVmEnvConfig {
             crate::document_language::document_default_language_from_headers(headers);
         self.document_last_modified =
             crate::document_last_modified::document_last_modified_from_headers(headers);
+        self.cross_origin_opener_policy =
+            crate::cross_origin_isolation::CrossOriginOpenerPolicyCommit::from_response(
+                final_url, headers,
+            );
+    }
+
+    pub(crate) fn related_initial_empty(
+        web_storage: crate::RendererWebStorageHandles,
+        top_level_storage_key: moli_storage_key::MoliStorageKey,
+        policy: &crate::document_runtime::DocumentPolicyContainer,
+        indexed_db_manager: Option<crate::context_bootstrap::WeakIndexedDbManager>,
+        storage_bucket_store: crate::context_bootstrap::SharedStorageBucketStore,
+    ) -> Self {
+        Self {
+            root_frame_id: None,
+            main_document_commit: None,
+            initial_document_referrer: None,
+            initial_top_level_browsing_context_name: None,
+            auxiliary_browsing_context_policy: None,
+            top_level_storage_key: Some(top_level_storage_key),
+            web_storage,
+            document_start_scripts: Vec::new(),
+            runtime_bindings: Vec::new(),
+            runtime_inspector_session_restore_snapshots: Vec::new(),
+            runtime_isolated_worlds: Vec::new(),
+            permission_overrides: Vec::new(),
+            extra_http_headers: Vec::new(),
+            document_policy_container: policy.clone(),
+            cross_origin_opener_policy: Default::default(),
+            document_default_language: None,
+            document_last_modified: None,
+            locale_override: None,
+            timezone_override: None,
+            script_execution_disabled: !policy.sandbox.allows_scripts,
+            bypass_content_security_policy: false,
+            cpu_throttling_rate: 1.0,
+            emulated_media: crate::protocol_types::EmulatedMediaOverrides::default(),
+            idle_override: None,
+            viewport_surface: None,
+            network_offline: false,
+            blocked_url_patterns: Vec::new(),
+            indexed_db_manager,
+            storage_bucket_store: Some(storage_bucket_store),
+            fetch_subresource_interception_enabled: false,
+            fetch_subresource_interception_resource_type: None,
+            layout_policy: LayoutPolicy::default(),
+            wpt_extensions_enabled: false,
+            navigation_bootstrap_entry: None,
+            reserved_service_worker_client_id: None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PageVmEnvironmentConfigApplyMode {
+    NormalConstruction,
+    StagedInitialConstruction,
+    StagedInitialAdoption,
+}
+
+impl PageVmEnvironmentConfigApplyMode {
+    fn applies_context_entering_configuration(self) -> bool {
+        matches!(self, Self::NormalConstruction | Self::StagedInitialAdoption)
+    }
+
+    fn applies_document_policy(self) -> bool {
+        matches!(
+            self,
+            Self::NormalConstruction | Self::StagedInitialConstruction
+        )
     }
 }
 
@@ -1138,6 +1221,7 @@ pub(crate) struct PageVmRuntimeHooks {
     pub(crate) browser_context_runtime: super::RendererBrowserContextRuntime,
     document_lifecycle: Option<RendererDocumentLifecycleJournalHandle>,
     document_lifecycle_install: PageVmDocumentLifecycleInstall,
+    output_journal_binding: PageVmOutputJournalBinding,
     renderer_document_isolate_allocator: Option<RendererDocumentIsolateAllocator>,
     renderer_page_script_environment: Option<crate::script_vm::RendererPageScriptEnvironment>,
     renderer_document_isolate_reservation: Option<RendererDocumentIsolateReservation>,
@@ -1163,6 +1247,19 @@ enum PageVmDocumentLifecycleInstall {
     #[default]
     ReuseOrCreateInitial,
     CrossDocumentCommit,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum PageVmOutputJournalBinding {
+    #[default]
+    PreserveStream,
+    PageAgentTransition,
+}
+
+impl PageVmOutputJournalBinding {
+    fn allows_page_agent_transition(self) -> bool {
+        self == Self::PageAgentTransition
+    }
 }
 
 #[derive(Clone, Default)]
@@ -1200,6 +1297,7 @@ impl PageVmRuntimeHooks {
             browser_context_runtime,
             document_lifecycle: None,
             document_lifecycle_install: PageVmDocumentLifecycleInstall::default(),
+            output_journal_binding: PageVmOutputJournalBinding::default(),
             renderer_document_isolate_allocator: None,
             renderer_page_script_environment: None,
             renderer_document_isolate_reservation: None,
@@ -1275,6 +1373,7 @@ impl PageVmRuntimeHooks {
                 },
             document_lifecycle: None,
             document_lifecycle_install: PageVmDocumentLifecycleInstall::default(),
+            output_journal_binding: PageVmOutputJournalBinding::default(),
             renderer_document_isolate_allocator: None,
             renderer_page_script_environment: None,
             renderer_document_isolate_reservation: None,
@@ -1313,6 +1412,7 @@ impl PageVmRuntimeHooks {
             browser_context_runtime,
             document_lifecycle: None,
             document_lifecycle_install: PageVmDocumentLifecycleInstall::ReuseOrCreateInitial,
+            output_journal_binding: PageVmOutputJournalBinding::default(),
             renderer_document_isolate_allocator: None,
             renderer_page_script_environment: None,
             renderer_document_isolate_reservation: None,
@@ -1364,11 +1464,39 @@ impl PageVmRuntimeHooks {
                     "prepared renderer document isolate is missing its Page environment"
                 )
             })?;
+        if self
+            .renderer_page_script_environment
+            .as_ref()
+            .is_some_and(|current| {
+                current.isolate_identity_key() != environment.isolate_identity_key()
+            })
+        {
+            self.output_journal_binding = PageVmOutputJournalBinding::PageAgentTransition;
+        }
         self.renderer_page_script_environment = Some(environment);
         self.renderer_document_isolate_reservation = Some(reservation);
         self.prepared_renderer_document_isolate_bootstrap =
             Some(Rc::new(std::cell::RefCell::new(Some(bootstrap))));
         Ok(self)
+    }
+
+    pub(in crate::runtime) fn with_validated_staged_renderer_document_isolate(
+        mut self,
+        bootstrap: RendererDocumentIsolateBootstrap,
+        reservation: RendererDocumentIsolateReservation,
+    ) -> Self {
+        assert!(
+            reservation.is_active(),
+            "staged renderer document isolate reservation must be active"
+        );
+        let environment = bootstrap
+            .renderer_page_script_environment()
+            .expect("staged renderer document isolate must retain its Page environment");
+        self.renderer_page_script_environment = Some(environment);
+        self.renderer_document_isolate_reservation = Some(reservation);
+        self.prepared_renderer_document_isolate_bootstrap =
+            Some(Rc::new(std::cell::RefCell::new(Some(bootstrap))));
+        self
     }
 
     fn for_cross_document_commit(mut self) -> Self {
@@ -1617,6 +1745,11 @@ pub(crate) struct PageVm {
     /// once before phase one may resume.
     replacement_document_commit_handoff:
         Option<crate::page_task_queue::RendererTopLevelNavigationHandoff>,
+    /// This Page was created synchronously as a related auxiliary initial
+    /// empty Document and later adopted by a protocol target. Its first
+    /// non-JavaScript destination must cross Page admission as target-local
+    /// held authority rather than as a later independent renderer output.
+    staged_related_initial_empty_page: bool,
     pub(super) local_executor: JsLocalExecutor,
 }
 
@@ -1704,6 +1837,9 @@ impl Drop for PageVm {
         // Stop accepting foreground work before dropping tasks that V8 had
         // already transferred to this PageVm. The isolate remains alive until
         // its ScriptVm and owner pin finish teardown below.
+        if let Err(error) = vm.disconnect_top_level_browsing_context_for_page_close() {
+            tracing::error!(%error, "failed to disconnect final top-level browsing context");
+        }
         vm.unregister_document_isolate_platform_for_context_teardown();
         self.page_task_queue.clear_document_owned_tasks();
 
@@ -1838,8 +1974,15 @@ impl PageVm {
         let Some(vm) = self.vm.as_mut() else {
             return;
         };
+        if let Err(error) = vm.disconnect_top_level_browsing_context_for_page_close() {
+            tracing::error!(%error, "failed to disconnect final top-level browsing context");
+        }
         vm.detach_default_inspector_context_for_context_teardown();
         vm.close_page_context_resources_for_context_teardown();
+    }
+
+    pub(super) fn top_level_browsing_context_is_closed(&self) -> bool {
+        self.vm().top_level_browsing_context_is_closed()
     }
 
     pub(super) fn take_page_creation_artifacts(&self) -> RendererPageCreationArtifacts {
@@ -2045,6 +2188,78 @@ impl PageVm {
         self.runtime_hooks.renderer_page_script_environment.clone()
     }
 
+    /// Transfers the stable Page wiring into one browser-prepared replacement
+    /// Document and commits the old main realm before the new realm is
+    /// bootstrapped.
+    ///
+    /// Constructing the hooks is fallible but non-destructive. Once
+    /// `commit_main_window_proxy_navigation` succeeds, failure is necessarily
+    /// post-commit and the Page owner must retire the Page instead of restoring
+    /// the detached old Document.
+    pub(super) fn begin_prepared_document_replacement(
+        &mut self,
+        bootstrap: RendererDocumentIsolateBootstrap,
+        reservation: RendererDocumentIsolateReservation,
+    ) -> Result<(
+        PageVmRuntimeHooks,
+        crate::page_task_queue::RendererTopLevelNavigationHandoff,
+    )> {
+        let environment = self
+            .runtime_hooks
+            .renderer_page_script_environment
+            .as_ref()
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "live Page replacement is missing its stable Page script environment"
+                )
+            })?;
+        let navigation_handoff = environment
+            .page_runtime_task_source()
+            .next_top_level_navigation_handoff();
+        let replacement_environment =
+            bootstrap
+                .renderer_page_script_environment()
+                .ok_or_else(|| {
+                    anyhow::anyhow!("prepared replacement is missing its Page script environment")
+                })?;
+        let switches_browsing_context_group = replacement_environment.browsing_context_group_id()
+            != environment.browsing_context_group_id();
+        let switches_script_agent =
+            replacement_environment.isolate_identity_key() != environment.isolate_identity_key();
+        if switches_browsing_context_group {
+            ensure!(
+                switches_script_agent,
+                "browsing-context group switch must also replace the script agent isolate"
+            );
+        }
+        let runtime_hooks = self
+            .runtime_hooks
+            .clone()
+            .for_cross_document_commit()
+            .with_prepared_renderer_document_isolate(bootstrap, reservation)?;
+        if switches_browsing_context_group {
+            self.commit_main_window_proxy_group_switch()?;
+        } else if switches_script_agent {
+            self.commit_main_window_proxy_remote_agent_transition()?;
+        } else {
+            self.commit_main_window_proxy_navigation()?;
+        }
+        let termination = self.document_lifecycle.request_termination(
+            self.document_lifecycle.identity(),
+            RendererDocumentTerminationReason::SupersededByCrossDocumentNavigation,
+        );
+        ensure!(
+            matches!(
+                termination,
+                RendererDocumentLifecycleTransition::Recorded(_)
+                    | RendererDocumentLifecycleTransition::Deferred
+                    | RendererDocumentLifecycleTransition::Duplicate
+            ),
+            "prepared cross-document commit could not terminate the old Document lifecycle: {termination:?}"
+        );
+        Ok((runtime_hooks, navigation_handoff))
+    }
+
     pub(super) fn javascript_dialog_broker(&self) -> RendererJavaScriptDialogBroker {
         self.runtime_hooks.javascript_dialog_runtime.broker()
     }
@@ -2204,6 +2419,42 @@ impl PageVm {
         }
     }
 
+    fn commit_main_window_proxy_group_switch(&mut self) -> Result<()> {
+        let Some(mut vm) = self.vm.take() else {
+            return Err(anyhow::anyhow!(
+                "COOP group switch attempted to commit an already retired PageVm"
+            ));
+        };
+        vm.preflight_main_window_proxy_agent_transition(self.page_id.as_u64())?;
+        vm.detach_default_inspector_context_for_context_teardown();
+        vm.disconnect_top_level_browsing_context_for_group_switch()?;
+        vm.close_page_context_resources_for_context_teardown();
+        tracing::debug!(
+            page_id = self.page_id.as_u64(),
+            "committed COOP browsing-context group switch before replacement realm bootstrap"
+        );
+        drop(vm);
+        Ok(())
+    }
+
+    fn commit_main_window_proxy_remote_agent_transition(&mut self) -> Result<()> {
+        let Some(mut vm) = self.vm.take() else {
+            return Err(anyhow::anyhow!(
+                "remote-agent transition attempted to commit an already retired PageVm"
+            ));
+        };
+        vm.preflight_main_window_proxy_agent_transition(self.page_id.as_u64())?;
+        vm.detach_default_inspector_context_for_context_teardown();
+        vm.disconnect_main_window_proxy_for_remote_agent_transition()?;
+        vm.close_page_context_resources_for_context_teardown();
+        tracing::debug!(
+            page_id = self.page_id.as_u64(),
+            "committed same-group script-agent transition before replacement realm bootstrap"
+        );
+        drop(vm);
+        Ok(())
+    }
+
     // Fresh PageVm bootstrap is a special V8-entry boundary.
     //
     // The direct V8 call does not happen here; it happens further down in:
@@ -2355,14 +2606,31 @@ impl PageVm {
         }
         for script in document_start_scripts {
             let script_started = Instant::now();
-            match script.world_name.as_deref() {
-                Some(world_name) => {
-                    let execution_context_id =
-                        self.ensure_named_world_ready_for_document_start_script(world_name)?;
-                    self.vm_mut()
-                        .exec_in_execution_context(execution_context_id, &script.source)?;
+            if script.browser_internal {
+                match script.world_name.as_deref() {
+                    Some(world_name) => {
+                        let execution_context_id =
+                            self.ensure_named_world_ready_for_document_start_script(world_name)?;
+                        self.vm_mut()
+                            .exec_browser_internal_bootstrap_script_in_execution_context(
+                                execution_context_id,
+                                &script.source,
+                            )?;
+                    }
+                    None => self
+                        .vm_mut()
+                        .exec_browser_internal_bootstrap_script(&script.source)?,
                 }
-                None => self.vm_mut().exec_runtime_turn(&script.source, None)?,
+            } else {
+                match script.world_name.as_deref() {
+                    Some(world_name) => {
+                        let execution_context_id =
+                            self.ensure_named_world_ready_for_document_start_script(world_name)?;
+                        self.vm_mut()
+                            .exec_in_execution_context(execution_context_id, &script.source)?;
+                    }
+                    None => self.vm_mut().exec_runtime_turn(&script.source, None)?,
+                }
             }
             tracing::debug!(
                 phase = "document start script",
@@ -3030,7 +3298,6 @@ impl PageVm {
         !self.vm().has_pending_location_navigation()
             && !self.vm().has_pending_child_frame_realm_materialization()
             && !self.vm().has_pending_child_document_lifecycle()
-            && !self.vm().has_pending_lightweight_popup_resource_loads()
     }
 
     #[cfg(test)]
@@ -3120,14 +3387,12 @@ impl PageVm {
                 .wait_for_document_style_progress_without_timeout()
                 .await;
         }
-        if self
+        let has_pending_document_work = self
             .vm()
             .document_runtime
             .has_pending_document_write_external_script_load()
-            || self.vm().has_pending_child_document_lifecycle()
-            || self.vm().has_pending_lightweight_popup_resource_loads()
-            || self.has_pending_module_script_for_target_stage()
-        {
+            || self.vm().has_pending_child_document_lifecycle();
+        if has_pending_document_work || self.has_pending_module_script_for_target_stage() {
             let timer_deadline = include_timer_work
                 .then(|| self.vm().next_timeout_deadline())
                 .flatten();
@@ -3270,15 +3535,14 @@ impl PageVm {
                     .await;
                 continue;
             }
-            if self
+            let has_pending_lifecycle_work = self
                 .vm()
                 .document_runtime
                 .has_pending_document_write_external_script_load()
                 || wait_for_load_event_delaying_subresources
                 || (wait_for_child_browsing_context_work
-                    && (self.vm().has_pending_child_document_lifecycle()
-                        || self.vm().has_pending_lightweight_popup_resource_loads()))
-            {
+                    && self.vm().has_pending_child_document_lifecycle());
+            if has_pending_lifecycle_work {
                 let _ = self
                     .wait_for_lifecycle_blocking_page_work_arrival_without_timeout(
                         wait_for_runtime_owned_module_work,
@@ -4178,7 +4442,12 @@ impl PageVm {
         // prepared replacements and leave newly created Pages on the legacy
         // in-memory lifecycle queue.
         if let Some(environment) = runtime_hooks.renderer_page_script_environment.as_ref() {
-            document_lifecycle.bind_output_journal(environment.output_journal());
+            document_lifecycle.bind_output_journal(
+                environment.output_journal(),
+                runtime_hooks
+                    .output_journal_binding
+                    .allows_page_agent_transition(),
+            );
         }
         // Initial Page creation binds the stable owner-local producer routes
         // while reserving the document isolate above. Resolve every typed
@@ -4241,13 +4510,185 @@ impl PageVm {
             backend_node_registry.clone(),
             env.root_frame_id.clone(),
             env.main_document_commit.clone(),
+            env.initial_document_referrer.clone(),
             env.top_level_storage_key.clone(),
             env.reserved_service_worker_client_id,
+            env.auxiliary_browsing_context_policy.map(|policy| {
+                policy.with_response_content_security_policies(
+                    &env.document_policy_container
+                        .response_content_security_policies,
+                )
+            }),
         )?;
+        if let Some(name) = env.initial_top_level_browsing_context_name.as_deref() {
+            vm_bootstrap.initialize_initial_top_level_browsing_context_name(name);
+        }
         let mut vm = vm_bootstrap.finish()?;
         vm.set_layout_policy(env.layout_policy);
         vm.install_page_task_capabilities(page_task_capabilities);
         vm.set_root_document_lifecycle(document_lifecycle.clone());
+        Ok(Self::finish_construction(
+            page_id,
+            local_executor,
+            env,
+            runtime_hooks,
+            document_lifecycle,
+            page_task_queue,
+            vm,
+            started,
+            PageVmEnvironmentConfigApplyMode::NormalConstruction,
+        ))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::runtime) fn new_related_initial_empty_in_scope(
+        scope: &mut v8::PinScope<'_, '_>,
+        page_id: PageId,
+        local_executor: JsLocalExecutor,
+        loader: &ResourceRequestClient,
+        env: &PageVmEnvConfig,
+        mut runtime_hooks: PageVmRuntimeHooks,
+        bootstrap_document: DomHost,
+        opener: Option<&v8::Global<v8::Object>>,
+        window_name: &str,
+        inherited_origin: &str,
+        initial_document_policy_container: crate::document_runtime::DocumentPolicyContainer,
+        auxiliary_popup_id: u64,
+        started: Instant,
+    ) -> Result<Self> {
+        let (document_lifecycle, document_lifecycle_identity) =
+            runtime_hooks.install_document_lifecycle(page_id)?;
+        let page_runtime_task_source = runtime_hooks
+            .renderer_page_script_environment
+            .as_ref()
+            .map(|environment| environment.page_runtime_task_source())
+            .ok_or_else(|| {
+                anyhow::anyhow!("staged auxiliary Page is missing its script environment")
+            })?;
+        let page_task_queue =
+            PageTaskQueue::new_with_page_runtime_task_source(page_runtime_task_source.clone());
+        let PageVmRendererDocumentIsolateBootstrap {
+            renderer_document_isolate_bootstrap,
+        } = runtime_hooks
+            .create_renderer_document_isolate_bootstrap(page_runtime_task_source.clone())?;
+        let task_producer_senders = page_runtime_task_source
+            .bound_task_producer_senders(document_lifecycle_identity.document)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "staged auxiliary Page is missing its complete typed producer route set"
+                )
+            })?;
+        let (
+            page_task_capabilities,
+            main_document_runtime,
+            resource_completion,
+            main_parser_continuation,
+            stylesheet,
+            service_worker,
+        ) = task_producer_senders.into_parts();
+        let resource_task_runner = runtime_hooks.resource_task_runner.clone().ok_or_else(|| {
+            anyhow::anyhow!("staged auxiliary Page is missing its resource runner")
+        })?;
+        let post_domcontentloaded_page_task_sender = page_task_queue
+            .owner_attached_post_domcontentloaded_runtime_page_task_sender(
+                main_document_runtime,
+                main_parser_continuation,
+                stylesheet,
+                service_worker,
+            );
+        let resource_completion_sender = RendererResourceCompletionSender::for_page_scheduler(
+            resource_completion,
+            document_lifecycle_identity.document,
+        );
+        let backend_node_registry = new_shared_renderer_backend_node_registry();
+        let initial_document_loader_bootstrap =
+            crate::network::context::DocumentResourceLoaderBootstrap::new(
+                loader.clone(),
+                resource_task_runner,
+            );
+        let preinspector = ScriptVmDefaultWorldBootstrap::prebootstrap_from_dom_host_in_scope(
+            scope,
+            bootstrap_document,
+            env.bypass_content_security_policy,
+            post_domcontentloaded_page_task_sender,
+            page_task_queue.parser_boundary_sender(),
+            resource_completion_sender,
+            initial_document_loader_bootstrap,
+            runtime_hooks.browser_context_runtime.clone(),
+            runtime_hooks.javascript_dialog_runtime.clone(),
+            renderer_document_isolate_bootstrap,
+            backend_node_registry,
+            env.top_level_storage_key.clone(),
+            env.reserved_service_worker_client_id,
+            inherited_origin.to_owned(),
+            initial_document_policy_container,
+        )
+        .map_err(|error| error.0)?;
+        preinspector.initialize_auxiliary_window_in_scope(
+            scope,
+            opener,
+            window_name,
+            inherited_origin,
+            auxiliary_popup_id,
+        )?;
+        let mut vm = preinspector
+            .finish_without_inspector()
+            .map_err(|error| error.0)?;
+        vm.mark_root_document_initial_empty();
+        vm.set_initial_storage_backends_in_scope(
+            scope,
+            env.indexed_db_manager.clone(),
+            env.storage_bucket_store.clone(),
+        );
+        vm.install_page_task_capabilities(page_task_capabilities);
+        vm.set_root_document_lifecycle(document_lifecycle.clone());
+        vm.set_document_ready_state(crate::dom::native::DocumentReadyState::Complete)?;
+        for milestone in [
+            RendererDocumentLifecycleMilestone::DomContentLoaded,
+            RendererDocumentLifecycleMilestone::Load,
+        ] {
+            anyhow::ensure!(
+                matches!(
+                    document_lifecycle
+                        .begin_milestone_dispatch(document_lifecycle_identity, milestone),
+                    RendererDocumentLifecycleTransition::DispatchStarted
+                ),
+                "staged auxiliary initial Document rejected {milestone:?} dispatch"
+            );
+            anyhow::ensure!(
+                matches!(
+                    document_lifecycle
+                        .complete_milestone_dispatch(document_lifecycle_identity, milestone),
+                    RendererDocumentLifecycleTransition::Recorded(_)
+                ),
+                "staged auxiliary initial Document rejected {milestone:?} completion"
+            );
+        }
+        Ok(Self::finish_construction(
+            page_id,
+            local_executor,
+            env,
+            runtime_hooks,
+            document_lifecycle,
+            page_task_queue,
+            vm,
+            started,
+            PageVmEnvironmentConfigApplyMode::StagedInitialConstruction,
+        ))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn finish_construction(
+        page_id: PageId,
+        local_executor: JsLocalExecutor,
+        env: &PageVmEnvConfig,
+        runtime_hooks: PageVmRuntimeHooks,
+        document_lifecycle: RendererDocumentLifecycleJournalHandle,
+        page_task_queue: PageTaskQueue,
+        vm: ScriptVm,
+        started: Instant,
+        environment_apply_mode: PageVmEnvironmentConfigApplyMode,
+    ) -> Self {
         let dom_agent_state = vm.renderer_dom_agent_state();
         let report = ScriptExecutionReport::default();
         let creation_id = register_page_vm_creation();
@@ -4313,6 +4754,10 @@ impl PageVm {
             runtime_hooks,
             navigation_response: None,
             replacement_document_commit_handoff: None,
+            staged_related_initial_empty_page: matches!(
+                environment_apply_mode,
+                PageVmEnvironmentConfigApplyMode::StagedInitialConstruction
+            ),
             local_executor,
         };
         debug!(
@@ -4320,67 +4765,184 @@ impl PageVm {
             elapsed_ms = started.elapsed().as_millis(),
             "page vm runtime initialized"
         );
+        page_vm.apply_environment_config(env, environment_apply_mode);
         page_vm
-            .vm_mut()
-            .set_indexed_db_manager(env.indexed_db_manager.clone());
-        if let Some(storage_bucket_store) = env.storage_bucket_store.clone() {
-            page_vm
-                .vm_mut()
-                .set_storage_bucket_store(storage_bucket_store);
+    }
+
+    pub(in crate::runtime) fn is_staged_related_initial_empty_page(&self) -> bool {
+        self.staged_related_initial_empty_page
+    }
+
+    fn apply_environment_config(
+        &mut self,
+        env: &PageVmEnvConfig,
+        mode: PageVmEnvironmentConfigApplyMode,
+    ) {
+        if mode.applies_context_entering_configuration() {
+            self.vm_mut()
+                .set_indexed_db_manager(env.indexed_db_manager.clone());
+            if let Some(storage_bucket_store) = env.storage_bucket_store.clone() {
+                self.vm_mut().set_storage_bucket_store(storage_bucket_store);
+            }
         }
-        page_vm.vm_mut().set_web_storage_handles(&env.web_storage);
-        page_vm
-            .vm_mut()
-            .set_script_execution_disabled(env.script_execution_disabled);
-        page_vm
-            .vm_mut()
+        self.vm_mut().set_web_storage_handles(&env.web_storage);
+        let script_execution_disabled = env.script_execution_disabled;
+        self.vm_mut()
+            .set_script_execution_disabled(script_execution_disabled);
+        self.vm_mut()
             .set_permission_overrides(&env.permission_overrides);
-        page_vm
-            .vm_mut()
+        self.vm_mut()
             .set_extra_http_headers(&env.extra_http_headers);
-        page_vm
-            .vm_mut()
-            .set_main_navigation_policy_container(env.document_policy_container.clone());
-        page_vm
-            .vm_mut()
-            .document_runtime
-            .set_document_default_language(env.document_default_language.clone());
-        page_vm
-            .vm_mut()
-            .document_runtime
-            .set_document_source_last_modified(env.document_last_modified);
-        page_vm
-            .vm_mut()
+        if mode.applies_document_policy() {
+            let policy_container = env.main_document_policy_container();
+            match mode {
+                PageVmEnvironmentConfigApplyMode::NormalConstruction => self
+                    .vm_mut()
+                    .set_main_navigation_policy_container(policy_container),
+                PageVmEnvironmentConfigApplyMode::StagedInitialConstruction => self
+                    .vm_mut()
+                    .document_runtime
+                    .set_initial_document_policy_container(policy_container),
+                PageVmEnvironmentConfigApplyMode::StagedInitialAdoption => unreachable!(
+                    "staged initial adoption must preserve its creator-derived document policy"
+                ),
+            }
+            if let Some(policy) = env.auxiliary_browsing_context_policy {
+                self.vm_mut()
+                    .apply_auxiliary_browsing_context_policy(policy);
+            }
+            self.vm_mut()
+                .set_cross_origin_opener_policy(env.cross_origin_opener_policy.clone());
+            self.vm_mut()
+                .document_runtime
+                .set_document_default_language(env.document_default_language.clone());
+            self.vm_mut()
+                .document_runtime
+                .set_document_source_last_modified(env.document_last_modified);
+        }
+        self.vm_mut()
             .set_stored_document_start_scripts(&env.document_start_scripts);
-        page_vm
-            .vm_mut()
+        self.vm_mut()
             .set_stored_runtime_bindings(&env.runtime_bindings);
-        page_vm
-            .vm_mut()
+        self.vm_mut()
             .set_locale_override(env.locale_override.as_deref());
-        page_vm
-            .vm_mut()
+        self.vm_mut()
             .set_timezone_override(env.timezone_override.as_deref());
-        page_vm.vm_mut().set_emulated_media(&env.emulated_media);
-        page_vm.vm_mut().set_idle_override(env.idle_override);
-        page_vm
-            .vm_mut()
-            .set_viewport_surface_for_bootstrap(env.viewport_surface);
-        page_vm.vm_mut().set_network_offline(env.network_offline);
-        page_vm
-            .vm_mut()
+        self.vm_mut().set_idle_override(env.idle_override);
+        self.vm_mut().set_network_offline(env.network_offline);
+        self.vm_mut()
             .set_blocked_url_patterns(&env.blocked_url_patterns);
-        page_vm.vm_mut().set_fetch_subresource_interception(
+        self.vm_mut().set_fetch_subresource_interception(
             env.fetch_subresource_interception_enabled,
             env.fetch_subresource_interception_resource_type,
         );
-        page_vm
-            .vm_mut()
-            .install_navigation_bootstrap_entry(env.navigation_bootstrap_entry.clone());
-        Ok(page_vm)
+        self.vm_mut().set_layout_policy(env.layout_policy);
+        if mode.applies_context_entering_configuration() {
+            self.vm_mut().set_emulated_media(&env.emulated_media);
+            if mode == PageVmEnvironmentConfigApplyMode::NormalConstruction {
+                self.vm_mut()
+                    .set_viewport_surface_for_bootstrap(env.viewport_surface);
+            }
+            self.vm_mut()
+                .install_navigation_bootstrap_entry(env.navigation_bootstrap_entry.clone());
+        }
     }
 
-    pub(super) fn new_from_parser_stream_and_run_document_start(
+    fn replace_environment_config_fields(&mut self, env: &PageVmEnvConfig) {
+        self.runtime_isolated_worlds = env.runtime_isolated_worlds.clone();
+        self.permission_overrides = env.permission_overrides.clone();
+        self.document_start_scripts = env.document_start_scripts.clone();
+        self.runtime_bindings = env.runtime_bindings.clone();
+        self.runtime_inspector_protocol_configurations = env
+            .runtime_inspector_session_restore_snapshots
+            .iter()
+            .filter(|restore| restore.protocol_configuration.requires_restore())
+            .map(|restore| {
+                (
+                    DevToolsSessionKey::from_wire_session_id(
+                        restore
+                            .inspector_session_id
+                            .as_deref()
+                            .filter(|session_id| !session_id.is_empty()),
+                    ),
+                    restore.protocol_configuration.clone(),
+                )
+            })
+            .collect();
+        self.extra_http_headers = env.extra_http_headers.clone();
+        self.locale_override = env.locale_override.clone();
+        self.timezone_override = env.timezone_override.clone();
+        self.bypass_content_security_policy = env.bypass_content_security_policy;
+        self.cpu_throttling_rate = env.cpu_throttling_rate;
+        self.emulated_media = env.emulated_media.clone();
+        self.idle_override = env.idle_override;
+        self.viewport_surface = env.viewport_surface;
+        self.network_offline = env.network_offline;
+        self.blocked_url_patterns = env.blocked_url_patterns.clone();
+        self.indexed_db_manager = env.indexed_db_manager.clone();
+        self.storage_bucket_store = env.storage_bucket_store.clone();
+        self.fetch_subresource_interception_enabled = env.fetch_subresource_interception_enabled;
+        self.fetch_subresource_interception_resource_type =
+            env.fetch_subresource_interception_resource_type;
+        self.wpt_extensions_enabled = env.wpt_extensions_enabled;
+    }
+
+    /// Adopts the synchronously created initial empty realm into its protocol
+    /// target. The stable Page, WindowProxy, Context, and Document are kept;
+    /// only frame/Inspector metadata and target configuration are installed.
+    pub(in crate::runtime) fn adopt_staged_related_initial_empty(
+        &mut self,
+        loader: &ResourceRequestClient,
+        env: &PageVmEnvConfig,
+    ) -> Result<bool> {
+        anyhow::ensure!(
+            moli_url::is_about_blank(self.vm().document_runtime.document_url()),
+            "only a staged initial about:blank Document can enter initial target adoption"
+        );
+        anyhow::ensure!(
+            env.reserved_service_worker_client_id.is_none(),
+            "staged auxiliary Page must retain its synchronously allocated service-worker client"
+        );
+        let environment = self
+            .runtime_hooks
+            .renderer_page_script_environment
+            .as_ref()
+            .ok_or_else(|| {
+                anyhow::anyhow!("staged auxiliary Page lost its script environment before adoption")
+            })?;
+        self.document_lifecycle
+            .bind_output_journal(environment.output_journal(), false);
+        self.vm_mut()
+            .materialize_staged_initial_default_inspector_context(
+                env.root_frame_id.clone(),
+                env.main_document_commit.clone(),
+                &env.runtime_inspector_session_restore_snapshots,
+            )?;
+        let document_loader = self.vm_mut().replace_document_resource_runtime(loader);
+        self.request_client = document_loader.request_client().clone();
+        let inherited_script_execution_disabled = self.script_execution_disabled();
+        self.replace_environment_config_fields(env);
+        self.vm_mut()
+            .document_runtime
+            .set_bypass_content_security_policy(env.bypass_content_security_policy);
+        self.apply_environment_config(env, PageVmEnvironmentConfigApplyMode::StagedInitialAdoption);
+        if inherited_script_execution_disabled {
+            self.vm_mut().set_script_execution_disabled(true);
+        }
+        self.vm_mut().set_viewport_surface(env.viewport_surface)?;
+        self.vm_mut()
+            .set_wpt_extensions_enabled(env.wpt_extensions_enabled)?;
+        self.restore_runtime_inspector_sessions_on_named_owner_lane(
+            &env.runtime_inspector_session_restore_snapshots,
+        )?;
+        self.install_stored_runtime_isolated_worlds_on_named_owner_lane()?;
+        self.install_stored_runtime_bindings_on_named_owner_lane()?;
+        let document_start_scripts = self.document_start_scripts.clone();
+        self.run_document_start_scripts_on_named_owner_lane(&document_start_scripts, |_| {})?;
+        Ok(self.vm_mut().has_pending_location_navigation())
+    }
+
+    pub(super) fn new_from_parser_stream(
         page_id: PageId,
         local_executor: JsLocalExecutor,
         loader: &ResourceRequestClient,
@@ -4388,6 +4950,7 @@ impl PageVm {
         runtime_hooks: PageVmRuntimeHooks,
         parser_session: &mut DocumentParserSession,
         started: Instant,
+        defer_document_start_scripts: bool,
         before_document_start: impl FnOnce(&mut Self) -> Result<()>,
     ) -> Result<(Self, bool)> {
         let mut page_vm = Self::bootstrap_page_vm_from_stream(
@@ -4409,6 +4972,9 @@ impl PageVm {
                 &null_custom_element_registry_elements,
             )?;
         before_document_start(&mut page_vm)?;
+        if defer_document_start_scripts {
+            return Ok((page_vm, false));
+        }
         // Run document-start scripts directly on the runtime's live document.
         // The DomHost stays in the runtime; the next parser step borrows its
         // runtime DOM consumer instead of taking DOM ownership away.

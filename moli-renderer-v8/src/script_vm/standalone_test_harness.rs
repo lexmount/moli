@@ -239,3 +239,252 @@ impl DerefMut for StandaloneScriptVmHarness {
         &mut self.vm
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        pin::pin,
+        sync::{Arc, atomic::AtomicU64},
+    };
+
+    use moli_parser::HtmlParser;
+    use url::Url;
+
+    use super::*;
+    use crate::{
+        JsRuntime,
+        page_task_queue::{
+            PageTaskQueueTestHarness, RendererOwnerWakeSender, RendererPageTaskTestResidence,
+            RendererResourceCompletionSender,
+        },
+        runtime::{
+            PageId, RendererAuxiliaryPageReservationAllocator, RendererOutputStreamIdentity,
+            RendererOwnerLocalHostId, RendererPageToken, RendererTurnOutputJournal,
+        },
+        script_vm::{RendererDocumentIsolateHandle, RendererPageScriptEnvironment},
+    };
+
+    fn evaluate_preinspector_realm(
+        bootstrap: &mut super::super::ScriptVmPreinspectorDefaultWorldBootstrap,
+        source: &str,
+    ) -> anyhow::Result<String> {
+        let renderer_document_isolate = bootstrap.inner.renderer_document_isolate.clone();
+        let context = &bootstrap.inner.page_default_context;
+        renderer_document_isolate.with_entered_renderer_document_isolate(|isolate| {
+            let scope = pin!(v8::HandleScope::new(isolate));
+            let scope = &mut scope.init();
+            let context = v8::Local::new(scope, context);
+            let scope = &mut v8::ContextScope::new(scope, context);
+            let source = crate::util::v8_string(scope, source)
+                .ok_or_else(|| anyhow::anyhow!("failed to allocate preinspector test source"))?;
+            let script = v8::Script::compile(scope, source, None)
+                .ok_or_else(|| anyhow::anyhow!("failed to compile preinspector test source"))?;
+            let value = script
+                .run(scope)
+                .ok_or_else(|| anyhow::anyhow!("failed to run preinspector test source"))?;
+            Ok(value
+                .to_string(scope)
+                .ok_or_else(|| anyhow::anyhow!("preinspector test value was not stringifiable"))?
+                .to_rust_string_lossy(scope))
+        })
+    }
+
+    #[test]
+    fn main_default_realm_prebootstrap_preserves_window_and_document_until_inspector_materialization()
+     {
+        let _js_runtime = JsRuntime::initialize();
+        let standalone_runtime = StandaloneTestRuntime::new();
+        let _runtime_guard = standalone_runtime.runtime().enter();
+        let page_task_queue = PageTaskQueueTestHarness::new();
+        let page_task_tx = page_task_queue.owner_attached_runtime_page_task_sender_for_test();
+        let parser_boundary_tx = page_task_queue.parser_boundary_sender();
+        let document = HtmlParser::SCRIPTING_ENABLED.parse(
+            Url::parse("https://prebootstrap.example/").expect("test URL"),
+            "<!doctype html><html><head></head><body>initial</body></html>".to_owned(),
+        );
+        let resource_loader_owner = ResourceRequestClient::new(&moli_fetch::FetchConfig::default())
+            .expect("standalone test loader");
+        let initial_document_loader_bootstrap = DocumentResourceLoaderBootstrap::new(
+            resource_loader_owner.handle(),
+            standalone_runtime.resource_task_runner(),
+        );
+        let browser_context_owner = RendererBrowserContextRuntime::new();
+        let page_realm = ScriptVmDefaultWorldBootstrap::standalone_page_realm_from_dom_host_with_resource_completion_sender_and_browser_context_runtime_for_test_with_current_runtime(
+            DomHost::from_dom(document),
+            page_task_tx,
+            parser_boundary_tx,
+            RendererResourceCompletionSender::direct_completion_only(),
+            initial_document_loader_bootstrap,
+            browser_context_owner.handle(),
+        )
+        .expect("main Page realm scaffold should bootstrap");
+        let renderer_document_isolate = page_realm.renderer_document_isolate.clone();
+        let mut preinspector = renderer_document_isolate
+            .with_renderer_document_isolate_and_bootstrap_mut(|isolate, isolate_bootstrap| {
+                let scope = pin!(v8::HandleScope::new(isolate));
+                let scope = &mut scope.init();
+                let opener_context = v8::Context::new(scope, Default::default());
+                let scope = &mut v8::ContextScope::new(scope, opener_context);
+                let global_template = isolate_bootstrap.global_template(scope);
+                page_realm.bootstrap_default_world_in_scope(scope, global_template)
+            })
+            .expect("main default realm should prebootstrap inside the entered opener scope");
+        assert_eq!(
+            preinspector
+                .inner
+                .renderer_document_isolate
+                .renderer_document_isolate_inspector_default_context_registry_count(),
+            0,
+            "prebootstrap must not publish an Inspector default context while the opener callback is active"
+        );
+        assert_eq!(
+            evaluate_preinspector_realm(
+                &mut preinspector,
+                "globalThis.__prebootstrapDocument = document; globalThis.__prebootstrapArray = Array; document.body.textContent = 'written-before-materialization'; String(document.body.textContent)",
+            )
+            .expect("preinspector realm should already be script-visible"),
+            "written-before-materialization"
+        );
+
+        let bootstrap = preinspector.materialize_default_inspector_context();
+        assert_eq!(
+            bootstrap
+                .renderer_document_isolate
+                .renderer_document_isolate_inspector_default_context_registry_count(),
+            1,
+            "materialization must publish exactly the prebootstrapped realm"
+        );
+        let mut vm = bootstrap
+            .finish()
+            .expect("materialized realm should finish");
+        assert_eq!(
+            vm.eval("`${__prebootstrapDocument === document}|${__prebootstrapArray === Array}|${document.body.textContent}`")
+                .expect("materialized realm state should remain observable"),
+            "true|true|written-before-materialization",
+            "Inspector materialization must not replace the Window global, intrinsics, or initial Document"
+        );
+        drop(vm);
+        drop(_runtime_guard);
+        drop(standalone_runtime);
+    }
+
+    #[test]
+    fn related_page_isolate_admission_builds_peer_bindings_inside_entered_opener_scope() {
+        let _js_runtime = JsRuntime::initialize();
+        let source_page_id = PageId::new_for_testing(701);
+        let target_page_id = PageId::new_for_testing(702);
+        let (source_wake_tx, _source_wake_rx) = tokio::sync::mpsc::unbounded_channel();
+        let source_residence =
+            RendererPageTaskTestResidence::new(Some(RendererOwnerWakeSender::new(
+                source_wake_tx,
+                RendererPageToken::new_for_testing(source_page_id),
+            )));
+        let source_runtime_task_source = source_residence.runtime_source();
+        let source_v8_sender = source_runtime_task_source
+            .v8_foreground_task_sender()
+            .expect("source Page test residence should expose its V8 route");
+        let source_bootstrap = source_residence
+            .with_owner_runtime(|| {
+                RendererDocumentIsolateHandle::new_standalone_without_owner_reservation_for_test(
+                    source_v8_sender,
+                )
+            })
+            .expect("source Page document isolate should bootstrap");
+        let source_isolate =
+            source_bootstrap.clone_renderer_document_isolate_handle_for_owner_retention();
+        let source_inspector_backend = source_bootstrap.inspector_isolate_backend_handle();
+        let source_membership = source_bootstrap
+            .script_agent_page_membership()
+            .expect("source Page bootstrap should retain its script-agent membership");
+        let source_environment = RendererPageScriptEnvironment::new(
+            source_page_id.as_u64(),
+            false,
+            true,
+            true,
+            RendererAuxiliaryPageReservationAllocator::new_for_test(
+                RendererOwnerLocalHostId::new_for_testing(1),
+                source_page_id,
+                Arc::new(AtomicU64::new(703)),
+            ),
+            source_isolate.clone(),
+            source_inspector_backend,
+            source_membership,
+            source_runtime_task_source,
+            RendererTurnOutputJournal::new(
+                RendererOutputStreamIdentity::new_page_for_protocol_test(source_page_id),
+            ),
+        )
+        .expect("source Page script environment should bind its exact membership");
+
+        let (target_wake_tx, _target_wake_rx) = tokio::sync::mpsc::unbounded_channel();
+        let target_residence =
+            RendererPageTaskTestResidence::new(Some(RendererOwnerWakeSender::new(
+                target_wake_tx,
+                RendererPageToken::new_for_testing(target_page_id),
+            )));
+        let target_v8_sender = target_residence
+            .runtime_source()
+            .v8_foreground_task_sender()
+            .expect("target Page test residence should expose its V8 route");
+
+        let target_bootstrap = source_isolate
+            .with_renderer_document_isolate_and_bootstrap_mut(|isolate, _| {
+                let scope = pin!(v8::HandleScope::new(isolate));
+                let scope = &mut scope.init();
+                let opener_context = v8::Context::new(scope, Default::default());
+                let opener_global = opener_context.global(scope);
+                let scope = &mut v8::ContextScope::new(scope, opener_context);
+                let target_bootstrap = source_environment
+                    .bootstrap_related_page_document_isolate_in_scope(
+                        scope,
+                        &source_bootstrap.bridge_bindings,
+                        target_v8_sender,
+                    )?;
+                let target_global_template = target_bootstrap
+                    .bridge_bindings
+                    .window_global_template(scope);
+                let target_context = v8::Context::new(
+                    scope,
+                    v8::ContextOptions {
+                        global_template: Some(target_global_template),
+                        ..Default::default()
+                    },
+                );
+                anyhow::ensure!(
+                    !target_context
+                        .global(scope)
+                        .strict_equals(opener_global.into()),
+                    "related Page bridge bindings must construct an independent Context global"
+                );
+                Ok::<_, anyhow::Error>(target_bootstrap)
+            })
+            .expect("related Page admission must not re-borrow the already-entered isolate holder");
+
+        assert_eq!(
+            source_isolate.script_agent_page_count(),
+            2,
+            "the source membership capability should admit exactly one related Page route"
+        );
+        assert_eq!(
+            target_bootstrap
+                .clone_renderer_document_isolate_handle_for_owner_retention()
+                .identity_key(),
+            source_isolate.identity_key(),
+            "related Page admission must retain the opener's exact script-agent isolate"
+        );
+        assert_eq!(
+            target_bootstrap
+                .script_agent_page_membership()
+                .expect("related bootstrap should retain its target membership")
+                .page_id(),
+            target_page_id
+        );
+
+        drop(target_bootstrap);
+        assert_eq!(
+            source_isolate.script_agent_page_count(),
+            1,
+            "dropping an unadopted related bootstrap must roll back its Page route"
+        );
+    }
+}

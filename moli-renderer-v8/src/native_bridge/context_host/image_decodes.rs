@@ -327,9 +327,6 @@ fn active_window_dispatch_scope(scope: &mut v8::PinScope<'_, '_>) -> OwnerDispat
     if let Some(child_handle) = crate::native_bridge::active_child_window_handle(scope) {
         return OwnerDispatchScope::Child(child_handle);
     }
-    if let Some(popup_id) = crate::native_bridge::active_lightweight_popup_id(scope) {
-        return OwnerDispatchScope::LightweightPopup(popup_id);
-    }
     OwnerDispatchScope::Top
 }
 

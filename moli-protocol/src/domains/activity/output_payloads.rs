@@ -12,7 +12,12 @@ use crate::domains::{
 /// registry. Adding a new payload family now requires an exhaustive compiler-
 /// checked decision here, and projection cannot downcast a value to a type that
 /// was not named by the producer.
+///
+/// Payloads are consumed immediately into `ProtocolOutputPayloads`. Boxing the
+/// Page variant would add an allocation to that move-only handoff solely to
+/// shrink this transient enum.
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 pub(in crate::domains) enum ProtocolOutputPayload {
     Dom(DomPreparedOutputSlot),
     DomStorage(DomStoragePreparedOutputSlot),

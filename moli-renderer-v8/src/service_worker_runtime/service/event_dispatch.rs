@@ -1343,13 +1343,15 @@ impl ServiceWorkerRuntimeService {
                     .window_completion_target()
                     .expect("notification action window client host"),
                 completion_tx,
+                active_version.script_url.clone(),
             )
         };
-        let (host, completion_tx) = delivery;
+        let (host, completion_tx, source_script_url) = delivery;
         completion_tx
             .send_service_worker_notification_action_navigate_request(
                 crate::types::ServiceWorkerNotificationActionNavigateRequestCompletion {
                     host,
+                    source_script_url,
                     url,
                 },
             )

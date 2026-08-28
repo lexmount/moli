@@ -3,6 +3,7 @@ use serde_json::{Value, json};
 
 use crate::{cdp_frontend::CdpCreatedTarget, cdp_frontend_router::CdpFrontendRouter};
 
+use super::super::actor::FrontendControlRendererFence;
 use super::super::{CdpScheduler, ProtocolOutputSequence};
 
 pub(super) struct CdpFrontendTargetControl {
@@ -26,13 +27,14 @@ impl CdpFrontendTargetControl {
         &mut self,
         scheduler: &mut CdpScheduler,
         frontend_router: &CdpFrontendRouter,
+        renderer_fence: &mut FrontendControlRendererFence<'_>,
         target_id: &str,
     ) -> Result<String> {
         if target_id == scheduler.conn.default_tab_target_id() {
-            self.ensure_default_target_is_materialized(scheduler, frontend_router)
+            self.ensure_default_target_is_materialized(scheduler, frontend_router, renderer_fence)
                 .await?;
         }
-        self.attach_target_session(scheduler, frontend_router, target_id)
+        self.attach_target_session(scheduler, frontend_router, renderer_fence, target_id)
             .await
     }
 
@@ -40,15 +42,17 @@ impl CdpFrontendTargetControl {
         &mut self,
         scheduler: &mut CdpScheduler,
         frontend_router: &CdpFrontendRouter,
+        renderer_fence: &mut FrontendControlRendererFence<'_>,
         target_id: &str,
     ) -> Result<String> {
         let control_session_id = self
-            .ensure_browser_control_session(scheduler, frontend_router)
+            .ensure_browser_control_session(scheduler, frontend_router, renderer_fence)
             .await?;
         let response = self
             .execute_command(
                 scheduler,
                 frontend_router,
+                renderer_fence,
                 Some(&control_session_id),
                 "Target.attachToTarget",
                 json!({ "targetId": target_id, "flatten": true }),
@@ -68,13 +72,15 @@ impl CdpFrontendTargetControl {
         &mut self,
         scheduler: &mut CdpScheduler,
         frontend_router: &CdpFrontendRouter,
+        renderer_fence: &mut FrontendControlRendererFence<'_>,
     ) -> Result<String> {
-        self.ensure_default_target_is_materialized(scheduler, frontend_router)
+        self.ensure_default_target_is_materialized(scheduler, frontend_router, renderer_fence)
             .await?;
         let response = self
             .execute_command(
                 scheduler,
                 frontend_router,
+                renderer_fence,
                 None,
                 "Target.attachToBrowserTarget",
                 json!({}),
@@ -90,12 +96,14 @@ impl CdpFrontendTargetControl {
         &mut self,
         scheduler: &mut CdpScheduler,
         frontend_router: &CdpFrontendRouter,
+        renderer_fence: &mut FrontendControlRendererFence<'_>,
         session_id: &str,
     ) {
         if let Err(error) = self
             .execute_command(
                 scheduler,
                 frontend_router,
+                renderer_fence,
                 None,
                 "Target.detachFromTarget",
                 json!({ "sessionId": session_id }),
@@ -110,11 +118,13 @@ impl CdpFrontendTargetControl {
         &mut self,
         scheduler: &mut CdpScheduler,
         frontend_router: &CdpFrontendRouter,
+        renderer_fence: &mut FrontendControlRendererFence<'_>,
         target_id: &str,
     ) -> Result<()> {
         self.execute_command(
             scheduler,
             frontend_router,
+            renderer_fence,
             None,
             "Target.activateTarget",
             json!({ "targetId": target_id }),
@@ -127,14 +137,16 @@ impl CdpFrontendTargetControl {
         &mut self,
         scheduler: &mut CdpScheduler,
         frontend_router: &CdpFrontendRouter,
+        renderer_fence: &mut FrontendControlRendererFence<'_>,
         target_url: &str,
     ) -> Result<CdpCreatedTarget> {
-        self.ensure_default_target_is_materialized(scheduler, frontend_router)
+        self.ensure_default_target_is_materialized(scheduler, frontend_router, renderer_fence)
             .await?;
         let response = self
             .execute_command(
                 scheduler,
                 frontend_router,
+                renderer_fence,
                 None,
                 "Target.createTarget",
                 json!({ "url": target_url }),
@@ -159,12 +171,14 @@ impl CdpFrontendTargetControl {
         &mut self,
         scheduler: &mut CdpScheduler,
         frontend_router: &CdpFrontendRouter,
+        renderer_fence: &mut FrontendControlRendererFence<'_>,
         target_id: &str,
     ) -> Result<()> {
         let response = self
             .execute_command(
                 scheduler,
                 frontend_router,
+                renderer_fence,
                 None,
                 "Target.closeTarget",
                 json!({ "targetId": target_id }),
@@ -180,6 +194,7 @@ impl CdpFrontendTargetControl {
         &mut self,
         scheduler: &mut CdpScheduler,
         frontend_router: &CdpFrontendRouter,
+        renderer_fence: &mut FrontendControlRendererFence<'_>,
     ) -> Result<String> {
         if let Some(control_session_id) = self.browser_control_session_id.as_ref() {
             return Ok(control_session_id.clone());
@@ -188,6 +203,7 @@ impl CdpFrontendTargetControl {
             .execute_command(
                 scheduler,
                 frontend_router,
+                renderer_fence,
                 None,
                 "Target.attachToBrowserTarget",
                 json!({}),
@@ -205,6 +221,7 @@ impl CdpFrontendTargetControl {
         &mut self,
         scheduler: &mut CdpScheduler,
         frontend_router: &CdpFrontendRouter,
+        renderer_fence: &mut FrontendControlRendererFence<'_>,
     ) -> Result<()> {
         if self.default_page_materialized {
             return Ok(());
@@ -214,12 +231,13 @@ impl CdpFrontendTargetControl {
         // ID permanently, so materialize it before creating another target.
         let default_target_id = scheduler.conn.default_target_id().to_owned();
         let control_session_id = self
-            .ensure_browser_control_session(scheduler, frontend_router)
+            .ensure_browser_control_session(scheduler, frontend_router, renderer_fence)
             .await?;
         let response = self
             .execute_command(
                 scheduler,
                 frontend_router,
+                renderer_fence,
                 Some(&control_session_id),
                 "Target.attachToTarget",
                 json!({ "targetId": default_target_id, "flatten": true }),
@@ -232,6 +250,7 @@ impl CdpFrontendTargetControl {
         self.execute_command(
             scheduler,
             frontend_router,
+            renderer_fence,
             Some(&control_session_id),
             "Target.detachFromTarget",
             json!({ "sessionId": reservation_session_id }),
@@ -245,6 +264,7 @@ impl CdpFrontendTargetControl {
         &mut self,
         scheduler: &mut CdpScheduler,
         frontend_router: &CdpFrontendRouter,
+        renderer_fence: &mut FrontendControlRendererFence<'_>,
         session_id: Option<&str>,
         method: &str,
         params: Value,
@@ -265,10 +285,16 @@ impl CdpFrontendTargetControl {
             .await;
         let (protocol_events, scheduler_events, renderer_output_predecessor) =
             outcome.into_protocol_event_parts();
-        assert!(
-            renderer_output_predecessor.is_none(),
-            "frontend-control attach/detach commands must not execute renderer work"
-        );
+        if !renderer_fence
+            .flush_predecessor(
+                frontend_router,
+                scheduler,
+                renderer_output_predecessor.as_ref(),
+            )
+            .await
+        {
+            bail!("{method} could not project its renderer output predecessor");
+        }
         let mut response = None;
         let mut passthrough_events = Vec::new();
         for event in protocol_events {

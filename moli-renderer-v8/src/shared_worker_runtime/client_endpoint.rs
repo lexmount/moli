@@ -138,8 +138,7 @@ impl SharedWorkerClientFrameIdentity {
     fn child_handle(self) -> Option<DomHandle> {
         match self.execution_context.dispatch_scope() {
             crate::native_bridge::OwnerDispatchScope::Child(handle) => Some(handle),
-            crate::native_bridge::OwnerDispatchScope::Top
-            | crate::native_bridge::OwnerDispatchScope::LightweightPopup(_) => None,
+            crate::native_bridge::OwnerDispatchScope::Top => None,
         }
     }
 }

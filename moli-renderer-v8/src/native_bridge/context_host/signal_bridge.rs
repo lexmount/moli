@@ -2,6 +2,20 @@ use super::*;
 use crate::webidl;
 
 impl JsContextHost {
+    pub(in crate::native_bridge) fn detach_abort_signals_for_context_teardown(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        context_token: super::RuntimeObservableContextToken,
+    ) {
+        let retirement = self
+            .bridge
+            .abort
+            .detach_owned_by_context_token(scope, context_token);
+        for callback_id in retirement.signal_listener_callback_ids {
+            self.release_event_callback(callback_id);
+        }
+    }
+
     pub(crate) fn is_abort_signal<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,

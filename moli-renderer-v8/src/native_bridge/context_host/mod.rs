@@ -19,8 +19,8 @@ use crate::{
         },
         frame_owner_model::{
             FrameDocumentImageLoadEventBinding, FrameDocumentMediaLoadDelayBinding,
-            FrameDocumentTaskOwner, FrameOwnerStore, MainDocumentImageLoadDelayBinding,
-            MainDocumentMediaLoadDelayBinding,
+            FrameDocumentTaskOwner, FrameOwnerStore, LocalWindowId,
+            MainDocumentImageLoadDelayBinding, MainDocumentMediaLoadDelayBinding,
         },
         message_port_runtime::SharedMessagePortRegistry,
         native_bridge::{bindings::NativeBridgeBindings, element::ClientRect},
@@ -29,8 +29,9 @@ use crate::{
         reflector::ReflectorId,
         renderer_resource_scheduler::RendererResourceScheduler,
         runtime::{
-            RendererBrowserContextRuntime, RendererDocumentLifecycleJournalHandle,
-            RendererPageContextCancelReceiver, SharedRendererBackendNodeRegistry,
+            RendererAuxiliaryPageReservationAllocator, RendererBrowserContextRuntime,
+            RendererDocumentLifecycleJournalHandle, RendererPageContextCancelReceiver,
+            RendererPendingAuxiliaryPage, SharedRendererBackendNodeRegistry,
         },
         script_provenance::CompiledStringProvenance,
         shared_worker_runtime::SharedWorkerClientEndpointOwner,
@@ -77,12 +78,19 @@ mod broadcast_channels;
 mod canvas_resources;
 mod child_documents;
 mod child_dynamic_scripts;
+pub(crate) use child_dynamic_scripts::ChildDynamicInlineClassicScriptStart;
 mod child_events;
 mod child_frame_navigation;
 mod child_frame_runtime;
-pub(crate) use child_frame_runtime::install_child_window_proxy_access_check_handlers;
+pub(crate) use child_frame_runtime::{
+    install_child_window_proxy_access_check_handlers,
+    install_cross_origin_window_internal_method_intrinsics,
+};
 mod child_frame_snapshots;
 mod child_frames;
+pub(crate) use child_frames::{
+    FormSubmissionChildNavigationTarget, PendingFormSubmissionChildNavigation,
+};
 mod core;
 mod dialogs;
 mod directory_reader_callbacks;
@@ -97,6 +105,7 @@ mod focus;
 mod frame_document_ready_routes;
 mod hash_changes;
 mod host_environment;
+pub(crate) use host_environment::ChildDocumentStartScriptSnapshot;
 mod host_loads;
 mod image_decodes;
 mod image_loads;
@@ -114,6 +123,8 @@ mod layout_snapshot;
 mod layout_state;
 mod live_ranges;
 mod main_document_lifecycle;
+mod user_activation;
+use user_activation::TransientUserActivationLedger;
 mod media_element_events;
 mod media_loads;
 mod misc_platform_api_tasks;
@@ -127,6 +138,8 @@ mod message_ports;
 mod messages;
 mod module_owner_tasks;
 mod navigation;
+mod navigation_policy;
+pub(crate) use navigation_policy::BrowsingContextNavigationDenial;
 mod opfs_tasks;
 mod permissions;
 mod pointer_capture;
@@ -161,11 +174,7 @@ mod window_security_tokens;
 mod workers;
 pub(crate) use window_security_tokens::set_window_security_token;
 
-#[cfg(test)]
-pub(crate) use crate::window_document_identity::LightweightPopupDocumentId;
-pub(crate) use crate::window_document_identity::{
-    LightweightPopupDocumentOwner, LightweightPopupLocalWindowId, WindowDocumentOwner,
-};
+pub(crate) use crate::window_document_identity::WindowDocumentOwner;
 use crate::{
     frame_owner_model::FrameDocumentLoadDeliveryTask, runtime::ServiceWorkerControlState,
     service_worker_runtime::ServiceWorkerClientId,
@@ -176,9 +185,11 @@ use child_documents::{ChildDocumentParserStore, PendingChildDocumentNavigation};
 use child_events::ChildWindowEventListenerEntry;
 use child_frame_runtime::ChildWindowProxyRecords;
 pub(crate) use child_frame_runtime::{
-    cross_origin_lightweight_popup_id, is_cross_origin_location_proxy,
+    cross_origin_remote_frame_window_target, cross_origin_remote_top_window_target,
+    cross_origin_window_target_host_ptr, is_cross_origin_location_proxy,
+    is_cross_origin_related_top_window_proxy, is_cross_origin_remote_frame_window_proxy,
     is_cross_origin_top_window_proxy, throw_cross_origin_location_security_error,
-    throw_cross_origin_type_error,
+    throw_cross_origin_type_error, top_level_window_proxy_is_finally_closed,
 };
 pub(crate) use child_frame_snapshots::{
     ChildBrowsingContextDocumentSnapshot, ChildBrowsingContextFrameSnapshot,
@@ -201,13 +212,8 @@ pub(crate) use moli_page_types::{
 };
 pub(crate) use navigation::{PendingLocationNavigation, PendingTopLevelNavigation};
 pub(crate) use popups::{
-    LightweightPopupClassicScriptFetchTarget, LightweightPopupDocumentFetchTarget,
-    LightweightPopupNavigationTaskToken, PopupClassicScriptLoadApplication,
-    PopupDocumentLoadApplication, PopupDocumentLoadBodyActivity, active_lightweight_popup_id,
-    defer_active_lightweight_popup_restore, enter_active_lightweight_popup_scope,
-    enter_top_level_lightweight_popup_scope, javascript_url_csp_source,
-    lightweight_popup_id_from_window, restore_active_lightweight_popup_scope,
-    restore_deferred_active_lightweight_popup_scope_if_present,
+    javascript_url_csp_source, javascript_url_source, renderer_owned_auxiliary_popup_id,
+    set_renderer_owned_auxiliary_popup_id,
 };
 pub(crate) use range_records::{RangeBoundarySide, RangeRecordHandle};
 pub(crate) use runtime_observable::{
@@ -225,7 +231,6 @@ pub(crate) use window_execution_context::{
 };
 use window_execution_context::{
     WindowExecutionContextRealmRecords, WindowExecutionContextRealmRegistration,
-    WindowExecutionContextScopedRealmRegistration,
 };
 use workers::WorkerConnectionState;
 pub(crate) use workers::WorkerOwnerScope;
@@ -302,18 +307,16 @@ pub(crate) struct MessagePortWrapperEntry {
 pub(crate) enum OwnerDispatchScope {
     Top,
     Child(DomHandle),
-    LightweightPopup(u64),
 }
 
 pub(crate) struct OwnerDispatchRestore<'s> {
     previous_child: v8::Local<'s, v8::Value>,
-    previous_popup: v8::Local<'s, v8::Value>,
 }
 
 /// Exact Document plus the Window dispatch address used by a queued task.
 ///
-/// A `WindowDocumentOwner` alone is not enough for child frames and
-/// lightweight popups: the dispatch scope is the stable address needed to
+/// A `WindowDocumentOwner` alone is not enough for child frames: the dispatch
+/// scope is the stable address needed to
 /// resolve the target realm and DOM handle after scheduler admission.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct WindowDocumentTaskTarget {
@@ -351,7 +354,6 @@ impl From<WorkerOwnerScope> for OwnerDispatchScope {
         match owner {
             WorkerOwnerScope::Top => Self::Top,
             WorkerOwnerScope::Child(handle) => Self::Child(handle),
-            WorkerOwnerScope::LightweightPopup(popup_id) => Self::LightweightPopup(popup_id),
         }
     }
 }
@@ -360,31 +362,18 @@ impl OwnerDispatchScope {
     pub(crate) fn child_window(self) -> Option<DomHandle> {
         match self {
             Self::Child(handle) => Some(handle),
-            Self::Top | Self::LightweightPopup(_) => None,
+            Self::Top => None,
         }
     }
 
     pub(crate) fn enter<'s>(self, scope: &mut v8::PinScope<'s, '_>) -> OwnerDispatchRestore<'s> {
         let previous_child = match self {
-            Self::Top | Self::LightweightPopup(_) => {
-                crate::native_bridge::enter_active_child_window_scope(scope, None)
-            }
+            Self::Top => crate::native_bridge::enter_active_child_window_scope(scope, None),
             Self::Child(handle) => {
                 crate::native_bridge::enter_active_child_window_scope(scope, Some(handle))
             }
         };
-        let previous_popup = match self {
-            Self::Top | Self::Child(_) => {
-                crate::native_bridge::enter_top_level_lightweight_popup_scope(scope)
-            }
-            Self::LightweightPopup(popup_id) => {
-                crate::native_bridge::enter_active_lightweight_popup_scope(scope, popup_id)
-            }
-        };
-        OwnerDispatchRestore {
-            previous_child,
-            previous_popup,
-        }
+        OwnerDispatchRestore { previous_child }
     }
 
     pub(crate) fn defer_restore<'s>(
@@ -392,28 +381,8 @@ impl OwnerDispatchScope {
         scope: &mut v8::PinScope<'s, '_>,
         previous: OwnerDispatchRestore<'s>,
     ) {
-        match self {
-            Self::Top | Self::Child(_) => {
-                crate::native_bridge::defer_active_lightweight_popup_restore(
-                    scope,
-                    previous.previous_popup,
-                );
-                crate::native_bridge::defer_active_child_window_restore(
-                    scope,
-                    previous.previous_child,
-                );
-            }
-            Self::LightweightPopup(_) => {
-                crate::native_bridge::defer_active_child_window_restore(
-                    scope,
-                    previous.previous_child,
-                );
-                crate::native_bridge::defer_active_lightweight_popup_restore(
-                    scope,
-                    previous.previous_popup,
-                );
-            }
-        }
+        let _ = self;
+        crate::native_bridge::defer_active_child_window_restore(scope, previous.previous_child);
     }
 
     pub(crate) fn restore<'s>(
@@ -421,28 +390,8 @@ impl OwnerDispatchScope {
         scope: &mut v8::PinScope<'s, '_>,
         previous: OwnerDispatchRestore<'s>,
     ) {
-        match self {
-            Self::Top | Self::Child(_) => {
-                crate::native_bridge::restore_active_lightweight_popup_scope(
-                    scope,
-                    previous.previous_popup,
-                );
-                crate::native_bridge::restore_active_child_window_scope(
-                    scope,
-                    previous.previous_child,
-                );
-            }
-            Self::LightweightPopup(_) => {
-                crate::native_bridge::restore_active_child_window_scope(
-                    scope,
-                    previous.previous_child,
-                );
-                crate::native_bridge::restore_active_lightweight_popup_scope(
-                    scope,
-                    previous.previous_popup,
-                );
-            }
-        }
+        let _ = self;
+        crate::native_bridge::restore_active_child_window_scope(scope, previous.previous_child);
     }
 }
 
@@ -795,8 +744,19 @@ impl PendingImageLoadEvent {
 pub(crate) type JsContextHostPageTaskCapabilities =
     crate::page_task_queue::RendererPageJsContextTaskSenders;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ChildOpaqueOriginNonceBinding {
+    local_window_id: LocalWindowId,
+    nonce: moli_storage_key::OpaqueOriginNonce,
+}
+
 pub(crate) struct JsContextHost {
     runtime: *mut DocumentRuntime,
+    deferred_context_host_release_queue: crate::script_vm::RendererDeferredContextHostReleaseQueue,
+    /// After ScriptVm teardown a retained V8 realm owns this host through its
+    /// Context slot. Moving the existing Box here keeps the raw runtime address
+    /// stable until the last retained realm is collected.
+    retained_document_runtime: Option<Box<DocumentRuntime>>,
     layout_policy: moli_page_types::LayoutPolicy,
     document_layout_state: RefCell<layout_state::DocumentLayoutState>,
     layout_pass_active: Cell<bool>,
@@ -810,8 +770,24 @@ pub(crate) struct JsContextHost {
     #[cfg(test)]
     force_fresh_layout_reads_for_test: bool,
     root_document_lifecycle: Option<RendererDocumentLifecycleJournalHandle>,
+    root_document_is_initial_empty: bool,
     output_journal: Option<crate::runtime::RendererTurnOutputJournal>,
+    auxiliary_page_reservation_allocator: Option<RendererAuxiliaryPageReservationAllocator>,
+    page_script_environment: Option<crate::script_vm::RendererPageScriptEnvironment>,
+    /// Handle-free identity retained after the Page environment is retired so
+    /// detached realm access checks can still distinguish same-agent
+    /// replacement/related Pages from a COOP agent switch.
+    page_script_agent_identity: Option<(u64, usize)>,
+    /// Browser-owned active-target state. This remains separate from effective
+    /// focus because DevTools focus emulation can keep a parked Page focused.
+    top_level_page_active: bool,
     page_context_resources_closed: bool,
+    /// Document-scoped guards for the prompt/unload algorithms. A replacement
+    /// Document receives a fresh host while the surrounding Page identity stays
+    /// stable.
+    top_level_beforeunload_in_progress: bool,
+    top_level_unload_dispatched: bool,
+    context_host_lifecycle: Rc<Cell<crate::util::ContextHostLifecycle>>,
     page_default_context: Option<v8::Weak<v8::Context>>,
     pub(crate) v8_finalizers: crate::v8_finalizer::V8FinalizerRegistry,
     pub(super) bridge: NativeDomBridge,
@@ -846,21 +822,39 @@ pub(crate) struct JsContextHost {
     child_document_script_schedulers: FrameDocumentScriptSchedulerStore,
     child_document_parsers: ChildDocumentParserStore,
     child_window_proxy_records: ChildWindowProxyRecords,
+    top_level_cross_origin_window_access_surface: Option<v8::Global<v8::Object>>,
     child_default_context_bootstrap: Option<ChildDefaultContextBootstrapConfig>,
     #[cfg(test)]
     force_child_default_context_preflight_failure: bool,
     child_browsing_context_document_handles: HashMap<DomHandle, DomHandle>,
+    /// Effective origin of this top-level Document. This can differ from the
+    /// URL-derived origin for an inherited initial `about:blank` Document.
+    main_document_serialized_origin: String,
     document_domain_override: Option<String>,
     next_child_browsing_context_id: u64,
     next_child_document_load_id: u64,
     next_child_classic_script_load_id: u64,
     pending_child_document_navigations: HashMap<u64, PendingChildDocumentNavigation>,
+    /// Target-side bindings for source-assigned remote form scheduler ids.
+    /// This lets a later command cancel the exact loader/parser generation
+    /// without transporting an owner-local frame handle back to the source.
+    pending_remote_frame_navigations: HashMap<
+        crate::runtime::RendererRemoteFrameNavigationId,
+        (
+            crate::script_vm::RendererRemoteFrameToken,
+            crate::frame_owner_model::FrameDocumentNavigationLoadBinding,
+        ),
+    >,
     document_resource_loaders: DocumentResourceLoaderRegistry,
     web_storage_store: SharedWebStorageStore,
     session_storage_store: SharedWebStorageStore,
     indexed_db_manager: Option<WeakIndexedDbManager>,
     storage_bucket_store: SharedStorageBucketStore,
     stored_document_start_scripts: Vec<crate::DocumentStartScript>,
+    child_document_start_script_snapshots: HashMap<
+        crate::frame_owner_model::FrameDocumentTaskOwner,
+        host_environment::ChildDocumentStartScriptSnapshot,
+    >,
     stored_runtime_bindings: Vec<crate::protocol_types::RuntimeBindingRegistration>,
     app_manifest_link_change_epoch: u64,
     extra_http_headers: Vec<(String, String)>,
@@ -868,7 +862,7 @@ pub(crate) struct JsContextHost {
     locale_override: Option<String>,
     timezone_override: Option<String>,
     idle_override: Option<crate::protocol_types::EmulatedIdleOverride>,
-    protocol_user_gesture_activation_depth: usize,
+    transient_user_activation: TransientUserActivationLedger,
     current_input_event: Option<crate::native_bridge::CurrentInputEvent>,
     webdriver_bidi_file_prompt_handler_stack: Vec<String>,
     emulated_media: crate::protocol_types::EmulatedMediaOverrides,
@@ -885,16 +879,12 @@ pub(crate) struct JsContextHost {
     pending_service_worker_ready: HashMap<u64, service_workers::PendingServiceWorkerReady>,
     service_worker_registration_watchers: Vec<service_workers::ServiceWorkerRegistrationWatcher>,
     service_worker_lifecycle_watched_scopes: HashSet<(Url, String, WindowDocumentOwner)>,
-    service_worker_popup_clients: HashMap<u64, ServiceWorkerClientId>,
-    pending_service_worker_clients_open_window_popups:
-        HashMap<u64, service_workers::PendingServiceWorkerClientsOpenWindowPopup>,
     pending_window_messages: VecDeque<QueuedWindowMessage>,
     next_window_message_task_id: crate::page_task_queue::RendererPageWindowMessageTaskId,
     indexed_db_context_tasks: IndexedDbContextState,
     window_execution_contexts: HashMap<WindowExecutionContextOwner, WindowExecutionContextBinding>,
     current_window_message_source: Option<PendingWindowMessageEndpoint>,
     pending_active_child_window_restore: Option<Option<DomHandle>>,
-    pending_active_lightweight_popup_restore: Option<Option<u64>>,
     /// One child async-subresource body can keep its request attribution
     /// scope active until the enclosing selected task runs its checkpoint.
     /// The task dispatcher consumes this bit immediately after that
@@ -979,15 +969,20 @@ pub(crate) struct JsContextHost {
     child_shared_worker_client_owner_ids: HashMap<DomHandle, SharedWorkerClientOwnerId>,
     shared_worker_clients: SharedWorkerClientEndpointOwner,
     top_level_storage_key: Option<moli_storage_key::MoliStorageKey>,
-    web_storage_opaque_context_nonce: Option<moli_storage_key::OpaqueOriginNonce>,
-    child_web_storage_opaque_context_nonces:
-        HashMap<DomHandle, moli_storage_key::OpaqueOriginNonce>,
+    /// Browser-context-qualified identity of this top-level opaque origin.
+    /// It is shared with StorageKey, but Window same-origin checks must not
+    /// derive identity from a host-local LocalWindow id.
+    top_level_opaque_origin_nonce: Option<moli_storage_key::OpaqueOriginNonce>,
+    /// Opaque-origin identity follows the LocalWindow across document.open(),
+    /// but rotates when navigation installs a replacement LocalWindow.
+    child_opaque_origin_nonce_bindings: HashMap<DomHandle, ChildOpaqueOriginNonceBinding>,
     broadcast_channel_wrappers: HashMap<BroadcastChannelId, BroadcastChannelWrapperEntry>,
     form_past_named_items: HashMap<(DomHandle, String), DomHandle>,
     button_element_targets: HashMap<(DomHandle, String), DomHandle>,
     constructing_form_data_forms: Vec<DomHandle>,
     active_form_submission_forms: Vec<DomHandle>,
-    pending_form_submission_child_targets: HashMap<DomHandle, Vec<DomHandle>>,
+    pending_form_submission_child_targets:
+        HashMap<DomHandle, Vec<PendingFormSubmissionChildNavigation>>,
     active_image_submitter_coordinate: Option<(DomHandle, u32, u32)>,
     current_inline_script_stack: Vec<DomHandle>,
     compiled_string_provenance: Vec<CompiledStringProvenance>,
@@ -995,11 +990,16 @@ pub(crate) struct JsContextHost {
     /// entering V8. Only effects created synchronously inside that dispatch
     /// may copy this value; it is never inferred from later Page work.
     active_runtime_command_cause: Option<crate::runtime::RendererRuntimeCommandCausalIdentity>,
+    /// Source-side navigation facts temporarily installed while an element
+    /// target invokes another Window's synchronous Location setter. The
+    /// target host consumes a clone into its pending request before this
+    /// callback returns; the scope is always restored by the caller.
+    active_top_level_navigation_source: Option<crate::runtime::RendererTopLevelNavigationSource>,
     /// True only while V8 Inspector is synchronously dispatching a protocol
     /// command. DebugEvaluate can expose StackFrame objects whose location
     /// accessors are invalid, so callbacks use this scope to avoid probing them.
     active_inspector_dispatch: bool,
-    pending_top_level_navigation: Option<PendingTopLevelNavigation>,
+    pending_top_level_navigations: VecDeque<PendingTopLevelNavigation>,
     ordinary_page_turn_navigation_handoff_active: bool,
     pub(super) next_navigation_attempt_id: u64,
     pub(super) active_navigation_attempts: HashMap<u64, &'static str>,
@@ -1019,21 +1019,7 @@ pub(crate) struct JsContextHost {
     pending_download_activations: Vec<RendererPendingDownloadActivation>,
     #[cfg(test)]
     pending_popup_activations: Vec<RendererPendingPopupActivation>,
-    next_lightweight_popup_id: u64,
-    next_lightweight_popup_local_window_id: u64,
-    next_lightweight_popup_document_id: u64,
-    next_lightweight_popup_document_load_id: u64,
-    next_lightweight_popup_classic_script_load_id: u64,
-    lightweight_popup_browsing_contexts:
-        HashMap<u64, popups::LightweightPopupBrowsingContextRecord>,
-    lightweight_popup_window_names: HashMap<String, u64>,
-    lightweight_popup_document_handles: HashMap<DomHandle, u64>,
-    pending_lightweight_popup_document_loads:
-        HashMap<u64, popups::PendingLightweightPopupDocumentLoad>,
-    pending_lightweight_popup_classic_script_loads:
-        HashMap<u64, popups::PendingLightweightPopupClassicScriptLoad>,
-    /// Standalone-only compatibility storage for locally materialized popup
-    /// documents whose test/runtime adapter has no stable Page source.
+    next_auxiliary_browsing_context_id: u64,
     #[cfg(test)]
     pending_javascript_dialogs: Vec<dialogs::PendingJavaScriptDialogRecord>,
     javascript_dialog_runtime: crate::runtime::RendererJavaScriptDialogRuntime,
@@ -1041,6 +1027,10 @@ pub(crate) struct JsContextHost {
     javascript_dialog_handler_enabled: bool,
     pending_network_output: Vec<ScriptNetworkOutputItem>,
     focus_change_epoch: u64,
+    /// Current focused local frame Document. The active element can be absent
+    /// while focus remains inside that frame, so this identity is tracked
+    /// independently and falls back to the root Document after detach.
+    focused_document_handle: DomHandle,
     next_subresource_network_request_handle: u64,
     subresource_activity_epoch: u64,
     subresource_last_activity_at: std::time::Instant,
@@ -1149,6 +1139,120 @@ pub(crate) struct ChildBrowsingContextNavigationRequest {
     pub(crate) method: String,
     pub(crate) body: Option<Vec<u8>>,
     pub(crate) request_headers: Vec<(String, String)>,
+    navigation_source: Option<ChildBrowsingContextNavigationSource>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ChildBrowsingContextNavigationSource {
+    initiator_url: Url,
+    document_referrer: String,
+}
+
+impl ChildBrowsingContextNavigationRequest {
+    pub(crate) fn new(
+        url: Url,
+        method: String,
+        body: Option<Vec<u8>>,
+        request_headers: Vec<(String, String)>,
+    ) -> Self {
+        Self {
+            url,
+            method,
+            body,
+            request_headers,
+            navigation_source: None,
+        }
+    }
+
+    pub(crate) fn get_from_top_level_source(
+        target_url: Url,
+        source: Option<&crate::RendererTopLevelNavigationSource>,
+    ) -> Self {
+        let request = Self::new(target_url.clone(), "GET".to_owned(), None, Vec::new());
+        let Some(source) = source else {
+            return request;
+        };
+        let Some(source_url) = Url::parse(source.source_url()).ok() else {
+            return request;
+        };
+        let navigation_referrer = if source.suppresses_referrer() {
+            String::new()
+        } else {
+            moli_fetch::referrer_header_value(
+                &source_url,
+                &target_url,
+                None,
+                source.referrer_policy(),
+            )
+            .unwrap_or_default()
+        };
+        let document_referrer = if source.suppresses_referrer() {
+            String::new()
+        } else {
+            moli_fetch::navigation_referrer_value(
+                &source_url,
+                &target_url,
+                None,
+                source.referrer_policy(),
+            )
+            .unwrap_or_default()
+        };
+        request.with_navigation_source(source_url, navigation_referrer, document_referrer)
+    }
+
+    /// Freezes the source-side navigation metadata before a named target can
+    /// hand the request to a child Frame owned by another related Page.
+    ///
+    /// The explicit Referer is already policy-filtered by the source
+    /// Document. The target loader must therefore retain the source initiator
+    /// for cookie/Sec-Fetch classification while disabling its usual
+    /// target-parent referrer inference.
+    pub(crate) fn with_navigation_source(
+        mut self,
+        initiator_url: Url,
+        navigation_referrer: String,
+        document_referrer: String,
+    ) -> Self {
+        self.request_headers
+            .retain(|(name, _)| !name.eq_ignore_ascii_case("referer"));
+        if !navigation_referrer.is_empty() {
+            self.request_headers
+                .push(("Referer".to_owned(), navigation_referrer));
+        }
+        self.navigation_source = Some(ChildBrowsingContextNavigationSource {
+            initiator_url,
+            document_referrer,
+        });
+        self
+    }
+
+    pub(crate) fn initiator_url(&self) -> Option<&Url> {
+        self.navigation_source
+            .as_ref()
+            .map(|source| &source.initiator_url)
+    }
+
+    pub(in crate::native_bridge::context_host) fn has_explicit_navigation_source(&self) -> bool {
+        self.navigation_source.is_some()
+    }
+
+    pub(crate) fn document_referrer(&self) -> Option<&str> {
+        self.navigation_source
+            .as_ref()
+            .map(|source| source.document_referrer.as_str())
+    }
+
+    pub(crate) fn with_wire_navigation_source(
+        mut self,
+        initiator_url: Url,
+        document_referrer: String,
+    ) -> Self {
+        self.navigation_source = Some(ChildBrowsingContextNavigationSource {
+            initiator_url,
+            document_referrer,
+        });
+        self
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1236,28 +1340,81 @@ impl JsContextHost {
         self.app_manifest_link_change_epoch
     }
 
+    pub(crate) fn mark_page_context_detached(&self) {
+        if self.context_host_lifecycle.get() == crate::util::ContextHostLifecycle::Active {
+            self.context_host_lifecycle
+                .set(crate::util::ContextHostLifecycle::Detached);
+        }
+    }
+
     pub(crate) fn close_page_context_resources_for_teardown(&mut self) {
+        self.mark_page_context_detached();
         if self.page_context_resources_closed {
             return;
         }
         self.page_context_resources_closed = true;
+        // Keep the Page's output sink alive while exact execution-context
+        // resources are retired. DedicatedWorker teardown, in particular,
+        // must publish Target.destroyed before the detached host relinquishes
+        // its browser-facing capabilities.
+        self.retire_all_window_execution_context_resources_for_teardown();
         self.retire_all_document_resource_loaders();
         self.page_default_context = None;
+        self.top_level_cross_origin_window_access_surface = None;
+        self.internal_inspector_value_references.clear();
         self.v8_finalizers.clear_for_context_teardown();
         self.clear_pending_top_level_navigation();
         self.unregister_all_service_worker_child_clients();
-        self.unregister_all_service_worker_popup_clients();
         self.browser_context_runtime
             .unregister_service_worker_client(self.service_worker_client_id);
         self.close_shared_worker_clients();
         self.close_owned_broadcast_channels();
         self.close_owned_message_ports();
         self.shutdown_workers();
+        self.page_script_environment = None;
+        self.output_journal = None;
+        self.auxiliary_page_reservation_allocator = None;
+        self.root_document_lifecycle = None;
+        self.child_default_context_bootstrap = None;
+        self.command_turn_output = None;
+    }
+
+    pub(crate) fn context_host_lifecycle_handle(
+        &self,
+    ) -> Rc<Cell<crate::util::ContextHostLifecycle>> {
+        self.context_host_lifecycle.clone()
+    }
+
+    pub(crate) fn deferred_context_host_release_queue(
+        &self,
+    ) -> crate::script_vm::RendererDeferredContextHostReleaseQueue {
+        self.deferred_context_host_release_queue.clone()
+    }
+
+    pub(crate) fn page_context_resources_are_closed(&self) -> bool {
+        self.page_context_resources_closed
+    }
+
+    pub(crate) fn adopt_retained_document_runtime(
+        &mut self,
+        document_runtime: Box<DocumentRuntime>,
+    ) {
+        assert!(
+            self.retained_document_runtime.is_none(),
+            "JsContextHost must adopt its DocumentRuntime at most once"
+        );
+        assert!(
+            std::ptr::eq(self.runtime.cast_const(), document_runtime.as_ref()),
+            "retained DocumentRuntime transfer must preserve the host raw pointer"
+        );
+        self.retained_document_runtime = Some(document_runtime);
     }
 }
 
 impl Drop for JsContextHost {
     fn drop(&mut self) {
         self.close_page_context_resources_for_teardown();
+        self.context_host_lifecycle
+            .set(crate::util::ContextHostLifecycle::Destroyed);
     }
 }

@@ -45,15 +45,6 @@ struct StoragePrototypeMetadataDeclaration {
 
 #[derive(WebApiObject)]
 #[webapi(interface = "Object")]
-struct StorageAliasesDeclaration<'scope> {
-    #[webapi(data_property = "localStorage")]
-    local_storage: v8::Local<'scope, v8::Object>,
-    #[webapi(data_property = "sessionStorage")]
-    session_storage: v8::Local<'scope, v8::Object>,
-}
-
-#[derive(WebApiObject)]
-#[webapi(interface = "Object")]
 struct StorageConstructorGlobalDeclaration<'scope> {
     #[webapi(data_property = "Storage")]
     constructor: v8::Local<'scope, v8::Function>,
@@ -86,25 +77,6 @@ pub(in crate::context_bootstrap) fn ensure_storage_runtime_state_for_window<'s>(
     install_named_storage_runtime_state(scope, window, slot_name, storage_kind, prototype).ok()
 }
 
-pub(crate) fn install_storage_aliases_for_window<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    window: v8::Local<'s, v8::Object>,
-) -> Result<()> {
-    let local_storage =
-        ensure_storage_runtime_state_for_window(scope, window, WINDOW_LOCAL_STORAGE_SLOT, "local")
-            .ok_or_else(|| anyhow!("failed to install localStorage object"))?;
-    let session_storage = ensure_storage_runtime_state_for_window(
-        scope,
-        window,
-        WINDOW_SESSION_STORAGE_SLOT,
-        "session",
-    )
-    .ok_or_else(|| anyhow!("failed to install sessionStorage object"))?;
-    StorageAliasesDeclaration::new(local_storage, session_storage)
-        .initialize(scope, window)
-        .map_err(|error| anyhow!("failed to initialize storage aliases: {error}"))
-}
-
 fn install_named_storage_runtime_state<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     global: v8::Local<'s, v8::Object>,
@@ -125,7 +97,6 @@ fn install_named_storage_runtime_state<'s>(
             set_storage_owner_child_handle(scope, storage, handle);
             0
         }
-        WebStorageOwner::LightweightPopup(popup_id) => popup_id,
     };
     let owner_value = v8::BigInt::new_from_u64(scope, owner);
     let _ = storage.set_internal_field(STORAGE_OWNER_INTERNAL_FIELD_INDEX, owner_value.into());

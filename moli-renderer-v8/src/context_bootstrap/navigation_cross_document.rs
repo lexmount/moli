@@ -15,8 +15,8 @@ use super::navigation_serialize::{
     serialize_navigation_entry_object,
 };
 use super::navigation_window::{
-    child_browsing_context_handle_for_runtime_owner, runtime_window_is_global,
-    window_location_for_holder,
+    child_browsing_context_handle_for_runtime_owner, navigation_document_is_initial_empty,
+    runtime_window_is_global, window_location_for_holder,
 };
 use super::*;
 use moli_page_types::{NavigationHistoryMutation, cross_document_navigation_seed};
@@ -53,11 +53,17 @@ pub(super) fn handle_navigation_navigate_cross_document<'s>(
         .iter()
         .find(|entry| entry.history_index == current_index)
         .is_some_and(|entry| entry.url == "about:blank");
+    let replace_initial_empty_document = navigation_document_is_initial_empty(scope, owner);
     let mutation = match navigate_history_kind {
+        NavigationNavigateHistoryKind::Push if replace_initial_empty_document => {
+            NavigationHistoryMutation::Replace
+        }
         NavigationNavigateHistoryKind::Push => NavigationHistoryMutation::Push,
         NavigationNavigateHistoryKind::Replace => NavigationHistoryMutation::Replace,
         NavigationNavigateHistoryKind::Default => {
-            if current_href.as_deref() == Some("about:blank") && current_entry_is_about_blank {
+            if replace_initial_empty_document
+                || (current_href.as_deref() == Some("about:blank") && current_entry_is_about_blank)
+            {
                 NavigationHistoryMutation::Replace
             } else {
                 NavigationHistoryMutation::Push

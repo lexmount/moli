@@ -1203,13 +1203,16 @@ impl PausedDocumentTransfer {
             } => {
                 let request_cookie_report = body.request_cookie_report().cloned();
                 let body_progress_source = body.body_progress_source();
+                let final_url = body.final_url().clone();
+                let redirect_chain = body.redirect_chain().to_vec();
                 let navigation_state = navigation.clone();
                 let navigation = conn
                     .build_navigation_from_buffered_body_source_for_navigation_async(
                         &navigation,
-                        navigation.requested_url.clone(),
+                        final_url,
                         response_code,
                         response_headers,
+                        redirect_chain,
                         synthetic_body,
                         request_cookie_report,
                         NetworkObservationJournal::default(),
@@ -1337,6 +1340,7 @@ impl ActiveDocumentBodyStreamState {
                 final_url,
                 response_code,
                 response_headers,
+                self.response.redirect_chain.clone(),
                 synthetic_body,
                 self.response.request_cookie_report.clone(),
                 NetworkObservationJournal::default(),
@@ -1505,6 +1509,22 @@ impl DocumentBodySource {
         }
     }
 
+    fn redirect_chain(&self) -> &[moli_fetch::RedirectInfo] {
+        match self {
+            Self::BufferedRaw { response, .. } => &response.redirect_chain,
+            Self::StreamingRaw { response, .. } => &response.redirect_chain,
+            Self::CapturedRaw { head, .. } => &head.redirect_chain,
+        }
+    }
+
+    fn final_url(&self) -> &Url {
+        match self {
+            Self::BufferedRaw { response, .. } => &response.final_url,
+            Self::StreamingRaw { response, .. } => &response.final_url,
+            Self::CapturedRaw { head, .. } => &head.final_url,
+        }
+    }
+
     pub(crate) async fn continue_navigation_async(
         self,
         conn: &mut CdpConnection,
@@ -1533,6 +1553,7 @@ impl DocumentBodySource {
                     let status = head.status;
                     let headers = head.headers.clone();
                     let final_url = head.final_url.clone();
+                    let redirect_chain = head.redirect_chain.clone();
                     let request_cookie_report = head.request_cookie_report.clone();
                     let body = body
                         .try_into_materialized_bytes()
@@ -1547,6 +1568,7 @@ impl DocumentBodySource {
                         } else {
                             response_headers
                         },
+                        redirect_chain,
                         body,
                         request_cookie_report,
                         network_observation_journal,
@@ -1598,6 +1620,7 @@ impl DocumentBodySource {
                     let status = head.status;
                     let headers = head.headers.clone();
                     let final_url = head.final_url.clone();
+                    let redirect_chain = head.redirect_chain.clone();
                     let request_cookie_report = head.request_cookie_report.clone();
                     conn.build_navigation_from_buffered_body_source_for_navigation_async(
                         navigation,
@@ -1608,6 +1631,7 @@ impl DocumentBodySource {
                         } else {
                             response_headers
                         },
+                        redirect_chain,
                         body,
                         request_cookie_report,
                         network_observation_journal,

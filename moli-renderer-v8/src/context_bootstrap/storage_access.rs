@@ -241,17 +241,14 @@ fn current_window_storage_access_request_context(
         storage_key.origin(),
         &embedding_origin,
     ));
-    let outermost = matches!(
-        identity.dispatch_scope(),
-        OwnerDispatchScope::Top | OwnerDispatchScope::LightweightPopup(_)
-    );
+    let outermost = matches!(identity.dispatch_scope(), OwnerDispatchScope::Top);
     Some(StorageAccessRequestContext {
         ambient_storage_key,
         policy: StorageAccessRequestPolicy {
             outermost,
             third_party_partitioned: storage_key.is_third_party_partitioned(),
             permission,
-            transient_user_activation: host.protocol_user_gesture_activation(),
+            transient_user_activation: host.transient_user_activation(),
         },
     })
 }

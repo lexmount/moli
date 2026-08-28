@@ -18,9 +18,7 @@ mod main_module;
 
 pub(crate) use child_module::AuthorizedCurrentChildModuleFetchCompletion;
 pub(crate) use document_load::{
-    AuthorizedCurrentChildDocumentLoadCompletion,
-    AuthorizedCurrentPopupClassicScriptLoadCompletion,
-    AuthorizedCurrentPopupDocumentLoadCompletion, CurrentChildDocumentLoadApplication,
+    AuthorizedCurrentChildDocumentLoadCompletion, CurrentChildDocumentLoadApplication,
 };
 pub(crate) use main_document::AuthorizedCurrentDocumentWriteExternalScriptLoadCompletion;
 pub(crate) use main_module::{
@@ -88,12 +86,6 @@ impl PageVm {
             }
             RendererPageResourceTerminal::ChildDocumentLoad { completion } => {
                 self.apply_child_document_load_terminal(source, owner, *completion)?
-            }
-            RendererPageResourceTerminal::PopupDocumentLoad { completion } => {
-                self.apply_popup_document_load_terminal(source, owner, *completion)?
-            }
-            RendererPageResourceTerminal::PopupClassicScript { completion } => {
-                self.apply_popup_classic_script_terminal(source, owner, *completion)?
             }
         };
 

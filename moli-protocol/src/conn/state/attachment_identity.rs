@@ -42,6 +42,10 @@ impl NavigationRequestId {
             "navigation request id",
         ))
     }
+
+    pub(crate) fn get(self) -> u64 {
+        self.0.get()
+    }
 }
 
 fn allocate_nonzero_u64(counter: &AtomicU64, name: &str) -> NonZeroU64 {

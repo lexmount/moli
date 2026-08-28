@@ -40,16 +40,12 @@ const STORAGE_INTERNAL_NAME_UNITS: &[u16] = &[
 pub(super) enum WebStorageOwner {
     ActiveDocument,
     Child(DomHandle),
-    LightweightPopup(u64),
 }
 
 pub(super) fn web_storage_owner_for_window<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     window: v8::Local<'s, v8::Object>,
 ) -> WebStorageOwner {
-    if let Some(popup_id) = crate::native_bridge::lightweight_popup_id_from_window(scope, window) {
-        return WebStorageOwner::LightweightPopup(popup_id);
-    }
     super::super::navigation_window::child_browsing_context_handle_for_runtime_owner(scope, window)
         .map(WebStorageOwner::Child)
         .unwrap_or(WebStorageOwner::ActiveDocument)
@@ -67,15 +63,7 @@ pub(super) fn storage_owner<'s>(
     {
         return WebStorageOwner::Child(handle);
     }
-    storage
-        .get_internal_field(scope, STORAGE_OWNER_INTERNAL_FIELD_INDEX)
-        .and_then(|v| v8::Local::<v8::Value>::try_from(v).ok())
-        .and_then(|v| v8::Local::<v8::BigInt>::try_from(v).ok())
-        .and_then(|value| {
-            let (popup_id, lossless) = value.u64_value();
-            (lossless && popup_id != 0).then_some(WebStorageOwner::LightweightPopup(popup_id))
-        })
-        .unwrap_or(WebStorageOwner::ActiveDocument)
+    WebStorageOwner::ActiveDocument
 }
 
 pub(super) fn set_storage_owner_child_handle(
@@ -99,16 +87,6 @@ pub(super) fn storage_access_allows_web_storage_for_window<'s>(
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         return true;
     };
-    if let Some(popup_id) = crate::native_bridge::lightweight_popup_id_from_window(scope, window) {
-        let runtime = unsafe { &mut *host_ptr };
-        let Some(storage_context) = runtime.storage_context_for_lightweight_popup(popup_id) else {
-            return false;
-        };
-        return !moli_storage_key::serialized_storage_key_has_opaque_origin(
-            &storage_context.storage_key().serialized_storage_key(),
-        );
-    }
-
     let owner = super::super::navigation_window::runtime_window_owner(scope, window);
     let child_handle =
         super::super::navigation_window::child_browsing_context_handle_for_runtime_owner(
@@ -146,9 +124,6 @@ pub(super) fn current_storage_host_for_owner(
         WebStorageOwner::Child(handle) => runtime
             .storage_context_for_child_browsing_context(handle)?
             .into_origin_and_area_key(),
-        WebStorageOwner::LightweightPopup(popup_id) => runtime
-            .storage_context_for_lightweight_popup(popup_id)?
-            .into_origin_and_area_key(),
     };
     Some((origin, area_key, host_ptr))
 }
@@ -173,14 +148,7 @@ pub(super) fn with_storage_store<R>(
     let (_, area_key, host_ptr) = current_storage_host_for_owner(scope, owner)?;
     let host = unsafe { &*host_ptr };
     let store = if is_session {
-        match owner {
-            WebStorageOwner::ActiveDocument | WebStorageOwner::Child(_) => {
-                host.session_storage_store()
-            }
-            WebStorageOwner::LightweightPopup(popup_id) => {
-                host.lightweight_popup_session_storage_store(popup_id)?
-            }
-        }
+        host.session_storage_store()
     } else {
         host.web_storage_store()
     };
@@ -306,20 +274,6 @@ fn queue_storage_event(
     };
     let host = unsafe { &mut *host_ptr };
     let (source_scope, origin, area_key, url) = match owner {
-        WebStorageOwner::LightweightPopup(popup_id) => {
-            let Some(storage_context) = host.storage_context_for_lightweight_popup(popup_id) else {
-                return;
-            };
-            let Some(document_url) = host.lightweight_popup_document_url(popup_id) else {
-                return;
-            };
-            (
-                OwnerDispatchScope::LightweightPopup(popup_id),
-                storage_context.origin().to_owned(),
-                storage_context.web_storage_area_key().to_owned(),
-                document_url.to_string(),
-            )
-        }
         WebStorageOwner::Child(handle) => {
             let Some(storage_context) = host.storage_context_for_child_browsing_context(handle)
             else {

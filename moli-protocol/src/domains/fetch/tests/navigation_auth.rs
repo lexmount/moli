@@ -443,6 +443,11 @@ async fn continue_with_auth_and_intercept_response_pauses_before_authorized_body
         json!({ "frameId": "TID-1", "loaderId": LOADER_ID }),
         Some("SID-1"),
     );
+    ctx.wait_for_document_continuation_for_test(
+        Some("SID-1"),
+        "authorized response-stage navigation continuation",
+    )
+    .await;
     assert!(
         loaded_page_html_for_test(&mut ctx)
             .await

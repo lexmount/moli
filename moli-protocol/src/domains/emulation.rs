@@ -94,6 +94,7 @@ pub(crate) enum EmulationCommandTaskStep {
 }
 
 enum PendingEmulationPageOperation {
+    SetTopLevelPageFocus,
     SetExtraHttpHeaders,
     SetLocaleOverride,
     SetNetworkConditions,
@@ -173,9 +174,7 @@ pub(crate) fn try_start_emulation_command_dispatch(
             EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({}))),
         ),
         Some(EmulationAction::SetFocusEmulationEnabled) => {
-            Some(EmulationCommandTaskStep::Complete(
-                focus_emulation_enabled_command_output_plan(conn, cmd),
-            ))
+            Some(start_focus_emulation_enabled_command(conn, cmd))
         }
         Some(EmulationAction::SetDeviceMetricsOverride) => {
             Some(start_device_metrics_override_command(conn, cmd))
@@ -223,25 +222,53 @@ pub(crate) fn try_start_emulation_command_dispatch(
     }
 }
 
-fn focus_emulation_enabled_command_output_plan(
+fn start_focus_emulation_enabled_command(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,
-) -> CommandOutputPlan {
+) -> EmulationCommandTaskStep {
     let params: params::SetFocusEmulationEnabledParams = match cmd.get_params() {
         Ok(Some(params)) => params,
-        _ => return CommandOutputPlan::error(-32602, "InvalidParams"),
+        _ => {
+            return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(
+                -32602,
+                "InvalidParams",
+            ));
+        }
     };
     if conn.browser_context.is_none() {
-        return CommandOutputPlan::result(json!({}));
+        return EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})));
     }
-    match page_session::mutate_page_session_state(conn, cmd.session_id, |state| {
+    if let Err(message) = page_session::mutate_page_session_state(conn, cmd.session_id, |state| {
         *state.focus_emulation_enabled = params.enabled;
     }) {
-        Ok(()) => CommandOutputPlan::result(json!({})),
-        Err(message) if message == "BrowserContextNotLoaded" => {
+        return EmulationCommandTaskStep::Complete(if message == "BrowserContextNotLoaded" {
             CommandOutputPlan::error(-31998, "BrowserContextNotLoaded")
+        } else {
+            CommandOutputPlan::error(-32000, message)
+        });
+    }
+
+    let mut pending = match start_session_surface_override_page_command(conn, cmd.session_id) {
+        Ok(pending) => pending,
+        Err(message) => {
+            return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message));
         }
-        Err(message) => CommandOutputPlan::error(-32000, message),
+    };
+    match start_session_top_level_page_focus_command(conn, cmd.session_id) {
+        Ok(Some(focus)) => pending.push(focus),
+        Ok(None) => {}
+        Err(message) => {
+            return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message));
+        }
+    }
+    if pending.is_empty() {
+        EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})))
+    } else {
+        EmulationCommandTaskStep::Pending(PendingEmulationCommandDispatch {
+            command_id: cmd.id,
+            session_id: cmd.session_id.map(str::to_owned),
+            pending: PendingEmulationRendererDispatch::Pages(pending),
+        })
     }
 }
 
@@ -2117,8 +2144,13 @@ async fn execute_devtools_set_window_state_for_current_route(
             "BrowserContextNotLoaded",
         ));
     }
-    let pending = start_session_surface_override_page_command(conn, session_id)
+    let mut pending = start_session_surface_override_page_command(conn, session_id)
         .map_err(devtools_emulation_owner_error)?;
+    if let Some(focus) = start_session_top_level_page_focus_command(conn, session_id)
+        .map_err(devtools_emulation_owner_error)?
+    {
+        pending.push(focus);
+    }
     complete_emulation_page_updates(conn, devtools_command_session_id(&command.context), pending)
         .await
 }
@@ -2749,6 +2781,28 @@ fn start_session_surface_override_page_command(
     .map(|pending| vec![pending])
 }
 
+fn start_session_top_level_page_focus_command(
+    conn: &mut CdpConnection,
+    session_id: Option<&str>,
+) -> Result<Option<PendingEmulationPageCommand>, String> {
+    let load_inputs = conn.navigation_load_inputs_for_session_owner(session_id);
+    let active = load_inputs.page_active;
+    let focused = load_inputs.page_focused;
+    let owner_scope = CommandOwnerScope::capture(conn, session_id);
+    let Some(page) = loaded_page_mut_for_session(conn, session_id) else {
+        return Ok(None);
+    };
+    let pending = page
+        .start_set_top_level_page_focus(active, focused)
+        .map_err(|error| format!("failed to update top-level Page focus: {error}"))?;
+    Ok(Some(PendingEmulationPageCommand {
+        target: PendingEmulationPageTarget::SessionOwner { owner_scope },
+        operation: PendingEmulationPageOperation::SetTopLevelPageFocus,
+        pending,
+        runtime_response_rx: None,
+    }))
+}
+
 fn start_surface_override_for_route(
     conn: &mut CdpConnection,
     target: PendingEmulationPageTarget,
@@ -2916,6 +2970,10 @@ fn finish_emulation_page_operation(
     completion: CompletedPageCommand,
 ) -> Result<(), String> {
     match operation {
+        PendingEmulationPageOperation::SetTopLevelPageFocus => page
+            .finish_set_top_level_page_focus(completion)
+            .map(|(_, output)| drop(output))
+            .map_err(|error| error.to_string()),
         PendingEmulationPageOperation::SetExtraHttpHeaders => page
             .finish_set_extra_http_headers(completion)
             .map_err(|error| error.to_string()),

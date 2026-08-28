@@ -4,10 +4,9 @@ use moli_webapi_declare::{ObjectLiteralDeclaration, WebApiObject};
 
 use crate::context_bootstrap::navigator_runtime::{
     STORAGE_BUCKET_MANAGER_BRAND_SLOT, STORAGE_BUCKET_MANAGER_CHILD_HANDLE_SLOT,
-    STORAGE_BUCKET_MANAGER_POPUP_ID_SLOT, STORAGE_MANAGER_BRAND_SLOT,
-    STORAGE_MANAGER_CHILD_HANDLE_SLOT, STORAGE_MANAGER_POPUP_ID_SLOT,
-    current_protocol_user_gesture_activation, navigator_identity_profile,
-    navigator_receiver_branded, set_navigator_identity_profile,
+    STORAGE_MANAGER_BRAND_SLOT, STORAGE_MANAGER_CHILD_HANDLE_SLOT,
+    current_transient_user_activation, navigator_identity_profile, navigator_receiver_branded,
+    set_navigator_identity_profile,
 };
 use crate::context_bootstrap::storage_buckets::{
     IMPLICIT_DEFAULT_BUCKET_INTERNAL_NAME, StorageBucketCacheId, StorageBucketCacheMatch,
@@ -407,7 +406,6 @@ struct StorageManagerOwnerContext {
     storage_key: String,
     area_key: Option<String>,
     host_ptr: Option<*mut crate::native_bridge::JsContextHost>,
-    popup_id: Option<u64>,
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -517,7 +515,7 @@ pub(in crate::context_bootstrap) fn navigator_vibrate_callback<'s>(
     let Some(mut parsed) = webidl::parse_args::<NavigatorVibrateArgs>(scope, &args) else {
         return;
     };
-    if !current_protocol_user_gesture_activation(scope) {
+    if !current_transient_user_activation(scope) {
         rv.set_bool(false);
         return;
     }
@@ -795,21 +793,6 @@ fn storage_manager_owner_context<'s>(
             let host = unsafe { &mut *host_ptr };
             if let Some(handle) = storage_manager_child_handle(scope, manager) {
                 host.storage_context_for_child_browsing_context(handle)?
-            } else if let Some(popup_id) = storage_manager_popup_id(scope, manager)
-                .or_else(|| crate::native_bridge::active_lightweight_popup_id(scope))
-            {
-                if storage_manager_popup_id(scope, manager).is_some()
-                    && !host.lightweight_popup_is_open(popup_id)
-                {
-                    return None;
-                }
-                let storage_context = host.storage_context_for_lightweight_popup(popup_id)?;
-                return Some(StorageManagerOwnerContext {
-                    storage_key: storage_context.storage_key().serialized_storage_key(),
-                    area_key: Some(storage_context.web_storage_area_key().to_owned()),
-                    host_ptr: Some(host_ptr),
-                    popup_id: Some(popup_id),
-                });
             } else {
                 host.top_document_storage_context()
             }
@@ -818,7 +801,6 @@ fn storage_manager_owner_context<'s>(
             storage_key: context.storage_key().serialized_storage_key(),
             area_key: Some(context.web_storage_area_key().to_owned()),
             host_ptr: Some(host_ptr),
-            popup_id: None,
         });
     }
     let storage_key = crate::worker::worker_storage_key(scope)?;
@@ -827,7 +809,6 @@ fn storage_manager_owner_context<'s>(
         storage_key,
         area_key: None,
         host_ptr: None,
-        popup_id: None,
     })
 }
 
@@ -839,13 +820,6 @@ fn storage_manager_child_handle<'s>(
         .and_then(|value| value.number_value(scope))
         .filter(|value| value.is_finite() && *value >= 0.0 && value.fract() == 0.0)
         .map(|value| DomHandle::new(value as usize))
-}
-
-fn storage_manager_popup_id<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    manager: v8::Local<'s, v8::Object>,
-) -> Option<u64> {
-    private_popup_id(scope, manager, STORAGE_MANAGER_POPUP_ID_SLOT)
 }
 
 fn storage_manager_usage_bytes(
@@ -861,11 +835,7 @@ fn storage_manager_usage_bytes(
                 let store = host.web_storage_store();
                 store.lock().usage_bytes(area_key)
             };
-            let session_usage = if let Some(popup_id) = context.popup_id {
-                host.lightweight_popup_session_storage_store(popup_id)
-                    .map(|store| store.lock().usage_bytes(area_key))
-                    .unwrap_or(0)
-            } else {
+            let session_usage = {
                 let store = host.session_storage_store();
                 store.lock().usage_bytes(area_key)
             };
@@ -1152,10 +1122,6 @@ fn storage_bucket_manager_storage_key<'s>(
         let host = unsafe { &mut *host_ptr };
         let context = if let Some(handle) = storage_bucket_manager_child_handle(scope, manager) {
             host.storage_context_for_child_browsing_context(handle)?
-        } else if let Some(popup_id) = storage_bucket_manager_popup_id(scope, manager)
-            .or_else(|| crate::native_bridge::active_lightweight_popup_id(scope))
-        {
-            host.storage_context_for_lightweight_popup(popup_id)?
         } else {
             host.top_document_storage_context()
         };
@@ -1168,15 +1134,6 @@ fn storage_bucket_manager_owner_is_live<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     manager: v8::Local<'s, v8::Object>,
 ) -> bool {
-    if let Some(popup_id) = storage_bucket_manager_popup_id(scope, manager) {
-        return context_host_ptr_from_global_bridge(scope).is_some_and(|host_ptr| {
-            // SAFETY: the current V8 context owns a bridge ref for this host pointer.
-            // Lightweight popups still share the opener's concrete realm, so
-            // their explicit popup owner remains authoritative until P2 gives
-            // them an independent execution context.
-            unsafe { (&*host_ptr).lightweight_popup_is_open(popup_id) }
-        });
-    }
     if !storage_bucket_receiver_execution_context_is_live(scope, manager) {
         return false;
     }
@@ -1198,26 +1155,6 @@ fn storage_bucket_manager_child_handle<'s>(
         .and_then(|value| value.number_value(scope))
         .filter(|value| value.is_finite() && *value >= 0.0 && value.fract() == 0.0)
         .map(|value| DomHandle::new(value as usize))
-}
-
-fn storage_bucket_manager_popup_id<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    manager: v8::Local<'s, v8::Object>,
-) -> Option<u64> {
-    private_popup_id(scope, manager, STORAGE_BUCKET_MANAGER_POPUP_ID_SLOT)
-}
-
-fn private_popup_id<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-    slot: &str,
-) -> Option<u64> {
-    get_private_value(scope, object, slot)
-        .and_then(|value| v8::Local::<v8::BigInt>::try_from(value).ok())
-        .and_then(|value| {
-            let (popup_id, lossless) = value.u64_value();
-            (lossless && popup_id != 0).then_some(popup_id)
-        })
 }
 
 pub(in crate::context_bootstrap) fn storage_bucket_name_getter_callback<'s>(

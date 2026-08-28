@@ -15,7 +15,6 @@ use crate::types::{
     ChildDocumentLoadCompletion, ChildDynamicImportFetchCompletion,
     ChildModuleDependencyFetchCompletion, ChildModulepreloadFetchCompletion,
     ChildParserModuleRootFetchCompletion, DocumentWriteExternalScriptLoadCompletion,
-    PopupClassicScriptLoadCompletion, PopupDocumentLoadCompletion,
 };
 
 #[derive(Debug, Clone)]
@@ -67,6 +66,10 @@ pub(crate) enum RendererOwnerWake {
         token: RendererPageToken,
         handoff: RendererTopLevelNavigationHandoff,
     },
+    /// A related Page synchronously appended `window.close()` to this Page's
+    /// output journal. The target Page owner settles that exact FIFO; the wake
+    /// carries no close authority of its own.
+    TopLevelCloseOutputHandoff { token: RendererPageToken },
     /// The stable Page view either committed or rejected one exact
     /// replacement PageVm identity. This wake only re-admits commands parked
     /// on that identity; ordinary Page activity cannot satisfy the condition.
@@ -116,6 +119,10 @@ impl RendererOwnerWake {
         }
     }
 
+    pub(crate) fn top_level_close_output_handoff(token: RendererPageToken) -> Self {
+        Self::TopLevelCloseOutputHandoff { token }
+    }
+
     #[cfg(test)]
     pub(crate) fn page_id(&self) -> crate::PageId {
         match self {
@@ -124,6 +131,7 @@ impl RendererOwnerWake {
             | Self::CommittedDocumentParserUnblocked { token }
             | Self::RuntimeInspectorResponsePublication { token, .. }
             | Self::TopLevelNavigationHandoff { token, .. }
+            | Self::TopLevelCloseOutputHandoff { token }
             | Self::ReplacementDocumentViewSettled { token, .. } => token.page_id(),
         }
     }
@@ -143,6 +151,9 @@ impl RendererOwnerWake {
             }
             Self::TopLevelNavigationHandoff { .. } => panic!(
                 "a top-level navigation handoff is an execution handoff, not a Page source wake"
+            ),
+            Self::TopLevelCloseOutputHandoff { .. } => panic!(
+                "a top-level close output handoff settles a target FIFO, not a Page source wake"
             ),
             Self::ReplacementDocumentViewSettled { .. } => panic!(
                 "a replacement Document settlement is a command admission fact, not a Page source wake"
@@ -388,6 +399,14 @@ impl RendererOwnerWakeSender {
                 self.token, handoff,
             ))
             .is_ok()
+    }
+
+    pub(crate) fn signal_top_level_close_output_handoff(&self) {
+        let _ = self
+            .tx
+            .send(RendererOwnerWake::top_level_close_output_handoff(
+                self.token,
+            ));
     }
     pub(crate) fn defer_runtime_inspector_response_publication(
         &self,
@@ -659,24 +678,6 @@ impl RendererResourceCompletionSender {
             RendererPageResourceCompletion::child_document_load(root_document, completion)
         })
     }
-
-    pub(crate) fn send_popup_document(
-        &self,
-        completion: PopupDocumentLoadCompletion,
-    ) -> Result<(), RendererResourceCompletionRouteClosed> {
-        self.send_page_completion(|root_document| {
-            RendererPageResourceCompletion::popup_document_load(root_document, completion)
-        })
-    }
-
-    pub(crate) fn send_popup_classic_script(
-        &self,
-        completion: PopupClassicScriptLoadCompletion,
-    ) -> Result<(), RendererResourceCompletionRouteClosed> {
-        self.send_page_completion(|root_document| {
-            RendererPageResourceCompletion::popup_classic_script(root_document, completion)
-        })
-    }
 }
 
 /// Low-level resource-terminal fixture retaining the production Networking
@@ -846,7 +847,6 @@ mod tests {
         ChildModuleDependencyFetchCompletion, ChildModuleFetchNetworkAttribution,
         ChildModulepreloadFetchCompletion, ChildParserModuleRootFetchCompletion,
         DocumentWriteExternalScriptLoadCompletion, LoadedChildDocument,
-        PopupDocumentLoadCompletion, PopupDocumentLoadOutcome,
     };
 
     fn owner_attached_page_queue(
@@ -1267,31 +1267,6 @@ mod tests {
                     character_set: "UTF-8".to_owned(),
                     document_network: None,
                     markup: "<!doctype html><main>child</main>".to_owned(),
-                },
-            ))),
-        )
-    }
-
-    fn popup_document_completion(load_id: u64) -> PopupDocumentLoadCompletion {
-        PopupDocumentLoadCompletion::new(
-            crate::native_bridge::LightweightPopupDocumentFetchTarget::for_test(
-                load_id,
-                crate::native_bridge::LightweightPopupNavigationTaskToken::for_test(
-                    crate::native_bridge::LightweightPopupDocumentOwner::new(
-                        9,
-                        crate::native_bridge::LightweightPopupDocumentId::new(1),
-                    ),
-                    1,
-                ),
-            ),
-            Ok(PopupDocumentLoadOutcome::Loaded(Box::new(
-                LoadedChildDocument {
-                    final_url: Url::parse("https://example.test/popup").unwrap(),
-                    policy_container: crate::document_runtime::DocumentPolicyContainer::default(),
-                    content_type: Some("text/html".to_owned()),
-                    character_set: "UTF-8".to_owned(),
-                    document_network: None,
-                    markup: "<!doctype html><main>popup</main>".to_owned(),
                 },
             ))),
         )
@@ -1893,72 +1868,6 @@ mod tests {
         assert!(
             wake_rx.try_recv().is_err(),
             "rejected child navigation terminal must not publish a phantom owner wake"
-        );
-    }
-
-    #[test]
-    fn page_scheduler_route_preserves_exact_popup_target() {
-        let (wake_tx, mut wake_rx) = tokio::sync::mpsc::unbounded_channel();
-        let token =
-            crate::runtime::RendererPageToken::new_for_testing(crate::PageId::new_for_testing(35));
-        let mut page_queue = owner_attached_page_queue(token, wake_tx);
-        let root_document = RendererDocumentToken::new_for_testing(token.page_id(), 17);
-        let sender = RendererResourceCompletionSender::for_page_resource_test(
-            page_queue.sender(),
-            root_document,
-        );
-        let completion = popup_document_completion(63);
-        let target = completion.target();
-
-        sender
-            .send_popup_document(completion)
-            .expect("typed popup terminal should enqueue");
-        let completion = page_queue
-            .pop_front()
-            .expect("stable Page queue should retain the popup terminal")
-            .1;
-        assert_eq!(
-            completion.owner(),
-            RendererPageResourceCompletionOwner::popup_document_load(root_document, target)
-        );
-        assert!(matches!(
-            completion.terminal(),
-            RendererPageResourceTerminal::PopupDocumentLoad { .. }
-        ));
-        assert_eq!(
-            wake_rx
-                .try_recv()
-                .expect("accepted popup terminal should publish one Page wake")
-                .page_id(),
-            token.page_id()
-        );
-        assert!(
-            wake_rx.try_recv().is_err(),
-            "one accepted popup terminal must not publish a duplicate wake"
-        );
-    }
-
-    #[test]
-    fn closed_page_route_does_not_fall_back_to_legacy_popup_queue() {
-        let (wake_tx, mut wake_rx) = tokio::sync::mpsc::unbounded_channel();
-        let token =
-            crate::runtime::RendererPageToken::new_for_testing(crate::PageId::new_for_testing(36));
-        let page_queue = owner_attached_page_queue(token, wake_tx);
-        let page_route = page_queue.sender();
-        let root_document = RendererDocumentToken::new_for_testing(token.page_id(), 19);
-        let sender =
-            RendererResourceCompletionSender::for_page_resource_test(page_route, root_document);
-        drop(page_queue);
-
-        let result = sender.send_popup_document(popup_document_completion(67));
-
-        assert!(
-            result.is_err(),
-            "retired Page route must report closure to the popup producer"
-        );
-        assert!(
-            wake_rx.try_recv().is_err(),
-            "rejected popup terminal must not publish a phantom owner wake"
         );
     }
 

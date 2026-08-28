@@ -697,8 +697,9 @@ impl RendererInspectorMainIngress {
         }
     }
 
-    pub(crate) fn cancel_all_queued(&self, message: &str) {
-        let commands = self.shared.state.lock().lanes.drain_queued();
+    pub(crate) fn close_agent(&self, agent_token: RendererDevToolsAgentToken, message: &str) {
+        let commands = self.shared.state.lock().lanes.detach_agent(agent_token);
+        self.shared.pause_wake.notify_all();
         for command in commands {
             fail_main_command(command, message);
         }

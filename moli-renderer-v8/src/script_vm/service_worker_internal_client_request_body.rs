@@ -14,7 +14,98 @@ use crate::types::{
     ServiceWorkerNotificationActionNavigateRequestCompletion,
 };
 
+#[derive(Clone)]
+struct ServiceWorkerClientsOpenWindowContinuationSeed {
+    request_id: u64,
+    source_version_id: crate::runtime::ServiceWorkerVersionId,
+    source_run: crate::runtime::RendererServiceWorkerRunIdentity,
+}
+
+fn canonical_service_worker_auxiliary_url(url: &url::Url) -> Option<url::Url> {
+    match url.scheme() {
+        "http" | "https" => Some(url.clone()),
+        // Chromium canonicalizes every renderer-accepted `about:` URL to the
+        // one browser-owned about:blank initial navigation.
+        "about" => url::Url::parse("about:blank").ok(),
+        _ => None,
+    }
+}
+
 impl ScriptVm {
+    fn record_service_worker_auxiliary_navigation(
+        &mut self,
+        host_scope: crate::native_bridge::OwnerDispatchScope,
+        source_script_url: url::Url,
+        destination_url: url::Url,
+        completion: Option<ServiceWorkerClientsOpenWindowContinuationSeed>,
+    ) -> Result<bool> {
+        self.with_default_context_scope(|scope, host_ptr| {
+            let host = unsafe { &mut *host_ptr };
+            let previous_owner_context = host_scope.enter(scope);
+            let recorded = (|| {
+                let creation_policy = crate::document_runtime::DocumentPolicyContainer::default()
+                    .into_auxiliary_browsing_context_creation_policy()
+                    .expect("browser-context auxiliary creation is not document-sandboxed");
+                let auxiliary_browsing_context_policy =
+                    creation_policy.renderer_auxiliary_browsing_context_policy();
+                let Some(pending_auxiliary_page) =
+                    host.reserve_pending_browser_context_auxiliary_page()
+                else {
+                    return false;
+                };
+                let destination = destination_url.to_string();
+                let navigation_referrer = moli_fetch::referrer_header_value(
+                    &source_script_url,
+                    &destination_url,
+                    None,
+                    None,
+                )
+                .unwrap_or_default();
+                let document_referrer = moli_fetch::navigation_referrer_value(
+                    &source_script_url,
+                    &destination_url,
+                    None,
+                    None,
+                )
+                .unwrap_or_default();
+                let request = crate::RendererTopLevelNavigationRequest::get(destination.clone())
+                    .with_source(crate::RendererTopLevelNavigationSource::browser_context(
+                        source_script_url.to_string(),
+                        None,
+                        false,
+                    ));
+                let mut activation = crate::RendererPendingPopupActivation::browser_context(
+                    None,
+                    destination,
+                    "_blank".to_owned(),
+                    crate::RendererPopupDisposition::Foreground,
+                )
+                .with_navigation_request(request)
+                .with_navigation_referrers(navigation_referrer, String::new(), document_referrer)
+                .with_pending_auxiliary_page(Some(pending_auxiliary_page))
+                .with_auxiliary_browsing_context_policy(auxiliary_browsing_context_policy);
+                if let Some(completion) = completion {
+                    activation = activation.with_service_worker_clients_open_window_continuation(
+                        crate::RendererServiceWorkerClientsOpenWindowContinuation::new(
+                            &host.browser_context_runtime(),
+                            pending_auxiliary_page.page_reservation().page_id(),
+                            completion.request_id,
+                            completion.source_version_id,
+                            completion.source_run,
+                        ),
+                    );
+                }
+                activation = activation.with_new_target_disposition(
+                    crate::RendererPopupNewTargetDisposition::FreshUnnamed,
+                );
+                host.record_pending_popup_activation(activation, None);
+                true
+            })();
+            host_scope.restore(scope, previous_owner_context);
+            Ok(recorded)
+        })
+    }
+
     pub(crate) fn apply_service_worker_client_navigate_request_body(
         &mut self,
         completion: ServiceWorkerClientNavigateRequestCompletion,
@@ -74,21 +165,6 @@ impl ScriptVm {
                     }
                     Ok(())
                 })?;
-                return Ok(ServiceWorkerInternalBodyEffect::InternalActionApplied);
-            }
-            crate::native_bridge::OwnerDispatchScope::LightweightPopup(_) => {
-                browser_context_runtime
-                    .service_worker_runtime()
-                    .enqueue_client_navigate_completed(
-                        crate::types::ServiceWorkerClientNavigateCompletion {
-                            request_id: completion.request_id,
-                            source_version_id: completion.source_version_id,
-                            source_run: completion.source_run,
-                            result: Err(ServiceWorkerClientNavigateError::type_error(
-                                "The client was not found.",
-                            )),
-                        },
-                    );
                 return Ok(ServiceWorkerInternalBodyEffect::InternalActionApplied);
             }
             crate::native_bridge::OwnerDispatchScope::Top => {}
@@ -196,7 +272,7 @@ impl ScriptVm {
                 );
             return Ok(ServiceWorkerInternalBodyEffect::ExactTargetUnavailable);
         };
-        if !matches!(completion.url.scheme(), "http" | "https") {
+        let Some(destination_url) = canonical_service_worker_auxiliary_url(&completion.url) else {
             self._context_host
                 .borrow()
                 .browser_context_runtime()
@@ -214,15 +290,15 @@ impl ScriptVm {
                     },
                 );
             return Ok(ServiceWorkerInternalBodyEffect::InternalActionApplied);
-        }
+        };
 
         let host_scope = host_owner.dispatch_scope();
-        let Some(creator_base_url) = self
+        let host_is_current = self
             ._context_host
             .borrow_mut()
             .service_worker_window_request_context(host_scope)
-            .map(|context| context.document_url().clone())
-        else {
+            .is_some();
+        if !host_is_current {
             self._context_host
                 .borrow()
                 .browser_context_runtime()
@@ -240,65 +316,49 @@ impl ScriptVm {
                     },
                 );
             return Ok(ServiceWorkerInternalBodyEffect::ExactTargetUnavailable);
+        }
+        let completion_seed = ServiceWorkerClientsOpenWindowContinuationSeed {
+            request_id: completion.request_id,
+            source_version_id: completion.source_version_id,
+            source_run: completion.source_run.clone(),
         };
-        let url = completion.url.to_string();
-        self.with_default_context_scope(|scope, host_ptr| {
-            let host = unsafe { &mut *host_ptr };
-            let previous_owner_context = host_scope.enter(scope);
-            let popup_id = host
-                .open_lightweight_popup_window(
-                    scope,
-                    host_ptr,
-                    None,
-                    None,
-                    "_blank",
-                    &url,
-                    creator_base_url.clone(),
-                    crate::document_runtime::DocumentPolicyContainer::default(),
-                )
-                .map(|opened_popup| opened_popup.popup_id);
-            let session_storage_store = popup_id
-                .and_then(|popup_id| host.lightweight_popup_session_storage_store(popup_id));
-            let initial_empty_document_storage_key = popup_id.and_then(|popup_id| {
-                host.lightweight_popup_initial_empty_document_storage_key(popup_id)
-            });
-            host.record_pending_popup_activation(
-                crate::RendererPendingPopupActivation::browser_context(
-                    popup_id,
-                    url.clone(),
-                    "_blank".to_owned(),
-                    crate::RendererPopupDisposition::Foreground,
-                )
-                .with_initial_auxiliary_state(
-                    session_storage_store,
-                    initial_empty_document_storage_key,
-                ),
-                None,
-            );
-            if let Some(popup_id) = popup_id {
-                host.begin_service_worker_clients_open_window_popup(
-                    popup_id,
-                    completion.url.clone(),
-                    completion.request_id,
-                    completion.source_version_id,
-                    completion.source_run,
-                );
-                host_scope.restore(scope, previous_owner_context);
-                return Ok(());
+        let recorded = match self.record_service_worker_auxiliary_navigation(
+            host_scope,
+            completion.source_script_url,
+            destination_url,
+            Some(completion_seed.clone()),
+        ) {
+            Ok(recorded) => recorded,
+            Err(error) => {
+                self._context_host
+                    .borrow()
+                    .browser_context_runtime()
+                    .service_worker_runtime()
+                    .enqueue_clients_open_window_completed(
+                        crate::types::ServiceWorkerClientsOpenWindowCompletion {
+                            request_id: completion_seed.request_id,
+                            source_version_id: completion_seed.source_version_id,
+                            source_run: completion_seed.source_run,
+                            result: Ok(None),
+                        },
+                    );
+                return Err(error);
             }
-            host.browser_context_runtime()
+        };
+        if !recorded {
+            self._context_host
+                .borrow()
+                .browser_context_runtime()
                 .service_worker_runtime()
                 .enqueue_clients_open_window_completed(
                     crate::types::ServiceWorkerClientsOpenWindowCompletion {
-                        request_id: completion.request_id,
-                        source_version_id: completion.source_version_id,
-                        source_run: completion.source_run,
+                        request_id: completion_seed.request_id,
+                        source_version_id: completion_seed.source_version_id,
+                        source_run: completion_seed.source_run,
                         result: Ok(None),
                     },
                 );
-            host_scope.restore(scope, previous_owner_context);
-            Ok(())
-        })?;
+        }
         Ok(ServiceWorkerInternalBodyEffect::InternalActionApplied)
     }
 
@@ -313,53 +373,24 @@ impl ScriptVm {
         let Some(host_owner) = host_owner else {
             return Ok(ServiceWorkerInternalBodyEffect::ExactTargetUnavailable);
         };
+        let Some(destination_url) = canonical_service_worker_auxiliary_url(&completion.url) else {
+            return Ok(ServiceWorkerInternalBodyEffect::InternalActionApplied);
+        };
         let host_scope = host_owner.dispatch_scope();
-        let Some(creator_base_url) = self
+        let host_is_current = self
             ._context_host
             .borrow_mut()
             .service_worker_window_request_context(host_scope)
-            .map(|context| context.document_url().clone())
-        else {
+            .is_some();
+        if !host_is_current {
             return Ok(ServiceWorkerInternalBodyEffect::ExactTargetUnavailable);
-        };
-
-        let url = completion.url.to_string();
-        self.with_default_context_scope(|scope, host_ptr| {
-            let host = unsafe { &mut *host_ptr };
-            let previous_owner_context = host_scope.enter(scope);
-            let popup_id = host
-                .open_lightweight_popup_window(
-                    scope,
-                    host_ptr,
-                    None,
-                    None,
-                    "_blank",
-                    &url,
-                    creator_base_url.clone(),
-                    crate::document_runtime::DocumentPolicyContainer::default(),
-                )
-                .map(|opened_popup| opened_popup.popup_id);
-            let session_storage_store = popup_id
-                .and_then(|popup_id| host.lightweight_popup_session_storage_store(popup_id));
-            let initial_empty_document_storage_key = popup_id.and_then(|popup_id| {
-                host.lightweight_popup_initial_empty_document_storage_key(popup_id)
-            });
-            host.record_pending_popup_activation(
-                crate::RendererPendingPopupActivation::browser_context(
-                    popup_id,
-                    url.clone(),
-                    "_blank".to_owned(),
-                    crate::RendererPopupDisposition::Foreground,
-                )
-                .with_initial_auxiliary_state(
-                    session_storage_store,
-                    initial_empty_document_storage_key,
-                ),
-                None,
-            );
-            host_scope.restore(scope, previous_owner_context);
-            Ok(())
-        })?;
+        }
+        self.record_service_worker_auxiliary_navigation(
+            host_scope,
+            completion.source_script_url,
+            destination_url,
+            None,
+        )?;
         Ok(ServiceWorkerInternalBodyEffect::InternalActionApplied)
     }
 }

@@ -91,15 +91,15 @@ pub(in crate::native_bridge) fn detached_form_submit_callback<'s>(
         unsafe { &mut *runtime_ptr }.navigate_child_browsing_context_with_request(
             scope,
             child_handle,
-            ChildBrowsingContextNavigationRequest {
+            ChildBrowsingContextNavigationRequest::new(
                 url,
-                method: "POST".to_owned(),
-                body: Some(body.into_bytes()),
-                request_headers: vec![(
+                "POST".to_owned(),
+                Some(body.into_bytes()),
+                vec![(
                     "Content-Type".to_owned(),
                     "application/x-www-form-urlencoded".to_owned(),
                 )],
-            },
+            ),
         );
     } else if let Some(target_iframe) =
         detached_form_target_iframe(scope, runtime_ptr, owner_document, form)

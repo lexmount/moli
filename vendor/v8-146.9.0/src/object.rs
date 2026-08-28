@@ -4,6 +4,7 @@ use crate::AccessorNameSetterCallback;
 use crate::Array;
 use crate::Context;
 use crate::Data;
+use crate::Function;
 use crate::GetPropertyNamesArgs;
 use crate::IndexFilter;
 use crate::KeyCollectionMode;
@@ -45,6 +46,13 @@ unsafe extern "C" {
     values: *const *const Value,
     length: usize,
   ) -> *const Object;
+  fn v8__Object__SetAccessorProperty(
+    this: *const Object,
+    key: *const Name,
+    getter_or_null: *const Function,
+    setter_or_null: *const Function,
+    attr: PropertyAttribute,
+  );
   fn v8__Object__SetNativeDataProperty(
     this: *const Object,
     context: *const Context,
@@ -319,6 +327,27 @@ impl Object {
   pub fn new<'s>(scope: &PinScope<'s, '_>) -> Local<'s, Object> {
     unsafe { scope.cast_local(|sd| v8__Object__New(sd.get_isolate_ptr())) }
       .unwrap()
+  }
+
+  /// Sets an accessor property directly on this object.
+  #[inline(always)]
+  pub fn set_accessor_property(
+    &self,
+    key: Local<Name>,
+    getter: Option<Local<Function>>,
+    setter: Option<Local<Function>>,
+    attr: PropertyAttribute,
+  ) {
+    assert!(getter.is_some() || setter.is_some());
+    unsafe {
+      v8__Object__SetAccessorProperty(
+        self,
+        &*key,
+        getter.map_or_else(null, |function| &*function),
+        setter.map_or_else(null, |function| &*function),
+        attr,
+      );
+    }
   }
 
   /// Creates a JavaScript object with the given properties, and the given

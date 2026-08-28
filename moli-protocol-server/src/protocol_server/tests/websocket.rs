@@ -1990,8 +1990,10 @@ async fn websocket_cdp_raw_client_runtime_evaluate_immediately_after_page_naviga
     // Send Page.navigate then Runtime.evaluate back-to-back without
     // waiting for any lifecycle event. This mirrors what raw-CDP clients
     // do. The socket loop must drain the pending background navigation
-    // completion BEFORE dispatching Runtime.evaluate, otherwise evaluate
-    // would observe `NoDocumentLoaded`.
+    // attachment BEFORE dispatching Runtime.evaluate, otherwise evaluate
+    // would observe `NoDocumentLoaded`. The committed Document's parser
+    // continuation is deliberately independent, so its body may still be
+    // incomplete when evaluate runs.
     socket
         .send(WsMessage::Text(
             json!({
@@ -2012,7 +2014,7 @@ async fn websocket_cdp_raw_client_runtime_evaluate_immediately_after_page_naviga
                 "method": "Runtime.evaluate",
                 "sessionId": session_id,
                 "params": {
-                    "expression": "document.querySelector('#link') ? document.querySelector('#link').textContent : ''",
+                    "expression": "JSON.stringify({ url: document.URL, ready: document.readyState, hasLink: document.querySelector('#link') !== null })",
                     "returnByValue": true
                 }
             })
@@ -2034,10 +2036,27 @@ async fn websocket_cdp_raw_client_runtime_evaluate_immediately_after_page_naviga
     let value = evaluate_response["result"]["result"]["value"]
         .as_str()
         .expect("string value from evaluate");
+    let observed: serde_json::Value =
+        serde_json::from_str(value).expect("Runtime.evaluate should return serialized JSON");
     assert_eq!(
-        value, "link",
-        "evaluate must observe the new document body (got `{value}`)"
+        observed["url"],
+        json!(fixture_url),
+        "evaluate must observe the newly committed Document: {observed}"
     );
+    assert!(
+        matches!(
+            observed["ready"].as_str(),
+            Some("loading" | "interactive" | "complete")
+        ),
+        "the committed Document must expose a valid readyState: {observed}"
+    );
+    if observed["ready"] != json!("loading") {
+        assert_eq!(
+            observed["hasLink"],
+            json!(true),
+            "a parser-complete Document must contain its body link: {observed}"
+        );
+    }
 
     let _ = socket.close(None).await;
     abort_test_cdp_server(protocol_server).await;
@@ -2143,9 +2162,9 @@ async fn websocket_cdp_runtime_control_command_waits_for_navigation_attachment_c
     let new_isolate_id = resumed["result"]["id"]
         .as_str()
         .expect("replacement Runtime.getIsolateId");
-    assert_ne!(
+    assert_eq!(
         new_isolate_id, old_isolate_id,
-        "queued command must bind to the replacement document's renderer attachment"
+        "stable Page replacement must preserve its script-agent isolate while the queued command crosses the renderer attachment cutover"
     );
 
     let _ = socket.close(None).await;
@@ -3881,11 +3900,17 @@ document.addEventListener('readystatechange', () => {
         .iter()
         .find(|message| message["id"] == json!(7_u64))
         .expect("Runtime.evaluate response");
-    assert_eq!(
-        response["result"]["result"]["value"],
-        json!(
-            "{\"marker\":\"committed-source\",\"ready\":\"interactive\",\"deferExecuted\":false}"
-        )
+    let observed: serde_json::Value = serde_json::from_str(
+        response["result"]["result"]["value"]
+            .as_str()
+            .expect("serialized Runtime.evaluate result"),
+    )
+    .expect("Runtime.evaluate should return serialized JSON");
+    assert_eq!(observed["marker"], json!("committed-source"));
+    assert_eq!(observed["deferExecuted"], json!(false));
+    assert!(
+        matches!(observed["ready"].as_str(), Some("loading" | "interactive")),
+        "the parser may race the command after starting the deferred fetch, but load must remain pending: {observed}"
     );
 
     release_defer.notify_one();
@@ -8724,21 +8749,60 @@ async fn websocket_cdp_parser_script_network_backlog_flushes_before_domcontentlo
         json!({ "url": page_url }),
     )
     .await;
-    messages.extend(
-        recv_until_match(&mut socket, |message| {
+    // Page.domContentEventFired has no loader id. Under full-suite load the
+    // initial about:blank DCL can arrive after Page.enable, so only a DCL after
+    // the requested frame commit is a valid sampling boundary for this test.
+    let requested_frame_index = messages.iter().position(|message| {
+        message["sessionId"] == json!(target.session_id)
+            && message["method"] == json!("Page.frameNavigated")
+            && message["params"]["frame"]["url"] == json!(page_url)
+    });
+    let requested_dcl_already_received = requested_frame_index.is_some_and(|frame_index| {
+        messages.iter().skip(frame_index + 1).any(|message| {
             message["sessionId"] == json!(target.session_id)
                 && message["method"] == json!("Page.domContentEventFired")
         })
-        .await,
-    );
+    });
+    if !requested_dcl_already_received {
+        let mut saw_requested_frame = requested_frame_index.is_some();
+        messages.extend(
+            recv_until_match(&mut socket, |message| {
+                if message["sessionId"] == json!(target.session_id)
+                    && message["method"] == json!("Page.frameNavigated")
+                    && message["params"]["frame"]["url"] == json!(page_url)
+                {
+                    saw_requested_frame = true;
+                }
+                saw_requested_frame
+                    && message["sessionId"] == json!(target.session_id)
+                    && message["method"] == json!("Page.domContentEventFired")
+            })
+            .await,
+        );
+    }
 
-    let dcl_index = messages
+    let requested_frame_index = messages
         .iter()
         .position(|message| {
             message["sessionId"] == json!(target.session_id)
-                && message["method"] == json!("Page.domContentEventFired")
+                && message["method"] == json!("Page.frameNavigated")
+                && message["params"]["frame"]["url"] == json!(page_url)
         })
-        .expect("Page.domContentEventFired should be emitted");
+        .unwrap_or_else(|| {
+            panic!("requested Page.frameNavigated should be emitted: {messages:#?}")
+        });
+    let dcl_index = messages
+        .iter()
+        .enumerate()
+        .skip(requested_frame_index + 1)
+        .find_map(|(index, message)| {
+            (message["sessionId"] == json!(target.session_id)
+                && message["method"] == json!("Page.domContentEventFired"))
+            .then_some(index)
+        })
+        .unwrap_or_else(|| {
+            panic!("requested Page.domContentEventFired should be emitted: {messages:#?}")
+        });
     let script_request = messages
         .iter()
         .position(|message| {

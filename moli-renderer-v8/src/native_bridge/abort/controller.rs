@@ -64,10 +64,10 @@ pub(crate) fn abort_controller_abort_callback<'s>(
         return;
     };
     let controller = args.this();
-    let Some(controller_id) = AbortStore::controller_id_from_object(scope, controller) else {
+    if AbortStore::controller_id_from_object(scope, controller).is_none() {
         rv.set_undefined();
         return;
-    };
+    }
     let Some(signal) = get_private_value(scope, controller, ABORT_CONTROLLER_SIGNAL_SLOT)
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
     else {
@@ -80,22 +80,11 @@ pub(crate) fn abort_controller_abort_callback<'s>(
         abort_error_value(scope)
     };
     let host = unsafe { &mut *host_ptr };
-    let Some(signal_id) = host
-        .native_bridge_mut()
-        .abort
-        .controllers
-        .get(&controller_id)
-        .copied()
-    else {
+    if AbortStore::signal_id_from_object(scope, signal).is_none() {
         rv.set_undefined();
         return;
-    };
-    if host
-        .native_bridge_mut()
-        .abort
-        .signal_state(signal_id)
-        .is_some_and(|state| state.aborted)
-    {
+    }
+    if AbortStore::signal_aborted_from_object(scope, signal) {
         rv.set_undefined();
         return;
     }

@@ -109,6 +109,18 @@ impl ScriptVm {
             .set_response_content_security_policies(policies);
     }
 
+    pub(crate) fn apply_auxiliary_browsing_context_policy(
+        &mut self,
+        policy: crate::runtime::RendererAuxiliaryBrowsingContextPolicy,
+    ) {
+        let response_sandbox = self.document_runtime.document_sandbox_policy();
+        self.document_runtime.set_document_sandbox_policy(
+            policy
+                .sandbox()
+                .with_response_content_security_policy(response_sandbox),
+        );
+    }
+
     pub(crate) fn set_bypass_content_security_policy(&mut self, bypass: bool) {
         self.document_runtime
             .set_bypass_content_security_policy(bypass);

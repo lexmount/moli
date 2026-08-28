@@ -101,14 +101,11 @@ pub(in crate::native_bridge::element) fn iframe_uses_detached_content_cache(
     let Some(owner_document) = runtime.dom_host().owner_document_handle(handle) else {
         return false;
     };
-    if owner_document == runtime.dom_host().document_handle()
+    let owned_by_live_document = owner_document == runtime.dom_host().document_handle()
         || runtime
             .child_browsing_context_host_for_document_handle(owner_document)
-            .is_some()
-        || runtime
-            .lightweight_popup_id_for_document_handle(owner_document)
-            .is_some()
-    {
+            .is_some();
+    if owned_by_live_document {
         return false;
     }
     !runtime.child_browsing_context_host_is_ancestor_of_document(handle, owner_document)

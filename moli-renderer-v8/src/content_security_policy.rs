@@ -16,6 +16,7 @@ const CONNECT_SRC: &str = "connect-src";
 const CHILD_SRC: &str = "child-src";
 const DEFAULT_SRC: &str = "default-src";
 const FRAME_ANCESTORS: &str = "frame-ancestors";
+const FORM_ACTION: &str = "form-action";
 const FRAME_SRC: &str = "frame-src";
 const IMG_SRC: &str = "img-src";
 const MANIFEST_SRC: &str = "manifest-src";
@@ -34,6 +35,7 @@ const SANDBOX: &str = "sandbox";
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ContentSecurityPolicyResourceKind {
     DocumentConnect,
+    DocumentFormAction,
     DocumentFrame,
     DocumentImage,
     DocumentManifest,
@@ -153,7 +155,8 @@ pub(crate) struct ContentSecurityPolicyUrlViolation {
     pub(crate) column_number: i32,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct ContentSecurityPolicyReportingEndpoints {
     endpoints: BTreeMap<String, String>,
 }
@@ -331,6 +334,12 @@ pub(crate) fn content_security_policy_sandboxes_document_domain(policies: &[Stri
         .any(|policy| policy_sandboxes_document_domain(policy))
 }
 
+pub(crate) fn content_security_policy_sandboxes_navigation(policies: &[String]) -> bool {
+    policies
+        .iter()
+        .any(|policy| policy_sandboxes_document_domain(policy))
+}
+
 pub(crate) fn content_security_policy_forces_opaque_origin(policies: &[String]) -> bool {
     policies
         .iter()
@@ -341,6 +350,18 @@ pub(crate) fn content_security_policy_sandbox_allows_scripts(policies: &[String]
     policies
         .iter()
         .all(|policy| policy_sandbox_allows_scripts(policy).unwrap_or(true))
+}
+
+pub(crate) fn content_security_policy_sandbox_allows_forms(policies: &[String]) -> bool {
+    policies
+        .iter()
+        .all(|policy| policy_sandbox_allows_forms(policy).unwrap_or(true))
+}
+
+pub(crate) fn content_security_policy_sandbox_allows_popups(policies: &[String]) -> bool {
+    policies
+        .iter()
+        .all(|policy| policy_sandbox_allows_popups(policy).unwrap_or(true))
 }
 
 pub(crate) fn content_security_policy_sandbox_allows_popups_to_escape(policies: &[String]) -> bool {
@@ -355,6 +376,20 @@ pub(crate) fn content_security_policy_sandbox_allows_popups_to_escape(policies: 
         }
     }
     has_sandbox
+}
+
+pub(crate) fn content_security_policy_sandbox_allows_top_navigation(policies: &[String]) -> bool {
+    policies
+        .iter()
+        .all(|policy| policy_sandbox_allows_top_navigation(policy).unwrap_or(true))
+}
+
+pub(crate) fn content_security_policy_sandbox_allows_top_navigation_by_user_activation(
+    policies: &[String],
+) -> bool {
+    policies.iter().all(|policy| {
+        policy_sandbox_allows_top_navigation_by_user_activation(policy).unwrap_or(true)
+    })
 }
 
 pub(crate) fn content_security_policy_report_uri_endpoints(
@@ -868,13 +903,18 @@ fn content_security_policy_url_violation_for_checked_url_with_redirect_status_di
     policies.iter().find_map(|policy| {
         let (effective_directive, source_list) =
             effective_source_list_with_directive(policy, kind)?;
-        if source_list_allows_resource_request(
-            source_list,
-            protected_url,
-            checked_url,
-            redirect_status,
-            request,
-        ) {
+        let allowed = if kind == ContentSecurityPolicyResourceKind::DocumentFormAction {
+            source_list_allows(source_list, protected_url, checked_url, redirect_status)
+        } else {
+            source_list_allows_resource_request(
+                source_list,
+                protected_url,
+                checked_url,
+                redirect_status,
+                request,
+            )
+        };
+        if allowed {
             return None;
         }
         let document_uri = csp_url_for_report(protected_url);
@@ -1171,9 +1211,30 @@ fn policy_sandbox_allows_scripts(policy: &str) -> Option<bool> {
     directive_source_list(&directives, SANDBOX).map(sandbox_sources_allow_scripts)
 }
 
+fn policy_sandbox_allows_forms(policy: &str) -> Option<bool> {
+    let directives = parsed_directives(policy);
+    directive_source_list(&directives, SANDBOX).map(sandbox_sources_allow_forms)
+}
+
+fn policy_sandbox_allows_popups(policy: &str) -> Option<bool> {
+    let directives = parsed_directives(policy);
+    directive_source_list(&directives, SANDBOX).map(sandbox_sources_allow_popups)
+}
+
 fn policy_sandbox_allows_popups_to_escape(policy: &str) -> Option<bool> {
     let directives = parsed_directives(policy);
     directive_source_list(&directives, SANDBOX).map(sandbox_sources_allow_popups_to_escape)
+}
+
+fn policy_sandbox_allows_top_navigation(policy: &str) -> Option<bool> {
+    let directives = parsed_directives(policy);
+    directive_source_list(&directives, SANDBOX).map(sandbox_sources_allow_top_navigation)
+}
+
+fn policy_sandbox_allows_top_navigation_by_user_activation(policy: &str) -> Option<bool> {
+    let directives = parsed_directives(policy);
+    directive_source_list(&directives, SANDBOX)
+        .map(sandbox_sources_allow_top_navigation_by_user_activation)
 }
 
 fn sandbox_sources_allow_same_origin(sources: &[&str]) -> bool {
@@ -1186,6 +1247,30 @@ fn sandbox_sources_allow_scripts(sources: &[&str]) -> bool {
     sources
         .iter()
         .any(|token| token.eq_ignore_ascii_case("allow-scripts"))
+}
+
+fn sandbox_sources_allow_forms(sources: &[&str]) -> bool {
+    sources
+        .iter()
+        .any(|token| token.eq_ignore_ascii_case("allow-forms"))
+}
+
+fn sandbox_sources_allow_top_navigation(sources: &[&str]) -> bool {
+    sources
+        .iter()
+        .any(|token| token.eq_ignore_ascii_case("allow-top-navigation"))
+}
+
+fn sandbox_sources_allow_top_navigation_by_user_activation(sources: &[&str]) -> bool {
+    sources
+        .iter()
+        .any(|token| token.eq_ignore_ascii_case("allow-top-navigation-by-user-activation"))
+}
+
+fn sandbox_sources_allow_popups(sources: &[&str]) -> bool {
+    sources
+        .iter()
+        .any(|token| token.eq_ignore_ascii_case("allow-popups"))
 }
 
 fn sandbox_sources_allow_popups_to_escape(sources: &[&str]) -> bool {
@@ -1853,6 +1938,7 @@ impl ContentSecurityPolicyResourceKind {
     fn effective_directive(self) -> &'static str {
         match self {
             Self::DocumentConnect => CONNECT_SRC,
+            Self::DocumentFormAction => FORM_ACTION,
             Self::DocumentFrame => FRAME_SRC,
             Self::DocumentImage => IMG_SRC,
             Self::DocumentManifest => MANIFEST_SRC,
@@ -1868,6 +1954,9 @@ impl ContentSecurityPolicyResourceKind {
     fn directive_fallbacks(self) -> &'static [&'static str] {
         match self {
             Self::DocumentConnect => &[CONNECT_SRC, DEFAULT_SRC],
+            // Unlike fetch directives, form-action has no default-src
+            // fallback. An absent form-action directive allows submission.
+            Self::DocumentFormAction => &[FORM_ACTION],
             Self::DocumentFrame => &[FRAME_SRC, CHILD_SRC, DEFAULT_SRC],
             Self::DocumentImage => &[IMG_SRC, DEFAULT_SRC],
             Self::DocumentManifest => &[MANIFEST_SRC, DEFAULT_SRC],
@@ -2160,6 +2249,42 @@ mod tests {
             ContentSecurityPolicyResourceKind::SharedWorkerScript,
             "https://app.test/worker.js"
         ));
+    }
+
+    #[test]
+    fn form_action_is_navigation_specific_and_has_no_default_src_fallback() {
+        assert!(allowed(
+            "default-src 'none'",
+            ContentSecurityPolicyResourceKind::DocumentFormAction,
+            "https://cross-origin.test/submit"
+        ));
+        assert!(!allowed(
+            "form-action 'none'; default-src *",
+            ContentSecurityPolicyResourceKind::DocumentFormAction,
+            "https://app.test/submit"
+        ));
+        assert!(allowed(
+            "form-action 'self'",
+            ContentSecurityPolicyResourceKind::DocumentFormAction,
+            "https://app.test/submit"
+        ));
+        assert!(!allowed(
+            "form-action 'self'",
+            ContentSecurityPolicyResourceKind::DocumentFormAction,
+            "https://cross-origin.test/submit"
+        ));
+
+        let violation = content_security_policy_url_violation_with_redirect_status_and_disposition(
+            &["form-action 'none'".to_owned()],
+            &protected_url(),
+            &request_url("https://app.test/submit"),
+            ContentSecurityPolicyResourceKind::DocumentFormAction,
+            ContentSecurityPolicyRedirectStatus::NoRedirect,
+            ContentSecurityPolicyDisposition::Enforce,
+        )
+        .expect("form-action 'none' should produce a violation");
+        assert_eq!(violation.effective_directive, "form-action");
+        assert_eq!(violation.blocked_uri, "https://app.test/submit");
     }
 
     #[test]
@@ -3398,6 +3523,51 @@ mod tests {
     }
 
     #[test]
+    fn sandbox_directive_allows_forms_only_when_all_active_sandboxes_allow_it() {
+        let allows_forms = |policies: &[&str]| {
+            content_security_policy_sandbox_allows_forms(
+                &policies
+                    .iter()
+                    .map(|policy| policy.to_string())
+                    .collect::<Vec<_>>(),
+            )
+        };
+
+        assert!(allows_forms(&[]));
+        assert!(allows_forms(&["script-src 'self'"]));
+        assert!(!allows_forms(&["sandbox"]));
+        assert!(allows_forms(&["sandbox allow-forms"]));
+        assert!(allows_forms(&["sandbox ALLOW-FORMS"]));
+        assert!(!allows_forms(&[
+            "sandbox allow-forms",
+            "sandbox allow-scripts"
+        ]));
+    }
+
+    #[test]
+    fn sandbox_directive_allows_popups_only_when_all_active_sandboxes_allow_it() {
+        let allows_popups = |policies: &[&str]| {
+            content_security_policy_sandbox_allows_popups(
+                &policies
+                    .iter()
+                    .map(|policy| policy.to_string())
+                    .collect::<Vec<_>>(),
+            )
+        };
+
+        assert!(allows_popups(&[]));
+        assert!(allows_popups(&["script-src 'self'"]));
+        assert!(!allows_popups(&["sandbox"]));
+        assert!(allows_popups(&["sandbox allow-popups"]));
+        assert!(allows_popups(&["sandbox ALLOW-POPUPS"]));
+        assert!(!allows_popups(&[
+            "sandbox allow-popups",
+            "sandbox allow-scripts"
+        ]));
+        assert!(!allows_popups(&["sandbox allow-popups-to-escape-sandbox"]));
+    }
+
+    #[test]
     fn sandbox_directive_allows_popups_to_escape_only_when_all_active_sandboxes_allow_it() {
         let allows_popups_to_escape = |policies: &[&str]| {
             content_security_policy_sandbox_allows_popups_to_escape(
@@ -3421,5 +3591,45 @@ mod tests {
             "sandbox allow-popups-to-escape-sandbox",
             "sandbox allow-scripts"
         ]));
+    }
+
+    #[test]
+    fn sandbox_directive_top_navigation_tokens_intersect_independently() {
+        let policies = |values: &[&str]| {
+            values
+                .iter()
+                .map(|policy| (*policy).to_owned())
+                .collect::<Vec<_>>()
+        };
+
+        assert!(content_security_policy_sandbox_allows_top_navigation(
+            &policies(&["script-src 'self'"])
+        ));
+        assert!(!content_security_policy_sandbox_allows_top_navigation(
+            &policies(&["sandbox allow-scripts"])
+        ));
+        assert!(content_security_policy_sandbox_allows_top_navigation(
+            &policies(&["sandbox ALLOW-TOP-NAVIGATION"])
+        ));
+        assert!(!content_security_policy_sandbox_allows_top_navigation(
+            &policies(&[
+                "sandbox allow-top-navigation",
+                "sandbox allow-top-navigation-by-user-activation"
+            ])
+        ));
+
+        assert!(
+            content_security_policy_sandbox_allows_top_navigation_by_user_activation(&policies(&[
+                "sandbox ALLOW-TOP-NAVIGATION-BY-USER-ACTIVATION"
+            ]))
+        );
+        assert!(
+            !content_security_policy_sandbox_allows_top_navigation_by_user_activation(&policies(
+                &[
+                    "sandbox allow-top-navigation-by-user-activation",
+                    "sandbox allow-top-navigation"
+                ]
+            ))
+        );
     }
 }

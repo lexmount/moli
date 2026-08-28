@@ -19,5 +19,10 @@ impl Drop for ScriptVm {
             .deactivate_page_vm_binding_for_teardown();
 
         self.page_default_bridge_ref.take();
+        if let Some(document_runtime) = self.document_runtime.take_for_retained_document_host() {
+            self._context_host
+                .borrow_mut()
+                .adopt_retained_document_runtime(document_runtime);
+        }
     }
 }

@@ -1033,6 +1033,9 @@ pub struct DocumentStartScript {
     pub source: String,
     pub world_name: Option<String>,
     pub has_bidi_channel_argument: bool,
+    /// Browser-owned realm bootstrap that must not appear as author script
+    /// execution to Inspector instrumentation breakpoints.
+    pub browser_internal: bool,
     pub bidi_channel_handoffs: Vec<BidiPreloadChannelHandoff>,
 }
 

@@ -1,6 +1,7 @@
 use moli_core::page::{
-    Page, RendererMainDocumentCommit, RendererPageCreationArtifacts,
-    RendererPendingDownloadActivation, RendererRuntimeRealmInfo,
+    Page, RendererMainDocumentCommit, RendererMainDocumentResponseBlock,
+    RendererPageCreationArtifacts, RendererPendingDownloadActivation, RendererRuntimeRealmInfo,
+    RendererTopLevelNavigationSource,
 };
 use moli_core::runtime::NavigationEngine;
 use moli_fetch::StreamingRawResponse;
@@ -13,6 +14,7 @@ use crate::conn::ResponseCommitReady;
 use crate::devtools_runtime::DevToolsProtocol;
 use crate::domains::network::{
     CompletedDocumentProgressTransfer, CompletedDownloadProgressTransfer,
+    CompletedNoCommitResponseProgressTransfer,
 };
 
 use super::browser_context::BrowserContext;
@@ -23,6 +25,7 @@ pub(crate) const NETWORK_ERROR_PAGE_URL: &str = "chrome-error://chromewebdata/";
 pub(crate) struct NetworkErrorPageNavigation {
     error_text: String,
     unreachable_url: Url,
+    response_block: Option<RendererMainDocumentResponseBlock>,
 }
 
 impl NetworkErrorPageNavigation {
@@ -30,6 +33,19 @@ impl NetworkErrorPageNavigation {
         Self {
             error_text,
             unreachable_url,
+            response_block: None,
+        }
+    }
+
+    pub(crate) fn blocked_by_response(
+        error_text: String,
+        unreachable_url: Url,
+        response_block: RendererMainDocumentResponseBlock,
+    ) -> Self {
+        Self {
+            error_text,
+            unreachable_url,
+            response_block: Some(response_block),
         }
     }
 
@@ -39,6 +55,10 @@ impl NetworkErrorPageNavigation {
 
     pub(crate) fn unreachable_url(&self) -> &Url {
         &self.unreachable_url
+    }
+
+    pub(crate) const fn response_block(&self) -> Option<RendererMainDocumentResponseBlock> {
+        self.response_block
     }
 }
 
@@ -51,20 +71,85 @@ impl NetworkErrorPageNavigation {
 pub(crate) struct NavigationSourceDocumentSecurityContext {
     security_origin: String,
     secure_context_type: String,
+    /// Script-visible referrer frozen independently of mutable request
+    /// headers and carried with the other source-Document commit facts.
+    document_referrer: String,
+    renderer_navigation_source: Option<Box<RendererTopLevelNavigationSource>>,
+    request_referrer_mode: NavigationRequestReferrerMode,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum NavigationRequestReferrerMode {
+    #[default]
+    Legacy,
+    SourcePolicyGenerated,
+    ExplicitOverride,
 }
 
 impl NavigationSourceDocumentSecurityContext {
-    pub(crate) fn new(security_origin: String, secure_context_type: String) -> Self {
+    pub(crate) fn new(
+        security_origin: String,
+        secure_context_type: String,
+        document_referrer: String,
+    ) -> Self {
         Self {
             security_origin,
             secure_context_type,
+            document_referrer,
+            renderer_navigation_source: None,
+            request_referrer_mode: NavigationRequestReferrerMode::Legacy,
         }
+    }
+
+    pub(crate) fn with_renderer_navigation_source(
+        mut self,
+        source: RendererTopLevelNavigationSource,
+        request_has_explicit_referrer: bool,
+    ) -> Self {
+        self.request_referrer_mode = if request_has_explicit_referrer {
+            NavigationRequestReferrerMode::ExplicitOverride
+        } else {
+            NavigationRequestReferrerMode::SourcePolicyGenerated
+        };
+        self.renderer_navigation_source = Some(Box::new(source));
+        self
+    }
+
+    pub(crate) fn renderer_navigation_source(&self) -> Option<&RendererTopLevelNavigationSource> {
+        self.renderer_navigation_source.as_deref()
+    }
+
+    pub(crate) fn source_policy_referrer_for(&self, destination: &Url) -> Option<String> {
+        let source = self.renderer_navigation_source()?;
+        if source.suppresses_referrer() {
+            return None;
+        }
+        let source_url = Url::parse(source.source_url()).ok()?;
+        moli_fetch::referrer_header_value(&source_url, destination, None, source.referrer_policy())
+    }
+
+    pub(crate) fn request_referrer_is_source_policy_generated(&self) -> bool {
+        self.request_referrer_mode == NavigationRequestReferrerMode::SourcePolicyGenerated
+    }
+
+    pub(crate) fn mark_request_headers_explicitly_overridden(&mut self) {
+        if self.renderer_navigation_source.is_some() {
+            self.request_referrer_mode = NavigationRequestReferrerMode::ExplicitOverride;
+        }
+    }
+
+    pub(crate) fn infers_renderer_navigation_referrer(&self) -> bool {
+        self.request_referrer_mode == NavigationRequestReferrerMode::SourcePolicyGenerated
+            && self
+                .renderer_navigation_source
+                .as_deref()
+                .is_some_and(|source| !source.suppresses_referrer())
     }
 }
 
 impl Default for NavigationSourceDocumentSecurityContext {
     fn default() -> Self {
-        Self::new("null".to_owned(), "Secure".to_owned())
+        Self::new("null".to_owned(), "Secure".to_owned(), String::new())
     }
 }
 
@@ -78,8 +163,11 @@ pub(crate) struct RendererMainDocumentCommitSeed {
     frame_id: String,
     loader_id: String,
     timestamp: f64,
+    document_referrer: String,
+    renderer_navigation_source: Option<Box<RendererTopLevelNavigationSource>>,
     inherited_security_origin: String,
     inherited_secure_context_type: String,
+    navigation_history_entry_seed: Option<Box<moli_page_types::NavigationHistoryEntrySeed>>,
 }
 
 impl RendererMainDocumentCommitSeed {
@@ -88,11 +176,20 @@ impl RendererMainDocumentCommitSeed {
             frame_id: navigation.frame_id.clone(),
             loader_id: navigation.loader_id.clone(),
             timestamp: navigation.timestamp,
+            document_referrer: navigation
+                .source_document_security
+                .document_referrer
+                .clone(),
+            renderer_navigation_source: navigation
+                .source_document_security
+                .renderer_navigation_source
+                .clone(),
             inherited_security_origin: navigation.source_document_security.security_origin.clone(),
             inherited_secure_context_type: navigation
                 .source_document_security
                 .secure_context_type
                 .clone(),
+            navigation_history_entry_seed: navigation.navigation_history_entry_seed.clone(),
         }
     }
 
@@ -110,8 +207,11 @@ impl RendererMainDocumentCommitSeed {
             frame_id,
             loader_id,
             timestamp,
+            document_referrer: source_document_security.document_referrer,
+            renderer_navigation_source: source_document_security.renderer_navigation_source,
             inherited_security_origin: source_document_security.security_origin,
             inherited_secure_context_type: source_document_security.secure_context_type,
+            navigation_history_entry_seed: None,
         }
     }
 
@@ -119,7 +219,30 @@ impl RendererMainDocumentCommitSeed {
         &self,
         final_url: &Url,
         network_error_page: Option<&NetworkErrorPageNavigation>,
+        navigation_redirect_chain: Vec<moli_page_types::NavigationRedirect>,
     ) -> RendererMainDocumentCommit {
+        let referrer_destination = network_error_page
+            .map(NetworkErrorPageNavigation::unreachable_url)
+            .unwrap_or(final_url);
+        let document_referrer = self
+            .renderer_navigation_source
+            .as_deref()
+            .and_then(|source| {
+                if source.suppresses_referrer() {
+                    return Some(String::new());
+                }
+                let source_url = Url::parse(source.source_url()).ok()?;
+                Some(
+                    moli_fetch::navigation_referrer_value(
+                        &source_url,
+                        referrer_destination,
+                        None,
+                        source.referrer_policy(),
+                    )
+                    .unwrap_or_default(),
+                )
+            })
+            .unwrap_or_else(|| self.document_referrer.clone());
         let inherits_initial_origin = moli_url::is_about_blank(final_url);
         let security_origin = if network_error_page.is_some() {
             "://".to_owned()
@@ -141,11 +264,16 @@ impl RendererMainDocumentCommitSeed {
             frame_id: self.frame_id.clone(),
             loader_id: self.loader_id.clone(),
             url: final_url.as_str().to_owned(),
+            document_referrer,
             unreachable_url: network_error_page
                 .map(|error_page| error_page.unreachable_url().as_str().to_owned()),
             security_origin,
             secure_context_type,
             timestamp: self.timestamp,
+            navigation_history_entry_seed: self.navigation_history_entry_seed.clone(),
+            navigation_redirect_chain,
+            auxiliary_browsing_context_policy: None,
+            response_block: network_error_page.and_then(NetworkErrorPageNavigation::response_block),
         }
     }
 }
@@ -193,6 +321,8 @@ pub struct LoadedNavigation {
     pub initial_runtime_realms: Vec<RendererRuntimeRealmInfo>,
     pub renderer_output_predecessor: Option<moli_core::RendererOutputFence>,
     pub(crate) main_document_commit: Option<Arc<RendererMainDocumentCommit>>,
+    pub(crate) document_continuation_observer:
+        Option<moli_core::page::RendererDocumentContinuationObserver>,
     pub(crate) document_progress_transfer: CompletedDocumentProgressTransfer,
     pub(crate) navigation_engine: Option<NavigationEngine>,
     pub(crate) network_error_page: Option<NetworkErrorPageNavigation>,
@@ -228,11 +358,24 @@ pub struct DownloadNavigation {
     pub(crate) progress_transfer: CompletedDownloadProgressTransfer,
 }
 
+/// A navigation response that is observable on the network but cannot commit
+/// a new Document.
+///
+/// HTTP 204 and 205 are the current producers. Keeping this distinct from a
+/// transport failure is important: the response and redirect chain remain
+/// observable, while the previously committed Document must stay resident.
+#[derive(Debug)]
+pub struct NoCommitResponseNavigation {
+    pub final_url: Url,
+    pub(crate) progress_transfer: CompletedNoCommitResponseProgressTransfer,
+}
+
 #[derive(Debug)]
 pub enum NavigationLoadOutcome {
     ResponseCommitReady(Box<ResponseCommitReady>),
     Loaded(Box<LoadedNavigation>),
     Download(Box<DownloadNavigation>),
+    NoCommitResponse(Box<NoCommitResponseNavigation>),
     NetworkFailure(String),
 }
 
@@ -249,6 +392,10 @@ impl NavigationLoadOutcome {
         Self::Download(Box::new(navigation))
     }
 
+    pub(crate) fn no_commit_response(navigation: NoCommitResponseNavigation) -> Self {
+        Self::NoCommitResponse(Box::new(navigation))
+    }
+
     pub(crate) fn network_failure(error_text: String) -> Self {
         Self::NetworkFailure(error_text)
     }
@@ -260,6 +407,7 @@ impl NavigationLoadOutcome {
             }
             Self::Loaded(navigation) => Self::loaded(navigation.with_navigation_engine(engine)),
             Self::Download(navigation) => Self::Download(navigation),
+            Self::NoCommitResponse(navigation) => Self::NoCommitResponse(navigation),
             Self::NetworkFailure(error_text) => Self::NetworkFailure(error_text),
         }
     }
@@ -332,9 +480,22 @@ pub struct NavigationDispatchState {
     /// projection for multipart form data containing binary file payloads.
     pub request_body_bytes: Option<Vec<u8>>,
     pub request_headers: Vec<(String, String)>,
+    /// Exact renderer-side session history to install when this navigation
+    /// commits. It travels with the load so Fetch pauses and redirects cannot
+    /// fall back to target-level history reconstruction.
+    pub navigation_history_entry_seed: Option<Box<moli_page_types::NavigationHistoryEntrySeed>>,
     pub request_load_policy: NavigationRequestLoadPolicy,
     pub timestamp: f64,
-    pub(crate) source_document_security: NavigationSourceDocumentSecurityContext,
+    /// Heap-owned because this source-Document commit environment travels
+    /// through large navigation futures; keeping it inline regresses the
+    /// default Tokio worker stack even for unrelated target creation.
+    pub(crate) source_document_security: Box<NavigationSourceDocumentSecurityContext>,
+    /// Exact once-only ServiceWorker `Clients.openWindow()` completion carried
+    /// by the destination navigation. It survives Fetch pauses, redirects and
+    /// background scheduling, and is settled only by the terminal commit
+    /// owner. Ordinary navigations carry `None`.
+    pub(crate) service_worker_clients_open_window_continuation:
+        Option<moli_core::page::RendererServiceWorkerClientsOpenWindowContinuation>,
 }
 
 impl NavigationDispatchState {
@@ -347,6 +508,28 @@ impl NavigationDispatchState {
     pub(crate) fn set_request_body_text(&mut self, body: String) {
         self.request_body_bytes = Some(body.as_bytes().to_vec());
         self.request_body = Some(body);
+    }
+
+    /// Returns the headers owned by the caller/DevTools for transport.
+    ///
+    /// A source-policy Referer is projected into preflight events, but it is
+    /// removed here so the network request can recompute the value for the
+    /// actual URL and every redirect hop. Explicit request/header overrides
+    /// remain untouched.
+    pub(crate) fn transport_request_headers(&self) -> Vec<(String, String)> {
+        let mut headers = self.request_headers.clone();
+        if self
+            .source_document_security
+            .request_referrer_is_source_policy_generated()
+        {
+            headers.retain(|(name, _)| !name.eq_ignore_ascii_case("referer"));
+        }
+        headers
+    }
+
+    pub(crate) fn mark_request_headers_explicitly_overridden(&mut self) {
+        self.source_document_security
+            .mark_request_headers_explicitly_overridden();
     }
 }
 
@@ -393,5 +576,74 @@ impl<'a> TargetInfo<'a> {
             can_access_opener: false,
             browser_context_id: &bc.id,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use moli_core::PageId;
+    use moli_core::page::{
+        RendererDocumentLifecycleIdentity, RendererDocumentToken, RendererFrameToken,
+        RendererLifecycleEpoch, RendererWindowDocumentSource,
+    };
+
+    fn renderer_source(suppress_referrer: bool) -> RendererTopLevelNavigationSource {
+        let page_id = PageId::new_for_testing(7);
+        RendererTopLevelNavigationSource::new(
+            RendererDocumentLifecycleIdentity {
+                frame: RendererFrameToken { page_id },
+                document: RendererDocumentToken::new_for_testing(page_id, 3),
+                epoch: RendererLifecycleEpoch(5),
+            },
+            RendererWindowDocumentSource::ChildFrame {
+                frame_id: "FRAME-CHILD".to_owned(),
+                local_window_id: 11,
+                document_id: 13,
+            },
+            "https://source.test/frame/page.html?token=child".to_owned(),
+            None,
+            suppress_referrer,
+        )
+    }
+
+    #[test]
+    fn renderer_navigation_source_recomputes_default_policy_for_actual_destination() {
+        let security = NavigationSourceDocumentSecurityContext::default()
+            .with_renderer_navigation_source(renderer_source(false), false);
+
+        assert_eq!(
+            security.source_policy_referrer_for(
+                &Url::parse("https://source.test/next").expect("same-origin destination")
+            ),
+            Some("https://source.test/frame/page.html?token=child".to_owned())
+        );
+        assert_eq!(
+            security.source_policy_referrer_for(
+                &Url::parse("https://target.test/next").expect("cross-origin destination")
+            ),
+            Some("https://source.test/".to_owned())
+        );
+        assert_eq!(
+            security.source_policy_referrer_for(
+                &Url::parse("http://target.test/next").expect("downgrade destination")
+            ),
+            None
+        );
+        assert!(security.infers_renderer_navigation_referrer());
+
+        let mut explicitly_overridden = security.clone();
+        explicitly_overridden.mark_request_headers_explicitly_overridden();
+        assert!(!explicitly_overridden.infers_renderer_navigation_referrer());
+
+        let suppressed = NavigationSourceDocumentSecurityContext::default()
+            .with_renderer_navigation_source(renderer_source(true), false);
+        assert_eq!(
+            suppressed.source_policy_referrer_for(
+                &Url::parse("https://source.test/next").expect("suppressed destination")
+            ),
+            None
+        );
+        assert!(!suppressed.infers_renderer_navigation_referrer());
     }
 }

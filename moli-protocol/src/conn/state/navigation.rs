@@ -125,6 +125,15 @@ impl TargetNavigationHistoryState {
         self.pending_update = None;
     }
 
+    pub(crate) fn retain_pending_initial_empty_document_replacement(&mut self) {
+        if !matches!(
+            self.pending_update,
+            Some(PendingNavigationHistoryUpdate::ReplaceInitialEmptyDocument)
+        ) {
+            self.pending_update = None;
+        }
+    }
+
     pub(crate) fn entry_url(&self, entry_id: i32) -> Option<String> {
         self.entries
             .iter()

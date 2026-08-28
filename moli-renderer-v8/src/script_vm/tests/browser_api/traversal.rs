@@ -11,7 +11,7 @@ fn top_level_history_back_delegates_to_the_browser_history_controller() {
     assert_eq!(
         vm.take_pending_top_level_history_traversal()
             .expect("browser-owned back traversal request")
-            .delta,
+            .delta(),
         -1
     );
 
@@ -30,7 +30,7 @@ fn top_level_history_back_delegates_to_the_browser_history_controller() {
     assert_eq!(
         vm.take_pending_top_level_history_traversal()
             .expect("browser-owned back traversal request")
-            .delta,
+            .delta(),
         -1
     );
 
@@ -39,8 +39,47 @@ fn top_level_history_back_delegates_to_the_browser_history_controller() {
     assert_eq!(
         vm.take_pending_top_level_history_traversal()
             .expect("browser-owned forward traversal request")
-            .delta,
+            .delta(),
         1
+    );
+}
+
+#[test]
+fn top_level_cross_document_history_traversal_carries_the_exact_destination_seed() {
+    let first_url =
+        url::Url::parse("https://browser-owned-history.test/first").expect("first history URL");
+    let second_url =
+        url::Url::parse("https://browser-owned-history.test/second").expect("second history URL");
+    let initial_seed = moli_page_types::initial_navigation_history_seed(false, first_url.as_str());
+    let current_seed = moli_page_types::cross_document_navigation_seed(
+        initial_seed.entries,
+        initial_seed.current_index,
+        0,
+        &second_url,
+        moli_page_types::NavigationHistoryMutation::Push,
+    );
+    let mut vm = new_storage_test_vm(second_url.as_str());
+    vm.install_navigation_bootstrap_entry(Some(current_seed));
+
+    vm.eval("history.back(); 'queued'")
+        .expect("cross-Document history traversal should queue");
+    let traversal = vm
+        .take_pending_top_level_history_traversal()
+        .expect("cross-Document history traversal owner action");
+
+    assert_eq!(traversal.delta(), -1);
+    let (destination_url, destination_seed) = traversal
+        .cross_document_destination()
+        .expect("known cross-Document target should carry its exact seed");
+    assert_eq!(destination_url, first_url.as_str());
+    assert_eq!(destination_seed.current_index, 0);
+    assert_eq!(destination_seed.entries.len(), 2);
+    assert_eq!(
+        destination_seed
+            .activation
+            .as_ref()
+            .and_then(|activation| activation.navigation_type.as_deref()),
+        Some("traverse")
     );
 }
 
@@ -69,7 +108,7 @@ fn top_level_navigation_intents_keep_one_last_writer_state() {
     assert_eq!(
         vm.take_pending_top_level_history_traversal()
             .expect("history traversal intent")
-            .delta,
+            .delta(),
         1
     );
 }

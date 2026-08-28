@@ -443,7 +443,7 @@ pub(in crate::native_bridge) fn node_document_exec_command_callback<'s>(
             return;
         }
         EditingCommand::Copy => {
-            let active = current_protocol_user_gesture_activation(scope);
+            let active = current_transient_user_activation(scope);
             rv.set(v8::Boolean::new(scope, active).into());
             return;
         }
@@ -528,7 +528,7 @@ pub(in crate::native_bridge) fn node_document_query_command_enabled_callback<'s>
         Some(EditingCommand::SelectAll) => {
             exec_command_select_all_target(runtime, document_handle).is_some()
         }
-        Some(EditingCommand::Copy) => current_protocol_user_gesture_activation(scope),
+        Some(EditingCommand::Copy) => current_transient_user_activation(scope),
         None => false,
     };
     rv.set(v8::Boolean::new(scope, enabled).into());
@@ -656,9 +656,9 @@ fn current_modal_dialog(runtime: &JsContextHost) -> Option<DomHandle> {
         })
 }
 
-fn current_protocol_user_gesture_activation(scope: &mut v8::PinScope<'_, '_>) -> bool {
+fn current_transient_user_activation(scope: &mut v8::PinScope<'_, '_>) -> bool {
     crate::util::context_host_ptr_from_global_bridge(scope)
-        .is_some_and(|host_ptr| unsafe { (&*host_ptr).protocol_user_gesture_activation() })
+        .is_some_and(|host_ptr| unsafe { (&*host_ptr).transient_user_activation() })
 }
 
 fn exec_command_delete_selection<'s>(

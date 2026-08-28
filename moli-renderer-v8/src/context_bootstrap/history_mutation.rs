@@ -23,8 +23,8 @@ use super::navigation_result::{
 };
 use super::navigation_serialize::sync_child_navigation_entry_seed_from_owner;
 use super::navigation_window::{
-    runtime_window_is_global, runtime_window_owner, window_location_for_holder,
-    window_navigation_for_holder,
+    navigation_document_is_initial_empty, runtime_window_is_global, runtime_window_owner,
+    url_is_about_blank_document, window_location_for_holder, window_navigation_for_holder,
 };
 use super::*;
 use crate::webidl;
@@ -124,7 +124,16 @@ fn mutate_history_object<'s>(
             return;
         }
     };
-    let resolve_base_href = if history_url_inherits_origin(scope, owner, &current_href) {
+    let resolve_base_href = if runtime_window_is_global(scope, owner)
+        && navigation_document_is_initial_empty(scope, owner)
+    {
+        // A top-level initial about:blank keeps its visible Document URL for
+        // History mutation even though same-origin checks below still use the
+        // creator-derived reference URL. This is distinct from a child
+        // initial about:blank, whose joint-history URL continues to resolve
+        // through its inherited parent base.
+        &current_href
+    } else if history_url_inherits_origin(scope, owner, &current_href) {
         current_url.as_str()
     } else {
         &current_href
@@ -140,7 +149,7 @@ fn mutate_history_object<'s>(
         );
         return;
     };
-    if !moli_url::same_origin(&url, &current_url) {
+    if !history_target_is_same_origin(scope, owner, &current_href, &current_url, &url) {
         throw_history_security_error(
             scope,
             "Failed to execute 'pushState' or 'replaceState' on 'History': A history state object with URL of a different origin cannot be created in a document with origin.",
@@ -177,6 +186,18 @@ fn mutate_history_object<'s>(
         cancel_pending_same_document_navigation_finishes(scope, navigation);
         navigate_outcome = Some(outcome);
     }
+
+    // The initial empty Document remains initial across same-document URL
+    // mutations. The URL and history update steps therefore convert pushState
+    // to replacement until a different Document commits (or document.open()
+    // explicitly exits the initial state).
+    let kind = if matches!(kind, HistoryMutationKind::Push)
+        && navigation_document_is_initial_empty(scope, owner)
+    {
+        HistoryMutationKind::Replace
+    } else {
+        kind
+    };
 
     let entries = history_entries(scope, history).unwrap_or_else(|| v8::Array::new(scope, 0));
     let current_index = history_index(scope, history);
@@ -300,13 +321,6 @@ fn mutate_history_object<'s>(
             HistoryMutationKind::Replace => SameDocumentHistoryUpdate::Replace,
         };
         host.record_same_document_navigation(&url, "historyApi", history_update);
-    } else if let Some(popup_id) =
-        crate::native_bridge::lightweight_popup_id_from_window(scope, owner)
-        && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
-        && let Some(document_handle) =
-            unsafe { &*host_ptr }.lightweight_popup_document_handle(popup_id)
-    {
-        let _ = unsafe { &mut *host_ptr }.set_dom_document_url_for_handle(document_handle, url);
     }
 }
 
@@ -350,9 +364,35 @@ fn history_same_origin_reference_url<'s>(
     if history_url_inherits_origin(scope, owner, current_href)
         && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
     {
-        return Ok(unsafe { &mut *host_ptr }.host_document().url().clone());
+        let host = unsafe { &mut *host_ptr };
+        return Ok(host
+            .dom_host()
+            .document_base_url()
+            .unwrap_or_else(|| host.host_document().url().clone()));
     }
     url::Url::parse(current_href)
+}
+
+fn history_target_is_same_origin<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+    current_href: &str,
+    current_url: &url::Url,
+    target_url: &url::Url,
+) -> bool {
+    if !history_url_inherits_origin(scope, owner, current_href) {
+        return moli_url::same_origin(target_url, current_url);
+    }
+    let Some(current_origin) = window_origin_runtime_state(scope, owner) else {
+        return moli_url::same_origin(target_url, current_url);
+    };
+    if url_is_about_blank_document(target_url) {
+        // An initial about:blank Document and its same-document URL variants
+        // retain the creator origin, including a shared opaque identity that
+        // cannot be reconstructed from either serialized URL.
+        return true;
+    }
+    moli_url::origin_ascii_serialization(target_url) == current_origin
 }
 
 fn history_url_inherits_origin<'s>(
@@ -360,8 +400,13 @@ fn history_url_inherits_origin<'s>(
     owner: v8::Local<'s, v8::Object>,
     current_href: &str,
 ) -> bool {
-    !runtime_window_is_global(scope, owner)
-        && matches!(current_href, "about:blank" | "about:srcdoc")
+    let current_url_inherits_origin = current_href == "about:srcdoc"
+        || url::Url::parse(current_href)
+            .ok()
+            .is_some_and(|url| url_is_about_blank_document(&url));
+    current_url_inherits_origin
+        && (!runtime_window_is_global(scope, owner)
+            || navigation_document_is_initial_empty(scope, owner))
 }
 
 fn throw_history_security_error(scope: &mut v8::PinScope<'_, '_>, message: &str) {

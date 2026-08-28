@@ -376,9 +376,7 @@ impl JsContextHost {
                     return result;
                 }
                 Some(FrameDocumentLoadDeliveryProgress::Finished(finish)) => {
-                    let finished_child_handle = finish.child_handle;
                     self.publish_child_frame_load_finish(finish);
-                    self.note_lightweight_popup_child_frame_load_finished(finished_child_handle);
                     if moli_trace::window_message_trace_enabled() {
                         tracing::info!(
                             target: "moli_window_message_trace",

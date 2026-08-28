@@ -7,7 +7,11 @@ pub(super) fn capture_child_window_realm_snapshot(
     init: ChildWindowRealmInit,
 ) -> Result<ChildWindowRealmSnapshot> {
     ensure!(
-        host.frame_document_task_owner_is_current(init.handle, init.expected_owner),
+        host.frame_document_projection_is_current(
+            init.handle,
+            init.projection.browsing_context_id(),
+            init.projection.owner(),
+        ),
         "refused to initialize a stale child Window realm for handle {}",
         init.handle.index()
     );
@@ -18,7 +22,8 @@ pub(super) fn capture_child_window_realm_snapshot(
         .context("missing child browsing-context state")?;
     let snapshot = ChildWindowRealmSnapshot {
         handle: init.handle,
-        owner: init.expected_owner,
+        browsing_context_id: init.projection.browsing_context_id(),
+        owner: init.projection.owner(),
         current_url: host
             .child_browsing_context_current_url(init.handle)
             .context("missing child browsing-context URL")?,
@@ -41,7 +46,11 @@ pub(super) fn validate_child_window_realm_snapshot(
     snapshot: &ChildWindowRealmSnapshot,
 ) -> Result<()> {
     ensure!(
-        host.frame_document_task_owner_is_current(snapshot.handle, snapshot.owner),
+        host.frame_document_projection_is_current(
+            snapshot.handle,
+            snapshot.browsing_context_id,
+            snapshot.owner,
+        ),
         "child Window document owner changed while realm state was captured"
     );
     ensure!(

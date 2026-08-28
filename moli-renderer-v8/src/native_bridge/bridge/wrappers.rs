@@ -29,14 +29,6 @@ impl NativeDomBridge {
         self.identity.cached_wrapper(scope, reflector_id)
     }
 
-    pub(crate) fn retire_default_world_wrappers_for_realm(
-        &self,
-        realm_token: crate::native_bridge::RuntimeObservableContextToken,
-    ) {
-        self.identity
-            .retire_default_world_wrappers_for_realm(realm_token);
-    }
-
     pub(crate) fn wrap_window<'s, 'i>(
         &mut self,
         scope: &mut v8::PinScope<'s, 'i>,
@@ -56,14 +48,22 @@ impl NativeDomBridge {
             if !matches!(&handle, BridgeHandle::Window) {
                 self.bindings
                     .sync_wrapper_owner_realm_prototype(scope, host_ptr, &handle, wrapper);
+                self.identity.bind_cached_wrapper_owner_realm(
+                    scope,
+                    host_ptr,
+                    &handle,
+                    reflector_id,
+                );
             }
             return Some(wrapper);
         }
 
-        let wrapper = self
-            .bindings
-            .instantiate_wrapper(scope, host_ptr, handle, reflector_id);
+        let wrapper =
+            self.bindings
+                .instantiate_wrapper(scope, host_ptr, handle.clone(), reflector_id);
         self.identity.cache_wrapper(scope, reflector_id, wrapper);
+        self.identity
+            .bind_cached_wrapper_owner_realm(scope, host_ptr, &handle, reflector_id);
         Some(wrapper)
     }
 

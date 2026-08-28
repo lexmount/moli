@@ -51,6 +51,10 @@ enum PendingPerformanceRendererCommand {
     },
 }
 
+// This result is moved directly from the renderer wait into command
+// completion. Boxing the main result would allocate on the ordinary
+// Performance command path solely to shrink this transient handoff.
+#[allow(clippy::large_enum_variant)]
 enum CompletedPerformanceRendererCommand {
     Main(CompletedPageCommand),
     IoCommandReply(RendererPerformanceMetricSnapshot),

@@ -102,19 +102,7 @@ pub(crate) fn dispatch_message_port_events_for_port_collecting_errors(
                 wrapper,
                 callback_errors.as_deref_mut(),
             );
-            // A materialized window keeps its realm through V8's Context. The
-            // lightweight popup facade still needs its host-side scope through
-            // the microtask checkpoint.
-            if dispatched
-                && matches!(
-                    dispatch_scope,
-                    crate::native_bridge::OwnerDispatchScope::LightweightPopup(_)
-                )
-            {
-                dispatch_scope.defer_restore(scope, previous_owner_context);
-            } else {
-                dispatch_scope.restore(scope, previous_owner_context);
-            }
+            dispatch_scope.restore(scope, previous_owner_context);
             dispatched
         }
         MessagePortDispatchTarget::Worker(wrapper) => {

@@ -12,12 +12,18 @@ pub(crate) use default_action::{
     prepare_legacy_activation_for_dispatched_click, replace_contenteditable_selection,
     scroll_to_url_fragment_or_top, select_contenteditable_contents,
 };
-pub(in crate::native_bridge) use targets::named_iframe_target_handle_for_navigation;
 pub(crate) use targets::{
-    SpecialBrowsingContextTarget, navigate_existing_browsing_context_target,
-    navigate_named_iframe_target,
+    SpecialBrowsingContextTarget,
+    cancel_pending_renderer_owned_javascript_url_navigation_for_window,
+    existing_browsing_context_target_window, navigate_existing_browsing_context_target,
+    queue_renderer_owned_top_level_javascript_url_navigation_for_window,
+    queue_renderer_owned_top_level_navigation_for_window,
+    resolve_named_browsing_context_target_for_navigation,
+    source_javascript_url_allowed_by_csp_for_owner,
+    source_javascript_url_allows_new_context_by_policy,
 };
-pub(in crate::native_bridge::element) use targets::{
-    queue_deferred_named_iframe_target_navigation_from_document,
-    queue_deferred_named_iframe_target_request,
+pub(in crate::native_bridge) use targets::{
+    element_popup_relations, navigate_form_auxiliary_target, navigate_form_named_target,
+    source_node_can_navigate_top_level, source_node_form_action_allowed_by_csp,
+    source_node_javascript_url_allowed_by_csp,
 };

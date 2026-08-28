@@ -4,7 +4,7 @@ use tokio::sync::mpsc;
 use crate::{cdp_frontend::CdpFrontendControlRequest, cdp_frontend_router::CdpFrontendRouter};
 
 use self::target_control::CdpFrontendTargetControl;
-use super::CdpScheduler;
+use super::{CdpScheduler, actor::FrontendControlRendererFence};
 
 mod target_control;
 
@@ -41,6 +41,7 @@ impl CdpFrontendControlState {
         request: CdpFrontendControlRequest,
         frontend_router: &CdpFrontendRouter,
         scheduler: &mut CdpScheduler,
+        renderer_fence: &mut FrontendControlRendererFence<'_>,
         owner_lifecycle: Option<&CdpOwnerActorLifecycle>,
     ) -> bool {
         match request {
@@ -50,7 +51,7 @@ impl CdpFrontendControlState {
             } => {
                 let result = match self
                     .target_control
-                    .attach_browser(scheduler, frontend_router)
+                    .attach_browser(scheduler, frontend_router, renderer_fence)
                     .await
                 {
                     Ok(session_id) => {
@@ -66,6 +67,7 @@ impl CdpFrontendControlState {
                                     .detach_frontend_session(
                                         scheduler,
                                         frontend_router,
+                                        renderer_fence,
                                         &session_id,
                                     )
                                     .await;
@@ -82,7 +84,12 @@ impl CdpFrontendControlState {
                             frontend_router.unregister_browser_frontend(frontend_id)
                         {
                             self.target_control
-                                .detach_frontend_session(scheduler, frontend_router, &session_id)
+                                .detach_frontend_session(
+                                    scheduler,
+                                    frontend_router,
+                                    renderer_fence,
+                                    &session_id,
+                                )
                                 .await;
                         }
                         send_cookie_checkpoint(scheduler, owner_lifecycle);
@@ -98,7 +105,7 @@ impl CdpFrontendControlState {
             } => {
                 let result = match self
                     .target_control
-                    .attach_target(scheduler, frontend_router, &target_id)
+                    .attach_target(scheduler, frontend_router, renderer_fence, &target_id)
                     .await
                 {
                     Ok(session_id) => {
@@ -115,6 +122,7 @@ impl CdpFrontendControlState {
                                     .detach_frontend_session(
                                         scheduler,
                                         frontend_router,
+                                        renderer_fence,
                                         &session_id,
                                     )
                                     .await;
@@ -131,7 +139,12 @@ impl CdpFrontendControlState {
                             frontend_router.unregister_target_frontend(frontend_id)
                         {
                             self.target_control
-                                .detach_frontend_session(scheduler, frontend_router, &session_id)
+                                .detach_frontend_session(
+                                    scheduler,
+                                    frontend_router,
+                                    renderer_fence,
+                                    &session_id,
+                                )
                                 .await;
                         }
                         send_cookie_checkpoint(scheduler, owner_lifecycle);
@@ -143,7 +156,12 @@ impl CdpFrontendControlState {
             CdpFrontendControlRequest::DetachBrowser { frontend_id } => {
                 if let Some(session_id) = frontend_router.unregister_browser_frontend(frontend_id) {
                     self.target_control
-                        .detach_frontend_session(scheduler, frontend_router, &session_id)
+                        .detach_frontend_session(
+                            scheduler,
+                            frontend_router,
+                            renderer_fence,
+                            &session_id,
+                        )
                         .await;
                     send_cookie_checkpoint(scheduler, owner_lifecycle);
                 }
@@ -152,7 +170,12 @@ impl CdpFrontendControlState {
             CdpFrontendControlRequest::DetachTarget { frontend_id } => {
                 if let Some(session_id) = frontend_router.unregister_target_frontend(frontend_id) {
                     self.target_control
-                        .detach_frontend_session(scheduler, frontend_router, &session_id)
+                        .detach_frontend_session(
+                            scheduler,
+                            frontend_router,
+                            renderer_fence,
+                            &session_id,
+                        )
                         .await;
                     send_cookie_checkpoint(scheduler, owner_lifecycle);
                 }
@@ -168,7 +191,7 @@ impl CdpFrontendControlState {
             } => {
                 let result = self
                     .target_control
-                    .activate_target(scheduler, frontend_router, &target_id)
+                    .activate_target(scheduler, frontend_router, renderer_fence, &target_id)
                     .await;
                 let _ = completion_tx.send(result);
                 true
@@ -179,7 +202,7 @@ impl CdpFrontendControlState {
             } => {
                 let result = self
                     .target_control
-                    .close_target(scheduler, frontend_router, &target_id)
+                    .close_target(scheduler, frontend_router, renderer_fence, &target_id)
                     .await;
                 let _ = completion_tx.send(result);
                 send_cookie_checkpoint(scheduler, owner_lifecycle);
@@ -191,12 +214,17 @@ impl CdpFrontendControlState {
             } => {
                 let result = self
                     .target_control
-                    .create_managed_target(scheduler, frontend_router, &target_url)
+                    .create_managed_target(scheduler, frontend_router, renderer_fence, &target_url)
                     .await;
                 if let Err(Ok(target)) = completion_tx.send(result) {
                     let _ = self
                         .target_control
-                        .close_target(scheduler, frontend_router, &target.page_target_id)
+                        .close_target(
+                            scheduler,
+                            frontend_router,
+                            renderer_fence,
+                            &target.page_target_id,
+                        )
                         .await;
                 }
                 send_cookie_checkpoint(scheduler, owner_lifecycle);
@@ -205,7 +233,11 @@ impl CdpFrontendControlState {
             CdpFrontendControlRequest::EnsureDefaultTarget { completion_tx } => {
                 let result = self
                     .target_control
-                    .ensure_default_target_is_materialized(scheduler, frontend_router)
+                    .ensure_default_target_is_materialized(
+                        scheduler,
+                        frontend_router,
+                        renderer_fence,
+                    )
                     .await;
                 let _ = completion_tx.send(result);
                 true

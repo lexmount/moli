@@ -164,6 +164,9 @@ impl CdpConnection {
 
     pub(crate) fn session_route(&self, session_id: Option<&str>) -> Option<CdpSessionRoute> {
         let session_id = session_id?;
+        if let Some(route) = self.session_owner_route_override(session_id) {
+            return Some(route);
+        }
         if self.browser_session_ids.contains(session_id) {
             return Some(CdpSessionRoute::Browser);
         }

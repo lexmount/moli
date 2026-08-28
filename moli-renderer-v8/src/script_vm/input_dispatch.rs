@@ -626,6 +626,9 @@ impl ScriptVm {
         let client_point = root_to_frame.map_point(root_point);
         let client_x = f64::from(client_point.x);
         let client_y = f64::from(client_point.y);
+        if event_name == "mousedown" {
+            self._context_host.borrow_mut().notify_user_activation();
+        }
         let hover_transition = if tracks_mouse_hover_for_event(event_name) {
             let previous = self.hovered_mouse_handle;
             if previous != Some(handle) {
@@ -1268,6 +1271,9 @@ impl ScriptVm {
         let Some(handle) = touch_handle.or(pointer_handle) else {
             return Ok(input_dispatch_outcome(false));
         };
+        if event_name == "touchend" {
+            self._context_host.borrow_mut().notify_user_activation();
+        }
 
         let result = self.with_default_context_scope(|scope, runtime_ptr| {
             if let Some((previous, current)) = pointer_transition {
@@ -1431,6 +1437,9 @@ impl ScriptVm {
         }
         if changed_points.is_empty() {
             return Ok(input_dispatch_outcome(false));
+        }
+        if event_name == "touchend" {
+            self._context_host.borrow_mut().notify_user_activation();
         }
 
         match event_name {
@@ -1805,6 +1814,9 @@ impl ScriptVm {
         let Some(handle) = handle else {
             return Ok(input_dispatch_outcome(false));
         };
+        if event_name == "keydown" && !key.eq_ignore_ascii_case("Escape") {
+            self._context_host.borrow_mut().notify_user_activation();
+        }
 
         let key_lower = key.to_ascii_lowercase();
         let alt = modifiers & 1 == 1;

@@ -104,15 +104,7 @@ mod tests {
 
     use std::future::{Ready, ready};
 
-    use crate::document_runtime::DomHandle;
     use crate::document_script_scheduler::DocumentScriptExecutionOutcome;
-    use crate::frame_owner_model::{
-        DocumentId, FrameDocumentDynamicClassicScriptExecutionAction,
-        FrameDocumentScriptExecutionWork, FrameDocumentTaskOwner, FrameId, FrameRealmId,
-        FrameSchedulerLaneId, FrameScriptJob, FrameScriptJobKind, FrameScriptSource, LocalWindowId,
-        PendingChildDynamicDocumentScript,
-    };
-    use moli_fetch::RequestCredentialsMode;
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     struct FakePrepareFollowup {
@@ -128,7 +120,7 @@ mod tests {
     #[derive(Default)]
     struct FakeFrameDocumentScriptHooks {
         events: Vec<&'static str>,
-        prepared_work: Option<FrameDocumentScriptExecutionWork>,
+        prepared_work: Option<&'static str>,
         fail_execution: bool,
         dropped_followups: Vec<FakePrepareFollowup>,
         execution_followups: Vec<FakeExecutionFollowup>,
@@ -136,7 +128,7 @@ mod tests {
 
     impl DocumentScriptExecutionHooks for FakeFrameDocumentScriptHooks {
         type Ready = &'static str;
-        type PreparedWork = FrameDocumentScriptExecutionWork;
+        type PreparedWork = &'static str;
         type PrepareFollowup = FakePrepareFollowup;
         type ExecutionResult = FakeExecutionFollowup;
         type PostExecutionFollowup = FakeExecutionFollowup;
@@ -149,33 +141,25 @@ mod tests {
         fn prepare_execution(
             &mut self,
             ready: &'static str,
-        ) -> FrameDocumentScriptExecutionStartReport<FakePrepareFollowup> {
+        ) -> DocumentScriptExecutionStartReport<&'static str, FakePrepareFollowup> {
             self.events.push(ready);
             match self.prepared_work.take() {
-                Some(work) => FrameDocumentScriptExecutionStartReport::execute(
+                Some(work) => DocumentScriptExecutionStartReport::execute(
                     work,
                     FakePrepareFollowup {
                         prepared: true,
                         dropped: false,
                     },
                 ),
-                None => FrameDocumentScriptExecutionStartReport::dropped(FakePrepareFollowup {
+                None => DocumentScriptExecutionStartReport::dropped(FakePrepareFollowup {
                     prepared: false,
                     dropped: true,
                 }),
             }
         }
 
-        fn execute_work(
-            &mut self,
-            work: FrameDocumentScriptExecutionWork,
-        ) -> Self::ExecuteFuture<'_> {
-            self.events.push(match work {
-                FrameDocumentScriptExecutionWork::DynamicClassic(_) => "dynamic-classic",
-                FrameDocumentScriptExecutionWork::ExternalClassic(_) => "external-classic",
-                FrameDocumentScriptExecutionWork::JavascriptUrl(_) => "javascript-url",
-                FrameDocumentScriptExecutionWork::ModuleScript(_) => "module-script",
-            });
+        fn execute_work(&mut self, work: &'static str) -> Self::ExecuteFuture<'_> {
+            self.events.push(work);
             if self.fail_execution {
                 return ready(Err(anyhow::anyhow!(
                     "frame document script execution failed"
@@ -208,49 +192,10 @@ mod tests {
         }
     }
 
-    fn dynamic_classic_work() -> FrameDocumentScriptExecutionWork {
-        let script_url = url::Url::parse("https://frame-document-script-owner.test/dynamic.js")
-            .expect("dynamic script URL should parse");
-        let owner = FrameDocumentTaskOwner::new(
-            FrameSchedulerLaneId(100),
-            LocalWindowId(10),
-            DocumentId(20),
-        );
-        let pending = PendingChildDynamicDocumentScript {
-            child_handle: DomHandle::new(1),
-            owner,
-            realm_id: Some(FrameRealmId(30)),
-            script_handle: DomHandle::new(40),
-            source: "globalThis.__dynamic = true;".to_owned(),
-            script_nonce: None,
-            script_integrity: None,
-        };
-        let job = FrameScriptJob {
-            frame_id: FrameId("dynamic-frame".to_owned()),
-            local_window_id: owner.local_window_id,
-            document_id: owner.document_id,
-            current_script: Some(DomHandle::new(40)),
-            kind: FrameScriptJobKind::DynamicClassic,
-            source: FrameScriptSource::SourceText("globalThis.__dynamic = true;".to_owned()),
-            script_url: script_url.clone(),
-            base_url: script_url,
-            script_nonce: None,
-            script_integrity: None,
-            credentials_mode: RequestCredentialsMode::SameOrigin,
-            referrer_policy: None,
-        };
-        FrameDocumentScriptExecutionWork::dynamic_classic(
-            FrameDocumentDynamicClassicScriptExecutionAction::new(
-                pending.execution_target(FrameRealmId(30)),
-                job,
-            ),
-        )
-    }
-
     #[tokio::test]
     async fn started_frame_document_script_execution_runs_work_and_reports_followup() {
         let hooks = FakeFrameDocumentScriptHooks {
-            prepared_work: Some(dynamic_classic_work()),
+            prepared_work: Some("script-work"),
             ..Default::default()
         };
         let mut owner = FrameDocumentScriptExecutionOwner::new(hooks);
@@ -261,7 +206,7 @@ mod tests {
             .expect("frame document script owner should run ready work");
 
         assert_eq!(outcome, DocumentScriptExecutionOutcome::Progressed);
-        assert_eq!(owner.hooks.events, ["prepare", "dynamic-classic"]);
+        assert_eq!(owner.hooks.events, ["prepare", "script-work"]);
         assert_eq!(
             owner.hooks.execution_followups,
             [FakeExecutionFollowup { attempted: true }]
@@ -294,7 +239,7 @@ mod tests {
     #[tokio::test]
     async fn frame_document_script_execution_error_stops_before_outcome_mapping() {
         let hooks = FakeFrameDocumentScriptHooks {
-            prepared_work: Some(dynamic_classic_work()),
+            prepared_work: Some("script-work"),
             fail_execution: true,
             ..Default::default()
         };
@@ -306,7 +251,7 @@ mod tests {
             .expect_err("frame document script owner should propagate execution failures");
 
         assert_eq!(error.to_string(), "frame document script execution failed");
-        assert_eq!(owner.hooks.events, ["prepare", "dynamic-classic"]);
+        assert_eq!(owner.hooks.events, ["prepare", "script-work"]);
         assert!(owner.hooks.execution_followups.is_empty());
         assert!(owner.hooks.dropped_followups.is_empty());
     }

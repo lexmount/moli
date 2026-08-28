@@ -135,6 +135,24 @@ impl JsContextHost {
         retired
     }
 
+    pub(crate) fn retire_websockets_for_context_token(
+        &mut self,
+        context_token: super::super::RuntimeObservableContextToken,
+    ) -> usize {
+        let socket_ids = self
+            .websockets
+            .iter()
+            .filter_map(|(socket_id, state)| {
+                (state.owner.realm_token() == context_token).then_some(*socket_id)
+            })
+            .collect::<Vec<_>>();
+        let retired = socket_ids.len();
+        for socket_id in socket_ids {
+            self.retire_websocket(socket_id);
+        }
+        retired
+    }
+
     pub(crate) fn retire_websocket(&mut self, socket_id: u64) -> bool {
         let Some(state) = self.websockets.remove(&socket_id) else {
             return false;

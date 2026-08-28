@@ -3,16 +3,19 @@ use moli_owner_queue::{OwnerReadyTaskRoute, OwnerReadyTaskSource, OwnerTaskReady
 use crate::{
     resource_ready::{ReadyPageTask, RendererPageTaskReadyMetadata},
     runtime::{PageOwnerTurnOutcome, RendererPageToken},
+    v8_platform::RendererScriptAgentV8ForegroundTaskCompletion,
 };
 
 use super::RendererOwnerWakeSender;
 
-/// Stable Page owner of a V8 foreground task.
+/// Stable Page execution route selected for a script-agent foreground task.
 ///
-/// Foreground work belongs to the Page-lifetime isolate rather than to one
-/// Document incarnation. `V8ForegroundTask` itself retains the exact isolate
-/// registration generation, so a task transferred before isolate retirement
-/// becomes a no-op instead of entering a reused isolate.
+/// Foreground work belongs to the script-agent isolate rather than to one
+/// Document generation. One member Page executes the concrete V8 task, then
+/// the other live members receive checkpoint-only tasks for microtasks owned by
+/// their realms. `V8ForegroundTask` itself retains the exact isolate
+/// registration generation, so transferred work becomes a no-op after agent
+/// retirement instead of entering a reused isolate.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct RendererPageV8ForegroundTaskOwner {
     page: RendererPageToken,
@@ -22,36 +25,67 @@ impl RendererPageV8ForegroundTaskOwner {
     pub(crate) const fn new(page: RendererPageToken) -> Self {
         Self { page }
     }
+
+    pub(crate) const fn page_id(self) -> crate::runtime::PageId {
+        self.page.page_id()
+    }
 }
 
-/// One concrete foreground continuation posted by V8 for a Page isolate.
+/// One concrete script-agent continuation or peer checkpoint routed through a
+/// stable Page source.
 #[derive(Debug)]
 pub(crate) struct RendererPageV8ForegroundTask {
     owner: RendererPageV8ForegroundTaskOwner,
-    task: moli_v8_platform::V8ForegroundTask,
+    kind: RendererPageV8ForegroundTaskKind,
+}
+
+#[derive(Debug)]
+pub(crate) enum RendererPageV8ForegroundTaskKind {
+    ScriptAgentTask {
+        task: moli_v8_platform::V8ForegroundTask,
+        completion: RendererScriptAgentV8ForegroundTaskCompletion,
+    },
+    ScriptAgentCheckpoint,
 }
 
 impl RendererPageV8ForegroundTask {
-    fn new(
+    fn script_agent_task(
         owner: RendererPageV8ForegroundTaskOwner,
         task: moli_v8_platform::V8ForegroundTask,
+        completion: RendererScriptAgentV8ForegroundTaskCompletion,
     ) -> Self {
-        Self { owner, task }
+        Self {
+            owner,
+            kind: RendererPageV8ForegroundTaskKind::ScriptAgentTask { task, completion },
+        }
+    }
+
+    fn script_agent_checkpoint(owner: RendererPageV8ForegroundTaskOwner) -> Self {
+        Self {
+            owner,
+            kind: RendererPageV8ForegroundTaskKind::ScriptAgentCheckpoint,
+        }
     }
 
     pub(crate) const fn owner(&self) -> RendererPageV8ForegroundTaskOwner {
         self.owner
     }
 
-    pub(crate) fn into_task(self) -> moli_v8_platform::V8ForegroundTask {
-        self.task
+    pub(crate) fn into_kind(self) -> RendererPageV8ForegroundTaskKind {
+        self.kind
+    }
+
+    pub(crate) fn redispatch_after_page_retirement(self) {
+        if let RendererPageV8ForegroundTaskKind::ScriptAgentTask { task, completion } = self.kind {
+            completion.redispatch_after_page_retirement(task);
+        }
     }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct RendererPageV8ForegroundTaskRouteClosed;
 
-/// Page-lifetime producer route installed into the V8 platform registration.
+/// Page-lifetime producer route registered as one member of a script agent.
 #[derive(Clone, Debug)]
 pub(crate) struct RendererPageV8ForegroundTaskSender {
     task_route: OwnerReadyTaskRoute<
@@ -62,15 +96,50 @@ pub(crate) struct RendererPageV8ForegroundTaskSender {
 }
 
 impl RendererPageV8ForegroundTaskSender {
-    pub(crate) fn send(
+    pub(crate) const fn page_id(&self) -> crate::runtime::PageId {
+        self.owner.page_id()
+    }
+
+    fn send_task(
+        &self,
+        task: RendererPageV8ForegroundTask,
+    ) -> Result<(), RendererPageV8ForegroundTask> {
+        self.task_route
+            .send_and_signal_if_newly_ready(ReadyPageTask::new(task))
+            .map_err(|error| error.0.value)
+    }
+
+    pub(crate) fn send_script_agent_task(
         &self,
         task: moli_v8_platform::V8ForegroundTask,
+        completion: RendererScriptAgentV8ForegroundTaskCompletion,
+    ) -> Result<
+        (),
+        (
+            moli_v8_platform::V8ForegroundTask,
+            RendererScriptAgentV8ForegroundTaskCompletion,
+        ),
+    > {
+        let result = self.send_task(RendererPageV8ForegroundTask::script_agent_task(
+            self.owner, task, completion,
+        ));
+        result.map_err(|task| match task.into_kind() {
+            RendererPageV8ForegroundTaskKind::ScriptAgentTask { task, completion } => {
+                (task, completion)
+            }
+            RendererPageV8ForegroundTaskKind::ScriptAgentCheckpoint => {
+                unreachable!("script-agent task send returned a checkpoint payload")
+            }
+        })
+    }
+
+    pub(crate) fn send_script_agent_checkpoint(
+        &self,
     ) -> Result<(), RendererPageV8ForegroundTaskRouteClosed> {
-        self.task_route
-            .send_and_signal_if_newly_ready(ReadyPageTask::new(RendererPageV8ForegroundTask::new(
-                self.owner, task,
-            )))
-            .map_err(|_| RendererPageV8ForegroundTaskRouteClosed)
+        self.send_task(RendererPageV8ForegroundTask::script_agent_checkpoint(
+            self.owner,
+        ))
+        .map_err(|_| RendererPageV8ForegroundTaskRouteClosed)
     }
 
     fn same_route_as(&self, source: &RendererPageV8ForegroundTaskSource) -> bool {
@@ -89,7 +158,7 @@ impl OwnerTaskReadySignal for RendererPageV8ForegroundTaskReadySignal {
     }
 }
 
-/// Unique Page-lifetime consumer for V8 foreground continuations.
+/// Unique Page-lifetime consumer for script-agent foreground continuations.
 #[derive(Debug)]
 pub(crate) struct RendererPageV8ForegroundTaskSource {
     source: OwnerReadyTaskSource<
@@ -139,6 +208,14 @@ impl RendererPageV8ForegroundTaskSource {
         self.source.clear_local();
     }
 
+    pub(crate) fn drain_for_page_retirement(&mut self) -> Vec<RendererPageV8ForegroundTask> {
+        let mut tasks = Vec::new();
+        while let Some((_, task)) = self.pop_front() {
+            tasks.push(task);
+        }
+        tasks
+    }
+
     pub(crate) fn route_matches(&self, sender: &RendererPageV8ForegroundTaskSender) -> bool {
         sender.same_route_as(self)
     }
@@ -147,6 +224,7 @@ impl RendererPageV8ForegroundTaskSource {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PageV8ForegroundTaskEffect {
     Ran,
+    RanScriptAgentCheckpoint,
     IgnoredInactiveIsolateRegistration,
 }
 
@@ -162,7 +240,10 @@ impl PageV8ForegroundTaskTurnAction {
     /// This reports a domain fact only. The selected-task dispatcher decides
     /// what task-end checkpoint that fact requires.
     pub(crate) const fn entered_isolate(self) -> bool {
-        matches!(self.effect, PageV8ForegroundTaskEffect::Ran)
+        matches!(
+            self.effect,
+            PageV8ForegroundTaskEffect::Ran | PageV8ForegroundTaskEffect::RanScriptAgentCheckpoint
+        )
     }
 }
 

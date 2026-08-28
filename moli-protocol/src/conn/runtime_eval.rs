@@ -1,4 +1,8 @@
-use std::{collections::hash_map::Entry, future::Future, pin::Pin};
+use std::{
+    collections::{HashSet, hash_map::Entry},
+    future::Future,
+    pin::Pin,
+};
 
 use moli_page_types::{FrontendCommandId, RendererCallId, RendererInspectorResponseDelivery};
 use moli_protocol_cdp::CdpRendererCommandReplayDispatch;
@@ -269,7 +273,7 @@ pub(crate) struct ClaimedPendingInspectorAwaitOwner {
     command_id: u64,
     session_id: Option<String>,
     bidi_channel_object_group: Option<String>,
-    renderer_correlation: Option<RendererCommandCorrelation>,
+    renderer_correlation_at_claim: Option<RendererCommandCorrelation>,
 }
 
 impl ClaimedPendingInspectorAwaitOwner {
@@ -281,7 +285,7 @@ impl ClaimedPendingInspectorAwaitOwner {
                 .entry
                 .bidi_channel_listener()
                 .map(|listener| listener.channel_object_group().to_owned()),
-            renderer_correlation: claimed.entry.renderer_correlation(),
+            renderer_correlation_at_claim: claimed.entry.renderer_correlation(),
         }
     }
 
@@ -1424,12 +1428,16 @@ impl CdpConnection {
     ) {
         for owner in owners {
             self.cancel_runtime_await_job(owner.command_id, owner.session_id(), reason);
-            if let Some(correlation) = owner.renderer_correlation {
-                self.discard_renderer_call_for_session_owner_if_matches(
+            // Attachment replacement may have rotated the renderer call after
+            // this scheduler owner was claimed. The terminal owner consumes
+            // the current registration; its snapshot is only a fallback for
+            // marking a response whose correlation was already removed.
+            let terminal_correlation = self
+                .take_renderer_call_for_frontend_for_session_owner(
                     owner.session_id(),
-                    correlation,
-                );
-            }
+                    owner.command_id,
+                )
+                .or(owner.renderer_correlation_at_claim);
             if let Some(object_group) = owner.bidi_channel_object_group.as_deref() {
                 self.unregister_runtime_remote_object_group_for_session_owner(
                     owner.session_id(),
@@ -1442,7 +1450,7 @@ impl CdpConnection {
                 owner.session_id(),
                 Err(reason.to_owned()),
             );
-            if let Some(correlation) = owner.renderer_correlation {
+            if let Some(correlation) = terminal_correlation {
                 response.bind_renderer_call_id(correlation.renderer_call_id());
             }
             background_events.push(BackgroundProtocolEvent::runtime_inspector_response_ready(
@@ -1791,9 +1799,8 @@ impl CdpConnection {
         }
     }
 
-    pub(crate) fn fail_pending_inspector_awaits_for_session_owner_background_events_into(
+    pub(crate) fn fail_claimed_pending_inspector_awaits_for_session_owner_background_events_into(
         &mut self,
-        out: &mut Vec<BackgroundProtocolEvent>,
         claimed_background_events: &mut Vec<BackgroundProtocolEvent>,
         session_id: Option<&str>,
         reason: &'static str,
@@ -1802,6 +1809,20 @@ impl CdpConnection {
         self.push_claimed_pending_inspector_await_owner_errors(
             claimed_background_events,
             claimed,
+            reason,
+        );
+    }
+
+    pub(crate) fn fail_pending_inspector_awaits_for_session_owner_background_events_into(
+        &mut self,
+        out: &mut Vec<BackgroundProtocolEvent>,
+        claimed_background_events: &mut Vec<BackgroundProtocolEvent>,
+        session_id: Option<&str>,
+        reason: &'static str,
+    ) {
+        self.fail_claimed_pending_inspector_awaits_for_session_owner_background_events_into(
+            claimed_background_events,
+            session_id,
             reason,
         );
         if let Some(owner_session_id) = session_id
@@ -2763,18 +2784,13 @@ impl CdpConnection {
         let mut current_seen = false;
         for mut message in output.into_messages() {
             // Pause-loop responses are already concrete V8 protocol output.
-            // Context and DOM-node normalization can enqueue Page commands,
-            // so preserve the raw response until that owner can run again.
+            // Context normalization can enqueue a Page command, so preserve
+            // the raw response until that owner can run again.
             if page_owner_access_allowed
                 && let RendererRuntimeInspectorMessage::Protocol(message) = &mut message
             {
                 let mut message_value = message.value_mut();
                 self.normalize_runtime_event_context_ids_for_session_owner_async(
-                    current_session_id,
-                    &mut message_value,
-                )
-                .await;
-                self.normalize_node_remote_objects_for_session_owner_async(
                     current_session_id,
                     &mut message_value,
                 )
@@ -3386,108 +3402,6 @@ impl CdpConnection {
         );
         conn.publish_bidi_channel_listener_start(residence);
         BidiChannelListenerRoute::Event(event)
-    }
-
-    pub(crate) async fn normalize_node_remote_objects_for_session_owner_async(
-        &mut self,
-        session_id: Option<&str>,
-        payload: &mut Value,
-    ) {
-        let inspector_session_id =
-            self.target_renderer_runtime_inspector_session_id_for_session(session_id);
-        let include_whitespace =
-            crate::domains::dom::dom_agent_includes_whitespace_for_session(self, session_id);
-        self.normalize_node_remote_objects_by_page_lookup_async(
-            inspector_session_id.as_deref(),
-            include_whitespace,
-            payload,
-            |connection| connection.runtime_session_owner_page_mut(session_id),
-        )
-        .await;
-    }
-
-    async fn normalize_node_remote_objects_for_runtime_protocol_message_route_async(
-        &mut self,
-        session_id: Option<&str>,
-        route: &RuntimeProtocolMessagePageRoute,
-        payload: &mut Value,
-    ) {
-        let inspector_session_id =
-            self.target_renderer_runtime_inspector_session_id_for_session(session_id);
-        let include_whitespace =
-            crate::domains::dom::dom_agent_includes_whitespace_for_session(self, session_id);
-        self.normalize_node_remote_objects_by_page_lookup_async(
-            inspector_session_id.as_deref(),
-            include_whitespace,
-            payload,
-            |connection| connection.runtime_protocol_message_started_page_mut(route),
-        )
-        .await;
-    }
-
-    async fn normalize_node_remote_objects_by_page_lookup_async(
-        &mut self,
-        inspector_session_id: Option<&str>,
-        include_whitespace: bool,
-        payload: &mut Value,
-        mut page_lookup: impl for<'a> FnMut(&'a mut Self) -> Result<&'a mut Page, String>,
-    ) {
-        let mut paths = Vec::new();
-        collect_remote_object_paths(payload, "", &mut paths);
-
-        for path in paths {
-            let Some(remote_object) = payload.pointer(&path) else {
-                continue;
-            };
-            let Some(object_id) = remote_object
-                .get("objectId")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-            else {
-                continue;
-            };
-
-            let has_subtype = remote_object.get("subtype").is_some();
-            let is_object_like = remote_object
-                .get("type")
-                .and_then(Value::as_str)
-                .is_some_and(|ty| matches!(ty, "object" | "function"));
-            if has_subtype || !is_object_like {
-                continue;
-            }
-
-            let pending = page_lookup(self).and_then(|page| {
-                page.start_document_node_snapshot_for_object_id_in_inspector_session(
-                    inspector_session_id.map(str::to_owned),
-                    include_whitespace,
-                    &object_id,
-                    0,
-                    false,
-                )
-                .map_err(|error| error.to_string())
-            });
-            let is_node = match pending {
-                Ok(pending) => match pending.wait().await {
-                    Ok(completion) => page_lookup(self)
-                        .and_then(|page| {
-                            page.finish_document_node_snapshot_for_object_id(completion)
-                                .map_err(|error| error.to_string())
-                        })
-                        .ok()
-                        .flatten()
-                        .is_some(),
-                    Err(_) => false,
-                },
-                Err(_) => false,
-            };
-            if !is_node {
-                continue;
-            }
-
-            if let Some(remote_object) = payload.pointer_mut(&path).and_then(Value::as_object_mut) {
-                remote_object.insert("subtype".to_owned(), json!("node"));
-            }
-        }
     }
 
     pub(crate) async fn normalize_runtime_event_context_ids_for_session_owner_async(
@@ -4274,6 +4188,8 @@ impl CdpConnection {
         let mut isolated_world_context_count = 0;
         let mut child_default_context_count = 0;
         let mut failed_page_snapshot_count = 0;
+        let mut loaded_document_script_agent_ids = HashSet::new();
+        let mut loaded_document_missing_script_agent_id_count = 0;
 
         for completed in completed.completed {
             let Some(page) = self
@@ -4299,6 +4215,12 @@ impl CdpConnection {
                 failed_page_snapshot_count += 1;
                 continue;
             };
+            match snapshot.diagnostics.script_agent_id {
+                Some(script_agent_id) => {
+                    loaded_document_script_agent_ids.insert(script_agent_id);
+                }
+                None => loaded_document_missing_script_agent_id_count += 1,
+            }
             document_context_count += snapshot.diagnostics.document_context_count;
             isolated_world_context_count += snapshot.diagnostics.isolated_world_context_count;
             child_default_context_count += snapshot.diagnostics.child_default_context_count;
@@ -4308,13 +4230,15 @@ impl CdpConnection {
                 .dedicated_worker_running_worker_isolate_count;
         }
 
-        let estimated_document_isolate_count = self
+        let pending_document_page_build_count = self
             .browser_contexts()
-            .map(|browser_context| {
-                browser_context.loaded_document_page_count()
-                    + browser_context.pending_document_page_build_count()
-            })
+            .map(BrowserContext::pending_document_page_build_count)
             .sum::<usize>();
+        let loaded_document_script_agent_count = loaded_document_script_agent_ids.len();
+        let estimated_document_isolate_count = loaded_document_script_agent_count
+            + loaded_document_missing_script_agent_id_count
+            + failed_page_snapshot_count
+            + pending_document_page_build_count;
         let shared_worker_running_worker_isolate_count = self
             .browser_contexts()
             .map(|browser_context| {
@@ -4334,6 +4258,12 @@ impl CdpConnection {
             json!(isolated_world_context_count);
         diagnostics["isolateScope"]["childDefaultContextCount"] =
             json!(child_default_context_count);
+        diagnostics["isolateScope"]["loadedDocumentScriptAgentCount"] =
+            json!(loaded_document_script_agent_count);
+        diagnostics["isolateScope"]["loadedDocumentMissingScriptAgentIdCount"] =
+            json!(loaded_document_missing_script_agent_id_count);
+        diagnostics["isolateScope"]["estimatedDocumentIsolateCount"] =
+            json!(estimated_document_isolate_count);
         diagnostics["isolateScope"]["dedicatedWorkerLoadingCount"] =
             json!(dedicated_worker_loading_count);
         diagnostics["isolateScope"]["dedicatedWorkerRunningWorkerIsolateCount"] =
@@ -4437,8 +4367,6 @@ impl CdpConnection {
         for message in &mut messages {
             self.normalize_runtime_event_context_ids_for_session_owner_async(session_id, message)
                 .await;
-            self.normalize_node_remote_objects_for_session_owner_async(session_id, message)
-                .await;
         }
         if let Some(started) = timing_started {
             tracing::info!(
@@ -4496,19 +4424,7 @@ impl CdpConnection {
         let mut message = response.into_protocol_message_for_typed_runtime_route();
         self.normalize_runtime_event_context_ids_for_session_owner_async(session_id, &mut message)
             .await;
-        if !self.runtime_inspector_pause_active_for_session_owner(session_id) {
-            self.normalize_node_remote_objects_for_session_owner_async(session_id, &mut message)
-                .await;
-        }
         Some(RendererRuntimeInspectorMessage::protocol(message))
-    }
-
-    pub(crate) fn runtime_inspector_pause_active_for_session_owner(
-        &mut self,
-        session_id: Option<&str>,
-    ) -> bool {
-        self.runtime_session_owner_page_mut(session_id)
-            .is_ok_and(|page| page.runtime_inspector_pause_active())
     }
 
     pub(crate) fn start_runtime_protocol_message_for_session_owner(
@@ -4791,12 +4707,6 @@ impl CdpConnection {
             let mut message_value = message.value_mut();
             self.normalize_runtime_event_context_ids_for_session_owner_async(
                 completed.session_id.as_deref(),
-                &mut message_value,
-            )
-            .await;
-            self.normalize_node_remote_objects_for_runtime_protocol_message_route_async(
-                completed.session_id.as_deref(),
-                &completed.route,
                 &mut message_value,
             )
             .await;
@@ -6030,38 +5940,6 @@ fn send_renderer_replacement_error(
     }));
 }
 
-fn collect_remote_object_paths(value: &Value, path: &str, out: &mut Vec<String>) {
-    let mut stack = vec![(value, path.to_owned(), MAX_INSPECTOR_PROTOCOL_VALUE_DEPTH)];
-    while let Some((value, path, remaining_tree_depth)) = stack.pop() {
-        let Some(next_tree_depth) = remaining_tree_depth.checked_sub(1) else {
-            continue;
-        };
-        match value {
-            Value::Object(map) => {
-                if map.get("objectId").and_then(Value::as_str).is_some()
-                    && map.get("type").and_then(Value::as_str).is_some()
-                {
-                    out.push(path.clone());
-                }
-
-                let children = map.iter().collect::<Vec<_>>();
-                for (key, child) in children.into_iter().rev() {
-                    let escaped_key = key.replace('~', "~0").replace('/', "~1");
-                    let child_path = format!("{path}/{escaped_key}");
-                    stack.push((child, child_path, next_tree_depth));
-                }
-            }
-            Value::Array(values) => {
-                for index in (0..values.len()).rev() {
-                    let child_path = format!("{path}/{index}");
-                    stack.push((&values[index], child_path, next_tree_depth));
-                }
-            }
-            Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
-        }
-    }
-}
-
 fn runtime_realm_info_to_execution_context_event(
     realm: RendererRuntimeRealmInfo,
     owner_frame_id: Option<&str>,
@@ -7098,32 +6976,6 @@ mod tests {
     }
 
     #[test]
-    fn remote_object_path_collection_respects_protocol_depth_cap() {
-        run_deep_protocol_value_test("remote-object-path-depth-cap", || {
-            let value = json!({
-                "result": {
-                    "type": "object",
-                    "objectId": "OBJECT-1",
-                }
-            });
-            let mut paths = Vec::new();
-            collect_remote_object_paths(&value, "", &mut paths);
-            assert_eq!(paths, vec!["/result".to_owned()]);
-
-            let deep_value = deeply_nested_plain_value(
-                json!({
-                    "type": "object",
-                    "objectId": "too-deep",
-                }),
-                MAX_INSPECTOR_PROTOCOL_VALUE_DEPTH + 8,
-            );
-            paths.clear();
-            collect_remote_object_paths(&deep_value, "", &mut paths);
-            assert!(paths.is_empty());
-        });
-    }
-
-    #[test]
     fn bidi_channel_listener_owner_work_publishes_concrete_scheduler_work() {
         let mut conn = connection_with_bidi_page_session();
         let listener = bidi_channel_listener_residence_for_test(&conn, "SID-active", "wake");
@@ -7591,6 +7443,108 @@ mod tests {
     }
 
     #[test]
+    fn claimed_await_termination_consumes_a_rotated_renderer_correlation() {
+        const SESSION_ID: &str = "SID-rotated-await";
+        const COMMAND_ID: u64 = 41;
+
+        let mut conn = CdpConnection::default();
+        let mut browser_context = BrowserContext::new("BID-rotated-await".to_owned());
+        browser_context.set_active_target_id("TID-rotated-await".to_owned());
+        browser_context.attach_active_session(SESSION_ID.to_owned());
+        conn.browser_context = Some(browser_context);
+
+        conn.try_register_pending_inspector_await_with_object_group(
+            COMMAND_ID,
+            Some(SESSION_ID),
+            None,
+        )
+        .expect("await owner should register before renderer dispatch");
+        let old_attachment = RendererAgentAttachmentId::allocate();
+        let replacement_attachment = RendererAgentAttachmentId::allocate();
+        let prepared = conn
+            .try_register_renderer_call_for_session_owner(
+                Some(SESSION_ID),
+                COMMAND_ID,
+                Some(old_attachment),
+                renderer_command_descriptor_for_test(COMMAND_ID),
+            )
+            .expect("await renderer command should register");
+        let (original_correlation, old_sender, mut response_receiver) = prepared.into_parts();
+        let mut response_receiver = response_receiver
+            .take()
+            .expect("CommandReply delivery should retain one response receiver");
+
+        conn.claim_pending_inspector_await_for_scheduler_deferred_reply(
+            COMMAND_ID,
+            Some(SESSION_ID),
+        )
+        .expect("scheduler should claim the pending await owner");
+
+        let replacements = {
+            let browser_context = conn
+                .browser_context
+                .as_mut()
+                .expect("browser context should remain loaded");
+            crate::conn::state::prepare_renderer_call_replacements_for_devtools_sessions(
+                Some(SESSION_ID),
+                &mut browser_context.devtools_session_state,
+                &mut browser_context.auxiliary_devtools_session_states,
+                old_attachment,
+                replacement_attachment,
+            )
+            .expect("navigation replacement should prepare")
+        };
+        let (_, terminations, replays) = replacements.into_parts();
+        assert_eq!(terminations.len(), 1);
+        assert!(replays.is_empty());
+        let rotated_correlation = conn
+            .renderer_call_for_frontend_for_session_owner(Some(SESSION_ID), COMMAND_ID)
+            .expect("replacement should rotate the live renderer correlation");
+        assert_ne!(rotated_correlation, original_correlation);
+
+        let mut terminal_events = Vec::new();
+        conn.fail_claimed_pending_inspector_awaits_for_session_owner_background_events_into(
+            &mut terminal_events,
+            Some(SESSION_ID),
+            "Inspected target navigated or closed",
+        );
+        assert!(
+            conn.renderer_call_for_frontend_for_session_owner(Some(SESSION_ID), COMMAND_ID)
+                .is_none(),
+            "the claimed terminal owner must consume the rotated correlation"
+        );
+
+        let ready = terminal_events
+            .pop()
+            .expect("claimed await termination should publish one event")
+            .take_runtime_inspector_response_ready()
+            .expect("claimed await termination should publish one typed response");
+        assert!(ready.has_bound_renderer_call_id());
+        assert_eq!(ready.session_id(), Some(SESSION_ID));
+        assert!(terminal_events.is_empty());
+        let response = ready.into_protocol_message_for_typed_runtime_route();
+        assert_eq!(response["id"], json!(COMMAND_ID));
+        assert_eq!(
+            response["error"]["message"],
+            json!("Inspected target navigated or closed")
+        );
+
+        assert!(
+            conn.terminate_prepared_renderer_calls_after_navigation(
+                terminations,
+                "Inspected target navigated or closed",
+            )
+            .is_empty(),
+            "the canceled replacement sender must not publish a second response"
+        );
+        assert!(
+            response_receiver.try_recv().is_err(),
+            "the direct terminal owner must close the obsolete command-reply channel"
+        );
+        drop(old_sender);
+    }
+
+    #[test]
     fn failed_await_registration_does_not_discard_existing_renderer_owner() {
         let mut conn = CdpConnection::default();
         let mut browser_context = BrowserContext::new("BID-duplicate-owner".to_owned());
@@ -7966,7 +7920,11 @@ mod tests {
             work.bidi_channel_owner_action_kind(),
             Some(BidiChannelOwnerActionKind::ReleaseObjectGroup)
         );
-        conn.complete_ready_protocol_scheduler_work_turn(work).await;
+        let (_, _, renderer_output_predecessor) = conn
+            .complete_ready_protocol_scheduler_work_turn(work)
+            .await
+            .into_protocol_event_parts();
+        assert!(renderer_output_predecessor.is_none());
         assert!(
             conn.runtime_remote_object_group_for_session_owner(
                 Some("SID-active"),
@@ -8010,7 +7968,11 @@ mod tests {
             "webdriver-bidi-channel-stale-release",
         );
 
-        conn.complete_ready_protocol_scheduler_work_turn(work).await;
+        let (_, _, renderer_output_predecessor) = conn
+            .complete_ready_protocol_scheduler_work_turn(work)
+            .await
+            .into_protocol_event_parts();
+        assert!(renderer_output_predecessor.is_none());
 
         assert_eq!(
             conn.runtime_remote_object_group_for_session_owner(

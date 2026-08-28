@@ -66,10 +66,9 @@ impl PreparedProtocolOutputs {
         Some(prepared)
     }
 
-    pub(in crate::domains::activity) async fn from_renderer_observation(
+    pub(in crate::domains::activity) fn from_renderer_observation(
         conn: &mut CdpConnection,
         session_id: Option<&str>,
-        source_renderer_agent: moli_core::page::RendererDevToolsAgentToken,
         observation: &RendererProtocolObservation,
     ) -> Self {
         let mut prepared = Self::empty();
@@ -101,55 +100,21 @@ impl PreparedProtocolOutputs {
                 .append_to_output_sink(&mut prepared);
             }
             RendererProtocolObservation::DomMutations(batch) => {
-                crate::domains::dom::DomPreparedOutputs::
-                    from_renderer_dom_mutation_event_batches_for_stream(
-                        conn,
-                        session_id,
-                        source_renderer_agent,
-                        std::slice::from_ref(batch),
-                    )
-                    .append_to_output_sink(&mut prepared);
+                crate::domains::dom::DomPreparedOutputs::from_renderer_dom_mutation_event_batches(
+                    conn,
+                    session_id,
+                    std::slice::from_ref(batch),
+                )
+                .append_to_output_sink(&mut prepared);
             }
             RendererProtocolObservation::RuntimeInspector(batch) => {
-                let mut batches = conn.route_current_renderer_inspector_output_for_session_owner(
+                let batches = conn.route_current_renderer_inspector_output_for_session_owner(
                     session_id,
                     vec![batch.clone()],
                 );
-                for batch in &mut batches {
-                    let Some(attachment) = conn
-                        .target_page_protocol_attachment_identity_for_renderer_inspector_route(
-                            session_id,
-                            batch.session.wire_session_id(),
-                        )
-                    else {
-                        continue;
-                    };
-                    let output_session_id = attachment.session_id().map(str::to_owned);
-                    let normalize_node_objects = !conn
-                        .runtime_inspector_pause_active_for_session_owner(
-                            output_session_id.as_deref(),
-                        );
-                    for message in &mut batch.messages {
-                        let moli_core::page::RendererRuntimeInspectorMessage::Protocol(message) =
-                            message
-                        else {
-                            continue;
-                        };
-                        let mut value = message.value_mut();
-                        conn.normalize_runtime_event_context_ids_for_session_owner_async(
-                            output_session_id.as_deref(),
-                            &mut value,
-                        )
-                        .await;
-                        if normalize_node_objects {
-                            conn.normalize_node_remote_objects_for_session_owner_async(
-                                output_session_id.as_deref(),
-                                &mut value,
-                            )
-                            .await;
-                        }
-                    }
-                }
+                // Inspector output is terminal when the renderer publishes
+                // it. Projection must remain non-reentrant: the source Page
+                // may be parked in a modal or debugger loop.
                 crate::domains::runtime::RuntimePreparedOutputs::
                     from_renderer_runtime_inspector_message_batches(
                         conn,
@@ -220,6 +185,36 @@ impl PreparedProtocolOutputs {
     ) -> Self {
         let mut prepared = Self::empty();
         match action {
+            RendererOwnerAction::TopLevelFocus(target_page) => {
+                crate::domains::page::PagePreparedOutputs::from_renderer_top_level_focus(
+                    conn,
+                    target_page,
+                )
+                .append_to_top_level_focus_output_sink(&mut prepared);
+            }
+            RendererOwnerAction::TopLevelClose(source) => {
+                crate::domains::page::PagePreparedOutputs::from_renderer_top_level_close(
+                    conn, session_id, source,
+                )
+                .append_to_top_level_close_output_sink(&mut prepared);
+            }
+            RendererOwnerAction::TopLevelCloseUnloadAck(source) => {
+                crate::domains::page::PagePreparedOutputs::from_renderer_top_level_close_unload_ack(
+                    conn, session_id, source,
+                )
+                .append_to_top_level_close_output_sink(&mut prepared);
+            }
+            RendererOwnerAction::TopLevelCloseNetworkDrained(source) => {
+                crate::domains::page::PagePreparedOutputs::from_renderer_top_level_close_network_drained(
+                    conn, session_id, source,
+                )
+                .append_to_top_level_close_output_sink(&mut prepared);
+            }
+            RendererOwnerAction::RemoteWindowProxy(command) => {
+                let _ = conn
+                    .dispatch_renderer_remote_window_proxy_command_async(command)
+                    .await;
+            }
             RendererOwnerAction::FileChooser(activation) => {
                 crate::domains::input::InputPreparedOutputs::from_renderer_file_chooser_activation(
                     conn, session_id, activation,

@@ -341,16 +341,12 @@ async fn failed_heap_profiler_sampling_command_does_not_create_typed_projection(
 #[tokio::test(flavor = "multi_thread")]
 async fn heap_profiler_sampling_and_tracking_are_restored_on_replacement_page_isolate() {
     let mut ctx = TestContext::new();
-    with_loaded_document_async(
+    with_loaded_document_for_target_async(
         &mut ctx,
         "<!doctype html><script>globalThis.__heapBefore = []</script>",
+        "TID-heap-profiler-restore",
     )
     .await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist")
-        .set_active_target_id("TID-heap-profiler-restore");
 
     for command in [
         json!({"id": 206_840, "method": "HeapProfiler.enable"}),
@@ -665,13 +661,13 @@ async fn heap_profiler_moli_diagnostics_reports_connection_state_without_loaded_
     );
     assert_eq!(
         isolate_scope["runtimeGetHeapUsageV8HeapScope"],
-        json!("page-vm-document-isolate"),
+        json!("script-agent-document-isolate"),
         "diagnostics should label Runtime.getHeapUsage heap scope: {response:?}"
     );
     assert_eq!(
         isolate_scope["runtimeGetHeapUsageV8HeapIsTargetLocal"],
-        json!(true),
-        "diagnostics should make PageVM-local heap stats explicit: {response:?}"
+        json!(false),
+        "heap stats may include explicitly related Pages in the same script agent: {response:?}"
     );
     assert_eq!(
         isolate_scope["runtimeGetHeapUsageMoliCountersScope"],
@@ -680,12 +676,12 @@ async fn heap_profiler_moli_diagnostics_reports_connection_state_without_loaded_
     );
     assert_eq!(
         isolate_scope["runtimeCollectGarbageScope"],
-        json!("page-vm-document-isolate"),
+        json!("script-agent-document-isolate"),
         "diagnostics should label collectGarbage scope: {response:?}"
     );
     assert_eq!(
         isolate_scope["v8ForegroundTaskWakeScope"],
-        json!("page-vm-document-isolate"),
+        json!("script-agent-document-isolate"),
         "diagnostics should label V8 foreground task wake scope: {response:?}"
     );
     assert_eq!(
@@ -1092,14 +1088,15 @@ async fn runtime_console_api_called_ignores_user_tampered_console_buffers() {
 async fn runtime_timer_publication_emits_console_api_called_without_followup_command() {
     let mut ctx = TestContext::new();
     with_loaded_document_async(&mut ctx, "<!doctype html><body></body>").await;
-    let _ = enable_runtime_and_take_execution_context_id_async(&mut ctx, 20_685).await;
+    let execution_context_id =
+        enable_runtime_and_take_execution_context_id_async(&mut ctx, 20_685).await;
     ctx.sent.clear();
 
     ctx.process_async(json!({
         "id": 20_686,
         "method": "Runtime.evaluate",
         "params": {
-            "expression": "setTimeout(() => console.log('timer observable'), 20)"
+            "expression": "setTimeout(() => console.log('timer observable', document.body), 20)"
         }
     }))
     .await;
@@ -1117,6 +1114,19 @@ async fn runtime_timer_publication_emits_console_api_called_without_followup_com
         },
     )
     .await;
+    let event = ctx
+        .sent
+        .iter()
+        .find(|message| {
+            message["method"] == json!("Runtime.consoleAPICalled")
+                && message["params"]["args"][0]["value"] == json!("timer observable")
+        })
+        .expect("timer console event should remain observable");
+    assert_eq!(
+        event["params"]["executionContextId"],
+        json!(execution_context_id)
+    );
+    assert_eq!(event["params"]["args"][1]["subtype"], json!("node"));
 }
 #[tokio::test(flavor = "multi_thread")]
 async fn runtime_timer_cross_document_navigation_with_history_api_emits_full_context_commit() {

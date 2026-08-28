@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{fmt, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result, anyhow};
 use moli_cookie_jar::{
@@ -30,6 +30,7 @@ pub struct Request {
     infer_referrer_from_initiator: bool,
     pub use_page_network_policy: bool,
     pub follow_redirects: bool,
+    redirect_response_follow_policy: Option<RedirectResponseFollowPolicy>,
     pub request_mode: RequestMode,
     pub redirect_mode: RequestRedirectMode,
     pub credentials_mode: RequestCredentialsMode,
@@ -38,6 +39,44 @@ pub struct Request {
     pub cookie_context: NetworkCookieRequestContext,
     timeout_policy: RequestTimeoutPolicy,
     network_observation_recorder: Option<NetworkObservationRecorder>,
+}
+
+type RedirectResponseFollowCallback =
+    dyn Fn(&Url, &[(String, String)]) -> bool + Send + Sync + 'static;
+
+/// Optional browser-navigation policy evaluated before a redirect response is
+/// followed.
+///
+/// This transport hook deliberately knows nothing about browser policy. Its
+/// caller freezes the renderer-owned response sanitizer into the callback;
+/// the fetch runtime only guarantees that a denied redirect is returned as
+/// the terminal response without issuing the next request.
+#[derive(Clone)]
+pub struct RedirectResponseFollowPolicy {
+    callback: Arc<RedirectResponseFollowCallback>,
+}
+
+impl RedirectResponseFollowPolicy {
+    pub fn new<F>(callback: F) -> Self
+    where
+        F: Fn(&Url, &[(String, String)]) -> bool + Send + Sync + 'static,
+    {
+        Self {
+            callback: Arc::new(callback),
+        }
+    }
+
+    fn allows_follow(&self, response_url: &Url, response_headers: &[(String, String)]) -> bool {
+        (self.callback)(response_url, response_headers)
+    }
+}
+
+impl fmt::Debug for RedirectResponseFollowPolicy {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RedirectResponseFollowPolicy")
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -376,6 +415,7 @@ impl Request {
             infer_referrer_from_initiator: true,
             use_page_network_policy: false,
             follow_redirects: true,
+            redirect_response_follow_policy: None,
             request_mode: RequestMode::Navigate,
             redirect_mode: RequestRedirectMode::Follow,
             credentials_mode: RequestCredentialsMode::Include,
@@ -403,6 +443,7 @@ impl Request {
             infer_referrer_from_initiator: true,
             use_page_network_policy: false,
             follow_redirects: true,
+            redirect_response_follow_policy: None,
             request_mode: RequestMode::Navigate,
             redirect_mode: RequestRedirectMode::Follow,
             credentials_mode: RequestCredentialsMode::Include,
@@ -451,6 +492,7 @@ impl Request {
             infer_referrer_from_initiator: true,
             use_page_network_policy: false,
             follow_redirects: true,
+            redirect_response_follow_policy: None,
             request_mode: RequestMode::Cors,
             redirect_mode: RequestRedirectMode::Follow,
             credentials_mode: RequestCredentialsMode::Include,
@@ -507,6 +549,23 @@ impl Request {
         metadata: SubresourceRequestMetadata,
     ) -> Self {
         self.subresource_request_metadata = Some(metadata);
+        self
+    }
+
+    /// Attaches the referrer-policy inputs consumed by the shared network
+    /// request path. Navigation requests use this without pretending that the
+    /// request is a subresource; the metadata container is shared because
+    /// redirects need one policy calculation regardless of resource kind.
+    pub fn with_referrer_policies(
+        mut self,
+        referrer_policy: Option<String>,
+        document_referrer_policy: Option<String>,
+    ) -> Self {
+        let metadata = self
+            .subresource_request_metadata
+            .get_or_insert_with(SubresourceRequestMetadata::default);
+        metadata.referrer_policy = referrer_policy;
+        metadata.document_referrer_policy = document_referrer_policy;
         self
     }
 
@@ -603,6 +662,24 @@ impl Request {
     pub fn with_follow_redirects(mut self, follow_redirects: bool) -> Self {
         self.follow_redirects = follow_redirects;
         self
+    }
+
+    pub fn with_redirect_response_follow_policy(
+        mut self,
+        policy: RedirectResponseFollowPolicy,
+    ) -> Self {
+        self.redirect_response_follow_policy = Some(policy);
+        self
+    }
+
+    pub(crate) fn redirect_response_allows_follow(
+        &self,
+        response_url: &Url,
+        response_headers: &[(String, String)],
+    ) -> bool {
+        self.redirect_response_follow_policy
+            .as_ref()
+            .is_none_or(|policy| policy.allows_follow(response_url, response_headers))
     }
 
     pub fn with_redirect_mode(mut self, redirect_mode: RequestRedirectMode) -> Self {

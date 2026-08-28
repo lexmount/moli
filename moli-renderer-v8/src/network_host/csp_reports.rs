@@ -3,7 +3,6 @@ use crate::content_security_policy::{
     ContentSecurityPolicyViolationEventFields, content_security_policy_report_requests,
 };
 use crate::document_runtime::DomHandle;
-use crate::native_bridge::WorkerOwnerScope;
 use crate::service_worker_runtime::{
     ServiceWorkerFetchDispatch, ServiceWorkerRequestDestination,
     service_worker_fetch_request_metadata,
@@ -27,33 +26,6 @@ pub(crate) fn send_content_security_policy_reports_for_window(
     let owner = ContentSecurityPolicyReportOwner::new(
         crate::native_bridge::WindowDocumentOwner::Frame(document_owner),
         dispatch_scope,
-    );
-    let Some(request_context) =
-        window_csp_report_request_context_for_identity(scope, host, owner.network_identity())
-    else {
-        return;
-    };
-    send_content_security_policy_reports_from_window_context(
-        host,
-        &request_context,
-        fields,
-        report_uri_endpoints,
-        report_to_endpoints,
-    );
-}
-
-pub(crate) fn send_content_security_policy_reports_for_lightweight_popup(
-    scope: &mut v8::PinScope<'_, '_>,
-    host: &mut JsContextHost,
-    popup_id: u64,
-    document_owner: crate::native_bridge::LightweightPopupDocumentOwner,
-    fields: &ContentSecurityPolicyViolationEventFields<'_>,
-    report_uri_endpoints: &[String],
-    report_to_endpoints: &[String],
-) {
-    let owner = ContentSecurityPolicyReportOwner::new(
-        crate::native_bridge::WindowDocumentOwner::LightweightPopup(document_owner),
-        crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id),
     );
     let Some(request_context) =
         window_csp_report_request_context_for_identity(scope, host, owner.network_identity())
@@ -139,11 +111,6 @@ pub(crate) fn capture_window_csp_report_request_context(
         crate::native_bridge::OwnerDispatchScope::Child(handle) => {
             crate::native_bridge::WindowDocumentOwner::Frame(
                 host.current_child_document_task_owner(handle)?,
-            )
-        }
-        crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id) => {
-            crate::native_bridge::WindowDocumentOwner::LightweightPopup(
-                host.current_lightweight_popup_document_owner(popup_id)?,
             )
         }
     };
@@ -443,10 +410,6 @@ fn window_csp_report_request_context_for_identity(
         crate::native_bridge::OwnerDispatchScope::Child(handle) => {
             host.service_worker_client_id_for_window_fetch(Some(handle))
         }
-        crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id) => host
-            .service_worker_client_id_for_worker_owner(WorkerOwnerScope::LightweightPopup(
-                popup_id,
-            )),
     };
     Some(WindowCspReportRequestContext {
         identity,

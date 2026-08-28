@@ -97,6 +97,7 @@ pub(in crate::runtime) struct ConcurrentParseTimeRuntime {
     pub(super) owner: ParseTimeOwner,
     pub(super) parser_step_ready: bool,
     pub(super) pending_parsing_blocking_wait: PendingParsingBlockingWait,
+    pub(super) document_start_scripts_pending: bool,
 }
 
 impl ConcurrentParseTimeRuntime {
@@ -220,7 +221,21 @@ impl ConcurrentParseTimeRuntime {
             owner: ParseTimeOwner::Parser,
             parser_step_ready: false,
             pending_parsing_blocking_wait: PendingParsingBlockingWait::None,
+            document_start_scripts_pending: false,
         }
+    }
+
+    pub(super) fn defer_document_start_scripts(&mut self) {
+        self.document_start_scripts_pending = true;
+    }
+
+    pub(super) fn run_deferred_document_start_scripts(&mut self) -> Result<bool> {
+        if !std::mem::take(&mut self.document_start_scripts_pending) {
+            return Ok(false);
+        }
+        let document_start_scripts = self.page_vm.document_start_scripts.clone();
+        self.page_vm
+            .run_document_start_scripts_on_named_owner_lane(&document_start_scripts, |_| {})
     }
 
     pub(super) fn has_pending_parser_blocking_source_load(&self) -> bool {

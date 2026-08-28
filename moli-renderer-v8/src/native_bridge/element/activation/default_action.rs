@@ -10,6 +10,7 @@ use crate::util::{
 use crate::{
     RendererInputDispatchOutcome, RendererPendingDownloadActivation,
     RendererPendingFileChooserActivation, RendererPopupDisposition,
+    RendererTopLevelNavigationRequest,
     document_runtime::{DomHandle, EventTargetHandle},
     frame_owner_model::DocumentId,
     native_bridge::context_host::ChildBrowsingContextBootstrap,
@@ -30,6 +31,7 @@ use super::super::{
     replace_text_control_selection, resolve_url_like_attribute, scroll_node_into_view_at_start,
     submit_form_with_submit_event, update_focus,
 };
+use super::targets::element_popup_relations;
 use super::targets::{
     SpecialBrowsingContextTarget, named_iframe_target_handle_for_navigation,
     navigate_hyperlink_source_browsing_context, navigate_hyperlink_target_browsing_context,
@@ -2117,9 +2119,6 @@ fn navigation_owner_window_for_handle<'s>(
     if document_handle == runtime.document_handle() {
         return Some(scope.get_current_context().global(scope));
     }
-    if let Some(popup_id) = runtime.lightweight_popup_id_for_document_handle(document_handle) {
-        return runtime.lightweight_popup_window(scope, popup_id);
-    }
     let child_handle =
         runtime.child_browsing_context_handle_by_document_handle(scope, document_handle)?;
     runtime.existing_child_browsing_context_window_wrapper(scope, child_handle)
@@ -2330,17 +2329,32 @@ pub(in crate::native_bridge) fn navigate_form_target_browsing_context(
         ) {
             return true;
         }
-        let Ok(url) = url::Url::parse(resolved_url) else {
-            return false;
-        };
-        unsafe { &mut *runtime_ptr }.record_pending_location_navigation(url, None);
+        let relations = element_popup_relations(unsafe { &*runtime_ptr }, form_handle, "_self");
+        let source = unsafe { &*runtime_ptr }.renderer_top_level_navigation_source_for_node(
+            form_handle,
+            relations.suppress_referrer,
+        );
+        let mut request = RendererTopLevelNavigationRequest::get(resolved_url.to_owned());
+        if let Some(source) = source {
+            request = request.with_source(source);
+        }
+        unsafe { &mut *runtime_ptr }
+            .record_pending_renderer_top_level_navigation_request(request, None);
         return true;
     }
+    let relations = element_popup_relations(
+        unsafe { &*runtime_ptr },
+        form_handle,
+        target_name.unwrap_or("_self"),
+    );
+    let navigation_source = unsafe { &*runtime_ptr }
+        .renderer_top_level_navigation_source_for_node(form_handle, relations.suppress_referrer);
     navigate_target_browsing_context(
         scope,
         runtime_ptr,
         target_name,
         resolved_url,
+        navigation_source,
         None,
         exposes_opener,
     )

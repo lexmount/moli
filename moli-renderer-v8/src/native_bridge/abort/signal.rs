@@ -163,7 +163,7 @@ pub(crate) fn abort_signal_aborted_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+    let Some(_host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         rv.set_bool(false);
         return;
     };
@@ -172,16 +172,7 @@ pub(crate) fn abort_signal_aborted_getter_callback<'s>(
         rv.set_bool(false);
         return;
     }
-    // SAFETY: as_ptr() — this getter may be called during event dispatch
-    // (re-entrant from another callback holding borrow_mut). See util.rs.
-    let aborted = AbortStore::signal_id_from_object(scope, signal)
-        .and_then(|id| {
-            unsafe { &mut *host_ptr }
-                .native_bridge_mut()
-                .abort
-                .signal_state(id)
-        })
-        .is_some_and(|state| state.aborted);
+    let aborted = AbortStore::signal_aborted_from_object(scope, signal);
     rv.set_bool(aborted);
 }
 
@@ -190,7 +181,7 @@ pub(crate) fn abort_signal_reason_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+    let Some(_host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         rv.set_undefined();
         return;
     };
@@ -199,16 +190,7 @@ pub(crate) fn abort_signal_reason_getter_callback<'s>(
         rv.set_undefined();
         return;
     }
-    let Some(reason) = AbortStore::signal_id_from_object(scope, signal)
-        .and_then(|id| {
-            unsafe { &mut *host_ptr }
-                .native_bridge_mut()
-                .abort
-                .signal_state(id)
-        })
-        .and_then(|state| state.reason.as_ref())
-        .map(|reason| v8::Local::new(scope, reason))
-    else {
+    let Some(reason) = AbortStore::signal_reason_from_object(scope, signal) else {
         rv.set_undefined();
         return;
     };
@@ -236,8 +218,9 @@ pub(crate) fn abort_signal_onabort_getter_callback<'s>(
                 .abort
                 .signal_state(id)
         })
+        .filter(|state| !state.detached)
         .and_then(|state| state.onabort.as_ref())
-        .map(|onabort| v8::Local::new(scope, onabort))
+        .map(|onabort| v8::Local::new(scope, &onabort.callback))
     else {
         rv.set_null();
         return;
@@ -267,10 +250,14 @@ pub(crate) fn abort_signal_onabort_setter_callback<'s>(
         .native_bridge_mut()
         .abort
         .signal_state_mut(signal_id)
+        .filter(|state| !state.detached)
     {
         state.onabort = v8::Local::<v8::Function>::try_from(args.get(0))
             .ok()
-            .map(|function| v8::Global::new(scope, function));
+            .map(|function| super::AbortEventHandler {
+                callback: v8::Global::new(scope, function),
+                owner_realm: AbortStore::function_owner_realm(scope, function),
+            });
     }
     rv.set_undefined();
 }
@@ -280,7 +267,7 @@ pub(crate) fn abort_signal_throw_if_aborted_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+    let Some(_host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         rv.set_undefined();
         return;
     };
@@ -289,16 +276,9 @@ pub(crate) fn abort_signal_throw_if_aborted_callback<'s>(
         rv.set_undefined();
         return;
     }
-    let Some(reason) = AbortStore::signal_id_from_object(scope, signal)
-        .and_then(|id| {
-            unsafe { &mut *host_ptr }
-                .native_bridge_mut()
-                .abort
-                .signal_state(id)
-        })
-        .filter(|state| state.aborted)
-        .and_then(|state| state.reason.as_ref())
-        .map(|reason| v8::Local::new(scope, reason))
+    let Some(reason) = AbortStore::signal_aborted_from_object(scope, signal)
+        .then(|| AbortStore::signal_reason_from_object(scope, signal))
+        .flatten()
     else {
         rv.set_undefined();
         return;

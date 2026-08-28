@@ -166,6 +166,31 @@ impl RendererTurnOutputJournal {
         expected_cursor
     }
 
+    /// Temporarily removes records produced by a synchronously staged realm
+    /// before its initial Inspector context is adopted by protocol.
+    ///
+    /// The staged auxiliary Page already has a live Window/Document, so
+    /// opener code can synchronously produce console or DOM observations
+    /// before the target controller has supplied its frame id and Inspector
+    /// sessions. Adoption must still publish the canonical
+    /// `executionContextsCleared -> frame commit -> contextCreated` prefix
+    /// before those author observations. This operation is deliberately
+    /// unavailable after any stream prefix has settled.
+    pub(crate) fn take_unpublished_records_for_initial_context_adoption(
+        &self,
+    ) -> anyhow::Result<Vec<PendingRendererOutputRecord>> {
+        let mut state = self.state.lock();
+        anyhow::ensure!(
+            !state.closed,
+            "cannot adopt an initial Inspector context after renderer output closed"
+        );
+        anyhow::ensure!(
+            state.last_published_sequence.is_none() && state.deferred_publications.is_empty(),
+            "cannot reorder initial Inspector context output after a stream prefix was published"
+        );
+        Ok(std::mem::take(&mut state.records))
+    }
+
     #[cfg(test)]
     pub(crate) fn settle(&self) -> Option<RendererOutputPublication> {
         let mut state = self.state.lock();

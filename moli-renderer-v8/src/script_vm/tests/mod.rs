@@ -455,9 +455,6 @@ fn register_pending_window_fetch_with_connect_policy_for_test(
         crate::native_bridge::OwnerDispatchScope::Child(handle) => host
             .child_browsing_context_current_url(handle)
             .expect("test child Fetch document URL"),
-        crate::native_bridge::OwnerDispatchScope::LightweightPopup(_) => {
-            panic!("this focused Fetch policy helper only supports frame Documents")
-        }
     };
     let internal_id = host.record_async_subresource_fetch(
         fetch_context,
@@ -1282,6 +1279,141 @@ document.getElementById("inherited-opaque-frame").srcdoc =
     );
 }
 
+#[tokio::test]
+async fn child_opaque_origin_nonce_follows_local_window_lifetime() {
+    let mut vm = new_storage_test_vm("https://opaque-child-nonce.test/");
+    vm.eval(
+        r#"
+(() => {
+  const root = document.documentElement || document.appendChild(document.createElement("html"));
+  const body = document.body || root.appendChild(document.createElement("body"));
+  const frame = document.createElement("iframe");
+  frame.id = "opaque-nonce-frame";
+  frame.sandbox = "allow-scripts";
+  frame.srcdoc = "<!doctype html><body>first opaque document</body>";
+  body.appendChild(frame);
+})()
+"#,
+    )
+    .expect("opaque nonce child setup should evaluate");
+    run_child_navigation_commit_and_host_load_for_test(&mut vm, "opaque nonce first commit").await;
+
+    let child_realm = vm
+        .live_child_default_runtime_realm_inventory()
+        .into_iter()
+        .next()
+        .expect("opaque nonce child realm should exist");
+    let child_handle = vm
+        .child_frame_realm_store
+        .get(&child_realm.context_id)
+        .expect("opaque nonce child realm record should exist")
+        .child_handle;
+    let first_owner = current_single_child_document_owner_for_test(&vm, "first opaque child owner");
+    let first_nonce = vm
+        ._context_host
+        .borrow()
+        .child_opaque_origin_nonce_for_test(child_handle)
+        .expect("first opaque child LocalWindow should own a nonce");
+
+    vm.eval_in_child_default_context(
+        child_realm.context_id,
+        "document.open(); document.write('<body>document.open replacement</body>'); document.close();",
+    )
+    .expect("opaque child document.open should evaluate in its own realm");
+    let document_open_owner =
+        current_single_child_document_owner_for_test(&vm, "document.open opaque child owner");
+    let document_open_nonce = vm
+        ._context_host
+        .borrow()
+        .child_opaque_origin_nonce_for_test(child_handle)
+        .expect("document.open replacement should retain its opaque nonce");
+    assert_eq!(
+        document_open_owner.local_window_id, first_owner.local_window_id,
+        "document.open must preserve the opaque origin's LocalWindow"
+    );
+    assert_ne!(
+        document_open_owner.document_id, first_owner.document_id,
+        "document.open must still rotate the exact Document owner"
+    );
+    assert_eq!(
+        document_open_nonce, first_nonce,
+        "document.open must preserve the opaque origin identity"
+    );
+
+    let mut navigation_vm = new_storage_test_vm("https://opaque-child-navigation-nonce.test/");
+    navigation_vm
+        .eval(
+            r#"
+(() => {
+  const root = document.documentElement || document.appendChild(document.createElement("html"));
+  const body = document.body || root.appendChild(document.createElement("body"));
+  const frame = document.createElement("iframe");
+  frame.id = "opaque-navigation-nonce-frame";
+  frame.sandbox = "allow-scripts";
+  frame.srcdoc = "<!doctype html><body>first navigation document</body>";
+  body.appendChild(frame);
+})()
+"#,
+        )
+        .expect("opaque navigation nonce setup should evaluate");
+    run_child_navigation_commit_and_host_load_for_test(
+        &mut navigation_vm,
+        "opaque navigation nonce first commit",
+    )
+    .await;
+    let navigation_realm = navigation_vm
+        .live_child_default_runtime_realm_inventory()
+        .into_iter()
+        .next()
+        .expect("opaque navigation child realm should exist");
+    let navigation_handle = navigation_vm
+        .child_frame_realm_store
+        .get(&navigation_realm.context_id)
+        .expect("opaque navigation child realm record should exist")
+        .child_handle;
+    let navigation_owner = current_single_child_document_owner_for_test(
+        &navigation_vm,
+        "first opaque navigation owner",
+    );
+    let navigation_nonce = navigation_vm
+        ._context_host
+        .borrow()
+        .child_opaque_origin_nonce_for_test(navigation_handle)
+        .expect("first opaque navigation LocalWindow should own a nonce");
+
+    navigation_vm
+        .eval_in_child_default_context(
+            navigation_realm.context_id,
+            r#"
+location.href = "data:text/html,second-opaque-navigation";
+"navigating"
+"#,
+        )
+        .expect("replacement opaque child navigation should evaluate");
+    run_child_navigation_commit_and_host_load_for_test(
+        &mut navigation_vm,
+        "opaque nonce second commit",
+    )
+    .await;
+    let navigated_owner = current_single_child_document_owner_for_test(
+        &navigation_vm,
+        "navigated opaque child owner",
+    );
+    let navigated_nonce = navigation_vm
+        ._context_host
+        .borrow()
+        .child_opaque_origin_nonce_for_test(navigation_handle)
+        .expect("navigated opaque child LocalWindow should own a nonce");
+    assert_ne!(
+        navigated_owner.local_window_id, navigation_owner.local_window_id,
+        "opaque navigation must install a replacement LocalWindow"
+    );
+    assert_ne!(
+        navigated_nonce, navigation_nonce,
+        "opaque navigation must rotate the non-serialized origin identity"
+    );
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn main_document_open_preserves_local_window_owned_webcrypto_task_body_authority() {
     let mut vm = new_storage_test_vm("https://main-owner-webcrypto.test/");
@@ -1861,85 +1993,6 @@ fn isolated_realm_destruction_retires_webcrypto_task_without_retiring_local_wind
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn popup_replacement_retires_local_window_owned_webcrypto_tasks() {
-    let mut vm = new_storage_test_vm("https://popup-owner-webcrypto.test/");
-    assert_eq!(
-        vm.eval(
-            r#"
-            globalThis.__ownerBoundCryptoPopup = open("about:blank", "crypto-owner-popup");
-            String(globalThis.__ownerBoundCryptoPopup !== null)
-            "#,
-        )
-        .expect("popup WebCrypto owner window should open"),
-        "true"
-    );
-    let popup_id = vm
-        .take_pending_popup_activations()
-        .into_iter()
-        .next()
-        .and_then(|activation| activation.popup_id())
-        .expect("popup WebCrypto owner id");
-    let initial_local_window_id = vm
-        ._context_host
-        .borrow()
-        .current_lightweight_popup_local_window_id(popup_id)
-        .expect("initial popup LocalWindow owner");
-
-    vm.with_default_context_scope_and_checkpoint_for_test(|scope, host_ptr| {
-        let previous_popup =
-            crate::native_bridge::enter_active_lightweight_popup_scope(scope, popup_id);
-        let resolver = v8::PromiseResolver::new(scope).expect("popup WebCrypto test resolver");
-        let registered = unsafe { &mut *host_ptr }
-            .register_pending_webcrypto_task(scope, resolver)
-            .is_some();
-        crate::native_bridge::restore_active_lightweight_popup_scope(scope, previous_popup);
-        assert!(
-            registered,
-            "popup WebCrypto task should bind a Window execution context"
-        );
-        Ok(())
-    })
-    .expect("popup WebCrypto task should register");
-    assert_eq!(
-        vm._context_host
-            .borrow()
-            .pending_webcrypto_execution_contexts_for_test()
-            .into_iter()
-            .map(|(owner, _)| owner)
-            .collect::<Vec<_>>(),
-        vec![
-            crate::native_bridge::WindowExecutionContextOwner::LightweightPopup {
-                popup_id,
-                local_window_id: initial_local_window_id,
-            }
-        ],
-        "popup WebCrypto work must capture the preparation-time popup LocalWindow"
-    );
-
-    assert_eq!(
-        vm.eval(
-            r#"
-            open("about:blank", "crypto-owner-popup");
-            "replacement-committed"
-            "#,
-        )
-        .expect("named popup replacement should commit"),
-        "replacement-committed"
-    );
-    let replacement_local_window_id = vm
-        ._context_host
-        .borrow()
-        .current_lightweight_popup_local_window_id(popup_id)
-        .expect("replacement popup LocalWindow owner");
-    assert_ne!(replacement_local_window_id, initial_local_window_id);
-    assert_eq!(
-        vm._context_host.borrow().pending_webcrypto_task_count(),
-        0,
-        "popup replacement must retire old-LocalWindow WebCrypto resolvers"
-    );
-}
-
-#[tokio::test(flavor = "current_thread")]
 async fn main_document_open_preserves_local_window_owned_dedicated_worker() {
     let mut vm = new_storage_test_vm("https://main-owner-worker.test/");
     let before_document_owner = vm
@@ -2074,96 +2127,6 @@ fn isolated_realm_destruction_retires_dedicated_worker_without_retiring_local_wi
             .map(|owner| owner.local_window_id),
         Some(main_owner.local_window_id),
         "realm retirement must not retire the owning LocalWindow"
-    );
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn popup_replacement_retires_local_window_owned_dedicated_worker() {
-    let mut vm = new_storage_test_vm("https://popup-owner-worker.test/");
-    assert_eq!(
-        vm.eval(
-            r#"
-            globalThis.__ownerBoundWorkerPopup = open(
-              "about:blank",
-              "dedicated-worker-owner-popup"
-            );
-            String(globalThis.__ownerBoundWorkerPopup !== null)
-            "#,
-        )
-        .expect("popup Worker owner window should open"),
-        "true"
-    );
-    let popup_id = vm
-        .take_pending_popup_activations()
-        .into_iter()
-        .next()
-        .and_then(|activation| activation.popup_id())
-        .expect("popup Worker owner id");
-    let initial_local_window_id = vm
-        ._context_host
-        .borrow()
-        .current_lightweight_popup_local_window_id(popup_id)
-        .expect("initial popup LocalWindow owner");
-
-    vm.with_default_context_scope_and_checkpoint_for_test(|scope, host_ptr| {
-        let previous_popup =
-            crate::native_bridge::enter_active_lightweight_popup_scope(scope, popup_id);
-        let host = unsafe { &mut *host_ptr };
-        let owner = host
-            .current_runtime_window_execution_context_binding(scope)
-            .expect("popup Worker should capture its LocalWindow");
-        let outside_settings_load = host
-            .register_dedicated_worker_outside_settings_load(owner.dispatch_scope())
-            .expect("popup Worker should capture its Document script-load authority");
-        let creator_storage_key = host
-            .active_storage_context(scope, None)
-            .storage_key()
-            .clone();
-        let top_level_site = creator_storage_key.top_level_site().to_owned();
-        host.register_loading_worker(
-            scope,
-            v8::Object::new(scope),
-            top_level_site,
-            creator_storage_key,
-            String::new(),
-            moli_fetch::RequestCredentialsMode::SameOrigin,
-            None,
-            outside_settings_load,
-            owner,
-        );
-        crate::native_bridge::restore_active_lightweight_popup_scope(scope, previous_popup);
-        Ok(())
-    })
-    .expect("popup Worker should register");
-    assert_eq!(
-        vm._context_host
-            .borrow()
-            .worker_execution_contexts_for_test()
-            .into_iter()
-            .map(|(_, owner, _)| owner)
-            .collect::<Vec<_>>(),
-        vec![
-            crate::native_bridge::WindowExecutionContextOwner::LightweightPopup {
-                popup_id,
-                local_window_id: initial_local_window_id,
-            }
-        ]
-    );
-
-    vm.eval(
-        r#"
-        open("about:blank", "dedicated-worker-owner-popup");
-        "replacement-committed"
-        "#,
-    )
-    .expect("named popup replacement should commit");
-
-    assert!(
-        vm._context_host
-            .borrow()
-            .worker_execution_contexts_for_test()
-            .is_empty(),
-        "popup replacement must actively terminate old-LocalWindow Workers"
     );
 }
 
@@ -2435,68 +2398,6 @@ fn isolated_realm_destruction_retires_xhr_without_retiring_local_window() {
             .map(|owner| owner.local_window_id),
         Some(main_owner.local_window_id),
         "realm retirement must not retire the owning LocalWindow"
-    );
-}
-
-#[test]
-fn popup_replacement_retires_local_window_owned_xhr() {
-    let mut vm = new_storage_test_vm("https://popup-owner-xhr.test/");
-    assert_eq!(
-        vm.eval(
-            r#"
-            globalThis.__ownerBoundXhrPopup = open("about:blank", "xhr-owner-popup");
-            String(globalThis.__ownerBoundXhrPopup !== null)
-            "#,
-        )
-        .expect("popup XHR owner window should open"),
-        "true"
-    );
-    let popup_id = vm
-        .take_pending_popup_activations()
-        .into_iter()
-        .next()
-        .and_then(|activation| activation.popup_id())
-        .expect("popup XHR owner id");
-    let initial_local_window_id = vm
-        ._context_host
-        .borrow()
-        .current_lightweight_popup_local_window_id(popup_id)
-        .expect("initial popup LocalWindow owner");
-    let cancel_handle = moli_fetch::FetchCancelHandle::new();
-    let (_, owner, _) = vm
-        .with_default_context_scope_and_checkpoint_for_test(|scope, host_ptr| {
-            let previous_popup =
-                crate::native_bridge::enter_active_lightweight_popup_scope(scope, popup_id);
-            let registered = register_pending_window_xhr_for_test(
-                scope,
-                unsafe { &mut *host_ptr },
-                cancel_handle.clone(),
-            );
-            crate::native_bridge::restore_active_lightweight_popup_scope(scope, previous_popup);
-            Ok(registered)
-        })
-        .expect("popup XHR should register");
-    assert_eq!(
-        owner,
-        crate::native_bridge::WindowExecutionContextOwner::LightweightPopup {
-            popup_id,
-            local_window_id: initial_local_window_id,
-        }
-    );
-
-    vm.eval(r#"open("about:blank", "xhr-owner-popup"); "replacement-committed""#)
-        .expect("named popup replacement should commit");
-
-    assert!(
-        vm._context_host
-            .borrow()
-            .pending_window_xhr_execution_contexts_for_test()
-            .is_empty(),
-        "popup replacement must remove old-LocalWindow XHR state"
-    );
-    assert!(
-        cancel_handle.is_cancelled(),
-        "popup replacement must abort old-LocalWindow XHR transport"
     );
 }
 
@@ -2783,7 +2684,6 @@ fn main_document_open_fetch_redirect_uses_source_document_csp_report_context() {
             crate::native_bridge::WindowDocumentOwner::Frame(owner) => {
                 Some(owner.local_window_id)
             }
-            crate::native_bridge::WindowDocumentOwner::LightweightPopup(_) => None,
         }
     );
     assert_ne!(
@@ -2824,6 +2724,409 @@ fn main_document_open_fetch_redirect_uses_source_document_csp_report_context() {
             if record.resource_type() == crate::types::SubresourceResourceType::Fetch
                 && matches!(record.outcome(), crate::types::SubresourceNetworkOutcome::Success { .. })
     )));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn child_navigation_retains_and_releases_detached_dom_realm() {
+    let mut vm = new_storage_test_vm("https://child-detached-realm.test/");
+    vm.eval(
+        r#"
+        (() => {
+          const frame = document.createElement("iframe");
+          frame.id = "retained-child-realm";
+          (document.body || document.documentElement || document).appendChild(frame);
+        })();
+        "queued"
+        "#,
+    )
+    .expect("retained child realm fixture should queue its first Document");
+    assert_initial_about_blank_child_completed_synchronously_for_test(
+        &mut vm,
+        "retained child initial-empty Document",
+    )
+    .await;
+    vm.eval(
+        r#"
+        document.getElementById("retained-child-realm").srcdoc =
+          "<!doctype html><body><main id='old-child-node'>before-child</main></body>";
+        "queued"
+        "#,
+    )
+    .expect("retained child first Document should queue");
+    run_child_navigation_commit_and_host_load_for_test(&mut vm, "retained child first Document")
+        .await;
+    let child_context_id = vm
+        .live_child_default_runtime_realm_inventory()
+        .into_iter()
+        .map(|realm| realm.context_id)
+        .next()
+        .expect("retained child first realm should exist");
+    let (child_context_ptr, child_realm_token) = {
+        let realm = vm
+            .child_frame_realm_store
+            .get(&child_context_id)
+            .expect("retained child realm record");
+        (
+            &realm.context as *const _,
+            realm.runtime_observable_context_token,
+        )
+    };
+    let pending_body_source_id = crate::network_host::new_network_body_source_id();
+    let errored_body_source_id = crate::network_host::new_network_body_source_id();
+    vm.with_context_scope_by_ptr_and_checkpoint_for_test(child_context_ptr, |scope, host_ptr| {
+        let document_url = Url::parse("https://child-detached-realm.test/").expect("document URL");
+        let global = scope.get_current_context().global(scope);
+        for (body_source_id, global_name, path) in [
+            (
+                pending_body_source_id,
+                "__retainedChildPendingResponse",
+                "pending-body",
+            ),
+            (
+                errored_body_source_id,
+                "__retainedChildErroredResponse",
+                "errored-body",
+            ),
+        ] {
+            let response =
+                crate::network_host::build_fetch_response_object_from_stream_for_request_mode(
+                    scope,
+                    &document_url,
+                    moli_fetch::RequestMode::Cors,
+                    moli_fetch::ResponseHead {
+                        final_url: document_url
+                            .join(path)
+                            .expect("response URL should resolve"),
+                        status: 200,
+                        headers: vec![("content-type".to_owned(), "text/plain".to_owned())],
+                        request_cookie_report: None,
+                        cookie_set_reports: Vec::new(),
+                        redirected: false,
+                        redirect_chain: Vec::new(),
+                        from_cache: false,
+                        negotiated_http_version: None,
+                    },
+                    body_source_id,
+                );
+            let _ = global.set(
+                scope,
+                crate::util::v8str(scope, global_name).into(),
+                response.into(),
+            );
+        }
+        let message = crate::util::v8str(scope, "detached body error");
+        let reason = v8::Exception::error(scope, message);
+        crate::network_host::error_pending_network_body_stream_with_reason(
+            scope,
+            errored_body_source_id,
+            "detached body error".to_owned(),
+            reason,
+        );
+        let host = unsafe { &mut *host_ptr };
+        let (resource_timing_buffer_id, _finalizer) = host.create_resource_timing_buffer(scope, 0);
+        let resource_timing_entry = v8::Object::new(scope);
+        host.push_secondary_resource_timing_entry(
+            resource_timing_buffer_id,
+            v8::Global::new(scope, resource_timing_entry),
+        );
+        Ok(())
+    })
+    .expect("retained child pending body fixtures should install");
+    vm.eval(
+        r#"
+        globalThis.__retainedParentAbortController = new AbortController();
+        "parent-abort-ready"
+        "#,
+    )
+    .expect("top realm AbortSignal should be available for cross-realm callback retirement");
+    vm.eval_in_child_default_context(
+        child_context_id,
+        r##"
+        parent.__retainedChildWindow = window;
+        parent.__retainedChildDocument = document;
+        parent.__retainedChildNode = document.querySelector("#old-child-node");
+        parent.__retainedChildPendingResponse = globalThis.__retainedChildPendingResponse;
+        parent.__retainedChildPendingBodyPromise =
+          globalThis.__retainedChildPendingResponse.text();
+        parent.__retainedChildErroredResponse = globalThis.__retainedChildErroredResponse;
+        delete globalThis.__retainedChildPendingResponse;
+        delete globalThis.__retainedChildErroredResponse;
+        parent.__retainedChildFunction = value => {
+          const node = document.querySelector("#old-child-node");
+          node.dataset.call = value;
+          return JSON.stringify([
+            document === node.ownerDocument,
+            node === document.querySelector("#old-child-node"),
+            node.textContent
+          ]);
+        };
+        parent.__retainedChildWindowFunction = () => window;
+        parent.__retainedChildParentEqualsTopFunction = () => parent === top;
+        parent.__retainedChildParentDocumentFunction = () =>
+          parent.document === top.document;
+        parent.__retainedChildClosedFunction = () => window.closed;
+        const abortController = new AbortController();
+        abortController.signal.onabort = () => {
+          parent.__retainedChildAbortOnabortRan = true;
+        };
+        abortController.signal.addEventListener("abort", () => {
+          parent.__retainedChildAbortOldListenerRan = true;
+        });
+        parent.__retainedChildAbortController = abortController;
+        parent.__retainedChildAbortSignal = abortController.signal;
+        parent.__retainedParentAbortController.signal.addEventListener("abort", () => {
+          parent.__retainedParentAbortListenerRan = true;
+        });
+        parent.__retainedParentAbortController.signal.onabort = () => {
+          parent.__retainedParentAbortOnabortRan = true;
+        };
+        parent.__retainedChildInstallAbortCancellation = (target, callback) => {
+          abortController.signal.addEventListener("abort", () => {
+            parent.__retainedChildAbortNewListenerRan = true;
+          });
+          target.addEventListener("retained-child-abort-probe", callback, {
+            signal: abortController.signal,
+          });
+          return abortController.signal === parent.__retainedChildAbortSignal;
+        };
+        parent.__retainedChildAbortState = reason => {
+          abortController.abort(reason);
+          return [
+            abortController.signal === parent.__retainedChildAbortSignal,
+            abortController.signal.aborted,
+            abortController.signal.reason,
+            abortController.signal.onabort === null,
+          ];
+        };
+        "captured"
+        "##,
+    )
+    .expect("top realm should retain old child DOM and function values");
+    assert_eq!(
+        vm._context_host
+            .borrow()
+            .pending_network_body_v8_handle_counts_for_context_token(child_realm_token),
+        (1, 1),
+        "the child body fixtures must prove both error-reason and resolver strong edges"
+    );
+    assert_eq!(
+        vm._context_host
+            .borrow()
+            .resource_timing_buffer_count_for_context_token_for_test(child_realm_token),
+        1,
+        "the child fixture must retain one realm-owned secondary Resource Timing buffer"
+    );
+    vm.eval(
+        r#"
+        globalThis.__retainedChildAbortTargetRuns = 0;
+        document.addEventListener("retained-child-abort-probe", () => {
+          globalThis.__retainedChildAbortTargetRuns += 1;
+        }, { signal: globalThis.__retainedChildAbortSignal });
+        "registered"
+        "#,
+    )
+    .expect("current top target should accept the live child signal before navigation");
+    let before_navigation = vm
+        .renderer_document_isolate_heap_usage()
+        .expect("pre-navigation heap usage should be available");
+
+    vm.eval(
+        r#"
+        document.getElementById("retained-child-realm").src =
+          "data:text/html,<!doctype html><body><main id='new-child-node'>replacement-child</main></body>";
+        "queued"
+        "#,
+    )
+    .expect("retained child replacement should queue");
+    run_child_navigation_commit_and_host_load_for_test(
+        &mut vm,
+        "retained child replacement Document",
+    )
+    .await;
+    assert_eq!(
+        vm._context_host
+            .borrow()
+            .pending_network_body_v8_handle_counts_for_context_token(child_realm_token),
+        (0, 0),
+        "retiring the exact child realm must drop pending body V8 edges without clearing scalar body metadata"
+    );
+    assert_eq!(
+        vm._context_host
+            .borrow()
+            .resource_timing_buffer_count_for_context_token_for_test(child_realm_token),
+        0,
+        "retiring the exact child realm must release Resource Timing overflow Globals"
+    );
+    assert_eq!(
+        vm.eval(
+            "String(document.getElementById('retained-child-realm').contentWindow === __retainedChildWindow)"
+        )
+        .expect("stable child WindowProxy identity should survive navigation"),
+        "true"
+    );
+    let replacement_child_context_id = vm
+        .live_child_default_runtime_realm_inventory()
+        .into_iter()
+        .map(|realm| realm.context_id)
+        .next()
+        .expect("retained child replacement realm should exist");
+    assert_eq!(
+        vm.eval_in_child_default_context(
+            replacement_child_context_id,
+            "document.querySelector('#new-child-node').textContent",
+        )
+        .expect("opaque replacement child Document should be current"),
+        "replacement-child"
+    );
+    assert_eq!(
+        vm.eval(
+            "String(__retainedChildDocument.querySelector('#old-child-node') === __retainedChildNode)"
+        )
+        .expect("old child Document and Node identity should survive navigation"),
+        "true"
+    );
+    assert_eq!(
+        vm.eval("__retainedChildFunction('after-navigation')")
+            .expect("old child function should remain callable"),
+        r#"[true,true,"before-child"]"#
+    );
+    assert_eq!(
+        vm.eval("String(__retainedChildWindowFunction() === __retainedChildWindow)")
+            .expect("old child function should resolve the stable WindowProxy"),
+        "true"
+    );
+    assert_eq!(
+        vm.eval("String(__retainedChildParentEqualsTopFunction())")
+            .expect("old child function should retain its parent/top identity"),
+        "true"
+    );
+    assert_eq!(
+        vm.eval("String(__retainedChildParentDocumentFunction())")
+            .expect(
+                "old same-origin child function should retain parent access after an opaque replacement"
+            ),
+        "true"
+    );
+    assert_eq!(
+        vm.eval("String(__retainedChildClosedFunction())")
+            .expect("old child function should observe an open WindowProxy"),
+        "false"
+    );
+    assert_eq!(
+        vm.eval(
+            "__retainedChildNode.textContent = 'old-child-after-navigation'; JSON.stringify([__retainedChildNode.textContent, __retainedChildNode.dataset.call])"
+        )
+        .expect("old child Node should remain mutable"),
+        r#"["old-child-after-navigation","after-navigation"]"#
+    );
+    assert_eq!(
+        vm.eval(
+            r#"
+            (() => {
+              let postNavigationTargetRuns = 0;
+              const postNavigationIdentity = __retainedChildInstallAbortCancellation(
+                document,
+                () => { postNavigationTargetRuns += 1; },
+              );
+              document.dispatchEvent(new Event("retained-child-abort-probe"));
+              const state = __retainedChildAbortState("after-navigation");
+              document.dispatchEvent(new Event("retained-child-abort-probe"));
+              return JSON.stringify([
+                postNavigationIdentity,
+                ...state,
+                globalThis.__retainedChildAbortOldListenerRan === true,
+                globalThis.__retainedChildAbortOnabortRan === true,
+                globalThis.__retainedChildAbortNewListenerRan === true,
+                globalThis.__retainedChildAbortTargetRuns,
+                postNavigationTargetRuns,
+              ]);
+            })()
+            "#,
+        )
+        .expect(
+            "retained detached child AbortSignal should preserve passive state and cancellation"
+        ),
+        r#"[true,true,true,"after-navigation",true,false,false,false,1,1]"#,
+        "a detached signal must retain identity/abort state and current cancellation algorithms without reviving retired realm listeners"
+    );
+    assert_eq!(
+        vm.eval(
+            r#"
+            (() => {
+              __retainedParentAbortController.abort("after-child-navigation");
+              return JSON.stringify([
+                __retainedParentAbortController.signal.aborted,
+                __retainedParentAbortController.signal.reason,
+                __retainedParentAbortController.signal.onabort === null,
+                globalThis.__retainedParentAbortListenerRan === true,
+                globalThis.__retainedParentAbortOnabortRan === true,
+              ]);
+            })()
+            "#,
+        )
+        .expect("live parent AbortSignal should retire callbacks rooted in the old child realm"),
+        r#"[true,"after-child-navigation",true,false,false]"#,
+        "retiring a child realm must remove its callbacks even when their AbortSignal target remains current"
+    );
+    vm.collect_renderer_document_isolate_garbage()
+        .expect("retained child realm GC probe should complete");
+    let retained = vm
+        .renderer_document_isolate_heap_usage()
+        .expect("retained child heap usage should be available");
+    assert_eq!(
+        retained.number_of_native_contexts,
+        before_navigation.number_of_native_contexts + 1,
+        "saved old child values must retain exactly one detached inner realm"
+    );
+    assert_eq!(
+        retained.number_of_detached_contexts,
+        before_navigation.number_of_detached_contexts + 1,
+        "the saved old child realm must be reported as detached"
+    );
+
+    vm.eval(
+        r#"
+        delete globalThis.__retainedChildWindow;
+        delete globalThis.__retainedChildDocument;
+        delete globalThis.__retainedChildNode;
+        delete globalThis.__retainedChildPendingResponse;
+        delete globalThis.__retainedChildPendingBodyPromise;
+        delete globalThis.__retainedChildErroredResponse;
+        delete globalThis.__retainedChildFunction;
+        delete globalThis.__retainedChildWindowFunction;
+        delete globalThis.__retainedChildParentEqualsTopFunction;
+        delete globalThis.__retainedChildParentDocumentFunction;
+        delete globalThis.__retainedChildClosedFunction;
+        delete globalThis.__retainedChildAbortController;
+        delete globalThis.__retainedChildAbortSignal;
+        delete globalThis.__retainedChildInstallAbortCancellation;
+        delete globalThis.__retainedChildAbortState;
+        delete globalThis.__retainedChildAbortOldListenerRan;
+        delete globalThis.__retainedChildAbortOnabortRan;
+        delete globalThis.__retainedChildAbortNewListenerRan;
+        delete globalThis.__retainedChildAbortTargetRuns;
+        delete globalThis.__retainedParentAbortController;
+        delete globalThis.__retainedParentAbortListenerRan;
+        delete globalThis.__retainedParentAbortOnabortRan;
+        true
+        "#,
+    )
+    .expect("retained child values should be releasable");
+    vm.collect_renderer_document_isolate_garbage()
+        .expect("released child realm GC probe should complete");
+    vm.collect_renderer_document_isolate_garbage()
+        .expect("released child realm deferred-handle GC probe should complete");
+    let released = vm
+        .renderer_document_isolate_heap_usage()
+        .expect("released child heap usage should be available");
+    assert_eq!(
+        released.number_of_native_contexts, before_navigation.number_of_native_contexts,
+        "only the top and current child realms should remain"
+    );
+    assert_eq!(
+        released.number_of_detached_contexts, before_navigation.number_of_detached_contexts,
+        "deleting the last author reference must collect the old child realm"
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -3012,6 +3315,32 @@ async fn child_navigation_aborts_fetch_and_detaches_keepalive() {
     assert_eq!(
         records, 1,
         "detached keepalive must preserve network observation without settling the old Promise"
+    );
+
+    vm.close_page_context_resources_for_context_teardown();
+    vm.eval(
+        r#"
+        globalThis.__retiredChildFetchAfterHostTeardown = "pending";
+        __retiredChildFetch("https://fetch-execution-context.test/after-host-teardown").then(
+          () => { __retiredChildFetchAfterHostTeardown = "resolved"; },
+          error => {
+            __retiredChildFetchAfterHostTeardown = JSON.stringify([
+              error instanceof __retiredChildTypeErrorConstructor,
+              error.message
+            ]);
+          }
+        );
+        "queued"
+        "#,
+    )
+    .expect("retained old-child Fetch closure should remain safely callable after host teardown");
+    vm.eval("0")
+        .expect("post-host-teardown Fetch rejection microtask");
+    assert_eq!(
+        vm.eval("__retiredChildFetchAfterHostTeardown")
+            .expect("post-host-teardown retained child Fetch result"),
+        r#"[true,"Failed to execute 'fetch' on 'Window': The global scope is shutting down."]"#,
+        "Document host retirement must preserve the realm while denying new active Fetch work"
     );
 }
 
@@ -3300,11 +3629,10 @@ async fn child_navigation_keeps_accepted_beacon_network_only_and_rejects_stale_s
             .current_child_document_task_owner(child_handle)
             .expect("replacement child owner")
             .local_window_id,
-        match accepted_identity.owner() {
-            crate::native_bridge::WindowExecutionContextOwner::Frame(local_window_id) => {
-                local_window_id
-            }
-            other => panic!("child Beacon used unexpected owner: {other:?}"),
+        {
+            let crate::native_bridge::WindowExecutionContextOwner::Frame(local_window_id) =
+                accepted_identity.owner();
+            local_window_id
         }
     );
     assert_eq!(
@@ -3814,67 +4142,6 @@ fn isolated_realm_destruction_aborts_fetch_and_detaches_keepalive() {
             .count(),
         1,
         "detached streaming keepalive must preserve terminal network observation"
-    );
-}
-
-#[test]
-fn popup_replacement_aborts_fetch_and_detaches_keepalive() {
-    let mut vm = new_storage_test_vm("https://popup-owner-fetch.test/");
-    assert_eq!(
-        vm.eval(
-            r#"
-            globalThis.__ownerBoundFetchPopup = open("about:blank", "fetch-owner-popup");
-            String(globalThis.__ownerBoundFetchPopup !== null)
-            "#,
-        )
-        .expect("popup Fetch owner window should open"),
-        "true"
-    );
-    let popup_id = vm
-        .take_pending_popup_activations()
-        .into_iter()
-        .next()
-        .and_then(|activation| activation.popup_id())
-        .expect("popup Fetch owner id");
-    let (ordinary, keepalive) = vm
-        .with_default_context_scope_and_checkpoint_for_test(|scope, host_ptr| {
-            let previous_popup =
-                crate::native_bridge::enter_active_lightweight_popup_scope(scope, popup_id);
-            let host = unsafe { &mut *host_ptr };
-            let registered = (
-                register_pending_window_fetch_for_test(
-                    scope,
-                    host,
-                    false,
-                    PendingWindowFetchTestStage::Pending,
-                ),
-                register_pending_window_fetch_for_test(
-                    scope,
-                    host,
-                    true,
-                    PendingWindowFetchTestStage::Pending,
-                ),
-            );
-            crate::native_bridge::restore_active_lightweight_popup_scope(scope, previous_popup);
-            Ok(registered)
-        })
-        .expect("popup Fetches should register");
-
-    vm.eval(r#"open("about:blank", "fetch-owner-popup"); "replacement-committed""#)
-        .expect("named popup replacement should commit");
-
-    assert!(ordinary.3.is_cancelled());
-    assert!(!keepalive.3.is_cancelled());
-    assert_eq!(
-        vm._context_host
-            .borrow()
-            .pending_window_fetch_execution_contexts_for_test(),
-        vec![(keepalive.0, true, Some(keepalive.1), Some(keepalive.2))]
-    );
-    assert!(
-        vm._context_host
-            .borrow_mut()
-            .abort_subresource_fetch(keepalive.0)
     );
 }
 
@@ -5210,7 +5477,7 @@ fn renderer_document_isolate_memory_pressure_escalates_at_one_third_of_heap_limi
 }
 
 #[test]
-fn context_wrapper_cache_is_cleared_on_script_vm_teardown() {
+fn context_wrapper_cache_is_weakened_on_script_vm_teardown() {
     let mut vm = new_parsed_test_vm(
         "https://wrapper-cache-retention.test/",
         "<!doctype html><main></main>",
@@ -5254,9 +5521,9 @@ fn context_wrapper_cache_is_cleared_on_script_vm_teardown() {
 
     drop(vm);
     assert_eq!(
-        retained_cache.wrapper_entry_count(),
+        retained_cache.strong_wrapper_entry_count(),
         0,
-        "page context teardown must clear strong wrapper cache entries before contexts are dropped"
+        "page context teardown must weaken wrapper cache entries before contexts are dropped"
     );
 }
 
@@ -6286,6 +6553,7 @@ async fn pending_child_navigation_does_not_materialize_initial_empty_preload_rea
         source: "globalThis.__documentStartUrl = document.URL;".to_owned(),
         world_name: None,
         has_bidi_channel_argument: false,
+        browser_internal: false,
         bidi_channel_handoffs: Vec::new(),
     }]);
 
@@ -6511,95 +6779,6 @@ async fn child_document_script_owner_hooks_select_current_realm() {
         stale,
         ChildDocumentScriptRealmSelection::StaleRealm { .. }
     ));
-}
-
-#[tokio::test]
-async fn child_dynamic_execution_action_requires_materialized_current_realm() {
-    use crate::frame_owner_model::{
-        FrameDocumentTaskOwner, FrameRealmId, PendingChildDynamicDocumentScript,
-    };
-
-    let mut vm = new_storage_test_vm("https://child-dynamic-current-realm.test/");
-
-    vm.eval(
-        r#"
-(() => {
-  const root = document.documentElement || document.appendChild(document.createElement("html"));
-  const body = document.body || root.appendChild(document.createElement("body"));
-  const frame = document.createElement("iframe");
-  body.appendChild(frame);
-})()
-"#,
-    )
-    .expect("child dynamic current-realm setup should evaluate");
-    assert_initial_about_blank_child_completed_synchronously_for_test(
-        &mut vm,
-        "child dynamic current-realm setup",
-    )
-    .await;
-    let child_context_id = materialize_single_child_default_realm_for_test(
-        &mut vm,
-        "child dynamic current-realm setup",
-    );
-    let (child_handle, task_owner, owner_realm_id) = {
-        let realm = vm
-            .child_frame_realm_store
-            .get(&child_context_id)
-            .expect("child realm record should exist");
-        let snapshot = vm
-            ._context_host
-            .borrow()
-            .frame_owner_current_child_snapshot(realm.child_handle)
-            .expect("child frame should expose a current owner snapshot");
-        (
-            realm.child_handle,
-            FrameDocumentTaskOwner::new(
-                snapshot.scheduler_lane_id,
-                snapshot.local_window_id,
-                snapshot.document_id,
-            ),
-            realm.owner_realm_id,
-        )
-    };
-    let script_handle = DomHandle::new(9001);
-    let work_without_realm = PendingChildDynamicDocumentScript {
-        child_handle,
-        owner: task_owner,
-        realm_id: None,
-        script_handle,
-        source: "globalThis.__childDynamicMaterializedRealm = true;".to_owned(),
-        script_nonce: Some("captured-nonce".to_owned()),
-        script_integrity: Some("sha256-captured-integrity".to_owned()),
-    };
-
-    let action = vm
-        ._context_host
-        .borrow()
-        .child_dynamic_classic_script_execution_action_for_owner(
-            &work_without_realm,
-            owner_realm_id,
-        )
-        .expect("current dynamic work should materialize an execution action");
-    assert_eq!(action.target().task_owner(), task_owner);
-    assert_eq!(action.target().realm_id(), owner_realm_id);
-    let job = action.into_job();
-    assert_eq!(job.script_nonce.as_deref(), Some("captured-nonce"));
-    assert_eq!(
-        job.script_integrity.as_deref(),
-        Some("sha256-captured-integrity")
-    );
-
-    let stale_work = PendingChildDynamicDocumentScript {
-        realm_id: Some(FrameRealmId(owner_realm_id.0 + 1)),
-        ..work_without_realm
-    };
-    assert!(
-        vm._context_host
-            .borrow()
-            .child_dynamic_classic_script_execution_action_for_owner(&stale_work, owner_realm_id)
-            .is_none(),
-        "stale dynamic child work must not produce an execution action"
-    );
 }
 
 #[tokio::test]
@@ -10107,6 +10286,449 @@ async fn child_frame_realm_location_navigation_queues_child_navigation() {
 }
 
 #[tokio::test]
+async fn child_window_name_survives_owner_refresh_and_self_navigation() {
+    let mut vm = new_storage_test_vm("https://child-window-name.test/");
+
+    vm.eval(
+        r#"
+(() => {
+  const root = document.documentElement || document.appendChild(document.createElement("html"));
+  const body = document.body || root.appendChild(document.createElement("body"));
+  const frame = document.createElement("iframe");
+  frame.id = "named-child";
+  frame.name = "owner-name";
+  body.appendChild(frame);
+  void frame.contentWindow;
+})()
+"#,
+    )
+    .expect("named child setup should evaluate");
+    assert_initial_about_blank_child_completed_synchronously_for_test(
+        &mut vm,
+        "named child initial-empty setup",
+    )
+    .await;
+    let initial_context_id =
+        materialize_single_child_default_realm_for_test(&mut vm, "named child initial realm");
+
+    assert_eq!(
+        vm.eval_in_child_default_context(
+            initial_context_id,
+            r#"window.name = "runtime-name"; window.name"#,
+        )
+        .expect("child window.name assignment should evaluate"),
+        "runtime-name"
+    );
+    assert_eq!(
+        vm.eval(
+            r#"
+(() => {
+  const frame = document.getElementById("named-child");
+  const before = frame.contentWindow.name;
+  frame.name = "owner-renamed";
+  const afterRename = frame.contentWindow.name;
+  frame.removeAttribute("name");
+  return [before, afterRename, frame.contentWindow.name].join("|");
+})()
+"#,
+        )
+        .expect("frame owner name mutation probe should evaluate"),
+        "runtime-name|runtime-name|runtime-name",
+        "an attached frame owner attribute must not overwrite its browsing-context name"
+    );
+
+    assert_eq!(
+        vm.eval_in_child_default_context(
+            initial_context_id,
+            r#"
+(() => {
+  const target = URL.createObjectURL(new Blob(
+    ["<!doctype html><p>replacement child</p>"],
+    { type: "text/html" }
+  ));
+  return window.open(target, "_self") === window;
+})()
+"#,
+        )
+        .expect("child window.open(_self) should evaluate"),
+        "true"
+    );
+    run_child_navigation_commit_and_host_load_for_test(&mut vm, "named child self navigation")
+        .await;
+
+    let replacement_context_id = vm
+        .live_child_default_runtime_realm_inventory()
+        .into_iter()
+        .map(|realm| realm.context_id)
+        .next()
+        .expect("replacement named child realm should exist");
+    assert_eq!(
+        vm.eval_in_child_default_context(replacement_context_id, "window.name")
+            .expect("replacement child window.name should evaluate"),
+        "runtime-name",
+        "the browsing-context name must survive a cross-document self navigation"
+    );
+}
+
+#[test]
+fn cross_realm_location_uses_entry_base_and_incumbent_navigation_source() {
+    let mut vm = new_storage_test_vm("https://multiple-globals.test/root/page.html");
+
+    vm.eval(
+        r#"
+(() => {
+  const frame = document.createElement("iframe");
+  frame.id = "entry";
+  frame.name = "entry";
+  frame.srcdoc = '<base href="https://multiple-globals.test/entry/"><body></body>';
+  (document.body || document.documentElement || document).appendChild(frame);
+})()
+"#,
+    )
+    .expect("entry realm setup should evaluate");
+    vm.drain_pending_child_frame_work_for_test();
+
+    let entry_handle = vm
+        ._context_host
+        .borrow()
+        .child_browsing_context_handle_by_name("entry")
+        .expect("entry child browsing context should exist");
+    let entry_context_id = vm
+        .live_child_default_runtime_realm_inventory()
+        .into_iter()
+        .find(|realm| {
+            vm.child_frame_realm_store
+                .get(&realm.context_id)
+                .is_some_and(|record| record.child_handle == entry_handle)
+        })
+        .map(|realm| realm.context_id)
+        .expect("entry child realm should exist");
+
+    vm.eval_in_child_default_context(
+        entry_context_id,
+        r#"
+(() => {
+  const incumbent = document.createElement("iframe");
+  incumbent.name = "incumbent";
+  incumbent.srcdoc = '<base href="https://multiple-globals.test/incumbent/"><body></body>';
+  const relevant = document.createElement("iframe");
+  relevant.name = "relevant";
+  relevant.srcdoc = '<base href="https://multiple-globals.test/relevant/"><body></body>';
+  document.body.append(incumbent, relevant);
+})()
+"#,
+    )
+    .expect("incumbent and relevant realm setup should evaluate");
+    vm.drain_pending_child_frame_work_for_test();
+
+    let (incumbent_handle, relevant_handle) = {
+        let host = vm._context_host.borrow();
+        (
+            host.child_browsing_context_handle_by_name("incumbent")
+                .expect("incumbent child browsing context should exist"),
+            host.child_browsing_context_handle_by_name("relevant")
+                .expect("relevant child browsing context should exist"),
+        )
+    };
+    let (incumbent_context_id, relevant_context_id) = {
+        let realms = vm.live_child_default_runtime_realm_inventory();
+        let context_for_handle = |handle| {
+            realms
+                .iter()
+                .find(|realm| {
+                    vm.child_frame_realm_store
+                        .get(&realm.context_id)
+                        .is_some_and(|record| record.child_handle == handle)
+                })
+                .map(|realm| realm.context_id)
+                .expect("named child realm should exist")
+        };
+        (
+            context_for_handle(incumbent_handle),
+            context_for_handle(relevant_handle),
+        )
+    };
+
+    vm.eval_in_child_default_context(
+        incumbent_context_id,
+        r#"
+function navigateRelevant() {
+  parent.frames.relevant.location.assign("target.html");
+}
+"#,
+    )
+    .expect("incumbent navigation function should install");
+    vm.eval(
+        r#"
+globalThis.__invokeIncumbentNavigation = function() {
+  document.getElementById("entry").contentWindow.frames.incumbent.navigateRelevant();
+};
+"#,
+    )
+    .expect("top-level call bridge should install");
+    vm.eval_in_child_default_context(entry_context_id, "top.__invokeIncumbentNavigation()")
+        .expect("entry realm should invoke the incumbent navigation function");
+
+    let pending = vm
+        ._context_host
+        .borrow()
+        .child_browsing_context_pending_live_navigation_for_test(relevant_handle)
+        .expect("relevant child should receive one pending navigation");
+    let crate::native_bridge::ChildBrowsingContextBootstrap::Request(request) = pending else {
+        panic!(
+            "cross-realm Location navigation must retain an explicit request carrier, got {pending:?}"
+        );
+    };
+    assert_eq!(
+        request.url.as_str(),
+        "https://multiple-globals.test/entry/target.html",
+        "relative Location input must resolve against the entry settings object"
+    );
+    assert_eq!(
+        request.initiator_url().map(url::Url::as_str),
+        Some("about:srcdoc"),
+        "the request carrier must retain the incumbent child Document as its source"
+    );
+    assert_ne!(incumbent_context_id, relevant_context_id);
+}
+
+#[test]
+fn cross_realm_window_open_uses_receiver_target_and_entry_request_policy() {
+    let mut vm = new_storage_test_vm("https://multiple-globals-open.test/root/page.html");
+
+    vm.eval(
+        r#"
+(() => {
+  const frame = document.createElement("iframe");
+  frame.id = "entry-open";
+  frame.name = "entry-open";
+  frame.srcdoc = '<base href="https://multiple-globals-open.test/entry/"><body></body>';
+  (document.body || document.documentElement || document).appendChild(frame);
+})()
+"#,
+    )
+    .expect("window.open entry realm setup should evaluate");
+    vm.drain_pending_child_frame_work_for_test();
+
+    let entry_handle = vm
+        ._context_host
+        .borrow()
+        .child_browsing_context_handle_by_name("entry-open")
+        .expect("window.open entry child browsing context should exist");
+    let entry_context_id = vm
+        .live_child_default_runtime_realm_inventory()
+        .into_iter()
+        .find(|realm| {
+            vm.child_frame_realm_store
+                .get(&realm.context_id)
+                .is_some_and(|record| record.child_handle == entry_handle)
+        })
+        .map(|realm| realm.context_id)
+        .expect("window.open entry child realm should exist");
+
+    vm.eval_in_child_default_context(
+        entry_context_id,
+        r#"
+(() => {
+  history.replaceState(null, "", "https://multiple-globals-open.test/entry/source.html");
+  const incumbent = document.createElement("iframe");
+  incumbent.name = "incumbent-open";
+  incumbent.srcdoc = '<base href="https://multiple-globals-open.test/incumbent/"><body></body>';
+  const relevant = document.createElement("iframe");
+  relevant.name = "relevant-open";
+  relevant.sandbox = "allow-scripts allow-same-origin";
+  relevant.srcdoc = '<base href="https://multiple-globals-open.test/relevant/"><body></body>';
+  const popupReceiver = document.createElement("iframe");
+  popupReceiver.name = "popup-receiver-open";
+  popupReceiver.sandbox = "allow-scripts allow-same-origin allow-popups";
+  popupReceiver.srcdoc = '<base href="https://multiple-globals-open.test/receiver/"><body></body>';
+  document.body.append(incumbent, relevant, popupReceiver);
+})()
+"#,
+    )
+    .expect("window.open incumbent and relevant realm setup should evaluate");
+    vm.drain_pending_child_frame_work_for_test();
+
+    let (incumbent_handle, relevant_handle, popup_receiver_handle, popup_receiver_frame_id) = {
+        let host = vm._context_host.borrow();
+        let incumbent_handle = host
+            .child_browsing_context_handle_by_name("incumbent-open")
+            .expect("window.open incumbent child browsing context should exist");
+        let relevant_handle = host
+            .child_browsing_context_handle_by_name("relevant-open")
+            .expect("window.open relevant child browsing context should exist");
+        let popup_receiver_handle = host
+            .child_browsing_context_handle_by_name("popup-receiver-open")
+            .expect("window.open popup receiver child browsing context should exist");
+        let popup_receiver_frame_id = host
+            .child_browsing_context_request_scope(popup_receiver_handle)
+            .expect("window.open popup receiver request scope should exist")
+            .0;
+        (
+            incumbent_handle,
+            relevant_handle,
+            popup_receiver_handle,
+            popup_receiver_frame_id,
+        )
+    };
+    let (incumbent_context_id, relevant_context_id) = {
+        let realms = vm.live_child_default_runtime_realm_inventory();
+        let context_for_handle = |handle| {
+            realms
+                .iter()
+                .find(|realm| {
+                    vm.child_frame_realm_store
+                        .get(&realm.context_id)
+                        .is_some_and(|record| record.child_handle == handle)
+                })
+                .map(|realm| realm.context_id)
+                .expect("window.open named child realm should exist")
+        };
+        (
+            context_for_handle(incumbent_handle),
+            context_for_handle(relevant_handle),
+        )
+    };
+
+    vm.eval_in_child_default_context(
+        incumbent_context_id,
+        r#"
+history.replaceState(null, "", "https://multiple-globals-open.test/incumbent/source.html");
+function openRelevant() {
+  const relevant = parent.frames["relevant-open"];
+  return relevant.open("target.html", "_self") === relevant;
+}
+function openBlockedRelevantPopup() {
+  const relevant = parent.frames["relevant-open"];
+  return relevant.open("about:blank", "receiver-policy-popup") === null;
+}
+function openAllowedReceiverPopup() {
+  const receiver = parent.frames["popup-receiver-open"];
+  receiver.open("popup-target.html", "receiver-source-popup");
+}
+"#,
+    )
+    .expect("window.open incumbent function should install");
+    vm.eval_in_child_default_context(
+        relevant_context_id,
+        r#"history.replaceState(null, "", "https://multiple-globals-open.test/relevant/source.html")"#,
+    )
+    .expect("window.open relevant history URL should install");
+    vm.eval(
+        r#"
+globalThis.__invokeIncumbentWindowOpen = function() {
+  return document.getElementById("entry-open")
+    .contentWindow.frames["incumbent-open"].openRelevant();
+};
+globalThis.__invokeIncumbentBlockedWindowOpen = function() {
+  return document.getElementById("entry-open")
+    .contentWindow.frames["incumbent-open"].openBlockedRelevantPopup();
+};
+globalThis.__invokeIncumbentAllowedWindowOpen = function() {
+  return document.getElementById("entry-open")
+    .contentWindow.frames["incumbent-open"].openAllowedReceiverPopup();
+};
+"#,
+    )
+    .expect("window.open top-level call bridge should install");
+    assert_eq!(
+        vm.eval_in_child_default_context(
+            entry_context_id,
+            "String(top.__invokeIncumbentWindowOpen())",
+        )
+        .expect("entry realm should invoke incumbent window.open"),
+        "true",
+        "window.open(_self) must return the relevant receiver WindowProxy"
+    );
+    assert_eq!(
+        vm.eval_in_child_default_context(
+            entry_context_id,
+            "String(top.__invokeIncumbentBlockedWindowOpen())",
+        )
+        .expect("entry realm should invoke the sandboxed receiver window.open"),
+        "true",
+        "new-context admission must use the receiver's sandbox policy"
+    );
+    assert!(
+        vm.take_pending_popup_activations().is_empty(),
+        "an unsandboxed entry realm must not bypass the receiver's popup sandbox gate"
+    );
+    vm.eval_in_child_default_context(entry_context_id, "top.__invokeIncumbentAllowedWindowOpen()")
+        .expect("entry realm should invoke the popup-allowed receiver window.open");
+    let activations = vm.take_pending_popup_activations();
+    assert_eq!(activations.len(), 1);
+    let crate::RendererPopupActivationSource::Window {
+        window,
+        exposes_opener,
+        ..
+    } = activations[0].source()
+    else {
+        panic!("window.open must retain a Window receiver source");
+    };
+    assert_eq!(
+        window,
+        &crate::RendererWindowDocumentSource::ChildFrame {
+            frame_id: popup_receiver_frame_id,
+            local_window_id: vm
+                ._context_host
+                .borrow()
+                .current_child_document_task_owner(popup_receiver_handle)
+                .expect("popup receiver owner should remain current")
+                .local_window_id
+                .0,
+            document_id: vm
+                ._context_host
+                .borrow()
+                .current_child_document_task_owner(popup_receiver_handle)
+                .expect("popup receiver owner should remain current")
+                .document_id
+                .0,
+        },
+        "popup opener projection must identify the receiver frame"
+    );
+    assert!(*exposes_opener);
+    assert_eq!(
+        activations[0]
+            .navigation_source()
+            .map(crate::RendererTopLevelNavigationSource::source_url),
+        Some("https://multiple-globals-open.test/entry/source.html"),
+        "popup destination request must retain the separate entry Window source"
+    );
+
+    assert!(
+        !vm.has_pending_location_navigation(),
+        "a child receiver's _self target must not queue a top-level navigation"
+    );
+    let host = vm._context_host.borrow();
+    assert!(
+        host.child_browsing_context_pending_live_navigation_for_test(entry_handle)
+            .is_none(),
+        "the entry Window supplies request policy but is not the _self target"
+    );
+    assert!(
+        host.child_browsing_context_pending_live_navigation_for_test(incumbent_handle)
+            .is_none(),
+        "the incumbent Window supplies neither the target nor request policy"
+    );
+    let pending = host
+        .child_browsing_context_pending_live_navigation_for_test(relevant_handle)
+        .expect("the relevant receiver should receive the _self navigation");
+    let crate::native_bridge::ChildBrowsingContextBootstrap::Request(request) = pending else {
+        panic!("window.open must retain an explicit entry request carrier, got {pending:?}");
+    };
+    assert_eq!(
+        request.url.as_str(),
+        "https://multiple-globals-open.test/entry/target.html",
+        "window.open URL conversion must use the entry settings object's base URL"
+    );
+    assert_eq!(
+        request.initiator_url().map(url::Url::as_str),
+        Some("https://multiple-globals-open.test/entry/source.html"),
+        "window.open navigation policy must come from the entry Document"
+    );
+}
+
+#[tokio::test]
 async fn empty_srcdoc_keeps_document_url_separate_from_parent_fallback_base() {
     let mut vm = new_storage_test_vm("https://empty-srcdoc.test/path/page.html");
 
@@ -10896,6 +11518,9 @@ fn child_document_open_revalidates_owner_after_descendant_unload_reentry() {
 #[test]
 fn detached_first_exposure_retires_prebootstrapped_child_realm() {
     let mut vm = new_storage_test_vm("https://stale-child-function-request.test/");
+    let before_exposure = vm
+        .renderer_document_isolate_heap_usage()
+        .expect("prebootstrap baseline heap usage should be available");
 
     let result = vm
         .eval(
@@ -10905,17 +11530,162 @@ fn detached_first_exposure_retires_prebootstrapped_child_realm() {
   const body = document.body || root.appendChild(document.createElement("body"));
   const frame = document.createElement("iframe");
   body.appendChild(frame);
+  const childDocument = frame.contentDocument;
+  childDocument.body.innerHTML =
+    "<div id='owner-handoff' class='ready' data-state='parent' style='color: green'></div>";
+  const childElement = childDocument.getElementById("owner-handoff");
+  // Force all shared-cache families to be created provisionally in the
+  // parent realm before the real child Context exists.
+  void childDocument.children;
+  void childElement.classList;
+  void childElement.dataset;
+  void childElement.style;
   const heldWindow = frame.contentWindow;
+  const childResult = heldWindow.Function(`
+    const element = document.getElementById("owner-handoff");
+    globalThis.__ownerHandoffDocument = document;
+    globalThis.__ownerHandoffCollection = document.children;
+    globalThis.__ownerHandoffClassList = element.classList;
+    globalThis.__ownerHandoffDataset = element.dataset;
+    globalThis.__ownerHandoffStyle = element.style;
+    return [
+      Object.getPrototypeOf(document.children) === HTMLCollection.prototype,
+      Object.getPrototypeOf(element.classList) === DOMTokenList.prototype,
+      Object.getPrototypeOf(element.dataset) === DOMStringMap.prototype,
+      Object.getPrototypeOf(element.style) === CSSStyleProperties.prototype,
+    ].join("|");
+  `)();
+  // Also create wrappers from the parent after the child Context exists,
+  // without making the child execute their accessors. Their prototype and
+  // cache lifetime must still follow the authoritative child realm.
+  const parentOnlyForm = childDocument.createElement("form");
+  childDocument.body.appendChild(parentOnlyForm);
+  const parentOnlyCollection = parentOnlyForm.elements;
+  const parentOnlyClassList = parentOnlyForm.classList;
+  const parentOnlyDataset = parentOnlyForm.dataset;
+  const parentOnlyStyle = parentOnlyForm.style;
+  globalThis.__ownerHandoffParentOnlyElement = parentOnlyForm;
+  globalThis.__ownerHandoffParentOnlyCollection = parentOnlyCollection;
+  globalThis.__ownerHandoffParentOnlyClassList = parentOnlyClassList;
+  globalThis.__ownerHandoffParentOnlyDataset = parentOnlyDataset;
+  globalThis.__ownerHandoffParentOnlyStyle = parentOnlyStyle;
+  const verifyParentOnlyPrototypes = heldWindow.Function(
+    "element",
+    "collection",
+    "classList",
+    "dataset",
+    "style",
+    `return [
+      Object.getPrototypeOf(element) === HTMLFormElement.prototype,
+      Object.getPrototypeOf(collection) === HTMLFormControlsCollection.prototype,
+      Object.getPrototypeOf(classList) === DOMTokenList.prototype,
+      Object.getPrototypeOf(dataset) === DOMStringMap.prototype,
+      Object.getPrototypeOf(style) === CSSStyleProperties.prototype,
+    ].join("|");`,
+  );
+  const parentOnlyResult = verifyParentOnlyPrototypes(
+    parentOnlyForm,
+    parentOnlyCollection,
+    parentOnlyClassList,
+    parentOnlyDataset,
+    parentOnlyStyle,
+  );
   frame.remove();
-  return typeof heldWindow.Function;
+  return childResult + "|" + parentOnlyResult + "|" + typeof heldWindow.Function;
 })()
 "#,
         )
         .expect("stale contentWindow materialization request setup should evaluate");
     assert_eq!(
-        result, "function",
-        "the real child realm remains usable by the current stack until owner retirement"
+        result, "true|true|true|true|true|true|true|true|true|function",
+        "the real child realm remains usable by the current stack and adopts every shared-cache prototype before owner retirement"
     );
+    let (prebootstrapped_context_ptr, prebootstrapped_realm_token) = {
+        let contexts = vm.prebootstrapped_child_default_contexts.borrow();
+        let context = contexts
+            .values()
+            .next()
+            .expect("first exposure should prebootstrap exactly one child default realm");
+        (
+            &context.context as *const v8::Global<v8::Context>,
+            context.runtime_observable_context_token,
+        )
+    };
+    let retained_shared_wrapper_cache = vm
+        .with_context_scope_by_ptr_and_checkpoint_for_test(
+            prebootstrapped_context_ptr,
+            |scope, _runtime_ptr| {
+                Ok(crate::native_bridge::identity::retain_context_wrapper_cache_for_test(scope))
+            },
+        )
+        .expect("prebootstrapped child wrapper cache should be retainable for regression testing");
+    let mut cached_wrapper_owner_realms = vm
+        .with_context_scope_by_ptr_and_checkpoint_for_test(
+            prebootstrapped_context_ptr,
+            |scope, _runtime_ptr| {
+                let global = scope.get_current_context().global(scope);
+                let mut owners = Vec::new();
+                for name in [
+                    "__ownerHandoffDocument",
+                    "__ownerHandoffCollection",
+                    "__ownerHandoffClassList",
+                    "__ownerHandoffDataset",
+                    "__ownerHandoffStyle",
+                ] {
+                    let wrapper = global
+                        .get(scope, crate::util::v8str(scope, name).into())
+                        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+                        .unwrap_or_else(|| {
+                            panic!("prebootstrapped child global must retain `{name}`")
+                        });
+                    owners.push(
+                        retained_shared_wrapper_cache
+                            .wrapper_owner_realm_for_object(scope, wrapper),
+                    );
+                }
+                Ok(owners)
+            },
+        )
+        .expect("prebootstrapped child cache ownership should be inspectable");
+    cached_wrapper_owner_realms.extend(
+        vm.with_default_context_scope_and_checkpoint_for_test(|scope, _runtime_ptr| {
+            let global = scope.get_current_context().global(scope);
+            let mut owners = Vec::new();
+            for name in [
+                "__ownerHandoffParentOnlyElement",
+                "__ownerHandoffParentOnlyCollection",
+                "__ownerHandoffParentOnlyClassList",
+                "__ownerHandoffParentOnlyDataset",
+                "__ownerHandoffParentOnlyStyle",
+            ] {
+                let wrapper = global
+                    .get(scope, crate::util::v8str(scope, name).into())
+                    .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+                    .unwrap_or_else(|| panic!("parent global must retain `{name}`"));
+                owners.push(
+                    retained_shared_wrapper_cache.wrapper_owner_realm_for_object(scope, wrapper),
+                );
+            }
+            Ok(owners)
+        })
+        .expect("parent-only child cache ownership should be inspectable"),
+    );
+    assert_eq!(
+        cached_wrapper_owner_realms,
+        vec![Some(prebootstrapped_realm_token); 10],
+        "provisional and parent-only Document, Node, collection, DOMTokenList, DOMStringMap, and style wrappers must all transfer to the real child realm"
+    );
+    vm.eval(
+        r#"
+        delete globalThis.__ownerHandoffParentOnlyElement;
+        delete globalThis.__ownerHandoffParentOnlyCollection;
+        delete globalThis.__ownerHandoffParentOnlyClassList;
+        delete globalThis.__ownerHandoffParentOnlyDataset;
+        delete globalThis.__ownerHandoffParentOnlyStyle;
+        true
+        "#,
+    )
+    .expect("parent-only wrapper probes should be releasable before stale realm retirement");
     assert!(
         vm.run_child_realm_materialization_body_for_test()
             .expect("child realm materialization body should succeed"),
@@ -10943,6 +11713,35 @@ fn detached_first_exposure_retires_prebootstrapped_child_realm() {
             .window_execution_context_registry_counts_for_test(),
         (1, 1),
         "stale-drop must retire the unclaimed child context binding and realm registration"
+    );
+    let remaining_strong_wrapper_count = retained_shared_wrapper_cache.strong_wrapper_entry_count();
+    assert_eq!(
+        retained_shared_wrapper_cache
+            .strong_wrapper_entry_count_for_realm(prebootstrapped_realm_token),
+        0,
+        "stale-drop must weaken every DOM wrapper created by the retired child realm; \
+         {remaining_strong_wrapper_count} strong wrappers remain in live realms"
+    );
+    assert_eq!(
+        retained_shared_wrapper_cache
+            .strong_live_collection_entry_count_for_realm(prebootstrapped_realm_token),
+        0,
+        "stale-drop must weaken live collections owned by the retired child realm"
+    );
+    vm.collect_renderer_document_isolate_garbage()
+        .expect("stale prebootstrap realm GC probe should complete");
+    vm.collect_renderer_document_isolate_garbage()
+        .expect("stale prebootstrap deferred-handle GC probe should complete");
+    let after_stale_drop = vm
+        .renderer_document_isolate_heap_usage()
+        .expect("post-prebootstrap heap usage should be available");
+    assert_eq!(
+        after_stale_drop.number_of_native_contexts, before_exposure.number_of_native_contexts,
+        "an unreferenced stale prebootstrap realm must not survive its owner request"
+    );
+    assert_eq!(
+        after_stale_drop.number_of_detached_contexts, before_exposure.number_of_detached_contexts,
+        "stale prebootstrap wrapper state must not form a detached Context cycle"
     );
 }
 
@@ -11047,9 +11846,9 @@ async fn child_default_bridge_ref_is_released_on_child_context_teardown() {
         "removed iframe should not keep a live child default context"
     );
     assert_eq!(
-        retained_child_cache.wrapper_entry_count_for_realm(child_realm_token),
+        retained_child_cache.strong_wrapper_entry_count_for_realm(child_realm_token),
         0,
-        "destroying a child default context must retire its strong wrapper entries"
+        "destroying a child default context must weaken its wrapper entries"
     );
     assert!(
         retained_child_cache.wrapper_entry_count_for_realm(top_realm_token) >= top_wrapper_count,

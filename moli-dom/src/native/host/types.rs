@@ -49,6 +49,13 @@ pub struct DomHost {
     pub(super) shadow_disabled_custom_element_definitions: RefCell<HashSet<String>>,
     pub(super) active_element: Cell<Option<DomHandle>>,
     pub(super) hovered_elements: RefCell<IndexSet<DomHandle>>,
+    /// Whether the owning top-level Page currently participates in focus.
+    ///
+    /// The active element remains document state while a Page is in the
+    /// background. Selector matching must additionally consult this Page
+    /// state so `:focus`, `:focus-visible`, and `:focus-within` disappear
+    /// without destroying the element identity restored on reactivation.
+    pub(super) page_focused: Cell<bool>,
     pub(super) mutation_observer_records_enabled: Cell<bool>,
     pub(super) devtools_mutation_records_enabled: Cell<bool>,
 }

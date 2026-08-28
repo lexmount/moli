@@ -600,7 +600,7 @@ onconnect = event => {
 
     let response = take_response_by_id(&mut ctx, 90_022);
     let isolate_scope = &response["result"]["isolateScope"];
-    assert_eq!(isolate_scope["documentIsolateModel"], json!("page-vm"));
+    assert_eq!(isolate_scope["documentIsolateModel"], json!("script-agent"));
     assert_eq!(isolate_scope["loadedDocumentPageCount"], json!(2));
     assert_eq!(
         isolate_scope["loadedDocumentRendererOwnerCount"],
@@ -775,8 +775,8 @@ onconnect = event => {
     );
     assert_eq!(
         isolate_scope["estimatedDocumentIsolateCount"],
-        json!(2),
-        "popup PageVM must be counted as a second document isolate: {response:?}"
+        json!(1),
+        "a related opener and popup keep separate Window realms in one stable script-agent isolate: {response:?}"
     );
     assert_eq!(
         isolate_scope["documentContextCount"],
@@ -801,8 +801,8 @@ onconnect = event => {
     );
     assert_eq!(
         isolate_scope["estimatedLiveV8IsolateCount"],
-        json!(4),
-        "combo should be two page document isolates plus two worker isolates: {response:?}"
+        json!(3),
+        "combo should be one related-page script-agent isolate plus two worker isolates: {response:?}"
     );
     assert_eq!(
         response["result"]["activeBrowserContext"]["backgroundLoadedPageCount"],

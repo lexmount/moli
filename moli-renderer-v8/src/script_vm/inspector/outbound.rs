@@ -20,6 +20,8 @@ use std::{
     rc::Rc,
 };
 
+use super::output_resolution::RendererInspectorMessageFinalizer;
+
 /// Push-based ordered outbound handling for inspector messages.
 ///
 /// V8 Inspector calls `send_response` / `send_notification` from the
@@ -55,6 +57,7 @@ struct InspectorResponseRoutingState {
     runtime_command_output_suppression_depth: usize,
     runtime_command_output_queue_snapshot_len: Option<usize>,
     command_turn_output: Option<(DevToolsSessionKey, RendererCommandTurnOutputRecorder)>,
+    message_finalizer: Option<RendererInspectorMessageFinalizer>,
 }
 
 type SharedInspectorOutboundMessageState = Rc<RefCell<InspectorOutboundMessageState>>;
@@ -140,6 +143,7 @@ impl InspectorOutbound {
             // Records already appended to the recorder remain owned by the
             // command and are not discarded with the detached session route.
             guard.command_turn_output = None;
+            guard.message_finalizer = None;
             guard.pending_response_callbacks.clear();
             guard.canceled_response_callbacks.clear();
         }
@@ -190,7 +194,19 @@ impl InspectorOutbound {
         }
     }
 
-    pub(super) fn push_value(&self, value: Value) {
+    pub(super) fn bind_message_finalizer(&self, finalizer: RendererInspectorMessageFinalizer) {
+        self.response_routing.borrow_mut().message_finalizer = Some(finalizer);
+    }
+
+    fn finalize_message(&self, message: &mut Value) {
+        let finalizer = self.response_routing.borrow().message_finalizer.clone();
+        if let Some(finalizer) = finalizer {
+            finalizer.finalize(message);
+        }
+    }
+
+    pub(super) fn push_value(&self, mut value: Value) {
+        self.finalize_message(&mut value);
         if let Some(session_route) = self.session_route.borrow().clone() {
             match session_route.route_notification(&value) {
                 RendererInspectorPauseNotificationRoute::OrdinaryTurn => {
@@ -336,7 +352,8 @@ impl InspectorOutbound {
             });
     }
 
-    pub(super) fn push_response_value(&self, call_id: i32, value: Value) {
+    pub(super) fn push_response_value(&self, call_id: i32, mut value: Value) {
+        self.finalize_message(&mut value);
         if let Some(session_route) = self.session_route.borrow().as_ref() {
             session_route.mark_command_response(call_id, value.get("error").is_none());
         }
@@ -759,8 +776,8 @@ mod tests {
             RendererOutputStreamIdentity::new_page_for_protocol_test(PageId::new_for_testing(41)),
         );
         let pause_bridge = crate::devtools::pause::RendererInspectorPauseBridge::default();
-        pause_bridge.configure_page_route(journal.clone());
         let agent_token = RendererDevToolsAgentToken::allocate();
+        pause_bridge.configure_page_route(agent_token, journal.clone());
         let session = DevToolsSessionKey::Primary;
         let io_ingress = crate::devtools::ingress::io::RendererInspectorIoIngress::new(
             pause_bridge.pause_loop_wake(),

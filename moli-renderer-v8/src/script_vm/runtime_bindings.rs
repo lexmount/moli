@@ -159,9 +159,6 @@ pub(crate) fn perform_microtask_checkpoint_and_report_pending_promise_rejections
     if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
         let host = unsafe { &mut *host_ptr };
         crate::native_bridge::restore_deferred_active_child_window_scope_if_present(scope, host);
-        crate::native_bridge::restore_deferred_active_lightweight_popup_scope_if_present(
-            scope, host,
-        );
         host.finish_deferred_child_subresource_request_scope_pop();
     }
     let promise_stats = if trace_enabled {

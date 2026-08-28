@@ -96,15 +96,18 @@ pub(crate) fn window_fetch_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+    let Some(accessing_host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         rv.set(make_rejected_promise(scope, "failed to get native bridge").into());
         return;
     };
+    let receiver_host_ptr = crate::util::context_host_ptr_from_window_object(scope, args.this())
+        .unwrap_or(accessing_host_ptr);
 
     let receiver = match crate::native_bridge::WindowOperationReceiver::capture_and_authorize(
         scope,
         args.this(),
-        unsafe { &*host_ptr },
+        unsafe { &*receiver_host_ptr },
+        unsafe { &*accessing_host_ptr },
     ) {
         Ok(receiver) => receiver,
         Err(crate::native_bridge::WindowOperationReceiverCaptureError::IllegalInvocation) => {
@@ -161,7 +164,7 @@ pub(crate) fn window_fetch_callback<'s>(
     let signal_value = window_fetch_signal_value(scope, &args);
     let signal = match signal_value {
         Some(value) => {
-            match validate_window_fetch_signal(scope, unsafe { &mut *host_ptr }, value) {
+            match validate_window_fetch_signal(scope, unsafe { &mut *accessing_host_ptr }, value) {
                 Ok(signal) => signal,
                 Err(message) => {
                     rv.set(make_rejected_promise(scope, &message).into());
@@ -172,7 +175,7 @@ pub(crate) fn window_fetch_callback<'s>(
         None => None,
     };
 
-    let Some(binding) = receiver.resolve_live_binding(unsafe { &*host_ptr }) else {
+    let Some(binding) = receiver.resolve_live_binding(unsafe { &*receiver_host_ptr }) else {
         // This also catches the subtle generation race where a RequestInit
         // getter navigated the iframe. Never look up the replacement
         // LocalWindow by the stable child handle.

@@ -1,4 +1,5 @@
 use super::*;
+use crate::browsing_context_model::{BrowsingContextId, BrowsingContextKind};
 use crate::frame_owner_model::FrameDocumentLoadDeliveryPhase;
 
 fn handle(index: usize) -> DomHandle {
@@ -162,6 +163,10 @@ fn main_frame_identity_uses_reserved_owner_records() {
     );
     let frame_id = FrameId("main".to_owned());
     let frame = store.frames.get(&frame_id).expect("main frame record");
+    assert_eq!(
+        frame.browsing_context_id,
+        BrowsingContextId::primary_top_level()
+    );
     assert_eq!(frame.kind, FrameKind::Main);
     assert_eq!(frame.owner_element_handle, None);
     assert_eq!(frame.window_proxy_id, WindowProxyId(0));
@@ -195,6 +200,7 @@ fn main_frame_identity_uses_reserved_owner_records() {
         .current_main_owner_snapshot()
         .expect("main owner snapshot should exist");
     assert_eq!(snapshot.frame_id, frame_id);
+    assert_eq!(snapshot.browsing_context_id, frame.browsing_context_id);
     assert_eq!(snapshot.kind, FrameKind::Main);
     assert_eq!(snapshot.parent_frame_id, None);
     assert_eq!(snapshot.owner_element_handle, None);
@@ -284,6 +290,52 @@ fn main_frame_identity_uses_reserved_owner_records() {
 }
 
 #[test]
+fn child_browsing_context_identity_is_stable_and_not_an_owner_handle() {
+    let mut store = FrameOwnerStore::default();
+    let first_handle = handle(900);
+    let second_handle = handle(901);
+
+    let first_frame = store.ensure_child_frame(
+        first_handle,
+        "typed-context-first".to_owned(),
+        Some("main".to_owned()),
+    );
+    let first_id = store
+        .browsing_context_id_for_child_handle(first_handle)
+        .expect("first child browsing-context identity");
+    assert_eq!(first_id.kind(), BrowsingContextKind::Nested);
+
+    assert_eq!(
+        store.ensure_child_frame(
+            first_handle,
+            "typed-context-first".to_owned(),
+            Some("main".to_owned()),
+        ),
+        first_frame
+    );
+    assert_eq!(
+        store.browsing_context_id_for_child_handle(first_handle),
+        Some(first_id),
+        "rediscovery of the same child context must keep its browser identity"
+    );
+
+    store.ensure_child_frame(
+        second_handle,
+        "typed-context-second".to_owned(),
+        Some("main".to_owned()),
+    );
+    let second_id = store
+        .browsing_context_id_for_child_handle(second_handle)
+        .expect("second child browsing-context identity");
+    assert_ne!(first_id, second_id);
+    assert_ne!(
+        first_id.value(),
+        first_handle.index() as u64,
+        "the identity allocator must not project the DOM owner handle"
+    );
+}
+
+#[test]
 fn main_document_replacement_rotates_document_owner_without_replacing_window_or_realm() {
     let mut store = FrameOwnerStore::default();
     store.ensure_main_frame(
@@ -310,6 +362,10 @@ fn main_document_replacement_rotates_document_owner_without_replacing_window_or_
         .current_main_owner_snapshot()
         .expect("replacement main owner snapshot");
 
+    assert_eq!(
+        transition.browsing_context_id(),
+        original.browsing_context_id
+    );
     assert_eq!(transition.retired_owner().document_id, original.document_id);
     assert_eq!(
         transition.current_owner().document_id,
@@ -344,6 +400,11 @@ fn main_document_replacement_rotates_document_owner_without_replacing_window_or_
         chained_transition.retired_owner(),
         transition.current_owner(),
         "same-turn replacements must form one contiguous owner transition chain"
+    );
+    assert_eq!(
+        chained_transition.browsing_context_id(),
+        transition.browsing_context_id(),
+        "main replacement chain must retain one browsing-context identity"
     );
     assert_eq!(
         store.take_pending_main_document_owner_transitions(),
@@ -2102,6 +2163,9 @@ fn replace_child_document_returns_one_old_to_new_owner_transition() {
     let first_owner = store
         .current_child_document_task_owner(child_handle)
         .expect("initial document should expose a task owner");
+    let browsing_context_id = store
+        .browsing_context_id_for_child_handle(child_handle)
+        .expect("attached child should expose its browsing-context identity");
 
     let transition = store
         .replace_child_document(
@@ -2121,7 +2185,15 @@ fn replace_child_document_returns_one_old_to_new_owner_transition() {
         .expect("replacement transition should install a current owner");
 
     assert_eq!(transition.child_handle(), child_handle);
+    assert_eq!(transition.browsing_context_id(), browsing_context_id);
     assert_eq!(transition.retired_owner(), Some(first_owner));
+    let retirement = transition
+        .external_state_retirement(handle(331))
+        .expect("replacement must expose exact external-state retirement input");
+    assert_eq!(retirement.child_handle(), child_handle);
+    assert_eq!(retirement.browsing_context_id(), browsing_context_id);
+    assert_eq!(retirement.retired_owner(), first_owner);
+    assert_eq!(retirement.document_handle(), handle(331));
     assert_ne!(first_owner, second_owner);
     assert_eq!(
         first_owner.scheduler_lane_id,

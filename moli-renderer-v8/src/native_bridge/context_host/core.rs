@@ -76,6 +76,372 @@ impl JsContextHost {
         }
     }
 
+    pub(crate) fn bind_page_script_environment(
+        &mut self,
+        environment: crate::script_vm::RendererPageScriptEnvironment,
+    ) {
+        assert!(
+            self.page_script_environment.is_none(),
+            "context host Page script environment must be bound only once"
+        );
+        self.bind_auxiliary_page_reservation_allocator(
+            environment.auxiliary_page_reservation_allocator(),
+        );
+        self.top_level_page_active = environment.top_level_page_is_active();
+        self.dom_host()
+            .set_page_focused(environment.top_level_page_is_focused());
+        environment.replicate_current_top_level_document(
+            self.document_url(),
+            &self.main_document_serialized_origin,
+            self.main_window_opaque_origin_nonce(),
+            self.document_domain_override.clone(),
+        );
+        let identity = (environment.page_id(), environment.isolate_identity_key());
+        assert!(
+            self.page_script_agent_identity
+                .is_none_or(|previous| previous == identity),
+            "context host Page script-agent identity must not be rebound"
+        );
+        self.page_script_agent_identity = Some(identity);
+        self.page_script_environment = Some(environment);
+    }
+
+    pub(crate) fn top_level_page_is_active(&self) -> bool {
+        self.page_script_environment.as_ref().map_or(
+            self.top_level_page_active,
+            crate::script_vm::RendererPageScriptEnvironment::top_level_page_is_active,
+        )
+    }
+
+    pub(crate) fn top_level_page_is_focused(&self) -> bool {
+        self.page_script_environment.as_ref().map_or_else(
+            || self.dom_host().page_focused(),
+            |environment| environment.top_level_page_is_focused(),
+        )
+    }
+
+    pub(crate) fn top_level_page_residence(&self) -> Option<crate::RendererResolvedPopupTarget> {
+        self.page_script_environment
+            .as_ref()
+            .map(crate::script_vm::RendererPageScriptEnvironment::top_level_page_residence)
+    }
+
+    pub(crate) fn top_level_window_proxy_endpoint_id(
+        &self,
+    ) -> Option<crate::browsing_context_model::TopLevelWindowProxyEndpointId> {
+        self.page_script_environment.as_ref().map(
+            crate::script_vm::RendererPageScriptEnvironment::top_level_window_proxy_endpoint_id,
+        )
+    }
+
+    pub(crate) fn remote_window_proxy_channel(
+        &self,
+    ) -> Option<crate::runtime::RendererRemoteWindowProxyChannel> {
+        self.page_script_environment
+            .as_ref()
+            .map(crate::script_vm::RendererPageScriptEnvironment::remote_window_proxy_channel)
+    }
+
+    pub(crate) fn related_page_remote_frame_tree_snapshot(
+        &self,
+        endpoint: crate::browsing_context_model::TopLevelWindowProxyEndpointId,
+    ) -> Option<Vec<crate::script_vm::RendererRemoteFrameSnapshot>> {
+        self.page_script_environment
+            .as_ref()?
+            .remote_frame_tree_snapshot(endpoint)
+    }
+
+    pub(crate) fn remote_window_proxy_source(
+        &self,
+        scope: &mut v8::PinScope<'_, '_>,
+    ) -> Option<crate::runtime::RendererRemoteWindowProxySource> {
+        if let Some(identity) = self.current_runtime_window_execution_context_identity(scope) {
+            return self.remote_window_proxy_source_for_identity(identity);
+        }
+        let source = crate::runtime::RendererRemoteWindowProxySource::new(
+            self.top_level_window_proxy_endpoint_id()?,
+            self.top_level_page_residence()?,
+            self.main_document_serialized_origin.clone(),
+        );
+        Some(source)
+    }
+
+    pub(crate) fn remote_window_proxy_source_for_identity(
+        &self,
+        identity: WindowExecutionContextIdentity,
+    ) -> Option<crate::runtime::RendererRemoteWindowProxySource> {
+        if !self.window_execution_context_identity_is_current(identity) {
+            return None;
+        }
+        let source = crate::runtime::RendererRemoteWindowProxySource::new(
+            self.top_level_window_proxy_endpoint_id()?,
+            self.top_level_page_residence()?,
+            self.main_document_serialized_origin.clone(),
+        );
+        let source_scope = identity.dispatch_scope();
+        let OwnerDispatchScope::Child(handle) = source_scope else {
+            return Some(source);
+        };
+        let frame = crate::script_vm::RendererRemoteFrameToken {
+            endpoint: self.top_level_window_proxy_endpoint_id()?,
+            root_document: self.root_document_lifecycle_identity()?,
+            browsing_context_id: self.child_browsing_context_id_for_handle(handle)?,
+        };
+        Some(source.with_frame(frame, self.child_browsing_context_window_origin(handle)?))
+    }
+
+    pub(crate) fn top_level_serialized_origin(&self) -> &str {
+        &self.main_document_serialized_origin
+    }
+
+    pub(crate) fn set_top_level_page_activation(
+        &mut self,
+        active: bool,
+        focused: bool,
+    ) -> (bool, bool) {
+        let changed = self
+            .page_script_environment
+            .as_ref()
+            .map(|environment| environment.set_top_level_page_activation(active, focused))
+            .unwrap_or_else(|| {
+                (
+                    self.top_level_page_active != active,
+                    self.dom_host().page_focused() != focused,
+                )
+            });
+        self.top_level_page_active = active;
+        self.dom_host().set_page_focused(focused);
+        changed
+    }
+
+    pub(crate) fn shares_related_page_script_agent_with(&self, other: &Self) -> bool {
+        self.page_script_agent_identity
+            .zip(other.page_script_agent_identity)
+            .is_some_and(|((page_id, isolate), (other_page_id, other_isolate))| {
+                page_id != other_page_id && isolate == other_isolate
+            })
+    }
+
+    pub(crate) fn shares_page_script_agent_with(&self, other: &Self) -> bool {
+        self.page_script_agent_identity
+            .zip(other.page_script_agent_identity)
+            .is_some_and(|((_, isolate), (_, other_isolate))| isolate == other_isolate)
+    }
+
+    pub(crate) fn top_level_browsing_context_is_closed(&self) -> bool {
+        self.page_script_environment
+            .as_ref()
+            .is_some_and(|environment| environment.top_level_browsing_context_is_closed())
+    }
+
+    pub(crate) fn top_level_opener_value<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+    ) -> Option<v8::Local<'s, v8::Value>> {
+        self.page_script_environment
+            .as_ref()
+            .and_then(|environment| environment.top_level_opener_value(scope))
+    }
+
+    pub(crate) fn set_top_level_browsing_context_name(&self, name: String) {
+        if let Some(environment) = self.page_script_environment.as_ref() {
+            environment.set_top_level_browsing_context_name(name);
+        }
+    }
+
+    pub(crate) fn related_page_named_target_for_navigation<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        name: &str,
+        replacement_opener: Option<v8::Local<'s, v8::Object>>,
+    ) -> Option<(
+        v8::Local<'s, v8::Object>,
+        v8::Local<'s, v8::Context>,
+        crate::RendererResolvedPopupTarget,
+    )> {
+        self.page_script_environment
+            .as_ref()?
+            .related_page_named_target_for_navigation(scope, name, replacement_opener)
+    }
+
+    pub(crate) fn related_page_top_level_targets_for_navigation(
+        &self,
+    ) -> Vec<crate::script_vm::RendererRelatedPageTopLevelNavigationTarget> {
+        self.page_script_environment
+            .as_ref()
+            .map(|environment| environment.related_page_top_level_targets_for_navigation())
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn related_page_current_context_for_residence<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        residence: crate::RendererResolvedPopupTarget,
+    ) -> Option<v8::Local<'s, v8::Context>> {
+        self.page_script_environment
+            .as_ref()?
+            .related_page_current_context_for_residence(scope, residence)
+    }
+
+    pub(crate) fn related_page_target_for_window_proxy_endpoint<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        endpoint: crate::browsing_context_model::TopLevelWindowProxyEndpointId,
+    ) -> Option<crate::script_vm::RendererRelatedTopLevelWindowProxyResolution<'s>> {
+        self.page_script_environment
+            .as_ref()?
+            .related_page_target_for_window_proxy_endpoint(scope, endpoint)
+    }
+
+    pub(crate) fn replace_related_page_top_level_opener<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        residence: crate::RendererResolvedPopupTarget,
+        opener: v8::Local<'s, v8::Object>,
+    ) -> bool {
+        self.page_script_environment
+            .as_ref()
+            .is_some_and(|environment| {
+                environment.replace_related_page_top_level_opener(scope, residence, opener)
+            })
+    }
+
+    pub(crate) fn sever_top_level_opener(&self, scope: &mut v8::PinScope<'_, '_>) -> bool {
+        let Some(environment) = self.page_script_environment.as_ref() else {
+            return false;
+        };
+        environment.sever_top_level_opener_edge(scope);
+        true
+    }
+
+    pub(crate) fn top_level_browsing_context_opened_by_dom(&self) -> bool {
+        self.page_script_environment
+            .as_ref()
+            .is_some_and(crate::script_vm::RendererPageScriptEnvironment::opened_by_dom)
+    }
+
+    pub(crate) fn current_top_level_cross_origin_opener_policy(
+        &self,
+    ) -> Option<crate::cross_origin_isolation::TopLevelDocumentCrossOriginOpenerPolicy> {
+        self.page_script_environment
+            .as_ref()
+            .and_then(|environment| environment.current_top_level_cross_origin_opener_policy())
+    }
+
+    pub(crate) fn allow_scripts_to_close_windows(&self) -> bool {
+        self.browser_context_runtime
+            .allow_scripts_to_close_windows()
+    }
+
+    pub(crate) fn begin_top_level_beforeunload_dispatch(&mut self) -> bool {
+        if self.top_level_beforeunload_in_progress {
+            return false;
+        }
+        self.top_level_beforeunload_in_progress = true;
+        true
+    }
+
+    pub(crate) fn finish_top_level_beforeunload_dispatch(&mut self) {
+        assert!(
+            self.top_level_beforeunload_in_progress,
+            "top-level beforeunload completion requires an active dispatch"
+        );
+        self.top_level_beforeunload_in_progress = false;
+    }
+
+    pub(crate) fn begin_top_level_unload_dispatch(&mut self) -> bool {
+        if self.top_level_unload_dispatched {
+            return false;
+        }
+        self.top_level_unload_dispatched = true;
+        true
+    }
+
+    /// Commits one already-authorized Page-scoped close and appends its typed
+    /// browser-owner action to this Page's exact output stream.
+    pub(crate) fn accept_top_level_browsing_context_close(
+        &mut self,
+        source: crate::runtime::RendererTopLevelCloseSource,
+    ) -> bool {
+        let Some(environment) = self.page_script_environment.clone() else {
+            return false;
+        };
+        if !environment.begin_top_level_browsing_context_close() {
+            return true;
+        }
+        assert!(
+            self.append_live_turn_owner_action(crate::runtime::RendererOwnerAction::TopLevelClose(
+                source
+            ),),
+            "a live Page close must retain its renderer output journal"
+        );
+        environment.signal_top_level_close_output_handoff();
+        true
+    }
+
+    pub(crate) fn acknowledge_top_level_browsing_context_close_unload(
+        &mut self,
+        source: crate::runtime::RendererTopLevelCloseSource,
+    ) -> bool {
+        self.append_live_turn_owner_action(
+            crate::runtime::RendererOwnerAction::TopLevelCloseUnloadAck(source),
+        )
+    }
+
+    pub(crate) fn acknowledge_top_level_browsing_context_close_network_drained(
+        &mut self,
+        source: crate::runtime::RendererTopLevelCloseSource,
+    ) -> bool {
+        self.append_live_turn_owner_action(
+            crate::runtime::RendererOwnerAction::TopLevelCloseNetworkDrained(source),
+        )
+    }
+
+    pub(crate) fn bind_auxiliary_page_reservation_allocator(
+        &mut self,
+        allocator: RendererAuxiliaryPageReservationAllocator,
+    ) {
+        assert!(
+            self.auxiliary_page_reservation_allocator
+                .replace(allocator)
+                .is_none(),
+            "context host auxiliary Page allocator must be bound only once"
+        );
+    }
+
+    pub(crate) fn reserve_pending_auxiliary_page(
+        &self,
+        exposes_opener: bool,
+    ) -> Option<RendererPendingAuxiliaryPage> {
+        self.auxiliary_page_reservation_allocator
+            .as_ref()
+            .map(|allocator| allocator.reserve(exposes_opener, true))
+    }
+
+    /// Reserves a browser-context-created auxiliary Page. Unlike Window.open,
+    /// hyperlink, and form producers, ServiceWorker/notification producers do
+    /// not make the resulting top-level context script-closable after its
+    /// session history grows.
+    pub(crate) fn reserve_pending_browser_context_auxiliary_page(
+        &self,
+    ) -> Option<RendererPendingAuxiliaryPage> {
+        self.auxiliary_page_reservation_allocator
+            .as_ref()
+            .map(|allocator| allocator.reserve(false, false))
+    }
+
+    pub(crate) fn stage_related_initial_empty_page_in_scope(
+        &self,
+        scope: &mut v8::PinScope<'_, '_>,
+        pending: RendererPendingAuxiliaryPage,
+        init: crate::runtime::RendererRelatedInitialEmptyPageRealmInit,
+    ) -> anyhow::Result<()> {
+        self.page_script_environment
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("context host is missing its Page script environment"))?
+            .stage_related_initial_empty_page_in_scope(scope, &self.bridge.bindings, pending, init)
+    }
+
     pub(crate) fn install_page_default_context(
         &mut self,
         scope: &mut v8::PinScope<'_, '_, ()>,
@@ -128,11 +494,39 @@ impl JsContextHost {
     pub(crate) fn mark_focus_changed(&mut self) {
         self.focus_change_epoch = self.focus_change_epoch.wrapping_add(1);
     }
+
+    pub(crate) fn focused_document_handle(&self) -> DomHandle {
+        let focused = self.focused_document_handle;
+        if focused == self.document_handle()
+            || self
+                .child_browsing_context_host_for_document_handle(focused)
+                .is_some()
+        {
+            focused
+        } else {
+            self.document_handle()
+        }
+    }
+
+    pub(crate) fn set_focused_document_from_target(&mut self, target: DomHandle) {
+        let document = if self.dom_host().is_html_element_named(target, "iframe")
+            || self.dom_host().is_html_element_named(target, "frame")
+        {
+            self.child_browsing_context_document_handle(target)
+                .or_else(|| self.dom_host().owner_document_handle(target))
+        } else {
+            self.dom_host().owner_document_handle(target)
+        };
+        if let Some(document) = document {
+            self.focused_document_handle = document;
+        }
+    }
 }
 
 impl JsContextHost {
     pub(crate) fn new(
         runtime: &mut DocumentRuntime,
+        deferred_context_host_release_queue: crate::script_vm::RendererDeferredContextHostReleaseQueue,
         mut frame_owner_store: FrameOwnerStore,
         bindings: NativeBridgeBindings,
         backend_node_registry: SharedRendererBackendNodeRegistry,
@@ -145,6 +539,7 @@ impl JsContextHost {
         page_context_cancel_rx: RendererPageContextCancelReceiver,
         top_level_storage_key: Option<moli_storage_key::MoliStorageKey>,
         reserved_service_worker_client_id: Option<ServiceWorkerClientId>,
+        initial_document_origin: Option<String>,
     ) -> Self {
         let message_port_registry = browser_context_runtime.message_port_registry();
         let broadcast_channel_registry = browser_context_runtime.broadcast_channel_registry();
@@ -153,9 +548,27 @@ impl JsContextHost {
         let javascript_dialog_handler_enabled =
             browser_context_runtime.javascript_dialog_handler_enabled();
         let document_url = runtime.document_url().clone();
+        let main_document_snapshot = frame_owner_store
+            .current_main_owner_snapshot()
+            .expect("main frame owner must exist before client projection");
+        let document_handle = main_document_snapshot.document_handle;
+        let main_document_serialized_origin = main_document_snapshot.settings.origin.clone();
+        if let Some(initial_document_origin) = initial_document_origin {
+            assert_eq!(
+                main_document_serialized_origin, initial_document_origin,
+                "FrameOwnerStore must retain the creator-frozen main Document origin"
+            );
+        }
+        let top_level_opaque_origin_nonce =
+            (main_document_serialized_origin == "null").then(|| {
+                top_level_storage_key
+                    .as_ref()
+                    .and_then(moli_storage_key::MoliStorageKey::opaque_nonce)
+                    .unwrap_or_else(|| browser_context_runtime.next_opaque_origin_nonce())
+            });
         let main_document_owner = frame_owner_store
             .current_main_document_task_owner()
-            .expect("main frame owner must exist before client projection");
+            .expect("main frame owner must expose a task owner before client projection");
         assert_eq!(
             runtime.main_frame_document_task_owner(),
             Some(main_document_owner),
@@ -196,6 +609,8 @@ impl JsContextHost {
             super::visual_resource_generation::VisualResourceGeneration::default();
         let mut host = Self {
             runtime: runtime as *mut DocumentRuntime,
+            deferred_context_host_release_queue,
+            retained_document_runtime: None,
             layout_policy: moli_page_types::LayoutPolicy::default(),
             document_layout_state: RefCell::new(super::layout_state::DocumentLayoutState::default()),
             layout_pass_active: Cell::new(false),
@@ -209,8 +624,16 @@ impl JsContextHost {
             #[cfg(test)]
             force_fresh_layout_reads_for_test: false,
             root_document_lifecycle: None,
+            root_document_is_initial_empty: false,
             output_journal: None,
+            auxiliary_page_reservation_allocator: None,
+            page_script_environment: None,
+            page_script_agent_identity: None,
+            top_level_page_active: true,
             page_context_resources_closed: false,
+            top_level_beforeunload_in_progress: false,
+            top_level_unload_dispatched: false,
+            context_host_lifecycle: Rc::new(Cell::new(crate::util::ContextHostLifecycle::Active)),
             page_default_context: None,
             v8_finalizers: crate::v8_finalizer::V8FinalizerRegistry::default(),
             bridge: NativeDomBridge::new(bindings),
@@ -244,21 +667,25 @@ impl JsContextHost {
             child_document_script_schedulers: FrameDocumentScriptSchedulerStore::default(),
             child_document_parsers: ChildDocumentParserStore::default(),
             child_window_proxy_records: ChildWindowProxyRecords::default(),
+            top_level_cross_origin_window_access_surface: None,
             child_default_context_bootstrap: None,
             #[cfg(test)]
             force_child_default_context_preflight_failure: false,
             child_browsing_context_document_handles: HashMap::new(),
+            main_document_serialized_origin,
             document_domain_override: None,
             next_child_browsing_context_id: 1,
             next_child_document_load_id: 0,
             next_child_classic_script_load_id: 0,
             pending_child_document_navigations: HashMap::new(),
+            pending_remote_frame_navigations: HashMap::new(),
             document_resource_loaders: DocumentResourceLoaderRegistry::default(),
             web_storage_store: new_shared_web_storage_store(),
             session_storage_store: new_shared_web_storage_store(),
             indexed_db_manager: None,
             storage_bucket_store: new_shared_storage_bucket_store(),
             stored_document_start_scripts: Vec::new(),
+            child_document_start_script_snapshots: HashMap::new(),
             stored_runtime_bindings: Vec::new(),
             app_manifest_link_change_epoch: 0,
             extra_http_headers: Vec::new(),
@@ -266,7 +693,7 @@ impl JsContextHost {
             locale_override: None,
             timezone_override: None,
             idle_override: None,
-            protocol_user_gesture_activation_depth: 0,
+            transient_user_activation: TransientUserActivationLedger::default(),
             current_input_event: None,
             webdriver_bidi_file_prompt_handler_stack: Vec::new(),
             emulated_media: crate::protocol_types::EmulatedMediaOverrides::default(),
@@ -282,8 +709,6 @@ impl JsContextHost {
             pending_service_worker_ready: HashMap::new(),
             service_worker_registration_watchers: Vec::new(),
             service_worker_lifecycle_watched_scopes: HashSet::new(),
-            service_worker_popup_clients: HashMap::new(),
-            pending_service_worker_clients_open_window_popups: HashMap::new(),
             pending_window_messages: VecDeque::new(),
             next_window_message_task_id:
                 crate::page_task_queue::RendererPageWindowMessageTaskId::from_raw(1),
@@ -291,7 +716,6 @@ impl JsContextHost {
             window_execution_contexts: HashMap::new(),
             current_window_message_source: None,
             pending_active_child_window_restore: None,
-            pending_active_lightweight_popup_restore: None,
             pending_child_subresource_request_scope_pop: false,
             pending_text_control_change_commit: None,
             directory_reader_callbacks:
@@ -375,8 +799,8 @@ impl JsContextHost {
             child_shared_worker_client_owner_ids: HashMap::new(),
             shared_worker_clients: SharedWorkerClientEndpointOwner::default(),
             top_level_storage_key,
-            web_storage_opaque_context_nonce: None,
-            child_web_storage_opaque_context_nonces: HashMap::new(),
+            top_level_opaque_origin_nonce,
+            child_opaque_origin_nonce_bindings: HashMap::new(),
             broadcast_channel_wrappers: HashMap::new(),
             form_past_named_items: HashMap::new(),
             button_element_targets: HashMap::new(),
@@ -387,8 +811,9 @@ impl JsContextHost {
             current_inline_script_stack: Vec::new(),
             compiled_string_provenance: Vec::new(),
             active_runtime_command_cause: None,
+            active_top_level_navigation_source: None,
             active_inspector_dispatch: false,
-            pending_top_level_navigation: None,
+            pending_top_level_navigations: VecDeque::new(),
             ordinary_page_turn_navigation_handoff_active: false,
             next_navigation_attempt_id: 1,
             active_navigation_attempts: HashMap::new(),
@@ -406,16 +831,7 @@ impl JsContextHost {
             pending_download_activations: Vec::new(),
             #[cfg(test)]
             pending_popup_activations: Vec::new(),
-            next_lightweight_popup_id: 1,
-            next_lightweight_popup_local_window_id: 1,
-            next_lightweight_popup_document_id: 1,
-            next_lightweight_popup_document_load_id: 0,
-            next_lightweight_popup_classic_script_load_id: 0,
-            lightweight_popup_browsing_contexts: HashMap::new(),
-            lightweight_popup_window_names: HashMap::new(),
-            lightweight_popup_document_handles: HashMap::new(),
-            pending_lightweight_popup_document_loads: HashMap::new(),
-            pending_lightweight_popup_classic_script_loads: HashMap::new(),
+            next_auxiliary_browsing_context_id: 1,
             #[cfg(test)]
             pending_javascript_dialogs: Vec::new(),
             javascript_dialog_runtime,
@@ -423,6 +839,7 @@ impl JsContextHost {
             javascript_dialog_handler_enabled,
             pending_network_output: Vec::new(),
             focus_change_epoch: 0,
+            focused_document_handle: document_handle,
             next_subresource_network_request_handle: 1,
             subresource_activity_epoch: 0,
             subresource_last_activity_at: std::time::Instant::now(),
@@ -484,6 +901,51 @@ impl JsContextHost {
         self.root_document_lifecycle = Some(lifecycle);
     }
 
+    pub(crate) fn mark_root_document_initial_empty(&mut self) {
+        debug_assert!(
+            moli_url::is_about_blank(self.document_url()),
+            "only an about:blank root Document can be marked initial empty"
+        );
+        self.root_document_is_initial_empty = true;
+        self.refresh_top_level_cross_origin_opener_policy_initial_state();
+    }
+
+    pub(crate) fn root_document_is_initial_empty(&self) -> bool {
+        self.root_document_is_initial_empty
+    }
+
+    pub(crate) fn commit_top_level_cross_origin_opener_policy(
+        &self,
+        commit: crate::cross_origin_isolation::CrossOriginOpenerPolicyCommit,
+        document_referrer: String,
+    ) -> Vec<moli_fetch::Request> {
+        if let Some(environment) = self.page_script_environment.as_ref() {
+            let (state, reports) = commit.resolve_for_document(
+                self.document_url(),
+                self.main_document_serialized_origin.clone(),
+                document_referrer,
+                self.root_document_is_initial_empty,
+            );
+            environment.commit_top_level_cross_origin_opener_policy(state);
+            return reports;
+        }
+        Vec::new()
+    }
+
+    fn refresh_top_level_cross_origin_opener_policy_initial_state(&self) {
+        let Some(environment) = self.page_script_environment.as_ref() else {
+            return;
+        };
+        let Some(current) = environment.current_top_level_cross_origin_opener_policy() else {
+            return;
+        };
+        let document_referrer = current.document_referrer().to_owned();
+        let _ = self.commit_top_level_cross_origin_opener_policy(
+            crate::cross_origin_isolation::CrossOriginOpenerPolicyCommit::Inherited(current),
+            document_referrer,
+        );
+    }
+
     /// Returns the exact root Document that owns Page-scoped protocol
     /// handoffs produced by this host.
     ///
@@ -499,6 +961,12 @@ impl JsContextHost {
     }
 
     pub(crate) fn open_root_document(&mut self, scope: &mut v8::PinScope<'_, '_>) {
+        // Blink's Document::open() explicitly makes an initial empty Document
+        // cease to be initial. Keep this state on the Document owner rather
+        // than inferring it from the current URL, which same-document
+        // navigation is allowed to change.
+        self.root_document_is_initial_empty = false;
+        self.refresh_top_level_cross_origin_opener_policy_initial_state();
         let descendant_count_before = self.child_browsing_contexts.len();
         for child_handle in self.top_level_child_browsing_context_handles_in_document_order() {
             self.drop_child_browsing_context_subtree_with_window_realm(scope, child_handle);
@@ -696,18 +1164,6 @@ impl JsContextHost {
             )
             .dom_manipulation()
             .hash_change_delivery()
-    }
-
-    pub(crate) fn page_popup_load_event_sender(
-        &self,
-    ) -> crate::page_task_queue::RendererPagePopupLoadEventSender {
-        self.page_task_capabilities
-            .get()
-            .expect(
-                "a live Page Window must install its complete Page task capabilities before popup load admission",
-            )
-            .dom_manipulation()
-            .popup_load_event()
     }
 
     pub(crate) fn page_file_entry_file_callback_sender(
@@ -1876,26 +2332,6 @@ impl JsContextHost {
         }
     }
 
-    pub(crate) fn clear_custom_element_registry_associations_for_document(
-        &mut self,
-        document_handle: DomHandle,
-    ) {
-        let stale_handles = self
-            .custom_element_registry_associations
-            .keys()
-            .copied()
-            .filter(|associated_handle| {
-                *associated_handle == document_handle
-                    || self.dom_host().owner_document_handle(*associated_handle)
-                        == Some(document_handle)
-            })
-            .collect::<Vec<_>>();
-        for handle in stale_handles {
-            self.custom_element_registry_associations
-                .shift_remove(&handle);
-        }
-    }
-
     pub(crate) fn effective_custom_element_registry_association(
         &self,
         handle: DomHandle,
@@ -2075,11 +2511,19 @@ impl JsContextHost {
         child_handle: DomHandle,
         prototype_name: &str,
     ) -> Option<v8::Local<'s, v8::Value>> {
-        let window = self.existing_child_browsing_context_window_wrapper(scope, child_handle)?;
-        let constructor =
-            window.get(scope, crate::util::v8_string(scope, prototype_name)?.into())?;
-        let constructor = v8::Local::<v8::Object>::try_from(constructor).ok()?;
-        constructor.get(scope, crate::util::v8str(scope, "prototype").into())
+        let dispatch_scope = OwnerDispatchScope::Child(child_handle);
+        let owner = self.current_window_execution_context_owner(dispatch_scope)?;
+        let (_, context) = self.window_execution_context(scope, owner, dispatch_scope)?;
+        let prototype = {
+            let child_scope = &mut v8::ContextScope::new(scope, context);
+            let prototype = crate::context_bootstrap::ensure_intrinsic_interface_prototype(
+                child_scope,
+                prototype_name,
+            )
+            .ok()?;
+            v8::Global::new(child_scope, prototype)
+        };
+        Some(v8::Local::new(scope, &prototype).into())
     }
 
     pub(crate) fn custom_elements_for_registry_key(

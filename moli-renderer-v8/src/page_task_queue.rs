@@ -34,7 +34,6 @@ mod owner_sources;
 mod parse_time;
 mod parser_async_module_admission;
 mod parser_owned_module_continuation;
-mod popup_load_event;
 mod post_domcontentloaded_runtime;
 mod post_parse_owner_work;
 mod rendering_update;
@@ -370,11 +369,6 @@ pub(crate) use self::parser_owned_module_continuation::{
     PageParserOwnedModuleContinuationBodyActivity, PageParserOwnedModuleContinuationTargetEffect,
     PageParserOwnedModuleContinuationTurnAction,
 };
-pub(crate) use self::popup_load_event::{
-    PagePopupLoadEventTargetEffect, PagePopupLoadEventTurnAction, PagePopupLoadEventTurnOutcome,
-    RendererPagePopupLoadEventOwner, RendererPagePopupLoadEventSender,
-    RendererPagePopupLoadEventTask,
-};
 pub(crate) use self::post_parse_owner_work::{
     PostParseLifecycleQueueStats, PostParseLifecycleWork, PostParsePageOwnedWork,
     post_parse_lifecycle_queue_stats,
@@ -474,7 +468,8 @@ pub(crate) use self::user_interaction::{
 pub(crate) use self::v8_foreground_task::RendererPageV8ForegroundTaskOwner;
 pub(crate) use self::v8_foreground_task::{
     PageV8ForegroundTaskEffect, PageV8ForegroundTaskTurnAction, PageV8ForegroundTaskTurnOutcome,
-    RendererPageV8ForegroundTask, RendererPageV8ForegroundTaskSender,
+    RendererPageV8ForegroundTask, RendererPageV8ForegroundTaskKind,
+    RendererPageV8ForegroundTaskSender,
 };
 pub(crate) use self::view_transition_update::{
     PageViewTransitionUpdateTargetEffect, PageViewTransitionUpdateTurnAction,

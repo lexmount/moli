@@ -269,9 +269,6 @@ pub(super) use hit_test::{
     node_document_elements_from_point_callback, node_shadow_root_element_from_point_callback,
     node_shadow_root_elements_from_point_callback,
 };
-pub(in crate::native_bridge) use lifecycle::{
-    append_detached_html_document_body_html, set_detached_html_document_body_html,
-};
 pub(super) use lifecycle::{
     node_document_close_callback, node_document_exec_command_callback, node_document_open_callback,
     node_document_query_command_enabled_callback, node_document_query_command_indeterm_callback,
@@ -965,10 +962,16 @@ fn document_referrer_getter_function<'s>(
         return;
     };
     let runtime = unsafe { &*runtime_ptr };
-    let referrer = runtime
-        .child_browsing_context_referrer_for_document_handle(handle)
-        .or_else(|| runtime.lightweight_popup_referrer_for_document_handle(handle))
-        .unwrap_or("");
+    let referrer = if handle == runtime.document_handle() {
+        runtime
+            .document_policy_container()
+            .document_referrer
+            .as_str()
+    } else {
+        runtime
+            .child_browsing_context_referrer_for_document_handle(handle)
+            .unwrap_or("")
+    };
     set_document_string_return_value(scope, &mut rv, referrer);
 }
 

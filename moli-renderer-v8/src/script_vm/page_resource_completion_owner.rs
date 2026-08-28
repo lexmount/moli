@@ -97,22 +97,6 @@ impl ScriptVm {
                         current_target,
                     )
                 }),
-            RendererPageResourceCompletionLocalOwner::PopupDocumentLoad(target) => self
-                .current_lightweight_popup_document_fetch_target(target.load_id())
-                .map(|current_target| {
-                    RendererPageResourceCompletionOwner::popup_document_load(
-                        root_document,
-                        current_target,
-                    )
-                }),
-            RendererPageResourceCompletionLocalOwner::PopupClassicScript(target) => self
-                .current_lightweight_popup_classic_script_fetch_target(target.load_id())
-                .map(|current_target| {
-                    RendererPageResourceCompletionOwner::popup_classic_script(
-                        root_document,
-                        current_target,
-                    )
-                }),
         }
     }
 }

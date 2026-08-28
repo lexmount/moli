@@ -413,15 +413,17 @@ impl ServiceWorkerRuntimeService {
                     .endpoint
                     .page_task_sender()
                     .expect("window client should have a page completion endpoint"),
+                source_version.script_url.clone(),
             )
         };
-        let (host, completion_tx) = delivery;
+        let (host, completion_tx, source_script_url) = delivery;
         let _ = completion_tx.send_service_worker_clients_open_window_request(
             ServiceWorkerClientsOpenWindowRequestCompletion {
                 host,
                 request_id: open_window.request_id,
                 source_version_id: open_window.source_version_id,
                 source_run: run,
+                source_script_url,
                 url: open_window.url,
             },
         );
@@ -439,6 +441,39 @@ impl ServiceWorkerRuntimeService {
                 result: completion.result,
             },
         );
+    }
+
+    pub(in crate::service_worker_runtime) fn finish_clients_open_window_page_completion(
+        &self,
+        completion: crate::service_worker_runtime::ServiceWorkerOpenWindowPageCompletion,
+    ) {
+        let result = self.clients_open_window_result_for_page_completion(&completion);
+        self.finish_clients_open_window_completed(ServiceWorkerClientsOpenWindowCompletion {
+            request_id: completion.request_id,
+            source_version_id: completion.source_version_id,
+            source_run: completion.source_run.clone(),
+            result,
+        });
+    }
+
+    pub(super) fn clients_open_window_result_for_page_completion(
+        &self,
+        completion: &crate::service_worker_runtime::ServiceWorkerOpenWindowPageCompletion,
+    ) -> Result<Option<ServiceWorkerClientSnapshot>, ServiceWorkerClientsOpenWindowError> {
+        match completion.committed_page {
+            Some((page_id, service_worker_client_id)) if page_id == completion.expected_page_id => {
+                self.client_navigate_result_for_current_window_client(
+                    completion.source_version_id,
+                    ServiceWorkerClientId::from_u64_for_worker(service_worker_client_id),
+                )
+                .map_err(|error| match error {
+                    ServiceWorkerClientNavigateError::TypeError(message) => {
+                        ServiceWorkerClientsOpenWindowError::type_error(message)
+                    }
+                })
+            }
+            Some(_) | None => Ok(None),
+        }
     }
 
     pub(crate) fn client_navigate_result_for_current_window_client(
@@ -462,6 +497,9 @@ impl ServiceWorkerRuntimeService {
             return Ok(None);
         };
         if client.client_type != ServiceWorkerClientType::Window {
+            return Ok(None);
+        }
+        if !client.execution_ready || client.discarded_or_frozen {
             return Ok(None);
         }
         if !moli_url::same_origin(&source_version.script_url, &client.document_url) {

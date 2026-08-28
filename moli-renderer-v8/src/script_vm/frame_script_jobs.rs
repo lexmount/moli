@@ -119,7 +119,7 @@ impl ScriptVm {
         completion_mode: FrameScriptJobSourceTextCompletionMode,
         execution_boundary: FrameScriptJobExecutionBoundary,
     ) -> Result<SourceTextScriptCompletion> {
-        let Some(job) = self.prepare_inline_classic_frame_script_job(job)? else {
+        let Some(job) = self.prepare_frame_script_job_for_execution(job)? else {
             return Ok(SourceTextScriptCompletion::Ignored);
         };
         let realm_id = self.current_realm_id_for_frame_script_job(&job)?;
@@ -203,10 +203,44 @@ impl ScriptVm {
         result
     }
 
-    fn prepare_inline_classic_frame_script_job(
+    fn prepare_frame_script_job_for_execution(
         &mut self,
         mut job: FrameScriptJob,
     ) -> Result<Option<FrameScriptJob>> {
+        if job.kind == crate::frame_owner_model::FrameScriptJobKind::JavascriptUrl {
+            let realm_id = self.current_realm_id_for_frame_script_job(&job)?;
+            let url = job.script_url.clone();
+            let allowed = self.with_frame_realm_scope(realm_id, |scope, host_ptr| {
+                let host = unsafe { &mut *host_ptr };
+                let Some(owner) = host.current_realm_owner_dispatch_scope(scope) else {
+                    return Ok(false);
+                };
+                let csp_source = crate::native_bridge::javascript_url_csp_source(&url);
+                if !host.allows_inline_javascript_navigation_by_csp(scope, owner, &csp_source) {
+                    return Ok(false);
+                }
+                #[cfg(test)]
+                let source = match &mut job.source {
+                    FrameScriptSource::SourceText(source) => source,
+                    FrameScriptSource::FunctionConstructor(_) => return Ok(false),
+                };
+                #[cfg(not(test))]
+                let FrameScriptSource::SourceText(source) = &mut job.source;
+                let requirements = host.trusted_types_for_script_requirements(scope);
+                let Some(rewritten) =
+                    crate::context_bootstrap::trusted_script_string_for_javascript_navigation(
+                        scope,
+                        source,
+                        requirements,
+                    )
+                else {
+                    return Ok(false);
+                };
+                *source = rewritten;
+                Ok(true)
+            })?;
+            return Ok(allowed.then_some(job));
+        }
         if !job.needs_inline_classic_element_preparation() {
             // Non-inline jobs do not use script-element preparation. Synthetic
             // inline jobs without a backing element are not DOM insertions;

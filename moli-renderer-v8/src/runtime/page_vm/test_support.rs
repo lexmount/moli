@@ -1,6 +1,9 @@
 use std::{
     ops::{Deref, DerefMut},
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::Instant,
 };
 
@@ -23,6 +26,7 @@ use crate::{
 use super::{PageSelectedTaskTestSelector, PageVm, PageVmEnvConfig, PageVmRuntimeHooks};
 
 static NEXT_TEST_PAGE_ID: AtomicU64 = AtomicU64::new(1);
+static NEXT_TEST_AUXILIARY_PAGE_ID: AtomicU64 = AtomicU64::new(1_000_000);
 
 impl PageVm {
     /// Keep the owner of a standalone request client alive for exactly this
@@ -95,6 +99,20 @@ impl PageVmTaskExecutorTestHarness {
     ) -> bool {
         self.page_vm
             .has_ready_dom_manipulation_family_for_test(family)
+    }
+
+    pub(crate) fn bind_auxiliary_page_reservation_allocator_for_test(&mut self) {
+        let page_id = self.page_vm.page_id;
+        let next_page_id = NEXT_TEST_AUXILIARY_PAGE_ID.fetch_add(1_000, Ordering::Relaxed);
+        self.page_vm
+            .vm_mut()
+            .bind_auxiliary_page_reservation_allocator_for_test(
+                crate::runtime::RendererAuxiliaryPageReservationAllocator::new_for_test(
+                    crate::runtime::RendererOwnerLocalHostId::new_for_testing(page_id.as_u64()),
+                    page_id,
+                    Arc::new(AtomicU64::new(next_page_id)),
+                ),
+            );
     }
 
     pub(crate) fn new(document_url: Url, loader: &ResourceRequestClient) -> Self {
@@ -646,6 +664,9 @@ fn minimal_test_page_vm_env_config() -> PageVmEnvConfig {
         web_storage: crate::RendererWebStorageHandles::ephemeral(),
         root_frame_id: None,
         main_document_commit: None,
+        initial_document_referrer: None,
+        initial_top_level_browsing_context_name: None,
+        auxiliary_browsing_context_policy: None,
         top_level_storage_key: None,
         document_start_scripts: Vec::new(),
         runtime_bindings: Vec::new(),
@@ -654,6 +675,7 @@ fn minimal_test_page_vm_env_config() -> PageVmEnvConfig {
         permission_overrides: Vec::new(),
         extra_http_headers: Vec::new(),
         document_policy_container: Default::default(),
+        cross_origin_opener_policy: Default::default(),
         document_default_language: None,
         document_last_modified: None,
         locale_override: None,

@@ -330,6 +330,7 @@ mod tests {
     #[tokio::test]
     async fn debugger_instrumentation_navigation_publishes_new_context_with_bound_origin() {
         let mut ctx = TestContext::new();
+        ctx.enable_document_continuation_scheduler_for_test();
         with_loaded_document(&mut ctx).await;
 
         let runtime = command(&mut ctx, json!({"id": 34, "method": "Runtime.enable"}), 34).await;

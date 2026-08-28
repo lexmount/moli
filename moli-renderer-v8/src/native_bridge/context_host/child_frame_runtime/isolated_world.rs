@@ -138,6 +138,10 @@ impl JsContextHost {
                 stale.runtime_observable_context_token,
             );
             let stale_context = v8::Local::new(scope, &stale.context);
+            {
+                let stale_scope = &mut v8::ContextScope::new(scope, stale_context);
+                crate::native_bridge::clear_context_embedder_state_for_teardown(stale_scope, false);
+            }
             stale_context.detach_global();
         }
 
@@ -195,14 +199,21 @@ impl JsContextHost {
         realm_token: RuntimeObservableContextToken,
         access_policy: WindowExecutionContextAccessPolicy,
     ) -> Result<()> {
+        let browsing_context_id = self
+            .frame_owner_store
+            .browsing_context_id_for_child_handle(handle)
+            .ok_or_else(|| anyhow::anyhow!("missing child browsing-context identity"))?;
         self.configure_child_window_realm_global(
             scope,
             global,
             ChildWindowRealmInit {
                 handle,
-                expected_owner,
-                realm_token,
-                world: WindowWorldKind::Isolated { access_policy },
+                projection: crate::browsing_context_model::RealmHostProjection::new(
+                    browsing_context_id,
+                    expected_owner,
+                    realm_token,
+                    WindowWorldKind::Isolated { access_policy },
+                ),
             },
         )
     }
@@ -215,14 +226,21 @@ impl JsContextHost {
         expected_owner: FrameDocumentTaskOwner,
         realm_token: RuntimeObservableContextToken,
     ) -> Result<()> {
+        let browsing_context_id = self
+            .frame_owner_store
+            .browsing_context_id_for_child_handle(handle)
+            .ok_or_else(|| anyhow::anyhow!("missing child browsing-context identity"))?;
         self.configure_child_window_realm_global(
             scope,
             global,
             ChildWindowRealmInit {
                 handle,
-                expected_owner,
-                realm_token,
-                world: WindowWorldKind::Default,
+                projection: crate::browsing_context_model::RealmHostProjection::new(
+                    browsing_context_id,
+                    expected_owner,
+                    realm_token,
+                    WindowWorldKind::Default,
+                ),
             },
         )
     }
@@ -234,7 +252,7 @@ impl JsContextHost {
         init: ChildWindowRealmInit,
     ) -> Result<()> {
         let projection = initialize_child_window_realm_state(self, scope, global, init)?;
-        if init.world.is_default() {
+        if init.projection.world().is_default() {
             self.child_window_proxy_records
                 .set_realm_top(scope, init.handle, projection.top);
             self.install_default_world_state_for_child_window(

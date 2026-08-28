@@ -9,12 +9,12 @@ pub use fence::RendererOutputFence;
 pub use identity::{
     RendererOutputCursor, RendererOutputFenceLeaseId, RendererOutputResidenceIdentity,
     RendererOutputStreamCloseReason, RendererOutputStreamControl, RendererOutputStreamEpoch,
-    RendererOutputStreamIdentity,
+    RendererOutputStreamIdentity, RendererPageOutputOwnerReservationId,
 };
 pub(crate) use item::PendingRendererOutputRecord;
 pub use item::{
     RendererDocumentTitleChanged, RendererOutputItem, RendererOutputRecord, RendererOwnerAction,
-    RendererProtocolObservation,
+    RendererProtocolObservation, RendererTopLevelCloseSource,
 };
 pub use transport::{
     RendererOutputTransportDiagnostics, RendererOutputTransportMessage,

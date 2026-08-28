@@ -675,6 +675,40 @@ impl ScriptVm {
         })
     }
 
+    /// Applies the current top-level Document's inline-navigation CSP at the
+    /// selected JavaScript-URL Page-task boundary.
+    ///
+    /// The producer may belong to another related Page and performs its own
+    /// source-side check before target selection. This second check is
+    /// intentionally target-owned and delayed until execution: a superseding
+    /// navigation can retire the pending task, and a surviving task must use
+    /// the final target Document's policy and violation-event realm.
+    pub(crate) fn javascript_url_source_allowed_by_target_policy_selected_task_body(
+        &mut self,
+        url: &Url,
+    ) -> Result<Option<String>> {
+        let csp_source = crate::native_bridge::javascript_url_csp_source(url);
+        let script_source = crate::native_bridge::javascript_url_source(url);
+        self.with_default_context_scope(move |scope, host_ptr| {
+            let host = unsafe { &mut *host_ptr };
+            if !host.allows_inline_javascript_navigation_by_csp(
+                scope,
+                crate::native_bridge::OwnerDispatchScope::Top,
+                &csp_source,
+            ) {
+                return Ok(None);
+            }
+            let requirements = host.trusted_types_for_script_requirements(scope);
+            Ok(
+                crate::context_bootstrap::trusted_script_string_for_javascript_navigation(
+                    scope,
+                    &script_source,
+                    requirements,
+                ),
+            )
+        })
+    }
+
     #[cfg(test)]
     pub(crate) fn eval_with_child_record_sync(&mut self, source: &str) -> Result<String> {
         let context_ptr: *const v8::Global<v8::Context> = &self.page_default_context as *const _;
@@ -716,6 +750,28 @@ impl ScriptVm {
             EvalStringMicrotaskCheckpoint::Perform,
         )
         .into_inner_for_internal_snapshot()
+    }
+
+    /// Executes browser-owned realm bootstrap without exposing an
+    /// implementation script to page-facing Inspector instrumentation.
+    pub(super) fn exec_browser_internal_bootstrap_script_in_context_ptr(
+        &mut self,
+        context_ptr: *const v8::Global<v8::Context>,
+        source: &str,
+    ) -> Result<()> {
+        self.eval_string_in_context_ptr_without_turn_drain_with_kind(
+            context_ptr,
+            source,
+            ContextStringEvaluationKind::InspectorInternal,
+            EvalStringMicrotaskCheckpoint::Perform,
+        )
+        .into_inner_for_internal_snapshot()
+        .map(drop)
+    }
+
+    pub(crate) fn exec_browser_internal_bootstrap_script(&mut self, source: &str) -> Result<()> {
+        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_context as *const _;
+        self.exec_browser_internal_bootstrap_script_in_context_ptr(context_ptr, source)
     }
 
     /// Read a test probe without manufacturing an intervening task checkpoint.

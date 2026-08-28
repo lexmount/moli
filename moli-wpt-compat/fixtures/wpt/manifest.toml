@@ -1498,7 +1498,7 @@ wait_until = "load"
 timeout_ms = 5000
 suite = "smoke"
 tags = ["forms", "html", "submit", "navigation", "target"]
-notes = "Manual compat port for submitter target fallback: requestSubmit(submitter) treats missing and empty formtarget as no override for internal and external form-associated submitters, dispatches submit once, preserves SubmitEvent.submitter, and navigates the form-level named target."
+notes = "Manual compat port for submitter target fallback: requestSubmit(submitter) distinguishes a missing formtarget, which keeps the form target, from an explicitly empty formtarget, which overrides the form target and then falls back to the document base target; internal and external form-associated submitters dispatch submit once and preserve SubmitEvent.submitter."
 
 [[test]]
 id = "form-self-target-basic"

@@ -436,39 +436,21 @@ fn shared_worker_constructor_context(
                 host.active_child_subresource_request_scope()
                     .map(|(handle, _, _)| handle)
             });
-        let active_popup_referrer_policy = child_handle
-            .is_none()
-            .then(|| {
-                host.active_lightweight_popup_referrer_policy(scope)
-                    .map(ToOwned::to_owned)
-            })
-            .flatten();
         let document_referrer_policy = child_handle
             .and_then(|handle| host.child_browsing_context_document_handle(handle))
             .and_then(|document_handle| {
                 document_referrer_policy_for_native_document(host, document_handle)
             })
-            .or(active_popup_referrer_policy)
             .or(current_context_document_referrer_policy);
         let storage_context = host.active_storage_context(scope, child_handle);
         let network_partition_key = child_handle
             .and_then(|handle| host.child_browsing_context_network_partition_key(handle));
-        let owner_scope = child_handle
-            .map(crate::native_bridge::OwnerDispatchScope::Child)
-            .or_else(|| {
-                crate::native_bridge::active_lightweight_popup_id(scope)
-                    .map(crate::native_bridge::OwnerDispatchScope::LightweightPopup)
-            })
-            .unwrap_or(crate::native_bridge::OwnerDispatchScope::Top);
+        let owner_scope = child_handle.map(crate::native_bridge::OwnerDispatchScope::Child);
+        let owner_scope = owner_scope.unwrap_or(crate::native_bridge::OwnerDispatchScope::Top);
         let policy_context =
             crate::network_host::effective_subresource_policy_context(scope, host, owner_scope);
-        let active_popup_base_url = child_handle
-            .is_none()
-            .then(|| host.active_lightweight_popup_base_url(scope))
-            .flatten();
         let base_url = child_handle
             .and_then(|handle| host.child_browsing_context_base_url(handle))
-            .or(active_popup_base_url)
             .unwrap_or_else(|| worker_constructor_base_url(host));
         let storage_key = storage_context.storage_key().clone();
         let top_level_site = storage_key.top_level_site().to_owned();
@@ -476,10 +458,6 @@ fn shared_worker_constructor_context(
             host.child_browsing_context_content_security_policies(handle)
                 .map(<[String]>::to_vec)
                 .unwrap_or_else(|| host.document_content_security_policies().to_vec())
-        } else if let Some(policies) =
-            host.active_lightweight_popup_content_security_policies(scope)
-        {
-            policies.to_vec()
         } else {
             host.document_content_security_policies().to_vec()
         };
@@ -494,10 +472,9 @@ fn shared_worker_constructor_context(
             .page_shared_worker_client_event_sender()
             .bind_execution_context(execution_context);
         let worker_host_bridge_sender = host.page_worker_host_bridge_event_sender().clone();
-        let secure_context_url = child_handle
-            .and_then(|handle| host.child_browsing_context_secure_context_url(handle))
-            .or_else(|| host.active_lightweight_popup_base_url(scope))
-            .unwrap_or_else(|| host.document_url().clone());
+        let secure_context_url =
+            child_handle.and_then(|handle| host.child_browsing_context_secure_context_url(handle));
+        let secure_context_url = secure_context_url.unwrap_or_else(|| host.document_url().clone());
         let creator_secure_context = moli_url::is_potentially_trustworthy_url(&secure_context_url);
         let resource_loader = host.document_resource_loader_for_dispatch_scope(owner_scope)?;
         let context = SharedWorkerConstructorContext {
@@ -537,7 +514,7 @@ fn shared_worker_constructor_context(
 }
 
 fn shared_worker_parent_service_worker_client_id_for_script(
-    scope: &mut v8::PinScope<'_, '_>,
+    _scope: &mut v8::PinScope<'_, '_>,
     host: &mut crate::native_bridge::JsContextHost,
     child_handle: Option<DomHandle>,
     script_url: &Url,
@@ -545,13 +522,8 @@ fn shared_worker_parent_service_worker_client_id_for_script(
     if script_url.scheme() != "blob" {
         return None;
     }
-    let worker_owner_scope = child_handle
-        .map(WorkerOwnerScope::Child)
-        .or_else(|| {
-            crate::native_bridge::active_lightweight_popup_id(scope)
-                .map(WorkerOwnerScope::LightweightPopup)
-        })
-        .unwrap_or(WorkerOwnerScope::Top);
+    let worker_owner_scope = child_handle.map(WorkerOwnerScope::Child);
+    let worker_owner_scope = worker_owner_scope.unwrap_or(WorkerOwnerScope::Top);
     Some(host.service_worker_client_id_for_worker_owner(worker_owner_scope))
 }
 

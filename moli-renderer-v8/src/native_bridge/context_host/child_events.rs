@@ -780,6 +780,12 @@ fn apply_child_window_event_handler_return(
         return;
     };
     let returned = v8::Local::new(scope, returned);
+    if event_type == "beforeunload" && !returned.is_null_or_undefined() {
+        if let Some(returned) = returned.to_string(scope) {
+            let _ = event.set(scope, v8str(scope, "returnValue").into(), returned.into());
+        }
+        return;
+    }
     let should_cancel = if event_type == "error" {
         returned.is_boolean() && returned.boolean_value(scope)
     } else {

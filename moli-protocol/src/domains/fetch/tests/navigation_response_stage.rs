@@ -105,6 +105,11 @@ async fn response_stage_pause_happens_before_navigation_body_eof() {
         json!({ "frameId": "TID-1", "loaderId": LOADER_ID }),
         Some("SID-1"),
     );
+    ctx.wait_for_document_continuation_for_test(
+        Some("SID-1"),
+        "response-stage navigation continuation",
+    )
+    .await;
 
     {
         let page = ctx
@@ -416,6 +421,11 @@ lateBinding("author-script");
     ctx.expect_result(36_506, json!({}), Some("SID-1"));
     let navigate = take_response_by_id(&mut ctx, 36_502);
     assert_eq!(navigate["result"]["frameId"], json!("TID-1"));
+    ctx.wait_for_document_continuation_for_test(
+        Some("SID-1"),
+        "response-stage configured Document continuation",
+    )
+    .await;
 
     ctx.process_async(json!({
         "id": 36_507,
@@ -890,6 +900,35 @@ async fn interleaved_response_heads_only_commit_the_current_prepared_document() 
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
+    ctx.install_navigation_fixture_for_session_owner("about:blank", Some("SID-1"))
+        .await;
+    let target_page_before = ctx
+        .conn
+        .target_page_residence_identity_for_session(Some("SID-1"))
+        .expect("interleaved navigation target Page residence");
+    let renderer_page_before = ctx
+        .conn
+        .renderer_page_residence_identity_for_session_owner(Some("SID-1"))
+        .expect("interleaved navigation renderer Page residence");
+    let page_attachment_before = ctx
+        .conn
+        .browser_context
+        .as_ref()
+        .and_then(BrowserContext::page_attachment_id)
+        .expect("interleaved navigation target Page attachment");
+    let devtools_agent_before = ctx
+        .conn
+        .browser_context
+        .as_ref()
+        .and_then(BrowserContext::loaded_page)
+        .map(moli_core::page::Page::renderer_devtools_agent_token)
+        .expect("interleaved navigation initial renderer agent");
+    ctx.enable_page_events_for_test(Some("SID-1"));
+    wait_until_scheduler_message(&mut ctx, "initial Page.loadEventFired", |message| {
+        message["method"] == json!("Page.loadEventFired") && message["sessionId"] == json!("SID-1")
+    })
+    .await;
+    ctx.sent.clear();
 
     ctx.process_async(json!({
         "id": 364,
@@ -980,6 +1019,35 @@ async fn interleaved_response_heads_only_commit_the_current_prepared_document() 
         attachment_before_continue,
         "a superseded response head must not switch the renderer channel"
     );
+    assert_eq!(
+        ctx.conn
+            .target_page_residence_identity_for_session(Some("SID-1")),
+        Some(target_page_before.clone()),
+        "a superseded response head must preserve the target Page residence"
+    );
+    assert_eq!(
+        ctx.conn
+            .renderer_page_residence_identity_for_session_owner(Some("SID-1")),
+        Some(renderer_page_before),
+        "a superseded response head must preserve the renderer Page residence"
+    );
+    let browser_context = ctx
+        .conn
+        .browser_context
+        .as_ref()
+        .expect("interleaved navigation browser context");
+    assert_eq!(
+        browser_context.page_attachment_id(),
+        Some(page_attachment_before)
+    );
+    assert_eq!(
+        browser_context
+            .loaded_page()
+            .expect("superseded navigation must preserve the loaded Page")
+            .renderer_devtools_agent_token(),
+        devtools_agent_before,
+        "a superseded response head must preserve the live renderer agent"
+    );
 
     ctx.process_async(json!({
         "id": 368,
@@ -995,6 +1063,7 @@ async fn interleaved_response_heads_only_commit_the_current_prepared_document() 
         current_navigation["result"]["loaderId"],
         second_pause["params"]["networkId"]
     );
+    wait_until_frame_stopped_loading(&mut ctx, "TID-1").await;
 
     let page = ctx
         .conn
@@ -1002,8 +1071,28 @@ async fn interleaved_response_heads_only_commit_the_current_prepared_document() 
         .as_ref()
         .and_then(|bc| bc.loaded_page())
         .expect("current navigation should commit a page");
+    assert_eq!(
+        ctx.conn
+            .target_page_residence_identity_for_session(Some("SID-1")),
+        Some(target_page_before),
+        "the current response head must replace the Document in the same target Page"
+    );
+    assert_eq!(
+        ctx.conn
+            .renderer_page_residence_identity_for_session_owner(Some("SID-1")),
+        Some(renderer_page_before),
+        "the current response head must retain the renderer Page residence"
+    );
+    assert_eq!(
+        ctx.conn
+            .browser_context
+            .as_ref()
+            .and_then(BrowserContext::page_attachment_id),
+        Some(page_attachment_before)
+    );
     assert_eq!(page.renderer_devtools_agent_token(), second_agent);
     assert_ne!(page.renderer_devtools_agent_token(), first_agent);
+    assert_ne!(page.renderer_devtools_agent_token(), devtools_agent_before);
     let html = page
         .serialize_html_async()
         .await
@@ -1384,6 +1473,548 @@ async fn continue_response_can_override_status_and_headers() {
         page.headers()
             .iter()
             .any(|(name, value)| name == "x-override" && value == "yes")
+    );
+
+    server.abort();
+}
+
+#[derive(Clone, Copy)]
+enum NoCommitResponseStageAction {
+    Fulfill,
+    ContinueOverride,
+    ContinueOriginal,
+}
+
+async fn assert_response_stage_no_commit_case(
+    ctx: &mut TestContext,
+    navigate_id: u64,
+    terminal_id: u64,
+    url: &str,
+    original_status: u16,
+    effective_status: u16,
+    action: NoCommitResponseStageAction,
+) {
+    assert!(
+        ctx.sent.is_empty(),
+        "case must start with an empty event queue"
+    );
+    let target_page_before = ctx
+        .conn
+        .target_page_residence_identity_for_session(Some("SID-1"))
+        .expect("no-commit navigation target Page residence");
+    let renderer_page_before = ctx
+        .conn
+        .renderer_page_residence_identity_for_session_owner(Some("SID-1"))
+        .expect("no-commit navigation renderer Page residence");
+    let page_attachment_before = ctx
+        .conn
+        .browser_context
+        .as_ref()
+        .and_then(BrowserContext::page_attachment_id)
+        .expect("no-commit navigation target Page attachment");
+    let devtools_agent_before = ctx
+        .conn
+        .browser_context
+        .as_ref()
+        .and_then(BrowserContext::loaded_page)
+        .map(moli_core::page::Page::renderer_devtools_agent_token)
+        .expect("no-commit navigation initial renderer agent");
+    let html_before = loaded_page_html_for_test(ctx).await;
+
+    ctx.process_async(json!({
+        "id": navigate_id,
+        "method": "Page.navigate",
+        "sessionId": "SID-1",
+        "params": { "url": url }
+    }))
+    .await;
+
+    let paused = take_main_document_request_pause(ctx).await;
+    assert_eq!(paused["params"]["responseStatusCode"], original_status);
+    let fetch_request_id = paused["params"]["requestId"]
+        .as_str()
+        .expect("response-stage Fetch request id")
+        .to_owned();
+    let network_request_id = paused["params"]["networkId"]
+        .as_str()
+        .expect("response-stage Network request id")
+        .to_owned();
+    let prepared_agent = ctx
+        .conn
+        .browser_context
+        .as_ref()
+        .and_then(|browser_context| {
+            browser_context
+                .active_target
+                .fetch_owner
+                .pending_fetch_response_prepared_renderer_agent_for_test(&fetch_request_id)
+        });
+    assert_eq!(
+        prepared_agent.is_some(),
+        !matches!(original_status, 204 | 205),
+        "only a response that can commit should reserve a renderer agent at response pause"
+    );
+    assert!(
+        !ctx.sent
+            .iter()
+            .any(|message| message["id"] == json!(navigate_id)),
+        "Page.navigate must remain pending while the effective response is undecided: {:?}",
+        ctx.sent
+    );
+
+    let (method, params) = match action {
+        NoCommitResponseStageAction::Fulfill => (
+            "Fetch.fulfillRequest",
+            json!({
+                "requestId": fetch_request_id,
+                "responseCode": effective_status,
+                "responseHeaders": [
+                    { "name": "content-type", "value": "text/html; charset=utf-8" }
+                ]
+            }),
+        ),
+        NoCommitResponseStageAction::ContinueOverride => (
+            "Fetch.continueResponse",
+            json!({
+                "requestId": fetch_request_id,
+                "responseCode": effective_status,
+                "responseHeaders": [
+                    { "name": "content-type", "value": "text/html; charset=utf-8" }
+                ],
+                "responsePhrase": "No Content"
+            }),
+        ),
+        NoCommitResponseStageAction::ContinueOriginal => (
+            "Fetch.continueResponse",
+            json!({ "requestId": fetch_request_id }),
+        ),
+    };
+    ctx.process_async(json!({
+        "id": terminal_id,
+        "method": method,
+        "sessionId": "SID-1",
+        "params": params
+    }))
+    .await;
+    ctx.expect_result(terminal_id, json!({}), Some("SID-1"));
+
+    let navigate_response = take_response_by_id(ctx, navigate_id);
+    assert_eq!(navigate_response["sessionId"], "SID-1");
+    assert_eq!(navigate_response["result"]["frameId"], "TID-1");
+    assert!(navigate_response["result"]["loaderId"].as_str().is_some());
+    assert_eq!(
+        navigate_response["result"]["errorText"], "net::ERR_ABORTED",
+        "unexpected Page.navigate terminal: {navigate_response:?}; remaining={:?}",
+        ctx.sent
+    );
+    assert_eq!(navigate_response["result"]["isDownload"], false);
+
+    let response_index = ctx
+        .sent
+        .iter()
+        .position(|message| {
+            message["method"] == json!("Network.responseReceived")
+                && message["params"]["requestId"].as_str() == Some(network_request_id.as_str())
+                && message["params"]["response"]["status"] == json!(effective_status)
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "missing effective {effective_status} response for {url}: {:?}",
+                ctx.sent
+            )
+        });
+    let failed_index = ctx
+        .sent
+        .iter()
+        .position(|message| {
+            message["method"] == json!("Network.loadingFailed")
+                && message["params"]["requestId"].as_str() == Some(network_request_id.as_str())
+                && message["params"]["errorText"] == json!("net::ERR_ABORTED")
+                && message["params"]["canceled"] == json!(true)
+        })
+        .unwrap_or_else(|| panic!("missing no-commit loadingFailed for {url}: {:?}", ctx.sent));
+    assert!(
+        response_index < failed_index,
+        "the effective response must be observed before its canceled terminal"
+    );
+    assert!(!ctx.sent.iter().any(|message| {
+        message["method"] == json!("Network.loadingFinished")
+            && message["params"]["requestId"].as_str() == Some(network_request_id.as_str())
+    }));
+    assert!(!ctx.sent.iter().any(|message| {
+        (message["method"] == json!("Page.frameNavigated")
+            && message["params"]["frame"]["url"] == json!(url))
+            || matches!(
+                message["method"].as_str(),
+                Some("DOM.documentUpdated" | "Page.domContentEventFired" | "Page.loadEventFired")
+            )
+    }));
+
+    assert_eq!(
+        ctx.conn
+            .target_page_residence_identity_for_session(Some("SID-1")),
+        Some(target_page_before),
+        "a no-commit response must retain the target Page residence"
+    );
+    assert_eq!(
+        ctx.conn
+            .renderer_page_residence_identity_for_session_owner(Some("SID-1")),
+        Some(renderer_page_before),
+        "a no-commit response must retain the renderer Page residence"
+    );
+    let browser_context = ctx
+        .conn
+        .browser_context
+        .as_ref()
+        .expect("no-commit browser context");
+    assert_eq!(
+        browser_context.page_attachment_id(),
+        Some(page_attachment_before)
+    );
+    assert_eq!(
+        browser_context
+            .loaded_page()
+            .expect("the committed Document must remain installed")
+            .renderer_devtools_agent_token(),
+        devtools_agent_before,
+        "a no-commit response must not replace the Document realm"
+    );
+    assert_eq!(loaded_page_html_for_test(ctx).await, html_before);
+    assert!(
+        !ctx.conn
+            .has_pending_document_navigation_for_session_owner(Some("SID-1")),
+        "the no-commit terminal must clear its pending navigation"
+    );
+    assert!(
+        !ctx.conn
+            .browser_context
+            .as_ref()
+            .expect("no-commit browser context")
+            .active_target
+            .fetch_owner
+            .pending_fetch_response_transfer_is_pending_for_test(&fetch_request_id),
+        "the response-stage transfer must be consumed exactly once"
+    );
+    ctx.sent.clear();
+}
+
+// Chromium sources:
+// content/browser/renderer_host/navigation_request.cc
+// third_party/blink/public/devtools_protocol/domains/Fetch.pdl
+// third_party/blink/web_tests/http/tests/inspector-protocol/fetch/
+// fetch-continue-response-with-overrides.js
+#[tokio::test(flavor = "multi_thread")]
+async fn response_stage_effective_no_content_statuses_abort_without_committing() {
+    async fn ok_page() -> impl IntoResponse {
+        (
+            [(CONTENT_TYPE.as_str(), "text/html")],
+            "<!doctype html><main>network-body</main>",
+        )
+    }
+
+    async fn no_content() -> StatusCode {
+        StatusCode::NO_CONTENT
+    }
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new()
+                .route("/ok", get(ok_page))
+                .route("/no-content", get(no_content)),
+        )
+        .await
+        .unwrap();
+    });
+
+    let mut ctx = TestContext::new();
+    let mut browser_context = attached_browser_context();
+    browser_context
+        .active_target
+        .runtime_slot
+        .enable_primary_network_events();
+    ctx.conn.browser_context = Some(browser_context);
+    ctx.install_navigation_fixture_for_session_owner("about:blank", Some("SID-1"))
+        .await;
+    ctx.enable_page_events_for_test(Some("SID-1"));
+    ctx.enable_dom_events_for_test(Some("SID-1"));
+    wait_until_scheduler_message(&mut ctx, "initial Page.loadEventFired", |message| {
+        message["method"] == json!("Page.loadEventFired") && message["sessionId"] == json!("SID-1")
+    })
+    .await;
+    ctx.sent.clear();
+
+    ctx.process_async(json!({
+        "id": 43_000,
+        "method": "Fetch.enable",
+        "sessionId": "SID-1",
+        "params": {
+            "patterns": [{
+                "urlPattern": "*",
+                "requestStage": "Response",
+                "resourceType": "Document"
+            }]
+        }
+    }))
+    .await;
+    ctx.expect_result(43_000, json!({}), Some("SID-1"));
+
+    assert_response_stage_no_commit_case(
+        &mut ctx,
+        43_001,
+        43_002,
+        &format!("http://{addr}/ok"),
+        200,
+        204,
+        NoCommitResponseStageAction::Fulfill,
+    )
+    .await;
+    assert_response_stage_no_commit_case(
+        &mut ctx,
+        43_003,
+        43_004,
+        &format!("http://{addr}/ok"),
+        200,
+        205,
+        NoCommitResponseStageAction::ContinueOverride,
+    )
+    .await;
+    assert_response_stage_no_commit_case(
+        &mut ctx,
+        43_005,
+        43_006,
+        &format!("http://{addr}/no-content"),
+        204,
+        204,
+        NoCommitResponseStageAction::ContinueOriginal,
+    )
+    .await;
+
+    server.abort();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn response_stage_fulfill_can_replace_original_no_content_with_committable_response() {
+    async fn no_content() -> StatusCode {
+        StatusCode::NO_CONTENT
+    }
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new().route("/no-content", get(no_content)),
+        )
+        .await
+        .unwrap();
+    });
+
+    let mut ctx = TestContext::new();
+    let mut browser_context = attached_browser_context();
+    browser_context
+        .active_target
+        .runtime_slot
+        .enable_primary_network_events();
+    ctx.conn.browser_context = Some(browser_context);
+    ctx.install_navigation_fixture_for_session_owner("about:blank", Some("SID-1"))
+        .await;
+    let target_page_before = ctx
+        .conn
+        .target_page_residence_identity_for_session(Some("SID-1"))
+        .expect("fulfilled navigation target Page residence");
+    let renderer_page_before = ctx
+        .conn
+        .renderer_page_residence_identity_for_session_owner(Some("SID-1"))
+        .expect("fulfilled navigation renderer Page residence");
+    let page_attachment_before = ctx
+        .conn
+        .browser_context
+        .as_ref()
+        .and_then(BrowserContext::page_attachment_id)
+        .expect("fulfilled navigation target Page attachment");
+    let devtools_agent_before = ctx
+        .conn
+        .browser_context
+        .as_ref()
+        .and_then(BrowserContext::loaded_page)
+        .map(moli_core::page::Page::renderer_devtools_agent_token)
+        .expect("fulfilled navigation initial renderer agent");
+    ctx.enable_page_events_for_test(Some("SID-1"));
+    ctx.enable_dom_events_for_test(Some("SID-1"));
+    wait_until_scheduler_message(&mut ctx, "initial Page.loadEventFired", |message| {
+        message["method"] == json!("Page.loadEventFired") && message["sessionId"] == json!("SID-1")
+    })
+    .await;
+    ctx.sent.clear();
+
+    ctx.process_async(json!({
+        "id": 43_010,
+        "method": "Fetch.enable",
+        "sessionId": "SID-1",
+        "params": {
+            "patterns": [{
+                "urlPattern": "*",
+                "requestStage": "Response",
+                "resourceType": "Document"
+            }]
+        }
+    }))
+    .await;
+    ctx.expect_result(43_010, json!({}), Some("SID-1"));
+
+    let url = format!("http://{addr}/no-content");
+    ctx.process_async(json!({
+        "id": 43_011,
+        "method": "Page.navigate",
+        "sessionId": "SID-1",
+        "params": { "url": url }
+    }))
+    .await;
+    let paused = take_main_document_request_pause(&mut ctx).await;
+    assert_eq!(paused["params"]["responseStatusCode"], 204);
+    let fetch_request_id = paused["params"]["requestId"]
+        .as_str()
+        .expect("response-stage Fetch request id")
+        .to_owned();
+    let network_request_id = paused["params"]["networkId"]
+        .as_str()
+        .expect("response-stage Network request id")
+        .to_owned();
+    assert!(
+        ctx.conn
+            .browser_context
+            .as_ref()
+            .and_then(|browser_context| {
+                browser_context
+                    .active_target
+                    .fetch_owner
+                    .pending_fetch_response_prepared_renderer_agent_for_test(&fetch_request_id)
+            })
+            .is_none(),
+        "the original 204 response must not reserve a renderer agent before interception"
+    );
+
+    let synthetic_body = base64::engine::general_purpose::STANDARD
+        .encode("<!doctype html><main>rescued-from-204</main>");
+    ctx.process_async(json!({
+        "id": 43_012,
+        "method": "Fetch.fulfillRequest",
+        "sessionId": "SID-1",
+        "params": {
+            "requestId": fetch_request_id,
+            "responseCode": 200,
+            "responseHeaders": [
+                { "name": "content-type", "value": "text/html; charset=utf-8" }
+            ],
+            "body": synthetic_body
+        }
+    }))
+    .await;
+    ctx.expect_result(43_012, json!({}), Some("SID-1"));
+    ctx.expect_result(
+        43_011,
+        json!({ "frameId": "TID-1", "loaderId": network_request_id }),
+        Some("SID-1"),
+    );
+    ctx.wait_for_document_continuation_for_test(
+        Some("SID-1"),
+        "fulfilled response-stage Document continuation",
+    )
+    .await;
+    wait_until_scheduler_message(
+        &mut ctx,
+        "fulfilled response-stage Network.loadingFinished",
+        |message| {
+            message["method"] == json!("Network.loadingFinished")
+                && message["params"]["requestId"] == json!(network_request_id)
+        },
+    )
+    .await;
+
+    let response = ctx
+        .sent
+        .iter()
+        .find(|message| {
+            message["method"] == json!("Network.responseReceived")
+                && message["params"]["requestId"] == json!(network_request_id)
+        })
+        .unwrap_or_else(|| panic!("missing synthetic response: {:?}", ctx.sent));
+    assert_eq!(response["params"]["response"]["status"], 200);
+    assert!(ctx.sent.iter().any(|message| {
+        message["method"] == json!("Network.loadingFinished")
+            && message["params"]["requestId"] == json!(network_request_id)
+    }));
+    assert!(!ctx.sent.iter().any(|message| {
+        message["method"] == json!("Network.loadingFailed")
+            && message["params"]["requestId"] == json!(network_request_id)
+    }));
+    assert_eq!(
+        ctx.sent
+            .iter()
+            .filter(|message| {
+                message["method"] == json!("Page.frameNavigated")
+                    && message["params"]["frame"]["url"] == json!(url)
+            })
+            .count(),
+        1,
+        "the effective 200 response must publish exactly one Document commit"
+    );
+    assert!(
+        ctx.sent
+            .iter()
+            .any(|message| message["method"] == json!("DOM.documentUpdated"))
+    );
+    assert!(
+        ctx.sent
+            .iter()
+            .any(|message| message["method"] == json!("Page.domContentEventFired"))
+    );
+    assert!(
+        ctx.sent
+            .iter()
+            .any(|message| message["method"] == json!("Page.loadEventFired"))
+    );
+
+    assert_eq!(
+        ctx.conn
+            .target_page_residence_identity_for_session(Some("SID-1")),
+        Some(target_page_before),
+        "the fulfilled navigation must retain the target Page residence"
+    );
+    assert_eq!(
+        ctx.conn
+            .renderer_page_residence_identity_for_session_owner(Some("SID-1")),
+        Some(renderer_page_before),
+        "the fulfilled navigation must retain the renderer Page residence"
+    );
+    let browser_context = ctx
+        .conn
+        .browser_context
+        .as_ref()
+        .expect("fulfilled navigation browser context");
+    assert_eq!(
+        browser_context.page_attachment_id(),
+        Some(page_attachment_before)
+    );
+    assert_ne!(
+        browser_context
+            .loaded_page()
+            .expect("the synthetic 200 Document must be installed")
+            .renderer_devtools_agent_token(),
+        devtools_agent_before,
+        "the effective 200 response must install a new Document realm"
+    );
+    assert!(
+        loaded_page_html_for_test(&mut ctx)
+            .await
+            .contains("rescued-from-204")
+    );
+    assert!(
+        !ctx.conn
+            .has_pending_document_navigation_for_session_owner(Some("SID-1"))
     );
 
     server.abort();
@@ -2819,8 +3450,36 @@ async fn fulfill_request_completes_navigation_with_synthetic_response() {
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
+    ctx.install_navigation_fixture_for_session_owner("about:blank", Some("SID-1"))
+        .await;
+    let target_page_before = ctx
+        .conn
+        .target_page_residence_identity_for_session(Some("SID-1"))
+        .expect("fulfilled navigation target Page residence");
+    let renderer_page_before = ctx
+        .conn
+        .renderer_page_residence_identity_for_session_owner(Some("SID-1"))
+        .expect("fulfilled navigation renderer Page residence");
+    let page_attachment_before = ctx
+        .conn
+        .browser_context
+        .as_ref()
+        .and_then(BrowserContext::page_attachment_id)
+        .expect("fulfilled navigation target Page attachment");
+    let devtools_agent_before = ctx
+        .conn
+        .browser_context
+        .as_ref()
+        .and_then(BrowserContext::loaded_page)
+        .map(moli_core::page::Page::renderer_devtools_agent_token)
+        .expect("fulfilled navigation initial renderer agent");
     ctx.enable_page_events_for_test(Some("SID-1"));
     ctx.enable_dom_events_for_test(Some("SID-1"));
+    wait_until_scheduler_message(&mut ctx, "initial Page.loadEventFired", |message| {
+        message["method"] == json!("Page.loadEventFired") && message["sessionId"] == json!("SID-1")
+    })
+    .await;
+    ctx.sent.clear();
 
     ctx.process_async(json!({
         "id": 36,
@@ -2889,6 +3548,36 @@ async fn fulfill_request_completes_navigation_with_synthetic_response() {
 
     assert_eq!(ctx.take_one()["method"], "Page.loadEventFired");
     assert_eq!(ctx.take_one()["method"], "Page.frameStoppedLoading");
+
+    assert_eq!(
+        ctx.conn
+            .target_page_residence_identity_for_session(Some("SID-1")),
+        Some(target_page_before),
+        "Fetch.fulfillRequest must replace the Document without replacing the target Page"
+    );
+    assert_eq!(
+        ctx.conn
+            .renderer_page_residence_identity_for_session_owner(Some("SID-1")),
+        Some(renderer_page_before),
+        "Fetch.fulfillRequest must retain the renderer Page residence"
+    );
+    let browser_context = ctx
+        .conn
+        .browser_context
+        .as_ref()
+        .expect("fulfilled navigation browser context");
+    assert_eq!(
+        browser_context.page_attachment_id(),
+        Some(page_attachment_before)
+    );
+    assert_ne!(
+        browser_context
+            .loaded_page()
+            .expect("fulfilled navigation loaded Page")
+            .renderer_devtools_agent_token(),
+        devtools_agent_before,
+        "Fetch.fulfillRequest must install a new renderer Document agent"
+    );
 
     ctx.process_async(json!({
         "id": 39,

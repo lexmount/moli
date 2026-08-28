@@ -1,10 +1,27 @@
 use super::*;
 
-pub(in crate::context_bootstrap) fn resolve_location_navigation_target(
+pub(crate) fn resolve_location_navigation_target(
     scope: &mut v8::PinScope<'_, '_>,
     current_href: &str,
     kind: LocationNavigationKind,
     raw_target: Option<String>,
+) -> Option<url::Url> {
+    let entered_base_url = context_host_ptr_from_global_bridge(scope).map(|host_ptr| {
+        super::super::window_runtime::entered_window_api_base_url(scope, unsafe { &*host_ptr })
+    });
+    resolve_location_navigation_target_against_entered_base(
+        current_href,
+        kind,
+        raw_target,
+        entered_base_url.as_ref(),
+    )
+}
+
+pub(crate) fn resolve_location_navigation_target_against_entered_base(
+    current_href: &str,
+    kind: LocationNavigationKind,
+    raw_target: Option<String>,
+    entered_base_url: Option<&url::Url>,
 ) -> Option<url::Url> {
     match kind {
         LocationNavigationKind::Reload => url::Url::parse(current_href).ok(),
@@ -22,12 +39,8 @@ pub(in crate::context_bootstrap) fn resolve_location_navigation_target(
             // EnteredDOMWindow(isolate)->document(), not the target Location's
             // current Document. This matters when an opener navigates a popup
             // more than once with the same relative string.
-            if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
-                && let Ok(resolved) =
-                    super::super::window_runtime::entered_window_api_base_url(scope, unsafe {
-                        &*host_ptr
-                    })
-                    .join(&raw_target)
+            if let Some(entered_base_url) = entered_base_url
+                && let Ok(resolved) = entered_base_url.join(&raw_target)
             {
                 return Some(resolved);
             }

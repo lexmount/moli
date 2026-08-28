@@ -3,6 +3,7 @@ use super::super::{
     NavigationHistoryEntrySeed,
 };
 use crate::document_runtime::DomHandle;
+use crate::frame_owner_model::FrameDocumentNavigationLoadBinding;
 use url::Url;
 
 impl JsContextHost {
@@ -81,6 +82,17 @@ impl JsContextHost {
         self.queue_child_browsing_context_navigation_to_url(handle, &url)
     }
 
+    pub(crate) fn queue_child_browsing_context_navigation_request_without_seed_update(
+        &mut self,
+        handle: DomHandle,
+        request: ChildBrowsingContextNavigationRequest,
+    ) -> bool {
+        if !self.child_browsing_contexts.contains_key(&handle) {
+            return false;
+        }
+        self.queue_child_browsing_context_navigation_request(handle, request)
+    }
+
     pub(crate) fn queue_deferred_child_browsing_context_navigation_from_entry_seed(
         &mut self,
         handle: DomHandle,
@@ -109,59 +121,29 @@ impl JsContextHost {
         self.queue_child_browsing_context_navigation_commit(handle)
     }
 
-    pub(crate) fn queue_deferred_child_browsing_context_navigation_to_url(
-        &mut self,
-        handle: DomHandle,
-        resolved_url: &str,
-    ) -> bool {
-        if !self.child_browsing_contexts.contains_key(&handle) {
-            return false;
-        }
-        let Some(url) = Url::parse(resolved_url).ok() else {
-            return false;
-        };
-        if let Some(entry) = self.child_browsing_contexts.get_mut(&handle) {
-            entry.apply_deferred_navigation_to_entry_seed(&url);
-        }
-        if self
-            .set_child_browsing_context_pending_navigation(
-                handle,
-                ChildBrowsingContextBootstrap::Url(url),
-                false,
-            )
-            .is_none()
-        {
-            return false;
-        }
-        self.queue_child_browsing_context_navigation_commit(handle)
-    }
-
     pub(crate) fn queue_deferred_child_browsing_context_navigation_request(
         &mut self,
         handle: DomHandle,
         request: ChildBrowsingContextNavigationRequest,
-    ) -> bool {
+        replace_current: bool,
+    ) -> Option<FrameDocumentNavigationLoadBinding> {
         if !self.child_browsing_contexts.contains_key(&handle) {
-            return false;
+            return None;
         }
         self.reject_replaced_service_worker_child_client_navigation(
             handle,
             "The navigation was canceled.".to_owned(),
         );
         if let Some(entry) = self.child_browsing_contexts.get_mut(&handle) {
-            entry.apply_deferred_navigation_to_entry_seed(&request.url);
+            entry.apply_deferred_navigation_to_entry_seed(&request.url, replace_current);
         }
-        if self
-            .set_child_browsing_context_pending_navigation(
-                handle,
-                ChildBrowsingContextBootstrap::Request(request),
-                false,
-            )
-            .is_none()
-        {
-            return false;
-        }
+        let navigation_load = self.set_child_browsing_context_pending_navigation(
+            handle,
+            ChildBrowsingContextBootstrap::Request(request),
+            false,
+        )?;
         self.queue_child_browsing_context_navigation_commit(handle)
+            .then_some(navigation_load)
     }
 
     pub(crate) fn mark_child_browsing_context_top_level_history_increment(

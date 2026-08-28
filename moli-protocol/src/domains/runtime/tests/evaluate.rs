@@ -1,4 +1,5 @@
 use super::*;
+use crate::BackgroundNavigationCompletion;
 
 /// Runtime.enable is a no-op that succeeds.
 #[tokio::test]
@@ -516,12 +517,12 @@ async fn loaded_page_runtime_agent_state_commands_dispatch_after_runtime_enable(
 #[tokio::test(flavor = "multi_thread")]
 async fn runtime_agent_configuration_is_restored_on_replacement_page_isolate() {
     let mut ctx = TestContext::new();
-    with_loaded_document_async(&mut ctx, "<!doctype html><body>before</body>").await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist")
-        .set_active_target_id("TID-runtime-agent-restore");
+    with_loaded_document_for_target_async(
+        &mut ctx,
+        "<!doctype html><body>before</body>",
+        "TID-runtime-agent-restore",
+    )
+    .await;
     enable_runtime_and_take_execution_context_id_async(&mut ctx, 11_016).await;
 
     for (id, method, params) in [
@@ -606,12 +607,12 @@ async fn runtime_agent_configuration_is_restored_on_replacement_page_isolate() {
 #[tokio::test(flavor = "multi_thread")]
 async fn opaque_reattach_state_wins_over_conflicting_runtime_listener_configuration() {
     let mut ctx = TestContext::new();
-    with_loaded_document_async(&mut ctx, "<!doctype html><body>before</body>").await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist")
-        .set_active_target_id("TID-runtime-reattach-precedence");
+    with_loaded_document_for_target_async(
+        &mut ctx,
+        "<!doctype html><body>before</body>",
+        "TID-runtime-reattach-precedence",
+    )
+    .await;
 
     ctx.process_async(json!({"id": 11_023, "method": "Runtime.enable"}))
         .await;
@@ -2233,7 +2234,7 @@ async fn page_navigate_empty_http_error_commits_browser_error_document() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn page_navigate_network_failure_commits_error_document() {
+async fn page_navigate_network_failure_commits_error_document_in_stable_page() {
     async fn first() -> impl IntoResponse {
         (
             [(CONTENT_TYPE.as_str(), "text/html; charset=utf-8")],
@@ -2448,12 +2449,17 @@ async fn page_navigate_network_failure_commits_error_document() {
             request_body: None,
             request_body_bytes: None,
             request_headers: Vec::new(),
+            navigation_history_entry_seed: None,
             request_load_policy: crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
             timestamp: 0.0,
-            source_document_security: crate::conn::NavigationSourceDocumentSecurityContext::new(
-                "http://127.0.0.1".to_owned(),
-                "InsecureScheme".to_owned(),
+            source_document_security: Box::new(
+                crate::conn::NavigationSourceDocumentSecurityContext::new(
+                    "http://127.0.0.1".to_owned(),
+                    "InsecureScheme".to_owned(),
+                    String::new(),
+                ),
             ),
+            service_worker_clients_open_window_continuation: None,
         },
         None,
         Ok(crate::conn::CapturedBody::from_string(
@@ -2497,23 +2503,23 @@ async fn page_navigate_network_failure_commits_error_document() {
     }))
     .await;
     ctx.expect_error(91, -32000, "No resource with given identifier found");
-    assert_ne!(
+    assert_eq!(
         ctx.conn
             .target_page_residence_identity_for_session(Some("SID-1")),
         Some(before_target_page),
-        "current master installs navigation Documents as a new target Page attachment"
+        "the network error Document must stay in the target's stable Page residence"
     );
-    assert_ne!(
+    assert_eq!(
         ctx.conn
             .renderer_page_residence_identity_for_session_owner(Some("SID-1")),
         Some(before_renderer_page),
-        "the error Document must not reuse the retired renderer Page"
+        "the network error Document must replace only the renderer Page's current realm"
     );
     assert_ne!(
         ctx.conn
             .current_renderer_agent_attachment_id_for_session_owner(Some("SID-1")),
         Some(before_renderer_attachment),
-        "the error Document must own a replacement realm/Inspector attachment"
+        "the error Document must replace the previous realm/renderer agent"
     );
 
     ctx.process_async(json!({
@@ -3646,7 +3652,7 @@ async fn scoped_binding_persists_across_navigation_for_registered_named_world() 
     assert!(add_script["result"]["identifier"].as_str().is_some());
     ctx.sent.clear();
 
-    ctx.process_async(json!({
+    ctx.process_and_wait_for_response_async(json!({
         "id": 334,
         "method": "Page.navigate",
         "sessionId": "SID-1",
@@ -6645,7 +6651,7 @@ async fn registered_named_world_object_handles_remain_callable_after_navigation(
     );
     ctx.sent.clear();
 
-    ctx.process_async(json!({
+    ctx.process_and_wait_for_response_async(json!({
         "id": 507,
         "method": "Page.navigate",
         "sessionId": "SID-1",

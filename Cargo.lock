@@ -2857,6 +2857,7 @@ dependencies = [
  "moli-script",
  "moli-selector",
  "moli-shared-worker",
+ "moli-site",
  "moli-storage-key",
  "moli-storage-service",
  "moli-streams",

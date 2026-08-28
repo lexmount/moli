@@ -435,7 +435,6 @@ impl BrowserContext {
             .map(|metrics| viewport_surface_install_script(&metrics.viewport_surface(), true))
             .unwrap_or_default();
         let max_touch_points = inputs.max_touch_points();
-        let document_has_focus = inputs.document_has_focus();
         let document_hidden = inputs.document_hidden();
         let document_visibility_state = inputs.document_visibility_state();
         let window_fullscreen = inputs.window_fullscreen();
@@ -576,12 +575,6 @@ impl BrowserContext {
                     defineGetter(document, 'hidden', () => {document_hidden});
                     defineGetter(document, 'visibilityState', () => {document_visibility_state});
                     defineGetter(document, 'webkitIsFullScreen', () => {window_fullscreen});
-                    try {{
-                        Object.defineProperty(document, 'hasFocus', {{
-                            configurable: true,
-                            value: () => {document_has_focus}
-                        }});
-                    }} catch (_error) {{}}
                 }}
             }})();",
             geolocation_override = geolocation_override
@@ -603,7 +596,6 @@ impl BrowserContext {
             max_touch_points = max_touch_points,
             document_hidden = document_hidden,
             document_visibility_state = json!(document_visibility_state),
-            document_has_focus = document_has_focus,
             window_fullscreen = window_fullscreen,
         );
 
@@ -612,6 +604,7 @@ impl BrowserContext {
             source,
             world_name: None,
             has_bidi_channel_argument: false,
+            browser_internal: true,
             bidi_channel_handoffs: Vec::new(),
         })
     }
@@ -619,15 +612,54 @@ impl BrowserContext {
     pub(crate) async fn apply_surface_overrides_to_loaded_page_async(
         &mut self,
     ) -> Result<(), String> {
+        let defer_for_modal_owner = self.has_pending_javascript_dialog();
         let Some(script) = self.generated_surface_override_script() else {
             return Ok(());
         };
         let Some(page) = self.active_target.runtime_slot.loaded_page_mut() else {
             return Ok(());
         };
+        if defer_for_modal_owner {
+            return page
+                .enqueue_page_surface_override_script_detached(&script.source)
+                .map_err(|error| {
+                    format!("failed to defer page surface overrides behind modal dialog: {error}")
+                });
+        }
         page.run_page_surface_override_script_async(&script.source)
             .await
             .map_err(|error| format!("failed to apply page surface overrides: {error}"))
+    }
+
+    pub(crate) async fn apply_surface_overrides_to_parked_target_loaded_page_async(
+        &mut self,
+        target_id: &str,
+    ) -> Result<(), String> {
+        let defer_for_modal_owner = self.has_pending_javascript_dialog();
+        let Some(script) = self.generated_surface_override_script_for_parked_target(target_id)
+        else {
+            return Ok(());
+        };
+        let Some(page) = self
+            .background_target_mut(target_id)
+            .and_then(|target| target.runtime_slot.loaded_page_mut())
+        else {
+            return Ok(());
+        };
+        if defer_for_modal_owner {
+            return page
+                .enqueue_page_surface_override_script_detached(&script.source)
+                .map_err(|error| {
+                    format!(
+                        "failed to defer parked target page surface overrides behind modal dialog: {error}"
+                    )
+                });
+        }
+        page.run_page_surface_override_script_async(&script.source)
+            .await
+            .map_err(|error| {
+                format!("failed to apply parked target page surface overrides: {error}")
+            })
     }
 
     #[cfg(test)]

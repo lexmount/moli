@@ -105,6 +105,7 @@ impl PageVm {
             return;
         }
 
+        let agent_token = self.devtools_agent_token();
         let sessions = self.dom_agent_state.session_keys();
         let batches = sessions
             .into_iter()
@@ -113,6 +114,7 @@ impl PageVm {
                     self.project_dom_mutation_facts_for_session(session_id.as_deref(), &facts);
                 (!events.is_empty()).then(|| {
                     RendererDomMutationEventBatch::new(
+                        agent_token,
                         DevToolsSessionKey::from_wire_session_id(session_id.as_deref()),
                         events,
                     )

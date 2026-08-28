@@ -91,8 +91,18 @@ pub(super) async fn emit_prepared(
             source,
             disposition,
             popup_id,
-            url,
+            requested_url,
+            destination_request,
+            reports_requested_url_without_destination,
             target_name,
+            navigation_referrer,
+            initial_document_referrer,
+            document_referrer,
+            pending_auxiliary_page,
+            resolved_target_page,
+            new_target_disposition,
+            auxiliary_browsing_context_policy,
+            service_worker_clients_open_window_continuation,
             session_storage_store,
             initial_empty_document_storage_key,
         ) = activation.into_parts();
@@ -103,31 +113,46 @@ pub(super) async fn emit_prepared(
                 ..
             }
         );
+        // `Navigate()` for an ordinary Window producer is invoked before its
+        // asynchronously queued target-Document javascript URL tasks run.
+        // Renderer publications can split those facts even when both came
+        // from one source V8 turn, so the destination owner must preserve the
+        // Page task boundary instead of trying to pair adjacent publications.
+        let drain_pending_javascript_tasks_before_commit = (destination_request.is_some()
+            || reports_requested_url_without_destination)
+            && matches!(&source, RendererPopupActivationSource::Window { .. });
         let opener = resolve_devtools_opener(conn, &page_owner, &source);
         let creation = PopupTargetCreation::new(
             page_owner.browser_context_id().to_owned(),
             popup_id,
-            url,
+            requested_url,
+            destination_request,
+            reports_requested_url_without_destination,
             target_name,
             opener,
             can_access_opener,
             disposition,
+            navigation_referrer,
+            initial_document_referrer,
+            document_referrer,
+            pending_auxiliary_page,
+            resolved_target_page,
+            new_target_disposition,
+            auxiliary_browsing_context_policy,
+            service_worker_clients_open_window_continuation,
             session_storage_store,
             initial_empty_document_storage_key,
+            drain_pending_javascript_tasks_before_commit,
         );
-        let browser_context_id = page_owner.browser_context_id().to_owned();
-        let target_id =
+        // Keep the large target-admission state off the generic renderer
+        // output projection stack. This path is present in every projection
+        // future even when the current command contains no popup action.
+        Box::pin(
             crate::domains::target::create_popup_target_from_renderer_output_background_events_async(
                 conn, out, creation,
-            )
-            .await;
-        super::javascript_dialog::settle_pending_popup_dialogs(
-            conn,
-            out,
-            &browser_context_id,
-            popup_id,
-            target_id.as_deref(),
-        );
+            ),
+        )
+        .await;
     }
 }
 
@@ -165,10 +190,6 @@ fn resolve_devtools_opener(
                 .devtools_target_info(target_id)
                 .is_some()
                 .then(|| PopupTargetOpenerIdentity::new(target_id, frame_id))
-        }
-        RendererWindowDocumentSource::LightweightPopup { popup_id, .. } => {
-            let target_id = browser_context.target_id_for_popup_id(*popup_id)?;
-            Some(PopupTargetOpenerIdentity::new(target_id, target_id))
         }
     };
     if resolved.is_none() {
@@ -403,49 +424,6 @@ mod tests {
             Some("FRAME-child")
         );
         assert!(info.can_access_opener);
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn fifo_popup_batch_resolves_a_lightweight_popup_as_the_next_opener() {
-        let mut conn = CdpConnection::default();
-        conn.browser_context = Some(context("BID-1", "TID-root", "SID-1"));
-        let owner = page_owner("BID-1", "TID-root");
-
-        emit(
-            &mut conn,
-            owner,
-            vec![
-                window_activation(
-                    RendererWindowDocumentSource::RootFrame,
-                    true,
-                    Some(44),
-                    "about:blank#first",
-                ),
-                window_activation(
-                    RendererWindowDocumentSource::LightweightPopup {
-                        popup_id: 44,
-                        popup_document_id: 12,
-                    },
-                    true,
-                    Some(45),
-                    "about:blank#second",
-                ),
-            ],
-        )
-        .await;
-
-        let context = conn.browser_context_by_id("BID-1").unwrap();
-        let first_target_id = context.target_id_for_popup_id(44).unwrap();
-        let second_target_id = context.target_id_for_popup_id(45).unwrap();
-        let second = context.devtools_target_info(second_target_id).unwrap();
-        assert_eq!(
-            second.opener_id.as_ref().map(|id| id.as_str()),
-            Some(first_target_id)
-        );
-        assert_eq!(
-            second.opener_frame_id.as_ref().map(|id| id.as_str()),
-            Some(first_target_id)
-        );
     }
 
     #[tokio::test(flavor = "multi_thread")]

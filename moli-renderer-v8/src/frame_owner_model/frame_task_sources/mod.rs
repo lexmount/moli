@@ -1,7 +1,5 @@
 mod document_script_ready;
 pub(crate) use document_script_ready::{
-    FrameDocumentDynamicClassicExecutionFollowup, FrameDocumentDynamicClassicPrepareFollowup,
-    FrameDocumentDynamicClassicPrepareSkipReason, FrameDocumentDynamicClassicScriptExecutionAction,
     FrameDocumentExternalClassicExecutionFollowup, FrameDocumentExternalClassicExecutionResult,
     FrameDocumentExternalClassicPostExecutionAction, FrameDocumentExternalClassicPrepareFollowup,
     FrameDocumentExternalClassicPrepareSkipReason, FrameDocumentExternalClassicScriptExecution,
@@ -15,6 +13,5 @@ pub(crate) use document_script_ready::{
     FrameDocumentScriptExecutionWork, FrameDocumentScriptPrepareFollowup,
     FrameDocumentScriptReadyTaskWork, FrameDocumentScriptWorkAdmission,
     FrameDocumentUnboundScriptWork, PendingChildDocumentScriptExecutionWork,
-    PendingChildDynamicDocumentScript, PendingChildExternalClassicDocumentScript,
-    PendingChildJavascriptUrlDocumentScript,
+    PendingChildExternalClassicDocumentScript, PendingChildJavascriptUrlDocumentScript,
 };

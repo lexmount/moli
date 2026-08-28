@@ -8,7 +8,6 @@ use moli_storage_key::MoliStorageKey;
 pub(crate) enum WorkerOwnerScope {
     Top,
     Child(crate::document_runtime::DomHandle),
-    LightweightPopup(u64),
 }
 
 pub(super) enum WorkerExecutionState {

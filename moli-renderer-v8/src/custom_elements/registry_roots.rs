@@ -33,5 +33,4 @@ pub(crate) fn is_shadow_including_rooted_in_browsing_context_document(
         || host
             .child_browsing_context_host_for_document_handle(document_handle)
             .is_some()
-        || host.lightweight_popup_document_is_open(document_handle)
 }

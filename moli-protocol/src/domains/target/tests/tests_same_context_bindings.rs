@@ -1412,7 +1412,7 @@ async fn same_context_targets_replay_only_their_own_pre_document_binding_and_pre
     let add_b = take_response_by_id(&mut ctx, 10421);
     assert!(add_b["result"]["identifier"].is_string());
 
-    ctx.process_async(json!({
+    ctx.process_and_wait_for_response_async(json!({
         "id": 10422,
         "method": "Page.navigate",
         "sessionId": second_session_id,
@@ -1454,7 +1454,7 @@ async fn same_context_targets_replay_only_their_own_pre_document_binding_and_pre
     .await;
     ctx.expect_result(10423, json!({}), None);
 
-    ctx.process_async(json!({
+    ctx.process_and_wait_for_response_async(json!({
         "id": 10424,
         "method": "Page.navigate",
         "sessionId": "SID-active",
@@ -1509,7 +1509,7 @@ async fn same_context_targets_replay_only_their_own_pre_document_binding_and_pre
     assert_eq!(parked_payload["text"], json!("B initial page"));
     ctx.take_all();
 
-    ctx.process_async(json!({
+    ctx.process_and_wait_for_response_async(json!({
         "id": 10426,
         "method": "Page.navigate",
         "sessionId": second_session_id,
@@ -1644,7 +1644,7 @@ async fn same_context_targets_replay_only_their_own_pre_document_binding_and_pre
     let add_b = take_response_by_id(&mut ctx, 10475);
     assert!(add_b["result"]["identifier"].is_string());
 
-    ctx.process_async(json!({
+    ctx.process_and_wait_for_response_async(json!({
         "id": 10476,
         "method": "Page.navigate",
         "sessionId": second_session_id,
@@ -1682,7 +1682,7 @@ async fn same_context_targets_replay_only_their_own_pre_document_binding_and_pre
     .await;
     ctx.expect_result(10477, json!({}), None);
 
-    ctx.process_async(json!({
+    ctx.process_and_wait_for_response_async(json!({
         "id": 10478,
         "method": "Page.navigate",
         "sessionId": "SID-active",
@@ -1728,7 +1728,7 @@ async fn same_context_targets_replay_only_their_own_pre_document_binding_and_pre
     );
     ctx.take_all();
 
-    ctx.process_async(json!({
+    ctx.process_and_wait_for_response_async(json!({
         "id": 10480,
         "method": "Page.navigate",
         "sessionId": second_session_id,
@@ -1871,7 +1871,7 @@ async fn same_context_targets_materialize_only_their_own_utility_pre_document_bi
     let add_b = take_response_by_id(&mut ctx, 10433);
     assert!(add_b["result"]["identifier"].is_string());
 
-    ctx.process_async(json!({
+    ctx.process_and_wait_for_response_async(json!({
         "id": 10434,
         "method": "Page.navigate",
         "sessionId": second_session_id,
@@ -1950,7 +1950,7 @@ async fn same_context_targets_materialize_only_their_own_utility_pre_document_bi
     .await;
     ctx.expect_result(10436, json!({}), None);
 
-    ctx.process_async(json!({
+    ctx.process_and_wait_for_response_async(json!({
         "id": 10437,
         "method": "Page.navigate",
         "sessionId": "SID-active",
@@ -2036,7 +2036,7 @@ async fn same_context_targets_materialize_only_their_own_utility_pre_document_bi
     );
     ctx.take_all();
 
-    ctx.process_async(json!({
+    ctx.process_and_wait_for_response_async(json!({
         "id": 10440,
         "method": "Page.navigate",
         "sessionId": second_session_id,
@@ -2222,7 +2222,7 @@ async fn same_context_targets_materialize_only_their_own_utility_pre_document_bi
     let add_b = take_response_by_id(&mut ctx, 10487);
     assert!(add_b["result"]["identifier"].is_string());
 
-    ctx.process_async(json!({
+    ctx.process_and_wait_for_response_async(json!({
         "id": 10488,
         "method": "Page.navigate",
         "sessionId": second_session_id,
@@ -2293,7 +2293,7 @@ async fn same_context_targets_materialize_only_their_own_utility_pre_document_bi
     .await;
     ctx.expect_result(10490, json!({}), None);
 
-    ctx.process_async(json!({
+    ctx.process_and_wait_for_response_async(json!({
         "id": 10491,
         "method": "Page.navigate",
         "sessionId": "SID-active",
@@ -2369,7 +2369,7 @@ async fn same_context_targets_materialize_only_their_own_utility_pre_document_bi
     );
     ctx.take_all();
 
-    ctx.process_async(json!({
+    ctx.process_and_wait_for_response_async(json!({
         "id": 10494,
         "method": "Page.navigate",
         "sessionId": second_session_id,
@@ -2737,7 +2737,7 @@ async fn same_context_targets_restore_only_their_own_utility_pre_document_bindin
     let add_b = take_response_by_id(&mut ctx, 10458);
     assert!(add_b["result"]["identifier"].is_string());
 
-    ctx.process_async(json!({
+    ctx.process_and_wait_for_response_async(json!({
         "id": 10459,
         "method": "Page.navigate",
         "sessionId": second_session_id,
@@ -2832,7 +2832,7 @@ async fn same_context_targets_restore_only_their_own_utility_pre_document_bindin
     let add_c = take_response_by_id(&mut ctx, 10463);
     assert!(add_c["result"]["identifier"].is_string());
 
-    ctx.process_async(json!({
+    ctx.process_and_wait_for_response_async(json!({
         "id": 10464,
         "method": "Page.navigate",
         "sessionId": third_session_id,

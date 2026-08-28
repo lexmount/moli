@@ -4,13 +4,21 @@ use crate::conn::BrowserContext;
 use crate::testing::TestContext;
 
 pub(super) async fn with_loaded_document_async(ctx: &mut TestContext, html: &str) {
+    with_loaded_document_for_target_async(ctx, html, "TID-1").await;
+}
+
+pub(super) async fn with_loaded_document_for_target_async(
+    ctx: &mut TestContext,
+    html: &str,
+    target_id: &str,
+) {
     ctx.conn
         .insert_browser_context(BrowserContext::new("BID-1".into()));
     ctx.conn
         .browser_context
         .as_mut()
         .expect("browser context should be installed before loading test page")
-        .set_active_target_id("TID-1".to_owned());
+        .set_active_target_id(target_id.to_owned());
     let data_url = format!("data:text/html,{html}");
     ctx.install_navigation_fixture_for_session_owner(&data_url, None)
         .await;

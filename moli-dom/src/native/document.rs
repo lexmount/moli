@@ -147,6 +147,10 @@ impl Document {
         self.url = url;
     }
 
+    pub fn set_url_preserving_fallback_base(&mut self, url: Url) {
+        self.url = url;
+    }
+
     pub fn set_base_url_override(&mut self, url: Option<Url>) {
         self.base_url_state.set_base_url_override(url);
     }

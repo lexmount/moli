@@ -83,7 +83,7 @@ pub(crate) use inspector::InspectorCommandDispatch;
 pub(crate) use javascript_dialog::TargetJavaScriptDialog;
 pub(crate) use javascript_dialog::{
     TargetJavaScriptDialogScope, TargetJavaScriptDialogScopeObserver,
-    TargetPreparedJavaScriptDialog, TargetPreparedJavaScriptDialogRoute,
+    TargetPreparedJavaScriptDialog,
 };
 pub(crate) use pending_renderer_command::{
     DuplicatePendingRendererCommand, PendingRendererCommandKey, PreparedRendererCallDispatch,
@@ -138,7 +138,7 @@ pub(crate) use emulation::{
 pub(crate) use navigation_outcome::{CompletedDownloadBody, CompletedDownloadBodyArtifact};
 pub use navigation_outcome::{
     DownloadNavigation, LoadedNavigation, NavigationDispatchState, NavigationLoadOutcome,
-    NavigationRequestLoadPolicy, TargetInfo,
+    NavigationRequestLoadPolicy, NoCommitResponseNavigation, TargetInfo,
 };
 pub(crate) use navigation_outcome::{
     NETWORK_ERROR_PAGE_URL, NavigationResultProjection, NavigationSourceDocumentSecurityContext,

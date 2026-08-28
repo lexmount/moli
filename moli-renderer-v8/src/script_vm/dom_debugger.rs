@@ -186,9 +186,7 @@ fn rooted_event_listener_snapshots<'s>(
             Some(OwnerDispatchScope::Child(child_handle)) => host
                 .current_child_window_event_target(child_handle)
                 .map(EventTargetHandle::ChildWindow),
-            Some(OwnerDispatchScope::Top | OwnerDispatchScope::LightweightPopup(_)) => {
-                Some(EventTargetHandle::Window)
-            }
+            Some(OwnerDispatchScope::Top) => Some(EventTargetHandle::Window),
             None => None,
         };
         return target

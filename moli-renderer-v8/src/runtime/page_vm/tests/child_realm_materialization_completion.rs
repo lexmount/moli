@@ -19,6 +19,7 @@ Promise.resolve().then(() => {
             .to_owned(),
             world_name: None,
             has_bidi_channel_argument: false,
+            browser_internal: false,
             bidi_channel_handoffs: Vec::new(),
         },
         crate::DocumentStartScript {
@@ -29,6 +30,7 @@ parent.__childRealmCompletionOrder.push("second-body");
             .to_owned(),
             world_name: None,
             has_bidi_channel_argument: false,
+            browser_internal: false,
             bidi_channel_handoffs: Vec::new(),
         },
     ]);
@@ -37,10 +39,12 @@ parent.__childRealmCompletionOrder.push("second-body");
 fn queue_child_realm_materialization(page_vm: &mut PageVm, element_id: &str) -> anyhow::Result<()> {
     page_vm.vm_mut().eval(&format!(
         r#"
+{{
 const frame = document.createElement("iframe");
 frame.id = {element_id:?};
 document.body.appendChild(frame);
 void frame.contentWindow.Function;
+}}
 "queued"
 "#,
     ))?;
@@ -137,6 +141,7 @@ async fn child_realm_materialization_creates_named_preload_world_in_the_selected
             source: "globalThis.__childNamedWorldReady = 'ready';".to_owned(),
             world_name: Some("child-utility".to_owned()),
             has_bidi_channel_argument: false,
+            browser_internal: false,
             bidi_channel_handoffs: Vec::new(),
         }]);
         page_vm.set_stored_runtime_bindings(&[
@@ -183,6 +188,90 @@ async fn child_realm_materialization_creates_named_preload_world_in_the_selected
     })
     .await
     .expect("child named-world materialization witness should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn child_document_creation_freezes_document_start_script_registry() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let document_url =
+            Url::parse("https://example.com/child-realm-preload-snapshot").unwrap();
+        let (mut page_vm, _resource_source, _owner_wake_rx) =
+            page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
+
+        queue_child_realm_materialization(&mut page_vm, "pre-registration-child")?;
+        let first_child_handle = page_vm
+            .vm()
+            .element_handle_by_id_for_test("pre-registration-child")
+            .expect("first child owner handle");
+        let first_frame_id = page_vm
+            .vm()
+            .child_browsing_context_frame_id_by_owner_node_id(first_child_handle)
+            .expect("first child frame id");
+
+        page_vm.set_stored_document_start_scripts(&[crate::DocumentStartScript {
+            registry_key: Some("late-child-named-world-script".to_owned()),
+            source: "globalThis.__lateChildPreload = 'future-document';".to_owned(),
+            world_name: Some("late-child-utility".to_owned()),
+            has_bidi_channel_argument: false,
+            browser_internal: false,
+            bidi_channel_handoffs: Vec::new(),
+        }]);
+
+        let first_outcome = page_vm
+            .run_child_realm_materialization_body_for_test()?
+            .expect("the already-queued child realm should materialize");
+        assert_eq!(
+            first_outcome.action.target_effect,
+            crate::page_task_queue::PageChildRealmMaterializationTargetEffect::MaterializedCurrentOwnerWithoutDocumentStartScript,
+        );
+        assert!(
+            !page_vm.has_isolated_world_named_for_frame(
+                &first_frame_id,
+                "late-child-utility"
+            ),
+            "a later registry update must not be replayed into an already-queued child Document",
+        );
+
+        queue_child_realm_materialization(&mut page_vm, "post-registration-child")?;
+        let second_child_handle = page_vm
+            .vm()
+            .element_handle_by_id_for_test("post-registration-child")
+            .expect("second child owner handle");
+        let second_frame_id = page_vm
+            .vm()
+            .child_browsing_context_frame_id_by_owner_node_id(second_child_handle)
+            .expect("second child frame id");
+        let second_outcome = page_vm
+            .run_child_realm_materialization_body_for_test()?
+            .expect("the future child realm should materialize");
+        assert_eq!(
+            second_outcome.action.target_effect,
+            crate::page_task_queue::PageChildRealmMaterializationTargetEffect::MaterializedCurrentOwnerAfterDocumentStartScript,
+        );
+        assert!(
+            page_vm.has_isolated_world_named_for_frame(
+                &second_frame_id,
+                "late-child-utility"
+            ),
+            "a future child Document must capture the updated registry",
+        );
+        let execution_context_id = page_vm.create_isolated_world_for_frame(
+            &second_frame_id,
+            "late-child-utility",
+            false,
+        )?;
+        let state = page_vm.evaluate_expression_in_execution_context_with_await(
+            execution_context_id,
+            "globalThis.__lateChildPreload",
+            false,
+        )?;
+        assert_eq!(state["value"], serde_json::json!("future-document"));
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("child realm preload snapshot witness should run");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -256,6 +345,7 @@ Promise.resolve().then(() => {
                 .to_owned(),
                 world_name: None,
                 has_bidi_channel_argument: false,
+                browser_internal: false,
                 bidi_channel_handoffs: Vec::new(),
             }]);
         page_vm

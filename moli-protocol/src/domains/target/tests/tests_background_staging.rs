@@ -80,6 +80,348 @@ async fn loaded_page_html_for_test(ctx: &mut TestContext) -> String {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn target_activation_moves_native_page_focus_and_preserves_active_element_identity() {
+    let mut ctx = TestContext::new();
+    load_bc_with_titled_page_async(
+        &mut ctx,
+        "BID-FOCUS",
+        "TID-FOCUS-A",
+        r#"<title>focus-a</title><input id="focus-target"><script>
+const input = document.getElementById('focus-target');
+globalThis.__focusEvents = [];
+for (const type of ['blur', 'focusout', 'focus', 'focusin']) {
+  input.addEventListener(type, () => __focusEvents.push(`input-${type}`));
+}
+for (const type of ['blur', 'focus']) {
+  window.addEventListener(type, () => __focusEvents.push(`window-${type}`));
+}
+input.focus();
+__focusEvents.length = 0;
+</script>"#,
+    )
+    .await;
+    ctx.conn
+        .browser_context
+        .as_mut()
+        .expect("focus BrowserContext")
+        .attach_active_session("SID-FOCUS-A");
+
+    ctx.process_async(json!({
+        "id": 8101,
+        "method": "Target.setAutoAttach",
+        "params": { "autoAttach": true, "waitForDebuggerOnStart": false }
+    }))
+    .await;
+    ctx.expect_result(8101, json!({}), None);
+    ctx.process_async(json!({
+        "id": 8102,
+        "method": "Target.createTarget",
+        "params": {
+            "browserContextId": "BID-FOCUS",
+            "url": "about:blank#focus-b",
+            "background": true
+        }
+    }))
+    .await;
+    let created = ctx.take_one();
+    assert_eq!(created["method"], "Target.targetCreated");
+    let target_b = created["params"]["targetInfo"]["targetId"]
+        .as_str()
+        .expect("focus target B id")
+        .to_owned();
+    let attached = ctx.take_one();
+    assert_eq!(attached["method"], "Target.attachedToTarget");
+    let session_b = attached["params"]["sessionId"]
+        .as_str()
+        .expect("focus target B session")
+        .to_owned();
+    ctx.expect_result(8102, json!({ "targetId": target_b }), None);
+
+    ctx.process_async(json!({
+        "id": 8103,
+        "method": "Runtime.evaluate",
+        "sessionId": session_b,
+        "params": {
+            "returnByValue": true,
+            "expression": r#"(() => {
+  const input = document.body.appendChild(document.createElement('input'));
+  input.id = 'focus-target';
+  globalThis.__focusEvents = [];
+  for (const type of ['blur', 'focusout', 'focus', 'focusin']) {
+    input.addEventListener(type, () => __focusEvents.push(`input-${type}`));
+  }
+  for (const type of ['blur', 'focus']) {
+    window.addEventListener(type, () => __focusEvents.push(`window-${type}`));
+  }
+  input.focus();
+  __focusEvents.length = 0;
+  return [document.hasFocus(), document.hidden, document.visibilityState,
+          document.activeElement === input, input.matches(':focus')];
+})()"#
+        }
+    }))
+    .await;
+    let staged = take_response_by_id(&mut ctx, 8103);
+    assert_eq!(
+        staged["result"]["result"]["value"],
+        json!([false, true, "hidden", true, false]),
+        "a staged background target must start with native Page focus disabled"
+    );
+
+    ctx.process_async(json!({
+        "id": 8104,
+        "method": "Target.activateTarget",
+        "params": { "targetId": target_b }
+    }))
+    .await;
+    ctx.expect_result(8104, json!({}), None);
+
+    for (id, session_id, expected) in [
+        (
+            8105,
+            "SID-FOCUS-A",
+            json!({
+                "focused": false,
+                "hidden": true,
+                "visibility": "hidden",
+                "activeIdentity": true,
+                "cssFocus": false,
+                "events": ["input-blur", "input-focusout", "window-blur"]
+            }),
+        ),
+        (
+            8106,
+            session_b.as_str(),
+            json!({
+                "focused": true,
+                "hidden": false,
+                "visibility": "visible",
+                "activeIdentity": true,
+                "cssFocus": true,
+                "events": ["window-focus", "input-focus", "input-focusin"]
+            }),
+        ),
+    ] {
+        ctx.process_async(json!({
+            "id": id,
+            "method": "Runtime.evaluate",
+            "sessionId": session_id,
+            "params": {
+                "returnByValue": true,
+                "expression": r#"(() => {
+  const input = document.getElementById('focus-target');
+  return {
+    focused: document.hasFocus(),
+    hidden: document.hidden,
+    visibility: document.visibilityState,
+    activeIdentity: document.activeElement === input,
+    cssFocus: input.matches(':focus'),
+    events: __focusEvents.slice()
+  };
+})()"#
+            }
+        }))
+        .await;
+        let response = take_response_by_id(&mut ctx, id);
+        assert_eq!(response["result"]["result"]["value"], expected);
+    }
+
+    ctx.process_async(json!({
+        "id": 8107,
+        "method": "Page.bringToFront",
+        "sessionId": "SID-FOCUS-A"
+    }))
+    .await;
+    ctx.expect_result(8107, json!({}), Some("SID-FOCUS-A"));
+    assert_eq!(
+        ctx.conn
+            .browser_context
+            .as_ref()
+            .and_then(|bc| bc.active_target_id()),
+        Some("TID-FOCUS-A")
+    );
+
+    ctx.process_async(json!({
+        "id": 8108,
+        "method": "Emulation.setFocusEmulationEnabled",
+        "sessionId": session_b,
+        "params": { "enabled": true }
+    }))
+    .await;
+    ctx.expect_result(8108, json!({}), Some(&session_b));
+    ctx.process_async(json!({
+        "id": 8109,
+        "method": "Runtime.evaluate",
+        "sessionId": session_b,
+        "params": { "returnByValue": true, "expression": "[document.hasFocus(), document.hidden, document.visibilityState]" }
+    }))
+    .await;
+    let emulated = take_response_by_id(&mut ctx, 8109);
+    assert_eq!(
+        emulated["result"]["result"]["value"],
+        json!([true, false, "visible"])
+    );
+
+    ctx.process_async(json!({
+        "id": 8110,
+        "method": "Runtime.evaluate",
+        "sessionId": session_b,
+        "params": {
+            "returnByValue": true,
+            "userGesture": true,
+            "expression": "window.focus(); document.hasFocus()"
+        }
+    }))
+    .await;
+    let promoted_by_window_focus = take_response_by_id(&mut ctx, 8110);
+    assert_eq!(
+        promoted_by_window_focus["result"]["result"]["value"],
+        json!(true)
+    );
+    assert_eq!(
+        ctx.conn
+            .browser_context
+            .as_ref()
+            .and_then(|bc| bc.active_target_id()),
+        Some(target_b.as_str()),
+        "effective focus emulation must not hide the parked Page's inactive target state"
+    );
+
+    ctx.process_async(json!({
+        "id": 8111,
+        "method": "Page.bringToFront",
+        "sessionId": "SID-FOCUS-A"
+    }))
+    .await;
+    ctx.expect_result(8111, json!({}), Some("SID-FOCUS-A"));
+
+    ctx.process_async(json!({
+        "id": 8112,
+        "method": "Emulation.setFocusEmulationEnabled",
+        "sessionId": session_b,
+        "params": { "enabled": false }
+    }))
+    .await;
+    ctx.expect_result(8112, json!({}), Some(&session_b));
+    ctx.process_async(json!({
+        "id": 8113,
+        "method": "Runtime.evaluate",
+        "sessionId": session_b,
+        "params": { "returnByValue": true, "expression": "[document.hasFocus(), document.hidden, document.visibilityState]" }
+    }))
+    .await;
+    let cleared = take_response_by_id(&mut ctx, 8113);
+    assert_eq!(
+        cleared["result"]["result"]["value"],
+        json!([false, true, "hidden"])
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn activated_target_creation_awaits_previous_page_focus_and_visibility_handoff() {
+    let mut ctx = TestContext::new();
+    load_bc_with_titled_page_async(
+        &mut ctx,
+        "BID-FOCUS-CREATE",
+        "TID-FOCUS-CREATE-A",
+        r#"<input id="focus-target"><script>
+const input = document.getElementById('focus-target');
+globalThis.__focusEvents = [];
+for (const type of ['blur', 'focusout']) {
+  input.addEventListener(type, () => __focusEvents.push(`input-${type}`));
+}
+window.addEventListener('blur', () => __focusEvents.push('window-blur'));
+input.focus();
+__focusEvents.length = 0;
+</script>"#,
+    )
+    .await;
+    ctx.conn
+        .browser_context
+        .as_mut()
+        .expect("focus-create BrowserContext")
+        .attach_active_session("SID-FOCUS-CREATE-A");
+
+    let (result, _, _, _) = ctx
+        .conn
+        .execute_devtools_command(DevToolsCommand::CreateTarget(DevToolsCreateTargetCommand {
+            context: crate::devtools_runtime::DevToolsCommandContext {
+                protocol: crate::devtools_runtime::DevToolsProtocol::WebDriverBidi,
+                session_id: None,
+                target_id: None,
+                browser_context_id: Some(crate::devtools_runtime::DevToolsBrowserContextId::from(
+                    "BID-FOCUS-CREATE",
+                )),
+            },
+            url: "about:blank#focused-created-target".to_owned(),
+            browser_context_id: Some(crate::devtools_runtime::DevToolsBrowserContextId::from(
+                "BID-FOCUS-CREATE",
+            )),
+            activate: true,
+        }))
+        .await
+        .into_complete_parts();
+    let DevToolsCommandResult::CreateTarget(created) = result.expect("target creation") else {
+        panic!("expected create-target result");
+    };
+    assert_eq!(
+        ctx.conn
+            .browser_context
+            .as_ref()
+            .and_then(|browser_context| browser_context.active_target_id()),
+        Some(created.target_id.as_str())
+    );
+
+    ctx.process_async(json!({
+        "id": 8112,
+        "method": "Runtime.evaluate",
+        "sessionId": "SID-FOCUS-CREATE-A",
+        "params": {
+            "returnByValue": true,
+            "expression": "[document.hasFocus(), document.hidden, document.visibilityState, document.activeElement === document.getElementById('focus-target'), document.getElementById('focus-target').matches(':focus'), __focusEvents]"
+        }
+    }))
+    .await;
+    assert_eq!(
+        take_response_by_id(&mut ctx, 8112)["result"]["result"]["value"],
+        json!([
+            false,
+            true,
+            "hidden",
+            true,
+            false,
+            ["input-blur", "input-focusout", "window-blur"]
+        ]),
+        "activated creation must finish the exact demoted Page transaction before returning"
+    );
+
+    ctx.process_async(json!({
+        "id": 8113,
+        "method": "Target.attachToTarget",
+        "params": { "targetId": created.target_id.as_str() }
+    }))
+    .await;
+    let created_session = take_response_by_id(&mut ctx, 8113)["result"]["sessionId"]
+        .as_str()
+        .expect("created active target session")
+        .to_owned();
+    ctx.process_async(json!({
+        "id": 8114,
+        "method": "Runtime.evaluate",
+        "sessionId": created_session,
+        "params": {
+            "returnByValue": true,
+            "expression": "[document.hasFocus(), document.hidden, document.visibilityState]"
+        }
+    }))
+    .await;
+    assert_eq!(
+        take_response_by_id(&mut ctx, 8114)["result"]["result"]["value"],
+        json!([true, false, "visible"])
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn same_context_background_session_can_stage_its_own_pre_document_state_before_promotion() {
     let mut ctx = TestContext::new();
     load_bc_with_titled_page_async(
@@ -224,7 +566,7 @@ async fn same_context_background_session_can_stage_its_own_pre_document_state_be
         assert_eq!(active.active_target_id(), Some(second_target_id.as_str()));
     }
 
-    ctx.process_async(json!({
+    ctx.process_and_wait_for_response_async(json!({
         "id": 104192,
         "method": "Page.navigate",
         "sessionId": second_session_id,
@@ -5045,6 +5387,11 @@ async fn same_context_loaded_background_window_open_self_navigates_owner_without
             })
     })
     .await;
+    ctx.wait_for_document_continuation_for_test(
+        Some(&owner.session_id),
+        "background _self Document continuation",
+    )
+    .await;
     let emitted = ctx.take_all();
     assert!(
         !emitted
@@ -5087,7 +5434,7 @@ async fn same_context_loaded_background_window_open_self_navigates_owner_without
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn same_context_named_popup_reuse_navigates_and_promotes_loaded_owner() {
+async fn protocol_name_projection_cannot_redirect_popup_to_unrelated_background_owner() {
     let mut ctx = TestContext::new();
     tokio::task::LocalSet::new()
         .run_until(async {
@@ -5118,13 +5465,24 @@ async fn same_context_named_popup_reuse_navigates_and_promotes_loaded_owner() {
     let response = take_response_by_id(&mut ctx, 1041949446);
     assert_eq!(response["result"]["result"]["type"], json!("boolean"));
     assert_eq!(response["result"]["result"]["value"], json!(true));
+    let emitted = ctx.take_all();
+    let created_target_id = emitted
+        .iter()
+        .find(|message| message["method"] == json!("Target.targetCreated"))
+        .and_then(|message| message["params"]["targetInfo"]["targetId"].as_str())
+        .expect("renderer-selected named popup should create a new target")
+        .to_owned();
+    assert_ne!(
+        created_target_id, owner.target_id,
+        "a protocol-only name projection must not become renderer group authority"
+    );
     ctx.wait_until_scheduler_state(
-        "named popup navigation commit and foreground activation",
+        "renderer-selected named popup navigation and foreground activation",
         |conn| {
             conn.browser_context_by_id("BID-9-NAMED-POPUP")
                 .is_some_and(|browser_context| {
-                    browser_context.active_target_id() == Some(owner.target_id.as_str())
-                        && loaded_page_for_target(browser_context, &owner.target_id).is_some_and(
+                    browser_context.active_target_id() == Some(created_target_id.as_str())
+                        && loaded_page_for_target(browser_context, &created_target_id).is_some_and(
                             |page| {
                                 page.final_url().as_str()
                                     == "data:text/html,<title>named</title><main>named target</main>"
@@ -5134,39 +5492,13 @@ async fn same_context_named_popup_reuse_navigates_and_promotes_loaded_owner() {
         },
     )
     .await;
-    let emitted = ctx.take_all();
-    assert!(
-        !emitted
-            .iter()
-            .any(|message| message["method"] == json!("Target.targetCreated")),
-        "reusing a loaded named target must not create a new popup target: {emitted:?}"
-    );
-    let changed = emitted
-        .iter()
-        .find(|message| {
-            message["method"] == json!("Target.targetInfoChanged")
-                && message["params"]["targetInfo"]["targetId"] == json!(owner.target_id)
-                && message["params"]["targetInfo"]["url"]
-                    == json!("data:text/html,<title>named</title><main>named target</main>")
-        })
-        .unwrap_or_else(|| {
-            panic!("loaded named target reuse should report targetInfoChanged: {emitted:?}")
-        });
-    assert_eq!(
-        changed["params"]["targetInfo"]["targetId"],
-        json!(owner.target_id)
-    );
-    assert_eq!(
-        changed["params"]["targetInfo"]["url"],
-        json!("data:text/html,<title>named</title><main>named target</main>")
-    );
 
     {
         let browser_context = ctx.conn.browser_context.as_ref().expect("browser context");
         assert_eq!(
             browser_context.active_target_id(),
-            Some(owner.target_id.as_str()),
-            "ordinary window.open should promote its reused named target"
+            Some(created_target_id.as_str()),
+            "ordinary window.open should promote the renderer-selected new target"
         );
         assert_eq!(
             browser_context.target_url(),
@@ -5174,13 +5506,24 @@ async fn same_context_named_popup_reuse_navigates_and_promotes_loaded_owner() {
         );
         assert!(
             browser_context.has_loaded_page(),
-            "named popup reuse should replace the existing owner loaded page"
+            "the renderer-selected popup should retain its loaded Page"
+        );
+        let background_target = browser_context
+            .background_target(&owner.target_id)
+            .expect("background target should remain parked");
+        assert_eq!(
+            background_target.target_url(),
+            "data:text/html,<title>background</title><main>background target</main>"
         );
         assert!(
-            browser_context
-                .background_target("TID-000000000NPA")
-                .is_some(),
-            "foreground named-target reuse should demote the previous active target"
+            background_target.has_loaded_page(),
+            "the unrelated background owner must remain loaded"
+        );
+        let popup_target = browser_context
+            .background_target("TID-000000000NPA");
+        assert!(
+            popup_target.is_some(),
+            "foreground popup creation should demote the previous active target"
         );
     }
 
@@ -5194,7 +5537,10 @@ async fn same_context_named_popup_reuse_navigates_and_promotes_loaded_owner() {
     }))
     .await;
     let response = take_response_by_id(&mut ctx, 1041949447);
-    assert_eq!(response["result"]["result"]["value"], json!("named target"));
+    assert_eq!(
+        response["result"]["result"]["value"],
+        json!("background target")
+    );
         })
         .await;
 }

@@ -1244,7 +1244,7 @@ fn classic_script_argument_deserializer_function(user_function: String) -> Strin
          if (value === window) {{\n\
          return {{ '{CLASSIC_SCRIPT_WEB_REFERENCE_MARKER}': '{CLASSIC_SCRIPT_WEB_REFERENCE_WINDOW}' }};\n\
          }}\n\
-         const popupId = __moliHostLightweightPopupIdForObject(value);\n\
+         const popupId = __moliHostAuxiliaryPopupIdForObject(value);\n\
          if (popupId) return {{ '{CLASSIC_SCRIPT_WEB_REFERENCE_MARKER}': '{CLASSIC_SCRIPT_WEB_REFERENCE_POPUP_WINDOW}', '{CLASSIC_SCRIPT_WEB_REFERENCE_POPUP_ID}': String(popupId) }};\n\
          const backendNodeId = __moliHostChildFrameOwnerBackendNodeIdForWindow(value);\n\
          if (typeof backendNodeId === 'number') {{\n\
@@ -2400,6 +2400,12 @@ pub(super) async fn webdriver_classic_switch_frame(
             Ok(reference) => reference,
             Err(error) => return classic_error_into_response(error),
         };
+        let context = classic_browsing_context(&binding);
+        if let Err(error) =
+            verify_classic_element_attached(&state, &binding, &context, element_id).await
+        {
+            return classic_error_into_response(error);
+        }
         let frame_id = match binding
             .runtime
             .frame_id_for_element(
@@ -2935,8 +2941,8 @@ async fn verify_classic_element_attached(
         binding,
         context,
         element_id,
-        "webdriver-classic-shadow-host",
-        "get element shadow root",
+        "webdriver-classic-element-attachment",
+        "element attachment check",
     )
     .await?;
     let result = binding
@@ -2950,7 +2956,7 @@ async fn verify_classic_element_attached(
         binding,
         context,
         object_id,
-        "get element shadow root",
+        "element attachment check",
     )
     .await;
     match result {
@@ -2962,7 +2968,7 @@ async fn verify_classic_element_attached(
         },
         Ok(_) => Err(ClassicError::new(
             ClassicErrorCode::UnknownError,
-            "get element shadow root attachment check returned an unexpected result",
+            "element attachment check returned an unexpected result",
         )),
         Err(error) => Err(classic_error_from_devtools_error(error)),
     }

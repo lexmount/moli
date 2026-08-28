@@ -102,7 +102,6 @@ mod broadcast_channel_delivery;
 mod child_classic_source_load_completion;
 mod child_document_completion;
 mod child_document_lifecycle;
-mod child_document_script_ready;
 mod child_dynamic_import_completion;
 mod child_dynamic_import_owner_action;
 mod child_host_load;
@@ -149,7 +148,6 @@ mod modulepreload_start_completion;
 mod navigation_api_task;
 mod opfs;
 mod parser_written_script_residence;
-mod popup_document_completion;
 mod preferred_aspect_ratio;
 mod rendering_update;
 mod service_worker;
@@ -1786,6 +1784,9 @@ fn test_page_vm_with_loader_dom_host_hooks_and_response_referrer_policy(
             web_storage: crate::RendererWebStorageHandles::ephemeral(),
             root_frame_id,
             main_document_commit: None,
+            initial_document_referrer: None,
+            initial_top_level_browsing_context_name: None,
+            auxiliary_browsing_context_policy: None,
             top_level_storage_key: None,
             document_start_scripts: vec![],
             runtime_bindings: vec![],
@@ -1797,6 +1798,7 @@ fn test_page_vm_with_loader_dom_host_hooks_and_response_referrer_policy(
                 referrer_policy: response_referrer_policy,
                 ..Default::default()
             },
+            cross_origin_opener_policy: Default::default(),
             document_default_language: None,
             document_last_modified: None,
             locale_override: None,
@@ -3112,6 +3114,9 @@ fn default_runtime_hooks_reject_direct_no_owner_page_vm_construction() {
             web_storage: crate::RendererWebStorageHandles::ephemeral(),
             root_frame_id: None,
             main_document_commit: None,
+            initial_document_referrer: None,
+            initial_top_level_browsing_context_name: None,
+            auxiliary_browsing_context_policy: None,
             top_level_storage_key: None,
             document_start_scripts: vec![],
             runtime_bindings: vec![],
@@ -3120,6 +3125,7 @@ fn default_runtime_hooks_reject_direct_no_owner_page_vm_construction() {
             permission_overrides: vec![],
             extra_http_headers: Vec::new(),
             document_policy_container: Default::default(),
+            cross_origin_opener_policy: Default::default(),
             document_default_language: None,
             document_last_modified: None,
             locale_override: None,
@@ -10678,8 +10684,8 @@ async fn page_vm_realm_materialization_created_ready_work_enters_document_script
 }
 
 #[tokio::test]
-async fn child_dynamic_inline_script_runs_on_document_script_ready_source() {
-    let (events_before_script_ready, script_ready_source, events_after_script_ready, next_source) =
+async fn child_dynamic_inline_script_runs_without_document_script_ready_source() {
+    let (events_after_append, has_script_ready_source, next_source) =
         run_page_vm_async_test(async move {
             let mut page_vm = test_page_vm();
             page_vm.vm_mut().eval(
@@ -10702,46 +10708,33 @@ async fn child_dynamic_inline_script_runs_on_document_script_ready_source() {
 "#,
             )?;
 
-            let events_before_script_ready = page_vm
+            let events_after_append = page_vm
                 .vm_mut()
                 .eval("__childDynamicReadySourceEvents.join('|')")?;
+            let has_script_ready_source = page_vm.has_ready_child_frame_semantic_turn_for_test(
+                ChildFrameSemanticTurnKind::DocumentScriptReady,
+            );
             run_expected_child_realm_materialization_for_wait(
                 &mut page_vm,
                 "dynamic child inline-script realm",
             )
             .await;
-            let script_ready_source = page_vm
-                .run_next_child_frame_task_source_for_semantic_test()
-                .await;
-            let events_after_script_ready = page_vm
-                .vm_mut()
-                .eval("__childDynamicReadySourceEvents.join('|')")?;
             let next_source = page_vm
                 .run_next_child_frame_task_source_for_semantic_test()
                 .await;
 
-            Ok::<_, anyhow::Error>((
-                events_before_script_ready,
-                script_ready_source,
-                events_after_script_ready,
-                next_source,
-            ))
+            Ok::<_, anyhow::Error>((events_after_append, has_script_ready_source, next_source))
         })
         .await
         .expect("child dynamic inline script source test should run");
 
     assert_eq!(
-        events_before_script_ready, "frame-load",
-        "the initial about:blank load must dispatch synchronously when the frame is connected"
+        events_after_append, "frame-load|dynamic:script",
+        "dynamic child inline script must execute before appendChild returns"
     );
-    assert_eq!(
-        script_ready_source,
-        Some(ChildFrameSemanticTurnKind::DocumentScriptReady),
-        "dynamic child inline script should run from the document-script ready source"
-    );
-    assert_eq!(
-        events_after_script_ready, "frame-load|dynamic:script",
-        "DocumentScriptReady should execute the dynamic child script after the synchronous initial load"
+    assert!(
+        !has_script_ready_source,
+        "synchronous dynamic inline execution must not publish a DocumentScriptReady source"
     );
     assert_eq!(
         next_source, None,

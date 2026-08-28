@@ -617,14 +617,74 @@ pub(crate) fn construct_original_hash_change_event<'s>(
     Some(event)
 }
 
+fn construct_beforeunload_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let event_ctor =
+        super::exposed_interfaces::ensure_intrinsic_interface_constructor(scope, "Event").ok()?;
+    let init = v8::Object::new(scope);
+    let _ = init.set(
+        scope,
+        v8str(scope, "cancelable").into(),
+        v8::Boolean::new(scope, true).into(),
+    );
+    let event =
+        event_ctor.new_instance(scope, &[v8str(scope, "beforeunload").into(), init.into()])?;
+
+    // BeforeUnloadEvent has an illegal public constructor, but browser-created
+    // instances still use its prototype and its string-valued returnValue. An
+    // own data property intentionally shadows Event.returnValue's legacy
+    // boolean accessor so both handler assignment and handler return follow the
+    // HTML prompt-to-unload algorithm.
+    let beforeunload_ctor = super::exposed_interfaces::ensure_intrinsic_interface_constructor(
+        scope,
+        "BeforeUnloadEvent",
+    )
+    .ok()?;
+    let prototype = beforeunload_ctor
+        .get(scope, v8str(scope, "prototype").into())
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?;
+    if event.set_prototype(scope, prototype.into()) != Some(true) {
+        return None;
+    }
+    if event.define_own_property(
+        scope,
+        v8str(scope, "returnValue").into(),
+        v8str(scope, "").into(),
+        v8::PropertyAttribute::NONE,
+    ) != Some(true)
+    {
+        return None;
+    }
+    Some(event)
+}
+
+fn beforeunload_event_requests_prompt(
+    scope: &mut v8::PinScope<'_, '_>,
+    event: v8::Local<'_, v8::Object>,
+) -> bool {
+    let default_prevented = event
+        .get(scope, v8str(scope, "defaultPrevented").into())
+        .is_some_and(|value| value.boolean_value(scope));
+    let has_return_value = event
+        .get(scope, v8str(scope, "returnValue").into())
+        .and_then(|value| value.to_string(scope))
+        .is_some_and(|value| !value.to_rust_string_lossy(scope).is_empty());
+    default_prevented || has_return_value
+}
+
+/// Dispatches one browser-created BeforeUnloadEvent and reports whether script
+/// requested a confirmation prompt. The caller owns sticky-activation, dialog,
+/// subtree ordering, and final navigation/close policy.
 pub(crate) fn dispatch_beforeunload_for_runtime_owner<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
-) {
-    let Some(event) = construct_original_event(scope, "beforeunload") else {
-        return;
+) -> bool {
+    let Some(event) = construct_beforeunload_event(scope) else {
+        return false;
     };
     dispatch_unload_lifecycle_event_for_runtime_owner(scope, owner, "beforeunload", event);
+    beforeunload_event_requests_prompt(scope, event)
 }
 
 pub(crate) fn dispatch_unload_for_runtime_owner<'s>(

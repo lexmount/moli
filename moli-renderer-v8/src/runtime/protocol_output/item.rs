@@ -24,6 +24,20 @@ pub struct RendererDocumentTitleChanged {
     pub title: String,
 }
 
+/// Browser-owner close semantics selected by the producer that completed the
+/// renderer-side beforeunload decision.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RendererTopLevelCloseSource {
+    /// Script-originated `Window.close()`. Protocol must keep the exact Page
+    /// currentness check through final teardown.
+    Window,
+    /// Browser-originated `Page.close`. A replacement Document may become
+    /// current while the browser-owned close remains pending.
+    Page,
+    /// Browser-originated `Target.closeTarget`.
+    Target,
+}
+
 /// A renderer-neutral browser-owner action.
 ///
 /// Variants move here as their old pending queue is removed. Keeping actions
@@ -31,6 +45,27 @@ pub struct RendererDocumentTitleChanged {
 /// without changing their position in the enclosing FIFO.
 #[derive(Clone, Debug, PartialEq)]
 pub enum RendererOwnerAction {
+    /// Requests browser-owner activation of an exact renderer Page. The
+    /// action stays in the incumbent turn's stream so a cross-Page call keeps
+    /// its response ordering; the payload independently freezes the target.
+    /// Renderer admission has already consumed any required incumbent
+    /// transient activation (or accepted the opener exemption).
+    TopLevelFocus(crate::runtime::RendererResolvedPopupTarget),
+    /// Requests browser-owner retirement of this output stream's top-level
+    /// browsing context. The Page-scoped lifecycle has already transitioned
+    /// to script-visible `Closing` when this record is appended.
+    TopLevelClose(RendererTopLevelCloseSource),
+    /// Renderer-stream barrier after accepted-close network terminals. The
+    /// browser owner may start unload only after this record reaches ingress.
+    TopLevelCloseNetworkDrained(RendererTopLevelCloseSource),
+    /// Renderer ACK after pagehide/unload for an accepted browser close. This
+    /// record is appended after every unload-produced output in the same Page
+    /// stream, so protocol teardown needs no recursive command fence.
+    TopLevelCloseUnloadAck(RendererTopLevelCloseSource),
+    /// Routes an operation accepted through a live RemoteWindowProxy to the
+    /// exact target Page. The target renderer revalidates the group-qualified
+    /// endpoint before touching its current LocalWindow.
+    RemoteWindowProxy(crate::runtime::RendererRemoteWindowProxyCommand),
     FileChooser(RendererPendingFileChooserActivation),
     Download(RendererPendingDownloadActivation),
     JavaScriptDialog(RendererPendingJavaScriptDialog),

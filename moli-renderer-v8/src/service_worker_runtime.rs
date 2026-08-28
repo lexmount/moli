@@ -84,6 +84,9 @@ pub(crate) use service::{
     ServiceWorkerRuntimeService,
     new_service_worker_runtime_service_with_resource_store_and_browser_resource_runtime_binding,
 };
+pub(crate) use service_lane::{
+    ServiceWorkerOpenWindowCompletionEndpoint, ServiceWorkerOpenWindowPageCompletion,
+};
 pub(crate) use snapshots::{
     ServiceWorkerControlState, ServiceWorkerRegistrationSnapshot, ServiceWorkerVersionSnapshot,
 };

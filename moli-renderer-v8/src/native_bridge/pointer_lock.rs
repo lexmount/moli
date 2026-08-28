@@ -98,7 +98,7 @@ pub(crate) fn element_request_pointer_lock_callback<'s>(
         );
         return;
     }
-    let failure = if runtime.protocol_user_gesture_activation() {
+    let failure = if runtime.transient_user_activation() {
         PointerLockFailure::NotSupported
     } else {
         PointerLockFailure::NotAllowed

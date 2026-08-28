@@ -10,7 +10,7 @@ use super::super::{
     reflector::{DomPtr, ReflectorId, ReflectorRegistry},
 };
 use super::element::{control_label_handles, form_control_elements};
-use super::{JsContextHost, RuntimeObservableContextToken};
+use super::{JsContextHost, OwnerDispatchScope, RuntimeObservableContextToken};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(super) enum BridgeHandle {
@@ -20,6 +20,19 @@ pub(super) enum BridgeHandle {
     Dataset(DomHandle),
     Style(DomHandle),
     ComputedStyle(DomHandle, ComputedStyleDescriptor),
+}
+
+impl BridgeHandle {
+    pub(super) fn dom_handle(&self) -> Option<DomHandle> {
+        match self {
+            Self::Window => None,
+            Self::Node(handle)
+            | Self::ClassList(handle, _)
+            | Self::Dataset(handle)
+            | Self::Style(handle)
+            | Self::ComputedStyle(handle, _) => Some(*handle),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -114,7 +127,6 @@ pub(crate) enum ComputedStyleTargetKey {
     Dynamic,
     ChildFrame(DomHandle),
     DetachedIframe(DomHandle),
-    PopupDocument(DomHandle),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -383,15 +395,55 @@ struct SharedDefaultWorldWrapperCache;
 
 #[derive(Debug)]
 struct BridgeCachedWrapper {
-    wrapper: v8::Global<v8::Object>,
-    creation_realm: Option<RuntimeObservableContextToken>,
+    wrapper: BridgeWrapperHandle,
+    owner_realm: Option<RuntimeObservableContextToken>,
+}
+
+#[derive(Debug)]
+enum BridgeWrapperHandle {
+    Strong(v8::Global<v8::Object>),
+    Weak(v8::Weak<v8::Object>),
+}
+
+impl BridgeWrapperHandle {
+    fn new(scope: &mut v8::PinScope<'_, '_>, wrapper: v8::Local<'_, v8::Object>) -> Self {
+        if crate::util::page_context_is_detached_document(scope.get_current_context()) {
+            Self::Weak(v8::Weak::new(scope, wrapper))
+        } else {
+            Self::Strong(v8::Global::new(scope, wrapper))
+        }
+    }
+
+    fn to_local<'s>(&self, scope: &mut v8::PinScope<'s, '_>) -> Option<v8::Local<'s, v8::Object>> {
+        match self {
+            Self::Strong(wrapper) => Some(v8::Local::new(scope, wrapper)),
+            Self::Weak(wrapper) => wrapper.to_local(scope),
+        }
+    }
+
+    fn weaken(&mut self, scope: &mut v8::PinScope<'_, '_>) {
+        let Self::Strong(wrapper) = self else {
+            return;
+        };
+        let wrapper = v8::Local::new(scope, &*wrapper);
+        *self = Self::Weak(v8::Weak::new(scope, wrapper));
+    }
+
+    #[cfg(test)]
+    fn is_strong(&self) -> bool {
+        matches!(self, Self::Strong(_))
+    }
 }
 
 impl BridgeCachedWrapper {
     fn new(scope: &mut v8::PinScope<'_, '_>, wrapper: v8::Local<'_, v8::Object>) -> Self {
         Self {
-            wrapper: v8::Global::new(scope, wrapper),
-            creation_realm: scope
+            wrapper: BridgeWrapperHandle::new(scope, wrapper),
+            // A child node can be first exposed through its parent before the
+            // real child Context exists. Treat the ambient realm as a
+            // provisional owner until the authoritative child realm consumes
+            // the wrapper.
+            owner_realm: scope
                 .get_current_context()
                 .get_slot::<RuntimeObservableContextToken>()
                 .as_deref()
@@ -402,7 +454,7 @@ impl BridgeCachedWrapper {
 
 #[derive(Debug)]
 struct BridgeContextWindowWrapper {
-    wrapper: v8::Global<v8::Object>,
+    wrapper: RefCell<BridgeWrapperHandle>,
 }
 
 fn context_window_wrapper<'s>(
@@ -411,7 +463,7 @@ fn context_window_wrapper<'s>(
     scope
         .get_current_context()
         .get_slot::<BridgeContextWindowWrapper>()
-        .map(|entry| v8::Local::new(scope, &entry.wrapper))
+        .and_then(|entry| entry.wrapper.borrow().to_local(scope))
 }
 
 fn set_context_window_wrapper(
@@ -421,7 +473,7 @@ fn set_context_window_wrapper(
     let _ = scope
         .get_current_context()
         .set_slot(Rc::new(BridgeContextWindowWrapper {
-            wrapper: v8::Global::new(scope, wrapper),
+            wrapper: RefCell::new(BridgeWrapperHandle::new(scope, wrapper)),
         }));
 }
 
@@ -448,6 +500,15 @@ impl BridgeContextWrapperCacheRetainForTest {
         self.cache.borrow().wrappers.len()
     }
 
+    pub(crate) fn strong_wrapper_entry_count(&self) -> usize {
+        self.cache
+            .borrow()
+            .wrappers
+            .values()
+            .filter(|entry| entry.wrapper.is_strong())
+            .count()
+    }
+
     pub(crate) fn wrapper_entry_count_for_realm(
         &self,
         realm_token: RuntimeObservableContextToken,
@@ -456,8 +517,52 @@ impl BridgeContextWrapperCacheRetainForTest {
             .borrow()
             .wrappers
             .values()
-            .filter(|entry| entry.creation_realm == Some(realm_token))
+            .filter(|entry| entry.owner_realm == Some(realm_token))
             .count()
+    }
+
+    pub(crate) fn strong_wrapper_entry_count_for_realm(
+        &self,
+        realm_token: RuntimeObservableContextToken,
+    ) -> usize {
+        self.cache
+            .borrow()
+            .wrappers
+            .values()
+            .filter(|entry| entry.owner_realm == Some(realm_token) && entry.wrapper.is_strong())
+            .count()
+    }
+
+    pub(crate) fn strong_live_collection_entry_count_for_realm(
+        &self,
+        realm_token: RuntimeObservableContextToken,
+    ) -> usize {
+        self.cache
+            .borrow()
+            .live_collection_wrappers
+            .values()
+            .filter(|entry| entry.owner_realm == Some(realm_token) && entry.wrapper.is_strong())
+            .count()
+    }
+
+    pub(crate) fn wrapper_owner_realm_for_object(
+        &self,
+        scope: &mut v8::PinScope<'_, '_>,
+        object: v8::Local<'_, v8::Object>,
+    ) -> Option<RuntimeObservableContextToken> {
+        let cache = self.cache.borrow();
+        cache
+            .wrappers
+            .values()
+            .chain(cache.live_collection_wrappers.values())
+            .find_map(|entry| {
+                entry
+                    .wrapper
+                    .to_local(scope)
+                    .is_some_and(|wrapper| wrapper.strict_equals(object.into()))
+                    .then_some(entry.owner_realm)
+            })
+            .flatten()
     }
 }
 
@@ -470,22 +575,60 @@ pub(crate) fn retain_context_wrapper_cache_for_test(
     }
 }
 
-pub(crate) fn clear_context_wrapper_cache_for_teardown(
+pub(crate) fn clear_context_embedder_state_for_teardown(
     scope: &mut v8::PinScope<'_, '_>,
     include_shared_default_world: bool,
 ) {
     let context = scope.get_current_context();
-    if !include_shared_default_world
-        && context
-            .get_slot::<SharedDefaultWorldWrapperCache>()
-            .is_some()
+    let realm_token = context
+        .get_slot::<RuntimeObservableContextToken>()
+        .as_deref()
+        .copied();
+    if let Some(host_ptr) = crate::util::context_host_ptr_from_context_slot(context)
+        && let Some(realm_token) = realm_token
     {
-        return;
+        let host = unsafe { &mut *host_ptr };
+        host.retire_pending_network_body_v8_handles_for_context_token(realm_token);
+        host.retire_resource_timing_buffers_for_context_token(realm_token);
+        host.retire_event_callbacks_for_context_token(realm_token);
+        host.detach_abort_signals_for_context_teardown(scope, realm_token);
     }
+    crate::util::detach_document_page_context(context);
+    crate::context_bootstrap::clear_agent_microtask_checkpoint_tasks_for_context_teardown(
+        scope, context,
+    );
+    crate::context_bootstrap::clear_indexed_db_runtime_state_table_for_context_teardown(context);
+    let uses_shared_default_world_cache = context
+        .get_slot::<SharedDefaultWorldWrapperCache>()
+        .is_some();
+    let weaken_all_cache_entries = include_shared_default_world || !uses_shared_default_world_cache;
     if let Some(cache) = context.get_slot::<RefCell<BridgeContextWrapperCache>>() {
-        let mut cache = cache.borrow_mut();
-        cache.wrappers.clear();
-        cache.live_collection_wrappers.clear();
+        let mut cache_state = cache.borrow_mut();
+        for entry in cache_state.wrappers.values_mut() {
+            if weaken_all_cache_entries || entry.owner_realm == realm_token {
+                entry.wrapper.weaken(scope);
+            }
+        }
+        for entry in cache_state.live_collection_wrappers.values_mut() {
+            if weaken_all_cache_entries || entry.owner_realm == realm_token {
+                entry.wrapper.weaken(scope);
+            }
+        }
+        drop(cache_state);
+        crate::util::retain_context_v8_handle_state_for_safe_release(context, cache);
+    }
+
+    if let Some(window_wrapper) = context.get_slot::<BridgeContextWindowWrapper>() {
+        window_wrapper.wrapper.borrow_mut().weaken(scope);
+        crate::util::retain_context_v8_handle_state_for_safe_release(context, window_wrapper);
+    }
+    if let Some(registry) = crate::context_bootstrap::exposed_interfaces::weaken_intrinsic_interface_registry_for_context_teardown(scope) {
+        crate::util::retain_context_v8_handle_state_for_safe_release(context, registry);
+    }
+    if let Some(prototype) =
+        crate::context_bootstrap::weaken_dom_exception_prototype_for_context_teardown(scope)
+    {
+        crate::util::retain_context_v8_handle_state_for_safe_release(context, prototype);
     }
 }
 
@@ -533,7 +676,7 @@ impl BridgeIdentityStore {
             .borrow()
             .wrappers
             .get(&reflector_id)
-            .map(|entry| v8::Local::new(scope, &entry.wrapper))
+            .and_then(|entry| entry.wrapper.to_local(scope))
     }
 
     pub(super) fn cache_wrapper(
@@ -550,6 +693,52 @@ impl BridgeIdentityStore {
             .borrow_mut()
             .wrappers
             .insert(reflector_id, BridgeCachedWrapper::new(scope, wrapper));
+    }
+
+    fn authoritative_child_realm_token_for_dom_handle(
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut JsContextHost,
+        node_handle: DomHandle,
+    ) -> Option<(DomHandle, RuntimeObservableContextToken)> {
+        // Isolated worlds own a private cache whose ambient realm token is
+        // already exact and whose entries are all weakened together.
+        scope
+            .get_current_context()
+            .get_slot::<SharedDefaultWorldWrapperCache>()
+            .as_deref()?;
+        let host = unsafe { &*host_ptr };
+        let document_handle = host.dom_host().owner_document_handle(node_handle)?;
+        let child_handle = host.child_browsing_context_host_for_document_handle(document_handle)?;
+        if host.child_browsing_context_document_handle(child_handle) != Some(document_handle) {
+            return None;
+        }
+        let identity = host.current_registered_window_execution_context_identity(
+            OwnerDispatchScope::Child(child_handle),
+        )?;
+        Some((child_handle, identity.realm_token()))
+    }
+
+    pub(super) fn bind_cached_wrapper_owner_realm(
+        &self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut JsContextHost,
+        handle: &BridgeHandle,
+        reflector_id: ReflectorId,
+    ) {
+        let Some(node_handle) = handle.dom_handle() else {
+            return;
+        };
+        let Some((_, realm_token)) =
+            Self::authoritative_child_realm_token_for_dom_handle(scope, host_ptr, node_handle)
+        else {
+            return;
+        };
+        let cache = context_wrapper_cache(scope);
+        let mut cache = cache.borrow_mut();
+        let Some(entry) = cache.wrappers.get_mut(&reflector_id) else {
+            return;
+        };
+        entry.owner_realm = Some(realm_token);
     }
 
     pub(super) fn register_live_collection(&mut self, descriptor: LiveCollectionDescriptor) -> u32 {
@@ -572,7 +761,7 @@ impl BridgeIdentityStore {
             .borrow()
             .live_collection_wrappers
             .get(descriptor)
-            .map(|entry| v8::Local::new(scope, &entry.wrapper))
+            .and_then(|entry| entry.wrapper.to_local(scope))
     }
 
     pub(super) fn cache_live_collection_wrapper(
@@ -587,17 +776,19 @@ impl BridgeIdentityStore {
             .insert(descriptor, BridgeCachedWrapper::new(scope, wrapper));
     }
 
-    pub(super) fn retire_default_world_wrappers_for_realm(
+    pub(super) fn bind_cached_live_collection_owner_realm(
         &self,
-        realm_token: RuntimeObservableContextToken,
-    ) {
-        let mut cache = self.default_world_wrapper_cache.borrow_mut();
-        cache
-            .wrappers
-            .retain(|_, entry| entry.creation_realm != Some(realm_token));
-        cache
-            .live_collection_wrappers
-            .retain(|_, entry| entry.creation_realm != Some(realm_token));
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut JsContextHost,
+        descriptor: &LiveCollectionDescriptor,
+    ) -> Option<DomHandle> {
+        let (child_handle, realm_token) =
+            Self::authoritative_child_realm_token_for_dom_handle(scope, host_ptr, descriptor.root)?;
+        let cache = context_wrapper_cache(scope);
+        let mut cache = cache.borrow_mut();
+        let entry = cache.live_collection_wrappers.get_mut(descriptor)?;
+        entry.owner_realm = Some(realm_token);
+        Some(child_handle)
     }
 
     pub(super) fn register_static_handle_collection(&mut self, handles: Vec<DomHandle>) -> u32 {

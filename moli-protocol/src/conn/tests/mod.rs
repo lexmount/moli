@@ -8,16 +8,16 @@ use super::{
     BrowserContextSiteDataManagerOwnerState, BrowserContextStructuredCookieCommandVerdict,
     BrowserContextStructuredCookieWriteBackendStatus,
     BrowserContextStructuredCookieWriteReadinessStatus, CdpConnection, CdpSessionRoute,
-    CommandDispatchContext, CommandResponseFlushContext, NavigationBackgroundEvent,
-    NavigationDispatchState, NavigationResultProjection, ServiceWorkerTargetState,
-    SharedWorkerTargetState, build_event,
+    CommandDispatchContext, CommandOwnerScope, CommandResponseFlushContext,
+    NavigationBackgroundEvent, NavigationDispatchState, NavigationResultProjection,
+    ServiceWorkerTargetState, SharedWorkerTargetState, build_event,
 };
 use crate::devtools_runtime::{
     AutomationEvent, DevToolsFrameId, DevToolsLoaderId, DevToolsTargetFilterEntry,
     DevToolsTargetId, NavigationFrameEvent, NavigationFrameEventKind,
 };
 use crate::domains::network::{
-    FailedNavigationDocumentPolicy, FailedNavigationResponseMode,
+    FailedNavigationDocumentPolicy, FailedNavigationHistoryPolicy, FailedNavigationResponseMode,
     MaterializedFailedDocumentProgress, MaterializedNavigationLoadOutcome,
     empty_main_document_progress_gate_for_test,
 };
@@ -249,8 +249,12 @@ fn background_navigation_completion_sender_routes_explicit_session_owners() {
     inactive.attach_active_session("SID-inactive");
     conn.inactive_browser_contexts.push(inactive);
 
-    let (sender, _receiver) = tokio::sync::mpsc::unbounded_channel();
-    conn.set_background_navigation_completion_sender(sender);
+    let (event_sender, _event_receiver) = tokio::sync::mpsc::unbounded_channel();
+    let (completion_sender, _completion_receiver) = tokio::sync::mpsc::unbounded_channel();
+    let (continuation_sender, _continuation_receiver) = tokio::sync::mpsc::unbounded_channel();
+    conn.set_background_event_sender(event_sender);
+    conn.set_background_navigation_completion_sender(completion_sender);
+    conn.set_document_continuation_completion_sender(continuation_sender);
 
     assert!(
         conn.background_navigation_completion_sender_for_session_owner(Some("SID-active"))
@@ -327,6 +331,63 @@ fn none_session_owner_route_override_scope_restores_previous_route_on_drop() {
     assert_eq!(
         conn.none_session_owner_route_override(),
         Some(previous_route)
+    );
+}
+
+#[test]
+fn session_owner_route_override_scope_selects_exact_owner_and_restores_previous_route() {
+    let mut conn = CdpConnection::new();
+    let previous_route = CdpSessionRoute::ActiveTarget {
+        browser_context_id: "BID-current".to_owned(),
+        target_id: Some("TID-current".to_owned()),
+    };
+    let scoped_route = CdpSessionRoute::ActiveTarget {
+        browser_context_id: "BID-publication-owner".to_owned(),
+        target_id: Some("TID-publication-owner".to_owned()),
+    };
+
+    conn.replace_session_owner_route_override(Some((
+        "SID-collision".to_owned(),
+        previous_route.clone(),
+    )));
+    {
+        let mut scope = conn
+            .scoped_session_owner_route_override("SID-collision".to_owned(), scoped_route.clone());
+        assert_eq!(
+            scope.conn_mut().session_route(Some("SID-collision")),
+            Some(scoped_route)
+        );
+    }
+
+    assert_eq!(
+        conn.session_owner_route_override("SID-collision"),
+        Some(previous_route)
+    );
+}
+
+#[test]
+fn command_owner_scope_retains_an_attached_sessions_exact_route_after_ingress_scope() {
+    let mut conn = CdpConnection::new();
+    let publication_route = CdpSessionRoute::ActiveTarget {
+        browser_context_id: "BID-publication-owner".to_owned(),
+        target_id: Some("TID-publication-owner".to_owned()),
+    };
+
+    let owner_scope = {
+        let mut ingress_scope = conn.scoped_session_owner_route_override(
+            "SID-collision".to_owned(),
+            publication_route.clone(),
+        );
+        CommandOwnerScope::capture(ingress_scope.conn_mut(), Some("SID-collision"))
+    };
+    assert_eq!(conn.session_route(Some("SID-collision")), None);
+
+    let mut restored_scope = owner_scope.enter(&mut conn);
+    assert_eq!(
+        restored_scope
+            .conn_mut()
+            .session_route(Some("SID-collision")),
+        Some(publication_route)
     );
 }
 
@@ -414,7 +475,7 @@ async fn removing_active_browser_context_switches_engine_to_promoted_context() {
 }
 
 #[tokio::test]
-async fn memory_diagnostics_reports_page_vm_document_isolate_model() {
+async fn memory_diagnostics_reports_script_agent_document_isolate_model() {
     let mut conn = CdpConnection::new();
     conn.replace_navigation_engine(
         NavigationEngine::new_with_page_vm_document_isolate_for_diagnostics(),
@@ -465,7 +526,7 @@ async fn memory_diagnostics_reports_page_vm_document_isolate_model() {
 
     assert_eq!(
         diagnostics["isolateScope"]["documentIsolateModel"],
-        json!("page-vm")
+        json!("script-agent")
     );
     assert_eq!(
         diagnostics["isolateScope"]["loadedDocumentPageCount"],
@@ -482,7 +543,7 @@ async fn memory_diagnostics_reports_page_vm_document_isolate_model() {
     assert_eq!(
         diagnostics["isolateScope"]["estimatedDocumentIsolateCount"],
         json!(2),
-        "page-vm diagnostics should count one document isolate per loaded page"
+        "independent Pages should retain distinct document script agents"
     );
     assert_eq!(
         diagnostics["isolateScope"]["estimatedWorkerIsolateCount"],
@@ -1229,6 +1290,7 @@ async fn materialized_navigation_completion_drops_stale_token() {
         MaterializedNavigationLoadOutcome::Failed(MaterializedFailedDocumentProgress {
             error_text: "stale navigation should not emit".to_owned(),
             document_policy: FailedNavigationDocumentPolicy::InvalidateCommittedDocument,
+            history_policy: FailedNavigationHistoryPolicy::DiscardPendingUpdate,
             response_mode: FailedNavigationResponseMode::ProtocolError,
             progress_gate: empty_main_document_progress_gate_for_test(),
         });
@@ -1281,6 +1343,7 @@ async fn materialized_navigation_completion_drops_stale_token_without_navigate_i
         MaterializedNavigationLoadOutcome::Failed(MaterializedFailedDocumentProgress {
             error_text: "stale navigation should not emit without a navigate id".to_owned(),
             document_policy: FailedNavigationDocumentPolicy::InvalidateCommittedDocument,
+            history_policy: FailedNavigationHistoryPolicy::DiscardPendingUpdate,
             response_mode: FailedNavigationResponseMode::ProtocolError,
             progress_gate: empty_main_document_progress_gate_for_test(),
         });
@@ -1315,6 +1378,7 @@ async fn materialized_navigation_completion_drains_current_token() {
         MaterializedNavigationLoadOutcome::Failed(MaterializedFailedDocumentProgress {
             error_text: "current navigation should emit".to_owned(),
             document_policy: FailedNavigationDocumentPolicy::InvalidateCommittedDocument,
+            history_policy: FailedNavigationHistoryPolicy::DiscardPendingUpdate,
             response_mode: FailedNavigationResponseMode::ProtocolError,
             progress_gate: empty_main_document_progress_gate_for_test(),
         });
@@ -1358,9 +1422,11 @@ fn materialized_navigation_test_state(
         request_body: None,
         request_body_bytes: None,
         request_headers: Vec::new(),
+        navigation_history_entry_seed: None,
         request_load_policy: crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
         timestamp: 0.0,
         source_document_security: Default::default(),
+        service_worker_clients_open_window_continuation: None,
     }
 }
 

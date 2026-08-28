@@ -330,11 +330,6 @@ pub(super) fn document_referrer_policy_for_native_document(
                 .child_browsing_context_referrer_policy_for_document_handle(document_handle)
                 .map(ToOwned::to_owned)
         })
-        .or_else(|| {
-            runtime
-                .lightweight_popup_referrer_policy_for_document_handle(document_handle)
-                .map(ToOwned::to_owned)
-        })
 }
 
 pub(super) fn current_document_content_security_policies<'s>(

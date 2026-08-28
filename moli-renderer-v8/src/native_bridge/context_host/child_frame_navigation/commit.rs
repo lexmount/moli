@@ -404,12 +404,24 @@ impl JsContextHost {
             );
             return None;
         }
-        if let ChildBrowsingContextBootstrap::Url(url) = &pending_bootstrap
-            && url.scheme() == "javascript"
-        {
+        let javascript_url = match &pending_bootstrap {
+            ChildBrowsingContextBootstrap::Url(url) if url.scheme() == "javascript" => {
+                Some(url.clone())
+            }
+            ChildBrowsingContextBootstrap::Request(request)
+                if request.url.scheme() == "javascript" =>
+            {
+                Some(request.url.clone())
+            }
+            ChildBrowsingContextBootstrap::AboutBlank
+            | ChildBrowsingContextBootstrap::Url(_)
+            | ChildBrowsingContextBootstrap::Request(_)
+            | ChildBrowsingContextBootstrap::Srcdoc { .. } => None,
+        };
+        if let Some(url) = javascript_url {
             self.queue_child_browsing_context_javascript_url_execution(
                 handle,
-                url.clone(),
+                url,
                 false,
                 false,
                 navigation_load,
@@ -422,7 +434,7 @@ impl JsContextHost {
             .get_mut(&handle)
             .is_some_and(|entry| entry.take_pending_top_level_history_length_increment());
         self.clear_child_browsing_context_pending_navigation(handle);
-        self.clear_pending_form_submission_child_target(handle);
+        self.clear_pending_form_submission_child_target(handle, navigation_load);
         let commit_result = self.commit_child_document_bootstrap_or_start_load(
             scope,
             handle,
@@ -431,6 +443,7 @@ impl JsContextHost {
             ChildDocumentNavigationInitiator::BrowsingContext,
         );
         self.sync_existing_child_browsing_context_window_state(scope, handle);
+        self.publish_related_page_remote_frame_tree();
         if increment_top_level_history_length
             && let Some(window) = self.child_browsing_context_window_wrapper(scope, handle)
         {
@@ -511,7 +524,7 @@ impl JsContextHost {
         entry.clear_pending_navigation();
         entry.clear_pending_top_level_history_length_increment();
         entry.restore_navigation_entry_seed_from_committed();
-        self.clear_pending_form_submission_child_target(handle);
+        self.clear_pending_form_submission_child_target(handle, navigation_load);
         self.reject_replaced_service_worker_child_client_navigation(
             handle,
             "Cannot navigate to URL.".to_owned(),
@@ -541,6 +554,22 @@ impl JsContextHost {
             .current_child_owner_snapshot(handle)
             .is_some_and(|snapshot| {
                 snapshot.scheduler_lane_id == owner.scheduler_lane_id
+                    && snapshot.local_window_id == owner.local_window_id
+                    && snapshot.document_id == owner.document_id
+            })
+    }
+
+    pub(crate) fn frame_document_projection_is_current(
+        &self,
+        handle: DomHandle,
+        browsing_context_id: crate::frame_owner_model::BrowsingContextId,
+        owner: FrameDocumentTaskOwner,
+    ) -> bool {
+        self.frame_owner_store
+            .current_child_owner_snapshot(handle)
+            .is_some_and(|snapshot| {
+                snapshot.browsing_context_id == browsing_context_id
+                    && snapshot.scheduler_lane_id == owner.scheduler_lane_id
                     && snapshot.local_window_id == owner.local_window_id
                     && snapshot.document_id == owner.document_id
             })
@@ -713,6 +742,7 @@ impl JsContextHost {
                 credentialless_storage_nonce,
             );
         }
+        self.refresh_child_top_navigation_policy_after_commit(handle);
         let window_commit = self.plan_child_document_window_commit(
             handle,
             &snapshot,

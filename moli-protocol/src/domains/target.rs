@@ -321,6 +321,7 @@ enum PendingTargetCommandKind {
     CreateTarget {
         response_plan: CommandOutputPlan,
         creation_commit: creation::TargetCreationCommit,
+        focus_handoff: Option<creation::PendingCreatedTargetFocusHandoff>,
         initial_document_route: Option<crate::conn::CdpSessionRoute>,
         initial_document: Option<Box<crate::conn::PendingInitialDocumentPageBuild>>,
     },
@@ -362,6 +363,10 @@ enum CompletedTargetCommandKind {
     CreateTarget {
         response_plan: CommandOutputPlan,
         creation_commit: creation::TargetCreationCommit,
+        /// Completion retains a full renderer command output only for
+        /// activated creation. Keep the rare handoff indirect so every Target
+        /// dispatch does not pay its stack footprint.
+        focus_handoff: Option<Box<creation::CompletedCreatedTargetFocusHandoff>>,
         initial_document_route: Option<crate::conn::CdpSessionRoute>,
         initial_document: Option<
             Result<
@@ -416,11 +421,16 @@ impl PendingTargetCommandDispatch {
             PendingTargetCommandKind::CreateTarget {
                 response_plan,
                 creation_commit,
+                focus_handoff,
                 initial_document_route,
                 initial_document,
             } => CompletedTargetCommandKind::CreateTarget {
                 response_plan,
                 creation_commit,
+                focus_handoff: match focus_handoff {
+                    Some(pending) => Some(Box::new(pending.wait().await)),
+                    None => None,
+                },
                 initial_document_route,
                 initial_document: match initial_document {
                     Some(pending) => Some(pending.wait().await.map(Box::new)),
@@ -652,6 +662,10 @@ pub(crate) async fn execute_devtools_create_target_command_async_with_protocol_e
     };
     let result = execution.result;
     let creation_commit = execution.commit;
+    let focus_handoff = execution.focus_handoff;
+    if let Some(focus_handoff) = focus_handoff {
+        creation::finish_created_target_focus_handoff_async(conn, focus_handoff.wait().await).await;
+    }
     let mut protocol_events = Vec::new();
     let (initial_document_events, renderer_output_predecessor) = conn
         .ensure_created_target_initial_document_page(&result.target_id)
@@ -682,6 +696,7 @@ pub(crate) async fn execute_devtools_target_command_async_with_protocol_events(
 ) -> (
     Result<DevToolsCommandResult, DevToolsError>,
     Vec<crate::conn::BackgroundProtocolEvent>,
+    Option<moli_core::RendererOutputFence>,
 ) {
     match command {
         DevToolsCommand::CloseTarget(command) => {
@@ -697,32 +712,42 @@ pub(crate) async fn execute_devtools_target_command_async_with_protocol_events(
             .map(DevToolsCommandResult::CloseTarget);
             let mut protocol_events = side_effects.into_background_events();
             protocol_events.append(&mut command_context.take_protocol_events());
-            (result, protocol_events)
+            (
+                result,
+                protocol_events,
+                command_context.take_renderer_output_predecessor(),
+            )
         }
         DevToolsCommand::ActivateTarget(command) => {
             match activation::execute_devtools_activate_target_command_async(conn, command).await {
-                Ok(events) => (Ok(DevToolsCommandResult::Empty), events),
-                Err(error) => (Err(error), Vec::new()),
+                Ok(events) => (Ok(DevToolsCommandResult::Empty), events, None),
+                Err(error) => (Err(error), Vec::new(), None),
             }
         }
         DevToolsCommand::RemoveBrowserContext(_) => {
             let DevToolsCommand::RemoveBrowserContext(command) = command else {
                 unreachable!("matched remove browser context command");
             };
-            browser_context::execute_devtools_remove_browser_context_command_async(conn, command)
-                .await
+            let (result, events) =
+                browser_context::execute_devtools_remove_browser_context_command_async(
+                    conn, command,
+                )
+                .await;
+            (result, events, None)
         }
         DevToolsCommand::CreateTarget(command) => {
-            let (result, events, _) =
+            let (result, events, predecessor) =
                 execute_devtools_create_target_command_async_with_protocol_events(conn, command)
                     .await;
-            (result, events)
+            (result, events, predecessor)
         }
         DevToolsCommand::GetTargets(_)
         | DevToolsCommand::GetClientWindows(_)
         | DevToolsCommand::CreateBrowserContext(_)
         | DevToolsCommand::GetBrowserContexts(_) => {
-            execute_immediate_devtools_target_command_with_protocol_events(conn, command)
+            let (result, events) =
+                execute_immediate_devtools_target_command_with_protocol_events(conn, command);
+            (result, events, None)
         }
         _ => (
             Err(DevToolsError::new(
@@ -730,6 +755,7 @@ pub(crate) async fn execute_devtools_target_command_async_with_protocol_events(
                 "UnsupportedDevToolsCommand",
             )),
             Vec::new(),
+            None,
         ),
     }
 }
@@ -807,9 +833,13 @@ pub(crate) async fn complete_pending_target_command(
         CompletedTargetCommandKind::CreateTarget {
             response_plan,
             creation_commit,
+            focus_handoff,
             initial_document_route,
             initial_document,
         } => {
+            if let Some(focus_handoff) = focus_handoff {
+                creation::finish_created_target_focus_handoff_async(conn, *focus_handoff).await;
+            }
             let activation_events = if let Some(activation) = creation_commit.activation() {
                 conn.complete_staged_target_activation_async(activation)
                     .await
@@ -1287,14 +1317,15 @@ mod devtools_runtime_entry_tests {
             "test must cover scheduler-deferred Runtime await owner cleanup"
         );
 
-        let (result, protocol_events) = execute_devtools_target_command_async_with_protocol_events(
-            &mut conn,
-            DevToolsCommand::CloseTarget(DevToolsCloseTargetCommand {
-                context: cdp_context(),
-                target_id: DevToolsTargetId::from("TID-runtime-ready-close"),
-            }),
-        )
-        .await;
+        let (result, protocol_events, renderer_output_predecessor) =
+            execute_devtools_target_command_async_with_protocol_events(
+                &mut conn,
+                DevToolsCommand::CloseTarget(DevToolsCloseTargetCommand {
+                    context: cdp_context(),
+                    target_id: DevToolsTargetId::from("TID-runtime-ready-close"),
+                }),
+            )
+            .await;
 
         let DevToolsCommandResult::CloseTarget(close_result) =
             result.expect("close target should succeed")
@@ -1302,6 +1333,10 @@ mod devtools_runtime_entry_tests {
             panic!("expected close target result");
         };
         assert!(close_result.success);
+        assert!(
+            renderer_output_predecessor.is_some(),
+            "a loaded target close must preserve its unload ACK cursor"
+        );
         assert!(
             protocol_events.iter().all(|event| event
                 .protocol_message()

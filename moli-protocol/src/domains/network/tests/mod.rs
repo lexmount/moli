@@ -44,6 +44,19 @@ fn consume_main_document_navigation_start(ctx: &mut TestContext) {
     assert_eq!(ctx.take_one()["method"], "Page.frameStartedNavigating");
     assert_eq!(ctx.take_one()["method"], "Page.frameStartedLoading");
 }
+async fn wait_for_network_error_document_load(ctx: &mut TestContext, session_id: &str) {
+    wait_until_messages(
+        ctx,
+        Some(session_id),
+        "network error Document stopped loading",
+        |messages| {
+            messages
+                .iter()
+                .any(|message| message["method"] == json!("Page.frameStoppedLoading"))
+        },
+    )
+    .await;
+}
 async fn flush_until_subresource_finished(
     ctx: &mut TestContext,
     resource_type: &str,
