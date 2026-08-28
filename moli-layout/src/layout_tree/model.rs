@@ -2,6 +2,8 @@
 
 use std::ops::Range;
 
+use style::Atom;
+
 use crate::LayoutPosition;
 
 /// Viewport inputs shared by layout, geometry queries, and paint projection.
@@ -53,6 +55,38 @@ impl LayoutSize {
     pub const fn new(width: f32, height: f32) -> Self {
         Self { width, height }
     }
+}
+
+/// Frozen resolved track list for one axis of a CSS Grid formatting context.
+///
+/// Track sizes are retained in layout CSS pixels at Blink-compatible 1/64-pixel
+/// precision. The authored line-name snapshot is kept in the same layout epoch
+/// so a CSSOM read cannot combine old used sizes with names from a newer style
+/// mutation.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct LayoutResolvedGridTrackList {
+    pub negative_implicit_track_count: usize,
+    pub explicit_track_count: usize,
+    pub positive_implicit_track_count: usize,
+    pub used_track_sizes: Vec<f32>,
+    /// Expanded names for each explicit grid line. The length is the explicit
+    /// track count plus one; names at repeat boundaries are already merged.
+    pub explicit_line_names: Vec<Vec<Atom>>,
+}
+
+impl LayoutResolvedGridTrackList {
+    pub fn track_count(&self) -> usize {
+        self.negative_implicit_track_count
+            .saturating_add(self.explicit_track_count)
+            .saturating_add(self.positive_implicit_track_count)
+    }
+}
+
+/// Frozen resolved row and column track lists for a CSS Grid container.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct LayoutResolvedGridTracks {
+    pub rows: LayoutResolvedGridTrackList,
+    pub columns: LayoutResolvedGridTrackList,
 }
 
 /// An axis-aligned rectangle in one explicit layout coordinate space.

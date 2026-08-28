@@ -13,6 +13,7 @@ use crate::{
         document_runtime::DomHandle,
         native_bridge::element::geometry::{
             ClientRect, observable_bounding_client_rect, observable_bounding_client_rects,
+            observable_used_grid_tracks,
         },
         style_engine::{
             ComputedDisplayKind, ComputedRenderedStyleFacts, FullStyleWorldSnapshot, StyleViewport,
@@ -5075,6 +5076,11 @@ fn resolve_moli_computed_style_value(
     if property == "font-family" {
         return normalize_cssom_font_family_value(value).unwrap_or_else(|| value.to_owned());
     }
+    if matches!(property, "grid-template-columns" | "grid-template-rows")
+        && let Some(tracks) = resolved_grid_template_tracks(runtime, handle, property)
+    {
+        return tracks;
+    }
     if property == "width"
         && let Some(width) =
             resolve_computed_width_with_inline_fallback(runtime, handle, value, context, resolution)
@@ -5119,6 +5125,86 @@ fn resolve_moli_computed_style_value(
         return resolve_computed_auto_min_size(runtime, handle, resolution);
     }
     value.to_owned()
+}
+
+fn resolved_grid_template_tracks(
+    runtime: &JsContextHost,
+    handle: DomHandle,
+    property: &str,
+) -> Option<String> {
+    if !runtime.layout_policy().uses_real_layout() {
+        return None;
+    }
+    let grid = observable_used_grid_tracks(
+        runtime,
+        handle,
+        moli_layout::LayoutFlushReason::SynchronousGeometry,
+    )
+    .ok()??;
+    let tracks = match property {
+        "grid-template-columns" => &grid.columns,
+        "grid-template-rows" => &grid.rows,
+        _ => return None,
+    };
+
+    serialize_used_grid_track_list(tracks)
+}
+
+fn serialize_used_grid_track_list(
+    tracks: &moli_layout::LayoutResolvedGridTrackList,
+) -> Option<String> {
+    if tracks.track_count() != tracks.used_track_sizes.len() {
+        return None;
+    }
+    if tracks.used_track_sizes.is_empty() {
+        return Some("none".to_owned());
+    }
+    if tracks.explicit_line_names.len() != tracks.explicit_track_count.saturating_add(1) {
+        return None;
+    }
+    let mut components = Vec::with_capacity(
+        tracks.used_track_sizes.len().saturating_add(
+            tracks
+                .explicit_line_names
+                .iter()
+                .filter(|names| !names.is_empty())
+                .count(),
+        ),
+    );
+    let mut size_index = 0usize;
+    for _ in 0..tracks.negative_implicit_track_count {
+        components.push(format_non_negative_used_css_px(f64::from(
+            *tracks.used_track_sizes.get(size_index)?,
+        )));
+        size_index += 1;
+    }
+    for (track_index, names) in tracks.explicit_line_names.iter().enumerate() {
+        if !names.is_empty() {
+            let mut serialized = String::from("[");
+            for (index, name) in names.iter().enumerate() {
+                if index > 0 {
+                    serialized.push(' ');
+                }
+                serialize_identifier(name.as_ref(), &mut serialized)
+                    .expect("serializing an identifier into String cannot fail");
+            }
+            serialized.push(']');
+            components.push(serialized);
+        }
+        if track_index < tracks.explicit_track_count {
+            components.push(format_non_negative_used_css_px(f64::from(
+                *tracks.used_track_sizes.get(size_index)?,
+            )));
+            size_index += 1;
+        }
+    }
+    for _ in 0..tracks.positive_implicit_track_count {
+        components.push(format_non_negative_used_css_px(f64::from(
+            *tracks.used_track_sizes.get(size_index)?,
+        )));
+        size_index += 1;
+    }
+    (size_index == tracks.used_track_sizes.len()).then(|| components.join(" "))
 }
 
 fn computed_axis_position_shorthand_value(
@@ -6538,17 +6624,51 @@ fn parse_css_percent(value: &str) -> Option<f64> {
 }
 
 fn format_css_px(value: f64) -> String {
-    if (value.round() - value).abs() < 0.000_001 {
-        return format!("{}px", value.round() as i64);
+    format!("{}px", format_css_numeric_literal(value))
+}
+
+/// Matches Blink's `CSSNumericLiteralValue` serialization, which uses `%g`
+/// with six significant digits for finite non-integer dimensions.
+fn format_css_numeric_literal(value: f64) -> String {
+    if value == 0.0 {
+        return "0".to_owned();
     }
-    let mut serialized = format!("{value:.6}");
-    while serialized.contains('.') && serialized.ends_with('0') {
+    if !value.is_finite() {
+        return value.to_string();
+    }
+
+    // Formatting in scientific notation first gives us both the six-digit
+    // rounding and the post-rounding exponent without reimplementing floating
+    // point decimal conversion.
+    let scientific = format!("{value:.5e}");
+    let (mantissa, exponent) = scientific
+        .rsplit_once('e')
+        .expect("finite f64 scientific formatting must contain an exponent");
+    let exponent = exponent
+        .parse::<i32>()
+        .expect("f64 scientific formatting must contain a decimal exponent");
+    if (-4..6).contains(&exponent) {
+        let fractional_digits = usize::try_from((5 - exponent).max(0)).unwrap_or(0);
+        let mut serialized = format!("{value:.fractional_digits$}");
+        trim_decimal_zeros(&mut serialized);
+        return serialized;
+    }
+
+    let mut mantissa = mantissa.to_owned();
+    trim_decimal_zeros(&mut mantissa);
+    format!("{mantissa}e{exponent:+03}")
+}
+
+fn trim_decimal_zeros(serialized: &mut String) {
+    if !serialized.contains('.') {
+        return;
+    }
+    while serialized.ends_with('0') {
         serialized.pop();
     }
     if serialized.ends_with('.') {
         serialized.pop();
     }
-    format!("{serialized}px")
 }
 
 fn format_non_negative_used_css_px(value: f64) -> String {
@@ -7030,7 +7150,7 @@ mod tests {
     use super::{
         KEYFRAME_NESTING_DEPTH_LIMIT, animation_shorthand_names, box_shorthand_component,
         collect_custom_functions_from_css, compress_box_shorthand_value,
-        custom_function_container_rule_texts, format_css_number,
+        custom_function_container_rule_texts, format_css_number, format_css_px,
         keyframe_has_supported_animation_values, keyframe_property_values,
         normalize_computed_color_functions, normalize_css_integer_token, normalize_style_value,
         simple_var_function_parts,
@@ -7062,6 +7182,14 @@ mod tests {
         assert_eq!(format_css_number(120.000005), "120");
         assert_eq!(format_css_number(-120.000005), "-120");
         assert_eq!(format_css_number(120.00005), "120.00005");
+    }
+
+    #[test]
+    fn css_pixel_serialization_matches_blink_six_significant_digits() {
+        assert_eq!(format_css_px(33.328_125), "33.3281px");
+        assert_eq!(format_css_px(0.015_625), "0.015625px");
+        assert_eq!(format_css_px(999_999.0), "999999px");
+        assert_eq!(format_css_px(1_000_000.0), "1e+06px");
     }
 
     #[test]

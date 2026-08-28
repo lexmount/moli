@@ -4,17 +4,18 @@ use parley::{AlignmentOptions, PositionedLayoutItem, YieldData};
 use style::Atom;
 use taffy::{
     AlignContent, AlignContentKeyword, AlignmentSafety, AvailableSpace, BlockContext,
-    BlockFormattingContext, BoxSizing, CacheTree, Clear, Dimension, Display, FloatDirection,
-    Layout, LayoutBlockContainer, LayoutFlexboxContainer, LayoutGridContainer, LayoutInput,
-    LayoutOutput, LayoutPartialTree, LeafLayoutContext, Line, MaybeMath, MaybeResolve, NodeId,
-    Point, ResolveOrZero, RoundTree, RunMode, Size, SizingMode, SizingPurpose, Style,
+    BlockFormattingContext, BoxSizing, CacheTree, Clear, DetailedGridInfo, Dimension, Display,
+    FloatDirection, Layout, LayoutBlockContainer, LayoutFlexboxContainer, LayoutGridContainer,
+    LayoutInput, LayoutOutput, LayoutPartialTree, LeafLayoutContext, Line, MaybeMath, MaybeResolve,
+    NodeId, Point, ResolveOrZero, RoundTree, RunMode, Size, SizingMode, SizingPurpose, Style,
     TraversePartialTree, TraverseTree, compute_block_layout, compute_cached_layout,
     compute_flexbox_layout, compute_grid_layout, compute_hidden_layout,
     compute_leaf_layout_with_context, compute_root_layout, round_layout,
 };
 
 use crate::{
-    LayoutBoxId, LayoutBoxKind, LayoutCapabilityDiagnostic, LayoutWorld, PaintRect, PaintViewport,
+    LAYOUT_SUBPIXELS_PER_CSS_PIXEL, LayoutBoxId, LayoutBoxKind, LayoutCapabilityDiagnostic,
+    LayoutWorld, PaintRect, PaintViewport,
     inline::{
         InlineFormattingContext, InlineFragments, InlineLinePlacement, InlineObjectRole,
         break_inline_lines, build_inline_fragments, build_inline_line_placements,
@@ -26,9 +27,6 @@ use crate::{
     table::{compute_table_layout, prepare_table_layout_trees},
     world::InlineStaticPosition,
 };
-
-// Blink stores box geometry in 1/64 CSS-pixel LayoutUnits.
-const LAYOUT_SUBPIXELS_PER_CSS_PIXEL: f32 = 64.0;
 
 pub(crate) struct PreparedWorldLayout {
     positioned_static_placeholders: Vec<PositionedStaticPlaceholder>,
@@ -133,6 +131,7 @@ where
         layout_box.layout_children.clear();
         layout_box.positioned_containing_block = None;
         layout_box.inline_static_position = None;
+        layout_box.resolved_grid_tracks = None;
     }
 
     world.viewport_layout.children.clear();
@@ -1611,6 +1610,28 @@ where
 
     fn get_grid_child_style(&self, child_node_id: NodeId) -> Self::GridItemStyle<'_> {
         self.get_core_container_style(child_node_id)
+    }
+
+    fn set_detailed_grid_info(&mut self, node_id: NodeId, detailed_grid_info: DetailedGridInfo) {
+        let layout_box = &self.boxes[LayoutBoxId::from_taffy(node_id).index()];
+        if layout_box
+            .capability_diagnostics
+            .contains(&LayoutCapabilityDiagnostic::GridTemplateModeDeferred)
+            // The current backend reports detailed Grid tracks in physical
+            // axes. Publishing them for a vertical container would expose its
+            // width as the used `grid-template-columns` inline size. Keep the
+            // computed value until logical Grid constraints land in Taffy.
+            || !layout_box.style.uses_horizontal_writing_mode()
+        {
+            return;
+        }
+        let Some(resolved_grid_tracks) =
+            crate::grid::project_resolved_grid_tracks(&layout_box.style.taffy, detailed_grid_info)
+        else {
+            return;
+        };
+        self.boxes[LayoutBoxId::from_taffy(node_id).index()].resolved_grid_tracks =
+            Some(resolved_grid_tracks);
     }
 }
 

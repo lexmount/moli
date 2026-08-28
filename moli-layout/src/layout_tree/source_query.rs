@@ -7,7 +7,8 @@ use crate::LayoutPosition;
 use super::{
     model::{
         LayoutBoxModel, LayoutCoordinateSpaceId, LayoutFragmentBoxModel, LayoutFragmentKind,
-        LayoutOutputBoxId, LayoutPoint, LayoutQuad, LayoutRect, LayoutSize, LayoutTransform2D,
+        LayoutOutputBoxId, LayoutPoint, LayoutQuad, LayoutRect, LayoutResolvedGridTracks,
+        LayoutSize, LayoutTransform2D,
     },
     query::{LayoutElementMetrics, LayoutNodeOutput},
     tree::FrozenLayoutTree,
@@ -205,6 +206,21 @@ where
             visible: geometry.visible,
             pointer_events: geometry.pointer_events,
         })
+    }
+
+    /// Returns used Grid tracks from the same frozen epoch as other CSSOM
+    /// geometry, normalized out of the container's effective CSS zoom.
+    pub fn used_grid_tracks_for_source(&self, source: N) -> Option<LayoutResolvedGridTracks> {
+        let output = self.source_output(source)?;
+        let layout_box = self.boxes.get(output.principal_box?.index())?;
+        let mut grid = layout_box.resolved_grid_tracks.clone()?;
+        let unzoom = CssomAbsoluteZoom::new(layout_box.geometry.effective_zoom);
+        for tracks in [&mut grid.rows, &mut grid.columns] {
+            for size in &mut tracks.used_track_sizes {
+                *size = unzoom.scalar(*size);
+            }
+        }
+        Some(grid)
     }
 
     /// Resolves a viewport point into the coordinate system Blink uses for
@@ -473,6 +489,10 @@ impl CssomAbsoluteZoom {
 
     fn point(self, point: LayoutPoint) -> LayoutPoint {
         LayoutPoint::new(point.x / self.0, point.y / self.0)
+    }
+
+    fn scalar(self, value: f32) -> f32 {
+        value / self.0
     }
 
     fn size(self, size: LayoutSize) -> LayoutSize {
@@ -763,6 +783,7 @@ mod tests {
                 geometry_source: Some(1),
                 principal_source: Some(1),
                 hit_source: Some(1),
+                resolved_grid_tracks: None,
                 control_paint_order: None,
             }],
             vec![

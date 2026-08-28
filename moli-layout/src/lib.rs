@@ -7,7 +7,7 @@
 
 /// Number of fixed layout subpixels in one CSS pixel, matching Blink's
 /// `LayoutUnit` precision.
-pub const LAYOUT_SUBPIXELS_PER_CSS_PIXEL: f32 = 64.0;
+pub(crate) const LAYOUT_SUBPIXELS_PER_CSS_PIXEL: f32 = 64.0;
 
 mod builder;
 mod capture;
@@ -15,6 +15,7 @@ mod containment;
 mod error;
 mod form;
 mod gradient;
+mod grid;
 mod inline;
 mod intrinsic;
 mod layout_tree;
@@ -53,10 +54,10 @@ pub use layout_tree::{
     LayoutFragmentBoxModel, LayoutFragmentId, LayoutFragmentKind, LayoutHit,
     LayoutIntersectionGeometry, LayoutNodeOutput, LayoutOutputBoxId, LayoutPaintedSurfaceHit,
     LayoutPassMetrics, LayoutPassResult, LayoutPoint, LayoutQuad, LayoutQuery, LayoutQueryAnswer,
-    LayoutQueryBatch, LayoutRect, LayoutScrollContainerMetrics, LayoutScrollExtent,
-    LayoutScrollIntoViewGeometry, LayoutSize, LayoutTransform2D, LayoutTreeRetentionMetrics,
-    LayoutViewport, MAX_RETAINED_LAYOUT_BOXES, MAX_RETAINED_LAYOUT_FRAGMENTS,
-    MAX_RETAINED_LAYOUT_TREE_BYTES,
+    LayoutQueryBatch, LayoutRect, LayoutResolvedGridTrackList, LayoutResolvedGridTracks,
+    LayoutScrollContainerMetrics, LayoutScrollExtent, LayoutScrollIntoViewGeometry, LayoutSize,
+    LayoutTransform2D, LayoutTreeRetentionMetrics, LayoutViewport, MAX_RETAINED_LAYOUT_BOXES,
+    MAX_RETAINED_LAYOUT_FRAGMENTS, MAX_RETAINED_LAYOUT_TREE_BYTES,
 };
 pub use normalize::{NormalizedBoxNode, NormalizedBoxTree, NormalizedFormattingContext};
 pub use normalize_source::{

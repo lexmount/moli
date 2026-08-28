@@ -5,9 +5,9 @@ use taffy::{Cache, Layout, Point, Style};
 
 use crate::{
     LayoutCssImageReference, LayoutElementSemantics, LayoutError, LayoutPoint, LayoutPseudo,
-    LayoutScrollbarAxis, LayoutScrollbarColors, LayoutScrollbarGutter, LayoutScrollbarWidth,
-    ResolvedLayoutStyle, inline::InlineFormattingContext, replaced::ReplacedContext,
-    style::LayoutOverflowMode,
+    LayoutResolvedGridTracks, LayoutScrollbarAxis, LayoutScrollbarColors, LayoutScrollbarGutter,
+    LayoutScrollbarWidth, ResolvedLayoutStyle, inline::InlineFormattingContext,
+    replaced::ReplacedContext, style::LayoutOverflowMode,
 };
 
 /// Dense identifier scoped to exactly one [`LayoutWorld`].
@@ -252,6 +252,11 @@ pub struct LayoutBox<N> {
     /// owner's conflict-resolution grid.
     pub(crate) collapsed_table_border_part: bool,
     pub(crate) inline_formatting_context: bool,
+    /// Used Grid tracks produced by the numeric layout pass.
+    ///
+    /// This is browser-owned canonical geometry rather than a retained Taffy
+    /// object. It is frozen with the rest of the layout tree for CSSOM reads.
+    pub(crate) resolved_grid_tracks: Option<LayoutResolvedGridTracks>,
     pub(crate) cache: Cache,
     pub(crate) unrounded_layout: Layout,
     pub(crate) final_layout: Layout,
@@ -1092,6 +1097,7 @@ where
             collapsed_table_borders: None,
             collapsed_table_border_part: false,
             inline_formatting_context: false,
+            resolved_grid_tracks: None,
             cache: Cache::new(),
             unrounded_layout: Layout::with_order(0),
             final_layout: Layout::with_order(0),

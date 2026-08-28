@@ -928,6 +928,7 @@ where
                 .next()
                 .expect("a frozen layout tree always owns the viewport coordinate space"),
         );
+        let world = self.world;
         let boxes = self
             .boxes
             .into_iter()
@@ -947,14 +948,20 @@ where
                         control_paint_order,
                     ),
                     coordinate_space,
-                )| FrozenLayoutBox {
-                    geometry,
-                    scroll_extent,
-                    coordinate_space,
-                    geometry_source,
-                    principal_source,
-                    hit_source,
-                    control_paint_order,
+                )| {
+                    let resolved_grid_tracks = world.boxes[geometry.id.index()]
+                        .resolved_grid_tracks
+                        .clone();
+                    FrozenLayoutBox {
+                        geometry,
+                        scroll_extent,
+                        coordinate_space,
+                        geometry_source,
+                        principal_source,
+                        hit_source,
+                        resolved_grid_tracks,
+                        control_paint_order,
+                    }
                 },
             )
             .collect();
