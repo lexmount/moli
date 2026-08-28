@@ -1873,6 +1873,67 @@ document.body.appendChild(frame);
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn javascript_location_assignment_does_not_ghost_location_href_on_delegate_pages() {
+    let runtime = JsRuntime::initialize();
+    let loader =
+        ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("default loader");
+    let url = url::Url::parse("https://javascript-location-ghost.test/start.html").unwrap();
+    let mut page = create_test_html_page_with_navigation_dispatch(
+        &runtime,
+        &loader,
+        url,
+        "<!doctype html><title>start</title>",
+        RendererTopLevelNavigationDispatch::DelegateToBrowser,
+    )
+    .await;
+
+    let (set_reply, _) = page
+        .run_async_command(RendererPageCommand::EvaluateExpression {
+            expression: r#"location.href = "javascript:document.title = 'LOC-RAN'"; "set""#
+                .to_owned(),
+            await_promise: false,
+        })
+        .await
+        .expect("javascript: location assignment should complete");
+    assert_eq!(
+        renderer_json_value(set_reply),
+        Some(serde_json::json!("set"))
+    );
+
+    let (href_reply, _) = page
+        .run_async_command(RendererPageCommand::EvaluateExpression {
+            expression: "location.href".to_owned(),
+            await_promise: false,
+        })
+        .await
+        .expect("location.href readback should complete");
+    assert_eq!(
+        renderer_json_value(href_reply),
+        Some(serde_json::json!(
+            "https://javascript-location-ghost.test/start.html"
+        )),
+        "assigning a javascript: URL must not ghost location.href"
+    );
+
+    let (title_reply, _) = page
+        .run_async_command(RendererPageCommand::EvaluateExpression {
+            expression: "document.title".to_owned(),
+            await_promise: false,
+        })
+        .await
+        .expect("document.title readback should complete");
+    assert_eq!(
+        renderer_json_value(title_reply),
+        Some(serde_json::json!("start")),
+        "a javascript: location assignment must not execute its script"
+    );
+
+    page.close_async()
+        .await
+        .expect("javascript location ghost page should close");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn owner_scheduler_continues_from_stale_to_latest_child_navigation_generation() {
     let runtime = JsRuntime::initialize();
     let loader =

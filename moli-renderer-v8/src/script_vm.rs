@@ -5550,6 +5550,11 @@ impl ScriptVm {
         &mut self,
     ) -> Option<super::native_bridge::PendingLocationNavigation> {
         if self.pending_location_navigation_scheme_is("javascript") {
+            let source_url = self.document_runtime.document_url().clone();
+            self._context_host
+                .borrow_mut()
+                .clear_pending_location_navigation();
+            self.restore_top_level_location_runtime_state(&source_url);
             return None;
         }
         let source_url = self.document_runtime.document_url().clone();

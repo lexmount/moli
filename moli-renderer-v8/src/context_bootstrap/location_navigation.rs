@@ -627,7 +627,9 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
         return;
     }
 
-    sync_location_object(scope, location, resolved.as_str());
+    if resolved.scheme() != "javascript" {
+        sync_location_object(scope, location, resolved.as_str());
+    }
 
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         return;

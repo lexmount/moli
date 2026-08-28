@@ -929,6 +929,54 @@ globalThis.__events.push('after setter');
 }
 
 #[tokio::test]
+async fn javascript_location_assignment_keeps_href_and_drops_pending_when_not_followed() {
+    run_page_vm_async_test(async move {
+        let page_vm = test_page_vm_with_document_url(
+            Url::parse("https://javascript-location-ghost.test/start.html").unwrap(),
+        );
+        let local_executor = page_vm.local_executor.clone();
+
+        local_executor
+            .run(async move {
+                let mut page_vm = page_vm;
+                let href = page_vm.vm_mut().eval(
+                    r#"
+location.href = "javascript:document.title = 'LOC-RAN'";
+location.href
+"#,
+                )?;
+                assert_eq!(
+                    href, "https://javascript-location-ghost.test/start.html",
+                    "assigning a javascript: URL must not ghost location.href"
+                );
+                assert!(
+                    page_vm.vm().has_pending_location_navigation(),
+                    "javascript: location should remain pending until the owner follows it"
+                );
+                assert!(
+                    !page_vm
+                        .vm_mut()
+                        .publish_pending_non_javascript_location_navigation()?,
+                    "a javascript: pending navigation must never be published to the browser"
+                );
+                assert!(
+                    !page_vm.vm().has_pending_location_navigation(),
+                    "dropping a javascript: pending navigation must clear the pending record"
+                );
+                let href = page_vm.vm_mut().eval("location.href")?;
+                assert_eq!(
+                    href, "https://javascript-location-ghost.test/start.html",
+                    "location.href must remain unchanged after the pending navigation is dropped"
+                );
+                Ok::<_, anyhow::Error>(())
+            })
+            .await
+            .expect("javascript: location ghost-state rejection should complete");
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn javascript_string_completion_restarts_renderer_lifecycle_on_same_document_token() {
     run_page_vm_async_test(async move {
         let page_vm = test_page_vm_with_document_url(
