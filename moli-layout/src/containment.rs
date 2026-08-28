@@ -5,7 +5,9 @@
 //! decision here so containing-block selection, stacking, geometry projection,
 //! hit testing, and paint clipping all consume one Chromium-aligned answer.
 
-use crate::world::{LayoutBox, LayoutBoxKind};
+use std::{fmt::Debug, hash::Hash};
+
+use crate::world::{LayoutBox, LayoutBoxId, LayoutBoxKind, LayoutWorld};
 
 impl<N> LayoutBox<N> {
     /// Mirrors Blink's `LayoutObject::IsBox()` boundary.
@@ -45,20 +47,6 @@ impl<N> LayoutBox<N> {
             )
     }
 
-    pub(crate) fn establishes_positioned_containing_block(&self) -> bool {
-        self.style.establishes_positioned_containing_block(
-            self.is_css_box(),
-            self.is_eligible_for_paint_or_layout_containment(),
-        )
-    }
-
-    pub(crate) fn establishes_fixed_containing_block(&self) -> bool {
-        self.style.establishes_fixed_containing_block(
-            self.is_css_box(),
-            self.is_eligible_for_paint_or_layout_containment(),
-        )
-    }
-
     pub(crate) fn creates_stacking_context(
         &self,
         is_root: bool,
@@ -75,5 +63,36 @@ impl<N> LayoutBox<N> {
         self.style.clips_overflow()
             || (self.is_eligible_for_paint_or_layout_containment()
                 && self.style.applies_paint_containment())
+    }
+}
+
+impl<N> LayoutWorld<N>
+where
+    N: Copy + Debug + Eq + Hash,
+{
+    /// Resolves containing-block capability from both computed style and the
+    /// box's identity in this layout tree.
+    ///
+    /// Filter effects establish containing blocks on inline LayoutObjects too,
+    /// but the Filter Effects specifications explicitly exempt the document
+    /// element. Keeping that identity-dependent rule on `LayoutWorld` avoids
+    /// conflating the root of a subtree layout source with the document
+    /// element.
+    pub(crate) fn establishes_positioned_containing_block(&self, id: LayoutBoxId) -> bool {
+        let layout_box = &self.boxes[id.index()];
+        layout_box.style.establishes_positioned_containing_block(
+            self.is_document_element(id),
+            layout_box.is_css_box(),
+            layout_box.is_eligible_for_paint_or_layout_containment(),
+        )
+    }
+
+    pub(crate) fn establishes_fixed_containing_block(&self, id: LayoutBoxId) -> bool {
+        let layout_box = &self.boxes[id.index()];
+        layout_box.style.establishes_fixed_containing_block(
+            self.is_document_element(id),
+            layout_box.is_css_box(),
+            layout_box.is_eligible_for_paint_or_layout_containment(),
+        )
     }
 }

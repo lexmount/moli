@@ -1248,6 +1248,189 @@ offsets['shadow-action']=shadow.getElementById('shadow-action').offsetParent?.id
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn filters_establish_containing_blocks_except_on_the_document_element() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/filter-containing-blocks.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html{filter:opacity(99%);will-change:backdrop-filter}
+html,body{margin:0;padding:0}
+.case{margin-left:100px;width:160px;height:40px}
+#filter{filter:opacity(80%)}
+#backdrop{backdrop-filter:blur(0px)}
+#will-filter{will-change:filter}
+#will-backdrop{will-change:backdrop-filter}
+.absolute{position:absolute;left:11px;top:12px;width:10px;height:10px}
+.fixed{position:fixed;left:13px;top:14px;width:10px;height:10px}
+#inline-owner{margin-left:100px;height:40px}
+#inline-filter{filter:opacity(80%)}
+#inline-absolute{position:absolute;left:17px;top:18px;width:10px;height:10px}
+#root-fixed{position:fixed;left:7px;top:8px;width:10px;height:10px}
+</style>`;
+document.body.innerHTML = `
+<div id=filter class=case><span id=filter-absolute class=absolute></span><span id=filter-fixed class=fixed></span></div>
+<div id=backdrop class=case><span id=backdrop-absolute class=absolute></span><span id=backdrop-fixed class=fixed></span></div>
+<div id=will-filter class=case><span id=will-filter-absolute class=absolute></span><span id=will-filter-fixed class=fixed></span></div>
+<div id=will-backdrop class=case><span id=will-backdrop-absolute class=absolute></span><span id=will-backdrop-fixed class=fixed></span></div>
+<div id=inline-owner>prefix <span id=inline-filter>inline<span id=inline-absolute></span></span></div>
+<span id=root-fixed></span>`;
+'installed'
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+
+        // Geometry queries intentionally consume the last published layout.
+        // Publish this mutation through the rendering lifecycle first.
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(800, 600, 1.0))?
+            .expect("filter fixture must retain a layout root");
+
+        let result = page_vm.vm_mut().eval(
+            r#"JSON.stringify((()=>{
+const ids=['filter','backdrop','will-filter','will-backdrop','inline-filter','root-fixed'];
+const rect=id=>{const r=document.getElementById(id).getBoundingClientRect();return [r.x,r.y]};
+const relative={};
+for(const id of ['filter','backdrop','will-filter','will-backdrop']){
+  const parent=rect(id);
+  for(const suffix of ['absolute','fixed']){
+    const child=rect(`${id}-${suffix}`);
+    relative[`${id}-${suffix}`]=[child[0]-parent[0],child[1]-parent[1]];
+  }
+}
+const inline=rect('inline-filter');const inlineChild=rect('inline-absolute');
+relative['inline-absolute']=[inlineChild[0]-inline[0],inlineChild[1]-inline[1]];
+const offsetParents={};
+for(const id of Object.keys(relative)) offsetParents[id]=document.getElementById(id).offsetParent?.id??null;
+offsetParents['root-fixed']=document.getElementById('root-fixed').offsetParent?.id??null;
+return {relative,offsetParents,rootFixed:rect('root-fixed')};
+})())"#,
+        )?;
+        let result: serde_json::Value = serde_json::from_str(&result)?;
+        for id in ["filter", "backdrop", "will-filter", "will-backdrop"] {
+            for (suffix, expected) in [("absolute", [11.0, 12.0]), ("fixed", [13.0, 14.0])] {
+                let child = format!("{id}-{suffix}");
+                let actual = result["relative"][&child]
+                    .as_array()
+                    .unwrap_or_else(|| panic!("missing relative geometry for {child}: {result}"));
+                for (axis, expected) in expected.into_iter().enumerate() {
+                    let actual = actual[axis].as_f64().expect("numeric geometry") as f32;
+                    assert!(
+                        (actual - expected).abs() <= 0.05,
+                        "{child}[{axis}]: expected {expected}, got {actual}; result={result}"
+                    );
+                }
+                assert_eq!(
+                    result["offsetParents"][&child].as_str(),
+                    Some(id),
+                    "unexpected offsetParent for {child}: {result}"
+                );
+            }
+        }
+        for (id, expected) in [
+            ("inline-absolute", [17.0, 18.0]),
+            ("root-fixed", [7.0, 8.0]),
+        ] {
+            let source = if id == "root-fixed" {
+                &result["rootFixed"]
+            } else {
+                &result["relative"][id]
+            };
+            let actual = source
+                .as_array()
+                .unwrap_or_else(|| panic!("missing geometry for {id}: {result}"));
+            for (axis, expected) in expected.into_iter().enumerate() {
+                let actual = actual[axis].as_f64().expect("numeric geometry") as f32;
+                assert!(
+                    (actual - expected).abs() <= 0.05,
+                    "{id}[{axis}]: expected {expected}, got {actual}; result={result}"
+                );
+            }
+        }
+        assert_eq!(
+            result["offsetParents"]["inline-absolute"].as_str(),
+            Some("inline-filter"),
+            "filter must apply before Blink's IsBox gate: {result}"
+        );
+        assert_eq!(
+            result["offsetParents"]["root-fixed"].as_str(),
+            None,
+            "the document element is excluded by Filter Effects: {result}"
+        );
+
+        // The same filtered element can also be the root of a one-shot
+        // subtree source. It is still an ordinary element in its owner
+        // document, so occupying LayoutWorld's root slot must not grant the
+        // document-element exception.
+        let subtree_root = page_vm
+            .vm()
+            .element_handle_by_id_for_test("filter")
+            .expect("filtered subtree root");
+        let subtree_children = [
+            (
+                page_vm
+                    .vm()
+                    .element_handle_by_id_for_test("filter-absolute")
+                    .expect("absolute subtree child"),
+                [11.0, 12.0],
+            ),
+            (
+                page_vm
+                    .vm()
+                    .element_handle_by_id_for_test("filter-fixed")
+                    .expect("fixed subtree child"),
+                [13.0, 14.0],
+            ),
+        ];
+        let subtree_pass = page_vm.vm().build_layout_pass_for_subtree_for_test(
+            subtree_root,
+            moli_layout::LayoutPassRequest::new(
+                moli_layout::LayoutViewport::new(800, 600, 1.0),
+                moli_layout::LayoutFlushReason::Test,
+            ),
+        )?;
+        let subtree_answers = subtree_pass.answer_queries(&moli_layout::LayoutQueryBatch::new(
+            subtree_children
+                .iter()
+                .map(|(source, _)| moli_layout::LayoutQuery::ElementMetrics { source: *source })
+                .collect(),
+        ));
+        for ((source, expected), answer) in subtree_children
+            .into_iter()
+            .zip(subtree_answers.answers)
+        {
+            let moli_layout::LayoutQueryAnswer::ElementMetrics(Some(metrics)) = answer else {
+                panic!("missing subtree metrics for {source:?}");
+            };
+            assert_eq!(
+                metrics.offset_parent,
+                Some(subtree_root),
+                "a filtered subtree root must remain an ordinary containing block"
+            );
+            for (actual, expected) in [metrics.offset_position.x, metrics.offset_position.y]
+                .into_iter()
+                .zip(expected)
+            {
+                assert!(
+                    (actual - expected).abs() <= 0.05,
+                    "subtree child {source:?}: expected offset {expected}, got {actual}"
+                );
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("filter containing-block fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn fixed_flex_auto_margin_consumes_free_space_once() {
     run_page_vm_async_test(async move {
         let loader =

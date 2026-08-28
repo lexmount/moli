@@ -472,6 +472,16 @@ pub trait LayoutSource {
         Self: 'a;
 
     fn root(&self) -> Self::NodeId;
+    /// Whether the view root is the document element associated with its
+    /// layout viewport.
+    ///
+    /// Subtree and synthetic sources also receive an internal viewport-sized
+    /// containing block. They must return `false`: document-element CSS
+    /// exceptions depend on node identity, not on occupying index zero in a
+    /// one-shot layout tree.
+    fn root_is_document_element(&self) -> bool {
+        false
+    }
     /// Returns the parent in the same flattened tree exposed by [`Self::flat_children`].
     /// The view root must return `None`, even when it has a DOM parent outside the view.
     fn flat_parent(&self, node: Self::NodeId) -> Option<Self::NodeId>;

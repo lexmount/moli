@@ -598,9 +598,12 @@ where
                         || element.is_html_element("td")
                         || element.is_html_element("th")
                 }),
-                establishes_positioned_containing_block: layout_box
-                    .establishes_positioned_containing_block(),
-                establishes_fixed_containing_block: layout_box.establishes_fixed_containing_block(),
+                establishes_positioned_containing_block: self
+                    .world
+                    .establishes_positioned_containing_block(LayoutBoxId::from_index(index)),
+                establishes_fixed_containing_block: self
+                    .world
+                    .establishes_fixed_containing_block(LayoutBoxId::from_index(index)),
                 visible: layout_box.style.is_visible(),
                 pointer_events: layout_box.style.accepts_pointer_events(),
             });

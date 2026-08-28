@@ -687,11 +687,10 @@ where
     N: Copy + Debug + Eq + Hash,
 {
     while let Some(id) = candidate {
-        let layout_box = &world.boxes[id.index()];
-        if layout_box.establishes_positioned_containing_block() {
+        if world.establishes_positioned_containing_block(id) {
             return Some(id);
         }
-        candidate = layout_box.parent;
+        candidate = world.boxes[id.index()].structural_parent;
     }
     None
 }
@@ -704,11 +703,10 @@ where
     N: Copy + Debug + Eq + Hash,
 {
     while let Some(id) = candidate {
-        let layout_box = &world.boxes[id.index()];
-        if layout_box.establishes_fixed_containing_block() {
+        if world.establishes_fixed_containing_block(id) {
             return Some(id);
         }
-        candidate = layout_box.parent;
+        candidate = world.boxes[id.index()].structural_parent;
     }
     None
 }

@@ -2824,6 +2824,24 @@ impl ScriptVm {
             .map_err(anyhow::Error::new)
     }
 
+    #[cfg(test)]
+    pub(crate) fn build_layout_pass_for_subtree_for_test(
+        &self,
+        root: DomHandle,
+        request: moli_layout::LayoutPassRequest,
+    ) -> Result<moli_layout::LayoutPassResult<DomHandle>, moli_layout::LayoutError> {
+        let context_host = self._context_host.borrow();
+        let mut services = moli_layout::DocumentLayoutServices::new();
+        let mut embedded_document_services = HashMap::new();
+        crate::layout_renderer::build_native_layout_pass(
+            &context_host,
+            root,
+            &mut services,
+            &mut embedded_document_services,
+            request,
+        )
+    }
+
     pub(super) fn computed_style_properties_for_inspector_handle(
         &self,
         handle: DomHandle,

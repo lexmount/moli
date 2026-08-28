@@ -565,6 +565,9 @@ where
     pub(crate) source_mapping: HashMap<N, LayoutBoxId>,
     pub(crate) display_contents_mapping: HashMap<N, Vec<LayoutBoxId>>,
     pub(crate) root: LayoutBoxId,
+    /// The root is the document element only for a complete document source.
+    /// Subtree and synthetic sources still use the same internal root slot.
+    pub(crate) root_is_document_element: bool,
     pub(crate) viewport_scroll_policy: ViewportScrollPolicy,
     pub(crate) viewport_layout: ViewportLayoutState,
     pub(crate) css_image_references: Vec<LayoutCssImageReference<N>>,
@@ -574,12 +577,13 @@ impl<N> LayoutWorld<N>
 where
     N: Copy + Debug + Eq + Hash,
 {
-    pub(crate) fn new(root: LayoutBox<N>) -> Self {
+    pub(crate) fn new(root: LayoutBox<N>, root_is_document_element: bool) -> Self {
         Self {
             boxes: vec![root],
             source_mapping: HashMap::new(),
             display_contents_mapping: HashMap::new(),
             root: LayoutBoxId::from_index(0),
+            root_is_document_element,
             viewport_scroll_policy: ViewportScrollPolicy::default(),
             viewport_layout: ViewportLayoutState::default(),
             css_image_references: Vec::new(),
@@ -650,6 +654,10 @@ where
             .entry(source)
             .or_default()
             .extend_from_slice(child_boxes);
+    }
+
+    pub(crate) fn is_document_element(&self, id: LayoutBoxId) -> bool {
+        self.root_is_document_element && id == self.root
     }
 
     pub(crate) fn replace_children(
