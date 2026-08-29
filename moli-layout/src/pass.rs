@@ -304,10 +304,21 @@ where
     )
 }
 
-/// Resolves `overflow:auto` with the same monotonic feedback loop used by
-/// classic browser scrollbars: lay out without an automatic gutter, reveal
-/// every axis that overflows, then repeat because one gutter can make the
-/// perpendicular axis overflow. Each axis changes at most once.
+/// Resolves `overflow:auto` with a monotonic browser-style feedback loop.
+///
+/// The first iteration lays out without an automatic gutter. If overflow
+/// reveals a scrollbar, its gutter changes the available space and the
+/// affected box must be laid out again; that gutter can in turn reveal the
+/// perpendicular scrollbar. An axis is only ever revealed, never hidden, so
+/// each box/axis changes at most once and the loop converges.
+///
+/// Every iteration enters Taffy through the synthetic viewport root, but that
+/// is a scheduling entry point rather than an unconditional full-tree layout.
+/// `invalidate_scrollbar_feedback` clears only changed boxes and their numeric
+/// ancestors. All other subtrees keep valid Taffy cache entries and return
+/// immediately. This is the same important boundary as Blink's corrective
+/// scrollbar relayout: pay a follow-up pass only after state changes, and only
+/// recompute the paths whose available space can have changed.
 #[derive(Default)]
 struct NumericLayoutMetrics {
     pass_count: usize,
@@ -413,6 +424,10 @@ where
         }
         let changed = viewport_changed || !changed_boxes.is_empty();
         if changed {
+            // Do not clear the whole Taffy tree here. Although the next call to
+            // `compute_prepared_world_layout` starts at the root, untouched
+            // branches remain cache hits; only these boxes and their ancestor
+            // paths participate in the corrective numeric layout.
             metrics.feedback_invalidated_node_count =
                 metrics.feedback_invalidated_node_count.saturating_add(
                     prepared.invalidate_scrollbar_feedback(world, &changed_boxes, viewport_changed),

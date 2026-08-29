@@ -75,6 +75,12 @@ impl PreparedWorldLayout {
     /// Clears only the cache entries on changed scrollbar boxes and their
     /// numeric ancestors. The reusable mark table makes this proportional to
     /// the affected paths rather than to every box in the document.
+    ///
+    /// Taffy's next compute still starts at the viewport root, as its public
+    /// API requires, but siblings outside these paths retain their cached
+    /// `LayoutOutput`. Thus a second scrollbar-feedback iteration is a local
+    /// corrective relayout in cost and invalidation scope, not a second full
+    /// document layout.
     pub(crate) fn invalidate_scrollbar_feedback<N>(
         &mut self,
         world: &mut LayoutWorld<N>,
