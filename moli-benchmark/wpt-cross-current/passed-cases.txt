@@ -7,6 +7,7 @@ FileAPI/blob/Blob-stream-byob-crash.html
 FileAPI/blob/Blob-stream-sync-xhr-crash.html
 FileAPI/file/File-constructor-endings.html
 FileAPI/filelist-section/filelist.html
+FileAPI/url/url-lifetime.html
 IndexedDB/database-names-by-origin.html
 IndexedDB/idb_webworkers.htm
 IndexedDB/idbfactory-databases-opaque-origin.html
