@@ -7,7 +7,12 @@
 // Relative positioning of atomic inline boxes additionally follows Blitz
 // commit 4a9be930accc971675d5730e4fde3cfa13c3b57e.
 
-use std::{collections::BTreeMap, fmt::Debug, hash::Hash, ops::Range};
+use std::{
+    collections::{BTreeMap, HashMap},
+    fmt::Debug,
+    hash::Hash,
+    ops::Range,
+};
 
 use parley::{BreakReason, InlineBox, InlineBoxKind, Layout, PositionedLayoutItem, TextStyle};
 use taffy::{MaybeResolve as _, Point, Size};
@@ -267,21 +272,6 @@ pub(crate) struct InlineFragments {
     pub(crate) boxes: Vec<InlineBoxFragment>,
 }
 
-impl InlineFragments {
-    pub(crate) fn translate_block_axis(&mut self, offset: f32) {
-        for line in &mut self.lines {
-            line.rect.y += offset;
-            line.baseline += offset;
-        }
-        for text in &mut self.text {
-            text.rect.y += offset;
-        }
-        for inline_box in &mut self.boxes {
-            inline_box.rect.y += offset;
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct InlineLineFragment {
     pub(crate) line_index: usize,
@@ -314,8 +304,8 @@ pub(crate) fn build_inline_fragments(
     line_placements: &[InlineLinePlacement],
 ) -> InlineFragments {
     let mut fragments = InlineFragments::default();
-    let mut box_fragments = BTreeMap::<(usize, usize), FragmentAccumulator>::new();
-    let mut source_fragments = BTreeMap::<SourceFragmentKey, FragmentAccumulator>::new();
+    let mut box_fragments = HashMap::<(usize, usize), FragmentAccumulator>::new();
+    let mut source_fragments = HashMap::<SourceFragmentKey, FragmentAccumulator>::new();
 
     for (line_index, line) in layout.lines().enumerate() {
         let metrics = line.metrics();
@@ -378,11 +368,7 @@ pub(crate) fn build_inline_fragments(
                     cluster.advance().max(0.0),
                     (ascent + descent).max(0.0),
                 );
-                for unit in context
-                    .text_units
-                    .iter()
-                    .filter(|unit| ranges_overlap(&unit.output_range, &range))
-                {
+                for unit in overlapping_output_ranges(&context.text_units, &range) {
                     for ancestor in &unit.ancestors {
                         box_fragments
                             .entry((ancestor.index(), line_index))
@@ -390,11 +376,7 @@ pub(crate) fn build_inline_fragments(
                             .include_inline_axis(rect.x, rect.width);
                     }
                 }
-                for source in context
-                    .source_map
-                    .iter()
-                    .filter(|source| ranges_overlap(&source.output_range, &range))
-                {
+                for source in overlapping_output_ranges(&context.source_map, &range) {
                     source_fragments
                         .entry(SourceFragmentKey {
                             box_index: source.box_id.index(),
@@ -456,6 +438,8 @@ pub(crate) fn build_inline_fragments(
         }
     }
 
+    let mut box_fragments = box_fragments.into_iter().collect::<Vec<_>>();
+    box_fragments.sort_unstable_by_key(|(key, _)| *key);
     fragments.boxes = box_fragments
         .into_iter()
         .filter_map(|((box_index, line_index), accumulator)| {
@@ -469,6 +453,8 @@ pub(crate) fn build_inline_fragments(
             })
         })
         .collect();
+    let mut source_fragments = source_fragments.into_iter().collect::<Vec<_>>();
+    source_fragments.sort_unstable_by_key(|(key, _)| *key);
     fragments.text = source_fragments
         .into_iter()
         .filter_map(|(key, accumulator)| {
@@ -517,9 +503,9 @@ pub(crate) fn break_inline_lines(
             let line_range = line.text_range();
             metrics.trailing_whitespace > 0.0
                 && metrics.advance > width + tolerance
-                && context.text_units.iter().any(|unit| {
-                    unit.break_spaces_opportunity && ranges_overlap(&unit.output_range, &line_range)
-                })
+                && overlapping_output_ranges(&context.text_units, &line_range)
+                    .iter()
+                    .any(|unit| unit.break_spaces_opportunity)
         })
         .collect::<Vec<_>>();
     if !adjust_lines.iter().any(|adjust| *adjust) {
@@ -1009,11 +995,9 @@ fn build_line_inline_box_states(
     geometries: &[InlineItemVerticalGeometry],
 ) -> Vec<LineInlineBoxState> {
     let mut present = std::collections::BTreeSet::new();
-    for unit in &context.text_units {
-        if ranges_overlap(&unit.output_range, &line_range) {
-            for ancestor in &unit.ancestors {
-                mark_structural_path(context, *ancestor, &mut present);
-            }
+    for unit in overlapping_output_ranges(&context.text_units, &line_range) {
+        for ancestor in &unit.ancestors {
+            mark_structural_path(context, *ancestor, &mut present);
         }
     }
     for geometry in geometries {
@@ -1199,7 +1183,7 @@ fn non_edge_vertical_offset(
     alignment_shift + baseline_shift
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 struct SourceFragmentKey {
     box_index: usize,
     source_byte_start: usize,
@@ -1256,6 +1240,43 @@ impl FragmentAccumulator {
 
 fn ranges_overlap(left: &Range<usize>, right: &Range<usize>) -> bool {
     left.start < right.end && right.start < left.end
+}
+
+trait HasInlineOutputRange {
+    fn output_range(&self) -> &Range<usize>;
+}
+
+impl HasInlineOutputRange for InlineTextUnit {
+    fn output_range(&self) -> &Range<usize> {
+        &self.output_range
+    }
+}
+
+impl HasInlineOutputRange for InlineSourceMapEntry {
+    fn output_range(&self) -> &Range<usize> {
+        &self.output_range
+    }
+}
+
+/// Returns the contiguous slice intersecting `target` from an output-ordered
+/// inline map. Normalization produces non-overlapping ranges, except that a
+/// single output range can have multiple source origins (for example CRLF
+/// merged across text nodes). Visual glyph clusters are not ordered under
+/// bidi, so two binary searches are used instead of a stateful cursor.
+fn overlapping_output_ranges<'a, T>(items: &'a [T], target: &Range<usize>) -> &'a [T]
+where
+    T: HasInlineOutputRange,
+{
+    if target.is_empty() {
+        return &items[..0];
+    }
+    debug_assert!(items.windows(2).all(|pair| {
+        pair[0].output_range().start <= pair[1].output_range().start
+            && pair[0].output_range().end <= pair[1].output_range().end
+    }));
+    let start = items.partition_point(|item| item.output_range().end <= target.start);
+    let end = start + items[start..].partition_point(|item| item.output_range().start < target.end);
+    &items[start..end]
 }
 
 pub(crate) fn prepare_inline_contexts<N>(
@@ -2116,6 +2137,36 @@ fn is_combining_mark(character: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ordered_output_range_lookup_handles_duplicates_gaps_and_bidi_order() {
+        let source = |output_range: Range<usize>| InlineSourceMapEntry {
+            output_range,
+            box_id: LayoutBoxId::from_index(1),
+            source_byte_range: 0..1,
+            source_utf16_range: 0..1,
+        };
+        let entries = vec![
+            source(0..1),
+            source(1..2),
+            source(1..2),
+            source(2..5),
+            source(7..9),
+        ];
+        let ranges = |query: Range<usize>| {
+            overlapping_output_ranges(&entries, &query)
+                .iter()
+                .map(|entry| entry.output_range.clone())
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(ranges(1..3), vec![1..2, 1..2, 2..5]);
+        // Visual clusters may query logical text in either direction.
+        assert_eq!(ranges(7..8), vec![7..9]);
+        assert_eq!(ranges(0..1), vec![0..1]);
+        assert!(ranges(5..7).is_empty());
+        assert!(ranges(2..2).is_empty());
+    }
 
     #[test]
     fn normal_line_height_unites_metrics_from_the_shaped_fallback_font() {

@@ -1775,6 +1775,14 @@ where
                 output.margins_can_collapse_through = false;
             }
             if inputs.run_mode == RunMode::PerformLayout {
+                // Intrinsic and flex/grid probes need only the numeric IFC
+                // result. Materialize CSSOM/paint fragments once, after the
+                // accepted layout has received its final block alignment.
+                let fragments = build_inline_fragments(
+                    &inline_context,
+                    &measurement.layout,
+                    &measurement.line_placements,
+                );
                 self.position_inline_objects(
                     &inline_context,
                     &measurement,
@@ -1785,7 +1793,7 @@ where
                     content_box_size,
                     self.boxes[id.index()].style.direction(),
                 );
-                inline_context.fragments = measurement.fragments;
+                inline_context.fragments = fragments;
                 inline_context.line_placements = measurement.line_placements;
                 inline_context.laid_out = Some(measurement.layout);
             }
@@ -2133,7 +2141,6 @@ where
             .rev()
             .find(|line| !line.phantom)
             .map(|line| line.baseline);
-        let fragments = build_inline_fragments(context, &layout, &line_placements);
         InlineMeasurement {
             size: Size {
                 width: known_dimensions.width.unwrap_or(width),
@@ -2147,7 +2154,6 @@ where
             floats,
             percentage_basis,
             line_placements,
-            fragments,
         }
     }
 
@@ -2533,7 +2539,6 @@ struct InlineMeasurement {
     floats: Vec<InlineFloatPlacement>,
     percentage_basis: Option<f32>,
     line_placements: Vec<InlineLinePlacement>,
-    fragments: InlineFragments,
 }
 
 impl InlineMeasurement {
@@ -2553,7 +2558,6 @@ impl InlineMeasurement {
         for floated in &mut self.floats {
             floated.location.y += offset;
         }
-        self.fragments.translate_block_axis(offset);
     }
 }
 
