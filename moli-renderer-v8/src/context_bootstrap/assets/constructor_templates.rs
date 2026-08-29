@@ -480,6 +480,11 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
             .length(0)
             .build(scope)
         }
+        ConstructorKind::DomRectReadOnly => v8::FunctionTemplate::builder(
+            super::super::dom_rect::dom_rect_readonly_constructor_callback,
+        )
+        .length(0)
+        .build(scope),
         ConstructorKind::DomRect => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
                 web_api_interfaces::DOMRect,
