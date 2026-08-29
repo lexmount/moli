@@ -8306,6 +8306,7 @@ webidl/ecmascript-binding/interface-object-set-receiver.html
 webidl/ecmascript-binding/interface-object.html
 webidl/ecmascript-binding/interface-prototype-constructor-set-receiver.html
 webidl/ecmascript-binding/interface-prototype-object.html
+webidl/ecmascript-binding/invalid-this-value-cross-realm.html
 webidl/ecmascript-binding/iterator-invalidation-foreach.html
 webidl/ecmascript-binding/iterator-prototype-object.html
 webidl/ecmascript-binding/legacy-callback-interface-object.html

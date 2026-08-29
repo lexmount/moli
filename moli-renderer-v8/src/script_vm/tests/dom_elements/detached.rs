@@ -7047,10 +7047,21 @@ fn detached_global_event_handler_accessors_use_owner_prototypes() {
     assert(descriptor.configurable === true, `${name} configurable`);
     return descriptor;
   };
+  const throwsTypeError = callback => {
+    try {
+      callback();
+      return false;
+    } catch (error) {
+      return error instanceof TypeError;
+    }
+  };
 
   const click = accessor(HTMLElement.prototype, "onclick");
   accessor(HTMLElement.prototype, "onsubmit");
-  assert(HTMLElement.prototype.onclick === null, "HTMLElement.prototype.onclick default");
+  assert(
+    throwsTypeError(() => HTMLElement.prototype.onclick),
+    "HTMLElement.prototype.onclick receiver brand"
+  );
   assert(Object.getOwnPropertyDescriptor(HTMLBodyElement.prototype, "onload").get !==
     Object.getOwnPropertyDescriptor(HTMLElement.prototype, "onload").get,
     "HTMLBodyElement.onload should keep body/window override");
@@ -7075,7 +7086,7 @@ fn detached_global_event_handler_accessors_use_owner_prototypes() {
     assert(element[name] === handler, `${label}.${name} after delete`);
   }
 
-  assert(click.get.call({}) === null, "forged getter is lenient null");
+  assert(throwsTypeError(() => click.get.call({})), "forged getter receiver brand");
   return "ok";
 })()
 "#,

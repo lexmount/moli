@@ -2394,11 +2394,11 @@ pub(in crate::native_bridge) fn node_hidden_getter_function<'s>(
     let Ok((runtime_ptr, handle)) =
         node_runtime_and_handle_from_object_or_detached(scope, args.this())
     else {
-        rv.set_undefined();
+        throw_incompatible_getter_receiver(scope, "HTMLElement", "hidden");
         return;
     };
     if !node_is_element(unsafe { &*runtime_ptr }, handle) {
-        rv.set_undefined();
+        throw_incompatible_getter_receiver(scope, "HTMLElement", "hidden");
         return;
     }
     match element_attribute(unsafe { &*runtime_ptr }, handle, "hidden") {
@@ -2420,11 +2420,11 @@ pub(in crate::native_bridge) fn node_hidden_setter_function<'s>(
     let Ok((runtime_ptr, handle)) =
         node_runtime_and_handle_from_object_or_detached(scope, args.this())
     else {
-        rv.set_undefined();
+        throw_incompatible_setter_receiver(scope, "HTMLElement", "hidden");
         return;
     };
     if !node_is_element(unsafe { &*runtime_ptr }, handle) {
-        rv.set_undefined();
+        throw_incompatible_setter_receiver(scope, "HTMLElement", "hidden");
         return;
     }
     let value = args.get(0);

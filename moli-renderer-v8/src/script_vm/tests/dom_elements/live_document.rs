@@ -1,6 +1,89 @@
 use super::*;
 
 #[test]
+fn cross_realm_dom_bindings_reject_incompatible_receivers_in_their_own_realm() {
+    let mut vm = new_storage_test_vm("https://cross-realm-dom-receivers.test/");
+
+    vm.eval(
+        r#"
+(() => {
+  const root = document.documentElement ||
+    document.appendChild(document.createElement("html"));
+  const body = document.body || root.appendChild(document.createElement("body"));
+  const frame = document.createElement("iframe");
+  frame.id = "cross-realm-dom-receivers";
+  body.appendChild(frame);
+})()
+"#,
+    )
+    .expect("cross-realm receiver child frame should be created");
+    materialize_single_child_default_realm_for_test(
+        &mut vm,
+        "cross-realm DOM receiver child Realm",
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const other = document.getElementById("cross-realm-dom-receivers").contentWindow;
+  const notElement = Object.create(other.HTMLElement.prototype);
+  const notText = Object.create(other.Text.prototype);
+  const notDocument = Object.create(other.HTMLDocument.prototype);
+  const element = other.document.createElement("button");
+  const text = other.document.createTextNode("foo");
+  const outcome = callback => {
+    try {
+      callback();
+      return "no throw";
+    } catch (error) {
+      return [
+        error.name,
+        error instanceof other.TypeError,
+        error instanceof TypeError
+      ].join(":");
+    }
+  };
+
+  return [
+    outcome(() => { Object.create(other.document).head; }),
+    outcome(() => {
+      Object.getOwnPropertyDescriptor(other.HTMLElement.prototype, "title")
+        .get.call(notElement);
+    }),
+    outcome(() => {
+      Reflect.get(other.document.createElement("div"), "hidden", notElement);
+    }),
+    outcome(() => { new Proxy(text, {}).nodeType; }),
+    outcome(() => { Object.create(element).innerHTML = ""; }),
+    outcome(() => {
+      Object.getOwnPropertyDescriptor(other.HTMLElement.prototype, "onclick")
+        .set.call(notElement, null);
+    }),
+    outcome(() => { Reflect.set(new other.Text("foo"), "data", "foo", notText); }),
+    outcome(() => { new Proxy(other.document, {}).title = ""; }),
+    outcome(() => { Object.create(element).click(); }),
+    outcome(() => { other.document.querySelector.call(notDocument, "*"); }),
+    outcome(() => { Reflect.apply(text.remove, notText, []); }),
+    outcome(() => {
+      new Proxy(other.document.createElement("a"), {})
+        .addEventListener("foo", () => {});
+    })
+  ].join("|");
+})()
+"#,
+        )
+        .expect("cross-realm receiver brand checks should evaluate");
+
+    assert_eq!(
+        result,
+        std::iter::repeat_n("TypeError:true:false", 12)
+            .collect::<Vec<_>>()
+            .join("|")
+    );
+}
+
+#[test]
 fn document_compat_mode_reflects_parser_quirks_mode() {
     let cases = [
         (
@@ -4389,13 +4472,24 @@ fn global_event_handler_accessors_live_on_owner_prototypes() {
                 assert(descriptor.configurable === true, `${name} configurable`);
                 return descriptor;
               };
+              const throwsTypeError = callback => {
+                try {
+                  callback();
+                  return false;
+                } catch (error) {
+                  return error instanceof TypeError;
+                }
+              };
 
               const click = accessor(HTMLElement.prototype, "onclick");
               const submit = accessor(HTMLElement.prototype, "onsubmit");
               const load = accessor(HTMLElement.prototype, "onload");
-              assert(HTMLElement.prototype.onclick === null, "HTMLElement.prototype.onclick default");
-              assert(HTMLElement.prototype.onsubmit === null, "HTMLElement.prototype.onsubmit default");
-              assert(HTMLElement.prototype.onload === null, "HTMLElement.prototype.onload default");
+              assert(throwsTypeError(() => click.get.call(HTMLElement.prototype)),
+                "HTMLElement.prototype.onclick receiver brand");
+              assert(throwsTypeError(() => submit.get.call(HTMLElement.prototype)),
+                "HTMLElement.prototype.onsubmit receiver brand");
+              assert(throwsTypeError(() => load.get.call(HTMLElement.prototype)),
+                "HTMLElement.prototype.onload receiver brand");
               assert(Object.getOwnPropertyDescriptor(HTMLBodyElement.prototype, "onload").get !== load.get,
                 "HTMLBodyElement.onload should keep body/window override");
 

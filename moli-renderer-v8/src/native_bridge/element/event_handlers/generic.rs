@@ -333,7 +333,7 @@ pub(crate) fn node_event_handler_getter_function<'s>(
     let object = args.this();
     let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object_or_detached(scope, object)
     else {
-        rv.set_null();
+        throw_type_error(scope, "Illegal invocation");
         return;
     };
     if let Some(event_type) = event_handler_event_type(&handler_name)
@@ -504,6 +504,10 @@ pub(crate) fn node_event_handler_setter_function<'s>(
     let object = args.this();
     let value = args.get(0);
     let runtime_and_handle = node_runtime_and_handle_from_object_or_detached(scope, object).ok();
+    if runtime_and_handle.is_none() {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    }
     if let Some(event_type) = event_handler_event_type(&handler_name)
         && let Some((_runtime_ptr, handle)) = runtime_and_handle
     {

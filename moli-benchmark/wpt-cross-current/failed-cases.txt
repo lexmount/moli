@@ -3680,7 +3680,6 @@ webidl/current-realm.html
 webidl/ecmascript-binding/constructors.html
 webidl/ecmascript-binding/default-toJSON-cross-realm.html
 webidl/ecmascript-binding/global-object-implicit-this-value-cross-realm.html
-webidl/ecmascript-binding/invalid-this-value-cross-realm.html
 webidl/ecmascript-binding/window-named-properties-object.html
 webrtc-identity/RTCPeerConnection-constructor.html
 webrtc-priority/RTCPeerConnection-ondatachannel.html

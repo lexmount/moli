@@ -3602,7 +3602,7 @@ fn webidl_attribute_setters_preserve_undefined_and_replaceable_semantics() {
   return JSON.stringify({
     animation: [animation.id, outcome(() => animationId.set.call({}))].join(","),
     document: [outcome(() => bodySetter.call({})), detached.fullscreenEnabled].join(","),
-    lenient: [outcome(() => mouseEnter.set.call({})), element.onmouseenter].join(","),
+    eventHandler: [outcome(() => mouseEnter.set.call({})), element.onmouseenter].join(","),
     replaceableShape,
     replacements: [window.scrollX, window.screenLeft, window.screenTop].join(","),
     failures: [selfFailure, screenFailure].join(",")
@@ -3614,7 +3614,7 @@ fn webidl_attribute_setters_preserve_undefined_and_replaceable_semantics() {
 
     assert_eq!(
         result,
-        r#"{"animation":"undefined,TypeError","document":"TypeError,false","lenient":"return,","replaceableShape":true,"replacements":",,foo","failures":"TypeError,TypeError"}"#
+        r#"{"animation":"undefined,TypeError","document":"TypeError,false","eventHandler":"TypeError,","replaceableShape":true,"replacements":",,foo","failures":"TypeError,TypeError"}"#
     );
 }
 
