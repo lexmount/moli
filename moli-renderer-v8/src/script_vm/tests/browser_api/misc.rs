@@ -3078,6 +3078,57 @@ fn blob_slice_uses_receiver_realm_after_method_realm_is_detached() {
 }
 
 #[test]
+fn removing_child_frame_revokes_only_its_blob_object_urls() {
+    let mut vm = new_parsed_test_vm(
+        "https://blob-url-child-lifetime.test/",
+        "<!doctype html><html><body></body></html>",
+    );
+
+    let urls = vm
+        .eval(
+            r#"
+(() => {
+  const parentUrl = URL.createObjectURL(new Blob(["parent"]));
+  const frame = document.createElement("iframe");
+  document.body.appendChild(frame);
+  const childUrl = frame.contentWindow.URL.createObjectURL(
+    new frame.contentWindow.Blob(["child"])
+  );
+  globalThis.__blobUrlLifetimeFrame = frame;
+  return `${parentUrl}|${childUrl}`;
+})()
+"#,
+        )
+        .expect("child Blob object URL setup should evaluate");
+    let (parent_url, child_url) = urls
+        .split_once('|')
+        .expect("setup should return both object URLs");
+
+    assert_eq!(
+        crate::blob::object_url_body_and_type(parent_url),
+        Some(("parent".to_owned(), String::new()))
+    );
+    assert_eq!(
+        crate::blob::object_url_body_and_type(child_url),
+        Some(("child".to_owned(), String::new()))
+    );
+
+    vm.eval("globalThis.__blobUrlLifetimeFrame.remove()")
+        .expect("child frame removal should evaluate");
+    vm.drain_pending_child_frame_work_for_test();
+
+    assert_eq!(
+        crate::blob::object_url_body_and_type(parent_url),
+        Some(("parent".to_owned(), String::new())),
+        "removing a child frame must preserve the parent realm's object URLs"
+    );
+    assert!(
+        crate::blob::object_url_body_and_type(child_url).is_none(),
+        "removing a child frame must revoke object URLs created by its realm"
+    );
+}
+
+#[test]
 fn blob_stream_is_native_readable_stream_and_response_consumes_bytes() {
     let mut vm = new_storage_test_vm("https://blob-stream-reader.test/");
 

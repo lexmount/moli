@@ -5,6 +5,7 @@ FileAPI/FileReader/workers.html
 FileAPI/blob/Blob-constructor-endings.html
 FileAPI/file/File-constructor-endings.html
 FileAPI/filelist-section/filelist.html
+FileAPI/url/url-lifetime.html
 IndexedDB/database-names-by-origin.html
 IndexedDB/idbfactory-origin-isolation.html
 IndexedDB/idbindex-cross-realm-methods.html

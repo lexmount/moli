@@ -366,7 +366,9 @@ pub(super) fn create_object_url_for_object<'s>(
 ) -> Option<String> {
     let blob_id = blob_id_from_object(scope, object)?;
     let owner_id = current_resource_owner_id(scope);
-    blob_store().create_object_url(owner_id, blob_id, origin)
+    let lifetime_id = native_bridge::current_runtime_observable_context_token(scope)
+        .map(native_bridge::RuntimeObservableContextToken::as_u64);
+    blob_store().create_object_url_with_lifetime(owner_id, lifetime_id, blob_id, origin)
 }
 
 pub(super) fn revoke_object_url(url: &str) {
@@ -484,6 +486,12 @@ fn blob_mime_type(blob_id: BlobId) -> Option<String> {
 
 pub(crate) fn cleanup_owner_resources(owner_id: ResourceOwnerId) {
     blob_store().cleanup_owner_resources(owner_id);
+}
+
+pub(crate) fn cleanup_object_urls_for_context(
+    context_token: native_bridge::RuntimeObservableContextToken,
+) -> usize {
+    blob_store().cleanup_object_url_lifetime(context_token.as_u64())
 }
 
 fn release_blob_wrapper_ref(blob_id: BlobId) {

@@ -422,6 +422,8 @@ impl JsContextHost {
         &mut self,
         context_token: RuntimeObservableContextToken,
     ) -> usize {
+        let revoked_blob_object_url_count =
+            crate::blob::cleanup_object_urls_for_context(context_token);
         crate::observer_runtime::retire_context_token(self, context_token);
         let indexed_db_retirement = self.retire_indexed_db_context(context_token);
         let retired_indexed_db_connections = indexed_db_retirement.retired_connections.len();
@@ -449,13 +451,15 @@ impl JsContextHost {
                 ?context_token,
                 retired_count,
                 retired_indexed_db_connections,
+                revoked_blob_object_url_count,
                 "retired LocalWindow bindings with destroyed V8 execution context"
             );
-        } else if retired_indexed_db_connections > 0 {
+        } else if retired_indexed_db_connections > 0 || revoked_blob_object_url_count > 0 {
             tracing::debug!(
                 ?context_token,
                 retired_indexed_db_connections,
-                "retired IndexedDB state with destroyed V8 execution context"
+                revoked_blob_object_url_count,
+                "retired context-owned state with destroyed V8 execution context"
             );
         }
         retired_count
@@ -473,6 +477,8 @@ impl JsContextHost {
         &mut self,
         context_token: RuntimeObservableContextToken,
     ) -> usize {
+        let revoked_blob_object_url_count =
+            crate::blob::cleanup_object_urls_for_context(context_token);
         crate::observer_runtime::retire_context_token(self, context_token);
         let retired_realm_count = self
             .window_execution_context_realms
@@ -480,6 +486,7 @@ impl JsContextHost {
         tracing::debug!(
             ?context_token,
             retired_realm_count,
+            revoked_blob_object_url_count,
             "retired isolated Window realm registration"
         );
         retired_realm_count

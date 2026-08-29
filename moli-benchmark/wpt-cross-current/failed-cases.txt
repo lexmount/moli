@@ -1,5 +1,4 @@
 FileAPI/idlharness.html
-FileAPI/url/url-lifetime.html
 acid/acid3/numbered-tests.html
 client-hints/service-workers/intercept-request.https.html
 client-hints/service-workers/new-request.https.html
