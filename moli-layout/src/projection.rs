@@ -27,6 +27,7 @@ pub(crate) struct LayoutPassPhaseMetrics {
     pub(crate) scrollbar_feedback_elapsed: std::time::Duration,
     pub(crate) embedded_frame_elapsed: std::time::Duration,
     pub(crate) numeric_layout_pass_count: usize,
+    pub(crate) numeric_feedback_invalidated_node_count: usize,
 }
 
 pub(crate) fn finish_layout_pass<N>(
@@ -101,6 +102,8 @@ where
         embedded_frame_elapsed: phase_metrics.embedded_frame_elapsed,
         projection_elapsed: projection_started.elapsed(),
         numeric_layout_pass_count: phase_metrics.numeric_layout_pass_count,
+        numeric_feedback_invalidated_node_count: phase_metrics
+            .numeric_feedback_invalidated_node_count,
         box_count: projection.boxes.len(),
         fragment_count: projection.fragments.len(),
         paint_operation_count: paint_snapshot

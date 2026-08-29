@@ -6,7 +6,9 @@ use crate::{
     inline::prepare_inline_contexts,
     list::prepare_list_markers,
     projection::{finish_layout_pass, overflowing_axes},
-    taffy_tree::compute_world_layout,
+    taffy_tree::{
+        compute_prepared_world_layout, invalidate_scrollbar_feedback_layout, prepare_world_layout,
+    },
 };
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -295,6 +297,8 @@ where
             scrollbar_feedback_elapsed: numeric_metrics.scrollbar_feedback_elapsed,
             embedded_frame_elapsed,
             numeric_layout_pass_count: numeric_metrics.pass_count,
+            numeric_feedback_invalidated_node_count: numeric_metrics
+                .feedback_invalidated_node_count,
         },
     )
 }
@@ -310,6 +314,7 @@ struct NumericLayoutMetrics {
     followup_passes_elapsed: Duration,
     overflow_detection_elapsed: Duration,
     scrollbar_feedback_elapsed: Duration,
+    feedback_invalidated_node_count: usize,
 }
 
 fn compute_world_layout_with_scrollbars<N>(
@@ -335,13 +340,16 @@ where
     }
 
     let mut metrics = NumericLayoutMetrics::default();
+    let phase_started = Instant::now();
+    let mut prepared = prepare_world_layout(world, viewport);
+    let preparation_elapsed = phase_started.elapsed();
     loop {
         metrics.pass_count = metrics.pass_count.saturating_add(1);
         let phase_started = Instant::now();
-        compute_world_layout(world, viewport);
+        compute_prepared_world_layout(world, viewport, &mut prepared);
         let elapsed = phase_started.elapsed();
         if metrics.pass_count == 1 {
-            metrics.first_pass_elapsed = elapsed;
+            metrics.first_pass_elapsed = preparation_elapsed + elapsed;
         } else {
             metrics.followup_passes_elapsed += elapsed;
         }
@@ -350,12 +358,13 @@ where
         metrics.overflow_detection_elapsed += phase_started.elapsed();
         let phase_started = Instant::now();
         let (root_overflow_x, root_overflow_y) = overflow[root];
-        let mut changed = world
+        let mut viewport_changed = world
             .viewport_scroll_policy
             .reveal_auto_scrollbar(LayoutScrollbarAxis::Horizontal, root_overflow_x);
-        changed |= world
+        viewport_changed |= world
             .viewport_scroll_policy
             .reveal_auto_scrollbar(LayoutScrollbarAxis::Vertical, root_overflow_y);
+        let mut changed_boxes = Vec::new();
         for (index, ((overflow_x, overflow_y), layout_box)) in
             overflow.into_iter().zip(world.boxes.iter_mut()).enumerate()
         {
@@ -363,16 +372,26 @@ where
             if id == root_id || defining_body == Some(id) {
                 continue;
             }
-            changed |= layout_box.style.reveal_auto_scrollbar(
+            let mut box_changed = layout_box.style.reveal_auto_scrollbar(
                 LayoutScrollbarAxis::Horizontal,
                 false,
                 overflow_x,
             );
-            changed |= layout_box.style.reveal_auto_scrollbar(
+            box_changed |= layout_box.style.reveal_auto_scrollbar(
                 LayoutScrollbarAxis::Vertical,
                 false,
                 overflow_y,
             );
+            if box_changed {
+                changed_boxes.push(id);
+            }
+        }
+        let changed = viewport_changed || !changed_boxes.is_empty();
+        if changed {
+            metrics.feedback_invalidated_node_count =
+                metrics.feedback_invalidated_node_count.saturating_add(
+                    invalidate_scrollbar_feedback_layout(world, &changed_boxes, viewport_changed),
+                );
         }
         metrics.scrollbar_feedback_elapsed += phase_started.elapsed();
         if !changed {

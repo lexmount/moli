@@ -30,7 +30,54 @@ use crate::{
 // Blink stores box geometry in 1/64 CSS-pixel LayoutUnits.
 const LAYOUT_SUBPIXELS_PER_CSS_PIXEL: f32 = 64.0;
 
-pub(crate) fn compute_world_layout<N>(world: &mut LayoutWorld<N>, viewport: PaintViewport)
+pub(crate) struct PreparedWorldLayout {
+    positioned_static_placeholders: Vec<PositionedStaticPlaceholder>,
+    numeric_unrounded_layouts: Vec<Layout>,
+    numeric_viewport_layout: Layout,
+}
+
+impl PreparedWorldLayout {
+    fn restore_numeric_geometry<N>(&self, world: &mut LayoutWorld<N>)
+    where
+        N: Copy + Debug + Eq + Hash,
+    {
+        assert_eq!(
+            self.numeric_unrounded_layouts.len(),
+            world.boxes.len(),
+            "numeric feedback must not allocate layout boxes"
+        );
+        for (layout_box, layout) in world
+            .boxes
+            .iter_mut()
+            .zip(self.numeric_unrounded_layouts.iter().copied())
+        {
+            layout_box.unrounded_layout = layout;
+        }
+        world.viewport_layout.unrounded_layout = self.numeric_viewport_layout;
+    }
+
+    fn capture_numeric_geometry<N>(&mut self, world: &LayoutWorld<N>)
+    where
+        N: Copy + Debug + Eq + Hash,
+    {
+        self.numeric_unrounded_layouts.clear();
+        self.numeric_unrounded_layouts.extend(
+            world
+                .boxes
+                .iter()
+                .map(|layout_box| layout_box.unrounded_layout),
+        );
+        self.numeric_viewport_layout = world.viewport_layout.unrounded_layout;
+    }
+}
+
+/// Builds the stable numeric tree once for the entire scrollbar feedback
+/// transaction. In particular, static-position placeholders and table
+/// topology must not be recreated for every automatic-scrollbar iteration.
+pub(crate) fn prepare_world_layout<N>(
+    world: &mut LayoutWorld<N>,
+    viewport: PaintViewport,
+) -> PreparedWorldLayout
 where
     N: Copy + Debug + Eq + Hash,
 {
@@ -48,6 +95,22 @@ where
     world.viewport_layout.cache.clear();
     world.viewport_layout.unrounded_layout = Layout::with_order(0);
     world.viewport_layout.final_layout = Layout::with_order(0);
+    update_viewport_layout_style(world, viewport);
+    let positioned_static_placeholders = prepare_layout_tree(world);
+    prepare_table_layout_trees(world);
+    let mut prepared = PreparedWorldLayout {
+        positioned_static_placeholders,
+        numeric_unrounded_layouts: Vec::with_capacity(world.boxes.len()),
+        numeric_viewport_layout: Layout::with_order(0),
+    };
+    prepared.capture_numeric_geometry(world);
+    prepared
+}
+
+fn update_viewport_layout_style<N>(world: &mut LayoutWorld<N>, viewport: PaintViewport)
+where
+    N: Copy + Debug + Eq + Hash,
+{
     let viewport_scrollbar_insets = world.viewport_scroll_policy.scrollbar_layout_insets();
     world.viewport_layout.style = Style {
         display: Display::Block,
@@ -77,8 +140,24 @@ where
         },
         ..Style::default()
     };
-    let positioned_static_placeholders = prepare_layout_tree(world);
-    prepare_table_layout_trees(world);
+}
+
+/// Computes one numeric scrollbar-feedback iteration over the prepared tree.
+///
+/// Post-layout adapters mutate `unrounded_layout`. Before another iteration,
+/// restore the Taffy-owned geometry captured immediately after the preceding
+/// root computation. Cache-hit subtrees then retain valid local geometry,
+/// while invalidated ancestors can safely reposition them. This is the same
+/// local-relayout boundary Blink uses when a box's scrollbar state changes.
+pub(crate) fn compute_prepared_world_layout<N>(
+    world: &mut LayoutWorld<N>,
+    viewport: PaintViewport,
+    prepared: &mut PreparedWorldLayout,
+) where
+    N: Copy + Debug + Eq + Hash,
+{
+    prepared.restore_numeric_geometry(world);
+    update_viewport_layout_style(world, viewport);
 
     let root = world.viewport_taffy_node();
     compute_root_layout(
@@ -89,8 +168,9 @@ where
             height: AvailableSpace::Definite(viewport.css_height as f32),
         },
     );
+    prepared.capture_numeric_geometry(world);
     physicalize_vertical_block_flow(world);
-    finish_block_positioned_layout(world, viewport, &positioned_static_placeholders);
+    finish_block_positioned_layout(world, viewport, &prepared.positioned_static_placeholders);
     finish_inline_positioned_layout(world, viewport);
     finish_form_control_contents(world);
     finish_outside_list_markers(world);
@@ -107,6 +187,47 @@ where
     for marker in outside_markers {
         round_layout_to_css_subpixels(world, marker.to_taffy());
     }
+}
+
+/// Invalidates exactly the boxes whose style changed and their numeric
+/// ancestors. Descendants and sibling subtrees retain their Taffy entries; a
+/// changed input naturally misses the keyed cache, while an unchanged input
+/// can reuse both its output and the restored local geometry.
+pub(crate) fn invalidate_scrollbar_feedback_layout<N>(
+    world: &mut LayoutWorld<N>,
+    changed_boxes: &[LayoutBoxId],
+    viewport_changed: bool,
+) -> usize
+where
+    N: Copy + Debug + Eq + Hash,
+{
+    let mut invalidated = vec![false; world.boxes.len()];
+    if viewport_changed {
+        invalidated[world.root.index()] = true;
+    }
+    for changed in changed_boxes {
+        let mut current = Some(*changed);
+        while let Some(id) = current {
+            if invalidated[id.index()] {
+                break;
+            }
+            invalidated[id.index()] = true;
+            current = world.boxes[id.index()].layout_parent;
+        }
+    }
+    let invalidated_count = invalidated
+        .iter()
+        .filter(|invalidated| **invalidated)
+        .count();
+    for (layout_box, invalidated) in world.boxes.iter_mut().zip(invalidated) {
+        if invalidated {
+            layout_box.cache.clear();
+        }
+    }
+    if viewport_changed || !changed_boxes.is_empty() {
+        world.viewport_layout.cache.clear();
+    }
+    invalidated_count
 }
 
 /// Converts Taffy's horizontal block-start anchor into the physical edge used

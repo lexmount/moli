@@ -543,6 +543,11 @@ fn auto_scrollbar_feedback_reveals_the_perpendicular_axis() {
         .insert(2, fixed_size(LayoutDisplay::Block, 200.0, 200.0));
 
     let output = build(&source, &mut styles);
+    assert_eq!(output.metrics.numeric_layout_pass_count, 3);
+    assert_eq!(
+        output.metrics.numeric_feedback_invalidated_node_count, 4,
+        "each newly revealed axis invalidates only the scroller-to-root path"
+    );
     let metrics = output.element_metrics_for_source(1).unwrap();
     assert_eq!(
         metrics.client_size,
@@ -556,6 +561,62 @@ fn auto_scrollbar_feedback_reveals_the_perpendicular_axis() {
     let extent = output.scroll_extent(box_id).unwrap();
     assert!(extent.horizontal_scrollbar.is_some());
     assert!(extent.vertical_scrollbar.is_some());
+}
+
+#[test]
+fn scrollbar_feedback_prepares_static_position_placeholders_once() {
+    let source = Source(vec![
+        Node::element("root", vec![1]),
+        Node::element("scroller", vec![2, 3]),
+        Node::element("content", Vec::new()),
+        Node::element("absolute", Vec::new()),
+    ]);
+    let mut styles = Styles::default();
+    styles
+        .0
+        .insert(0, fixed_size(LayoutDisplay::Block, 320.0, 240.0));
+    styles.0.insert(
+        1,
+        resolved(
+            LayoutDisplay::Block,
+            Style {
+                size: Size {
+                    width: length(200.0),
+                    height: length(100.0),
+                },
+                overflow: Point {
+                    x: Overflow::Scroll,
+                    y: Overflow::Scroll,
+                },
+                ..Style::default()
+            },
+        ),
+    );
+    styles
+        .0
+        .insert(2, fixed_size(LayoutDisplay::Block, 200.0, 200.0));
+    styles.0.insert(
+        3,
+        resolved(
+            LayoutDisplay::Block,
+            Style {
+                position: Position::Absolute,
+                size: Size {
+                    width: length(20.0),
+                    height: length(20.0),
+                },
+                ..Style::default()
+            },
+        ),
+    );
+
+    let output = build(&source, &mut styles);
+    assert_eq!(output.metrics.numeric_layout_pass_count, 3);
+    assert_eq!(
+        output.metrics.box_count, 5,
+        "four source boxes plus one stable static-position placeholder"
+    );
+    assert!(output.source_output(3).is_some());
 }
 
 #[test]

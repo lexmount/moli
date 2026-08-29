@@ -49,6 +49,9 @@ pub struct LayoutPassMetrics {
     pub embedded_frame_elapsed: Duration,
     pub projection_elapsed: Duration,
     pub numeric_layout_pass_count: usize,
+    /// Number of box-cache entries explicitly invalidated across automatic
+    /// scrollbar feedback iterations. Unchanged subtrees stay cacheable.
+    pub numeric_feedback_invalidated_node_count: usize,
     pub box_count: usize,
     pub fragment_count: usize,
     pub paint_operation_count: usize,

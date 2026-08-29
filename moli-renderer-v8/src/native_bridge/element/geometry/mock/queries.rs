@@ -156,6 +156,7 @@ pub(crate) fn answer_queries(
             embedded_frame_elapsed: Duration::ZERO,
             projection_elapsed: Duration::ZERO,
             numeric_layout_pass_count: 1,
+            numeric_feedback_invalidated_node_count: 0,
             box_count: 0,
             fragment_count: 0,
             paint_operation_count: 0,

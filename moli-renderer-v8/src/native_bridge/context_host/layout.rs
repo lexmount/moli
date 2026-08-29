@@ -267,6 +267,8 @@ impl JsContextHost {
                 embedded_frame_us = metrics.embedded_frame_elapsed.as_micros(),
                 projection_us = metrics.projection_elapsed.as_micros(),
                 numeric_layout_pass_count = metrics.numeric_layout_pass_count,
+                numeric_feedback_invalidated_node_count = metrics
+                    .numeric_feedback_invalidated_node_count,
                 box_count = metrics.box_count,
                 fragment_count = metrics.fragment_count,
                 paint_operation_count = metrics.paint_operation_count,
