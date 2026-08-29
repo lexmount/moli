@@ -1,6 +1,10 @@
 use super::super::super::{
     document,
-    node::{node_runtime_and_handle_from_args, node_runtime_and_handle_from_args_or_detached},
+    node::{
+        node_runtime_and_handle_from_args, node_runtime_and_handle_from_args_or_detached,
+        receiver_has_detached_state, require_element_method_receiver,
+        throw_incompatible_method_receiver,
+    },
     throw_dom_exception,
 };
 use super::super::is_disabled_form_control;
@@ -14,9 +18,16 @@ pub(in crate::native_bridge) fn node_click_callback<'s>(
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_args(scope, &args) else {
-        document::detached_click_method_callback(scope, args, rv);
+        if receiver_has_detached_state(scope, args.this()) {
+            document::detached_click_method_callback(scope, args, rv);
+            return;
+        }
+        throw_incompatible_method_receiver(scope, "HTMLElement", "click");
         return;
     };
+    if !require_element_method_receiver(scope, unsafe { &*runtime_ptr }, handle, "click") {
+        return;
+    }
     let outcome = activate_handle_via_synthetic_click(scope, runtime_ptr, handle, 0.0, 0.0, 0, 0);
     if let Some(download) = outcome.pending_download {
         unsafe { &mut *runtime_ptr }.record_pending_download_activation(download);
