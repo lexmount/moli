@@ -531,6 +531,11 @@ pub(in crate::context_bootstrap) fn build_constructor_template_for_profile<'s>(
         ConstructorKind::DomRectReadOnly => {
             super::super::dom_rect::build_dom_rect_readonly_constructor_template(scope)
         }
+        ConstructorKind::DomRectReadOnly => v8::FunctionTemplate::builder(
+            super::super::dom_rect::dom_rect_readonly_constructor_callback,
+        )
+        .length(0)
+        .build(scope),
         ConstructorKind::DomRect => {
             super::super::dom_rect::build_dom_rect_constructor_template(scope)
         }
