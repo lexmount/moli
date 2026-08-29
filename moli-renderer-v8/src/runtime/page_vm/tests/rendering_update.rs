@@ -2103,6 +2103,75 @@ document.getElementById('masked').style.setProperty('mask-repeat','no-repeat');
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn screenshot_culling_keeps_outset_ink_that_reaches_the_viewport() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/paint-culling-outsets.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0;padding:0;background:white;height:220px}
+.case{position:absolute;width:20px;height:10px;background:transparent}
+#shadow{left:5px;top:60px;box-shadow:0 -15px 0 0 rgb(255,0,0)}
+#outline{left:40px;top:57px;outline:5px solid rgb(0,128,0);outline-offset:5px}
+#filtered{left:75px;top:55px;width:10px;background:rgb(0,0,255);filter:blur(8px)}
+#discarded{left:5px;top:170px;background:rgb(255,255,0)}
+</style>`;
+document.body.innerHTML = '<div id=shadow class=case></div><div id=outline class=case></div><div id=filtered class=case></div><div id=discarded class=case></div>';
+'installed'
+"#,
+        )?;
+        let snapshot = page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(100, 50, 1.0))?
+            .expect("culling fixture must retain a layout root");
+
+        assert!(snapshot.fragments.iter().all(|fragment| {
+            !matches!(
+                fragment,
+                moli_layout::PaintFragment::Fill {
+                    brush: moli_layout::PaintBrush::Solid(color),
+                    ..
+                } if *color == moli_layout::PaintColor::new(1.0, 1.0, 0.0, 1.0)
+            )
+        }));
+        let mut depth = 0usize;
+        for fragment in &snapshot.fragments {
+            match fragment {
+                moli_layout::PaintFragment::PushLayer { .. }
+                | moli_layout::PaintFragment::PushClip { .. } => depth += 1,
+                moli_layout::PaintFragment::PopLayer => {
+                    depth = depth.checked_sub(1).expect("paint stack underflow")
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(depth, 0, "culled stacking contexts must remain balanced");
+
+        let image = moli_paint::raster_snapshot(&snapshot)?;
+        let pixel = |x: u32, y: u32| {
+            let index = ((y * image.width + x) * 4) as usize;
+            <[u8; 4]>::try_from(&image.rgba[index..index + 4]).expect("RGBA pixel")
+        };
+        assert_eq!(pixel(10, 47), [255, 0, 0, 255]);
+        assert_eq!(pixel(45, 48), [0, 128, 0, 255]);
+        let filtered = pixel(80, 48);
+        assert!(
+            filtered[2] > filtered[0] && filtered[2] > filtered[1],
+            "blurred blue ink should reach the capture from below it: {filtered:?}"
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("outset paint culling fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn screenshot_resolves_css_gradient_domains_hints_and_interpolation_like_chromium() {
     run_page_vm_async_test(async move {
         let loader =

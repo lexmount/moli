@@ -107,7 +107,7 @@ pub(super) fn project_background_color<N>(
     paint_space: PaintSpace,
     color: PaintColor,
     snapshot: &mut PaintSnapshot,
-    text_clip_mask: &impl Fn(&mut PaintSnapshot),
+    text_clip_mask: &mut impl FnMut(&mut PaintSnapshot),
 ) where
     N: Copy + Debug + Eq + Hash,
 {
@@ -156,7 +156,7 @@ pub(super) fn project_background_layers<N>(
     areas: BoxAreas,
     paint_space: PaintSpace,
     snapshot: &mut PaintSnapshot,
-    text_clip_mask: &impl Fn(&mut PaintSnapshot),
+    text_clip_mask: &mut impl FnMut(&mut PaintSnapshot),
 ) where
     N: Copy + Debug + Eq + Hash,
 {
@@ -310,7 +310,7 @@ fn finish_background_text_clip_layer(
     clip: PaintShape,
     transform: LayoutTransform2D,
     snapshot: &mut PaintSnapshot,
-    text_clip_mask: &impl Fn(&mut PaintSnapshot),
+    text_clip_mask: &mut impl FnMut(&mut PaintSnapshot),
 ) {
     snapshot.push_fragment(PaintFragment::PushLayer {
         opacity: 1.0,

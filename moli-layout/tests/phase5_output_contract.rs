@@ -515,6 +515,209 @@ fn non_viewport_captures_omit_only_the_root_scrollbars() {
 }
 
 #[test]
+fn viewport_paint_culls_offscreen_events_without_losing_transformed_or_fixed_content() {
+    let source = Source(vec![
+        Node::element("root", vec![1, 2, 3, 4, 5]),
+        Node::element("visible", Vec::new()),
+        Node::element("deep", Vec::new()),
+        Node::element("transformed-into-view", Vec::new()),
+        Node::element("viewport-fixed", Vec::new()),
+        Node::element("offscreen-context", vec![6]),
+        Node::element("offscreen-context-child", Vec::new()),
+    ]);
+    let mut styles = Styles::default();
+    styles.0.insert(
+        0,
+        fixed_size(LayoutDisplay::Block, 120.0, 800.0).with_position(LayoutPosition::Relative),
+    );
+    let absolute = |top: f32, color: PaintColor| {
+        ResolvedLayoutStyle::synthetic(
+            LayoutDisplay::Block,
+            Style {
+                position: Position::Absolute,
+                inset: Rect {
+                    left: length(10.0),
+                    right: LengthPercentageAuto::auto(),
+                    top: length(top),
+                    bottom: LengthPercentageAuto::auto(),
+                },
+                size: Size {
+                    width: length(30.0),
+                    height: length(20.0),
+                },
+                ..Style::default()
+            },
+            color,
+        )
+        .with_position(LayoutPosition::Absolute)
+    };
+    let red = PaintColor::new(1.0, 0.0, 0.0, 1.0);
+    let blue = PaintColor::new(0.0, 0.0, 1.0, 1.0);
+    let green = PaintColor::new(0.0, 1.0, 0.0, 1.0);
+    let magenta = PaintColor::new(1.0, 0.0, 1.0, 1.0);
+    let yellow = PaintColor::new(1.0, 1.0, 0.0, 1.0);
+    styles.0.insert(1, absolute(10.0, red));
+    styles.0.insert(2, absolute(500.0, blue));
+    styles.0.insert(
+        3,
+        absolute(500.0, green).with_2d_transform(LayoutTransform2D::translation(0.0, -480.0)),
+    );
+    styles.0.insert(
+        4,
+        ResolvedLayoutStyle::synthetic(
+            LayoutDisplay::Block,
+            Style {
+                position: Position::Absolute,
+                inset: Rect {
+                    left: length(60.0),
+                    right: LengthPercentageAuto::auto(),
+                    top: length(30.0),
+                    bottom: LengthPercentageAuto::auto(),
+                },
+                size: Size {
+                    width: length(30.0),
+                    height: length(20.0),
+                },
+                ..Style::default()
+            },
+            magenta,
+        )
+        .with_position(LayoutPosition::Fixed),
+    );
+    styles.0.insert(
+        5,
+        absolute(700.0, PaintColor::TRANSPARENT).with_opacity(0.5),
+    );
+    styles.0.insert(
+        6,
+        ResolvedLayoutStyle::synthetic(
+            LayoutDisplay::Block,
+            Style {
+                size: Size {
+                    width: length(30.0),
+                    height: length(20.0),
+                },
+                ..Style::default()
+            },
+            yellow,
+        ),
+    );
+
+    let viewport = build_with_request(
+        &source,
+        &mut styles,
+        LayoutPassRequest::with_paint(LayoutViewport::new(120, 100, 1.0), LayoutFlushReason::Test),
+    );
+    let colors = viewport
+        .paint_snapshot()
+        .expect("viewport paint")
+        .fragments
+        .iter()
+        .filter_map(PaintFragment::solid_fill)
+        .map(|(_, color, _)| color)
+        .collect::<Vec<_>>();
+    assert!(colors.contains(&red));
+    assert!(
+        colors.contains(&green),
+        "the CSS transform moves this box into view"
+    );
+    assert!(
+        colors.contains(&magenta),
+        "fixed content is tested in viewport space"
+    );
+    assert!(!colors.contains(&blue));
+    assert!(!colors.contains(&yellow));
+    assert!(viewport.metrics.paint_event_count > 0);
+    assert!(viewport.metrics.paint_culled_event_count > 0);
+    assert!(
+        viewport.metrics.paint_culled_event_count < viewport.metrics.paint_event_count,
+        "visible paint must remain after culling"
+    );
+    assert_balanced_paint_stack(&viewport.paint_snapshot().expect("viewport paint").fragments);
+
+    let full_document = build_with_request(
+        &source,
+        &mut styles,
+        LayoutPassRequest::with_capture(
+            LayoutViewport::new(120, 100, 1.0),
+            LayoutFlushReason::Test,
+            PaintCaptureRequest::full_document(),
+        ),
+    );
+    let full_colors = full_document
+        .paint_snapshot()
+        .expect("full-document paint")
+        .fragments
+        .iter()
+        .filter_map(PaintFragment::solid_fill)
+        .map(|(_, color, _)| color)
+        .collect::<Vec<_>>();
+    assert!(full_colors.contains(&blue));
+    assert!(full_colors.contains(&yellow));
+    assert!(
+        full_document.metrics.paint_culled_event_count < viewport.metrics.paint_culled_event_count,
+        "the larger capture should discard fewer paint events"
+    );
+
+    let deep_clip = build_with_request(
+        &source,
+        &mut styles,
+        LayoutPassRequest::with_capture(
+            LayoutViewport::new(120, 100, 1.0),
+            LayoutFlushReason::Test,
+            PaintCaptureRequest::page_clip(LayoutRect::new(0.0, 490.0, 120.0, 40.0), 1.0),
+        ),
+    );
+    let clip_colors = deep_clip
+        .paint_snapshot()
+        .expect("page clip paint")
+        .fragments
+        .iter()
+        .filter_map(PaintFragment::solid_fill)
+        .map(|(_, color, _)| color)
+        .collect::<Vec<_>>();
+    assert!(clip_colors.contains(&blue));
+    assert!(!clip_colors.contains(&red));
+    assert!(!clip_colors.contains(&green));
+}
+
+#[test]
+fn viewport_paint_skips_final_inline_lines_outside_the_capture() {
+    const LONG_TEXT: &str = "one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty";
+    let source = Source(vec![
+        Node::element("root", vec![1]),
+        Node::text("long-text", LONG_TEXT),
+    ]);
+    let mut styles = Styles::default();
+    styles.0.insert(
+        0,
+        resolved(
+            LayoutDisplay::Block,
+            Style {
+                size: Size {
+                    width: length(80.0),
+                    height: Dimension::auto(),
+                },
+                ..Style::default()
+            },
+        ),
+    );
+
+    let output = build_with_request(
+        &source,
+        &mut styles,
+        LayoutPassRequest::with_paint(LayoutViewport::new(100, 50, 1.0), LayoutFlushReason::Test),
+    );
+    assert!(output.metrics.paint_text_line_count > 10);
+    assert!(output.metrics.paint_culled_text_line_count > 0);
+    assert!(
+        output.metrics.paint_culled_text_line_count < output.metrics.paint_text_line_count,
+        "the first viewport lines must still paint"
+    );
+    assert!(output.paint_snapshot().is_some());
+}
+
+#[test]
 fn auto_scrollbar_feedback_reveals_the_perpendicular_axis() {
     let source = Source(vec![
         Node::element("root", vec![1]),

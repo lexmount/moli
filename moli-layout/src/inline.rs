@@ -276,7 +276,28 @@ pub(crate) struct InlineFragments {
 pub(crate) struct InlineLineFragment {
     pub(crate) line_index: usize,
     pub(crate) rect: PaintRect,
+    /// Conservative glyph/decoration/shadow ink used only by capture culling.
+    /// CSSOM line geometry continues to use `rect`.
+    pub(crate) paint_bounds: InlinePaintBounds,
     pub(crate) baseline: f32,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) enum InlinePaintBounds {
+    #[default]
+    Empty,
+    Bounded(PaintRect),
+    Unbounded,
+}
+
+impl InlinePaintBounds {
+    fn include(&mut self, rect: PaintRect) {
+        *self = match *self {
+            Self::Empty => Self::Bounded(rect),
+            Self::Bounded(current) => Self::Bounded(current.union(rect)),
+            Self::Unbounded => Self::Unbounded,
+        };
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -306,6 +327,11 @@ pub(crate) fn build_inline_fragments(
     let mut fragments = InlineFragments::default();
     let mut box_fragments = HashMap::<(usize, usize), FragmentAccumulator>::new();
     let mut source_fragments = HashMap::<SourceFragmentKey, FragmentAccumulator>::new();
+    let style_paint_outsets = layout
+        .styles()
+        .iter()
+        .map(text_style_paint_outsets)
+        .collect::<Vec<_>>();
 
     for (line_index, line) in layout.lines().enumerate() {
         let metrics = line.metrics();
@@ -326,6 +352,12 @@ pub(crate) fn build_inline_fragments(
         fragments.lines.push(InlineLineFragment {
             line_index,
             rect: line_rect,
+            paint_bounds: context
+                .selection
+                .as_ref()
+                .map_or(InlinePaintBounds::Empty, |_| {
+                    InlinePaintBounds::Bounded(line_rect)
+                }),
             baseline: placement.map_or(metrics.baseline, |placement| placement.baseline),
         });
         if let Some(placement) = placement {
@@ -368,6 +400,24 @@ pub(crate) fn build_inline_fragments(
                     cluster.advance().max(0.0),
                     (ascent + descent).max(0.0),
                 );
+                if let Some(style) = layout.styles().get(style_index)
+                    && style.brush.paint
+                {
+                    // Parley exposes typographic cluster boxes rather than
+                    // exact outline bounds. A two-em guard is deliberately
+                    // conservative for italic/color-glyph overhang, while the
+                    // style sidecar adds arbitrary CSS shadow/decoration
+                    // displacement. This work happens once, alongside final
+                    // fragment materialization, not during every paint.
+                    let glyph_guard = run.font_size().max(0.0) * 2.0 + 1.0;
+                    let line = &mut fragments.lines[line_index];
+                    match style_paint_outsets.get(style_index).copied().flatten() {
+                        Some(outsets) => {
+                            line.paint_bounds.include(outsets.outset(rect, glyph_guard))
+                        }
+                        None => line.paint_bounds = InlinePaintBounds::Unbounded,
+                    }
+                }
                 for unit in overlapping_output_ranges(&context.text_units, &range) {
                     for ancestor in &unit.ancestors {
                         box_fragments
@@ -470,6 +520,63 @@ pub(crate) fn build_inline_fragments(
         })
         .collect();
     fragments
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct TextPaintOutsets {
+    top: f32,
+    right: f32,
+    bottom: f32,
+    left: f32,
+}
+
+impl TextPaintOutsets {
+    fn outset(self, rect: PaintRect, guard: f32) -> PaintRect {
+        let top = self.top.max(0.0) + guard;
+        let right = self.right.max(0.0) + guard;
+        let bottom = self.bottom.max(0.0) + guard;
+        let left = self.left.max(0.0) + guard;
+        PaintRect::new(
+            rect.x - left,
+            rect.y - top,
+            (rect.width + left + right).max(0.0),
+            (rect.height + top + bottom).max(0.0),
+        )
+    }
+}
+
+fn text_style_paint_outsets(style: &parley::layout::Style<TextBrush>) -> Option<TextPaintOutsets> {
+    let mut outsets = TextPaintOutsets::default();
+    for shadow in style
+        .brush
+        .shadows
+        .iter()
+        .filter(|shadow| shadow.color.alpha > 0.0)
+    {
+        if !shadow.offset.x.is_finite()
+            || !shadow.offset.y.is_finite()
+            || !shadow.blur_radius.is_finite()
+        {
+            return None;
+        }
+        let blur = shadow.blur_radius.max(0.0) * 4.0 + 1.0;
+        outsets.left = outsets.left.max(blur - shadow.offset.x);
+        outsets.right = outsets.right.max(blur + shadow.offset.x);
+        outsets.top = outsets.top.max(blur - shadow.offset.y);
+        outsets.bottom = outsets.bottom.max(blur + shadow.offset.y);
+    }
+
+    let decoration = style.brush.decoration;
+    if decoration.underline || decoration.overline || decoration.line_through {
+        // Normal decoration ink remains inside the guarded typographic box.
+        // Authored underline offsets can move it arbitrarily far away.
+        let displaced = decoration.underline_offset.unwrap_or_default().abs()
+            + decoration.thickness.unwrap_or(1.0).max(0.0) * 3.0
+            + 1.0;
+        outsets.top = outsets.top.max(displaced);
+        outsets.bottom = outsets.bottom.max(displaced);
+    }
+    Some(outsets)
 }
 
 /// Breaks a shared IFC text stream while preserving CSS `break-spaces`

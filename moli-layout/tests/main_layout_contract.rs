@@ -2,10 +2,11 @@ use std::collections::HashMap;
 
 use moli_layout::{
     DocumentLayoutServices, LayoutDisplay, LayoutElementCategory, LayoutElementSemantics,
-    LayoutError, LayoutNamespace, LayoutPosition, LayoutReplacedKind, LayoutSource,
-    LayoutSourceKind, LayoutStyleResolver, PaintBlendMode, PaintColor, PaintFragment, PaintRect,
-    PaintSnapshot, PaintViewport, ReplacedMetrics, ResolvedLayoutElementStyles,
-    ResolvedLayoutStyle, ScreenshotLayoutRequest, build_screenshot_snapshot,
+    LayoutError, LayoutFlushReason, LayoutNamespace, LayoutPassRequest, LayoutPosition,
+    LayoutReplacedKind, LayoutSource, LayoutSourceKind, LayoutStyleResolver, PaintBlendMode,
+    PaintCaptureRequest, PaintColor, PaintFragment, PaintRect, PaintSnapshot, PaintViewport,
+    ReplacedMetrics, ResolvedLayoutElementStyles, ResolvedLayoutStyle, ScreenshotLayoutRequest,
+    build_layout_pass, build_screenshot_snapshot,
 };
 use style::Atom;
 use taffy::{
@@ -1240,7 +1241,22 @@ fn block_margin_collapse_matches_parent_child_and_sibling_rules() {
         .0
         .insert(4, fixed_box(LayoutDisplay::Block, 800.0, 5.0, GREEN));
 
-    let snapshot = render(&source, &mut styles, PaintViewport::new(800, 100, 1.0));
+    // This test inspects all three painted boxes to validate margin collapse,
+    // so request the document surface instead of relying on offscreen viewport
+    // paint that capture culling now intentionally omits.
+    let snapshot = build_layout_pass(
+        &source,
+        &mut styles,
+        &mut DocumentLayoutServices::new(),
+        LayoutPassRequest::with_capture(
+            PaintViewport::new(800, 100, 1.0),
+            LayoutFlushReason::Test,
+            PaintCaptureRequest::full_document(),
+        ),
+    )
+    .unwrap()
+    .into_paint_snapshot()
+    .expect("full-document paint");
     assert_rect(
         solid_rect(&snapshot, RED),
         PaintRect::new(0.0, 30.0, 400.0, 20.0),

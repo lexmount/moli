@@ -54,6 +54,15 @@ pub struct LayoutPassMetrics {
     pub numeric_feedback_invalidated_node_count: usize,
     pub box_count: usize,
     pub fragment_count: usize,
+    /// Paint-order events considered for this capture before viewport culling.
+    pub paint_event_count: usize,
+    /// Paint-order events skipped because their conservative ink bounds did
+    /// not intersect the capture cull rect.
+    pub paint_culled_event_count: usize,
+    /// Final inline lines considered across foreground and text-mask paint.
+    pub paint_text_line_count: usize,
+    /// Inline lines whose conservative ink bounds missed the capture.
+    pub paint_culled_text_line_count: usize,
     pub paint_operation_count: usize,
     pub fallback_count: usize,
 }

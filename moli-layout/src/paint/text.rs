@@ -1,9 +1,10 @@
 use parley::{Affinity, Cursor, PositionedLayoutItem, Selection};
 
+use super::{PaintProjectionMetrics, cull::rects_intersect};
 use crate::{
     LayoutBox, LayoutBoxId, LayoutRect, LayoutTransform2D, PaintBrush, PaintColor, PaintFragment,
     PaintGlyph, PaintGlyphRun, PaintShape, PaintSnapshot, PaintTextDecoration, PaintTextShadow,
-    inline::{InlineFormattingContext, InlineObjectRole, InlineSelection},
+    inline::{InlineFormattingContext, InlineObjectRole, InlinePaintBounds, InlineSelection},
 };
 
 const SELECTION_COLOR: PaintColor = PaintColor::new(180.0 / 255.0, 213.0 / 255.0, 1.0, 1.0);
@@ -41,11 +42,15 @@ pub(super) enum TextClipMaskScope {
 pub(super) fn project_text<N>(
     layout_box: &LayoutBox<N>,
     transform: LayoutTransform2D,
+    local_cull: Option<LayoutRect>,
+    metrics: &mut PaintProjectionMetrics,
     snapshot: &mut PaintSnapshot,
 ) {
     project_text_phase(
         layout_box,
         transform,
+        local_cull,
+        metrics,
         snapshot,
         TextPaintPhase::Foreground,
         None,
@@ -61,12 +66,16 @@ pub(super) fn project_text<N>(
 pub(super) fn project_text_clip_mask<N>(
     layout_box: &LayoutBox<N>,
     transform: LayoutTransform2D,
+    local_cull: Option<LayoutRect>,
+    metrics: &mut PaintProjectionMetrics,
     snapshot: &mut PaintSnapshot,
     scope: TextClipMaskScope,
 ) {
     project_text_phase(
         layout_box,
         transform,
+        local_cull,
+        metrics,
         snapshot,
         TextPaintPhase::ClipMask,
         Some(scope),
@@ -76,6 +85,8 @@ pub(super) fn project_text_clip_mask<N>(
 fn project_text_phase<N>(
     layout_box: &LayoutBox<N>,
     transform: LayoutTransform2D,
+    local_cull: Option<LayoutRect>,
+    metrics: &mut PaintProjectionMetrics,
     snapshot: &mut PaintSnapshot,
     phase: TextPaintPhase,
     mask_scope: Option<TextClipMaskScope>,
@@ -97,12 +108,51 @@ fn project_text_phase<N>(
             origin_x,
             origin_y,
             transform,
+            local_cull,
             snapshot,
         );
     }
 
     let mut active_inline_boxes = Vec::new();
     for (line_index, line) in text_layout.lines().enumerate() {
+        metrics.text_line_count = metrics.text_line_count.saturating_add(1);
+        let line_is_culled =
+            local_cull.is_some_and(|cull| {
+                context.fragments.lines.get(line_index).is_some_and(|line| {
+                    match line.paint_bounds {
+                        InlinePaintBounds::Empty => true,
+                        InlinePaintBounds::Unbounded => false,
+                        InlinePaintBounds::Bounded(bounds) => {
+                            let bounds = LayoutRect::new(
+                                origin_x + bounds.x,
+                                origin_y + bounds.y,
+                                bounds.width,
+                                bounds.height,
+                            );
+                            !rects_intersect(bounds, cull)
+                        }
+                    }
+                })
+            });
+        if line_is_culled {
+            metrics.culled_text_line_count = metrics.culled_text_line_count.saturating_add(1);
+            // A background-clip:text replay tracks structural inline start/end
+            // markers across lines. Even when a line's glyph ink is culled,
+            // retain that tiny state transition so a later visible line uses
+            // the correct InlineBox mask scope.
+            if mask_scope.is_some() {
+                for item in line.items() {
+                    if let PositionedLayoutItem::InlineBox(positioned) = item {
+                        update_active_inline_boxes(
+                            context,
+                            positioned.id,
+                            &mut active_inline_boxes,
+                        );
+                    }
+                }
+            }
+            continue;
+        }
         let line_placement = context.line_placements.get(line_index);
         for (item_index, item) in line.items().enumerate() {
             let glyph_run = match item {
@@ -248,6 +298,7 @@ fn project_selection(
     origin_x: f32,
     origin_y: f32,
     transform: LayoutTransform2D,
+    local_cull: Option<LayoutRect>,
     snapshot: &mut PaintSnapshot,
 ) {
     let Some(selection) = context.selection.as_ref() else {
@@ -268,7 +319,10 @@ fn project_selection(
                     (rect.x1 - rect.x0).max(0.0) as f32,
                     (rect.y1 - rect.y0).max(0.0) as f32,
                 );
-                if rect.width > 0.0 && rect.height > 0.0 {
+                if rect.width > 0.0
+                    && rect.height > 0.0
+                    && local_cull.is_none_or(|cull| rects_intersect(rect, cull))
+                {
                     snapshot.push_fragment(PaintFragment::Fill {
                         shape: PaintShape::Rect(rect),
                         brush: PaintBrush::Solid(SELECTION_COLOR),
@@ -296,7 +350,10 @@ fn project_selection(
                 (rect.x1 - rect.x0).max(1.5) as f32,
                 (rect.y1 - rect.y0).max(0.0) as f32,
             );
-            if rect.height > 0.0 && color.alpha > 0.0 {
+            if rect.height > 0.0
+                && color.alpha > 0.0
+                && local_cull.is_none_or(|cull| rects_intersect(rect, cull))
+            {
                 snapshot.push_fragment(PaintFragment::Fill {
                     shape: PaintShape::Rect(rect),
                     brush: PaintBrush::Solid(*color),

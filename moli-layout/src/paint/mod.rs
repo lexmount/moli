@@ -1,5 +1,6 @@
 mod background;
 mod clip_path;
+mod cull;
 mod filters;
 mod form_controls;
 mod geometry;
@@ -14,6 +15,7 @@ use std::{collections::HashMap, fmt::Debug, hash::Hash};
 
 use background::{project_background_color, project_background_layers};
 use clip_path::{ClipPathUnsupported, project_clip_path};
+use cull::{PaintCullPlan, PaintCullRegion};
 use filters::{expanded_filter_clip, project_filters};
 use form_controls::project_form_control_appearance;
 use geometry::{BoxAreas, BoxModelBox, canonical_shape, inset_radii};
@@ -39,6 +41,19 @@ struct ContextPaintState {
     effect_layers: usize,
     mask_layer: bool,
     clip_path_layer: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct PaintProjectionMetrics {
+    pub(crate) event_count: usize,
+    pub(crate) culled_event_count: usize,
+    pub(crate) text_line_count: usize,
+    pub(crate) culled_text_line_count: usize,
+}
+
+pub(crate) struct PaintProjectionResult {
+    pub(crate) snapshot: PaintSnapshot,
+    pub(crate) metrics: PaintProjectionMetrics,
 }
 
 /// Paint-property-tree cursor for ordinary overflow clips.
@@ -117,7 +132,7 @@ pub(crate) fn project_paint_snapshot<N>(
     projection: &OutputProjection<'_, N>,
     capture: ResolvedPaintCapture,
     embedded_frames: &mut HashMap<LayoutBoxId, PaintSnapshot>,
-) -> PaintSnapshot
+) -> PaintProjectionResult
 where
     N: Copy + Debug + Eq + Hash,
 {
@@ -132,14 +147,22 @@ where
     snapshot.viewport_to_surface = capture.viewport_to_surface;
     snapshot.content_size = projection.document_content_size();
     snapshot.diagnostics = projection.diagnostics.clone();
+    let cull_plan = PaintCullPlan::build(projection);
+    let mut metrics = PaintProjectionMetrics {
+        event_count: projection.paint_events.len(),
+        ..PaintProjectionMetrics::default()
+    };
+    let mut current_cull = PaintCullRegion::for_capture(capture.viewport_rect);
     if let Some(background) = propagated_background {
         let transform = capture.viewport_to_surface;
         let paint_space = PaintSpace::ROOT.with_outer_transform(transform);
-        let text_clip_mask = |snapshot: &mut PaintSnapshot| {
+        let mut text_clip_mask = |snapshot: &mut PaintSnapshot| {
             project_background_text_clip_mask(
                 projection,
                 background,
                 TextClipMaskScope::AllGlyphs,
+                current_cull,
+                &mut metrics,
                 snapshot,
             );
         };
@@ -148,14 +171,45 @@ where
             BoxAreas::for_rect(capture.viewport_rect),
             paint_space,
             &mut snapshot,
-            &text_clip_mask,
+            &mut text_clip_mask,
         );
     }
 
+    let mut context_cull_regions = Vec::new();
     let mut context_layers = Vec::new();
     let mut active_clips = ActivePaintClipChain::default();
-    for event in &projection.paint_events {
-        match *event {
+    let mut event_index = 0usize;
+    while event_index < projection.paint_events.len() {
+        let event = projection.paint_events[event_index];
+        if let PaintOrderEvent::PushStackingContext(_) = event {
+            // Context boundaries reset ordinary overflow clips even when the
+            // complete balanced range is outside this capture.
+            active_clips.clear(&mut snapshot);
+            if cull_plan.event_misses(event_index, current_cull)
+                && let Some(pop_index) = cull_plan.matching_pop(event_index)
+            {
+                metrics.culled_event_count = metrics
+                    .culled_event_count
+                    .saturating_add(pop_index - event_index + 1);
+                event_index = pop_index + 1;
+                continue;
+            }
+            context_cull_regions.push(current_cull);
+            if cull_plan.disables_descendant_culling(event_index) {
+                // Like Blink's infinite cull rect below a pixel-moving
+                // filter/perspective boundary: source pixels outside the
+                // capture may still contribute to visible output.
+                current_cull = PaintCullRegion::Infinite;
+            }
+        } else if !matches!(event, PaintOrderEvent::PopStackingContext(_))
+            && cull_plan.event_misses(event_index, current_cull)
+        {
+            metrics.culled_event_count = metrics.culled_event_count.saturating_add(1);
+            event_index += 1;
+            continue;
+        }
+
+        match event {
             PaintOrderEvent::BoxOutsetShadow(id) => {
                 active_clips.transition_to(
                     projection,
@@ -165,7 +219,6 @@ where
                 project_outset_box_shadows(projection, id, &mut snapshot);
             }
             PaintOrderEvent::PushStackingContext(id) => {
-                active_clips.clear(&mut snapshot);
                 let layout_box = &projection.world.boxes[id.index()];
                 let style = &layout_box.style;
                 let geometry = &projection.boxes[id.index()];
@@ -316,6 +369,8 @@ where
                     propagated_background,
                     embedded_frames.contains_key(&id),
                     capture.include_backgrounds,
+                    current_cull,
+                    &mut metrics,
                     &mut snapshot,
                 );
             }
@@ -330,6 +385,8 @@ where
                     id,
                     embedded_frames,
                     capture.include_backgrounds,
+                    current_cull,
+                    &mut metrics,
                     &mut snapshot,
                 );
             }
@@ -399,12 +456,17 @@ where
                             })
                     )
                 );
+                current_cull = context_cull_regions
+                    .pop()
+                    .expect("stacking cull regions are structurally balanced");
             }
         }
+        event_index += 1;
     }
     active_clips.clear(&mut snapshot);
     debug_assert!(context_layers.is_empty());
-    snapshot
+    debug_assert!(context_cull_regions.is_empty());
+    PaintProjectionResult { snapshot, metrics }
 }
 
 fn owned_clip_chain<N>(
@@ -539,6 +601,8 @@ fn project_box_background<N>(
     propagated_background: Option<LayoutBoxId>,
     has_embedded_frame: bool,
     include_backgrounds: bool,
+    cull: PaintCullRegion,
+    metrics: &mut PaintProjectionMetrics,
     snapshot: &mut PaintSnapshot,
 ) where
     N: Copy + Debug + Eq + Hash,
@@ -588,11 +652,13 @@ fn project_box_background<N>(
             }
             None => {}
         }
-        let text_clip_mask = |snapshot: &mut PaintSnapshot| {
+        let mut text_clip_mask = |snapshot: &mut PaintSnapshot| {
             project_background_text_clip_mask(
                 projection,
                 id,
                 TextClipMaskScope::AllGlyphs,
+                cull,
+                metrics,
                 snapshot,
             );
         };
@@ -602,9 +668,15 @@ fn project_box_background<N>(
             paint_space,
             color,
             snapshot,
-            &text_clip_mask,
+            &mut text_clip_mask,
         );
-        project_background_layers(layout_box, areas, paint_space, snapshot, &text_clip_mask);
+        project_background_layers(
+            layout_box,
+            areas,
+            paint_space,
+            snapshot,
+            &mut text_clip_mask,
+        );
     }
 
     let layout = layout_box.final_layout;
@@ -642,11 +714,13 @@ fn project_background_text_clip_mask<N>(
     projection: &OutputProjection<'_, N>,
     root: LayoutBoxId,
     scope: TextClipMaskScope,
+    cull: PaintCullRegion,
+    metrics: &mut PaintProjectionMetrics,
     snapshot: &mut PaintSnapshot,
 ) where
     N: Copy + Debug + Eq + Hash,
 {
-    project_box_text_clip_mask(projection, root, scope, snapshot);
+    project_box_text_clip_mask(projection, root, scope, cull, metrics, snapshot);
 
     // A block/background root owns every descendant IFC. A flattened inline
     // instead selects its runs from the shared root IFC, then includes only
@@ -668,7 +742,14 @@ fn project_background_text_clip_mask<N>(
     while let Some(id) = stack.pop() {
         let layout_box = &projection.world.boxes[id.index()];
         stack.extend(layout_box.children.iter().rev().copied());
-        project_box_text_clip_mask(projection, id, TextClipMaskScope::AllGlyphs, snapshot);
+        project_box_text_clip_mask(
+            projection,
+            id,
+            TextClipMaskScope::AllGlyphs,
+            cull,
+            metrics,
+            snapshot,
+        );
     }
 }
 
@@ -676,6 +757,8 @@ fn project_box_text_clip_mask<N>(
     projection: &OutputProjection<'_, N>,
     id: LayoutBoxId,
     scope: TextClipMaskScope,
+    cull: PaintCullRegion,
+    metrics: &mut PaintProjectionMetrics,
     snapshot: &mut PaintSnapshot,
 ) where
     N: Copy + Debug + Eq + Hash,
@@ -685,13 +768,13 @@ fn project_box_text_clip_mask<N>(
         return;
     }
     let geometry = &projection.boxes[id.index()];
-    let transform = snapshot.viewport_to_surface.concatenate(
-        projection.coordinate_spaces[geometry.coordinate_space.index()]
-            .paint
-            .local_transform(),
-    );
+    let viewport_transform = projection.coordinate_spaces[geometry.coordinate_space.index()]
+        .paint
+        .local_transform();
+    let local_cull = cull.local_rect(viewport_transform);
+    let transform = snapshot.viewport_to_surface.concatenate(viewport_transform);
     let clip_count = push_clip_chain(projection, projection.content_clips[id.index()], snapshot);
-    project_text_clip_mask(layout_box, transform, snapshot, scope);
+    project_text_clip_mask(layout_box, transform, local_cull, metrics, snapshot, scope);
     pop_clips(clip_count, snapshot);
 }
 
@@ -767,6 +850,8 @@ fn project_box_contents<N>(
     id: LayoutBoxId,
     embedded_frames: &mut HashMap<LayoutBoxId, PaintSnapshot>,
     include_backgrounds: bool,
+    cull: PaintCullRegion,
+    metrics: &mut PaintProjectionMetrics,
     snapshot: &mut PaintSnapshot,
 ) where
     N: Copy + Debug + Eq + Hash,
@@ -776,6 +861,10 @@ fn project_box_contents<N>(
         return;
     }
     let geometry = &projection.boxes[id.index()];
+    let viewport_transform = projection.coordinate_spaces[geometry.coordinate_space.index()]
+        .paint
+        .local_transform();
+    let local_cull = cull.local_rect(viewport_transform);
     let paint_space = projection.coordinate_spaces[geometry.coordinate_space.index()]
         .paint_space(snapshot.viewport_to_surface);
     let transform = paint_space.local_transform();
@@ -791,8 +880,8 @@ fn project_box_contents<N>(
     }
     project_replaced_image(projection, id, paint_space, snapshot);
     project_form_control_appearance(layout_box, geometry.border_box, transform, snapshot);
-    let text_clip_mask = |scope: TextClipMaskScope, snapshot: &mut PaintSnapshot| {
-        project_background_text_clip_mask(projection, id, scope, snapshot);
+    let mut text_clip_mask = |scope: TextClipMaskScope, snapshot: &mut PaintSnapshot| {
+        project_background_text_clip_mask(projection, id, scope, cull, metrics, snapshot);
     };
     project_inline_box_fragments(
         projection.world,
@@ -800,9 +889,10 @@ fn project_box_contents<N>(
         paint_space,
         include_backgrounds,
         snapshot,
-        &text_clip_mask,
+        local_cull,
+        &mut text_clip_mask,
     );
-    project_text(layout_box, transform, snapshot);
+    project_text(layout_box, transform, local_cull, metrics, snapshot);
 }
 
 fn unavailable_replaced_content_paint<N>(

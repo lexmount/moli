@@ -271,6 +271,10 @@ impl JsContextHost {
                     .numeric_feedback_invalidated_node_count,
                 box_count = metrics.box_count,
                 fragment_count = metrics.fragment_count,
+                paint_event_count = metrics.paint_event_count,
+                paint_culled_event_count = metrics.paint_culled_event_count,
+                paint_text_line_count = metrics.paint_text_line_count,
+                paint_culled_text_line_count = metrics.paint_culled_text_line_count,
                 paint_operation_count = metrics.paint_operation_count,
                 fallback_count = metrics.fallback_count,
             );

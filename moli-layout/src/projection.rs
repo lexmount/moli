@@ -61,6 +61,7 @@ where
         .iter_mut()
         .filter_map(|(id, (_, snapshot))| snapshot.paint.take().map(|paint| (*id, paint)))
         .collect::<HashMap<_, _>>();
+    let mut paint_projection_metrics = crate::paint::PaintProjectionMetrics::default();
     let mut paint_snapshot = paint_capture
         .map(|request| {
             request
@@ -69,7 +70,11 @@ where
                     crate::paint::project_paint_snapshot(&projection, capture, &mut embedded_paint)
                 })
         })
-        .transpose()?;
+        .transpose()?
+        .map(|output| {
+            paint_projection_metrics = output.metrics;
+            output.snapshot
+        });
     let mut diagnostics = paint_snapshot
         .as_ref()
         .map(|snapshot| snapshot.diagnostics.clone())
@@ -106,6 +111,10 @@ where
             .numeric_feedback_invalidated_node_count,
         box_count: projection.boxes.len(),
         fragment_count: projection.fragments.len(),
+        paint_event_count: paint_projection_metrics.event_count,
+        paint_culled_event_count: paint_projection_metrics.culled_event_count,
+        paint_text_line_count: paint_projection_metrics.text_line_count,
+        paint_culled_text_line_count: paint_projection_metrics.culled_text_line_count,
         paint_operation_count: paint_snapshot
             .as_ref()
             .map_or(0, |snapshot| snapshot.fragments.len()),
@@ -301,6 +310,10 @@ where
             content_clips: vec![None; count],
             paint_events: Vec::new(),
         }
+    }
+
+    pub(crate) fn resolved_transform_has_unsupported_3d(&self, id: LayoutBoxId) -> bool {
+        self.resolved_transforms[id.index()].has_unsupported_3d
     }
 
     fn scrollbar_gutter_thickness(&self, id: LayoutBoxId, axis: LayoutScrollbarAxis) -> f32 {

@@ -24,7 +24,8 @@ pub(super) fn project_inline_box_fragments<N>(
     paint_space: PaintSpace,
     include_backgrounds: bool,
     snapshot: &mut PaintSnapshot,
-    text_clip_mask: &impl Fn(TextClipMaskScope, &mut PaintSnapshot),
+    local_cull: Option<LayoutRect>,
+    text_clip_mask: &mut impl FnMut(TextClipMaskScope, &mut PaintSnapshot),
 ) where
     N: Copy + Debug + Eq + Hash,
 {
@@ -91,6 +92,9 @@ pub(super) fn project_inline_box_fragments<N>(
         if rect.width <= 0.0 || rect.height <= 0.0 {
             continue;
         }
+        if local_cull.is_some_and(|cull| !super::cull::rects_intersect(rect, cull)) {
+            continue;
+        }
         let color = style.background_color();
         let radii = style.border_radii(rect.width, rect.height);
         let widths = PaintEdgeSizes::new(
@@ -132,7 +136,7 @@ pub(super) fn project_inline_box_fragments<N>(
         // Flattened inline descendants share the owner's Parley output. Give
         // the callback an explicit target so text.rs selects this structural
         // inline's glyph runs before background.rs applies the fragment clip.
-        let project_text_clip_mask = |snapshot: &mut PaintSnapshot| {
+        let mut project_text_clip_mask = |snapshot: &mut PaintSnapshot| {
             text_clip_mask(TextClipMaskScope::InlineBox(fragment.box_id), snapshot);
         };
         if include_backgrounds {
@@ -142,14 +146,14 @@ pub(super) fn project_inline_box_fragments<N>(
                 paint_space,
                 color,
                 snapshot,
-                &project_text_clip_mask,
+                &mut project_text_clip_mask,
             );
             project_background_layers(
                 inline_box,
                 areas,
                 paint_space,
                 snapshot,
-                &project_text_clip_mask,
+                &mut project_text_clip_mask,
             );
         }
 
