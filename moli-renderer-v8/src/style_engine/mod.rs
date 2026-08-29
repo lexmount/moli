@@ -95,7 +95,7 @@ mod world_lifecycle;
 mod world_trace;
 mod world_update;
 
-use cleanup::StyleCacheCleanup;
+use cleanup::StyleInvalidationCleanup;
 pub(crate) use computed::{
     ComputedDisplayKind, ComputedRenderedStyleFacts, ComputedTextTransformKind,
     ComputedTextWrapModeKind, ComputedWhiteSpaceCollapseKind, StyleObservationSnapshot,
@@ -158,7 +158,7 @@ pub(crate) use world_update::{
 /// The selector/query adapter in `moli-selector` deliberately stays
 /// query-only. The facade owns cross-document lookup indexes plus the Stylo
 /// side-table adapter; style sources, retained state, invalidation state, and
-/// computed cache live in per-document worlds.
+/// pseudo cache live in per-document worlds.
 pub(crate) struct MoliStyleEngine {
     dom_adapter: StyloDomStyleAdapter,
     document_worlds: DocumentStyleWorlds,
@@ -374,7 +374,7 @@ impl MoliStyleEngine {
         &self,
         document: DomHandle,
     ) -> usize {
-        self.world_for_document(document).computed_style_cache.len()
+        self.world_for_document(document).pseudo_style_cache.len()
     }
 
     #[cfg(test)]
@@ -383,7 +383,7 @@ impl MoliStyleEngine {
         document: DomHandle,
     ) -> u64 {
         self.world_for_document(document)
-            .computed_style_cache
+            .pseudo_style_cache
             .write_generation()
     }
 
@@ -394,7 +394,7 @@ impl MoliStyleEngine {
         handle: DomHandle,
     ) -> bool {
         self.world_for_document(document)
-            .computed_style_cache
+            .pseudo_style_cache
             .contains_handle_for_test(handle)
     }
 
@@ -405,7 +405,7 @@ impl MoliStyleEngine {
         handle: DomHandle,
     ) -> usize {
         self.world_for_document(document)
-            .computed_style_cache
+            .pseudo_style_cache
             .entry_count_for_handle_for_test(handle)
     }
 
@@ -639,14 +639,14 @@ impl MoliStyleEngine {
             .effect_count_for_test()
     }
 
-    pub(in crate::style_engine) fn cache_cleanup_for_world<'a>(
+    pub(in crate::style_engine) fn invalidation_cleanup_for_world<'a>(
         &'a self,
         world: &'a DocumentStyleWorld,
-    ) -> StyleCacheCleanup<'a> {
-        StyleCacheCleanup::new(
+    ) -> StyleInvalidationCleanup<'a> {
+        StyleInvalidationCleanup::new(
             world.document,
             &self.dom_adapter,
-            &world.computed_style_cache,
+            &world.pseudo_style_cache,
             &world.document_state,
         )
     }
@@ -662,7 +662,7 @@ impl MoliStyleEngine {
             .clear_for_document_replacement(document);
     }
 
-    /// Drops the exact target's canonical style and publication markers after
+    /// Drops the exact target's canonical style and cached pseudo values after
     /// it leaves every rendered style context.
     ///
     /// This is deliberately target-local. Subtree invalidation remains lazy;
@@ -671,7 +671,7 @@ impl MoliStyleEngine {
     pub(crate) fn retire_computed_style_for_inactive_handle(&self, handle: DomHandle) {
         self.dom_adapter.clear_element_data(handle);
         self.document_worlds
-            .invalidate_computed_style_handle(handle);
+            .invalidate_cached_pseudos_for_handle(handle);
     }
 
     fn clear_owner_document_indexes_for_document(&self, document: DomHandle) {
@@ -748,7 +748,7 @@ impl MoliStyleEngine {
         drain_style_invalidations(
             &self.dom_adapter,
             &world.document_state,
-            self.cache_cleanup_for_world(&world),
+            self.invalidation_cleanup_for_world(&world),
             host,
             &source_stores,
             document_context,

@@ -194,7 +194,7 @@ fn retained_target_result_preserves_fallback_reason() {
 }
 
 #[test]
-fn source_fallback_roots_remain_compact_until_cache_cleanup() {
+fn source_fallback_roots_remain_compact_until_invalidation_cleanup() {
     let mut host = test_host();
     let document = host.document_handle();
     let fallback_root = host.create_element("article");
@@ -262,7 +262,7 @@ fn source_fallback_roots_remain_compact_until_cache_cleanup() {
 }
 
 #[test]
-fn exact_affected_roots_remain_compact_until_cache_cleanup() {
+fn exact_affected_roots_remain_compact_until_invalidation_cleanup() {
     let mut host = test_host();
     let document = host.document_handle();
     let exact_root = host.create_element("section");
@@ -376,7 +376,7 @@ fn retained_target_result_applies_structural_boundary_cleanup_roots_on_match() {
 }
 
 #[test]
-fn structural_boundary_roots_remain_compact_until_cache_cleanup() {
+fn structural_boundary_roots_remain_compact_until_invalidation_cleanup() {
     let mut host = test_host();
     let document = host.document_handle();
     let structural_root = host.create_element("nav");
@@ -888,7 +888,7 @@ fn mixed_cleanup_clears_shadow_cascade_data_only_for_source_fallback_roots() {
     let world = engine.world_for_document(document);
     assert!(
         engine
-            .cache_cleanup_for_world(&world)
+            .invalidation_cleanup_for_world(&world)
             .apply_finalized_result(&host, finalized_result)
     );
 
@@ -1731,7 +1731,7 @@ fn clear_all_fallback_application_records_reasons_in_document_world() {
     let world = engine.world_for_document(document);
     assert!(
         engine
-            .cache_cleanup_for_world(&world)
+            .invalidation_cleanup_for_world(&world)
             .apply_finalized_result(&host, outcome.finalize(&host))
     );
 
@@ -1756,7 +1756,7 @@ fn clear_all_fallback_application_records_reasons_in_document_world() {
 
     assert!(
         !engine
-            .cache_cleanup_for_world(&world)
+            .invalidation_cleanup_for_world(&world)
             .apply_finalized_result(&host, StyleInvalidationOutcome::default().finalize(&host))
     );
     assert!(
@@ -1872,7 +1872,7 @@ fn subtree_fallback_cleanup_clears_only_affected_shadow_cascade_data() {
     let world = engine.world_for_document(document);
     assert!(
         engine
-            .cache_cleanup_for_world(&world)
+            .invalidation_cleanup_for_world(&world)
             .apply_finalized_result(&host, finalized_result)
     );
 

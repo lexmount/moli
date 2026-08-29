@@ -5,7 +5,7 @@ use crate::{document_runtime::DomHandle, dom::native::DomHost};
 
 use super::{
     cause::PendingStyleInvalidationWorkKind,
-    cleanup::StyleCacheCleanup,
+    cleanup::StyleInvalidationCleanup,
     invalidation::StyleInvalidationCleanupEffects,
     outcome::{StyleInvalidationOutcome, retained_source_invalidation_outcome},
     pending_invalidation::{PendingStyleInvalidationBatch, PendingStyleInvalidationWork},
@@ -234,7 +234,7 @@ impl PendingStyleInvalidationTargetTraceCountsSink for StyleInvalidationDrainSum
 pub(super) fn drain_style_invalidations(
     dom_adapter: &StyloDomStyleAdapter,
     document_state: &StyleDocumentState,
-    cache_cleanup: StyleCacheCleanup<'_>,
+    invalidation_cleanup: StyleInvalidationCleanup<'_>,
     host: &DomHost,
     source_stores: &DocumentStyleSourceStores<'_>,
     document_context: StyleSourceDocumentContext<'_>,
@@ -291,7 +291,7 @@ pub(super) fn drain_style_invalidations(
     if let Some(summary) = trace_summary {
         finalized_result.trace_drain_attempt(&summary);
     }
-    cache_cleanup.apply_finalized_result(host, finalized_result);
+    invalidation_cleanup.apply_finalized_result(host, finalized_result);
 }
 
 fn diagnostic_source_lifecycle_report_for_invalidation_drain(

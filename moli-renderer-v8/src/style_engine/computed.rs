@@ -533,7 +533,7 @@ pub(super) fn computed_style_snapshot_after_world_update(
                 &source_stores,
                 document_context,
                 owner_document,
-                engine.cache_cleanup_for_world(&world),
+                engine.invalidation_cleanup_for_world(&world),
                 update.environment(),
                 incremental,
             );
@@ -758,7 +758,7 @@ fn with_resolved_style_in_current_world<R>(
             handle,
             pseudo_element: Some(pseudo_element.clone()),
         };
-        if let Some(style) = world.computed_style_cache.get_pseudo(&pseudo_key) {
+        if let Some(style) = world.pseudo_style_cache.get_pseudo(&pseudo_key) {
             return callback(&style, None);
         }
     }
@@ -785,7 +785,7 @@ fn with_resolved_style_in_current_world<R>(
                 handle,
                 pseudo_element: Some(pseudo_element.clone()),
             };
-            if let Some(style) = world.computed_style_cache.get_pseudo(&pseudo_key) {
+            if let Some(style) = world.pseudo_style_cache.get_pseudo(&pseudo_key) {
                 return callback(&style, None);
             }
         }
@@ -841,7 +841,7 @@ fn with_resolved_style_in_current_world<R>(
                     .get(pseudo_element)
                     .cloned()
                 })?;
-            world.computed_style_cache.insert_pseudo(
+            world.pseudo_style_cache.insert_pseudo(
                 ComputedElementStyleCacheKey {
                     computed_cache_generation,
                     handle,
@@ -851,8 +851,9 @@ fn with_resolved_style_in_current_world<R>(
             );
             style
         } else {
+            #[cfg(test)]
             world
-                .computed_style_cache
+                .pseudo_style_cache
                 .record_primary(ComputedElementStyleCacheKey {
                     computed_cache_generation,
                     handle,
@@ -919,7 +920,7 @@ fn resolve_element_styles(
             validation_path,
         );
         let target = DomHandle::new(element.as_node().debug_id());
-        world.computed_style_cache.invalidate_handles([target]);
+        world.pseudo_style_cache.invalidate_handles([target]);
         // `resolve_style` is the single-node initial-style API. Keep dirty
         // values published until this observation begins, then replace only
         // the demanded path from ancestors to target.
@@ -1007,7 +1008,7 @@ where
         if canonical_is_current && !force_descendants {
             continue;
         }
-        world.computed_style_cache.invalidate_handles([handle]);
+        world.pseudo_style_cache.invalidate_handles([handle]);
         unsafe {
             ancestor.ensure_data().styles = ElementStyles::default();
         }
@@ -1147,7 +1148,7 @@ fn with_lazily_resolved_pseudo_style_in_current_world<R>(
         handle,
         pseudo_element: Some(pseudo_element.clone()),
     };
-    if let Some(style) = world.computed_style_cache.get_pseudo(&computed_key) {
+    if let Some(style) = world.pseudo_style_cache.get_pseudo(&computed_key) {
         return callback(&style);
     }
 
@@ -1180,7 +1181,7 @@ fn with_lazily_resolved_pseudo_style_in_current_world<R>(
                 )
             })?;
         world
-            .computed_style_cache
+            .pseudo_style_cache
             .insert_pseudo(computed_key, style.clone());
         callback(&style)
     })
@@ -1203,7 +1204,7 @@ fn ensure_retained_style_system_for_computed_read(
         &source_stores,
         document_context,
         retained_document,
-        engine.cache_cleanup_for_world(world),
+        engine.invalidation_cleanup_for_world(world),
         key,
         inputs,
     );

@@ -2043,7 +2043,7 @@ fn clear_all_fallback_clears_element_styles_without_replacing_the_style_world() 
     let world = engine.world_for_document(document);
     assert!(
         engine
-            .cache_cleanup_for_world(&world)
+            .invalidation_cleanup_for_world(&world)
             .apply_finalized_result(&host, outcome.finalize(&host))
     );
     assert_eq!(

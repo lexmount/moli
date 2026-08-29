@@ -3,7 +3,7 @@ use std::{cell::RefCell, collections::HashMap, rc::Rc};
 use crate::document_runtime::DomHandle;
 
 use super::{
-    cache::ComputedStyleCache,
+    cache::PseudoStyleCache,
     pending_invalidation::PendingStyleInvalidations,
     pending_mutation::PendingStructuralStyleMutations,
     registered_properties::CssCustomPropertyRegistry,
@@ -21,7 +21,7 @@ pub(super) struct DocumentStyleWorld {
     pub(super) document_state: StyleDocumentState,
     pub(super) pending_invalidations: PendingStyleInvalidations,
     pub(super) pending_structural_mutations: PendingStructuralStyleMutations,
-    pub(super) computed_style_cache: ComputedStyleCache,
+    pub(super) pseudo_style_cache: PseudoStyleCache,
     pub(super) owner_style_sheet_sources: RefCell<OwnerStyleSheetSources>,
     pub(super) linked_stylesheet_sources: RefCell<LinkedStylesheetSources>,
     pub(super) adopted_style_sheet_sources: RefCell<AdoptedStyleSheetSources>,
@@ -40,7 +40,7 @@ impl DocumentStyleWorld {
             document_state: StyleDocumentState::new(),
             pending_invalidations: PendingStyleInvalidations::new(),
             pending_structural_mutations: PendingStructuralStyleMutations::new(),
-            computed_style_cache: ComputedStyleCache::new(),
+            pseudo_style_cache: PseudoStyleCache::new(),
             owner_style_sheet_sources: RefCell::new(OwnerStyleSheetSources::default()),
             linked_stylesheet_sources: RefCell::new(LinkedStylesheetSources::default()),
             adopted_style_sheet_sources: RefCell::new(AdoptedStyleSheetSources::default()),
@@ -52,7 +52,7 @@ impl DocumentStyleWorld {
         self.registered_custom_properties.clear();
         self.pending_invalidations.clear();
         self.pending_structural_mutations.clear();
-        self.computed_style_cache.clear();
+        self.pseudo_style_cache.clear();
         self.document_state.clear_retained_style_system();
         self.document_state.bump_source_set_generation();
         self.document_state.bump_computed_cache_generation();
@@ -84,13 +84,13 @@ impl DocumentStyleWorlds {
         self.for_document(document).clear_for_document_replacement();
     }
 
-    /// Retires one handle's publication from whichever Document world last
-    /// exposed it. A DOM adoption can change `ownerDocument` before deferred
-    /// style work is drained, so consulting only the current owner would leave
-    /// the old world's marker behind.
-    pub(super) fn invalidate_computed_style_handle(&self, handle: DomHandle) {
+    /// Retires one handle's cached pseudo styles from whichever Document world
+    /// last exposed it. A DOM adoption can change `ownerDocument` before
+    /// deferred style work is drained, so consulting only the current owner
+    /// would leave the old world's pseudo values behind.
+    pub(super) fn invalidate_cached_pseudos_for_handle(&self, handle: DomHandle) {
         for world in self.worlds.borrow().values() {
-            world.computed_style_cache.invalidate_handles([handle]);
+            world.pseudo_style_cache.invalidate_handles([handle]);
         }
     }
 

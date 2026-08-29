@@ -130,7 +130,7 @@ impl MoliStyleEngine {
         effects: &[StyleMutationEffect],
         world: &DocumentStyleWorld,
     ) -> bool {
-        if world_has_cached_style_state(world) {
+        if world_has_style_state(self, world) {
             return false;
         }
         if mutation_effects_have_source_scope(effects) {
@@ -277,7 +277,7 @@ impl MoliStyleEngine {
         }
         for (document, roots) in roots_by_document {
             let world = self.world_for_document(document);
-            self.cache_cleanup_for_world(&world)
+            self.invalidation_cleanup_for_world(&world)
                 .invalidate_detached_subtrees(host, roots);
         }
     }
@@ -501,7 +501,7 @@ impl MoliStyleEngine {
         let Some(world) = self.owner_document_world(host, root) else {
             return;
         };
-        self.cache_cleanup_for_world(&world)
+        self.invalidation_cleanup_for_world(&world)
             .invalidate_inline_style_subtree(host, root);
     }
 
@@ -509,7 +509,7 @@ impl MoliStyleEngine {
         let Some(world) = self.owner_document_world(host, root) else {
             return;
         };
-        self.cache_cleanup_for_world(&world)
+        self.invalidation_cleanup_for_world(&world)
             .invalidate_subtrees_and_shadow_cascade_data(host, [root]);
     }
 
@@ -527,7 +527,7 @@ impl MoliStyleEngine {
             return;
         };
         let source_stores = world.borrow_source_stores();
-        if !world_has_cached_style_state(world) {
+        if !world_has_style_state(self, world) {
             world.document_state.bump_target_context_epoch();
             return;
         }
@@ -580,19 +580,22 @@ impl MoliStyleEngine {
         for (document, roots) in roots_by_document {
             let world = self.world_for_document(document);
             cleared |= self
-                .cache_cleanup_for_world(&world)
+                .invalidation_cleanup_for_world(&world)
                 .invalidate_subtrees(host, roots);
         }
         cleared
     }
 }
 
-fn world_has_cached_style_state(world: &DocumentStyleWorld) -> bool {
-    !world.computed_style_cache.is_empty()
-        || world
-            .document_state
-            .try_with_retained_style_system(|_| ())
-            .is_some()
+fn world_has_style_state(engine: &MoliStyleEngine, world: &DocumentStyleWorld) -> bool {
+    world
+        .document_state
+        .try_with_retained_style_system(|_| ())
+        .is_some()
+        || engine
+            .dom_adapter
+            .has_element_styles_for_document(world.document)
+        || !world.pseudo_style_cache.is_empty()
 }
 
 fn should_defer_structural_mutations(effects: &[StyleMutationEffect]) -> bool {

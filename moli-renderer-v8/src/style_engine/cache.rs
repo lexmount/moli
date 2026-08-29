@@ -1,7 +1,10 @@
 use std::{
-    cell::{Cell, RefCell},
+    cell::RefCell,
     collections::{HashMap, HashSet},
 };
+
+#[cfg(test)]
+use std::cell::Cell;
 
 use style::{
     properties::ComputedValues, selector_parser::PseudoElement, servo_arc::Arc as ServoArc,
@@ -9,16 +12,19 @@ use style::{
 
 use crate::document_runtime::DomHandle;
 
-/// Resolution index for canonical Stylo element data plus a pseudo-style cache.
+/// Cache for computed pseudo styles that have no canonical Stylo data slot.
 ///
-/// Primary `ComputedValues` are never duplicated here: they remain owned by
-/// Stylo `ElementData`. Primary entries record publication for diagnostics and
-/// per-handle pseudo eviction; pseudo styles have no equivalent canonical slot
-/// and are therefore retained by value until their generation is invalidated.
-pub(super) struct ComputedStyleCache {
+/// Primary `ComputedValues` live only in Stylo `ElementData`. Production code
+/// deliberately keeps no parallel index of primary publications; invalidation
+/// consults the Document's canonical element-data bucket when it needs to know
+/// whether any resolved style survives. The primary ledger below exists only
+/// to preserve fine-grained invalidation assertions in tests.
+pub(super) struct PseudoStyleCache {
+    #[cfg(test)]
     primary_entries: RefCell<HashSet<ComputedElementStyleCacheKey>>,
     pseudo_entries: RefCell<HashMap<ComputedElementStyleCacheKey, ServoArc<ComputedValues>>>,
     keys_by_handle: RefCell<HashMap<DomHandle, HashSet<ComputedElementStyleCacheKey>>>,
+    #[cfg(test)]
     write_generation: Cell<u64>,
 }
 
@@ -29,22 +35,26 @@ pub(super) struct ComputedElementStyleCacheKey {
     pub(super) pseudo_element: Option<PseudoElement>,
 }
 
-impl ComputedStyleCache {
+impl PseudoStyleCache {
     pub(super) fn new() -> Self {
         Self {
+            #[cfg(test)]
             primary_entries: RefCell::new(HashSet::new()),
             pseudo_entries: RefCell::new(HashMap::new()),
             keys_by_handle: RefCell::new(HashMap::new()),
+            #[cfg(test)]
             write_generation: Cell::new(0),
         }
     }
 
     pub(super) fn clear(&self) {
+        #[cfg(test)]
         self.primary_entries.borrow_mut().clear();
         self.pseudo_entries.borrow_mut().clear();
         self.keys_by_handle.borrow_mut().clear();
     }
 
+    #[cfg(test)]
     pub(super) fn record_primary(&self, key: ComputedElementStyleCacheKey) {
         debug_assert!(key.pseudo_element.is_none());
         if self.primary_entries.borrow_mut().insert(key.clone()) {
@@ -73,6 +83,7 @@ impl ComputedStyleCache {
             .is_none();
         if is_new {
             self.index_key(&key);
+            #[cfg(test)]
             self.bump_write_generation();
         }
     }
@@ -95,10 +106,14 @@ impl ComputedStyleCache {
         if keys.is_empty() {
             return;
         }
+        #[cfg(test)]
         let mut primary_entries = self.primary_entries.borrow_mut();
         let mut pseudo_entries = self.pseudo_entries.borrow_mut();
         for key in keys {
-            primary_entries.remove(&key);
+            #[cfg(test)]
+            {
+                primary_entries.remove(&key);
+            }
             pseudo_entries.remove(&key);
         }
     }
@@ -111,15 +126,14 @@ impl ComputedStyleCache {
             .insert(key.clone());
     }
 
+    #[cfg(test)]
     fn bump_write_generation(&self) {
         self.write_generation
             .set(self.write_generation.get().saturating_add(1));
     }
 
     pub(super) fn is_empty(&self) -> bool {
-        self.primary_entries.borrow().is_empty()
-            && self.pseudo_entries.borrow().is_empty()
-            && self.keys_by_handle.borrow().is_empty()
+        self.pseudo_entries.borrow().is_empty() && self.keys_by_handle.borrow().is_empty()
     }
 
     #[cfg(test)]

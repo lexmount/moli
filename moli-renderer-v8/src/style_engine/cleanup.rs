@@ -6,7 +6,7 @@ use moli_selector::StyloDomStyleAdapter;
 use crate::{document_runtime::DomHandle, dom::native::DomHost};
 
 use super::{
-    cache::ComputedStyleCache,
+    cache::PseudoStyleCache,
     invalidation::handle_is_in_style_subtrees,
     outcome::{
         FinalizedStyleInvalidationResult, StyleInvalidationCleanupApplicationContext,
@@ -15,24 +15,24 @@ use super::{
     state::StyleDocumentState,
 };
 
-pub(super) struct StyleCacheCleanup<'a> {
+pub(super) struct StyleInvalidationCleanup<'a> {
     document: DomHandle,
     dom_adapter: &'a StyloDomStyleAdapter,
-    computed_style_cache: &'a ComputedStyleCache,
+    pseudo_style_cache: &'a PseudoStyleCache,
     document_state: &'a StyleDocumentState,
 }
 
-impl<'a> StyleCacheCleanup<'a> {
+impl<'a> StyleInvalidationCleanup<'a> {
     pub(super) fn new(
         document: DomHandle,
         dom_adapter: &'a StyloDomStyleAdapter,
-        computed_style_cache: &'a ComputedStyleCache,
+        pseudo_style_cache: &'a PseudoStyleCache,
         document_state: &'a StyleDocumentState,
     ) -> Self {
         Self {
             document,
             dom_adapter,
-            computed_style_cache,
+            pseudo_style_cache,
             document_state,
         }
     }
@@ -42,7 +42,7 @@ impl<'a> StyleCacheCleanup<'a> {
             .clear_invalidation_clear_all_fallback_reasons();
         self.clear_shadow_cascade_data_for_document_world();
         self.clear_document_element_side_tables();
-        self.computed_style_cache.clear();
+        self.pseudo_style_cache.clear();
         self.document_state.clear_selector_caches();
         self.document_state.bump_computed_cache_generation();
         self.document_state.lazy_invalidation_roots.clear();
@@ -180,7 +180,7 @@ impl<'a> StyleCacheCleanup<'a> {
         if context.clears_shadow_cascade_data_for_cleanup_target() {
             self.clear_shadow_cascade_data_for_document_world();
         }
-        self.computed_style_cache.clear();
+        self.pseudo_style_cache.clear();
         self.document_state.clear_selector_caches();
         self.document_state.lazy_invalidation_roots.clear();
         self.document_state.bump_target_context_epoch();
@@ -268,14 +268,14 @@ impl<'a> StyleCacheCleanup<'a> {
         // expansion over every published style in the document. Keep doing
         // the exact-root retirement even when a deferred mutation is drained
         // after that root was adopted into another Document: the old world
-        // may still own its publication marker, while the adapter moves its
+        // may still own its pseudo sidecar, while the adapter moves its
         // ElementData to the current owner bucket on this targeted access.
         let immediately_invalidated = roots
             .iter()
             .copied()
             .filter(|handle| self.dom_adapter.mark_element_style_dirty(*handle))
             .collect::<IndexSet<_>>();
-        self.computed_style_cache
+        self.pseudo_style_cache
             .invalidate_handles(roots.iter().copied());
         self.document_state.clear_selector_caches();
         self.document_state.bump_target_context_epoch();
@@ -283,7 +283,7 @@ impl<'a> StyleCacheCleanup<'a> {
     }
 }
 
-impl StyleInvalidationCleanupApplicationSink for StyleCacheCleanup<'_> {
+impl StyleInvalidationCleanupApplicationSink for StyleInvalidationCleanup<'_> {
     fn apply_noop_cleanup_application(&self) -> bool {
         self.document_state
             .clear_invalidation_clear_all_fallback_reasons();

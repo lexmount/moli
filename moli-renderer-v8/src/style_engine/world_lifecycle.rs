@@ -8,7 +8,7 @@ use style::context::QuirksMode;
 
 use super::{
     FullStyleWorldSnapshot, StyleTreeScopeVersions, StyleWorldEnvironment,
-    cleanup::StyleCacheCleanup,
+    cleanup::StyleInvalidationCleanup,
     retained::{
         RetainedStyleInvalidations, build_retained_style_system,
         retained_style_system_matches_full_snapshot, update_retained_style_system,
@@ -87,7 +87,7 @@ pub(super) fn ensure_retained_style_system(
     source_stores: &DocumentStyleSourceStores<'_>,
     document_context: StyleSourceDocumentContext<'_>,
     retained_document: DomHandle,
-    cache_cleanup: StyleCacheCleanup<'_>,
+    invalidation_cleanup: StyleInvalidationCleanup<'_>,
     key: &StyleWorldKey,
     inputs: &FullStyleWorldSnapshot,
 ) {
@@ -140,7 +140,7 @@ pub(super) fn ensure_retained_style_system(
             host,
             dom_adapter,
             retained_document,
-            &cache_cleanup,
+            &invalidation_cleanup,
             invalidations,
         );
         document_state.clear_source_dirty_scopes();
@@ -165,7 +165,7 @@ pub(super) fn ensure_retained_style_system(
     // Replacing the document style world is the exceptional path. Incremental
     // updates above must preserve canonical ElementData so Stylo can apply the
     // invalidation set returned by flush().
-    cache_cleanup.clear_for_retained_style_system_rebuild();
+    invalidation_cleanup.clear_for_retained_style_system_rebuild();
     document_state.clear_source_dirty_scopes();
 
     let retained = build_retained_style_system(
@@ -202,7 +202,7 @@ pub(super) fn ensure_retained_style_system_incrementally(
     source_stores: &DocumentStyleSourceStores<'_>,
     document_context: StyleSourceDocumentContext<'_>,
     retained_document: DomHandle,
-    cache_cleanup: StyleCacheCleanup<'_>,
+    invalidation_cleanup: StyleInvalidationCleanup<'_>,
     environment: &StyleWorldEnvironment,
     update: &IncrementalStyleWorldUpdate,
 ) {
@@ -261,7 +261,7 @@ pub(super) fn ensure_retained_style_system_incrementally(
         host,
         dom_adapter,
         retained_document,
-        &cache_cleanup,
+        &invalidation_cleanup,
         invalidations,
     );
     document_state.clear_source_dirty_scopes();
@@ -291,7 +291,7 @@ fn apply_retained_stylesheet_invalidations(
     host: &DomHost,
     dom_adapter: &StyloDomStyleAdapter,
     document: DomHandle,
-    cache_cleanup: &StyleCacheCleanup<'_>,
+    invalidation_cleanup: &StyleInvalidationCleanup<'_>,
     invalidations: RetainedStyleInvalidations,
 ) {
     let RetainedStyleInvalidations {
@@ -352,18 +352,18 @@ fn apply_retained_stylesheet_invalidations(
         ));
     }
     if used_color_scheme_changed {
-        cache_cleanup.invalidate_subtrees(host, [document]);
+        invalidation_cleanup.invalidate_subtrees(host, [document]);
     }
-    cache_cleanup.retain_stylesheet_invalidation_roots(host, stylesheet_invalidation_roots);
+    invalidation_cleanup.retain_stylesheet_invalidation_roots(host, stylesheet_invalidation_roots);
     if document_scope_fallback {
-        cache_cleanup.invalidate_subtrees(host, [document]);
+        invalidation_cleanup.invalidate_subtrees(host, [document]);
     }
     for shadow_root in shadow_scope_fallbacks {
         let mut roots = vec![shadow_root];
         roots.extend(host.shadow_root_host(shadow_root));
-        cache_cleanup.invalidate_subtrees(host, roots);
+        invalidation_cleanup.invalidate_subtrees(host, roots);
     }
-    cache_cleanup.invalidate_subtrees(host, removed_shadow_scopes);
+    invalidation_cleanup.invalidate_subtrees(host, removed_shadow_scopes);
 }
 
 fn invalidate_viewport_unit_styles(

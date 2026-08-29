@@ -172,10 +172,6 @@ impl StyloDomStyleAdapter {
         self.state.clear_element_selector_flags(handle);
     }
 
-    pub fn clear_element_style_values(&self, handle: NodeId) {
-        self.state.clear_element_style_values(handle);
-    }
-
     /// Retains the element's last published computed values while marking
     /// them unavailable for the next style observation.
     pub fn mark_element_style_dirty(&self, handle: NodeId) -> bool {
@@ -184,6 +180,12 @@ impl StyloDomStyleAdapter {
 
     pub fn clear_element_data_for_document(&self, document: NodeId) {
         self.state.clear_element_data_for_document(document);
+    }
+
+    /// Returns whether the canonical Stylo side table still contains any
+    /// resolved element style for this Document.
+    pub fn has_element_styles_for_document(&self, document: NodeId) -> bool {
+        self.state.has_element_styles_for_document(document)
     }
 
     pub fn set_inline_style_attribute(
@@ -272,15 +274,6 @@ impl StyloDomStyleAdapter {
 
     pub fn has_element_data(&self, handle: NodeId) -> bool {
         self.state.has_element_data(handle)
-    }
-
-    pub fn element_data_count(&self) -> usize {
-        self.state.element_data_count()
-    }
-
-    #[doc(hidden)]
-    pub fn element_side_table_document_count_for_test(&self) -> usize {
-        self.state.element_side_table_document_count_for_test()
     }
 
     #[doc(hidden)]
@@ -375,59 +368,6 @@ impl<'binding> StyleDomHostBinding<'binding> {
         ))
     }
 
-    // Binding-level state operations are for one synchronous style traversal:
-    // callers can mutate side tables while wrapper lifetimes remain scoped to
-    // this host binding.
-    pub fn clear_element_data(&self, handle: NodeId) {
-        self.state.clear_element_data(handle);
-    }
-
-    pub fn clear_element_selector_flags(&self, handle: NodeId) {
-        self.state.clear_element_selector_flags(handle);
-    }
-
-    pub fn clear_element_style_values(&self, handle: NodeId) {
-        self.state.clear_element_style_values(handle);
-    }
-
-    pub fn clear_element_data_for_document(&self, document: NodeId) {
-        self.state.clear_element_data_for_document(document);
-    }
-
-    pub fn set_inline_style_attribute(
-        &self,
-        handle: NodeId,
-        declarations: Arc<Locked<PropertyDeclarationBlock>>,
-    ) {
-        self.state.set_inline_style_attribute(handle, declarations);
-    }
-
-    pub fn clear_inline_style_attribute(&self, handle: NodeId) {
-        self.state.clear_inline_style_attribute(handle);
-    }
-
-    pub fn clear_inline_style_attributes_for_document(&self, document: NodeId) {
-        self.state
-            .clear_inline_style_attributes_for_document(document);
-    }
-
-    pub fn element_selector_flag_handles_for_document(&self, document: NodeId) -> Vec<NodeId> {
-        self.state
-            .element_selector_flag_handles_for_document(document)
-    }
-
-    pub fn clear_shadow_cascade_data_for_roots(&self, roots: impl IntoIterator<Item = NodeId>) {
-        self.state.clear_shadow_cascade_data_for_roots(roots);
-    }
-
-    pub fn clear_shadow_cascade_data_for_document(&self, document: NodeId) {
-        self.state.clear_shadow_cascade_data_for_document(document);
-    }
-
-    pub fn shadow_cascade_roots_for_document(&self, document: NodeId) -> Vec<NodeId> {
-        self.state.shadow_cascade_roots_for_document(document)
-    }
-
     pub fn set_shadow_cascade_data(&self, root: NodeId, cascade_data: Arc<CascadeData>) {
         self.state.set_shadow_cascade_data(root, cascade_data);
     }
@@ -443,11 +383,6 @@ impl<'binding> StyleDomHostBinding<'binding> {
     #[doc(hidden)]
     pub fn element_side_table_document_count_for_test(&self) -> usize {
         self.state.element_side_table_document_count_for_test()
-    }
-
-    #[doc(hidden)]
-    pub fn shadow_cascade_document_count_for_test(&self) -> usize {
-        self.state.shadow_cascade_document_count_for_test()
     }
 
     pub(in crate::stylo) fn with_snapshot_handles<R>(
@@ -585,6 +520,7 @@ impl StyloElementDataStore {
         });
     }
 
+    #[cfg(test)]
     fn clear_style_values(&self, handle: NodeId) {
         self.remove_from_documents(handle, |bucket| {
             bucket.data.remove(&handle);
@@ -669,6 +605,13 @@ impl StyloElementDataStore {
             .borrow()
             .get(&document)
             .is_some_and(|bucket| bucket.data.contains_key(&handle))
+    }
+
+    fn has_style_values_for_document(&self, document: NodeId) -> bool {
+        self.documents
+            .borrow()
+            .get(&document)
+            .is_some_and(|bucket| bucket.data.values().any(|data| data.borrow().has_styles()))
     }
 
     fn len(&self) -> usize {
@@ -1406,11 +1349,6 @@ impl StyleDomState {
         self.element_data.clear_selector_flags(handle);
     }
 
-    fn clear_element_style_values(&self, handle: NodeId) {
-        self.note_owner_document_if_bound(handle);
-        self.element_data.clear_style_values(handle);
-    }
-
     fn mark_element_style_dirty(&self, handle: NodeId) -> bool {
         self.note_owner_document_if_bound(handle);
         self.element_data.mark_style_dirty(handle)
@@ -1418,6 +1356,10 @@ impl StyleDomState {
 
     fn clear_element_data_for_document(&self, document: NodeId) {
         self.element_data.clear_data_for_document(document);
+    }
+
+    fn has_element_styles_for_document(&self, document: NodeId) -> bool {
+        self.element_data.has_style_values_for_document(document)
     }
 
     fn set_inline_style_attribute(
