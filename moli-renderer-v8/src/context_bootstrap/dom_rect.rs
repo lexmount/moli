@@ -35,22 +35,6 @@ struct DomRectReadOnlyObjectDeclaration {
     height: f64,
 }
 
-#[derive(WebApiObject)]
-#[webapi(interface = "DOMRectReadOnly")]
-struct DomRectReadOnlyObjectDeclaration {
-    #[webapi(slot = DOM_RECT_BRAND_SLOT, init = true)]
-    brand: (),
-
-    #[webapi(slot = DOM_RECT_X_SLOT)]
-    x: f64,
-    #[webapi(slot = DOM_RECT_Y_SLOT)]
-    y: f64,
-    #[webapi(slot = DOM_RECT_WIDTH_SLOT)]
-    width: f64,
-    #[webapi(slot = DOM_RECT_HEIGHT_SLOT)]
-    height: f64,
-}
-
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::DOMRectReadOnly)]
 struct DomRectReadOnlyPrototypeDeclaration {
