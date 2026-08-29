@@ -79,6 +79,9 @@ impl<'a> QueryElement<'a> {
         if self.matches_target_pseudo() {
             state |= ElementState::URLTARGET;
         }
+        if element.popover_open() && self.host.is_connected(self.handle) {
+            state |= ElementState::POPOVER_OPEN;
+        }
         state |= self.heading_state();
         if element.is_html_media() {
             if element.media_paused() {

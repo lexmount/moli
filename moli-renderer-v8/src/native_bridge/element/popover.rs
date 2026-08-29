@@ -5,6 +5,7 @@ use crate::page_task_queue::{
     RendererPageElementToggleEventKind, RendererPageElementToggleEventState,
 };
 use crate::util::{node_wrapper_from_handle, throw_type_error, v8_string, v8str};
+use dom::ElementState as StyloElementState;
 
 use super::super::node::{
     node_is_element, node_runtime_and_handle_from_args_or_detached,
@@ -144,6 +145,7 @@ fn set_popover_open_state(
     if was_open == open {
         return open;
     }
+    let old_style_state = runtime.retained_current_element_state(handle);
     let (old_state, new_state) = if open {
         (
             RendererPageElementToggleEventState::Closed,
@@ -188,6 +190,13 @@ fn set_popover_open_state(
         .dom_host_mut()
         .set_popover_open(handle, open);
     if changed {
+        let runtime = unsafe { &mut *runtime_ptr };
+        runtime.note_element_state_style_activity_with_old_state(
+            handle,
+            StyloElementState::POPOVER_OPEN,
+            old_style_state,
+        );
+        runtime.invalidate_layout_after_interaction_state_change();
         if open {
             autofocus_popover_descendant(scope, runtime_ptr, handle);
         } else if !is_manual_popover(unsafe { &*runtime_ptr }, handle) {

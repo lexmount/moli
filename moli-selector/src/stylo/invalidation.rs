@@ -1589,6 +1589,9 @@ fn stylo_retained_dependency_state_for_element(element: &Element) -> ElementStat
             state |= ElementState::SEEKING;
         }
     }
+    if element.popover_open() {
+        state |= ElementState::POPOVER_OPEN;
+    }
     state
 }
 

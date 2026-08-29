@@ -500,11 +500,11 @@ slot {
   display: contents;
 }
 
-dialog:not([open]) {
+dialog:not([open]), [popover]:where(:not(:popover-open)) {
   display: none;
 }
 
-dialog[open] {
+dialog[open], [popover]:popover-open {
   display: block;
 }
 

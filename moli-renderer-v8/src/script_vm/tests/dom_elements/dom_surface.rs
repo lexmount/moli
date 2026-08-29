@@ -2113,6 +2113,69 @@ fn root_classic_scrollbars_stay_viewport_fixed_and_drive_window_scroll() {
 }
 
 #[test]
+fn closed_absolute_popover_does_not_expand_root_scrollable_overflow() {
+    let mut vm = new_storage_test_vm("https://closed-popover-overflow.test/");
+    vm.set_viewport_surface(Some(crate::protocol_types::ViewportSurface {
+        inner_width: 800,
+        inner_height: 600,
+        outer_width: 800,
+        outer_height: 600,
+        device_pixel_ratio: 1.0,
+        screen_width: 1920,
+        screen_height: 1080,
+        screen_avail_width: 1920,
+        screen_avail_height: 1040,
+    }))
+    .expect("popover overflow viewport surface should update");
+    vm.eval(
+        r#"
+        (() => {
+          if (!document.documentElement) {
+            document.appendChild(document.createElement("html"));
+          }
+          if (!document.body) {
+            document.documentElement.appendChild(document.createElement("body"));
+          }
+          document.documentElement.style.margin = "0";
+          document.body.style.margin = "0";
+          document.body.innerHTML = `
+            <nav style="overflow:hidden;width:100%;height:40px">
+              <tool-tip id="tip" popover="manual"
+                style="position:absolute;left:900px;width:200px;height:20px">
+                Tooltip
+              </tool-tip>
+            </nav>
+            <main style="height:1200px"></main>`;
+        })()
+        "#,
+    )
+    .expect("closed popover overflow fixture should initialize");
+
+    refresh_layout_for_test(&mut vm);
+    assert_eq!(
+        vm.eval("JSON.stringify([tip.getBoundingClientRect().width, document.documentElement.scrollWidth])")
+            .expect("closed popover geometry should evaluate"),
+        "[0,785]"
+    );
+
+    vm.eval("tip.showPopover()").expect("popover should open");
+    refresh_layout_for_test(&mut vm);
+    assert_eq!(
+        vm.eval("JSON.stringify([tip.getBoundingClientRect().width, document.documentElement.scrollWidth])")
+            .expect("open popover geometry should evaluate"),
+        "[200,1100]"
+    );
+
+    vm.eval("tip.hidePopover()").expect("popover should close");
+    refresh_layout_for_test(&mut vm);
+    assert_eq!(
+        vm.eval("JSON.stringify([tip.getBoundingClientRect().width, document.documentElement.scrollWidth])")
+            .expect("reclosed popover geometry should evaluate"),
+        "[0,785]"
+    );
+}
+
+#[test]
 fn root_scrollbar_gutters_size_the_initial_containing_block_once() {
     let mut vm = new_storage_test_vm("https://root-scrollbar-containing-block.test/");
     vm.set_viewport_surface(Some(crate::protocol_types::ViewportSurface {

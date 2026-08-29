@@ -303,6 +303,32 @@ fn dialog_user_agent_display_tracks_open_state() {
 }
 
 #[test]
+fn popover_user_agent_display_tracks_open_state() {
+    let mut vm = new_parsed_test_vm(
+        "https://popover-user-agent-display.test/",
+        "<!doctype html><tool-tip id=target popover=manual>Tooltip</tool-tip>",
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const popover = document.getElementById('target');
+  const values = [getComputedStyle(popover).display];
+  popover.showPopover();
+  values.push(getComputedStyle(popover).display);
+  popover.hidePopover();
+  values.push(getComputedStyle(popover).display);
+  return values.join('|');
+})()
+"#,
+        )
+        .expect("popover user-agent display should evaluate");
+
+    assert_eq!(result, "none|block|none");
+}
+
+#[test]
 fn semantic_text_decoration_uses_user_agent_defaults() {
     let mut vm = new_parsed_test_vm(
         "https://semantic-text-decoration.test/",

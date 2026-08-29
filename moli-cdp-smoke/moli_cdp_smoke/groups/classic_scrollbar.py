@@ -184,6 +184,7 @@ async def run_classic_scrollbar_group(state: SmokeState) -> None:
     )
     await _run_multi_scroller_drag_workflow(state, is_moli)
     await _run_root_scrollbar_workflow(state, is_moli)
+    await _run_closed_popover_overflow_workflow(state, is_moli)
     await _run_painted_surface_workflow(state, is_moli)
     await _run_viewport_policy_and_numeric_gutter_workflow(state, is_moli)
 
@@ -484,7 +485,6 @@ async def _run_root_scrollbar_workflow(state: SmokeState, is_moli: bool) -> None
         "root_classic_scrollbar_layout_and_cdp_drag",
         {"engine": "moli" if is_moli else "chromium", "metrics": metrics, "scroll": scroll},
     )
-
     await page.set_content(
         """
         <!doctype html>
@@ -613,6 +613,63 @@ async def _run_root_scrollbar_workflow(state: SmokeState, is_moli: bool) -> None
             "stableEmpty": stable_empty,
             "stableOverflow": stable_overflow,
             "rtlScrollbarSide": "right",
+        },
+    )
+
+
+async def _run_closed_popover_overflow_workflow(state: SmokeState, is_moli: bool) -> None:
+    page = state.page
+    await page.set_viewport_size({"width": 800, "height": 600})
+    await page.set_content(
+        """
+        <!doctype html>
+        <style>
+          html, body { margin: 0; }
+          nav { width: 785px; overflow: hidden; }
+          tool-tip {
+            position: absolute;
+            left: 900px;
+            width: 200px;
+            height: 20px;
+          }
+          main { height: 1200px; }
+        </style>
+        <nav><tool-tip id="tip" popover="manual">hidden tip</tool-tip></nav>
+        <main></main>
+        """,
+        wait_until="domcontentloaded",
+    )
+
+    async def metrics() -> list[float | str]:
+        return await page.evaluate(
+            """() => [
+              getComputedStyle(tip).display,
+              tip.getBoundingClientRect().width,
+              document.documentElement.clientWidth,
+              document.documentElement.scrollWidth,
+            ]"""
+        )
+
+    closed = await metrics()
+    assert_equal(closed, ["none", 0, 785, 785], "closed popover stays out of root overflow")
+    await page.evaluate("() => tip.showPopover()")
+    opened = await metrics()
+    assert_equal(
+        [opened[0], opened[1] > 0, opened[3] > opened[2]],
+        ["block", True, True],
+        "open popover participates in root overflow",
+    )
+    await page.evaluate("() => tip.hidePopover()")
+    reclosed = await metrics()
+    assert_equal(reclosed, closed, "closing popover removes its root overflow contribution")
+
+    state.record(
+        "closed_popover_does_not_create_root_scrollbar",
+        {
+            "engine": "moli" if is_moli else "chromium",
+            "closed": closed,
+            "opened": opened,
+            "reclosed": reclosed,
         },
     )
 
