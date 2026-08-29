@@ -2,6 +2,9 @@ use super::backing_store::{
     canvas_like_pixels_copy, canvas_owner_from_context, with_canvas_like_pixels_mut,
 };
 use super::helpers::{canonical_canvas_fill_style, canvas_unrestricted_double_arg};
+use super::path::{
+    CANVAS_CONTEXT_PATH_STATE_ID_SLOT, allocate_canvas_path_state_id, with_canvas_path_state_mut,
+};
 use super::*;
 use crate::context_bootstrap::image_data::{
     build_image_data_object, build_image_data_object_with_bytes, image_data_bytes_from_object,
@@ -14,6 +17,10 @@ use moli_canvas::{
     DEFAULT_FILL_STYLE, DEFAULT_FONT, DrawImageBlit, ScaleFilter, blit_draw_image_filtered,
     blit_image_data, byte_len, data_image_rgba8_pixels, draw_text, extract_image_data,
     fill_style_rgba, measure_text_width, normalize_rect as canvas_normalize_rect, paint_rect,
+};
+use moli_layout::{
+    PaintBrush, PaintColor, PaintFragment, PaintLineCap, PaintLineJoin, PaintShape, PaintSnapshot,
+    PaintStroke, PaintTransform2D, PaintViewport,
 };
 use moli_webapi_declare::WebApiObject;
 use std::str::FromStr;
@@ -141,6 +148,137 @@ struct CanvasContextPutImageDataDirtyArgs<'s> {
     dirty_width: i32,
     #[webidl(required, converter = "enforce_range_long", name = "dirtyHeight")]
     dirty_height: i32,
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "CanvasRenderingContext2D.moveTo")]
+struct CanvasContextMoveToArgs {
+    #[webidl(required)]
+    x: f64,
+    #[webidl(required)]
+    y: f64,
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "CanvasRenderingContext2D.lineTo")]
+struct CanvasContextLineToArgs {
+    #[webidl(required)]
+    x: f64,
+    #[webidl(required)]
+    y: f64,
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "CanvasRenderingContext2D.quadraticCurveTo")]
+struct CanvasContextQuadraticCurveToArgs {
+    #[webidl(required)]
+    cpx: f64,
+    #[webidl(required)]
+    cpy: f64,
+    #[webidl(required)]
+    x: f64,
+    #[webidl(required)]
+    y: f64,
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "CanvasRenderingContext2D.bezierCurveTo")]
+struct CanvasContextBezierCurveToArgs {
+    #[webidl(required)]
+    cp1x: f64,
+    #[webidl(required)]
+    cp1y: f64,
+    #[webidl(required)]
+    cp2x: f64,
+    #[webidl(required)]
+    cp2y: f64,
+    #[webidl(required)]
+    x: f64,
+    #[webidl(required)]
+    y: f64,
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "CanvasRenderingContext2D.rect")]
+struct CanvasContextRectPathArgs {
+    #[webidl(required)]
+    x: f64,
+    #[webidl(required)]
+    y: f64,
+    #[webidl(required)]
+    width: f64,
+    #[webidl(required)]
+    height: f64,
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "CanvasRenderingContext2D.arc")]
+struct CanvasContextArcArgs {
+    #[webidl(required)]
+    x: f64,
+    #[webidl(required)]
+    y: f64,
+    #[webidl(required)]
+    radius: f64,
+    #[webidl(required, name = "startAngle")]
+    start_angle: f64,
+    #[webidl(required, name = "endAngle")]
+    end_angle: f64,
+    #[webidl(default = false)]
+    counterclockwise: bool,
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "CanvasRenderingContext2D.arcTo")]
+struct CanvasContextArcToArgs {
+    #[webidl(required)]
+    x1: f64,
+    #[webidl(required)]
+    y1: f64,
+    #[webidl(required)]
+    x2: f64,
+    #[webidl(required)]
+    y2: f64,
+    #[webidl(required)]
+    radius: f64,
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "CanvasRenderingContext2D.ellipse")]
+struct CanvasContextEllipseArgs {
+    #[webidl(required)]
+    x: f64,
+    #[webidl(required)]
+    y: f64,
+    #[webidl(required, name = "radiusX")]
+    radius_x: f64,
+    #[webidl(required, name = "radiusY")]
+    radius_y: f64,
+    #[webidl(required)]
+    rotation: f64,
+    #[webidl(required, name = "startAngle")]
+    start_angle: f64,
+    #[webidl(required, name = "endAngle")]
+    end_angle: f64,
+    #[webidl(default = false)]
+    counterclockwise: bool,
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "CanvasRenderingContext2D.transform")]
+struct CanvasContextTransformArgs {
+    #[webidl(required)]
+    a: f64,
+    #[webidl(required)]
+    b: f64,
+    #[webidl(required)]
+    c: f64,
+    #[webidl(required)]
+    d: f64,
+    #[webidl(required)]
+    e: f64,
+    #[webidl(required)]
+    f: f64,
 }
 
 fn require_canvas_context_receiver<'s>(
@@ -608,7 +746,840 @@ pub(crate) fn canvas_context_rect_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let _ = normalized_rect(scope, &args, "CanvasRenderingContext2D.rect");
+    if !require_canvas_context_receiver(scope, args.this(), "rect") {
+        return;
+    }
+    let Some(parsed) = webidl::parse_args::<CanvasContextRectPathArgs>(scope, &args) else {
+        return;
+    };
+    let Some(id) = ensure_canvas_context_path_state_id(scope, args.this()) else {
+        return;
+    };
+    with_canvas_path_state_mut(id, |state| {
+        state.rect(parsed.x, parsed.y, parsed.width, parsed.height);
+    });
+}
+
+pub(crate) fn canvas_context_begin_path_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if !require_canvas_context_receiver(scope, args.this(), "beginPath") {
+        return;
+    }
+    let Some(id) = ensure_canvas_context_path_state_id(scope, args.this()) else {
+        return;
+    };
+    with_canvas_path_state_mut(id, |state| state.begin_path());
+}
+
+pub(crate) fn canvas_context_close_path_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if !require_canvas_context_receiver(scope, args.this(), "closePath") {
+        return;
+    }
+    let Some(id) = ensure_canvas_context_path_state_id(scope, args.this()) else {
+        return;
+    };
+    with_canvas_path_state_mut(id, |state| state.close_path());
+}
+
+pub(crate) fn canvas_context_move_to_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if !require_canvas_context_receiver(scope, args.this(), "moveTo") {
+        return;
+    }
+    let Some(parsed) = webidl::parse_args::<CanvasContextMoveToArgs>(scope, &args) else {
+        return;
+    };
+    let Some(id) = ensure_canvas_context_path_state_id(scope, args.this()) else {
+        return;
+    };
+    with_canvas_path_state_mut(id, |state| state.move_to(parsed.x, parsed.y));
+}
+
+pub(crate) fn canvas_context_line_to_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if !require_canvas_context_receiver(scope, args.this(), "lineTo") {
+        return;
+    }
+    let Some(parsed) = webidl::parse_args::<CanvasContextLineToArgs>(scope, &args) else {
+        return;
+    };
+    let Some(id) = ensure_canvas_context_path_state_id(scope, args.this()) else {
+        return;
+    };
+    with_canvas_path_state_mut(id, |state| state.line_to(parsed.x, parsed.y));
+}
+
+pub(crate) fn canvas_context_quadratic_curve_to_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if !require_canvas_context_receiver(scope, args.this(), "quadraticCurveTo") {
+        return;
+    }
+    let Some(parsed) = webidl::parse_args::<CanvasContextQuadraticCurveToArgs>(scope, &args) else {
+        return;
+    };
+    let Some(id) = ensure_canvas_context_path_state_id(scope, args.this()) else {
+        return;
+    };
+    with_canvas_path_state_mut(id, |state| {
+        state.quadratic_curve_to(parsed.cpx, parsed.cpy, parsed.x, parsed.y);
+    });
+}
+
+pub(crate) fn canvas_context_bezier_curve_to_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if !require_canvas_context_receiver(scope, args.this(), "bezierCurveTo") {
+        return;
+    }
+    let Some(parsed) = webidl::parse_args::<CanvasContextBezierCurveToArgs>(scope, &args) else {
+        return;
+    };
+    let Some(id) = ensure_canvas_context_path_state_id(scope, args.this()) else {
+        return;
+    };
+    with_canvas_path_state_mut(id, |state| {
+        state.bezier_curve_to(
+            parsed.cp1x,
+            parsed.cp1y,
+            parsed.cp2x,
+            parsed.cp2y,
+            parsed.x,
+            parsed.y,
+        );
+    });
+}
+
+pub(crate) fn canvas_context_arc_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if !require_canvas_context_receiver(scope, args.this(), "arc") {
+        return;
+    }
+    let Some(parsed) = webidl::parse_args::<CanvasContextArcArgs>(scope, &args) else {
+        return;
+    };
+    if parsed.radius < 0.0 {
+        webidl::throw_index_size_error(scope);
+        rv.set_undefined();
+        return;
+    }
+    let Some(id) = ensure_canvas_context_path_state_id(scope, args.this()) else {
+        rv.set_undefined();
+        return;
+    };
+    with_canvas_path_state_mut(id, |state| {
+        state.arc(
+            parsed.x,
+            parsed.y,
+            parsed.radius,
+            parsed.start_angle,
+            parsed.end_angle,
+            parsed.counterclockwise,
+        );
+    });
+    rv.set_undefined();
+}
+
+pub(crate) fn canvas_context_arc_to_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if !require_canvas_context_receiver(scope, args.this(), "arcTo") {
+        return;
+    }
+    let Some(parsed) = webidl::parse_args::<CanvasContextArcToArgs>(scope, &args) else {
+        return;
+    };
+    if parsed.radius < 0.0 {
+        webidl::throw_index_size_error(scope);
+        rv.set_undefined();
+        return;
+    }
+    let Some(id) = ensure_canvas_context_path_state_id(scope, args.this()) else {
+        rv.set_undefined();
+        return;
+    };
+    with_canvas_path_state_mut(id, |state| {
+        state.arc_to(parsed.x1, parsed.y1, parsed.x2, parsed.y2, parsed.radius);
+    });
+    rv.set_undefined();
+}
+
+pub(crate) fn canvas_context_ellipse_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if !require_canvas_context_receiver(scope, args.this(), "ellipse") {
+        return;
+    }
+    let Some(parsed) = webidl::parse_args::<CanvasContextEllipseArgs>(scope, &args) else {
+        return;
+    };
+    if parsed.radius_x < 0.0 || parsed.radius_y < 0.0 {
+        webidl::throw_index_size_error(scope);
+        rv.set_undefined();
+        return;
+    }
+    let Some(id) = ensure_canvas_context_path_state_id(scope, args.this()) else {
+        rv.set_undefined();
+        return;
+    };
+    with_canvas_path_state_mut(id, |state| {
+        state.ellipse(
+            parsed.x,
+            parsed.y,
+            parsed.radius_x,
+            parsed.radius_y,
+            parsed.rotation,
+            parsed.start_angle,
+            parsed.end_angle,
+            parsed.counterclockwise,
+        );
+    });
+    rv.set_undefined();
+}
+
+pub(crate) fn canvas_context_translate_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if !require_canvas_context_receiver(scope, args.this(), "translate") {
+        return;
+    }
+    let prefix = "CanvasRenderingContext2D.translate";
+    let Some(x) = canvas_required_unrestricted_double_arg(scope, &args, 0, prefix) else {
+        return;
+    };
+    let Some(y) = canvas_required_unrestricted_double_arg(scope, &args, 1, prefix) else {
+        return;
+    };
+    let Some(id) = ensure_canvas_context_path_state_id(scope, args.this()) else {
+        return;
+    };
+    with_canvas_path_state_mut(id, |state| state.translate(x, y));
+}
+
+pub(crate) fn canvas_context_scale_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if !require_canvas_context_receiver(scope, args.this(), "scale") {
+        return;
+    }
+    let prefix = "CanvasRenderingContext2D.scale";
+    let Some(x) = canvas_required_unrestricted_double_arg(scope, &args, 0, prefix) else {
+        return;
+    };
+    let Some(y) = canvas_required_unrestricted_double_arg(scope, &args, 1, prefix) else {
+        return;
+    };
+    let Some(id) = ensure_canvas_context_path_state_id(scope, args.this()) else {
+        return;
+    };
+    with_canvas_path_state_mut(id, |state| state.scale(x, y));
+}
+
+pub(crate) fn canvas_context_rotate_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if !require_canvas_context_receiver(scope, args.this(), "rotate") {
+        return;
+    }
+    let prefix = "CanvasRenderingContext2D.rotate";
+    let Some(angle) = canvas_required_unrestricted_double_arg(scope, &args, 0, prefix) else {
+        return;
+    };
+    let Some(id) = ensure_canvas_context_path_state_id(scope, args.this()) else {
+        return;
+    };
+    with_canvas_path_state_mut(id, |state| state.rotate(angle));
+}
+
+pub(crate) fn canvas_context_transform_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if !require_canvas_context_receiver(scope, args.this(), "transform") {
+        return;
+    }
+    let Some(parsed) = webidl::parse_args::<CanvasContextTransformArgs>(scope, &args) else {
+        return;
+    };
+    let Some(id) = ensure_canvas_context_path_state_id(scope, args.this()) else {
+        return;
+    };
+    with_canvas_path_state_mut(id, |state| {
+        state.concatenate_transform(parsed.a, parsed.b, parsed.c, parsed.d, parsed.e, parsed.f);
+    });
+}
+
+pub(crate) fn canvas_context_set_transform_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if !require_canvas_context_receiver(scope, args.this(), "setTransform") {
+        return;
+    }
+    let Some(parsed) = webidl::parse_args::<CanvasContextTransformArgs>(scope, &args) else {
+        return;
+    };
+    let Some(id) = ensure_canvas_context_path_state_id(scope, args.this()) else {
+        return;
+    };
+    with_canvas_path_state_mut(id, |state| {
+        state.set_transform(parsed.a, parsed.b, parsed.c, parsed.d, parsed.e, parsed.f);
+    });
+}
+
+pub(crate) fn canvas_context_reset_transform_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if !require_canvas_context_receiver(scope, args.this(), "resetTransform") {
+        return;
+    }
+    let Some(id) = ensure_canvas_context_path_state_id(scope, args.this()) else {
+        return;
+    };
+    with_canvas_path_state_mut(id, |state| state.reset_transform());
+}
+
+pub(crate) fn canvas_context_fill_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if !require_canvas_context_receiver(scope, args.this(), "fill") {
+        return;
+    }
+    let Some(canvas) = canvas_owner_from_context(scope, args.this()) else {
+        return;
+    };
+    let Some(id) = ensure_canvas_context_path_state_id(scope, args.this()) else {
+        rv.set_undefined();
+        return;
+    };
+    let fragment = with_canvas_path_state_mut(id, |state| {
+        if state.is_empty() {
+            return None;
+        }
+        Some(PaintFragment::Fill {
+            shape: PaintShape::Path(state.paint_path()),
+            brush: PaintBrush::Solid(context_fill_color(scope, args.this())),
+            transform: state.transform(),
+        })
+    });
+    if let Some(fragment) = fragment {
+        rasterize_canvas_fragment(scope, canvas, fragment);
+    }
+    rv.set_undefined();
+}
+
+pub(crate) fn canvas_context_stroke_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if !require_canvas_context_receiver(scope, args.this(), "stroke") {
+        return;
+    }
+    let Some(canvas) = canvas_owner_from_context(scope, args.this()) else {
+        return;
+    };
+    let Some(id) = ensure_canvas_context_path_state_id(scope, args.this()) else {
+        rv.set_undefined();
+        return;
+    };
+    let fragment = with_canvas_path_state_mut(id, |state| {
+        if state.is_empty() {
+            return None;
+        }
+        Some(PaintFragment::Stroke(context_stroke(
+            scope,
+            args.this(),
+            state.paint_path(),
+            state.transform(),
+        )))
+    });
+    if let Some(fragment) = fragment {
+        rasterize_canvas_fragment(scope, canvas, fragment);
+    }
+    rv.set_undefined();
+}
+
+pub(crate) fn canvas_context_stroke_rect_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if !require_canvas_context_receiver(scope, args.this(), "strokeRect") {
+        return;
+    }
+    let Some(canvas) = canvas_owner_from_context(scope, args.this()) else {
+        return;
+    };
+    let prefix = "CanvasRenderingContext2D.strokeRect";
+    let Some(x) = canvas_required_unrestricted_double_arg(scope, &args, 0, prefix) else {
+        rv.set_undefined();
+        return;
+    };
+    let Some(y) = canvas_required_unrestricted_double_arg(scope, &args, 1, prefix) else {
+        rv.set_undefined();
+        return;
+    };
+    let Some(width) = canvas_required_unrestricted_double_arg(scope, &args, 2, prefix) else {
+        rv.set_undefined();
+        return;
+    };
+    let Some(height) = canvas_required_unrestricted_double_arg(scope, &args, 3, prefix) else {
+        rv.set_undefined();
+        return;
+    };
+    let Some(id) = ensure_canvas_context_path_state_id(scope, args.this()) else {
+        rv.set_undefined();
+        return;
+    };
+    // strokeRect must not alter the current default path.
+    let (path, transform) = with_canvas_path_state_mut(id, |state| {
+        let mut rect_path = state.clone();
+        rect_path.begin_path();
+        rect_path.rect(x, y, width, height);
+        (rect_path.paint_path(), state.transform())
+    });
+    let stroke = context_stroke(scope, args.this(), path, transform);
+    rasterize_canvas_fragment(scope, canvas, PaintFragment::Stroke(stroke));
+    rv.set_undefined();
+}
+
+pub(crate) fn canvas_context_line_width_getter_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if !require_canvas_context_receiver(scope, args.this(), "lineWidth getter") {
+        return;
+    }
+    let value = context_number_slot(scope, args.this(), CANVAS_CONTEXT_LINE_WIDTH_SLOT)
+        .unwrap_or(DEFAULT_LINE_WIDTH);
+    rv.set(v8::Number::new(scope, value).into());
+}
+
+pub(crate) fn canvas_context_line_width_setter_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if !require_canvas_context_receiver(scope, args.this(), "lineWidth setter") {
+        return;
+    }
+    canvas_context_nonnegative_number_assign(
+        scope,
+        args.this(),
+        args.get(0),
+        CANVAS_CONTEXT_LINE_WIDTH_SLOT,
+    );
+    rv.set_undefined();
+}
+
+pub(crate) fn canvas_context_miter_limit_getter_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if !require_canvas_context_receiver(scope, args.this(), "miterLimit getter") {
+        return;
+    }
+    let value = context_number_slot(scope, args.this(), CANVAS_CONTEXT_MITER_LIMIT_SLOT)
+        .unwrap_or(DEFAULT_MITER_LIMIT);
+    rv.set(v8::Number::new(scope, value).into());
+}
+
+pub(crate) fn canvas_context_miter_limit_setter_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if !require_canvas_context_receiver(scope, args.this(), "miterLimit setter") {
+        return;
+    }
+    canvas_context_nonnegative_number_assign(
+        scope,
+        args.this(),
+        args.get(0),
+        CANVAS_CONTEXT_MITER_LIMIT_SLOT,
+    );
+    rv.set_undefined();
+}
+
+pub(crate) fn canvas_context_line_dash_offset_getter_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if !require_canvas_context_receiver(scope, args.this(), "lineDashOffset getter") {
+        return;
+    }
+    let value = context_number_slot(scope, args.this(), CANVAS_CONTEXT_LINE_DASH_OFFSET_SLOT)
+        .unwrap_or(DEFAULT_LINE_DASH_OFFSET);
+    rv.set(v8::Number::new(scope, value).into());
+}
+
+pub(crate) fn canvas_context_line_dash_offset_setter_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if !require_canvas_context_receiver(scope, args.this(), "lineDashOffset setter") {
+        return;
+    }
+    // A non-finite value is ignored per the canvas setter semantics.
+    let value = webidl::convert::<webidl::UnrestrictedDouble>(
+        scope,
+        args.get(0),
+        webidl::Context::member("CanvasRenderingContext2D", "lineDashOffset"),
+    );
+    if let Ok(value) = value {
+        let value = f64::from(value);
+        if value.is_finite() {
+            set_context_number_slot(
+                scope,
+                args.this(),
+                CANVAS_CONTEXT_LINE_DASH_OFFSET_SLOT,
+                value,
+            );
+        }
+    }
+    rv.set_undefined();
+}
+
+pub(crate) fn canvas_context_line_cap_getter_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if !require_canvas_context_receiver(scope, args.this(), "lineCap getter") {
+        return;
+    }
+    let value = context_string_slot(scope, args.this(), CANVAS_CONTEXT_LINE_CAP_SLOT)
+        .unwrap_or_else(|| DEFAULT_LINE_CAP.to_owned());
+    rv.set(
+        v8_string(scope, &value)
+            .unwrap_or_else(|| v8::String::empty(scope))
+            .into(),
+    );
+}
+
+pub(crate) fn canvas_context_line_cap_setter_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if !require_canvas_context_receiver(scope, args.this(), "lineCap setter") {
+        return;
+    }
+    canvas_context_enum_string_assign(
+        scope,
+        args.this(),
+        args.get(0),
+        CANVAS_CONTEXT_LINE_CAP_SLOT,
+        &["butt", "round", "square"],
+    );
+    rv.set_undefined();
+}
+
+pub(crate) fn canvas_context_line_join_getter_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if !require_canvas_context_receiver(scope, args.this(), "lineJoin getter") {
+        return;
+    }
+    let value = context_string_slot(scope, args.this(), CANVAS_CONTEXT_LINE_JOIN_SLOT)
+        .unwrap_or_else(|| DEFAULT_LINE_JOIN.to_owned());
+    rv.set(
+        v8_string(scope, &value)
+            .unwrap_or_else(|| v8::String::empty(scope))
+            .into(),
+    );
+}
+
+pub(crate) fn canvas_context_line_join_setter_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if !require_canvas_context_receiver(scope, args.this(), "lineJoin setter") {
+        return;
+    }
+    canvas_context_enum_string_assign(
+        scope,
+        args.this(),
+        args.get(0),
+        CANVAS_CONTEXT_LINE_JOIN_SLOT,
+        &["miter", "round", "bevel"],
+    );
+    rv.set_undefined();
+}
+
+pub(crate) fn canvas_context_stroke_style_getter_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if !require_canvas_context_receiver(scope, args.this(), "strokeStyle getter") {
+        return;
+    }
+    let value = context_string_slot(scope, args.this(), CANVAS_CONTEXT_STROKE_STYLE_SLOT)
+        .unwrap_or_else(|| DEFAULT_STROKE_STYLE.to_owned());
+    rv.set(
+        v8_string(scope, &value)
+            .unwrap_or_else(|| v8::String::empty(scope))
+            .into(),
+    );
+}
+
+pub(crate) fn canvas_context_stroke_style_setter_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if !require_canvas_context_receiver(scope, args.this(), "strokeStyle setter") {
+        return;
+    }
+    let Some(raw) = canvas_context_dom_string_value(
+        scope,
+        args.get(0),
+        "CanvasRenderingContext2D",
+        "strokeStyle",
+    ) else {
+        rv.set_undefined();
+        return;
+    };
+    let Some(canonical) = canonical_canvas_fill_style(&raw) else {
+        rv.set_undefined();
+        return;
+    };
+    set_context_string_slot(
+        scope,
+        args.this(),
+        CANVAS_CONTEXT_STROKE_STYLE_SLOT,
+        &canonical,
+    );
+    rv.set_undefined();
+}
+
+fn canvas_context_nonnegative_number_assign<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    holder: v8::Local<'s, v8::Object>,
+    value: v8::Local<'s, v8::Value>,
+    slot: &'static str,
+) {
+    let value = webidl::convert::<webidl::UnrestrictedDouble>(
+        scope,
+        value,
+        webidl::Context::member("CanvasRenderingContext2D", slot),
+    );
+    if let Ok(value) = value {
+        let value = f64::from(value);
+        if value.is_finite() && value >= 0.0 {
+            set_context_number_slot(scope, holder, slot, value);
+        }
+    }
+}
+
+fn canvas_context_enum_string_assign<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    holder: v8::Local<'s, v8::Object>,
+    value: v8::Local<'s, v8::Value>,
+    slot: &'static str,
+    accepted: &[&'static str],
+) {
+    let Some(string) =
+        canvas_context_dom_string_value(scope, value, "CanvasRenderingContext2D", slot)
+    else {
+        return;
+    };
+    if accepted.contains(&string.as_str()) {
+        set_context_string_slot(scope, holder, slot, &string);
+    }
+}
+
+fn ensure_canvas_context_path_state_id<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    context: v8::Local<'s, v8::Object>,
+) -> Option<u64> {
+    if let Some(id) = context_number_slot(scope, context, CANVAS_CONTEXT_PATH_STATE_ID_SLOT) {
+        return Some(id as u64);
+    }
+    let id = allocate_canvas_path_state_id();
+    set_context_number_slot(scope, context, CANVAS_CONTEXT_PATH_STATE_ID_SLOT, id as f64);
+    Some(id)
+}
+
+fn context_fill_color<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    context: v8::Local<'s, v8::Object>,
+) -> PaintColor {
+    let fill_style = context_string_slot(scope, context, CANVAS_CONTEXT_FILL_STYLE_SLOT)
+        .unwrap_or_else(|| DEFAULT_FILL_STYLE.to_owned());
+    color_with_global_alpha(
+        fill_style_rgba(&fill_style),
+        context_global_alpha(scope, context),
+    )
+}
+
+fn context_global_alpha<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    context: v8::Local<'s, v8::Object>,
+) -> f64 {
+    context_number_slot(scope, context, CANVAS_CONTEXT_GLOBAL_ALPHA_SLOT)
+        .unwrap_or(DEFAULT_GLOBAL_ALPHA)
+}
+
+fn color_with_global_alpha(rgba: [u8; 4], global_alpha: f64) -> PaintColor {
+    let alpha = (f64::from(rgba[3]) / 255.0 * global_alpha).clamp(0.0, 1.0) as f32;
+    PaintColor::new(
+        f64::from(rgba[0]) as f32 / 255.0,
+        f64::from(rgba[1]) as f32 / 255.0,
+        f64::from(rgba[2]) as f32 / 255.0,
+        alpha,
+    )
+}
+
+fn context_stroke<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    context: v8::Local<'s, v8::Object>,
+    path: moli_layout::PaintPath,
+    transform: PaintTransform2D,
+) -> PaintStroke {
+    let stroke_style = context_string_slot(scope, context, CANVAS_CONTEXT_STROKE_STYLE_SLOT)
+        .unwrap_or_else(|| DEFAULT_STROKE_STYLE.to_owned());
+    let join = match context_string_slot(scope, context, CANVAS_CONTEXT_LINE_JOIN_SLOT).as_deref() {
+        Some("round") => PaintLineJoin::Round,
+        Some("bevel") => PaintLineJoin::Bevel,
+        _ => PaintLineJoin::Miter,
+    };
+    let cap = match context_string_slot(scope, context, CANVAS_CONTEXT_LINE_CAP_SLOT).as_deref() {
+        Some("round") => PaintLineCap::Round,
+        Some("square") => PaintLineCap::Square,
+        _ => PaintLineCap::Butt,
+    };
+    PaintStroke {
+        path,
+        color: color_with_global_alpha(
+            fill_style_rgba(&stroke_style),
+            context_global_alpha(scope, context),
+        ),
+        width: context_number_slot(scope, context, CANVAS_CONTEXT_LINE_WIDTH_SLOT)
+            .unwrap_or(DEFAULT_LINE_WIDTH) as f32,
+        join,
+        start_cap: cap,
+        end_cap: cap,
+        miter_limit: context_number_slot(scope, context, CANVAS_CONTEXT_MITER_LIMIT_SLOT)
+            .unwrap_or(DEFAULT_MITER_LIMIT) as f32,
+        dash_pattern: context_line_dash(scope, context),
+        dash_offset: context_number_slot(scope, context, CANVAS_CONTEXT_LINE_DASH_OFFSET_SLOT)
+            .unwrap_or(DEFAULT_LINE_DASH_OFFSET) as f32,
+        transform,
+    }
+}
+
+fn context_line_dash<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    context: v8::Local<'s, v8::Object>,
+) -> Vec<f32> {
+    let Some(array) = get_private_value(scope, context, CANVAS_CONTEXT_LINE_DASH_SLOT)
+        .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok())
+    else {
+        return Vec::new();
+    };
+    (0..array.length())
+        .filter_map(|index| array.get_index(scope, index))
+        .filter_map(|value| value.number_value(scope))
+        .map(|value| value as f32)
+        .collect()
+}
+
+fn rasterize_canvas_fragment<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    canvas: v8::Local<'s, v8::Object>,
+    fragment: PaintFragment,
+) {
+    let _ = with_canvas_like_pixels_mut(scope, canvas, |pixels, width, height| {
+        if width == 0 || height == 0 {
+            return;
+        }
+        let mut snapshot = PaintSnapshot::new(
+            PaintViewport::new(width, height, 1.0),
+            PaintColor::new(0.0, 0.0, 0.0, 0.0),
+        );
+        snapshot.push_fragment(fragment);
+        if let Ok(raster) = moli_paint::raster_snapshot(&snapshot)
+            && raster.width == width
+            && raster.height == height
+        {
+            composite_rgba8_over(pixels, &raster.rgba);
+        }
+    });
+}
+
+/// Composites `source` (premultiplied RGBA8) over `destination` (straight
+/// RGBA8) using source-over. This is the format vello_cpu renders into, while
+/// the canvas backing store is straight alpha.
+fn composite_rgba8_over(destination: &mut [u8], source: &[u8]) {
+    for (dst, src) in destination.chunks_exact_mut(4).zip(source.chunks_exact(4)) {
+        let src_alpha = u32::from(src[3]);
+        if src_alpha == 0 {
+            continue;
+        }
+        let dst_alpha = u32::from(dst[3]);
+        if src_alpha == 255 {
+            dst.copy_from_slice(src);
+            continue;
+        }
+        let out_alpha = src_alpha + dst_alpha * (255 - src_alpha) / 255;
+        if out_alpha == 0 {
+            dst.copy_from_slice(&[0, 0, 0, 0]);
+            continue;
+        }
+        for channel in 0..3 {
+            let src_premultiplied = u32::from(src[channel]);
+            let dst_premultiplied = u32::from(dst[channel]) * dst_alpha / 255;
+            let out_premultiplied = src_premultiplied + dst_premultiplied * (255 - src_alpha) / 255;
+            dst[channel] = ((out_premultiplied * 255 + out_alpha / 2) / out_alpha) as u8;
+        }
+        dst[3] = out_alpha as u8;
+    }
 }
 
 pub(crate) fn canvas_context_is_point_in_path_callback(

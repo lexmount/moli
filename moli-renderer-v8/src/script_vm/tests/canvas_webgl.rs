@@ -725,6 +725,166 @@ fn html_canvas_clear_rect_only_clears_target_region() {
 }
 
 #[test]
+fn html_canvas_arc_fill_renders_pixels() {
+    let mut vm = new_storage_test_vm("https://canvas-arc-fill.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const canvas = document.createElement('canvas');
+  canvas.width = 20;
+  canvas.height = 20;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = 'red';
+  ctx.beginPath();
+  ctx.arc(10, 10, 5, 0, Math.PI * 2);
+  ctx.fill();
+  const data = Array.from(ctx.getImageData(0, 0, 20, 20).data);
+  const center = data.slice((10 * 20 + 10) * 4, (10 * 20 + 10) * 4 + 4);
+  const corner = data.slice(0, 4);
+  return JSON.stringify({ center, corner });
+})()
+"#,
+        )
+        .expect("canvas arc fill should evaluate");
+
+    assert_eq!(
+        result, r#"{"center":[255,0,0,255],"corner":[0,0,0,0]}"#,
+        "arc()+fill() must rasterize a filled disk"
+    );
+}
+
+#[test]
+fn html_canvas_line_stroke_renders_pixels() {
+    let mut vm = new_storage_test_vm("https://canvas-line-stroke.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const canvas = document.createElement('canvas');
+  canvas.width = 20;
+  canvas.height = 20;
+  const ctx = canvas.getContext('2d');
+  ctx.strokeStyle = 'green';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(2, 10);
+  ctx.lineTo(18, 10);
+  ctx.stroke();
+  const data = Array.from(ctx.getImageData(0, 0, 20, 20).data);
+  const hit = data.slice((10 * 20 + 10) * 4, (10 * 20 + 10) * 4 + 4);
+  const miss = data.slice(0, 4);
+  return JSON.stringify({ hit, miss });
+})()
+"#,
+        )
+        .expect("canvas line stroke should evaluate");
+
+    assert_eq!(
+        result, r#"{"hit":[0,128,0,255],"miss":[0,0,0,0]}"#,
+        "moveTo()+lineTo()+stroke() must rasterize the stroked line"
+    );
+}
+
+#[test]
+fn html_canvas_rect_path_fill_renders_pixels() {
+    let mut vm = new_storage_test_vm("https://canvas-rect-path-fill.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const canvas = document.createElement('canvas');
+  canvas.width = 20;
+  canvas.height = 20;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = 'blue';
+  ctx.beginPath();
+  ctx.rect(2, 2, 4, 3);
+  ctx.fill();
+  const data = Array.from(ctx.getImageData(0, 0, 20, 20).data);
+  const inside = data.slice((3 * 20 + 3) * 4, (3 * 20 + 3) * 4 + 4);
+  const outside = data.slice(0, 4);
+  return JSON.stringify({ inside, outside });
+})()
+"#,
+        )
+        .expect("canvas rect path fill should evaluate");
+
+    assert_eq!(
+        result, r#"{"inside":[0,0,255,255],"outside":[0,0,0,0]}"#,
+        "rect()+fill() must rasterize the rectangle"
+    );
+}
+
+#[test]
+fn html_canvas_path_fill_respects_translate() {
+    let mut vm = new_storage_test_vm("https://canvas-path-translate.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const canvas = document.createElement('canvas');
+  canvas.width = 20;
+  canvas.height = 20;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = 'red';
+  ctx.translate(5, 5);
+  ctx.beginPath();
+  ctx.rect(0, 0, 3, 3);
+  ctx.fill();
+  const data = Array.from(ctx.getImageData(0, 0, 20, 20).data);
+  const translated = data.slice((6 * 20 + 6) * 4, (6 * 20 + 6) * 4 + 4);
+  const origin = data.slice(0, 4);
+  return JSON.stringify({ translated, origin });
+})()
+"#,
+        )
+        .expect("canvas translated path fill should evaluate");
+
+    assert_eq!(
+        result, r#"{"translated":[255,0,0,255],"origin":[0,0,0,0]}"#,
+        "translate() must move the path geometry"
+    );
+}
+
+#[test]
+fn html_canvas_stroke_respects_line_width() {
+    let mut vm = new_storage_test_vm("https://canvas-stroke-line-width.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const canvas = document.createElement('canvas');
+  canvas.width = 20;
+  canvas.height = 20;
+  const ctx = canvas.getContext('2d');
+  ctx.strokeStyle = 'lime';
+  ctx.lineWidth = 6;
+  ctx.beginPath();
+  ctx.moveTo(2, 10);
+  ctx.lineTo(18, 10);
+  ctx.stroke();
+  const data = Array.from(ctx.getImageData(0, 0, 20, 20).data);
+  const center = data.slice((10 * 20 + 10) * 4, (10 * 20 + 10) * 4 + 4);
+  const edge = data.slice((12 * 20 + 10) * 4, (12 * 20 + 10) * 4 + 4);
+  return JSON.stringify({ center, edge });
+})()
+"#,
+        )
+        .expect("canvas stroke line width should evaluate");
+
+    assert_eq!(
+        result, r#"{"center":[0,255,0,255],"edge":[0,255,0,255]}"#,
+        "a 6px stroke must cover y in [7, 12]"
+    );
+}
+
+#[test]
 fn canvas_context_rect_path_method_is_available_for_fingerprinting_scripts() {
     let mut vm = new_storage_test_vm("https://canvas-rect-path-method.test/");
 
@@ -784,7 +944,7 @@ fn canvas_context_rect_path_method_is_available_for_fingerprinting_scripts() {
 
     assert_eq!(
         result,
-        r#"{"htmlType":"function","offscreenType":"function","arcType":"function","pointType":"function","htmlCall":"ok","offscreenCall":"ok","pointInPath":false,"pointInStroke":false,"changed":false}"#
+        r#"{"htmlType":"function","offscreenType":"function","arcType":"function","pointType":"function","htmlCall":"ok","offscreenCall":"ok","pointInPath":false,"pointInStroke":false,"changed":true}"#
     );
 }
 

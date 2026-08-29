@@ -33,6 +33,27 @@ struct CanvasLikeContextObjectDeclaration {
         constructor_default = super::DEFAULT_GLOBAL_COMPOSITE_OPERATION
     )]
     global_composite_operation: &'static str,
+    #[webapi(slot = CANVAS_CONTEXT_LINE_WIDTH_SLOT, constructor_default = super::DEFAULT_LINE_WIDTH)]
+    line_width: f64,
+    #[webapi(slot = CANVAS_CONTEXT_LINE_CAP_SLOT, constructor_default = super::DEFAULT_LINE_CAP)]
+    line_cap: &'static str,
+    #[webapi(slot = CANVAS_CONTEXT_LINE_JOIN_SLOT, constructor_default = super::DEFAULT_LINE_JOIN)]
+    line_join: &'static str,
+    #[webapi(
+        slot = CANVAS_CONTEXT_MITER_LIMIT_SLOT,
+        constructor_default = super::DEFAULT_MITER_LIMIT
+    )]
+    miter_limit: f64,
+    #[webapi(
+        slot = CANVAS_CONTEXT_LINE_DASH_OFFSET_SLOT,
+        constructor_default = super::DEFAULT_LINE_DASH_OFFSET
+    )]
+    line_dash_offset: f64,
+    #[webapi(
+        slot = CANVAS_CONTEXT_STROKE_STYLE_SLOT,
+        constructor_default = super::DEFAULT_STROKE_STYLE
+    )]
+    stroke_style: &'static str,
 }
 
 pub(super) fn canvas_unrestricted_double_arg<'s>(

@@ -1,24 +1,39 @@
 use super::canvas::{
-    canvas_context_clear_rect_callback, canvas_context_create_image_data_callback,
-    canvas_context_create_linear_gradient_callback, canvas_context_draw_image_callback,
-    canvas_context_fill_rect_callback, canvas_context_fill_style_getter_callback,
-    canvas_context_fill_style_setter_callback, canvas_context_fill_text_callback,
-    canvas_context_font_getter_callback, canvas_context_font_setter_callback,
-    canvas_context_get_image_data_callback, canvas_context_get_line_dash_callback,
-    canvas_context_global_alpha_getter_callback, canvas_context_global_alpha_setter_callback,
+    canvas_context_arc_callback, canvas_context_arc_to_callback,
+    canvas_context_begin_path_callback, canvas_context_bezier_curve_to_callback,
+    canvas_context_clear_rect_callback, canvas_context_close_path_callback,
+    canvas_context_create_image_data_callback, canvas_context_create_linear_gradient_callback,
+    canvas_context_draw_image_callback, canvas_context_ellipse_callback,
+    canvas_context_fill_callback, canvas_context_fill_rect_callback,
+    canvas_context_fill_style_getter_callback, canvas_context_fill_style_setter_callback,
+    canvas_context_fill_text_callback, canvas_context_font_getter_callback,
+    canvas_context_font_setter_callback, canvas_context_get_image_data_callback,
+    canvas_context_get_line_dash_callback, canvas_context_global_alpha_getter_callback,
+    canvas_context_global_alpha_setter_callback,
     canvas_context_global_composite_operation_getter_callback,
     canvas_context_global_composite_operation_setter_callback,
     canvas_context_image_smoothing_enabled_getter_callback,
     canvas_context_image_smoothing_enabled_setter_callback,
     canvas_context_image_smoothing_quality_getter_callback,
     canvas_context_image_smoothing_quality_setter_callback,
-    canvas_context_is_point_in_path_callback, canvas_context_measure_text_callback,
+    canvas_context_is_point_in_path_callback, canvas_context_line_cap_getter_callback,
+    canvas_context_line_cap_setter_callback, canvas_context_line_dash_offset_getter_callback,
+    canvas_context_line_dash_offset_setter_callback, canvas_context_line_join_getter_callback,
+    canvas_context_line_join_setter_callback, canvas_context_line_to_callback,
+    canvas_context_line_width_getter_callback, canvas_context_line_width_setter_callback,
+    canvas_context_measure_text_callback, canvas_context_miter_limit_getter_callback,
+    canvas_context_miter_limit_setter_callback, canvas_context_move_to_callback,
     canvas_context_noop_callback, canvas_context_put_image_data_callback,
-    canvas_context_rect_callback, canvas_context_set_line_dash_callback,
-    canvas_context_stroke_text_callback, canvas_gradient_add_color_stop_callback,
-    install_canvas_template_bindings, offscreen_canvas_convert_to_blob_callback,
-    offscreen_canvas_get_context_callback, webgl_boolean_callback,
-    webgl_check_framebuffer_status_callback, webgl_create_buffer_callback,
+    canvas_context_quadratic_curve_to_callback, canvas_context_rect_callback,
+    canvas_context_reset_transform_callback, canvas_context_rotate_callback,
+    canvas_context_scale_callback, canvas_context_set_line_dash_callback,
+    canvas_context_set_transform_callback, canvas_context_stroke_callback,
+    canvas_context_stroke_rect_callback, canvas_context_stroke_style_getter_callback,
+    canvas_context_stroke_style_setter_callback, canvas_context_stroke_text_callback,
+    canvas_context_transform_callback, canvas_context_translate_callback,
+    canvas_gradient_add_color_stop_callback, install_canvas_template_bindings,
+    offscreen_canvas_convert_to_blob_callback, offscreen_canvas_get_context_callback,
+    webgl_boolean_callback, webgl_check_framebuffer_status_callback, webgl_create_buffer_callback,
     webgl_create_framebuffer_callback, webgl_create_program_callback,
     webgl_create_renderbuffer_callback, webgl_create_shader_callback,
     webgl_get_attrib_location_callback, webgl_get_context_attributes_callback,
@@ -175,6 +190,48 @@ struct CanvasRenderingContext2dTemplateDeclaration {
     global_composite_operation: (),
 
     #[webapi(
+        accessor_property = "lineWidth",
+        getter = canvas_context_line_width_getter_callback,
+        setter = canvas_context_line_width_setter_callback
+    )]
+    line_width: (),
+
+    #[webapi(
+        accessor_property = "lineCap",
+        getter = canvas_context_line_cap_getter_callback,
+        setter = canvas_context_line_cap_setter_callback
+    )]
+    line_cap: (),
+
+    #[webapi(
+        accessor_property = "lineJoin",
+        getter = canvas_context_line_join_getter_callback,
+        setter = canvas_context_line_join_setter_callback
+    )]
+    line_join: (),
+
+    #[webapi(
+        accessor_property = "miterLimit",
+        getter = canvas_context_miter_limit_getter_callback,
+        setter = canvas_context_miter_limit_setter_callback
+    )]
+    miter_limit: (),
+
+    #[webapi(
+        accessor_property = "lineDashOffset",
+        getter = canvas_context_line_dash_offset_getter_callback,
+        setter = canvas_context_line_dash_offset_setter_callback
+    )]
+    line_dash_offset: (),
+
+    #[webapi(
+        accessor_property = "strokeStyle",
+        getter = canvas_context_stroke_style_getter_callback,
+        setter = canvas_context_stroke_style_setter_callback
+    )]
+    stroke_style: (),
+
+    #[webapi(
         method = "setLineDash",
         length = 1,
         callback = canvas_context_set_line_dash_callback
@@ -198,7 +255,11 @@ struct CanvasRenderingContext2dTemplateDeclaration {
     )]
     clear_rect: (),
 
-    #[webapi(method = "strokeRect", length = 4, callback = canvas_context_noop_callback)]
+    #[webapi(
+        method = "strokeRect",
+        length = 4,
+        callback = canvas_context_stroke_rect_callback
+    )]
     stroke_rect: (),
 
     #[webapi(method = "fillText", length = 3, callback = canvas_context_fill_text_callback)]
@@ -217,63 +278,71 @@ struct CanvasRenderingContext2dTemplateDeclaration {
     #[webapi(method = "restore", length = 0, callback = canvas_context_noop_callback)]
     restore: (),
 
-    #[webapi(method = "scale", length = 2, callback = canvas_context_noop_callback)]
+    #[webapi(method = "scale", length = 2, callback = canvas_context_scale_callback)]
     scale: (),
 
-    #[webapi(method = "translate", length = 2, callback = canvas_context_noop_callback)]
+    #[webapi(method = "translate", length = 2, callback = canvas_context_translate_callback)]
     translate: (),
 
-    #[webapi(method = "rotate", length = 1, callback = canvas_context_noop_callback)]
+    #[webapi(method = "rotate", length = 1, callback = canvas_context_rotate_callback)]
     rotate: (),
 
-    #[webapi(method = "transform", length = 6, callback = canvas_context_noop_callback)]
+    #[webapi(method = "transform", length = 6, callback = canvas_context_transform_callback)]
     transform: (),
 
-    #[webapi(method = "setTransform", length = 6, callback = canvas_context_noop_callback)]
+    #[webapi(
+        method = "setTransform",
+        length = 6,
+        callback = canvas_context_set_transform_callback
+    )]
     set_transform: (),
 
     #[webapi(
         method = "resetTransform",
         length = 0,
-        callback = canvas_context_noop_callback
+        callback = canvas_context_reset_transform_callback
     )]
     reset_transform: (),
 
-    #[webapi(method = "beginPath", length = 0, callback = canvas_context_noop_callback)]
+    #[webapi(method = "beginPath", length = 0, callback = canvas_context_begin_path_callback)]
     begin_path: (),
 
-    #[webapi(method = "closePath", length = 0, callback = canvas_context_noop_callback)]
+    #[webapi(method = "closePath", length = 0, callback = canvas_context_close_path_callback)]
     close_path: (),
 
-    #[webapi(method = "moveTo", length = 2, callback = canvas_context_noop_callback)]
+    #[webapi(method = "moveTo", length = 2, callback = canvas_context_move_to_callback)]
     move_to: (),
 
-    #[webapi(method = "lineTo", length = 2, callback = canvas_context_noop_callback)]
+    #[webapi(method = "lineTo", length = 2, callback = canvas_context_line_to_callback)]
     line_to: (),
 
     #[webapi(
         method = "quadraticCurveTo",
         length = 4,
-        callback = canvas_context_noop_callback
+        callback = canvas_context_quadratic_curve_to_callback
     )]
     quadratic_curve_to: (),
 
-    #[webapi(method = "bezierCurveTo", length = 6, callback = canvas_context_noop_callback)]
+    #[webapi(
+        method = "bezierCurveTo",
+        length = 6,
+        callback = canvas_context_bezier_curve_to_callback
+    )]
     bezier_curve_to: (),
 
-    #[webapi(method = "arcTo", length = 5, callback = canvas_context_noop_callback)]
+    #[webapi(method = "arcTo", length = 5, callback = canvas_context_arc_to_callback)]
     arc_to: (),
 
-    #[webapi(method = "arc", length = 5, callback = canvas_context_noop_callback)]
+    #[webapi(method = "arc", length = 5, callback = canvas_context_arc_callback)]
     arc: (),
 
-    #[webapi(method = "ellipse", length = 7, callback = canvas_context_noop_callback)]
+    #[webapi(method = "ellipse", length = 7, callback = canvas_context_ellipse_callback)]
     ellipse: (),
 
-    #[webapi(method = "fill", length = 1, callback = canvas_context_noop_callback)]
+    #[webapi(method = "fill", length = 1, callback = canvas_context_fill_callback)]
     fill: (),
 
-    #[webapi(method = "stroke", length = 0, callback = canvas_context_noop_callback)]
+    #[webapi(method = "stroke", length = 0, callback = canvas_context_stroke_callback)]
     stroke: (),
 
     #[webapi(method = "clip", length = 0, callback = canvas_context_noop_callback)]

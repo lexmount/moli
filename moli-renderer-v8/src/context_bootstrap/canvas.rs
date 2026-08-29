@@ -17,9 +17,21 @@ const CANVAS_CONTEXT_IMAGE_SMOOTHING_QUALITY_SLOT: &str =
 const CANVAS_CONTEXT_GLOBAL_ALPHA_SLOT: &str = "__moliCanvasContextGlobalAlpha";
 const CANVAS_CONTEXT_GLOBAL_COMPOSITE_OPERATION_SLOT: &str =
     "__moliCanvasContextGlobalCompositeOperation";
+const CANVAS_CONTEXT_LINE_WIDTH_SLOT: &str = "__moliCanvasContextLineWidth";
+const CANVAS_CONTEXT_LINE_CAP_SLOT: &str = "__moliCanvasContextLineCap";
+const CANVAS_CONTEXT_LINE_JOIN_SLOT: &str = "__moliCanvasContextLineJoin";
+const CANVAS_CONTEXT_MITER_LIMIT_SLOT: &str = "__moliCanvasContextMiterLimit";
+const CANVAS_CONTEXT_LINE_DASH_OFFSET_SLOT: &str = "__moliCanvasContextLineDashOffset";
+const CANVAS_CONTEXT_STROKE_STYLE_SLOT: &str = "__moliCanvasContextStrokeStyle";
 
 pub(crate) const DEFAULT_GLOBAL_ALPHA: f64 = 1.0;
 pub(crate) const DEFAULT_GLOBAL_COMPOSITE_OPERATION: &str = "source-over";
+pub(crate) const DEFAULT_LINE_WIDTH: f64 = 1.0;
+pub(crate) const DEFAULT_LINE_CAP: &str = "butt";
+pub(crate) const DEFAULT_LINE_JOIN: &str = "miter";
+pub(crate) const DEFAULT_MITER_LIMIT: f64 = 10.0;
+pub(crate) const DEFAULT_LINE_DASH_OFFSET: f64 = 0.0;
+pub(crate) const DEFAULT_STROKE_STYLE: &str = "#000000";
 
 /// Composite operations recognised by the HTML Canvas 2D spec.
 ///
@@ -179,6 +191,7 @@ mod helpers;
 mod image_bitmap;
 mod objects;
 mod offscreen;
+mod path;
 mod webgl;
 
 pub(crate) use backing_store::{
@@ -192,23 +205,39 @@ pub(crate) use constructors::{
     webgl_rendering_context_constructor_callback,
 };
 pub(crate) use context2d::{
-    canvas_context_clear_rect_callback, canvas_context_create_image_data_callback,
-    canvas_context_create_linear_gradient_callback, canvas_context_draw_image_callback,
-    canvas_context_fill_rect_callback, canvas_context_fill_style_getter_callback,
-    canvas_context_fill_style_setter_callback, canvas_context_fill_text_callback,
-    canvas_context_font_getter_callback, canvas_context_font_setter_callback,
-    canvas_context_get_image_data_callback, canvas_context_get_line_dash_callback,
-    canvas_context_global_alpha_getter_callback, canvas_context_global_alpha_setter_callback,
+    canvas_context_arc_callback, canvas_context_arc_to_callback,
+    canvas_context_begin_path_callback, canvas_context_bezier_curve_to_callback,
+    canvas_context_clear_rect_callback, canvas_context_close_path_callback,
+    canvas_context_create_image_data_callback, canvas_context_create_linear_gradient_callback,
+    canvas_context_draw_image_callback, canvas_context_ellipse_callback,
+    canvas_context_fill_callback, canvas_context_fill_rect_callback,
+    canvas_context_fill_style_getter_callback, canvas_context_fill_style_setter_callback,
+    canvas_context_fill_text_callback, canvas_context_font_getter_callback,
+    canvas_context_font_setter_callback, canvas_context_get_image_data_callback,
+    canvas_context_get_line_dash_callback, canvas_context_global_alpha_getter_callback,
+    canvas_context_global_alpha_setter_callback,
     canvas_context_global_composite_operation_getter_callback,
     canvas_context_global_composite_operation_setter_callback,
     canvas_context_image_smoothing_enabled_getter_callback,
     canvas_context_image_smoothing_enabled_setter_callback,
     canvas_context_image_smoothing_quality_getter_callback,
     canvas_context_image_smoothing_quality_setter_callback,
-    canvas_context_is_point_in_path_callback, canvas_context_measure_text_callback,
+    canvas_context_is_point_in_path_callback, canvas_context_line_cap_getter_callback,
+    canvas_context_line_cap_setter_callback, canvas_context_line_dash_offset_getter_callback,
+    canvas_context_line_dash_offset_setter_callback, canvas_context_line_join_getter_callback,
+    canvas_context_line_join_setter_callback, canvas_context_line_to_callback,
+    canvas_context_line_width_getter_callback, canvas_context_line_width_setter_callback,
+    canvas_context_measure_text_callback, canvas_context_miter_limit_getter_callback,
+    canvas_context_miter_limit_setter_callback, canvas_context_move_to_callback,
     canvas_context_noop_callback, canvas_context_put_image_data_callback,
-    canvas_context_rect_callback, canvas_context_set_line_dash_callback,
-    canvas_context_stroke_text_callback, canvas_gradient_add_color_stop_callback,
+    canvas_context_quadratic_curve_to_callback, canvas_context_rect_callback,
+    canvas_context_reset_transform_callback, canvas_context_rotate_callback,
+    canvas_context_scale_callback, canvas_context_set_line_dash_callback,
+    canvas_context_set_transform_callback, canvas_context_stroke_callback,
+    canvas_context_stroke_rect_callback, canvas_context_stroke_style_getter_callback,
+    canvas_context_stroke_style_setter_callback, canvas_context_stroke_text_callback,
+    canvas_context_transform_callback, canvas_context_translate_callback,
+    canvas_gradient_add_color_stop_callback,
 };
 pub(crate) use image_bitmap::window_create_image_bitmap_callback;
 pub(crate) use objects::{
