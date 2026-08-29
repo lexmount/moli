@@ -7,6 +7,7 @@ pub(super) use moli_webapi::blob::{
     blob_size_from_object, build_blob_object, build_blob_object_from_data,
     build_blob_object_unpublished, install_blob_template_bindings, is_blob_object,
 };
+pub(crate) use moli_webapi::blob::{blob_id_from_object, world_wrapper};
 use std::sync::{Arc, OnceLock};
 
 use super::{
@@ -95,8 +96,11 @@ pub(super) fn create_object_url_for_object<'s>(
     let partition = current_blob_storage_partition_identity(scope)?;
     let owner_id = current_resource_owner_id(scope);
     let origin = storage_key.origin().to_owned();
-    blob_store().create_object_url_with_access_key(
+    let lifetime_id = native_bridge::current_runtime_observable_context_token(scope)
+        .map(native_bridge::RuntimeObservableContextToken::as_u64);
+    blob_store().create_object_url_with_lifetime_and_access_key(
         owner_id,
+        lifetime_id,
         blob_id,
         &origin,
         Some(ObjectUrlAccessKey {
@@ -163,6 +167,12 @@ fn blob_uuid(blob_id: BlobId) -> Option<String> {
 
 pub(crate) fn cleanup_owner_resources(owner_id: ResourceOwnerId) {
     blob_store().retire_owner_resources(owner_id);
+}
+
+pub(crate) fn cleanup_object_urls_for_context(
+    context_token: native_bridge::RuntimeObservableContextToken,
+) -> usize {
+    blob_store().cleanup_object_url_lifetime(context_token.as_u64())
 }
 
 pub(super) fn release_blob_wrapper_ref(blob_id: BlobId) {
