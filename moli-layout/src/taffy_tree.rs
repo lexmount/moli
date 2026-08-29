@@ -18,7 +18,7 @@ use crate::{
     inline::{
         InlineFormattingContext, InlineFragments, InlineLinePlacement, InlineObjectRole,
         break_inline_lines, build_inline_fragments, build_inline_line_placements,
-        relative_atomic_inset_offset,
+        measure_inline_lines, relative_atomic_inset_offset,
     },
     positioned::resolve_absolute_axis_margins,
     replaced::measure_replaced,
@@ -1913,18 +1913,19 @@ where
             output.last_baselines.y = measurement
                 .last_baseline
                 .map(|baseline| baseline + padding.top + border.top + scrollbar_insets.top);
-            if measurement.line_placements.iter().any(|line| !line.phantom) {
+            if measurement.has_non_phantom_line {
                 output.margins_can_collapse_through = false;
             }
             if inputs.run_mode == RunMode::PerformLayout {
                 // Intrinsic and flex/grid probes need only the numeric IFC
                 // result. Materialize CSSOM/paint fragments once, after the
                 // accepted layout has received its final block alignment.
-                let fragments = build_inline_fragments(
-                    &inline_context,
-                    &measurement.layout,
-                    &measurement.line_placements,
-                );
+                let line_placements = measurement
+                    .line_placements
+                    .as_ref()
+                    .expect("final inline layout must retain line placements");
+                let fragments =
+                    build_inline_fragments(&inline_context, &measurement.layout, line_placements);
                 self.position_inline_objects(
                     &inline_context,
                     &measurement,
@@ -1936,7 +1937,10 @@ where
                     self.boxes[id.index()].style.direction(),
                 );
                 inline_context.fragments = fragments;
-                inline_context.line_placements = measurement.line_placements;
+                inline_context.line_placements = measurement
+                    .line_placements
+                    .take()
+                    .expect("final inline layout lost its line placements");
                 inline_context.laid_out = Some(measurement.layout);
             }
         }
@@ -2263,34 +2267,39 @@ where
             },
         );
 
-        let (line_placements, line_expansion) = build_inline_line_placements(
-            context,
-            &layout,
-            &atomic_baseline_ascents,
-            &structural_edge_contributions,
-        );
-        let mut height = layout.height() + line_expansion;
+        let (line_metrics, line_placements) = if inputs.run_mode == RunMode::PerformLayout {
+            let (placements, metrics) = build_inline_line_placements(
+                context,
+                &layout,
+                &atomic_baseline_ascents,
+                &structural_edge_contributions,
+            );
+            (metrics, Some(placements))
+        } else {
+            (
+                measure_inline_lines(
+                    context,
+                    &layout,
+                    &atomic_baseline_ascents,
+                    &structural_edge_contributions,
+                ),
+                None,
+            )
+        };
+        let mut height = layout.height() + line_metrics.line_expansion;
         if let Some(float_height) = float_height {
             height = height.max(float_height);
         }
         let alignment_block_size = height.max(alignment_float_height);
-        let first_baseline = line_placements
-            .iter()
-            .find(|line| !line.phantom)
-            .map(|line| line.baseline);
-        let last_baseline = line_placements
-            .iter()
-            .rev()
-            .find(|line| !line.phantom)
-            .map(|line| line.baseline);
         InlineMeasurement {
             size: Size {
                 width: known_dimensions.width.unwrap_or(width),
                 height: known_dimensions.height.unwrap_or(height),
             },
             alignment_block_size,
-            first_baseline,
-            last_baseline,
+            first_baseline: line_metrics.first_baseline,
+            last_baseline: line_metrics.last_baseline,
+            has_non_phantom_line: line_metrics.has_non_phantom_line,
             layout,
             atomic,
             floats,
@@ -2446,7 +2455,10 @@ where
             );
         }
         for (line_index, line) in measurement.layout.lines().enumerate() {
-            let line_placement = measurement.line_placements.get(line_index);
+            let line_placement = measurement
+                .line_placements
+                .as_ref()
+                .and_then(|placements| placements.get(line_index));
             for (item_index, item) in line.items().enumerate() {
                 let PositionedLayoutItem::InlineBox(positioned) = item else {
                     continue;
@@ -2676,11 +2688,15 @@ struct InlineMeasurement {
     alignment_block_size: f32,
     first_baseline: Option<f32>,
     last_baseline: Option<f32>,
+    has_non_phantom_line: bool,
     layout: parley::Layout<crate::stylo_to_parley::TextBrush>,
     atomic: Vec<Option<AtomicMeasurement>>,
     floats: Vec<InlineFloatPlacement>,
     percentage_basis: Option<f32>,
-    line_placements: Vec<InlineLinePlacement>,
+    /// Present only for the accepted `PerformLayout` result. Intrinsic probes
+    /// retain the numeric line summary but never allocate final placement
+    /// vectors that would immediately be discarded.
+    line_placements: Option<Vec<InlineLinePlacement>>,
 }
 
 impl InlineMeasurement {
@@ -2694,8 +2710,10 @@ impl InlineMeasurement {
         if let Some(last_baseline) = &mut self.last_baseline {
             *last_baseline += offset;
         }
-        for placement in &mut self.line_placements {
-            placement.translate_block_axis(offset);
+        if let Some(line_placements) = &mut self.line_placements {
+            for placement in line_placements {
+                placement.translate_block_axis(offset);
+            }
         }
         for floated in &mut self.floats {
             floated.location.y += offset;

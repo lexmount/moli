@@ -191,6 +191,17 @@ pub(crate) struct InlineLinePlacement {
     box_block_placements: Vec<InlineBoxBlockPlacement>,
 }
 
+/// Numeric line-box result shared by intrinsic measurement and final inline
+/// placement. Intrinsic probes need these four values, but do not need the
+/// per-item, per-glyph, and per-box vectors stored by [`InlineLinePlacement`].
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct InlineLineMetrics {
+    pub(crate) line_expansion: f32,
+    pub(crate) first_baseline: Option<f32>,
+    pub(crate) last_baseline: Option<f32>,
+    pub(crate) has_non_phantom_line: bool,
+}
+
 impl InlineLinePlacement {
     pub(crate) fn item_offset(&self, item_index: usize) -> f32 {
         self.item_offsets
@@ -667,13 +678,46 @@ pub(crate) fn break_inline_lines(
 /// provide for CSS `vertical-align`. The sidecar leaves Parley's shaped data
 /// immutable and applies the same offsets to glyph projection, atomic boxes,
 /// out-of-flow static positions, and fragment geometry.
+pub(crate) fn measure_inline_lines(
+    context: &InlineFormattingContext,
+    layout: &Layout<TextBrush>,
+    atomic_baseline_ascents: &[Option<f32>],
+    structural_edge_contributions: &[bool],
+) -> InlineLineMetrics {
+    resolve_inline_lines(
+        context,
+        layout,
+        atomic_baseline_ascents,
+        structural_edge_contributions,
+        None,
+    )
+}
+
 pub(crate) fn build_inline_line_placements(
     context: &InlineFormattingContext,
     layout: &Layout<TextBrush>,
     atomic_baseline_ascents: &[Option<f32>],
     structural_edge_contributions: &[bool],
-) -> (Vec<InlineLinePlacement>, f32) {
+) -> (Vec<InlineLinePlacement>, InlineLineMetrics) {
     let mut placements = Vec::with_capacity(layout.lines().len());
+    let metrics = resolve_inline_lines(
+        context,
+        layout,
+        atomic_baseline_ascents,
+        structural_edge_contributions,
+        Some(&mut placements),
+    );
+    (placements, metrics)
+}
+
+fn resolve_inline_lines(
+    context: &InlineFormattingContext,
+    layout: &Layout<TextBrush>,
+    atomic_baseline_ascents: &[Option<f32>],
+    structural_edge_contributions: &[bool],
+    mut placements: Option<&mut Vec<InlineLinePlacement>>,
+) -> InlineLineMetrics {
+    let mut result = InlineLineMetrics::default();
     let mut preceding_adjustment = 0.0;
     let mut unadjusted_line_top = 0.0;
 
@@ -926,66 +970,78 @@ pub(crate) fn build_inline_line_placements(
         let line_height = bounds.height();
         let root_baseline = raw_top + preceding_adjustment - bounds.top;
 
-        let mut ascending_states = (0..states.len()).collect::<Vec<_>>();
-        ascending_states.sort_by_key(|index| states[*index].depth);
-        for state_index in ascending_states {
-            states[state_index].global_offset = states[state_index].relative_offset
-                + anchor_global_offset(states[state_index].anchor, &states);
+        if !phantom {
+            result.has_non_phantom_line = true;
+            result.first_baseline.get_or_insert(root_baseline);
+            result.last_baseline = Some(root_baseline);
         }
-        let item_offsets = geometries
-            .iter()
-            .map(|geometry| {
-                let desired_top = root_baseline
-                    + anchor_global_offset(geometry.anchor, &states)
-                    + geometry.relative_offset
-                    + geometry.bounds.top;
-                desired_top - geometry.initial_top
-            })
-            .collect::<Vec<_>>();
-        let glyph_offsets = geometries
-            .iter()
-            .zip(&item_offsets)
-            .filter_map(|(geometry, offset)| {
-                let (run_index, style_index) = geometry.glyph_key?;
-                Some(InlineGlyphOffset {
-                    run_index,
-                    style_index,
-                    offset: *offset,
+
+        // Intrinsic and flex/grid probes need only the resolved line height
+        // and baselines. The following state walk and vectors exist solely to
+        // place final glyphs, atomic objects, and structural fragments.
+        if let Some(placements) = placements.as_mut() {
+            let mut ascending_states = (0..states.len()).collect::<Vec<_>>();
+            ascending_states.sort_by_key(|index| states[*index].depth);
+            for state_index in ascending_states {
+                states[state_index].global_offset = states[state_index].relative_offset
+                    + anchor_global_offset(states[state_index].anchor, &states);
+            }
+            let item_offsets = geometries
+                .iter()
+                .map(|geometry| {
+                    let desired_top = root_baseline
+                        + anchor_global_offset(geometry.anchor, &states)
+                        + geometry.relative_offset
+                        + geometry.bounds.top;
+                    desired_top - geometry.initial_top
                 })
-            })
-            .collect();
-        let box_block_placements = states
-            .iter()
-            .filter_map(|state| {
-                let strut = state.strut?;
-                let baseline = root_baseline + state.global_offset;
-                Some(InlineBoxBlockPlacement {
-                    box_id: state.box_id,
-                    top: baseline - strut.text_ascent,
-                    height: (strut.text_ascent + strut.text_descent).max(0.0),
+                .collect::<Vec<_>>();
+            let glyph_offsets = geometries
+                .iter()
+                .zip(&item_offsets)
+                .filter_map(|(geometry, offset)| {
+                    let (run_index, style_index) = geometry.glyph_key?;
+                    Some(InlineGlyphOffset {
+                        run_index,
+                        style_index,
+                        offset: *offset,
+                    })
                 })
-            })
-            .collect();
-        placements.push(InlineLinePlacement {
-            line_index,
-            rect: PaintRect::new(
-                metrics.inline_min_coord + metrics.offset,
-                raw_top + preceding_adjustment,
-                metrics.advance,
-                line_height,
-            ),
-            baseline: root_baseline,
-            phantom,
-            content_offset: root_baseline - metrics.baseline,
-            item_offsets,
-            glyph_offsets,
-            box_block_placements,
-        });
+                .collect();
+            let box_block_placements = states
+                .iter()
+                .filter_map(|state| {
+                    let strut = state.strut?;
+                    let baseline = root_baseline + state.global_offset;
+                    Some(InlineBoxBlockPlacement {
+                        box_id: state.box_id,
+                        top: baseline - strut.text_ascent,
+                        height: (strut.text_ascent + strut.text_descent).max(0.0),
+                    })
+                })
+                .collect();
+            placements.push(InlineLinePlacement {
+                line_index,
+                rect: PaintRect::new(
+                    metrics.inline_min_coord + metrics.offset,
+                    raw_top + preceding_adjustment,
+                    metrics.advance,
+                    line_height,
+                ),
+                baseline: root_baseline,
+                phantom,
+                content_offset: root_baseline - metrics.baseline,
+                item_offsets,
+                glyph_offsets,
+                box_block_placements,
+            });
+        }
         preceding_adjustment += line_height - (raw_bottom - raw_top);
         unadjusted_line_top += metrics.line_height.max(0.0);
     }
 
-    (placements, preceding_adjustment)
+    result.line_expansion = preceding_adjustment;
+    result
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -2378,6 +2434,57 @@ mod tests {
                 "Parley editor tail must not become an extra CSS line box: {break_reason:?}"
             );
         }
+    }
+
+    #[test]
+    fn intrinsic_line_summary_matches_materialized_line_placements() {
+        let root = LayoutBoxId::from_index(0);
+        let text = "first line\nsecond line";
+        let mut font_context = parley::FontContext::new();
+        let mut layout_context = parley::LayoutContext::<TextBrush>::new();
+        let mut builder = layout_context.style_run_builder(&mut font_context, text, 1.0, true);
+        let style = builder.push_style(TextStyle::default());
+        builder.push_style_run(style, ..);
+        let mut layout = builder.build(text);
+        layout.break_all_lines(Some(80.0));
+
+        let context = InlineFormattingContext {
+            root_style: root,
+            unbroken: layout.clone(),
+            laid_out: None,
+            text_units: Vec::new(),
+            source_map: Vec::new(),
+            selection: None,
+            objects: Vec::new(),
+            font_metrics: vec![None],
+            parent_strut: None,
+            root_includes_used_font_metrics: false,
+            style_parents: vec![root],
+            structural_boxes: Vec::new(),
+            line_placements: Vec::new(),
+            fragments: InlineFragments::default(),
+        };
+        let summary = measure_inline_lines(&context, &layout, &[], &[]);
+        let (placements, materialized_summary) =
+            build_inline_line_placements(&context, &layout, &[], &[]);
+
+        assert_eq!(summary, materialized_summary);
+        assert_eq!(placements.len(), layout.lines().len());
+        assert_eq!(
+            placements
+                .iter()
+                .find(|line| !line.phantom)
+                .map(|line| line.baseline),
+            summary.first_baseline
+        );
+        assert_eq!(
+            placements
+                .iter()
+                .rev()
+                .find(|line| !line.phantom)
+                .map(|line| line.baseline),
+            summary.last_baseline
+        );
     }
 
     fn normalize(
