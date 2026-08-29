@@ -1,4 +1,3 @@
-FileAPI/Blob-methods-from-detached-frame.html
 FileAPI/idlharness.html
 FileAPI/url/url-lifetime.html
 acid/acid3/numbered-tests.html

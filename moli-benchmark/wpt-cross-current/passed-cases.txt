@@ -1,3 +1,4 @@
+FileAPI/Blob-methods-from-detached-frame.html
 FileAPI/BlobURL/opaque-origin.html
 FileAPI/FileReader/progress_event_bubbles_cancelable.html
 FileAPI/FileReader/workers.html

@@ -3014,6 +3014,70 @@ fn blob_internal_builders_survive_global_blob_override() {
 }
 
 #[test]
+fn blob_slice_uses_receiver_realm_after_method_realm_is_detached() {
+    let mut vm = new_parsed_test_vm(
+        "https://blob-slice-receiver-realm.test/",
+        "<!doctype html><html><body></body></html>",
+    );
+
+    vm.eval(
+        r#"
+(() => {
+  const iframe = document.createElement("iframe");
+  iframe.srcdoc = "<!doctype html><html><body></body></html>";
+  document.body.appendChild(iframe);
+  globalThis.__blobSliceRealmFrame = iframe;
+})()
+"#,
+    )
+    .expect("detached-Realm Blob slice setup should evaluate");
+    vm.drain_pending_child_frame_work_for_test();
+
+    vm.eval(
+        r#"
+(() => {
+  const iframe = __blobSliceRealmFrame;
+  const detachedSlice = iframe.contentWindow.Blob.prototype.slice;
+  iframe.remove();
+
+  const blobSlice = detachedSlice.call(new Blob(["abcdef"]), 1, 4, "Text/Custom");
+  const fileSlice = detachedSlice.call(new File(["uvwxyz"], "sample.txt"), 2, 5);
+  globalThis.__blobSliceRealmProbe = {
+    childDetached: iframe.contentWindow === null,
+    blobIsMainRealmBlob: blobSlice instanceof Blob,
+    blobPrototypeIsMainRealmBlob: Object.getPrototypeOf(blobSlice) === Blob.prototype,
+    fileSliceIsMainRealmBlob: fileSlice instanceof Blob,
+    fileSliceIsFile: fileSlice instanceof File,
+    fileSlicePrototypeIsMainRealmBlob: Object.getPrototypeOf(fileSlice) === Blob.prototype,
+    type: blobSlice.type
+  };
+  Promise.all([blobSlice.text(), fileSlice.text()]).then(
+    ([blobText, fileText]) => {
+      __blobSliceRealmProbe.blobText = blobText;
+      __blobSliceRealmProbe.fileText = fileText;
+    },
+    error => { __blobSliceRealmProbe.error = error && error.name; }
+  );
+  return "scheduled";
+})()
+"#,
+    )
+    .expect("detached-Realm Blob slice probe should evaluate");
+
+    vm.eval("0")
+        .expect("detached-Realm Blob slice promise microtasks should drain");
+
+    let result = vm
+        .eval("JSON.stringify(globalThis.__blobSliceRealmProbe)")
+        .expect("detached-Realm Blob slice result should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"childDetached":true,"blobIsMainRealmBlob":true,"blobPrototypeIsMainRealmBlob":true,"fileSliceIsMainRealmBlob":true,"fileSliceIsFile":false,"fileSlicePrototypeIsMainRealmBlob":true,"type":"text/custom","blobText":"bcd","fileText":"wxy"}"#
+    );
+}
+
+#[test]
 fn blob_stream_is_native_readable_stream_and_response_consumes_bytes() {
     let mut vm = new_storage_test_vm("https://blob-stream-reader.test/");
 
