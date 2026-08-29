@@ -154,12 +154,12 @@ fn slotted_dependency_change_clears_assigned_descendant_cache_via_subtree_cleanu
 
     assert_eq!(
         engine.computed_style_cache_entry_count_for_document_for_test(document),
-        1
+        2,
+        "the assigned descendant is retained until it is observed"
     );
     assert!(engine.computed_style_cache_contains_handle_for_document_for_test(document, outside));
     assert!(
-        !engine
-            .computed_style_cache_contains_handle_for_document_for_test(document, assigned_child)
+        engine.computed_style_cache_contains_handle_for_document_for_test(document, assigned_child)
     );
     assert_eq!(
         engine.computed_style_property_value(
@@ -1597,14 +1597,13 @@ fn focus_invalidation_uses_has_focus_relative_dependency() {
 
     let mut engine = MoliStyleEngine::new();
     let document_url = url::Url::parse("https://example.test/").unwrap();
-    engine.set_document_adopted_style_sheet_sources(
-        document,
-        vec![StyloStylesheetSource::new(
-            ".container:has(:focus) .target { color: blue; }".into(),
-            document_url.clone(),
-        )],
+    let source_sheet = StyloStylesheetSource::new(
+        ".container:has(:focus) .target { color: blue; }".into(),
+        document_url.clone(),
     );
-    let inputs = FullStyleWorldSnapshot::default();
+    engine.set_document_adopted_style_sheet_sources(document, vec![source_sheet.clone()]);
+    let mut inputs = FullStyleWorldSnapshot::default();
+    inputs.document_stylesheet_sources.push(source_sheet);
     assert!(
         engine
             .computed_style_property_value(
@@ -1623,13 +1622,28 @@ fn focus_invalidation_uses_has_focus_relative_dependency() {
         1
     );
 
+    host.set_active_element_handle(Some(source));
     let media = crate::protocol_types::EmulatedMediaOverrides::default();
     engine.invalidate_for_focus_change(&host, None, Some(source), &media);
     engine.drain_pending_style_invalidations_for_document_for_test(&host, document);
 
     assert_eq!(
         engine.computed_style_cache_entry_count_for_document_for_test(document),
-        0
+        0,
+        "the exact :has(:focus) target is invalidated directly"
+    );
+    assert!(!engine.computed_style_cache_contains_handle_for_document_for_test(document, target));
+    assert_eq!(
+        engine.computed_style_property_value(
+            &host,
+            &document_url,
+            target,
+            "color",
+            None,
+            &inputs,
+            None,
+        ),
+        Some("rgb(0, 0, 255)".into())
     );
 }
 #[test]
@@ -1751,14 +1765,13 @@ fn target_invalidation_uses_has_target_relative_dependency() {
 
     let mut engine = MoliStyleEngine::new();
     let document_url = url::Url::parse("https://example.test/").unwrap();
-    engine.set_document_adopted_style_sheet_sources(
-        document,
-        vec![StyloStylesheetSource::new(
-            ".container:has(:target) .target { color: blue; }".into(),
-            document_url.clone(),
-        )],
+    let source_sheet = StyloStylesheetSource::new(
+        ".container:has(:target) .target { color: blue; }".into(),
+        document_url.clone(),
     );
-    let inputs = FullStyleWorldSnapshot::default();
+    engine.set_document_adopted_style_sheet_sources(document, vec![source_sheet.clone()]);
+    let mut inputs = FullStyleWorldSnapshot::default();
+    inputs.document_stylesheet_sources.push(source_sheet);
     assert!(
         engine
             .computed_style_property_value(
@@ -1777,13 +1790,28 @@ fn target_invalidation_uses_has_target_relative_dependency() {
         1
     );
 
+    assert!(host.set_document_target_element(document, Some(source)));
     let media = crate::protocol_types::EmulatedMediaOverrides::default();
     engine.invalidate_for_target_change(&host, None, Some(source), &media);
     engine.drain_pending_style_invalidations_for_document_for_test(&host, document);
 
     assert_eq!(
         engine.computed_style_cache_entry_count_for_document_for_test(document),
-        0
+        0,
+        "the exact :has(:target) target is invalidated directly"
+    );
+    assert!(!engine.computed_style_cache_contains_handle_for_document_for_test(document, target));
+    assert_eq!(
+        engine.computed_style_property_value(
+            &host,
+            &document_url,
+            target,
+            "color",
+            None,
+            &inputs,
+            None,
+        ),
+        Some("rgb(0, 0, 255)".into())
     );
 }
 #[test]

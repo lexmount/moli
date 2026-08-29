@@ -84,6 +84,16 @@ impl DocumentStyleWorlds {
         self.for_document(document).clear_for_document_replacement();
     }
 
+    /// Retires one handle's publication from whichever Document world last
+    /// exposed it. A DOM adoption can change `ownerDocument` before deferred
+    /// style work is drained, so consulting only the current owner would leave
+    /// the old world's marker behind.
+    pub(super) fn invalidate_computed_style_handle(&self, handle: DomHandle) {
+        for world in self.worlds.borrow().values() {
+            world.computed_style_cache.invalidate_handles([handle]);
+        }
+    }
+
     pub(super) fn documents_with_adopted_style_sheets(&self) -> Vec<DomHandle> {
         self.worlds
             .borrow()

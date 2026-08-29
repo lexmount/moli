@@ -530,7 +530,7 @@ impl StyleInvalidationCleanupApplicationContext {
         &self,
         document: DomHandle,
         affected_roots: &IndexSet<DomHandle>,
-        invalidated_cache_handles: &IndexSet<DomHandle>,
+        eagerly_invalidated_root_handles: &IndexSet<DomHandle>,
         shadow_cascade_roots: &IndexSet<DomHandle>,
         generations_before: StyleDocumentGenerationSnapshot,
         generations_after: StyleDocumentGenerationSnapshot,
@@ -547,8 +547,8 @@ impl StyleInvalidationCleanupApplicationContext {
                 self.clear_shadow_cascade_data_for_cleanup_target,
             affected_root_count = affected_roots.len(),
             affected_roots = ?affected_roots,
-            invalidated_cache_handle_count = invalidated_cache_handles.len(),
-            invalidated_cache_handles = ?invalidated_cache_handles,
+            eagerly_invalidated_root_handle_count = eagerly_invalidated_root_handles.len(),
+            eagerly_invalidated_root_handles = ?eagerly_invalidated_root_handles,
             source_fallback_shadow_cascade_root_count = shadow_cascade_roots.len(),
             source_fallback_shadow_cascade_roots = ?shadow_cascade_roots,
             source_set_generation_before = generations_before.source_set_generation,
@@ -561,7 +561,7 @@ impl StyleInvalidationCleanupApplicationContext {
                 generations_after.retained_style_system_generation,
             target_context_epoch_before = generations_before.target_context_epoch,
             target_context_epoch_after = generations_after.target_context_epoch,
-            "style invalidation fallback cleared scoped style caches"
+            "style invalidation fallback recorded lazy dirty roots"
         );
     }
 }

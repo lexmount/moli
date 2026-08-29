@@ -45,19 +45,19 @@ impl<'a> StyleCacheCleanup<'a> {
         self.computed_style_cache.clear();
         self.document_state.clear_selector_caches();
         self.document_state.bump_computed_cache_generation();
+        self.document_state.lazy_invalidation_roots.clear();
     }
 
-    /// Expands Stylo's matched stylesheet invalidations to already-published
-    /// descendants. Moli resolves demanded elements one at a time, so it does
-    /// not have a later full-tree traversal that would propagate inherited
-    /// style changes from a `RESTYLE_SELF` ancestor.
-    pub(super) fn invalidate_stylesheet_dirty_subtrees(&self, host: &DomHost) {
-        let roots = self.existing_subtree_roots(
-            host,
-            self.dom_adapter
-                .dirty_element_style_handles_for_document(self.document),
-        );
-        self.invalidate_existing_subtree_roots(host, &roots);
+    /// Retains Stylo's top-most dirty elements as lazy subtree roots.
+    /// Descendants inherit the root generation when they are next observed;
+    /// no document-wide published-style scan is performed here.
+    pub(super) fn retain_stylesheet_invalidation_roots(
+        &self,
+        host: &DomHost,
+        roots: impl IntoIterator<Item = DomHandle>,
+    ) {
+        let roots = self.existing_subtree_roots(host, roots);
+        self.record_lazy_invalidation_roots(host, &roots);
     }
 
     pub(super) fn invalidate_detached_subtrees(
@@ -74,9 +74,9 @@ impl<'a> StyleCacheCleanup<'a> {
             self.dom_adapter
                 .element_selector_flag_handles_for_document(self.document),
         );
-        let invalidated_handles = self.invalidate_existing_subtree_roots(host, &roots);
-        let cleared = invalidated_handles.is_some();
-        if invalidated_handles.is_some() {
+        let eagerly_invalidated_roots = self.record_lazy_invalidation_roots(host, &roots);
+        let cleared = eagerly_invalidated_roots.is_some();
+        if eagerly_invalidated_roots.is_some() {
             for &handle in &selector_flag_handles {
                 self.dom_adapter.clear_element_selector_flags(handle);
             }
@@ -92,15 +92,8 @@ impl<'a> StyleCacheCleanup<'a> {
         if roots.is_empty() {
             return false;
         }
-        let handles = self.cached_handles_in_style_subtrees(host, &roots);
-        for &handle in &handles {
-            self.dom_adapter.mark_element_style_dirty(handle);
-        }
+        self.record_lazy_invalidation_roots(host, &roots);
         self.dom_adapter.clear_inline_style_attribute(root);
-        self.computed_style_cache
-            .invalidate_handles(handles.iter().copied());
-        self.document_state.clear_selector_caches();
-        self.document_state.bump_target_context_epoch();
         true
     }
 
@@ -112,8 +105,7 @@ impl<'a> StyleCacheCleanup<'a> {
         self.document_state
             .clear_invalidation_clear_all_fallback_reasons();
         let roots = self.existing_subtree_roots(host, roots);
-        self.invalidate_existing_subtree_roots(host, &roots)
-            .is_some()
+        self.record_lazy_invalidation_roots(host, &roots).is_some()
     }
 
     pub(super) fn invalidate_subtrees_and_shadow_cascade_data(
@@ -124,9 +116,7 @@ impl<'a> StyleCacheCleanup<'a> {
         self.document_state
             .clear_invalidation_clear_all_fallback_reasons();
         let roots = self.existing_subtree_roots(host, roots);
-        let cleared = self
-            .invalidate_existing_subtree_roots(host, &roots)
-            .is_some();
+        let cleared = self.record_lazy_invalidation_roots(host, &roots).is_some();
         if cleared {
             self.clear_shadow_cascade_data_in_subtrees(host, &roots);
         }
@@ -152,8 +142,8 @@ impl<'a> StyleCacheCleanup<'a> {
         self.document_state
             .clear_invalidation_clear_all_fallback_reasons();
         let (affected_roots, shadow_cascade_scope_roots) = subtrees.into_root_sets();
-        let invalidated_handles = self
-            .invalidate_existing_subtree_roots(host, &affected_roots)
+        let eagerly_invalidated_roots = self
+            .record_lazy_invalidation_roots(host, &affected_roots)
             .expect("subtree cleanup application should carry an existing root");
         let cleared_shadow_cascade_roots =
             if context.clears_shadow_cascade_data_for_cleanup_target() {
@@ -165,7 +155,7 @@ impl<'a> StyleCacheCleanup<'a> {
         context.trace_scoped_fallback(
             self.document,
             &affected_roots,
-            &invalidated_handles,
+            &eagerly_invalidated_roots,
             &cleared_shadow_cascade_roots,
             generations_before,
             generations_after,
@@ -192,6 +182,7 @@ impl<'a> StyleCacheCleanup<'a> {
         }
         self.computed_style_cache.clear();
         self.document_state.clear_selector_caches();
+        self.document_state.lazy_invalidation_roots.clear();
         self.document_state.bump_target_context_epoch();
         let generations_after = self.document_state.generation_snapshot();
         context.trace_clear_all_fallback(self.document, generations_before, generations_after);
@@ -242,23 +233,6 @@ impl<'a> StyleCacheCleanup<'a> {
             .collect()
     }
 
-    fn cached_handles_in_style_subtrees(
-        &self,
-        host: &DomHost,
-        roots: &IndexSet<DomHandle>,
-    ) -> IndexSet<DomHandle> {
-        if roots.is_empty() {
-            return IndexSet::new();
-        }
-        let mut candidates = self
-            .dom_adapter
-            .element_style_value_handles_for_document(self.document)
-            .into_iter()
-            .collect::<IndexSet<_>>();
-        candidates.extend(self.computed_style_cache.handles());
-        self.handles_in_style_subtrees(host, roots, candidates)
-    }
-
     fn handles_in_style_subtrees(
         &self,
         host: &DomHost,
@@ -275,7 +249,7 @@ impl<'a> StyleCacheCleanup<'a> {
             .collect()
     }
 
-    fn invalidate_existing_subtree_roots(
+    fn record_lazy_invalidation_roots(
         &self,
         host: &DomHost,
         roots: &IndexSet<DomHandle>,
@@ -283,15 +257,29 @@ impl<'a> StyleCacheCleanup<'a> {
         if roots.is_empty() {
             return None;
         }
-        let handles = self.cached_handles_in_style_subtrees(host, roots);
-        for &handle in &handles {
-            self.dom_adapter.mark_element_style_dirty(handle);
-        }
+        self.document_state.lazy_invalidation_roots.record_roots(
+            host,
+            self.document,
+            roots.iter().copied(),
+        );
+
+        // Dirty the roots themselves immediately. Descendants are handled
+        // lazily from the retained root generation, avoiding O(P * depth)
+        // expansion over every published style in the document. Keep doing
+        // the exact-root retirement even when a deferred mutation is drained
+        // after that root was adopted into another Document: the old world
+        // may still own its publication marker, while the adapter moves its
+        // ElementData to the current owner bucket on this targeted access.
+        let immediately_invalidated = roots
+            .iter()
+            .copied()
+            .filter(|handle| self.dom_adapter.mark_element_style_dirty(*handle))
+            .collect::<IndexSet<_>>();
         self.computed_style_cache
-            .invalidate_handles(handles.iter().copied());
+            .invalidate_handles(roots.iter().copied());
         self.document_state.clear_selector_caches();
         self.document_state.bump_target_context_epoch();
-        Some(handles)
+        Some(immediately_invalidated)
     }
 }
 

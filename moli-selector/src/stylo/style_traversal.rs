@@ -71,6 +71,13 @@ struct StyloElementDocumentDataStore {
     data: HashMap<NodeId, Box<ElementDataWrapper>>,
     inline_styles: HashMap<NodeId, Arc<Locked<PropertyDeclarationBlock>>>,
     selector_flags: HashMap<NodeId, ElementSelectorFlags>,
+    /// Stylo's equivalent of Blink's `ChildNeedsStyleInvalidation` breadcrumb.
+    ///
+    /// Stylesheet invalidation already calls `TElement::set_dirty_descendants`
+    /// while unwinding from a matched descendant. Keeping that bit in the
+    /// document side table lets Moli follow only dirty branches later instead
+    /// of rediscovering them by scanning every published `ElementData` entry.
+    dirty_descendants: HashSet<NodeId>,
 }
 
 #[derive(Default)]
@@ -196,30 +203,33 @@ impl StyloDomStyleAdapter {
             .clear_inline_style_attributes_for_document(document);
     }
 
-    pub fn element_style_value_handles_for_document(&self, document: NodeId) -> Vec<NodeId> {
-        self.state
-            .element_style_value_handles_for_document(document)
-    }
-
-    pub fn dirty_element_style_handles_for_document(&self, document: NodeId) -> Vec<NodeId> {
-        self.state
-            .dirty_element_style_handles_for_document(document)
-    }
-
     pub fn process_stylesheet_invalidations(
         &self,
         host: &DomHost,
         roots: &[NodeId],
         invalidations: &StylesheetInvalidationSet,
-    ) -> bool {
+    ) -> Vec<NodeId> {
         self.with_bound_host(host, |binding| {
-            let mut changed = false;
+            let mut changed_roots = Vec::new();
             for root in roots.iter().filter_map(|root| binding.element(host, *root)) {
                 // Every root belongs to an independent Document/ShadowRoot
                 // scope and must be processed even after an earlier match.
-                changed |= invalidations.process_style(root, None);
+                if invalidations.process_style(root, None) {
+                    changed_roots.push(root);
+                }
             }
-            changed
+            collect_dirty_style_roots(changed_roots)
+        })
+    }
+
+    /// Collects the top-most dirty elements by following Stylo's retained
+    /// dirty-descendant breadcrumbs from the supplied scope roots.
+    ///
+    /// This is deliberately proportional to dirty branches. It replaces the
+    /// old document-wide scan over every published `ElementData` entry.
+    pub fn collect_dirty_style_roots(&self, host: &DomHost, roots: &[NodeId]) -> Vec<NodeId> {
+        self.with_bound_host(host, |binding| {
+            collect_dirty_style_roots(roots.iter().filter_map(|root| binding.element(host, *root)))
         })
     }
 
@@ -282,6 +292,55 @@ impl StyloDomStyleAdapter {
         self.state.host.set(host as *const DomHost);
         self.state.clear_node_data();
     }
+}
+
+fn collect_dirty_style_roots<'a>(roots: impl IntoIterator<Item = StyleElement<'a>>) -> Vec<NodeId> {
+    fn collect_from_element(
+        element: StyleElement<'_>,
+        roots: &mut Vec<NodeId>,
+        seen: &mut HashSet<NodeId>,
+        covered_by_dirty_ancestor: bool,
+    ) {
+        let handle = element.handle();
+        if !seen.insert(handle) {
+            return;
+        }
+
+        let self_is_dirty = element
+            .borrow_data()
+            .is_some_and(|data| !data.hint.is_empty());
+        let descendants_are_dirty = element.has_dirty_descendants();
+        if self_is_dirty {
+            // Moli resolves demanded elements one at a time. Treating a dirty
+            // element as a lazy subtree root conservatively carries inherited
+            // changes to any descendant resolved after it.
+            if !covered_by_dirty_ancestor {
+                roots.push(handle);
+            }
+        }
+
+        if !descendants_are_dirty {
+            return;
+        }
+        for child in element.traversal_children() {
+            if let Some(child) = child.as_element() {
+                collect_from_element(
+                    child,
+                    roots,
+                    seen,
+                    covered_by_dirty_ancestor || self_is_dirty,
+                );
+            }
+        }
+        unsafe { element.unset_dirty_descendants() };
+    }
+
+    let mut dirty_roots = Vec::new();
+    let mut seen = HashSet::new();
+    for root in roots {
+        collect_from_element(root, &mut dirty_roots, &mut seen, false);
+    }
+    dirty_roots
 }
 
 impl<'binding> StyleDomHostBinding<'binding> {
@@ -350,16 +409,6 @@ impl<'binding> StyleDomHostBinding<'binding> {
     pub fn clear_inline_style_attributes_for_document(&self, document: NodeId) {
         self.state
             .clear_inline_style_attributes_for_document(document);
-    }
-
-    pub fn element_style_value_handles_for_document(&self, document: NodeId) -> Vec<NodeId> {
-        self.state
-            .element_style_value_handles_for_document(document)
-    }
-
-    pub fn dirty_element_style_handles_for_document(&self, document: NodeId) -> Vec<NodeId> {
-        self.state
-            .dirty_element_style_handles_for_document(document)
     }
 
     pub fn element_selector_flag_handles_for_document(&self, document: NodeId) -> Vec<NodeId> {
@@ -447,18 +496,24 @@ impl StyloElementDataStore {
         let mut moved_data = None;
         let mut moved_inline_style = None;
         let mut moved_selector_flags = None;
+        let mut moved_dirty_descendants = false;
         let mut previous_is_empty = false;
         if let Some(previous_bucket) = documents.get_mut(&previous) {
             moved_data = previous_bucket.data.remove(&handle);
             moved_inline_style = previous_bucket.inline_styles.remove(&handle);
             moved_selector_flags = previous_bucket.selector_flags.remove(&handle);
+            moved_dirty_descendants = previous_bucket.dirty_descendants.remove(&handle);
             previous_is_empty = previous_bucket.is_empty();
         }
         if previous_is_empty {
             documents.remove(&previous);
         }
 
-        if moved_data.is_none() && moved_inline_style.is_none() && moved_selector_flags.is_none() {
+        if moved_data.is_none()
+            && moved_inline_style.is_none()
+            && moved_selector_flags.is_none()
+            && !moved_dirty_descendants
+        {
             return;
         }
 
@@ -471,6 +526,9 @@ impl StyloElementDataStore {
         }
         if let Some(selector_flags) = moved_selector_flags {
             bucket.selector_flags.insert(handle, selector_flags);
+        }
+        if moved_dirty_descendants {
+            bucket.dirty_descendants.insert(handle);
         }
     }
 
@@ -571,10 +629,12 @@ impl StyloElementDataStore {
                 .data
                 .keys()
                 .chain(bucket.selector_flags.keys())
+                .chain(bucket.dirty_descendants.iter())
                 .copied()
                 .collect::<HashSet<_>>();
             bucket.data.clear();
             bucket.selector_flags.clear();
+            bucket.dirty_descendants.clear();
             let orphaned_handles = affected_handles
                 .into_iter()
                 .filter(|handle| {
@@ -760,39 +820,35 @@ impl StyloElementDataStore {
         self.remove_owner_mappings_for_document(document, orphaned_handles);
     }
 
-    fn style_value_handles_for_document(&self, document: NodeId) -> Vec<NodeId> {
-        let documents = self.documents.borrow();
-        let Some(bucket) = documents.get(&document) else {
-            return Vec::new();
-        };
-        let mut handles = HashSet::with_capacity(bucket.data.len() + bucket.inline_styles.len());
-        handles.extend(bucket.data.keys().copied());
-        handles.extend(bucket.inline_styles.keys().copied());
-        handles.into_iter().collect()
-    }
-
-    fn dirty_style_handles_for_document(&self, document: NodeId) -> Vec<NodeId> {
-        self.documents
-            .borrow()
-            .get(&document)
-            .map(|bucket| {
-                bucket
-                    .data
-                    .iter()
-                    .filter_map(|(handle, data)| {
-                        (!data.borrow().hint.is_empty()).then_some(*handle)
-                    })
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-
     fn selector_flag_handles_for_document(&self, document: NodeId) -> Vec<NodeId> {
         self.documents
             .borrow()
             .get(&document)
             .map(|bucket| bucket.selector_flags.keys().copied().collect())
             .unwrap_or_default()
+    }
+
+    fn has_dirty_descendants_for_document(&self, document: NodeId, handle: NodeId) -> bool {
+        self.documents
+            .borrow()
+            .get(&document)
+            .is_some_and(|bucket| bucket.dirty_descendants.contains(&handle))
+    }
+
+    fn set_dirty_descendants_for_document(&self, document: NodeId, handle: NodeId) {
+        self.note_owner_document(handle, document);
+        self.documents
+            .borrow_mut()
+            .entry(document)
+            .or_default()
+            .dirty_descendants
+            .insert(handle);
+    }
+
+    fn unset_dirty_descendants_for_document(&self, document: NodeId, handle: NodeId) {
+        self.remove_from_document(document, handle, |bucket| {
+            bucket.dirty_descendants.remove(&handle);
+        });
     }
 
     fn clear_inline_style(&self, handle: NodeId) {
@@ -1073,13 +1129,17 @@ impl StyloElementDataStore {
 
 impl StyloElementDocumentDataStore {
     fn is_empty(&self) -> bool {
-        self.data.is_empty() && self.inline_styles.is_empty() && self.selector_flags.is_empty()
+        self.data.is_empty()
+            && self.inline_styles.is_empty()
+            && self.selector_flags.is_empty()
+            && self.dirty_descendants.is_empty()
     }
 
     fn contains_handle(&self, handle: NodeId) -> bool {
         self.data.contains_key(&handle)
             || self.inline_styles.contains_key(&handle)
             || self.selector_flags.contains_key(&handle)
+            || self.dirty_descendants.contains(&handle)
     }
 }
 
@@ -1107,6 +1167,13 @@ impl fmt::Debug for StyloElementDataStore {
                 &documents
                     .values()
                     .map(|bucket| bucket.selector_flags.len())
+                    .sum::<usize>(),
+            )
+            .field(
+                "dirty_descendants_len",
+                &documents
+                    .values()
+                    .map(|bucket| bucket.dirty_descendants.len())
                     .sum::<usize>(),
             )
             .finish()
@@ -1374,14 +1441,6 @@ impl StyleDomState {
 
     fn clear_inline_style_attributes_for_document(&self, document: NodeId) {
         self.element_data.clear_inline_styles_for_document(document);
-    }
-
-    fn element_style_value_handles_for_document(&self, document: NodeId) -> Vec<NodeId> {
-        self.element_data.style_value_handles_for_document(document)
-    }
-
-    fn dirty_element_style_handles_for_document(&self, document: NodeId) -> Vec<NodeId> {
-        self.element_data.dirty_style_handles_for_document(document)
     }
 
     fn element_selector_flag_handles_for_document(&self, document: NodeId) -> Vec<NodeId> {
@@ -1985,7 +2044,9 @@ impl<'a> TElement for StyleElement<'a> {
     }
 
     fn has_dirty_descendants(&self) -> bool {
-        false
+        self.style_state()
+            .element_data
+            .has_dirty_descendants_for_document(self.document(), self.handle())
     }
 
     fn has_snapshot(&self) -> bool {
@@ -1998,9 +2059,17 @@ impl<'a> TElement for StyleElement<'a> {
 
     unsafe fn set_handled_snapshot(&self) {}
 
-    unsafe fn set_dirty_descendants(&self) {}
+    unsafe fn set_dirty_descendants(&self) {
+        self.style_state()
+            .element_data
+            .set_dirty_descendants_for_document(self.document(), self.handle());
+    }
 
-    unsafe fn unset_dirty_descendants(&self) {}
+    unsafe fn unset_dirty_descendants(&self) {
+        self.style_state()
+            .element_data
+            .unset_dirty_descendants_for_document(self.document(), self.handle());
+    }
 
     fn store_children_to_process(&self, _n: isize) {}
 
@@ -2442,6 +2511,27 @@ mod element_data_store_tests {
         store.clear_style_values(handle);
         assert_eq!(store.document_for_handle(handle), Some(new_document));
         store.clear_selector_flags(handle);
+        assert_eq!(store.document_for_handle(handle), None);
+        assert!(store.documents.borrow().is_empty());
+    }
+
+    #[test]
+    fn dirty_descendant_breadcrumb_moves_and_retires_with_its_owner() {
+        let store = StyloElementDataStore::default();
+        let old_document = NodeId::new(0);
+        let new_document = NodeId::new(1);
+        let handle = NodeId::new(2);
+
+        store.set_dirty_descendants_for_document(old_document, handle);
+        assert!(store.has_dirty_descendants_for_document(old_document, handle));
+        assert_eq!(store.document_for_handle(handle), Some(old_document));
+
+        store.note_owner_document(handle, new_document);
+        assert!(!store.has_dirty_descendants_for_document(old_document, handle));
+        assert!(store.has_dirty_descendants_for_document(new_document, handle));
+        assert_eq!(store.document_for_handle(handle), Some(new_document));
+
+        store.unset_dirty_descendants_for_document(new_document, handle);
         assert_eq!(store.document_for_handle(handle), None);
         assert!(store.documents.borrow().is_empty());
     }

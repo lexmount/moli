@@ -61,6 +61,286 @@ fn computed_style_is_published_on_canonical_element_data_and_reused() {
 }
 
 #[test]
+fn lazy_subtree_invalidation_avoids_eager_scans_and_memoizes_paths() {
+    const UNRELATED_COUNT: usize = 256;
+
+    let mut host = test_host();
+    let document = host.document_handle();
+    let affected_root = host.create_element("section");
+    let affected_leaf = host.create_element("span");
+    let affected_sibling = host.create_element("span");
+    let unrelated_root = host.create_element("main");
+    assert!(host.append_child(document, affected_root));
+    assert!(host.append_child(affected_root, affected_leaf));
+    assert!(host.append_child(affected_root, affected_sibling));
+    assert!(host.append_child(document, unrelated_root));
+    let unrelated = (0..UNRELATED_COUNT)
+        .map(|_| {
+            let element = host.create_element("i");
+            assert!(host.append_child(unrelated_root, element));
+            element
+        })
+        .collect::<Vec<_>>();
+
+    let mut engine = MoliStyleEngine::new();
+    let document_url = url::Url::parse("https://example.test/").unwrap();
+    let inputs = FullStyleWorldSnapshot::default();
+    for handle in [affected_leaf, affected_sibling]
+        .into_iter()
+        .chain(unrelated.iter().copied())
+    {
+        assert!(
+            engine
+                .computed_style_property_value(
+                    &host,
+                    &document_url,
+                    handle,
+                    "display",
+                    None,
+                    &inputs,
+                    None,
+                )
+                .is_some()
+        );
+    }
+    assert_eq!(
+        engine.computed_style_cache_entry_count_for_document_for_test(document),
+        UNRELATED_COUNT + 2
+    );
+
+    let path_visits_before =
+        engine.style_invalidation_path_node_visit_count_for_document_for_test(document);
+    engine.invalidate_style_subtree(&host, affected_root);
+    assert_eq!(
+        engine.style_invalidation_path_node_visit_count_for_document_for_test(document),
+        path_visits_before,
+        "recording an invalidation root must not inspect any published descendant"
+    );
+    assert_eq!(
+        engine.retained_style_invalidation_root_count_for_document_for_test(document),
+        1
+    );
+    assert!(engine.style_invalidation_generation_for_document_for_test(document) > 0);
+    assert_eq!(
+        engine.computed_style_cache_entry_count_for_document_for_test(document),
+        UNRELATED_COUNT + 2,
+        "all descendant publication entries remain untouched at mutation time"
+    );
+
+    let resolutions_before = engine.element_style_resolution_count_for_document_for_test(document);
+    for &handle in &unrelated {
+        assert!(
+            engine
+                .computed_style_property_value(
+                    &host,
+                    &document_url,
+                    handle,
+                    "display",
+                    None,
+                    &inputs,
+                    None,
+                )
+                .is_some()
+        );
+    }
+    assert_eq!(
+        engine.element_style_resolution_count_for_document_for_test(document),
+        resolutions_before,
+        "an unrelated branch must remain canonical"
+    );
+    let unrelated_path_visits = engine
+        .style_invalidation_path_node_visit_count_for_document_for_test(document)
+        .saturating_sub(path_visits_before);
+    assert!(
+        unrelated_path_visits <= (UNRELATED_COUNT as u64).saturating_mul(2).saturating_add(3),
+        "memoized parent breadcrumbs should make a sibling sweep linear; visited {unrelated_path_visits} nodes"
+    );
+
+    assert!(
+        engine
+            .computed_style_property_value(
+                &host,
+                &document_url,
+                affected_leaf,
+                "display",
+                None,
+                &inputs,
+                None,
+            )
+            .is_some()
+    );
+    let resolutions_after_first_affected_read =
+        engine.element_style_resolution_count_for_document_for_test(document);
+    assert!(resolutions_after_first_affected_read > resolutions_before);
+    assert!(
+        engine
+            .computed_style_cache_contains_handle_for_document_for_test(document, affected_sibling),
+        "consuming one element must not enumerate or evict an unread sibling"
+    );
+    let visits_before_repeat =
+        engine.style_invalidation_path_node_visit_count_for_document_for_test(document);
+    assert!(
+        engine
+            .computed_style_property_value(
+                &host,
+                &document_url,
+                affected_leaf,
+                "display",
+                None,
+                &inputs,
+                None,
+            )
+            .is_some()
+    );
+    assert_eq!(
+        engine.element_style_resolution_count_for_document_for_test(document),
+        resolutions_after_first_affected_read,
+        "a second clean observation must reuse the refreshed ElementData"
+    );
+    assert_eq!(
+        engine.style_invalidation_path_node_visit_count_for_document_for_test(document),
+        visits_before_repeat + 1,
+        "a fully memoized target requires one O(1) generation check"
+    );
+
+    assert!(
+        engine
+            .computed_style_property_value(
+                &host,
+                &document_url,
+                affected_sibling,
+                "display",
+                None,
+                &inputs,
+                None,
+            )
+            .is_some()
+    );
+    assert!(
+        engine.element_style_resolution_count_for_document_for_test(document)
+            > resolutions_after_first_affected_read,
+        "the retained root history must independently validate an unread sibling"
+    );
+}
+
+#[test]
+fn repeated_lazy_invalidation_advances_past_previously_validated_elements() {
+    let mut host = test_host();
+    let document = host.document_handle();
+    let root = host.create_element("section");
+    let leaf = host.create_element("span");
+    assert!(host.append_child(document, root));
+    assert!(host.append_child(root, leaf));
+
+    let mut engine = MoliStyleEngine::new();
+    let document_url = url::Url::parse("https://example.test/").unwrap();
+    let inputs = FullStyleWorldSnapshot::default();
+    let read_leaf = |engine: &mut MoliStyleEngine| {
+        assert!(
+            engine
+                .computed_style_property_value(
+                    &host,
+                    &document_url,
+                    leaf,
+                    "display",
+                    None,
+                    &inputs,
+                    None,
+                )
+                .is_some()
+        );
+    };
+
+    read_leaf(&mut engine);
+    engine.invalidate_style_subtree(&host, root);
+    let first_generation = engine.style_invalidation_generation_for_document_for_test(document);
+    read_leaf(&mut engine);
+    let resolutions_after_first_generation =
+        engine.element_style_resolution_count_for_document_for_test(document);
+
+    engine.invalidate_style_subtree(&host, root);
+    assert!(
+        engine.style_invalidation_generation_for_document_for_test(document) > first_generation
+    );
+    read_leaf(&mut engine);
+    assert!(
+        engine.element_style_resolution_count_for_document_for_test(document)
+            > resolutions_after_first_generation,
+        "a new root generation must invalidate path stamps from the previous observation"
+    );
+}
+
+#[test]
+fn lazy_invalidated_deep_subtree_does_not_rewalk_validated_ancestors() {
+    const DEPTH: usize = 256;
+
+    let mut host = test_host();
+    let document = host.document_handle();
+    let root = host.create_element("section");
+    assert!(host.append_child(document, root));
+    let mut chain = vec![root];
+    let mut parent = root;
+    for _ in 1..DEPTH {
+        let child = host.create_element("div");
+        assert!(host.append_child(parent, child));
+        chain.push(child);
+        parent = child;
+    }
+
+    let mut engine = MoliStyleEngine::new();
+    let document_url = url::Url::parse("https://example.test/").unwrap();
+    let inputs = FullStyleWorldSnapshot::default();
+    assert!(
+        engine
+            .computed_style_property_value(
+                &host,
+                &document_url,
+                parent,
+                "display",
+                None,
+                &inputs,
+                None,
+            )
+            .is_some()
+    );
+
+    engine.invalidate_style_subtree(&host, root);
+    let ancestor_visits_before =
+        engine.ancestor_style_validation_visit_count_for_document_for_test(document);
+    let resolutions_before = engine.element_style_resolution_count_for_document_for_test(document);
+    for &handle in &chain {
+        assert!(
+            engine
+                .computed_style_property_value(
+                    &host,
+                    &document_url,
+                    handle,
+                    "display",
+                    None,
+                    &inputs,
+                    None,
+                )
+                .is_some()
+        );
+    }
+
+    let ancestor_visits = engine
+        .ancestor_style_validation_visit_count_for_document_for_test(document)
+        .saturating_sub(ancestor_visits_before);
+    assert!(
+        ancestor_visits <= DEPTH as u64,
+        "parent-before-child observation should reuse the nearest validated breadcrumb; visited {ancestor_visits} ancestors"
+    );
+    assert_eq!(
+        engine
+            .element_style_resolution_count_for_document_for_test(document)
+            .saturating_sub(resolutions_before),
+        DEPTH as u64,
+        "every dirty element is recascaded exactly once"
+    );
+}
+
+#[test]
 fn primary_snapshot_carries_applicable_eager_pseudos_without_forcing_absent_ones() {
     let mut host = test_host();
     let document = host.document_handle();
@@ -203,26 +483,128 @@ fn scoped_invalidation_marks_canonical_style_dirty_and_preserves_clean_elements(
 }
 
 #[test]
-fn inherited_ancestor_change_clears_descendant_cache_via_subtree_cleanup() {
+fn inherited_ancestor_change_lazily_refreshes_descendant_style() {
     let mut host = test_host();
     let document = host.document_handle();
-    let style = host.create_element("style");
     let ancestor = host.create_element("section");
     let descendant = host.create_element("span");
     let unrelated = host.create_element("aside");
-    assert!(host.append_child(document, style));
+    let source_text = ".theme { color: rgb(1, 2, 3); }";
     assert!(host.append_child(document, ancestor));
     assert!(host.append_child(ancestor, descendant));
     assert!(host.append_child(document, unrelated));
 
     let mut engine = MoliStyleEngine::new();
-    engine.set_owner_style_sheet_text_with_host(
-        &host,
-        style,
-        ".theme { color: rgb(1, 2, 3); }".into(),
-    );
     let document_url = url::Url::parse("https://example.test/").unwrap();
-    let inputs = FullStyleWorldSnapshot::default();
+    let source = StyloStylesheetSource::new(source_text.into(), document_url.clone());
+    engine.set_document_adopted_style_sheet_sources(document, vec![source.clone()]);
+    let mut inputs = FullStyleWorldSnapshot::default();
+    inputs.document_stylesheet_sources.push(source);
+    for handle in [descendant, unrelated] {
+        assert!(
+            engine
+                .computed_style_property_value(
+                    &host,
+                    &document_url,
+                    handle,
+                    "color",
+                    None,
+                    &inputs,
+                    None,
+                )
+                .is_some()
+        );
+    }
+    assert_eq!(
+        engine.computed_style_cache_entry_count_for_document_for_test(document),
+        2
+    );
+
+    assert!(host.set_attribute(ancestor, "class", "theme"));
+    let effects = [StyleMutationEffect::Attribute {
+        element: ancestor,
+        name: "class".into(),
+        old_value: None,
+        new_value: Some("theme".into()),
+    }];
+    let media = crate::protocol_types::EmulatedMediaOverrides::default();
+    engine.invalidate_for_mutations(&host, &effects, &media);
+    engine.drain_pending_style_invalidations_for_document_for_test(&host, document);
+
+    assert!(
+        element_style_is_dirty_for_test(&engine, &host, ancestor),
+        "the directly matched ancestor keeps Stylo's precise restyle hint"
+    );
+    assert!(
+        !element_style_is_dirty_for_test(&engine, &host, descendant),
+        "the descendant is represented by the lazy dirty-root generation"
+    );
+    assert!(
+        engine.retained_style_invalidation_root_count_for_document_for_test(document) > 0,
+        "the finalized invalidation must publish a lazy subtree root"
+    );
+
+    assert_eq!(
+        engine.computed_style_cache_entry_count_for_document_for_test(document),
+        2,
+        "subtree invalidation must not enumerate and evict published descendants"
+    );
+    assert!(
+        engine.computed_style_cache_contains_handle_for_document_for_test(document, descendant),
+        "the descendant remains published until it is observed"
+    );
+    assert!(engine.computed_style_cache_contains_handle_for_document_for_test(document, unrelated));
+    let resolutions_before = engine.element_style_resolution_count_for_document_for_test(document);
+    let descendant_color = engine.computed_style_property_value(
+        &host,
+        &document_url,
+        descendant,
+        "color",
+        None,
+        &inputs,
+        None,
+    );
+    assert!(
+        !element_style_is_dirty_for_test(&engine, &host, ancestor),
+        "observing the descendant must recascade its dirty ancestor first"
+    );
+    assert_eq!(
+        engine.computed_style_property_value(
+            &host,
+            &document_url,
+            ancestor,
+            "color",
+            None,
+            &inputs,
+            None,
+        ),
+        Some("rgb(1, 2, 3)".into()),
+        "the ancestor recascade must publish the newly matched rule"
+    );
+    assert_eq!(descendant_color, Some("rgb(1, 2, 3)".into()));
+    assert!(
+        engine.element_style_resolution_count_for_document_for_test(document) > resolutions_before,
+        "the first descendant observation must consume the retained dirty root"
+    );
+}
+#[test]
+fn custom_property_ancestor_change_lazily_refreshes_descendant_style() {
+    let mut host = test_host();
+    let document = host.document_handle();
+    let ancestor = host.create_element("section");
+    let descendant = host.create_element("span");
+    let unrelated = host.create_element("aside");
+    let source_text = ".theme { --accent: rgb(1, 2, 3); } span { color: var(--accent, black); }";
+    assert!(host.append_child(document, ancestor));
+    assert!(host.append_child(ancestor, descendant));
+    assert!(host.append_child(document, unrelated));
+
+    let mut engine = MoliStyleEngine::new();
+    let document_url = url::Url::parse("https://example.test/").unwrap();
+    let source = StyloStylesheetSource::new(source_text.into(), document_url.clone());
+    engine.set_document_adopted_style_sheet_sources(document, vec![source.clone()]);
+    let mut inputs = FullStyleWorldSnapshot::default();
+    inputs.document_stylesheet_sources.push(source);
     for handle in [descendant, unrelated] {
         assert!(
             engine
@@ -256,98 +638,46 @@ fn inherited_ancestor_change_clears_descendant_cache_via_subtree_cleanup() {
 
     assert_eq!(
         engine.computed_style_cache_entry_count_for_document_for_test(document),
-        1
+        2,
+        "subtree invalidation must not enumerate var() consumers"
     );
     assert!(
-        !engine.computed_style_cache_contains_handle_for_document_for_test(document, descendant),
-        "inherited ancestor changes must clear descendant cache until direct-handle cleanup has a safety class"
+        engine.computed_style_cache_contains_handle_for_document_for_test(document, descendant),
+        "the descendant remains published until it is observed"
     );
     assert!(engine.computed_style_cache_contains_handle_for_document_for_test(document, unrelated));
+    assert_eq!(
+        engine.computed_style_property_value(
+            &host,
+            &document_url,
+            descendant,
+            "color",
+            None,
+            &inputs,
+            None,
+        ),
+        Some("rgb(1, 2, 3)".into())
+    );
 }
+
 #[test]
-fn custom_property_ancestor_change_clears_descendant_cache_via_subtree_cleanup() {
+fn non_inherited_exact_change_lazily_recascades_descendant_conservatively() {
     let mut host = test_host();
     let document = host.document_handle();
-    let style = host.create_element("style");
     let ancestor = host.create_element("section");
     let descendant = host.create_element("span");
     let unrelated = host.create_element("aside");
-    assert!(host.append_child(document, style));
+    let source_text = ".theme { background-color: rgb(1, 2, 3); }";
     assert!(host.append_child(document, ancestor));
     assert!(host.append_child(ancestor, descendant));
     assert!(host.append_child(document, unrelated));
 
     let mut engine = MoliStyleEngine::new();
-    engine.set_owner_style_sheet_text_with_host(
-        &host,
-        style,
-        ".theme { --accent: rgb(1, 2, 3); } span { color: var(--accent, black); }".into(),
-    );
     let document_url = url::Url::parse("https://example.test/").unwrap();
-    let inputs = FullStyleWorldSnapshot::default();
-    for handle in [descendant, unrelated] {
-        assert!(
-            engine
-                .computed_style_property_value(
-                    &host,
-                    &document_url,
-                    handle,
-                    "color",
-                    None,
-                    &inputs,
-                    None,
-                )
-                .is_some()
-        );
-    }
-    assert_eq!(
-        engine.computed_style_cache_entry_count_for_document_for_test(document),
-        2
-    );
-
-    assert!(host.set_attribute(ancestor, "class", "theme"));
-    let effects = [StyleMutationEffect::Attribute {
-        element: ancestor,
-        name: "class".into(),
-        old_value: None,
-        new_value: Some("theme".into()),
-    }];
-    let media = crate::protocol_types::EmulatedMediaOverrides::default();
-    engine.invalidate_for_mutations(&host, &effects, &media);
-    engine.drain_pending_style_invalidations_for_document_for_test(&host, document);
-
-    assert_eq!(
-        engine.computed_style_cache_entry_count_for_document_for_test(document),
-        1
-    );
-    assert!(
-        !engine.computed_style_cache_contains_handle_for_document_for_test(document, descendant),
-        "custom-property ancestor changes must clear descendant var() consumers before direct-handle cleanup is safe"
-    );
-    assert!(engine.computed_style_cache_contains_handle_for_document_for_test(document, unrelated));
-}
-
-#[test]
-fn non_inherited_exact_change_still_clears_descendant_cache_via_subtree_cleanup() {
-    let mut host = test_host();
-    let document = host.document_handle();
-    let style = host.create_element("style");
-    let ancestor = host.create_element("section");
-    let descendant = host.create_element("span");
-    let unrelated = host.create_element("aside");
-    assert!(host.append_child(document, style));
-    assert!(host.append_child(document, ancestor));
-    assert!(host.append_child(ancestor, descendant));
-    assert!(host.append_child(document, unrelated));
-
-    let mut engine = MoliStyleEngine::new();
-    engine.set_owner_style_sheet_text_with_host(
-        &host,
-        style,
-        ".theme { background-color: rgb(1, 2, 3); }".into(),
-    );
-    let document_url = url::Url::parse("https://example.test/").unwrap();
-    let inputs = FullStyleWorldSnapshot::default();
+    let source = StyloStylesheetSource::new(source_text.into(), document_url.clone());
+    engine.set_document_adopted_style_sheet_sources(document, vec![source.clone()]);
+    let mut inputs = FullStyleWorldSnapshot::default();
+    inputs.document_stylesheet_sources.push(source);
     for handle in [descendant, unrelated] {
         assert!(
             engine
@@ -367,6 +697,8 @@ fn non_inherited_exact_change_still_clears_descendant_cache_via_subtree_cleanup(
         engine.computed_style_cache_entry_count_for_document_for_test(document),
         2
     );
+    let descendant_before = retained_primary_style_for_test(&engine, &host, descendant)
+        .expect("descendant style should be retained");
 
     assert!(host.set_attribute(ancestor, "class", "theme"));
     let effects = [StyleMutationEffect::Attribute {
@@ -381,39 +713,56 @@ fn non_inherited_exact_change_still_clears_descendant_cache_via_subtree_cleanup(
 
     assert_eq!(
         engine.computed_style_cache_entry_count_for_document_for_test(document),
-        1
+        2,
+        "subtree invalidation must not enumerate published descendants"
     );
     assert!(
-        !engine.computed_style_cache_contains_handle_for_document_for_test(document, descendant),
-        "even non-inherited exact-looking changes currently clear descendant cache until SelfOnly direct-handle cleanup exists"
+        engine.computed_style_cache_contains_handle_for_document_for_test(document, descendant),
+        "the conservative descendant recascade is deferred until observation"
     );
     assert!(engine.computed_style_cache_contains_handle_for_document_for_test(document, unrelated));
+    assert!(
+        engine
+            .computed_style_property_value(
+                &host,
+                &document_url,
+                descendant,
+                "background-color",
+                None,
+                &inputs,
+                None,
+            )
+            .is_some()
+    );
+    let descendant_after = retained_primary_style_for_test(&engine, &host, descendant)
+        .expect("observed descendant style should be republished");
+    assert!(
+        !ServoArc::ptr_eq(&descendant_before, &descendant_after),
+        "the lazy subtree contract remains inheritance-safe even for a non-inherited change"
+    );
 }
 
 #[test]
-fn shadow_host_inherited_change_clears_shadow_descendant_cache_via_subtree_cleanup() {
+fn shadow_host_inherited_change_lazily_refreshes_shadow_descendant() {
     let mut host = test_host();
     let document = host.document_handle();
-    let style = host.create_element("style");
     let shadow_host = host.create_element("section");
     let shadow_root = host
         .attach_shadow_root(shadow_host, "open")
         .expect("section should host a shadow root");
     let shadow_child = host.create_element("span");
     let unrelated = host.create_element("aside");
-    assert!(host.append_child(document, style));
+    let source_text = ".theme { color: rgb(1, 2, 3); }";
     assert!(host.append_child(document, shadow_host));
     assert!(host.append_child(shadow_root, shadow_child));
     assert!(host.append_child(document, unrelated));
 
     let mut engine = MoliStyleEngine::new();
-    engine.set_owner_style_sheet_text_with_host(
-        &host,
-        style,
-        ".theme { color: rgb(1, 2, 3); }".into(),
-    );
     let document_url = url::Url::parse("https://example.test/").unwrap();
-    let inputs = FullStyleWorldSnapshot::default();
+    let source = StyloStylesheetSource::new(source_text.into(), document_url.clone());
+    engine.set_document_adopted_style_sheet_sources(document, vec![source.clone()]);
+    let mut inputs = FullStyleWorldSnapshot::default();
+    inputs.document_stylesheet_sources.push(source);
     for handle in [shadow_child, unrelated] {
         assert!(
             engine
@@ -447,36 +796,46 @@ fn shadow_host_inherited_change_clears_shadow_descendant_cache_via_subtree_clean
 
     assert_eq!(
         engine.computed_style_cache_entry_count_for_document_for_test(document),
-        1
+        2,
+        "shadow descendants must not be enumerated during invalidation"
     );
     assert!(
-        !engine.computed_style_cache_contains_handle_for_document_for_test(document, shadow_child),
-        "inherited host changes must clear shadow descendant cache before direct-handle cleanup is safe"
+        engine.computed_style_cache_contains_handle_for_document_for_test(document, shadow_child),
+        "the shadow descendant remains published until observed"
     );
     assert!(engine.computed_style_cache_contains_handle_for_document_for_test(document, unrelated));
+    assert_eq!(
+        engine.computed_style_property_value(
+            &host,
+            &document_url,
+            shadow_child,
+            "color",
+            None,
+            &inputs,
+            None,
+        ),
+        Some("rgb(1, 2, 3)".into())
+    );
 }
 #[test]
-fn lazy_pseudo_inherited_change_clears_pseudo_cache_via_subtree_cleanup() {
+fn lazy_pseudo_inherited_change_is_evicted_when_owner_is_observed() {
     let mut host = test_host();
     let document = host.document_handle();
-    let style = host.create_element("style");
     let ancestor = host.create_element("section");
     let list_item = host.create_element("li");
     let unrelated = host.create_element("aside");
-    assert!(host.append_child(document, style));
+    let source_text =
+        ".theme { color: rgb(1, 2, 3); } li { display: list-item; } li::marker { color: inherit; }";
     assert!(host.append_child(document, ancestor));
     assert!(host.append_child(ancestor, list_item));
     assert!(host.append_child(document, unrelated));
 
     let mut engine = MoliStyleEngine::new();
-    engine.set_owner_style_sheet_text_with_host(
-        &host,
-        style,
-        ".theme { color: rgb(1, 2, 3); } li { display: list-item; } li::marker { color: inherit; }"
-            .into(),
-    );
     let document_url = url::Url::parse("https://example.test/").unwrap();
-    let inputs = FullStyleWorldSnapshot::default();
+    let source = StyloStylesheetSource::new(source_text.into(), document_url.clone());
+    engine.set_document_adopted_style_sheet_sources(document, vec![source.clone()]);
+    let mut inputs = FullStyleWorldSnapshot::default();
+    inputs.document_stylesheet_sources.push(source);
     assert!(
         engine
             .computed_style_property_value(
@@ -531,16 +890,17 @@ fn lazy_pseudo_inherited_change_clears_pseudo_cache_via_subtree_cleanup() {
 
     assert_eq!(
         engine.computed_style_cache_entry_count_for_document_for_test(document),
-        1
+        3,
+        "mutation-time invalidation must retain the descendant pseudo sidecar"
     );
     assert!(
-        !engine.computed_style_cache_contains_handle_for_document_for_test(document, list_item),
-        "inherited ancestor changes must clear lazy pseudo cache entries keyed by descendant handles"
+        engine.computed_style_cache_contains_handle_for_document_for_test(document, list_item),
+        "the owner and pseudo are evicted together only when the owner is demanded"
     );
     assert_eq!(
         engine
             .computed_style_cache_entry_count_for_handle_for_document_for_test(document, list_item),
-        0
+        2
     );
     assert_eq!(
         engine
@@ -548,30 +908,44 @@ fn lazy_pseudo_inherited_change_clears_pseudo_cache_via_subtree_cleanup() {
         1
     );
     assert!(engine.computed_style_cache_contains_handle_for_document_for_test(document, unrelated));
+    assert_eq!(
+        engine.computed_style_property_value(
+            &host,
+            &document_url,
+            list_item,
+            "color",
+            Some("marker"),
+            &inputs,
+            None,
+        ),
+        Some("rgb(1, 2, 3)".into())
+    );
+    assert_eq!(
+        engine
+            .computed_style_cache_entry_count_for_handle_for_document_for_test(document, list_item),
+        2,
+        "the refreshed primary and pseudo must be republished"
+    );
 }
 
 #[test]
-fn lazy_pseudo_custom_property_change_clears_pseudo_cache_via_subtree_cleanup() {
+fn lazy_pseudo_custom_property_change_is_evicted_when_owner_is_observed() {
     let mut host = test_host();
     let document = host.document_handle();
-    let style = host.create_element("style");
     let ancestor = host.create_element("section");
     let list_item = host.create_element("li");
     let unrelated = host.create_element("aside");
-    assert!(host.append_child(document, style));
+    let source_text = ".theme { --marker-color: rgb(1, 2, 3); } li { display: list-item; } li::marker { color: var(--marker-color, black); }";
     assert!(host.append_child(document, ancestor));
     assert!(host.append_child(ancestor, list_item));
     assert!(host.append_child(document, unrelated));
 
     let mut engine = MoliStyleEngine::new();
-    engine.set_owner_style_sheet_text_with_host(
-        &host,
-        style,
-        ".theme { --marker-color: rgb(1, 2, 3); } li { display: list-item; } li::marker { color: var(--marker-color, black); }"
-            .into(),
-    );
     let document_url = url::Url::parse("https://example.test/").unwrap();
-    let inputs = FullStyleWorldSnapshot::default();
+    let source = StyloStylesheetSource::new(source_text.into(), document_url.clone());
+    engine.set_document_adopted_style_sheet_sources(document, vec![source.clone()]);
+    let mut inputs = FullStyleWorldSnapshot::default();
+    inputs.document_stylesheet_sources.push(source);
     assert!(
         engine
             .computed_style_property_value(
@@ -626,16 +1000,17 @@ fn lazy_pseudo_custom_property_change_clears_pseudo_cache_via_subtree_cleanup() 
 
     assert_eq!(
         engine.computed_style_cache_entry_count_for_document_for_test(document),
-        1
+        3,
+        "mutation-time invalidation must retain the descendant pseudo sidecar"
     );
     assert!(
-        !engine.computed_style_cache_contains_handle_for_document_for_test(document, list_item),
-        "custom-property ancestor changes must clear lazy pseudo var() consumers before direct-handle cleanup is safe"
+        engine.computed_style_cache_contains_handle_for_document_for_test(document, list_item),
+        "the pseudo var() consumer remains published until its owner is demanded"
     );
     assert_eq!(
         engine
             .computed_style_cache_entry_count_for_handle_for_document_for_test(document, list_item),
-        0
+        2
     );
     assert_eq!(
         engine
@@ -643,6 +1018,18 @@ fn lazy_pseudo_custom_property_change_clears_pseudo_cache_via_subtree_cleanup() 
         1
     );
     assert!(engine.computed_style_cache_contains_handle_for_document_for_test(document, unrelated));
+    assert_eq!(
+        engine.computed_style_property_value(
+            &host,
+            &document_url,
+            list_item,
+            "color",
+            Some("marker"),
+            &inputs,
+            None,
+        ),
+        Some("rgb(1, 2, 3)".into())
+    );
 }
 
 #[test]
@@ -701,17 +1088,31 @@ fn source_local_fallback_roots_preserve_unrelated_document_cache_for_shadow_sour
 
     assert_eq!(
         engine.computed_style_cache_entry_count_for_document_for_test(document),
-        2
+        3,
+        "a scoped fallback records roots instead of enumerating published descendants"
     );
     assert!(engine.computed_style_cache_contains_handle_for_document_for_test(document, outside));
     assert!(
-        !engine.computed_style_cache_contains_handle_for_document_for_test(document, shadow_child)
+        engine.computed_style_cache_contains_handle_for_document_for_test(document, shadow_child)
     );
     assert!(
         engine.computed_style_cache_contains_handle_for_document_for_test(
             document,
             sibling_shadow_child
         )
+    );
+    assert!(
+        engine
+            .computed_style_property_value(
+                &host,
+                &document_url,
+                shadow_child,
+                "display",
+                None,
+                &inputs,
+                None,
+            )
+            .is_some()
     );
 }
 
@@ -5273,11 +5674,15 @@ fn document_stylesheet_change_updates_the_retained_system_in_place() {
         ServoArc::ptr_eq(&unrelated_style_before, &unrelated_style_after),
         "Stylo stylesheet invalidation must preserve an unrelated source's canonical style"
     );
-    assert!(element_style_is_dirty_for_test(
-        &engine,
-        &host,
-        inherited_child
-    ));
+    assert!(
+        !element_style_is_dirty_for_test(&engine, &host, inherited_child),
+        "the inherited child remains published; its dirty-root generation is consumed on demand"
+    );
+    assert!(
+        engine
+            .computed_style_cache_contains_handle_for_document_for_test(document, inherited_child),
+        "a target read must not enumerate and evict its unobserved descendants"
+    );
     assert_eq!(
         engine.computed_style_property_value(
             &host,

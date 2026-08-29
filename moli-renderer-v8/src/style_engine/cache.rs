@@ -12,9 +12,9 @@ use crate::document_runtime::DomHandle;
 /// Resolution index for canonical Stylo element data plus a pseudo-style cache.
 ///
 /// Primary `ComputedValues` are never duplicated here: they remain owned by
-/// Stylo `ElementData`. Primary entries only let invalidation find already
-/// published elements; pseudo styles have no equivalent canonical slot and are
-/// therefore retained by value until their generation is invalidated.
+/// Stylo `ElementData`. Primary entries record publication for diagnostics and
+/// per-handle pseudo eviction; pseudo styles have no equivalent canonical slot
+/// and are therefore retained by value until their generation is invalidated.
 pub(super) struct ComputedStyleCache {
     primary_entries: RefCell<HashSet<ComputedElementStyleCacheKey>>,
     pseudo_entries: RefCell<HashMap<ComputedElementStyleCacheKey, ServoArc<ComputedValues>>>,
@@ -101,10 +101,6 @@ impl ComputedStyleCache {
             primary_entries.remove(&key);
             pseudo_entries.remove(&key);
         }
-    }
-
-    pub(super) fn handles(&self) -> Vec<DomHandle> {
-        self.keys_by_handle.borrow().keys().copied().collect()
     }
 
     fn index_key(&self, key: &ComputedElementStyleCacheKey) {

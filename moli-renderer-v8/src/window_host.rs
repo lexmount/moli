@@ -1138,6 +1138,9 @@ pub(crate) fn build_computed_style_object<'s>(
     let host_ref = unsafe { &*host_ptr };
     let target_context =
         computed_style_target_context(scope, host_ref, handle, child_window_handle);
+    if target_context.returns_empty_style() {
+        host_ref.retire_computed_style_for_inactive_handle(handle);
+    }
     let cached_target_empty = match target_context {
         ComputedStyleTargetContext::ChildFrameDocument { .. } => {
             Some(target_context.returns_empty_style())

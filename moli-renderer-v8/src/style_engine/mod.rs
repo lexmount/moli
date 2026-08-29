@@ -36,6 +36,7 @@ mod drain;
 mod eligibility;
 mod fallback;
 mod invalidation;
+mod lazy_invalidation;
 pub(crate) mod media_list;
 mod mutation_effect;
 mod outcome;
@@ -409,6 +410,49 @@ impl MoliStyleEngine {
     }
 
     #[cfg(test)]
+    pub(crate) fn retained_style_invalidation_root_count_for_document_for_test(
+        &self,
+        document: DomHandle,
+    ) -> usize {
+        self.world_for_document(document)
+            .document_state
+            .lazy_invalidation_roots
+            .root_count()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn style_invalidation_generation_for_document_for_test(
+        &self,
+        document: DomHandle,
+    ) -> u64 {
+        self.world_for_document(document)
+            .document_state
+            .lazy_invalidation_roots
+            .generation()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn style_invalidation_path_node_visit_count_for_document_for_test(
+        &self,
+        document: DomHandle,
+    ) -> u64 {
+        self.world_for_document(document)
+            .document_state
+            .lazy_invalidation_roots
+            .path_node_visit_count()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn ancestor_style_validation_visit_count_for_document_for_test(
+        &self,
+        document: DomHandle,
+    ) -> u64 {
+        self.world_for_document(document)
+            .document_state
+            .ancestor_style_validation_visit_count()
+    }
+
+    #[cfg(test)]
     pub(crate) fn source_dirty_scope_source_ids_for_document_for_test(
         &self,
         document: DomHandle,
@@ -616,6 +660,18 @@ impl MoliStyleEngine {
             .clear_shadow_cascade_data_for_document(document);
         self.document_worlds
             .clear_for_document_replacement(document);
+    }
+
+    /// Drops the exact target's canonical style and publication markers after
+    /// it leaves every rendered style context.
+    ///
+    /// This is deliberately target-local. Subtree invalidation remains lazy;
+    /// a disconnected `getComputedStyle()` read must not reintroduce the old
+    /// document-wide scan merely to retire the one target it observes.
+    pub(crate) fn retire_computed_style_for_inactive_handle(&self, handle: DomHandle) {
+        self.dom_adapter.clear_element_data(handle);
+        self.document_worlds
+            .invalidate_computed_style_handle(handle);
     }
 
     fn clear_owner_document_indexes_for_document(&self, document: DomHandle) {

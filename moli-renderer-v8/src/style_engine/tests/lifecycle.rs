@@ -317,14 +317,16 @@ fn active_document_light_tree_mutation_matches_related_shadow_sources() {
     engine.invalidate_for_mutations(&host, &effect, &media);
     engine.drain_pending_style_invalidations_for_document_for_test(&host, document);
     assert!(
-        !engine.computed_style_cache_contains_handle_for_document_for_test(
+        engine.computed_style_cache_contains_handle_for_document_for_test(
             document,
             descendant_target
-        )
+        ),
+        "the related shadow target stays published behind a lazy dirty root"
     );
     assert!(
         engine.computed_style_cache_contains_handle_for_document_for_test(document, sibling_target)
     );
+    assert!(engine.retained_style_invalidation_root_count_for_document_for_test(document) > 0);
 }
 #[test]
 fn author_stylesheet_sources_are_owned_by_style_engine() {

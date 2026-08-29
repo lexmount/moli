@@ -16,6 +16,7 @@ use super::{
     CssCustomPropertyRegistrationRecord, StyleTreeScopeVersions, StyleViewport,
     StyloStyleEnvironment,
     active_stylesheets::ActiveStylesheetCollection,
+    lazy_invalidation::LazyStyleInvalidationRoots,
     shadow_scopes::ShadowScopeStyles,
     source_dirty::{StyleSourceDirtyReason, StyleSourceDirtyScopeSnapshot, StyleSourceDirtyScopes},
     source_id::{StyleScopeId, StyleSourceId},
@@ -86,6 +87,7 @@ pub(super) struct StyleDocumentState {
     computed_cache_generation: Cell<u64>,
     retained_style_system_generation: Cell<u64>,
     target_context_epoch: Cell<u64>,
+    pub(super) lazy_invalidation_roots: LazyStyleInvalidationRoots,
     #[cfg(debug_assertions)]
     completed_style_observation: RefCell<Option<CompletedStyleObservation>>,
     #[cfg(all(test, debug_assertions))]
@@ -96,6 +98,8 @@ pub(super) struct StyleDocumentState {
     retained_style_system_updates: Cell<u64>,
     #[cfg(test)]
     element_style_resolutions: Cell<u64>,
+    #[cfg(test)]
+    ancestor_style_validation_visits: Cell<u64>,
 }
 
 impl StyleDocumentState {
@@ -108,6 +112,7 @@ impl StyleDocumentState {
             computed_cache_generation: Cell::new(0),
             retained_style_system_generation: Cell::new(0),
             target_context_epoch: Cell::new(0),
+            lazy_invalidation_roots: LazyStyleInvalidationRoots::default(),
             #[cfg(debug_assertions)]
             completed_style_observation: RefCell::new(None),
             #[cfg(all(test, debug_assertions))]
@@ -118,6 +123,8 @@ impl StyleDocumentState {
             retained_style_system_updates: Cell::new(0),
             #[cfg(test)]
             element_style_resolutions: Cell::new(0),
+            #[cfg(test)]
+            ancestor_style_validation_visits: Cell::new(0),
         }
     }
 
@@ -208,6 +215,7 @@ impl StyleDocumentState {
 
     pub(super) fn clear_retained_style_system(&self) {
         self.retained_style_system.borrow_mut().take();
+        self.lazy_invalidation_roots.clear();
         self.clear_source_dirty_scopes();
         self.clear_invalidation_clear_all_fallback_reasons();
         self.clear_selector_caches();
@@ -363,6 +371,23 @@ impl StyleDocumentState {
     #[cfg(test)]
     pub(super) fn element_style_resolution_count(&self) -> u64 {
         self.element_style_resolutions.get()
+    }
+
+    #[cfg(test)]
+    pub(super) fn note_ancestor_style_validation_visits(&self, count: u64) {
+        self.ancestor_style_validation_visits.set(
+            self.ancestor_style_validation_visits
+                .get()
+                .saturating_add(count),
+        );
+    }
+
+    #[cfg(not(test))]
+    pub(super) fn note_ancestor_style_validation_visits(&self, _count: u64) {}
+
+    #[cfg(test)]
+    pub(super) fn ancestor_style_validation_visit_count(&self) -> u64 {
+        self.ancestor_style_validation_visits.get()
     }
 
     pub(super) fn with_shadow_cascade_data<R>(

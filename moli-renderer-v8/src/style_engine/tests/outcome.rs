@@ -1699,15 +1699,20 @@ fn target_query_drain_clear_all_when_retained_fallback_has_no_roots() {
 
     assert_eq!(
         engine.computed_style_cache_entry_count_for_document_for_test(document),
-        0
+        1,
+        "the document fallback is retained as a lazy root"
     );
     assert_eq!(
         engine.computed_style_cache_entry_count_for_document_for_test(detached_document),
         1
     );
     assert!(
-        element_style_is_dirty_for_test(&engine, &host, active),
-        "scoped fallback should retain the last computed values and mark them dirty"
+        !element_style_is_dirty_for_test(&engine, &host, active),
+        "a document root no longer enumerates and marks published descendants eagerly"
+    );
+    assert_eq!(
+        engine.retained_style_invalidation_root_count_for_document_for_test(document),
+        1
     );
     assert!(engine.dom_adapter.has_element_data(detached));
     assert!(engine.target_context_epoch_for_document_for_test(document) > target_epoch);
@@ -1942,12 +1947,17 @@ fn detached_document_rootless_source_fallback_clears_only_source_document_world(
     );
     assert_eq!(
         engine.computed_style_cache_entry_count_for_document_for_test(detached_document),
-        0
+        1,
+        "the detached document root is retained without scanning its published descendants"
     );
     assert!(engine.dom_adapter.has_element_data(active));
     assert!(
-        element_style_is_dirty_for_test(&engine, &host, detached),
-        "scoped fallback should retain the last computed values and mark them dirty"
+        !element_style_is_dirty_for_test(&engine, &host, detached),
+        "the descendant becomes stale through its document generation, not an eager restyle hint"
+    );
+    assert_eq!(
+        engine.retained_style_invalidation_root_count_for_document_for_test(detached_document),
+        1
     );
 }
 

@@ -7,7 +7,7 @@ use style::{
         SharedStyleContext, StyleContext, StyleSystemOptions, ThreadLocalStyleContext,
     },
     data::ElementStyles,
-    dom::TElement,
+    dom::{TElement, TNode},
     properties::{
         ComputedValues, PropertyId,
         longhands::{
@@ -46,6 +46,7 @@ use super::{
     StyleWorldUpdate, StyleWorldUpdatePlan,
     cache::ComputedElementStyleCacheKey,
     document_world::DocumentStyleWorld,
+    lazy_invalidation::StyleValidationPathEntry,
     source_lifecycle::StyleSourceDocumentContext,
     world_key::StyleWorldKey,
     world_lifecycle::{
@@ -747,7 +748,11 @@ fn with_resolved_style_in_current_world<R>(
     callback: impl FnOnce(&ServoArc<ComputedValues>, Option<&ElementStyles>) -> Option<R>,
 ) -> Option<R> {
     let computed_cache_generation = world.document_state.computed_cache_generation();
-    if let Some(pseudo_element) = pseudo_element {
+    let has_retained_invalidation_roots = world
+        .document_state
+        .lazy_invalidation_roots
+        .has_retained_roots();
+    if !has_retained_invalidation_roots && let Some(pseudo_element) = pseudo_element {
         let pseudo_key = ComputedElementStyleCacheKey {
             computed_cache_generation,
             handle,
@@ -757,36 +762,66 @@ fn with_resolved_style_in_current_world<R>(
             return callback(&style, None);
         }
     }
+    let validation_path = has_retained_invalidation_roots.then(|| {
+        world
+            .document_state
+            .lazy_invalidation_roots
+            .validation_path(host, world.document, handle)
+    });
 
     engine.dom_adapter.with_bound_host(host, |dom_adapter| {
         let element = dom_adapter.element(host, handle)?;
-        let canonical_styles = element
+        let canonical_is_current = element
             .borrow_data()
-            .filter(|data| data.has_styles() && data.hint.is_empty())
-            .map(|data| data.styles.clone())
-            .unwrap_or_else(|| {
-                populate_inline_style_attributes_for_resolution(
-                    engine,
-                    host,
-                    document_url,
-                    handle,
-                    quirks_mode,
-                );
-                install_shadow_cascade_data_for_resolution(world, dom_adapter);
-                // `resolve_style` is the single-node initial-style API. Keep
-                // dirty values published until this observation begins, then
-                // make only the element being recomputed unstyled.
-                unsafe {
-                    element.ensure_data().styles = ElementStyles::default();
-                }
-                let styles = resolve_element_styles(world, dom_adapter, element, None);
-                unsafe {
-                    let mut data = element.ensure_data();
-                    data.styles = styles.clone();
-                    data.clear_restyle_state();
-                }
-                styles
+            .is_some_and(|data| data.has_styles() && data.hint.is_empty());
+        let path_needs_resolution = validation_path
+            .as_ref()
+            .map_or(!canonical_is_current, |path| {
+                style_validation_path_needs_resolution(world, dom_adapter, host, path)
             });
+        if !path_needs_resolution && let Some(pseudo_element) = pseudo_element {
+            let pseudo_key = ComputedElementStyleCacheKey {
+                computed_cache_generation,
+                handle,
+                pseudo_element: Some(pseudo_element.clone()),
+            };
+            if let Some(style) = world.computed_style_cache.get_pseudo(&pseudo_key) {
+                return callback(&style, None);
+            }
+        }
+
+        let canonical_styles = if path_needs_resolution {
+            populate_inline_style_attributes_for_resolution(
+                engine,
+                host,
+                document_url,
+                handle,
+                quirks_mode,
+            );
+            install_shadow_cascade_data_for_resolution(world, dom_adapter);
+            if validation_path.is_none() {
+                // Initial resolution already walks the ancestor chain. Build
+                // its zero-generation stamps only on this slow path so clean
+                // repeated reads retain the old O(1) fast path.
+                world
+                    .document_state
+                    .lazy_invalidation_roots
+                    .validation_path(host, world.document, handle);
+            }
+            resolve_element_styles(
+                world,
+                dom_adapter,
+                element,
+                None,
+                validation_path.as_deref(),
+            )
+        } else {
+            element
+                .borrow_data()
+                .filter(|data| data.has_styles() && data.hint.is_empty())
+                .map(|data| data.styles.clone())
+                .expect("a current validation path must end in published element styles")
+        };
 
         let style = if let Some(pseudo_element) = pseudo_element {
             let style = canonical_styles
@@ -795,10 +830,16 @@ fn with_resolved_style_in_current_world<R>(
                 .cloned()
                 .or_else(|| {
                     install_shadow_cascade_data_for_resolution(world, dom_adapter);
-                    resolve_element_styles(world, dom_adapter, element, Some(pseudo_element))
-                        .pseudos
-                        .get(pseudo_element)
-                        .cloned()
+                    resolve_element_styles(
+                        world,
+                        dom_adapter,
+                        element,
+                        Some(pseudo_element),
+                        validation_path.as_deref(),
+                    )
+                    .pseudos
+                    .get(pseudo_element)
+                    .cloned()
                 })?;
             world.computed_style_cache.insert_pseudo(
                 ComputedElementStyleCacheKey {
@@ -841,6 +882,7 @@ fn resolve_element_styles(
     dom_adapter: &moli_selector::StyloDomHostBinding<'_>,
     element: StyloElement<'_>,
     pseudo_element: Option<&PseudoElement>,
+    validation_path: Option<&[StyleValidationPathEntry]>,
 ) -> ElementStyles {
     let shared_lock = dom_adapter.shared_lock().clone();
     let guard = shared_lock.read();
@@ -870,8 +912,20 @@ fn resolve_element_styles(
             shared: &shared,
             thread_local: &mut thread_local,
         };
-        let ancestor_resolution_count =
-            materialize_ancestor_styles_for_resolution(&mut context, element);
+        let ancestor_resolution_count = materialize_ancestor_styles_for_resolution(
+            &mut context,
+            element,
+            world,
+            validation_path,
+        );
+        let target = DomHandle::new(element.as_node().debug_id());
+        world.computed_style_cache.invalidate_handles([target]);
+        // `resolve_style` is the single-node initial-style API. Keep dirty
+        // values published until this observation begins, then replace only
+        // the demanded path from ancestors to target.
+        unsafe {
+            element.ensure_data().styles = ElementStyles::default();
+        }
         let styles = resolve_style(
             &mut context,
             element,
@@ -879,6 +933,20 @@ fn resolve_element_styles(
             pseudo_element,
             None,
         );
+        unsafe {
+            let mut data = element.ensure_data();
+            data.styles = styles.clone();
+            data.clear_restyle_state();
+        }
+        let required_generation = world
+            .document_state
+            .lazy_invalidation_roots
+            .required_generation_for_checked_element(target)
+            .unwrap_or_default();
+        world
+            .document_state
+            .lazy_invalidation_roots
+            .mark_element_current(target, required_generation);
         std::mem::swap(
             &mut context.thread_local.selector_caches,
             &mut retained_selector_caches,
@@ -894,25 +962,52 @@ fn resolve_element_styles(
     styles
 }
 
-fn materialize_ancestor_styles_for_resolution<E>(context: &mut StyleContext<E>, element: E) -> u64
+fn materialize_ancestor_styles_for_resolution<E>(
+    context: &mut StyleContext<E>,
+    element: E,
+    world: &DocumentStyleWorld,
+    validation_path: Option<&[StyleValidationPathEntry]>,
+) -> u64
 where
     E: TElement,
 {
-    let mut ancestors = Vec::new();
-    let mut current = element.traversal_parent();
-    while let Some(ancestor) = current {
-        ancestors.push(ancestor);
-        current = ancestor.traversal_parent();
-    }
+    let ancestors = validation_path
+        .and_then(|path| validation_path_ancestors(element, path))
+        .unwrap_or_else(|| {
+            let mut ancestors = Vec::new();
+            let mut current = element.traversal_parent();
+            while let Some(ancestor) = current {
+                let handle = DomHandle::new(ancestor.as_node().debug_id());
+                let required_generation = world
+                    .document_state
+                    .lazy_invalidation_roots
+                    .required_generation_for_checked_element(handle)
+                    .unwrap_or_default();
+                ancestors.push((ancestor, required_generation));
+                current = ancestor.traversal_parent();
+            }
+            ancestors.reverse();
+            ancestors
+        });
+    world
+        .document_state
+        .note_ancestor_style_validation_visits(ancestors.len() as u64);
 
     let mut resolution_count = 0_u64;
-    for ancestor in ancestors.into_iter().rev() {
-        if ancestor
+    let mut force_descendants = false;
+    for (ancestor, required_generation) in ancestors {
+        let handle = DomHandle::new(ancestor.as_node().debug_id());
+        let canonical_is_current = ancestor
             .borrow_data()
             .is_some_and(|data| data.has_styles() && data.hint.is_empty())
-        {
+            && world
+                .document_state
+                .lazy_invalidation_roots
+                .element_is_current(handle, required_generation);
+        if canonical_is_current && !force_descendants {
             continue;
         }
+        world.computed_style_cache.invalidate_handles([handle]);
         unsafe {
             ancestor.ensure_data().styles = ElementStyles::default();
         }
@@ -923,8 +1018,68 @@ where
             data.styles = styles;
             data.clear_restyle_state();
         }
+        world
+            .document_state
+            .lazy_invalidation_roots
+            .mark_element_current(handle, required_generation);
+        force_descendants = true;
     }
     resolution_count
+}
+
+/// Maps the memoized DOM path suffix back to Stylo ancestors.
+///
+/// `LazyStyleInvalidationRoots::validation_path` stops at the nearest handle
+/// already stamped for the current registry generation. That handle's style
+/// has already been validated by the observation that published the stamp, so
+/// a later child read only needs to inspect the unstamped suffix. If the DOM
+/// and Stylo parent contracts ever disagree, return `None` and conservatively
+/// use the complete ancestor chain above.
+fn validation_path_ancestors<E>(
+    element: E,
+    validation_path: &[StyleValidationPathEntry],
+) -> Option<Vec<(E, u64)>>
+where
+    E: TElement,
+{
+    let (target, ancestor_entries) = validation_path.split_last()?;
+    if target.element != DomHandle::new(element.as_node().debug_id()) {
+        return None;
+    }
+
+    let mut current = element.traversal_parent();
+    let mut ancestors = Vec::with_capacity(ancestor_entries.len());
+    for entry in ancestor_entries.iter().rev() {
+        let ancestor = current?;
+        if entry.element != DomHandle::new(ancestor.as_node().debug_id()) {
+            return None;
+        }
+        ancestors.push((ancestor, entry.required_generation));
+        current = ancestor.traversal_parent();
+    }
+    ancestors.reverse();
+    Some(ancestors)
+}
+
+fn style_validation_path_needs_resolution(
+    world: &DocumentStyleWorld,
+    dom_adapter: &moli_selector::StyloDomHostBinding<'_>,
+    host: &DomHost,
+    validation_path: &[StyleValidationPathEntry],
+) -> bool {
+    validation_path.iter().any(|entry| {
+        !world
+            .document_state
+            .lazy_invalidation_roots
+            .element_is_current(entry.element, entry.required_generation)
+            || dom_adapter
+                .element(host, entry.element)
+                .is_none_or(|element| {
+                    element
+                        .borrow_data()
+                        .is_none_or(|data| !data.has_styles() || !data.hint.is_empty())
+                })
+    })
 }
 
 fn with_lazily_resolved_pseudo_style<R>(
@@ -973,15 +1128,9 @@ fn with_lazily_resolved_pseudo_style_in_current_world<R>(
     callback: impl FnOnce(&ComputedValues) -> Option<R>,
 ) -> Option<R> {
     debug_assert!(pseudo_element.is_lazy());
-    let computed_key = ComputedElementStyleCacheKey {
-        computed_cache_generation: world.document_state.computed_cache_generation(),
-        handle,
-        pseudo_element: Some(pseudo_element.clone()),
-    };
-    if let Some(style) = world.computed_style_cache.get_pseudo(&computed_key) {
-        return callback(&style);
-    }
-
+    // Resolve/validate the primary path before consulting the pseudo sidecar.
+    // A retained lazy invalidation root intentionally leaves old pseudo entries
+    // in the cache until their owning element is demanded.
     let primary_style = with_resolved_style_in_current_world(
         engine,
         host,
@@ -992,6 +1141,15 @@ fn with_lazily_resolved_pseudo_style_in_current_world<R>(
         None,
         |style, _styles| Some(style.clone()),
     )?;
+
+    let computed_key = ComputedElementStyleCacheKey {
+        computed_cache_generation: world.document_state.computed_cache_generation(),
+        handle,
+        pseudo_element: Some(pseudo_element.clone()),
+    };
+    if let Some(style) = world.computed_style_cache.get_pseudo(&computed_key) {
+        return callback(&style);
+    }
 
     engine.dom_adapter.with_bound_host(host, |dom_adapter| {
         let element = dom_adapter.element(host, handle)?;

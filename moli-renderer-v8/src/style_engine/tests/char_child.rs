@@ -135,14 +135,13 @@ fn character_data_has_empty_dependency_invalidates_ancestor_subjects() {
 
     let mut engine = MoliStyleEngine::new();
     let document_url = url::Url::parse("https://example.test/").unwrap();
-    engine.set_document_adopted_style_sheet_sources(
-        document,
-        vec![StyloStylesheetSource::new(
-            ".container:has(.child:empty) .target { color: red; }".into(),
-            document_url.clone(),
-        )],
+    let source = StyloStylesheetSource::new(
+        ".container:has(.child:empty) .target { color: red; }".into(),
+        document_url.clone(),
     );
-    let inputs = FullStyleWorldSnapshot::default();
+    engine.set_document_adopted_style_sheet_sources(document, vec![source.clone()]);
+    let mut inputs = FullStyleWorldSnapshot::default();
+    inputs.document_stylesheet_sources.push(source);
     for handle in [child, target] {
         assert!(
             engine
@@ -162,7 +161,6 @@ fn character_data_has_empty_dependency_invalidates_ancestor_subjects() {
         engine.computed_style_cache_entry_count_for_document_for_test(document),
         2
     );
-
     let media = crate::protocol_types::EmulatedMediaOverrides::default();
     engine.invalidate_for_mutations(
         &host,
@@ -173,8 +171,10 @@ fn character_data_has_empty_dependency_invalidates_ancestor_subjects() {
 
     assert_eq!(
         engine.computed_style_cache_entry_count_for_document_for_test(document),
-        0
+        0,
+        "the exact :has(:empty) target query invalidates both published targets"
     );
+    assert!(!engine.computed_style_cache_contains_handle_for_document_for_test(document, target));
 }
 
 #[test]

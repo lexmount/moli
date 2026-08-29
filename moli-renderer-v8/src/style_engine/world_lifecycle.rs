@@ -2,6 +2,7 @@
 
 use crate::{document_runtime::DomHandle, dom::native::DomHost};
 
+use indexmap::IndexSet;
 use moli_selector::StyloDomStyleAdapter;
 use style::context::QuirksMode;
 
@@ -302,6 +303,7 @@ fn apply_retained_stylesheet_invalidations(
         viewport_size_changed,
         used_color_scheme_changed,
     } = invalidations;
+    let mut stylesheet_invalidation_roots = IndexSet::new();
     if let Some(invalidations) = document_invalidations {
         // HTML documents normally have one document element. The native DOM
         // also permits fragment-like test documents with several top-level
@@ -319,7 +321,11 @@ fn apply_retained_stylesheet_invalidations(
         {
             roots.push(root);
         }
-        dom_adapter.process_stylesheet_invalidations(host, &roots, &invalidations);
+        stylesheet_invalidation_roots.extend(dom_adapter.process_stylesheet_invalidations(
+            host,
+            &roots,
+            &invalidations,
+        ));
     }
     for (shadow_root, invalidations) in shadow_scopes {
         let mut roots = host
@@ -332,15 +338,23 @@ fn apply_retained_stylesheet_invalidations(
         if let Some(shadow_host) = host.shadow_root_host(shadow_root) {
             roots.push(shadow_host);
         }
-        dom_adapter.process_stylesheet_invalidations(host, &roots, &invalidations);
+        stylesheet_invalidation_roots.extend(dom_adapter.process_stylesheet_invalidations(
+            host,
+            &roots,
+            &invalidations,
+        ));
     }
     if viewport_size_changed {
-        invalidate_viewport_unit_styles(host, dom_adapter, document);
+        stylesheet_invalidation_roots.extend(invalidate_viewport_unit_styles(
+            host,
+            dom_adapter,
+            document,
+        ));
     }
     if used_color_scheme_changed {
         cache_cleanup.invalidate_subtrees(host, [document]);
     }
-    cache_cleanup.invalidate_stylesheet_dirty_subtrees(host);
+    cache_cleanup.retain_stylesheet_invalidation_roots(host, stylesheet_invalidation_roots);
     if document_scope_fallback {
         cache_cleanup.invalidate_subtrees(host, [document]);
     }
@@ -356,7 +370,7 @@ fn invalidate_viewport_unit_styles(
     host: &DomHost,
     dom_adapter: &StyloDomStyleAdapter,
     document: DomHandle,
-) {
+) -> Vec<DomHandle> {
     let mut roots = host
         .child_handles(document)
         .filter(|handle| {
@@ -374,11 +388,16 @@ fn invalidate_viewport_unit_styles(
                 .is_some_and(|node| node.as_element().is_some())
         }));
     }
-    dom_adapter.with_bound_host(host, |binding| {
-        for root in roots {
-            if let Some(root) = binding.element(host, root) {
-                style::invalidation::viewport_units::invalidate(root);
-            }
-        }
+    let changed_roots = dom_adapter.with_bound_host(host, |binding| {
+        roots
+            .iter()
+            .copied()
+            .filter(|root| {
+                binding
+                    .element(host, *root)
+                    .is_some_and(style::invalidation::viewport_units::invalidate)
+            })
+            .collect::<Vec<_>>()
     });
+    dom_adapter.collect_dirty_style_roots(host, &changed_roots)
 }

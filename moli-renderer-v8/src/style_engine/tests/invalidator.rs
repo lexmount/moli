@@ -258,7 +258,12 @@ fn has_selector_child_list_invalidation_uses_target_queries_without_rebuilding_s
     engine.drain_pending_style_invalidations_for_document_for_test(&host, document);
     assert_eq!(
         engine.computed_style_cache_entry_count_for_document_for_test(document),
-        0
+        2,
+        "the broad :has() cleanup must retain published descendants until observation"
+    );
+    assert!(
+        engine.retained_style_invalidation_root_count_for_document_for_test(document) > 0,
+        "the broad target-query result must be retained as lazy roots"
     );
 }
 
@@ -1470,12 +1475,26 @@ fn retained_stylo_invalidator_keeps_self_dependency_inheritance_safe() {
 
     assert_eq!(
         engine.computed_style_cache_entry_count_for_document_for_test(document),
-        2
+        3,
+        "only the matched parent is evicted eagerly; its child inherits the lazy root"
     );
     assert!(engine.computed_style_cache_contains_handle_for_document_for_test(document, outside));
     assert!(!engine.computed_style_cache_contains_handle_for_document_for_test(document, parent));
-    assert!(!engine.computed_style_cache_contains_handle_for_document_for_test(document, child));
+    assert!(engine.computed_style_cache_contains_handle_for_document_for_test(document, child));
     assert!(engine.computed_style_cache_contains_handle_for_document_for_test(document, unrelated));
+    assert_eq!(
+        engine.computed_style_property_value(
+            &host,
+            &document_url,
+            child,
+            "color",
+            None,
+            &inputs,
+            None,
+        ),
+        Some("rgb(0, 0, 255)".into()),
+        "reading the child must recascade the matched parent before inheriting"
+    );
 }
 #[test]
 fn retained_stylo_invalidator_ignores_unrelated_shadow_cascade_data() {
@@ -2014,7 +2033,7 @@ fn retained_stylo_invalidator_uses_shadow_relative_dependency() {
 }
 
 #[test]
-fn retained_stylo_invalidator_clears_shadow_host_for_shadow_tree_has_dependency() {
+fn retained_stylo_invalidator_lazily_refreshes_shadow_tree_has_descendants() {
     let mut host = test_host();
     let document = host.document_handle();
     let outside = host.create_element("aside");
@@ -2079,14 +2098,15 @@ fn retained_stylo_invalidator_clears_shadow_host_for_shadow_tree_has_dependency(
 
     assert_eq!(
         engine.computed_style_cache_entry_count_for_document_for_test(document),
-        1
+        2,
+        "the shadow child remains published behind the dirty shadow-host root"
     );
     assert!(engine.computed_style_cache_contains_handle_for_document_for_test(document, outside));
     assert!(
         !engine.computed_style_cache_contains_handle_for_document_for_test(document, shadow_host)
     );
     assert!(
-        !engine.computed_style_cache_contains_handle_for_document_for_test(document, shadow_child)
+        engine.computed_style_cache_contains_handle_for_document_for_test(document, shadow_child)
     );
     assert_eq!(
         engine.computed_style_property_value(
@@ -2103,7 +2123,7 @@ fn retained_stylo_invalidator_clears_shadow_host_for_shadow_tree_has_dependency(
 }
 
 #[test]
-fn retained_stylo_invalidator_clears_shadow_subject_for_host_context_inside_has_dependency() {
+fn retained_stylo_invalidator_lazily_refreshes_shadow_host_context_subject() {
     let mut host = test_host();
     let document = host.document_handle();
     let host_parent = host.create_element("div");
@@ -2185,10 +2205,11 @@ fn retained_stylo_invalidator_clears_shadow_subject_for_host_context_inside_has_
 
     assert_eq!(
         engine.computed_style_cache_entry_count_for_document_for_test(document),
-        1
+        2,
+        "the shadow subject remains published until its dirty scope is observed"
     );
     assert!(engine.computed_style_cache_contains_handle_for_document_for_test(document, outside));
-    assert!(!engine.computed_style_cache_contains_handle_for_document_for_test(document, subject));
+    assert!(engine.computed_style_cache_contains_handle_for_document_for_test(document, subject));
     assert_eq!(
         engine.computed_style_property_value(
             &host,
@@ -2268,14 +2289,28 @@ fn retained_stylo_invalidator_keeps_shadow_host_self_dependency_conservative() {
 
     assert_eq!(
         engine.computed_style_cache_entry_count_for_document_for_test(document),
-        1
+        2,
+        "the host is evicted directly while its shadow child is invalidated lazily"
     );
     assert!(engine.computed_style_cache_contains_handle_for_document_for_test(document, outside));
     assert!(
         !engine.computed_style_cache_contains_handle_for_document_for_test(document, shadow_host)
     );
     assert!(
-        !engine.computed_style_cache_contains_handle_for_document_for_test(document, shadow_child)
+        engine.computed_style_cache_contains_handle_for_document_for_test(document, shadow_child)
+    );
+    assert_eq!(
+        engine.computed_style_property_value(
+            &host,
+            &document_url,
+            shadow_child,
+            "color",
+            None,
+            &inputs,
+            None,
+        ),
+        Some("rgb(0, 0, 255)".into()),
+        "the shadow child must inherit the refreshed host style on demand"
     );
 }
 #[test]
@@ -4848,7 +4883,10 @@ fn retained_stylo_invalidator_defers_large_child_list_batches_until_drain() {
         engine.pending_style_invalidation_work_item_count_for_document_for_test(document),
         0
     );
-    assert!(!engine.computed_style_cache_contains_handle_for_document_for_test(document, subject));
+    assert!(
+        engine.computed_style_cache_contains_handle_for_document_for_test(document, subject),
+        "the coalesced broad invalidation must not enumerate its published descendants"
+    );
     assert_eq!(
         engine.computed_style_property_value(
             &host,

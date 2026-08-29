@@ -2773,13 +2773,22 @@ fn source_scope_fallback_roots_preserve_unrelated_document_cache() {
 
     assert_eq!(
         engine.computed_style_cache_entry_count_for_document_for_test(document),
-        0
+        1,
+        "document fallback records a lazy root instead of enumerating published descendants"
     );
     assert_eq!(
         engine.computed_style_cache_entry_count_for_document_for_test(detached_document),
         1
     );
-    assert!(!engine.computed_style_cache_contains_handle_for_document_for_test(document, active));
+    assert!(engine.computed_style_cache_contains_handle_for_document_for_test(document, active));
+    assert_eq!(
+        engine.retained_style_invalidation_root_count_for_document_for_test(document),
+        1
+    );
+    assert_eq!(
+        engine.retained_style_invalidation_root_count_for_document_for_test(detached_document),
+        0
+    );
     assert!(
         engine.computed_style_cache_contains_handle_for_document_for_test(
             detached_document,
@@ -2847,14 +2856,23 @@ fn source_scope_fallback_roots_preserve_active_document_cache_for_detached_docum
     );
     assert_eq!(
         engine.computed_style_cache_entry_count_for_document_for_test(detached_document),
-        0
+        1,
+        "detached-document fallback records a lazy root in only that document world"
     );
     assert!(engine.computed_style_cache_contains_handle_for_document_for_test(document, active));
     assert!(
-        !engine.computed_style_cache_contains_handle_for_document_for_test(
+        engine.computed_style_cache_contains_handle_for_document_for_test(
             detached_document,
             detached
         )
+    );
+    assert_eq!(
+        engine.retained_style_invalidation_root_count_for_document_for_test(document),
+        0
+    );
+    assert_eq!(
+        engine.retained_style_invalidation_root_count_for_document_for_test(detached_document),
+        1
     );
 }
 #[test]
@@ -2933,13 +2951,18 @@ fn unsupported_state_change_without_snapshot_uses_source_scope_fallback() {
 
     assert_eq!(
         engine.computed_style_cache_entry_count_for_document_for_test(document),
-        0
+        1,
+        "source-scope fallback must defer descendant recascade until observation"
     );
     assert_eq!(
         engine.computed_style_cache_entry_count_for_document_for_test(detached_document),
         1
     );
-    assert!(!engine.computed_style_cache_contains_handle_for_document_for_test(document, active));
+    assert!(engine.computed_style_cache_contains_handle_for_document_for_test(document, active));
+    assert_eq!(
+        engine.retained_style_invalidation_root_count_for_document_for_test(document),
+        1
+    );
     assert!(
         engine.computed_style_cache_contains_handle_for_document_for_test(
             detached_document,
