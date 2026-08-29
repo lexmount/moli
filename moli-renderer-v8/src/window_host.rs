@@ -265,6 +265,10 @@ pub(super) fn event_target_add_event_listener_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s, v8::Value>,
 ) {
+    if args.this().is_proxy() {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    }
     if simple_event_target_slot_name(scope, args.this()).is_some() {
         simple_event_target_add_event_listener_callback(scope, args, rv);
         return;
@@ -296,6 +300,7 @@ pub(super) fn event_target_add_event_listener_callback<'s>(
         event_target_handle_from_this(scope, &args, host_ptr, host)
     };
     let Some(target) = target else {
+        throw_type_error(scope, "Illegal invocation");
         return;
     };
     let passive = call
@@ -378,6 +383,10 @@ pub(super) fn event_target_remove_event_listener_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s, v8::Value>,
 ) {
+    if args.this().is_proxy() {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    }
     if simple_event_target_slot_name(scope, args.this()).is_some() {
         simple_event_target_remove_event_listener_callback(scope, args, rv);
         return;
@@ -400,6 +409,7 @@ pub(super) fn event_target_remove_event_listener_callback<'s>(
         event_target_handle_from_this(scope, &args, host_ptr, host)
     };
     let Some(target) = target else {
+        throw_type_error(scope, "Illegal invocation");
         return;
     };
     host.remove_registered_event_listener(scope, target, &call.event_type, call.callback, capture);
@@ -410,6 +420,10 @@ pub(super) fn event_target_dispatch_event_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
+    if args.this().is_proxy() {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    }
     if simple_event_target_slot_name(scope, args.this()).is_some() {
         simple_event_target_dispatch_event_callback(scope, args, rv);
         return;
@@ -426,7 +440,7 @@ pub(super) fn event_target_dispatch_event_callback<'s>(
         None
     };
     if child_window_target.is_none() && target.is_none() {
-        rv.set_bool(false);
+        throw_type_error(scope, "Illegal invocation");
         return;
     };
     let event_value = args.get(0);

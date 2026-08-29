@@ -1,6 +1,13 @@
 use crate::web_api_interfaces;
 use crate::{
-    native_bridge::{document, node::node_runtime_and_handle_from_args},
+    dom::native::NodeType,
+    native_bridge::{
+        document,
+        node::{
+            node_runtime_and_handle_from_args, receiver_has_detached_state,
+            throw_incompatible_getter_receiver, throw_incompatible_setter_receiver,
+        },
+    },
     webidl,
 };
 use moli_webapi_declare::WebApiFunctionTemplate;
@@ -51,6 +58,27 @@ fn receiver_is_live_node<'a>(
     args: &v8::FunctionCallbackArguments<'a>,
 ) -> bool {
     node_runtime_and_handle_from_args(scope, args).is_ok()
+}
+
+fn receiver_is_live_character_data<'a>(
+    scope: &mut v8::PinScope<'a, '_>,
+    args: &v8::FunctionCallbackArguments<'a>,
+) -> bool {
+    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_args(scope, args) else {
+        return false;
+    };
+    unsafe { &*runtime_ptr }
+        .dom_host()
+        .node(handle)
+        .is_some_and(|node| {
+            matches!(
+                node.node_type(),
+                NodeType::Text
+                    | NodeType::CDataSection
+                    | NodeType::Comment
+                    | NodeType::ProcessingInstruction
+            )
+        })
 }
 
 fn character_data_append_data_callback<'a>(
@@ -130,7 +158,7 @@ fn character_data_data_getter_callback<'a>(
     args: v8::FunctionCallbackArguments<'a>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if receiver_is_live_node(scope, &args) {
+    if receiver_is_live_character_data(scope, &args) {
         let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object(scope, args.this())
         else {
             rv.set_undefined();
@@ -143,6 +171,10 @@ fn character_data_data_getter_callback<'a>(
             return;
         };
         super::helpers::set_utf16_return_value(scope, &mut rv, &units);
+        return;
+    }
+    if !receiver_has_detached_state(scope, args.this()) {
+        throw_incompatible_getter_receiver(scope, "CharacterData", "data");
         return;
     }
     let value = Some(document::detached_character_data_value(scope, args.this()));
@@ -162,7 +194,7 @@ fn character_data_data_setter_callback<'a>(
     args: v8::FunctionCallbackArguments<'a>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if receiver_is_live_node(scope, &args) {
+    if receiver_is_live_character_data(scope, &args) {
         let Some(value) = super::helpers::dom_string_utf16_value_or_throw(
             scope,
             args.get(0),
@@ -188,7 +220,7 @@ fn character_data_data_setter_callback<'a>(
             removed_count,
             inserted_count,
         );
-    } else {
+    } else if receiver_has_detached_state(scope, args.this()) {
         let removed_count = document::detached_character_data_length(scope, args.this()) as u32;
         let value = if args.get(0).is_null() {
             String::new()
@@ -207,6 +239,9 @@ fn character_data_data_setter_callback<'a>(
             removed_count,
             inserted_count,
         );
+    } else {
+        throw_incompatible_setter_receiver(scope, "CharacterData", "data");
+        return;
     }
     rv.set_undefined();
 }

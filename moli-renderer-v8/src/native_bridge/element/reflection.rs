@@ -1302,11 +1302,10 @@ pub(super) fn set_dom_string_attribute_property_on_object<'s>(
     owner: &'static str,
     property: &'static str,
 ) {
-    let Some(value) = property_dom_string_value(scope, value, owner, property) else {
+    let Some((runtime_ptr, handle)) = element_reflection_receiver_or_throw(scope, object) else {
         return;
     };
-    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object_or_detached(scope, object)
-    else {
+    let Some(value) = property_dom_string_value(scope, value, owner, property) else {
         return;
     };
     set_reflected_attribute(scope, runtime_ptr, handle, name, &value);
@@ -1357,15 +1356,9 @@ pub(super) fn attribute_property_getter_from_object_or_detached<'s>(
     name: &str,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object_or_detached(scope, object)
-    else {
-        rv.set_null();
+    let Some((runtime_ptr, handle)) = element_reflection_receiver_or_throw(scope, object) else {
         return;
     };
-    if !node_is_element(unsafe { &*runtime_ptr }, handle) {
-        rv.set_undefined();
-        return;
-    }
     let value = element_attribute(unsafe { &*runtime_ptr }, handle, name).unwrap_or_default();
     let Some(value) = v8_string(scope, &value) else {
         rv.set_null();
