@@ -9,6 +9,8 @@ use crate::stylo_to_parley::TextBrush;
 pub(crate) struct SystemFontFamilyResolver {
     system_families: HashMap<String, String>,
     substitutions: HashMap<String, Option<String>>,
+    #[cfg(test)]
+    family_lookup_count: usize,
 }
 
 impl SystemFontFamilyResolver {
@@ -20,6 +22,8 @@ impl SystemFontFamilyResolver {
         Self {
             system_families,
             substitutions: HashMap::new(),
+            #[cfg(test)]
+            family_lookup_count: 0,
         }
     }
 
@@ -47,7 +51,19 @@ impl SystemFontFamilyResolver {
         let FontFamilyName::Named(name) = family else {
             return;
         };
+        let key = normalized_family_name(name);
+        if let Some(cached) = self.substitutions.get(&key) {
+            if let Some(substitute) = cached {
+                *name = Cow::Owned(substitute.clone());
+            }
+            return;
+        }
+        #[cfg(test)]
+        {
+            self.family_lookup_count = self.family_lookup_count.saturating_add(1);
+        }
         if collection.family_id(name).is_some() {
+            self.substitutions.insert(key, None);
             return;
         }
         let Some(substitute) = self.resolve_missing_family(name) else {
@@ -211,6 +227,33 @@ mod tests {
         assert_eq!(
             explicit_substitution_prefix(&unknown, &defaults),
             &unknown[..1]
+        );
+    }
+
+    #[test]
+    fn successful_family_lookup_is_cached() {
+        let mut collection = Collection::new(parley::fontique::CollectionOptions {
+            shared: false,
+            system_fonts: true,
+        });
+        let family = collection
+            .family_names()
+            .next()
+            .expect("the system font collection should expose at least one family")
+            .to_owned();
+        let mut resolver = SystemFontFamilyResolver::new(&mut collection);
+
+        for _ in 0..2 {
+            let mut style = TextStyle {
+                font_family: FontFamily::Single(FontFamilyName::Named(Cow::Owned(family.clone()))),
+                ..TextStyle::default()
+            };
+            resolver.resolve_text_style(&mut collection, &mut style);
+        }
+
+        assert_eq!(
+            resolver.family_lookup_count, 1,
+            "a known family must not rebuild Fontique's normalized lookup key"
         );
     }
 

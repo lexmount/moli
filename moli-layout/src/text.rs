@@ -5,7 +5,11 @@
 // - packages/blitz-dom/src/node/text.rs
 // - packages/blitz-paint/src/text.rs
 
-use std::{borrow::Cow, collections::BTreeMap, sync::Arc};
+use std::{
+    borrow::Cow,
+    collections::{BTreeMap, HashMap},
+    sync::Arc,
+};
 
 use parley::{
     FontContext, FontFamily, FontFamilyName, LayoutContext, TextStyle,
@@ -24,11 +28,27 @@ pub(crate) struct ParleyDocumentServices {
     pub(crate) layout_context: LayoutContext<TextBrush>,
     system_font_family_resolver: Option<SystemFontFamilyResolver>,
     web_font_families: BTreeMap<String, SegmentedWebFontFamily>,
+    font_family_resolution_plans: Vec<FontFamilyResolutionPlan>,
     inline_font_metrics_cache: Vec<(
         TextStyle<'static, 'static, TextBrush>,
         Option<InlineFontMetrics>,
     )>,
+    #[cfg(test)]
+    font_family_resolution_miss_count: usize,
 }
+
+#[derive(Clone, Debug)]
+struct FontFamilyResolutionPlan {
+    requested: FontFamily<'static>,
+    attributes: Attributes,
+    requires_character_resolution: bool,
+    default: Option<FontFamily<'static>>,
+    characters: HashMap<char, FontFamily<'static>>,
+}
+
+const MAX_FONT_FAMILY_RESOLUTION_PLANS: usize = 1024;
+const MAX_CHARACTER_RESOLUTIONS_PER_PLAN: usize = 4096;
+const MAX_INLINE_FONT_METRICS_CACHE_ENTRIES: usize = 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct WebFontCapabilities {
@@ -83,10 +103,6 @@ fn resolved_inline_x_height(ascent: f32, x_height: Option<f32>) -> f32 {
 }
 
 impl ParleyDocumentServices {
-    fn clear_inline_font_metrics_cache(&mut self) {
-        self.inline_font_metrics_cache.clear();
-    }
-
     /// Resolves CSS downloadable-font families into the selected segmented
     /// face, then applies explicit platform-family substitutions.
     ///
@@ -100,17 +116,76 @@ impl ParleyDocumentServices {
         style: &mut TextStyle<'static, 'static, TextBrush>,
         character: Option<char>,
     ) {
-        self.resolve_segmented_web_font_families(style, character);
-        let Some(resolver) = self.system_font_family_resolver.as_mut() else {
+        let plan_index = self.font_family_resolution_plan_index(style);
+        let cached = match character {
+            Some(character) => self.font_family_resolution_plans[plan_index]
+                .characters
+                .get(&character),
+            None => self.font_family_resolution_plans[plan_index]
+                .default
+                .as_ref(),
+        }
+        .cloned();
+        if let Some(cached) = cached {
+            style.font_family = cached;
             return;
-        };
-        resolver.resolve_text_style(&mut self.font_context.collection, style);
+        }
+
+        self.resolve_segmented_web_font_families(style, character);
+        if let Some(resolver) = self.system_font_family_resolver.as_mut() {
+            resolver.resolve_text_style(&mut self.font_context.collection, style);
+        }
+        let resolved = style.font_family.clone().into_owned();
+        match character {
+            Some(character) => {
+                if self.font_family_resolution_plans[plan_index]
+                    .characters
+                    .len()
+                    >= MAX_CHARACTER_RESOLUTIONS_PER_PLAN
+                {
+                    self.font_family_resolution_plans[plan_index]
+                        .characters
+                        .clear();
+                }
+                self.font_family_resolution_plans[plan_index]
+                    .characters
+                    .insert(character, resolved);
+            }
+            None => self.font_family_resolution_plans[plan_index].default = Some(resolved),
+        }
+        #[cfg(test)]
+        {
+            self.font_family_resolution_miss_count =
+                self.font_family_resolution_miss_count.saturating_add(1);
+        }
     }
 
     pub(crate) fn requires_character_font_resolution(
-        &self,
+        &mut self,
         style: &TextStyle<'static, 'static, TextBrush>,
     ) -> bool {
+        let plan_index = self.font_family_resolution_plan_index(style);
+        self.font_family_resolution_plans[plan_index].requires_character_resolution
+    }
+
+    fn font_family_resolution_plan_index(
+        &mut self,
+        style: &TextStyle<'static, 'static, TextBrush>,
+    ) -> usize {
+        let attributes = Attributes::new(style.font_width, style.font_style, style.font_weight);
+        if let Some(index) = self
+            .font_family_resolution_plans
+            .iter()
+            .position(|plan| plan.requested == style.font_family && plan.attributes == attributes)
+        {
+            return index;
+        }
+
+        if self.font_family_resolution_plans.len() >= MAX_FONT_FAMILY_RESOLUTION_PLANS {
+            self.font_family_resolution_plans.clear();
+        }
+        let requested = style.font_family.clone().into_owned();
+
         let family_uses_ranges = |family: &FontFamilyName<'_>| {
             let FontFamilyName::Named(name) = family else {
                 return false;
@@ -126,13 +201,23 @@ impl ParleyDocumentServices {
                     })
                 })
         };
-        match &style.font_family {
+        let requires_character_resolution = match &requested {
             FontFamily::Single(family) => family_uses_ranges(family),
             FontFamily::List(families) => families.iter().any(family_uses_ranges),
             FontFamily::Source(source) => FontFamilyName::parse_css_list(source)
                 .filter_map(Result::ok)
                 .any(|family| family_uses_ranges(&family)),
-        }
+        };
+        let index = self.font_family_resolution_plans.len();
+        self.font_family_resolution_plans
+            .push(FontFamilyResolutionPlan {
+                requested,
+                attributes,
+                requires_character_resolution,
+                default: None,
+                characters: HashMap::new(),
+            });
+        index
     }
 
     fn resolve_segmented_web_font_families(
@@ -217,10 +302,11 @@ impl ParleyDocumentServices {
         style: &TextStyle<'static, 'static, TextBrush>,
         sample: Option<char>,
     ) -> Option<InlineFontMetrics> {
+        let cache_key = inline_font_metrics_cache_key(style);
         if let Some((_, metrics)) = self
             .inline_font_metrics_cache
             .iter()
-            .find(|(cached, _)| cached == style)
+            .find(|(cached, _)| cached == &cache_key)
         {
             // A font such as Baidu's icon font may not contain `x`. A later
             // call carrying one of the style's real characters must be able
@@ -264,12 +350,14 @@ impl ParleyDocumentServices {
         if let Some((_, cached)) = self
             .inline_font_metrics_cache
             .iter_mut()
-            .find(|(cached, _)| cached == style)
+            .find(|(cached, _)| cached == &cache_key)
         {
             *cached = metrics;
         } else {
-            self.inline_font_metrics_cache
-                .push((style.clone(), metrics));
+            if self.inline_font_metrics_cache.len() >= MAX_INLINE_FONT_METRICS_CACHE_ENTRIES {
+                self.inline_font_metrics_cache.clear();
+            }
+            self.inline_font_metrics_cache.push((cache_key, metrics));
         }
         metrics
     }
@@ -310,6 +398,23 @@ impl ParleyDocumentServices {
             QueryStatus::Stop
         });
         identity
+    }
+}
+
+fn inline_font_metrics_cache_key(
+    style: &TextStyle<'static, 'static, TextBrush>,
+) -> TextStyle<'static, 'static, TextBrush> {
+    TextStyle {
+        font_family: style.font_family.clone().into_owned(),
+        font_size: style.font_size,
+        font_width: style.font_width,
+        font_style: style.font_style,
+        font_weight: style.font_weight,
+        font_variations: style.font_variations.clone(),
+        font_features: style.font_features.clone(),
+        locale: style.locale,
+        line_height: style.line_height,
+        ..TextStyle::default()
     }
 }
 
@@ -619,12 +724,6 @@ impl DocumentLayoutServices {
         self.web_fonts.len()
     }
 
-    pub(crate) fn begin_inline_layout_pass(&mut self) {
-        if let Some(parley) = self.parley.as_deref_mut() {
-            parley.clear_inline_font_metrics_cache();
-        }
-    }
-
     /// Adds or replaces one owner-validated font face.
     ///
     /// This API performs no document/generation check: the resource owner must
@@ -777,7 +876,10 @@ fn build_parley_services(
         layout_context: LayoutContext::new(),
         system_font_family_resolver,
         web_font_families,
+        font_family_resolution_plans: Vec::new(),
         inline_font_metrics_cache: Vec::new(),
+        #[cfg(test)]
+        font_family_resolution_miss_count: 0,
     }
 }
 
@@ -843,6 +945,64 @@ mod tests {
     fn missing_x_height_uses_the_blink_ascent_fallback() {
         assert!((resolved_inline_x_height(10.0, None) - 5.6).abs() < f32::EPSILON);
         assert_eq!(resolved_inline_x_height(10.0, Some(4.25)), 4.25);
+    }
+
+    #[test]
+    fn repeated_font_family_resolution_reuses_the_document_plan() {
+        let mut services =
+            DocumentLayoutServices::with_system_font_policy(SystemFontPolicy::Disabled);
+        let style = TextStyle::default();
+        let parley = services.parley_mut();
+
+        assert!(!parley.requires_character_font_resolution(&style));
+        assert!(!parley.requires_character_font_resolution(&style));
+        for _ in 0..2 {
+            let mut candidate = style.clone();
+            parley.resolve_font_families(&mut candidate, None);
+        }
+
+        assert_eq!(parley.font_family_resolution_plans.len(), 1);
+        assert_eq!(parley.font_family_resolution_miss_count, 1);
+    }
+
+    #[test]
+    fn font_collection_rebuild_discards_resolution_and_metrics_caches() {
+        let mut services =
+            DocumentLayoutServices::with_system_font_policy(SystemFontPolicy::Disabled);
+        {
+            let parley = services.parley_mut();
+            let mut style = TextStyle::default();
+            parley.resolve_font_families(&mut style, None);
+            let _ = parley.inline_font_metrics(&style, None);
+            assert_eq!(parley.font_family_resolution_plans.len(), 1);
+            assert_eq!(parley.inline_font_metrics_cache.len(), 1);
+        }
+
+        services
+            .register_web_font(WebFontRegistration::new(
+                "cache-reset",
+                WebFontFace::new("Cache Reset"),
+                TEST_TTF.to_vec(),
+            ))
+            .unwrap();
+        let parley = services.parley_mut();
+        assert!(parley.font_family_resolution_plans.is_empty());
+        assert!(parley.inline_font_metrics_cache.is_empty());
+        assert_eq!(parley.font_family_resolution_miss_count, 0);
+    }
+
+    #[test]
+    fn inline_font_metrics_cache_ignores_paint_only_style_changes() {
+        let mut services =
+            DocumentLayoutServices::with_system_font_policy(SystemFontPolicy::Disabled);
+        let parley = services.parley_mut();
+        let style = TextStyle::default();
+        let _ = parley.inline_font_metrics(&style, None);
+        let mut unpainted = style;
+        unpainted.brush.paint = false;
+        let _ = parley.inline_font_metrics(&unpainted, None);
+
+        assert_eq!(parley.inline_font_metrics_cache.len(), 1);
     }
 
     #[test]

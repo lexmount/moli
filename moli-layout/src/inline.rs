@@ -1403,7 +1403,6 @@ pub(crate) fn prepare_inline_contexts<N>(
 ) where
     N: Copy + Debug + Eq + Hash,
 {
-    services.begin_inline_layout_pass();
     for layout_box in &mut world.boxes {
         layout_box.inline_layout = None;
         layout_box.inline_context_owner = None;
