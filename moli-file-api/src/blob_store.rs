@@ -43,6 +43,7 @@ impl<OwnerId, PartitionId> Default for BlobEntries<OwnerId, PartitionId> {
 #[derive(Debug)]
 struct ObjectUrlState<OwnerId, AccessKey> {
     owner_id: Option<OwnerId>,
+    lifetime_id: Option<u64>,
     blob_id: BlobId,
     access_key: Option<AccessKey>,
 }
@@ -169,11 +170,33 @@ where
         self.create_object_url_with_access_key(owner_id, blob_id, origin, None)
     }
 
-    /// Create an object URL with its creator environment’s access key.
-    /// The key belongs to the URL, independently of the backing Blob.
+    /// Create an object URL tied to a more specific execution-context lifetime.
+    pub fn create_object_url_with_lifetime(
+        &self,
+        owner_id: Option<OwnerId>,
+        lifetime_id: Option<u64>,
+        blob_id: BlobId,
+        origin: &str,
+    ) -> Option<String> {
+        self.create_object_url_with_lifetime_and_access_key(owner_id, lifetime_id, blob_id, origin, None)
+    }
+
+    /// Create an object URL with its creator environment's access key.
     pub fn create_object_url_with_access_key(
         &self,
         owner_id: Option<OwnerId>,
+        blob_id: BlobId,
+        origin: &str,
+        access_key: Option<AccessKey>,
+    ) -> Option<String> {
+        self.create_object_url_with_lifetime_and_access_key(owner_id, None, blob_id, origin, access_key)
+    }
+
+    /// Associate the URL's independent creator key and execution-context lifetime.
+    pub fn create_object_url_with_lifetime_and_access_key(
+        &self,
+        owner_id: Option<OwnerId>,
+        lifetime_id: Option<u64>,
         blob_id: BlobId,
         origin: &str,
         access_key: Option<AccessKey>,
@@ -190,6 +213,7 @@ where
             object_url.clone(),
             ObjectUrlState {
                 owner_id,
+                lifetime_id,
                 blob_id,
                 access_key,
             },
@@ -246,6 +270,28 @@ where
         Some((String::from_utf8_lossy(&bytes).into_owned(), mime_type))
     }
 
+    /// Revoke every object URL created by one execution-context lifetime.
+    pub fn cleanup_object_url_lifetime(&self, lifetime_id: u64) -> usize {
+        let removed_blob_ids = {
+            let mut object_urls = self.object_urls.lock();
+            let mut removed_blob_ids = Vec::new();
+            object_urls.retain(|_, state| {
+                if state.lifetime_id == Some(lifetime_id) {
+                    removed_blob_ids.push(state.blob_id);
+                    false
+                } else {
+                    true
+                }
+            });
+            removed_blob_ids
+        };
+        let removed_count = removed_blob_ids.len();
+        for blob_id in removed_blob_ids {
+            self.release_blob_object_url_ref(blob_id);
+        }
+        removed_count
+    }
+
     /// Remove Blob/object URL entries owned by a context.
     pub fn cleanup_owner_resources(&self, owner_id: OwnerId) {
         let removed_blob_ids = {
@@ -263,9 +309,22 @@ where
             ids
         };
 
-        self.object_urls.lock().retain(|_, state| {
-            state.owner_id != Some(owner_id) && !removed_blob_ids.contains(&state.blob_id)
-        });
+        let released_blob_ids = {
+            let mut object_urls = self.object_urls.lock();
+            let mut released_blob_ids = Vec::new();
+            object_urls.retain(|_, state| {
+                let remove =
+                    state.owner_id == Some(owner_id) || removed_blob_ids.contains(&state.blob_id);
+                if remove && !removed_blob_ids.contains(&state.blob_id) {
+                    released_blob_ids.push(state.blob_id);
+                }
+                !remove
+            });
+            released_blob_ids
+        };
+        for blob_id in released_blob_ids {
+            self.release_blob_object_url_ref(blob_id);
+        }
     }
 
     /// Retain a reader reference for a Blob.
@@ -534,5 +593,33 @@ mod tests {
             store.object_url_bytes_and_type(&other_url),
             Some((b"other".to_vec(), "text/plain".to_owned()))
         );
+    }
+
+    #[test]
+    fn cleanup_object_url_lifetime_revokes_only_matching_urls() {
+        let store = BlobStore::<u64, u64>::default();
+        let blob = store.create_blob(
+            Some(1),
+            Some(10),
+            b"shared".to_vec(),
+            "text/plain".to_owned(),
+        );
+        let first_url = store
+            .create_object_url_with_lifetime(Some(1), Some(101), blob, "https://example.test")
+            .expect("first object URL");
+        let second_url = store
+            .create_object_url_with_lifetime(Some(1), Some(202), blob, "https://example.test")
+            .expect("second object URL");
+
+        assert_eq!(store.cleanup_object_url_lifetime(101), 1);
+        assert!(store.object_url_bytes_and_type(&first_url).is_none());
+        assert_eq!(
+            store.object_url_bytes_and_type(&second_url),
+            Some((b"shared".to_vec(), "text/plain".to_owned()))
+        );
+
+        store.release_blob_wrapper_ref(blob);
+        assert_eq!(store.cleanup_object_url_lifetime(202), 1);
+        assert!(store.blob_bytes(blob).is_none());
     }
 }
