@@ -568,6 +568,9 @@ where
     pub(crate) viewport_scroll_policy: ViewportScrollPolicy,
     pub(crate) viewport_layout: ViewportLayoutState,
     pub(crate) css_image_references: Vec<LayoutCssImageReference<N>>,
+    numeric_layout_tracking: bool,
+    numeric_layout_touched: Vec<LayoutBoxId>,
+    numeric_layout_touched_marks: Vec<bool>,
 }
 
 impl<N> LayoutWorld<N>
@@ -583,6 +586,9 @@ where
             viewport_scroll_policy: ViewportScrollPolicy::default(),
             viewport_layout: ViewportLayoutState::default(),
             css_image_references: Vec::new(),
+            numeric_layout_tracking: false,
+            numeric_layout_touched: Vec::new(),
+            numeric_layout_touched_marks: vec![false],
         }
     }
 
@@ -622,22 +628,99 @@ where
         usize::from(node) == self.boxes.len()
     }
 
-    pub(crate) fn global_layout_origin(&self, id: LayoutBoxId) -> (f32, f32) {
-        let mut x = 0.0;
-        let mut y = 0.0;
-        let mut current = Some(id);
-        while let Some(box_id) = current {
-            let layout_box = &self.boxes[box_id.index()];
-            x += layout_box.final_layout.location.x;
-            y += layout_box.final_layout.location.y;
-            current = layout_box.layout_parent;
+    /// Resolves every numeric layout origin in one preorder forest traversal.
+    ///
+    /// Calling the former single-box helper for every output box repeatedly
+    /// walked shared ancestor chains and became quadratic for a deep document.
+    /// The intrusive child links below avoid one allocation per parent in a
+    /// deeply nested tree while still covering detached numeric roots.
+    pub(crate) fn global_layout_origins(&self) -> Vec<LayoutPoint> {
+        let count = self.boxes.len();
+        let mut first_child = vec![None; count];
+        let mut next_sibling = vec![None; count];
+        let mut roots = Vec::new();
+        for index in (0..count).rev() {
+            let id = LayoutBoxId::from_index(index);
+            if let Some(parent) = self.boxes[index].layout_parent {
+                assert!(
+                    parent.index() < count,
+                    "numeric layout parent must belong to this world"
+                );
+                next_sibling[index] = first_child[parent.index()];
+                first_child[parent.index()] = Some(id);
+            } else {
+                roots.push(id);
+            }
         }
-        (x, y)
+
+        let mut origins = vec![LayoutPoint::ZERO; count];
+        let mut visited = vec![false; count];
+        let mut stack = roots
+            .into_iter()
+            .map(|root| (root, LayoutPoint::ZERO))
+            .collect::<Vec<_>>();
+        let mut resolved = 0usize;
+        while let Some((id, parent_origin)) = stack.pop() {
+            assert!(
+                !visited[id.index()],
+                "numeric layout parents must form an acyclic forest"
+            );
+            visited[id.index()] = true;
+            resolved = resolved.saturating_add(1);
+            let location = self.boxes[id.index()].final_layout.location;
+            let origin =
+                LayoutPoint::new(parent_origin.x + location.x, parent_origin.y + location.y);
+            origins[id.index()] = origin;
+
+            let mut child = first_child[id.index()];
+            while let Some(child_id) = child {
+                stack.push((child_id, origin));
+                child = next_sibling[child_id.index()];
+            }
+        }
+        assert_eq!(
+            resolved, count,
+            "numeric layout parents must form an acyclic forest"
+        );
+        origins
+    }
+
+    pub(crate) fn begin_numeric_layout_tracking(&mut self) {
+        assert!(
+            !self.numeric_layout_tracking,
+            "numeric layout tracking cannot be nested"
+        );
+        assert!(self.numeric_layout_touched.is_empty());
+        self.numeric_layout_touched_marks
+            .resize(self.boxes.len(), false);
+        self.numeric_layout_tracking = true;
+    }
+
+    pub(crate) fn record_numeric_layout_touch(&mut self, id: LayoutBoxId) {
+        if !self.numeric_layout_tracking || self.numeric_layout_touched_marks[id.index()] {
+            return;
+        }
+        self.numeric_layout_touched_marks[id.index()] = true;
+        self.numeric_layout_touched.push(id);
+    }
+
+    pub(crate) fn finish_numeric_layout_tracking(&mut self) -> Vec<LayoutBoxId> {
+        assert!(
+            self.numeric_layout_tracking,
+            "numeric layout tracking must be active"
+        );
+        self.numeric_layout_tracking = false;
+        let touched = std::mem::take(&mut self.numeric_layout_touched);
+        for id in touched.iter().copied() {
+            self.numeric_layout_touched_marks[id.index()] = false;
+        }
+        touched
     }
 
     pub(crate) fn allocate(&mut self, layout_box: LayoutBox<N>) -> LayoutBoxId {
         let id = LayoutBoxId::from_index(self.boxes.len());
         self.boxes.push(layout_box);
+        self.numeric_layout_touched_marks.push(false);
         id
     }
 

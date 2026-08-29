@@ -3,6 +3,7 @@ use std::{collections::HashMap, fmt::Debug, hash::Hash, time::Instant};
 use taffy::ResolveOrZero;
 
 use crate::layout_tree::LayoutCoordinateSpace;
+use crate::overflow::{OverflowProjection, inset_rect, offset_rect, outset_rect};
 use crate::stacking::{PaintOrderEvent, build_paint_order};
 use crate::style::ResolvedLayoutTransform;
 use crate::{
@@ -28,6 +29,7 @@ pub(crate) struct LayoutPassPhaseMetrics {
     pub(crate) embedded_frame_elapsed: std::time::Duration,
     pub(crate) numeric_layout_pass_count: usize,
     pub(crate) numeric_feedback_invalidated_node_count: usize,
+    pub(crate) numeric_feedback_overflow_recomputed_node_count: usize,
 }
 
 pub(crate) fn finish_layout_pass<N>(
@@ -45,9 +47,10 @@ where
     N: Copy + Debug + Eq + Hash,
 {
     let projection_started = Instant::now();
+    let overflow = OverflowProjection::new(world, viewport);
     let mut projection = OutputProjection::new(world, viewport);
-    projection.build_local_box_geometry();
-    projection.resolve_scrollable_overflow();
+    projection.build_local_box_geometry(&overflow);
+    projection.build_scroll_extents(&overflow);
     projection.build_coordinate_spaces()?;
     projection.build_fragments();
     projection.assign_clip_and_paint_order();
@@ -109,6 +112,8 @@ where
         numeric_layout_pass_count: phase_metrics.numeric_layout_pass_count,
         numeric_feedback_invalidated_node_count: phase_metrics
             .numeric_feedback_invalidated_node_count,
+        numeric_feedback_overflow_recomputed_node_count: phase_metrics
+            .numeric_feedback_overflow_recomputed_node_count,
         box_count: projection.boxes.len(),
         fragment_count: projection.fragments.len(),
         paint_event_count: paint_projection_metrics.event_count,
@@ -143,31 +148,6 @@ where
         paint_snapshot,
         css_image_references,
     ))
-}
-
-/// Samples overflow from the same projection that will freeze scroll extents.
-/// This keeps `overflow:auto` discovery correct for positioned descendants,
-/// transforms, and nested clips without maintaining a second approximation.
-pub(crate) fn overflowing_axes<N>(
-    world: &LayoutWorld<N>,
-    viewport: LayoutViewport,
-) -> Vec<(bool, bool)>
-where
-    N: Copy + Debug + Eq + Hash,
-{
-    let mut projection = OutputProjection::new(world, viewport);
-    projection.build_local_box_geometry();
-    projection.resolve_scrollable_overflow();
-    projection
-        .scroll_extents
-        .into_iter()
-        .map(|extent| {
-            (
-                extent.maximum_offset.x - extent.minimum_offset.x > f32::EPSILON,
-                extent.maximum_offset.y - extent.minimum_offset.y > f32::EPSILON,
-            )
-        })
-        .collect()
 }
 
 /// Blink-like linear paint space for one projected coordinate space.
@@ -316,38 +296,6 @@ where
         self.resolved_transforms[id.index()].has_unsupported_3d
     }
 
-    fn scrollbar_gutter_thickness(&self, id: LayoutBoxId, axis: LayoutScrollbarAxis) -> f32 {
-        if id == self.world.root {
-            self.world
-                .viewport_scroll_policy
-                .scrollbar_gutter_thickness(axis)
-        } else if self.world.is_viewport_defining_body(id) {
-            0.0
-        } else {
-            self.world.boxes[id.index()]
-                .style
-                .scrollbar_gutter_thickness(axis)
-        }
-    }
-
-    fn scrollbar_leading_gutter_thickness(
-        &self,
-        id: LayoutBoxId,
-        axis: LayoutScrollbarAxis,
-    ) -> f32 {
-        if id == self.world.root {
-            self.world
-                .viewport_scroll_policy
-                .scrollbar_leading_gutter_thickness(axis)
-        } else if self.world.is_viewport_defining_body(id) {
-            0.0
-        } else {
-            self.world.boxes[id.index()]
-                .style
-                .scrollbar_leading_gutter_thickness(axis, false)
-        }
-    }
-
     fn scrollbar_control_thickness(&self, id: LayoutBoxId) -> f32 {
         if id == self.world.root {
             self.world
@@ -435,7 +383,9 @@ where
         }
     }
 
-    fn build_local_box_geometry(&mut self) {
+    fn build_local_box_geometry(&mut self, overflow: &OverflowProjection) {
+        assert_eq!(overflow.len(), self.world.boxes.len());
+        let layout_origins = self.world.global_layout_origins();
         for (index, layout_box) in self.world.boxes.iter().enumerate() {
             for diagnostic in layout_box.capability_diagnostics() {
                 self.diagnostics.push(PaintDiagnostic::new(
@@ -450,52 +400,8 @@ where
             }
             let box_id = LayoutBoxId::from_index(index);
             let id = LayoutOutputBoxId::from_index(index);
-            let is_root = box_id == self.world.root;
-            let layout = layout_box.final_layout;
-            let border_box = LayoutRect::new(
-                0.0,
-                0.0,
-                layout.size.width.max(0.0),
-                layout.size.height.max(0.0),
-            );
-            let padding_box = inset_rect(
-                border_box,
-                layout.border.top,
-                layout.border.right,
-                layout.border.bottom,
-                layout.border.left,
-            );
-            let vertical_gutter =
-                self.scrollbar_gutter_thickness(box_id, LayoutScrollbarAxis::Vertical);
-            let vertical_leading_gutter =
-                self.scrollbar_leading_gutter_thickness(box_id, LayoutScrollbarAxis::Vertical);
-            let horizontal_gutter =
-                self.scrollbar_gutter_thickness(box_id, LayoutScrollbarAxis::Horizontal);
-            let horizontal_leading_gutter =
-                self.scrollbar_leading_gutter_thickness(box_id, LayoutScrollbarAxis::Horizontal);
-            let mut content_box = inset_rect(
-                padding_box,
-                layout.padding.top,
-                layout.padding.right,
-                layout.padding.bottom,
-                layout.padding.left,
-            );
-            if !is_root {
-                content_box.width = (content_box.width - vertical_gutter).max(0.0);
-                content_box.height = (content_box.height - horizontal_gutter).max(0.0);
-                content_box.x += vertical_leading_gutter;
-                content_box.y += horizontal_leading_gutter;
-            }
-            let margin_box = outset_rect(
-                border_box,
-                layout.margin.top,
-                layout.margin.right,
-                layout.margin.bottom,
-                layout.margin.left,
-            );
-            let resolved = layout_box
-                .style
-                .resolved_2d_transform(border_box.width, border_box.height);
+            let geometry = overflow.geometry(box_id);
+            let resolved = geometry.resolved_transform;
             self.resolved_transforms[index] = resolved;
             if resolved.has_unsupported_3d {
                 self.diagnostics.push(PaintDiagnostic::new(
@@ -507,68 +413,7 @@ where
                     PaintDiagnosticSeverity::Warning,
                 ));
             }
-            let local_scrollport = scrollport_for_box(
-                is_root,
-                self.viewport,
-                padding_box,
-                vertical_gutter,
-                vertical_leading_gutter,
-                horizontal_gutter,
-                horizontal_leading_gutter,
-            );
-            // Scrollable overflow starts at the padding-derived scrollport. A
-            // box's own border is visual geometry, not reachable descendant
-            // content, while starting after reserved gutters keeps a
-            // perpendicular scrollbar from manufacturing overflow on its own.
-            // Taffy's content_size is expressed from the padding edge and
-            // equals CSSOM scrollWidth/scrollHeight when it is larger than the
-            // client area.
-            let mut overflow = LayoutRect::new(
-                local_scrollport.x,
-                local_scrollport.y,
-                local_scrollport
-                    .width
-                    .max(layout.content_size.width)
-                    .max(0.0),
-                local_scrollport
-                    .height
-                    .max(layout.content_size.height)
-                    .max(0.0),
-            );
-            if is_root {
-                // The synthetic viewport has already removed root gutters,
-                // so the root's own used padding box can safely contribute
-                // without manufacturing perpendicular overflow.
-                overflow = overflow.union(padding_box);
-            }
-            if let Some(context) = layout_box.inline_layout.as_ref() {
-                let origin = LayoutPoint::new(
-                    layout.border.left
-                        + layout.padding.left
-                        + if is_root {
-                            0.0
-                        } else {
-                            vertical_leading_gutter
-                        },
-                    layout.border.top
-                        + layout.padding.top
-                        + if is_root {
-                            0.0
-                        } else {
-                            horizontal_leading_gutter
-                        },
-                );
-                for line in &context.fragments.lines {
-                    overflow = overflow.union(offset_rect(line.rect, origin));
-                }
-                for fragment in &context.fragments.text {
-                    overflow = overflow.union(offset_rect(fragment.rect, origin));
-                }
-                for fragment in &context.fragments.boxes {
-                    overflow = overflow.union(offset_rect(fragment.rect, origin));
-                }
-            }
-            self.scrollable_overflow[index] = overflow;
+            self.scrollable_overflow[index] = overflow.scrollable_overflow(box_id);
             let source = layout_box.source.or_else(|| {
                 (layout_box.anonymous_reason
                     == Some(LayoutAnonymousReason::InlineSplitContinuation))
@@ -584,9 +429,6 @@ where
                 .flatten()
             }));
             let semantics = layout_box.element_semantics();
-            let (layout_x, layout_y) = self
-                .world
-                .global_layout_origin(LayoutBoxId::from_index(index));
             self.boxes.push(LayoutBoxGeometry {
                 id,
                 effective_zoom: layout_box.style.effective_zoom(),
@@ -602,12 +444,12 @@ where
                 position: layout_box.style.position(),
                 coordinate_space: LayoutCoordinateSpaceId::from_index(index + 1),
                 clip_chain: None,
-                content_box,
-                padding_box,
-                border_box,
-                margin_box,
+                content_box: geometry.content_box,
+                padding_box: geometry.padding_box,
+                border_box: geometry.border_box,
+                margin_box: geometry.margin_box,
                 fragments: Vec::new(),
-                layout_origin_in_document: LayoutPoint::new(layout_x, layout_y),
+                layout_origin_in_document: layout_origins[index],
                 is_body_element: semantics.is_some_and(|element| element.is_html_element("body")),
                 is_table_offset_parent: semantics.is_some_and(|element| {
                     element.is_html_element("table")
@@ -623,72 +465,19 @@ where
         }
     }
 
-    fn resolve_scrollable_overflow(&mut self) {
-        for index in (0..self.world.boxes.len()).rev() {
-            let parent_id = self.world.boxes[index].layout_parent.or_else(|| {
-                // An absolutely positioned box whose containing block is the
-                // initial containing block is a direct child of Taffy's
-                // virtual viewport. It still contributes to the root
-                // element's scrollable overflow. Fixed boxes are excluded
-                // below because they remain anchored to that viewport.
-                (index != self.world.root.index()).then_some(self.world.root)
-            });
-            let Some(parent_id) = parent_id else {
-                continue;
-            };
-            if self.world.boxes[index].style.is_fixed_positioned() {
-                continue;
-            }
-            let child_geometry = &self.boxes[index];
-            let visual_overflow = if self.clips_overflow(LayoutBoxId::from_index(index)) {
-                child_geometry.border_box
-            } else {
-                self.scrollable_overflow[index]
-            };
-            let location = self.world.boxes[index].final_layout.location;
-            let layout_translation = LayoutTransform2D::translation(location.x, location.y);
-            let local_to_parent =
-                layout_translation.concatenate(self.resolved_transforms[index].transform);
-            let mapped = local_to_parent
-                .map_rect(visual_overflow)
-                .bounding_rect()
-                .union(
-                    layout_translation
-                        .map_rect(child_geometry.margin_box)
-                        .bounding_rect(),
-                );
-            self.scrollable_overflow[parent_id.index()] =
-                self.scrollable_overflow[parent_id.index()].union(mapped);
-        }
-
+    fn build_scroll_extents(&mut self, overflow_projection: &OverflowProjection) {
         for index in 0..self.world.boxes.len() {
             let id = LayoutBoxId::from_index(index);
-            let geometry = &self.boxes[index];
-            let overflow = self.scrollable_overflow[index];
+            let geometry = overflow_projection.geometry(id);
+            let overflow = overflow_projection.scrollable_overflow(id);
             let is_root = id == self.world.root;
-            let vertical_gutter =
-                self.scrollbar_gutter_thickness(id, LayoutScrollbarAxis::Vertical);
-            let vertical_leading_gutter =
-                self.scrollbar_leading_gutter_thickness(id, LayoutScrollbarAxis::Vertical);
-            let horizontal_gutter =
-                self.scrollbar_gutter_thickness(id, LayoutScrollbarAxis::Horizontal);
-            let horizontal_leading_gutter =
-                self.scrollbar_leading_gutter_thickness(id, LayoutScrollbarAxis::Horizontal);
             let scrollbar_thickness = self.scrollbar_control_thickness(id);
             let vertical_scrollbar_on_left = self.places_vertical_scrollbar_on_left(id);
-            let local_scrollport = scrollport_for_box(
-                is_root,
-                self.viewport,
-                geometry.padding_box,
-                vertical_gutter,
-                vertical_leading_gutter,
-                horizontal_gutter,
-                horizontal_leading_gutter,
-            );
+            let local_scrollport = geometry.local_scrollport;
             let scrollport = if is_root {
                 LayoutRect::new(
-                    vertical_leading_gutter,
-                    horizontal_leading_gutter,
+                    geometry.vertical_leading_gutter,
+                    geometry.horizontal_leading_gutter,
                     local_scrollport.width,
                     local_scrollport.height,
                 )
@@ -779,18 +568,19 @@ where
                     )
                 })
                 .filter(|bar| bar.frame.width > 0.0 && bar.frame.height > 0.0);
-            let scrollbar_corner = (vertical_gutter > 0.0 && horizontal_gutter > 0.0).then(|| {
-                LayoutRect::new(
-                    if vertical_scrollbar_on_left {
-                        scrollport.x - scrollbar_thickness
-                    } else {
-                        scrollport.right()
-                    },
-                    scrollport.bottom(),
-                    scrollbar_thickness,
-                    scrollbar_thickness,
-                )
-            });
+            let scrollbar_corner =
+                (geometry.vertical_gutter > 0.0 && geometry.horizontal_gutter > 0.0).then(|| {
+                    LayoutRect::new(
+                        if vertical_scrollbar_on_left {
+                            scrollport.x - scrollbar_thickness
+                        } else {
+                            scrollport.right()
+                        },
+                        scrollport.bottom(),
+                        scrollbar_thickness,
+                        scrollbar_thickness,
+                    )
+                });
             self.scroll_extents.push(LayoutScrollExtent {
                 scrollport,
                 scrollable_overflow: overflow,
@@ -1416,67 +1206,11 @@ where
     Ok(())
 }
 
-fn inset_rect(rect: LayoutRect, top: f32, right: f32, bottom: f32, left: f32) -> LayoutRect {
-    let top = top.max(0.0);
-    let right = right.max(0.0);
-    let bottom = bottom.max(0.0);
-    let left = left.max(0.0);
-    LayoutRect::new(
-        rect.x + left,
-        rect.y + top,
-        (rect.width - left - right).max(0.0),
-        (rect.height - top - bottom).max(0.0),
-    )
-}
-
-fn outset_rect(rect: LayoutRect, top: f32, right: f32, bottom: f32, left: f32) -> LayoutRect {
-    LayoutRect::new(
-        rect.x - left,
-        rect.y - top,
-        (rect.width + left + right).max(0.0),
-        (rect.height + top + bottom).max(0.0),
-    )
-}
-
-fn offset_rect(rect: LayoutRect, offset: LayoutPoint) -> LayoutRect {
-    LayoutRect::new(
-        rect.x + offset.x,
-        rect.y + offset.y,
-        rect.width,
-        rect.height,
-    )
-}
-
 fn finite_point(point: LayoutPoint) -> LayoutPoint {
     LayoutPoint::new(
         if point.x.is_finite() { point.x } else { 0.0 },
         if point.y.is_finite() { point.y } else { 0.0 },
     )
-}
-
-fn scrollport_for_box(
-    is_root: bool,
-    viewport: LayoutViewport,
-    padding_box: LayoutRect,
-    vertical_gutter: f32,
-    vertical_leading_gutter: f32,
-    horizontal_gutter: f32,
-    horizontal_leading_gutter: f32,
-) -> LayoutRect {
-    if is_root {
-        return LayoutRect::new(
-            0.0,
-            0.0,
-            (viewport.css_width as f32 - vertical_gutter).max(0.0),
-            (viewport.css_height as f32 - horizontal_gutter).max(0.0),
-        );
-    }
-    let mut scrollport = padding_box;
-    scrollport.width = (scrollport.width - vertical_gutter).max(0.0);
-    scrollport.height = (scrollport.height - horizontal_gutter).max(0.0);
-    scrollport.x += vertical_leading_gutter;
-    scrollport.y += horizontal_leading_gutter;
-    scrollport
 }
 
 fn inline_fragment_box_model<N>(

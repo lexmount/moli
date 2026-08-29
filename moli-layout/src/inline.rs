@@ -324,6 +324,11 @@ pub(crate) fn build_inline_fragments(
     layout: &Layout<TextBrush>,
     line_placements: &[InlineLinePlacement],
 ) -> InlineFragments {
+    // Binary overlap lookup relies on both endpoints being monotonic. Validate
+    // each immutable normalization product once, rather than rescanning the
+    // complete maps for every visual glyph cluster in debug and test builds.
+    debug_assert!(output_ranges_are_monotonic(&context.text_units));
+    debug_assert!(output_ranges_are_monotonic(&context.source_map));
     let mut fragments = InlineFragments::default();
     let mut box_fragments = HashMap::<(usize, usize), FragmentAccumulator>::new();
     let mut source_fragments = HashMap::<SourceFragmentKey, FragmentAccumulator>::new();
@@ -1377,13 +1382,19 @@ where
     if target.is_empty() {
         return &items[..0];
     }
-    debug_assert!(items.windows(2).all(|pair| {
-        pair[0].output_range().start <= pair[1].output_range().start
-            && pair[0].output_range().end <= pair[1].output_range().end
-    }));
     let start = items.partition_point(|item| item.output_range().end <= target.start);
     let end = start + items[start..].partition_point(|item| item.output_range().start < target.end);
     &items[start..end]
+}
+
+fn output_ranges_are_monotonic<T>(items: &[T]) -> bool
+where
+    T: HasInlineOutputRange,
+{
+    items.windows(2).all(|pair| {
+        pair[0].output_range().start <= pair[1].output_range().start
+            && pair[0].output_range().end <= pair[1].output_range().end
+    })
 }
 
 pub(crate) fn prepare_inline_contexts<N>(
@@ -2260,6 +2271,9 @@ mod tests {
             source(2..5),
             source(7..9),
         ];
+        assert!(output_ranges_are_monotonic(&entries));
+        assert!(!output_ranges_are_monotonic(&[source(1..3), source(0..4),]));
+        assert!(!output_ranges_are_monotonic(&[source(0..4), source(1..3),]));
         let ranges = |query: Range<usize>| {
             overlapping_output_ranges(&entries, &query)
                 .iter()

@@ -52,6 +52,9 @@ pub struct LayoutPassMetrics {
     /// Number of box-cache entries explicitly invalidated across automatic
     /// scrollbar feedback iterations. Unchanged subtrees stay cacheable.
     pub numeric_feedback_invalidated_node_count: usize,
+    /// Boxes whose local or descendant overflow was recomputed after the
+    /// initial linear overflow projection. Unaffected branches are excluded.
+    pub numeric_feedback_overflow_recomputed_node_count: usize,
     pub box_count: usize,
     pub fragment_count: usize,
     /// Paint-order events considered for this capture before viewport culling.

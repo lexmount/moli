@@ -34,6 +34,8 @@ pub(crate) struct PreparedWorldLayout {
     positioned_static_placeholders: Vec<PositionedStaticPlaceholder>,
     numeric_unrounded_layouts: Vec<Layout>,
     numeric_viewport_layout: Layout,
+    feedback_invalidation_marks: Vec<bool>,
+    feedback_invalidation_worklist: Vec<LayoutBoxId>,
 }
 
 impl PreparedWorldLayout {
@@ -69,6 +71,48 @@ impl PreparedWorldLayout {
         );
         self.numeric_viewport_layout = world.viewport_layout.unrounded_layout;
     }
+
+    /// Clears only the cache entries on changed scrollbar boxes and their
+    /// numeric ancestors. The reusable mark table makes this proportional to
+    /// the affected paths rather than to every box in the document.
+    pub(crate) fn invalidate_scrollbar_feedback<N>(
+        &mut self,
+        world: &mut LayoutWorld<N>,
+        changed_boxes: &[LayoutBoxId],
+        viewport_changed: bool,
+    ) -> usize
+    where
+        N: Copy + Debug + Eq + Hash,
+    {
+        assert!(self.feedback_invalidation_worklist.is_empty());
+        self.feedback_invalidation_marks
+            .resize(world.boxes.len(), false);
+        if viewport_changed {
+            self.feedback_invalidation_worklist.push(world.root);
+        }
+        self.feedback_invalidation_worklist
+            .extend(changed_boxes.iter().copied());
+
+        let mut invalidated = Vec::new();
+        while let Some(id) = self.feedback_invalidation_worklist.pop() {
+            if self.feedback_invalidation_marks[id.index()] {
+                continue;
+            }
+            self.feedback_invalidation_marks[id.index()] = true;
+            invalidated.push(id);
+            world.boxes[id.index()].cache.clear();
+            if let Some(parent) = world.boxes[id.index()].layout_parent {
+                self.feedback_invalidation_worklist.push(parent);
+            }
+        }
+        if viewport_changed || !changed_boxes.is_empty() {
+            world.viewport_layout.cache.clear();
+        }
+        for id in invalidated.iter().copied() {
+            self.feedback_invalidation_marks[id.index()] = false;
+        }
+        invalidated.len()
+    }
 }
 
 /// Builds the stable numeric tree once for the entire scrollbar feedback
@@ -102,6 +146,8 @@ where
         positioned_static_placeholders,
         numeric_unrounded_layouts: Vec::with_capacity(world.boxes.len()),
         numeric_viewport_layout: Layout::with_order(0),
+        feedback_invalidation_marks: vec![false; world.boxes.len()],
+        feedback_invalidation_worklist: Vec::new(),
     };
     prepared.capture_numeric_geometry(world);
     prepared
@@ -153,10 +199,12 @@ pub(crate) fn compute_prepared_world_layout<N>(
     world: &mut LayoutWorld<N>,
     viewport: PaintViewport,
     prepared: &mut PreparedWorldLayout,
-) where
+) -> Vec<LayoutBoxId>
+where
     N: Copy + Debug + Eq + Hash,
 {
     prepared.restore_numeric_geometry(world);
+    world.begin_numeric_layout_tracking();
     update_viewport_layout_style(world, viewport);
 
     let root = world.viewport_taffy_node();
@@ -187,47 +235,7 @@ pub(crate) fn compute_prepared_world_layout<N>(
     for marker in outside_markers {
         round_layout_to_css_subpixels(world, marker.to_taffy());
     }
-}
-
-/// Invalidates exactly the boxes whose style changed and their numeric
-/// ancestors. Descendants and sibling subtrees retain their Taffy entries; a
-/// changed input naturally misses the keyed cache, while an unchanged input
-/// can reuse both its output and the restored local geometry.
-pub(crate) fn invalidate_scrollbar_feedback_layout<N>(
-    world: &mut LayoutWorld<N>,
-    changed_boxes: &[LayoutBoxId],
-    viewport_changed: bool,
-) -> usize
-where
-    N: Copy + Debug + Eq + Hash,
-{
-    let mut invalidated = vec![false; world.boxes.len()];
-    if viewport_changed {
-        invalidated[world.root.index()] = true;
-    }
-    for changed in changed_boxes {
-        let mut current = Some(*changed);
-        while let Some(id) = current {
-            if invalidated[id.index()] {
-                break;
-            }
-            invalidated[id.index()] = true;
-            current = world.boxes[id.index()].layout_parent;
-        }
-    }
-    let invalidated_count = invalidated
-        .iter()
-        .filter(|invalidated| **invalidated)
-        .count();
-    for (layout_box, invalidated) in world.boxes.iter_mut().zip(invalidated) {
-        if invalidated {
-            layout_box.cache.clear();
-        }
-    }
-    if viewport_changed || !changed_boxes.is_empty() {
-        world.viewport_layout.cache.clear();
-    }
-    invalidated_count
+    world.finish_numeric_layout_tracking()
 }
 
 /// Converts Taffy's horizontal block-start anchor into the physical edge used
@@ -1429,7 +1437,11 @@ where
         if self.is_viewport_taffy_node(node_id) {
             self.viewport_layout.unrounded_layout = *layout;
         } else {
-            self.boxes[LayoutBoxId::from_taffy(node_id).index()].unrounded_layout = *layout;
+            let id = LayoutBoxId::from_taffy(node_id);
+            if self.boxes[id.index()].unrounded_layout != *layout {
+                self.record_numeric_layout_touch(id);
+            }
+            self.boxes[id.index()].unrounded_layout = *layout;
         }
     }
 
@@ -1502,9 +1514,14 @@ where
         if self.is_viewport_taffy_node(node_id) {
             self.viewport_layout.cache.store(inputs, output);
         } else {
-            self.boxes[LayoutBoxId::from_taffy(node_id).index()]
-                .cache
-                .store(inputs, output);
+            let id = LayoutBoxId::from_taffy(node_id);
+            if inputs.run_mode == RunMode::PerformLayout {
+                // A cache miss may rebuild inline fragments without changing
+                // the outer numeric rectangle, so final-layout stores are also
+                // first-class overflow dependencies.
+                self.record_numeric_layout_touch(id);
+            }
+            self.boxes[id.index()].cache.store(inputs, output);
         }
     }
 
@@ -1615,7 +1632,11 @@ where
         if self.is_viewport_taffy_node(node_id) {
             self.viewport_layout.final_layout = *layout;
         } else {
-            self.boxes[LayoutBoxId::from_taffy(node_id).index()].final_layout = *layout;
+            let id = LayoutBoxId::from_taffy(node_id);
+            if self.boxes[id.index()].final_layout != *layout {
+                self.record_numeric_layout_touch(id);
+            }
+            self.boxes[id.index()].final_layout = *layout;
         }
     }
 }

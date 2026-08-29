@@ -823,6 +823,129 @@ fn scrollbar_feedback_prepares_static_position_placeholders_once() {
 }
 
 #[test]
+fn nested_auto_scrollbar_feedback_reprojects_each_affected_path_linearly() {
+    for depth in [8usize, 64] {
+        let leaf = depth + 1;
+        let mut nodes = Vec::with_capacity(leaf + 1);
+        nodes.push(Node::element("root", vec![1]));
+        for index in 1..=depth {
+            nodes.push(Node::element(
+                "nested-scroller",
+                vec![if index == depth { leaf } else { index + 1 }],
+            ));
+        }
+        nodes.push(Node::element("oversized-leaf", Vec::new()));
+        let source = Source(nodes);
+        let mut styles = Styles::default();
+        styles
+            .0
+            .insert(0, fixed_size(LayoutDisplay::Block, 320.0, 240.0));
+        for index in 1..=depth {
+            styles.0.insert(
+                index,
+                resolved(
+                    LayoutDisplay::Block,
+                    Style {
+                        size: Size {
+                            width: length(200.0),
+                            height: length(100.0),
+                        },
+                        overflow: Point {
+                            x: Overflow::Scroll,
+                            y: Overflow::Scroll,
+                        },
+                        ..Style::default()
+                    },
+                ),
+            );
+        }
+        styles
+            .0
+            .insert(leaf, fixed_size(LayoutDisplay::Block, 200.0, 200.0));
+
+        let output = build(&source, &mut styles);
+        assert_eq!(output.metrics.numeric_layout_pass_count, 3);
+        assert_eq!(output.metrics.box_count, depth + 2);
+        assert_eq!(
+            output
+                .metrics
+                .numeric_feedback_overflow_recomputed_node_count,
+            2 * (depth + 2),
+            "each perpendicular-axis turn should visit the one affected chain once"
+        );
+    }
+}
+
+#[test]
+fn scrollbar_feedback_worklist_skips_unaffected_wide_branches() {
+    const UNRELATED_FIXED_BOXES: usize = 128;
+    let mut root_children = vec![1];
+    root_children.extend(3..3 + UNRELATED_FIXED_BOXES);
+    let mut nodes = vec![
+        Node::element("root", root_children),
+        Node::element("scroller", vec![2]),
+        Node::element("oversized-content", Vec::new()),
+    ];
+    nodes.extend((0..UNRELATED_FIXED_BOXES).map(|_| Node::element("unrelated-fixed", Vec::new())));
+    let source = Source(nodes);
+    let mut styles = Styles::default();
+    styles
+        .0
+        .insert(0, fixed_size(LayoutDisplay::Block, 320.0, 240.0));
+    styles.0.insert(
+        1,
+        resolved(
+            LayoutDisplay::Block,
+            Style {
+                size: Size {
+                    width: length(200.0),
+                    height: length(100.0),
+                },
+                overflow: Point {
+                    x: Overflow::Scroll,
+                    y: Overflow::Scroll,
+                },
+                ..Style::default()
+            },
+        ),
+    );
+    styles
+        .0
+        .insert(2, fixed_size(LayoutDisplay::Block, 200.0, 200.0));
+    for index in 3..3 + UNRELATED_FIXED_BOXES {
+        styles.0.insert(
+            index,
+            resolved(
+                LayoutDisplay::Block,
+                Style {
+                    position: Position::Absolute,
+                    size: Size {
+                        width: length(10.0),
+                        height: length(10.0),
+                    },
+                    ..Style::default()
+                },
+            )
+            .with_position(LayoutPosition::Fixed),
+        );
+    }
+
+    let output = build(&source, &mut styles);
+    assert_eq!(output.metrics.numeric_layout_pass_count, 3);
+    assert!(output.metrics.box_count > UNRELATED_FIXED_BOXES);
+    assert!(
+        output
+            .metrics
+            .numeric_feedback_overflow_recomputed_node_count
+            < 16,
+        "unrelated viewport-fixed branches must stay out of the overflow worklist: {:?}",
+        output
+            .metrics
+            .numeric_feedback_overflow_recomputed_node_count
+    );
+}
+
+#[test]
 fn thin_and_hidden_scrollbars_match_chromium_client_geometry() {
     let source = Source(vec![
         Node::element("root", vec![1]),

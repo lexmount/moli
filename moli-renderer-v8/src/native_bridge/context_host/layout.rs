@@ -269,6 +269,8 @@ impl JsContextHost {
                 numeric_layout_pass_count = metrics.numeric_layout_pass_count,
                 numeric_feedback_invalidated_node_count = metrics
                     .numeric_feedback_invalidated_node_count,
+                numeric_feedback_overflow_recomputed_node_count = metrics
+                    .numeric_feedback_overflow_recomputed_node_count,
                 box_count = metrics.box_count,
                 fragment_count = metrics.fragment_count,
                 paint_event_count = metrics.paint_event_count,
