@@ -12473,6 +12473,51 @@ fn computed_style_resolves_valid_typed_css_math_and_rejects_invalid_unit_algebra
 }
 
 #[test]
+fn object_dimension_attributes_participate_in_the_css_cascade() {
+    let mut vm = new_parsed_test_vm(
+        "https://object-dimension-presentation-hints.test/",
+        r#"<!doctype html>
+        <style>#author-rule { width: 70px; height: 80px; }</style>
+        <object id="target" width="100" height="50"></object>
+        <object id="author-rule" width="200" height="210"></object>"#,
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const target = document.getElementById('target');
+  const authorRule = document.getElementById('author-rule');
+  const size = element => {
+    const computed = getComputedStyle(element);
+    return [computed.width, computed.height];
+  };
+  const values = [...size(target)];
+
+  target.setAttribute('width', '12.5px');
+  target.setAttribute('height', '25%ignored');
+  values.push(...size(target));
+
+  target.style.width = '9px';
+  target.removeAttribute('width');
+  values.push(...size(target));
+  target.style.removeProperty('width');
+  target.removeAttribute('height');
+  values.push(...size(target));
+  values.push(...size(authorRule));
+  return JSON.stringify(values);
+})()
+"#,
+        )
+        .expect("object dimension presentation hints should evaluate");
+
+    assert_eq!(
+        result,
+        r#"["100px","50px","12.5px","25%","9px","25%","auto","auto","70px","80px"]"#
+    );
+}
+
+#[test]
 fn svg_generic_presentation_attributes_apply_to_every_svg_element() {
     let mut vm = new_parsed_test_vm(
         "https://svg-generic-presentation-attributes.test/",

@@ -167,6 +167,9 @@ impl QueryElement<'_> {
                 );
             }
         } else if element.namespace() == HTML_NAMESPACE {
+            if element.local_name() == "object" {
+                append_html_object_dimension_declarations(element, &mut block);
+            }
             append_html_table_presentation_declarations(*self, &mut block);
         }
 
@@ -647,6 +650,77 @@ fn append_html_table_cell_padding_declarations(
     }
 }
 
+fn append_html_object_dimension_declarations(
+    element: &Element,
+    block: &mut PropertyDeclarationBlock,
+) {
+    for (attribute, is_width) in [("width", true), ("height", false)] {
+        let Some(value) = element.attribute(attribute) else {
+            continue;
+        };
+        let Some(dimension) = parse_html_dimension_attribute(value) else {
+            continue;
+        };
+        use style::values::generics::length::Size;
+        let size = match dimension {
+            HtmlDimension::Pixels(value) => LengthPercentage::Length(NoCalcLength::from_px(value)),
+            HtmlDimension::Percentage(value) => {
+                LengthPercentage::Percentage(NoCalcPercentage::new(value / 100.0))
+            }
+        };
+        let size = Size::LengthPercentage(NonNegative(size));
+        let declaration = if is_width {
+            PropertyDeclaration::Width(size)
+        } else {
+            PropertyDeclaration::Height(size)
+        };
+        block.push(declaration, Importance::Normal);
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum HtmlDimension {
+    Pixels(f32),
+    Percentage(f32),
+}
+
+/// Parses an HTML dimension value as a non-negative CSS pixel length or
+/// percentage. HTML's legacy algorithm deliberately accepts trailing junk,
+/// but requires the value itself to start with an ASCII digit after leading
+/// ASCII whitespace.
+fn parse_html_dimension_attribute(value: &str) -> Option<HtmlDimension> {
+    let value = value.trim_start_matches(['\t', '\n', '\u{000C}', '\r', ' ']);
+    let bytes = value.as_bytes();
+    if !bytes.first().is_some_and(u8::is_ascii_digit) {
+        return None;
+    }
+
+    let integer_end = bytes
+        .iter()
+        .take_while(|byte| byte.is_ascii_digit())
+        .count();
+    let mut number_end = integer_end;
+    if bytes.get(integer_end) == Some(&b'.')
+        && bytes.get(integer_end + 1).is_some_and(u8::is_ascii_digit)
+    {
+        number_end += 1;
+        number_end += bytes[number_end..]
+            .iter()
+            .take_while(|byte| byte.is_ascii_digit())
+            .count();
+    }
+
+    let number = value[..number_end]
+        .parse::<f32>()
+        .ok()
+        .filter(|number| number.is_finite())?;
+    if bytes.get(number_end) == Some(&b'%') {
+        Some(HtmlDimension::Percentage(number))
+    } else {
+        Some(HtmlDimension::Pixels(number))
+    }
+}
+
 /// Mirrors Blink's legacy `cellpadding` state: an absent or exactly empty
 /// attribute keeps the historical 1px default; non-empty values use loose
 /// signed-integer parsing and are clamped to `uint16_t`.
@@ -868,5 +942,28 @@ mod tests {
         );
         assert_eq!(parse_html_legacy_color("transparent"), None);
         assert_eq!(parse_html_legacy_color(""), None);
+    }
+
+    #[test]
+    fn html_dimension_attribute_uses_legacy_dimension_parsing() {
+        assert_eq!(
+            parse_html_dimension_attribute("  100"),
+            Some(HtmlDimension::Pixels(100.0))
+        );
+        assert_eq!(
+            parse_html_dimension_attribute("12.5px"),
+            Some(HtmlDimension::Pixels(12.5))
+        );
+        assert_eq!(
+            parse_html_dimension_attribute("25.5%ignored"),
+            Some(HtmlDimension::Percentage(25.5))
+        );
+        assert_eq!(
+            parse_html_dimension_attribute("1.%"),
+            Some(HtmlDimension::Pixels(1.0))
+        );
+        assert_eq!(parse_html_dimension_attribute("+10"), None);
+        assert_eq!(parse_html_dimension_attribute(".5"), None);
+        assert_eq!(parse_html_dimension_attribute("auto"), None);
     }
 }

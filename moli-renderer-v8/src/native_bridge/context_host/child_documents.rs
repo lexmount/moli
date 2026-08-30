@@ -48,6 +48,7 @@ pub(super) struct PendingChildDocumentNavigation {
         Option<crate::service_worker_runtime::ServiceWorkerClientId>,
     pub(super) document_credentialless: bool,
     pub(super) credentialless_storage_nonce: Option<OpaqueOriginNonce>,
+    pub(super) initiator: ChildDocumentNavigationInitiator,
     pub(super) frame_owner_resource_timing: Option<PendingFrameOwnerResourceTiming>,
 }
 
