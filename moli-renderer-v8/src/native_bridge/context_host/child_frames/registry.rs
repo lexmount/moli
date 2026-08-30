@@ -100,6 +100,7 @@ impl JsContextHost {
     ) -> Option<FrameDocumentClassicScriptSchedulerWork> {
         match self.child_browsing_context_bootstrap_for_handle(handle) {
             Some(attribute_bootstrap) => {
+                self.object_fallback_bootstraps.remove(&handle);
                 let existing = self.child_browsing_contexts.get(&handle).cloned();
                 let is_new = existing.is_none();
                 let attribute_bootstrap_changed = existing
@@ -621,12 +622,37 @@ impl JsContextHost {
         self.drop_child_browsing_context_handles(handles, Some(scope));
     }
 
+    pub(in crate::native_bridge::context_host) fn enter_object_fallback_state(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        handle: DomHandle,
+    ) {
+        let Some(attribute_bootstrap) = self
+            .child_browsing_contexts
+            .get(&handle)
+            .map(|entry| entry.attribute_bootstrap().clone())
+        else {
+            return;
+        };
+        self.drop_child_browsing_context_subtree_with_window_realm(scope, handle);
+        if self.child_browsing_context_host_is_object_element(handle)
+            && self
+                .child_browsing_context_bootstrap_for_handle(handle)
+                .as_ref()
+                == Some(&attribute_bootstrap)
+        {
+            self.object_fallback_bootstraps
+                .insert(handle, attribute_bootstrap);
+        }
+    }
+
     fn drop_child_browsing_context_handles(
         &mut self,
         handles: Vec<DomHandle>,
         mut scope: Option<&mut v8::PinScope<'_, '_>>,
     ) {
         for handle in handles {
+            self.object_fallback_bootstraps.remove(&handle);
             let document_handle_before_drop = self.child_browsing_context_document_handle(handle);
             let frame_id = self
                 .child_browsing_contexts
@@ -790,6 +816,8 @@ impl JsContextHost {
             };
             self.queue_child_frame_detachment_event(entry.frame_id().to_owned());
         }
+        self.object_fallback_bootstraps
+            .retain(|handle, _| live_handles.contains(handle));
         self.retain_live_child_window_proxy_records(&live_handles);
         self.child_browsing_context_document_handles
             .retain(|handle, _| live_handles.contains(handle));
