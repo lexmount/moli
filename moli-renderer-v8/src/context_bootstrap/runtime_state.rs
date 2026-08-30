@@ -523,23 +523,32 @@ fn document_fullscreen_enabled_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let valid_receiver =
+    let Ok((runtime_ptr, handle)) =
         native_bridge::node_runtime_and_handle_from_object_or_detached(scope, args.this())
-            .ok()
-            .is_some_and(|(runtime_ptr, handle)| {
-                unsafe { &*runtime_ptr }
-                    .dom_host()
-                    .node(handle)
-                    .is_some_and(crate::dom::native::Node::is_document)
-            });
-    if !valid_receiver {
+    else {
+        throw_type_error(
+            scope,
+            "Document.fullscreenEnabled getter called on incompatible receiver.",
+        );
+        return;
+    };
+    let runtime = unsafe { &*runtime_ptr };
+    if !runtime
+        .dom_host()
+        .node(handle)
+        .is_some_and(crate::dom::native::Node::is_document)
+    {
         throw_type_error(
             scope,
             "Document.fullscreenEnabled getter called on incompatible receiver.",
         );
         return;
     }
-    rv.set_bool(false);
+    rv.set_bool(
+        runtime
+            .document_permissions_policy_for_document_handle(handle)
+            .is_some_and(crate::permissions_policy::DocumentPermissionsPolicy::fullscreen_enabled),
+    );
 }
 
 fn document_fullscreen_enabled_lenient_setter<'s>(

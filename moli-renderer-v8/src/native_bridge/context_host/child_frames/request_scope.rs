@@ -703,11 +703,17 @@ impl JsContextHost {
         let allow = is_iframe
             .then(|| self.dom_host().get_attribute(handle, "allow"))
             .flatten();
+        let allow_fullscreen = is_iframe
+            && self
+                .dom_host()
+                .get_attribute(handle, "allowfullscreen")
+                .is_some();
         parent_policy.delegated_to_child(
             &parent_url,
             &child_url,
             bootstrap.security_origin_inherited(),
             allow.as_deref(),
+            allow_fullscreen,
         )
     }
 
