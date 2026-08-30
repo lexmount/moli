@@ -59,6 +59,42 @@ struct SvgLengthTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::SVGAngle, enumerable)]
+struct SvgAngleTemplateMethodsDeclaration {
+    #[webapi(constant = "SVG_ANGLETYPE_UNKNOWN", value = SVG_ANGLE_TYPE_UNKNOWN)]
+    angle_type_unknown: (),
+
+    #[webapi(
+        constant = "SVG_ANGLETYPE_UNSPECIFIED",
+        value = SVG_ANGLE_TYPE_UNSPECIFIED
+    )]
+    angle_type_unspecified: (),
+
+    #[webapi(constant = "SVG_ANGLETYPE_DEG", value = SVG_ANGLE_TYPE_DEG)]
+    angle_type_deg: (),
+
+    #[webapi(constant = "SVG_ANGLETYPE_RAD", value = SVG_ANGLE_TYPE_RAD)]
+    angle_type_rad: (),
+
+    #[webapi(constant = "SVG_ANGLETYPE_GRAD", value = SVG_ANGLE_TYPE_GRAD)]
+    angle_type_grad: (),
+
+    #[webapi(
+        method = "newValueSpecifiedUnits",
+        length = 2,
+        callback = svg_angle_new_value_specified_units_callback
+    )]
+    new_value_specified_units: (),
+
+    #[webapi(
+        method = "convertToSpecifiedUnits",
+        length = 1,
+        callback = svg_angle_convert_to_specified_units_callback
+    )]
+    convert_to_specified_units: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::SVGLengthList, enumerable)]
 struct SvgLengthListTemplateMethodsDeclaration {
     #[webapi(method = "clear", length = 0, callback = svg_length_list_clear_callback)]
@@ -526,6 +562,66 @@ struct SvgGradientElementTemplateConstantsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::SVGMarkerElement, enumerable)]
+struct SvgMarkerElementTemplateMethodsDeclaration {
+    #[webapi(
+        constant = "SVG_MARKERUNITS_UNKNOWN",
+        value = SVG_MARKER_UNITS_UNKNOWN
+    )]
+    marker_units_unknown: (),
+
+    #[webapi(
+        constant = "SVG_MARKERUNITS_USERSPACEONUSE",
+        value = SVG_MARKER_UNITS_USER_SPACE_ON_USE
+    )]
+    marker_units_user_space_on_use: (),
+
+    #[webapi(
+        constant = "SVG_MARKERUNITS_STROKEWIDTH",
+        value = SVG_MARKER_UNITS_STROKE_WIDTH
+    )]
+    marker_units_stroke_width: (),
+
+    #[webapi(
+        constant = "SVG_MARKER_ORIENT_UNKNOWN",
+        value = SVG_MARKER_ORIENT_UNKNOWN
+    )]
+    marker_orient_unknown: (),
+
+    #[webapi(
+        constant = "SVG_MARKER_ORIENT_AUTO",
+        value = SVG_MARKER_ORIENT_AUTO
+    )]
+    marker_orient_auto: (),
+
+    #[webapi(
+        constant = "SVG_MARKER_ORIENT_ANGLE",
+        value = SVG_MARKER_ORIENT_ANGLE
+    )]
+    marker_orient_angle: (),
+
+    #[webapi(
+        constant = "SVG_MARKER_ORIENT_AUTO_START_REVERSE",
+        value = SVG_MARKER_ORIENT_AUTO_START_REVERSE
+    )]
+    marker_orient_auto_start_reverse: (),
+
+    #[webapi(
+        method = "setOrientToAuto",
+        length = 0,
+        callback = svg_marker_set_orient_to_auto_callback
+    )]
+    set_orient_to_auto: (),
+
+    #[webapi(
+        method = "setOrientToAngle",
+        length = 1,
+        callback = svg_marker_set_orient_to_angle_callback
+    )]
+    set_orient_to_angle: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::SVGSVGElement, enumerable)]
 struct SvgSvgElementTemplateMethodsDeclaration {
     #[webapi(
@@ -541,6 +637,13 @@ struct SvgSvgElementTemplateMethodsDeclaration {
         callback = svg_svg_element_deselect_all_callback
     )]
     deselect_all: (),
+
+    #[webapi(
+        method = "createSVGAngle",
+        length = 0,
+        callback = svg_svg_element_create_angle_callback
+    )]
+    create_svg_angle: (),
 
     #[webapi(
         method = "createSVGMatrix",
@@ -600,6 +703,41 @@ struct SvgLengthTemplateAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::SVGAngle, enumerable)]
+struct SvgAngleTemplateAccessorsDeclaration {
+    #[webapi(
+        accessor_property = "unitType",
+        getter = svg_angle_getter,
+        data = callback_data_index_value(scope, 0)
+    )]
+    unit_type: (),
+
+    #[webapi(
+        accessor_property = "value",
+        getter = svg_angle_getter,
+        setter = svg_angle_setter,
+        data = callback_data_index_value(scope, 1)
+    )]
+    value: (),
+
+    #[webapi(
+        accessor_property = "valueInSpecifiedUnits",
+        getter = svg_angle_getter,
+        setter = svg_angle_setter,
+        data = callback_data_index_value(scope, 2)
+    )]
+    value_in_specified_units: (),
+
+    #[webapi(
+        accessor_property = "valueAsString",
+        getter = svg_angle_getter,
+        setter = svg_angle_setter,
+        data = callback_data_index_value(scope, 3)
+    )]
+    value_as_string: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::SVGAnimatedString, enumerable)]
 struct SvgAnimatedStringTemplateAccessorsDeclaration {
     #[webapi(
@@ -650,6 +788,24 @@ struct SvgAnimatedLengthTemplateAccessorsDeclaration {
     #[webapi(
         accessor_property = "animVal",
         getter = svg_animated_length_getter,
+        data = callback_data_index_value(scope, 1)
+    )]
+    anim_val: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::SVGAnimatedAngle, enumerable)]
+struct SvgAnimatedAngleTemplateAccessorsDeclaration {
+    #[webapi(
+        accessor_property = "baseVal",
+        getter = svg_animated_angle_getter,
+        data = callback_data_index_value(scope, 0)
+    )]
+    base_val: (),
+
+    #[webapi(
+        accessor_property = "animVal",
+        getter = svg_animated_angle_getter,
         data = callback_data_index_value(scope, 1)
     )]
     anim_val: (),
@@ -1131,6 +1287,30 @@ struct SvgGraphicsBoxElementPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::SVGMarkerElement, enumerable)]
+struct SvgMarkerElementPrototypeAccessorsDeclaration {
+    #[webapi(
+        accessor_property = "markerUnits",
+        getter = svg_element_animated_enumeration_getter,
+        data = callback_data_index_value(scope, 10)
+    )]
+    marker_units: (),
+
+    #[webapi(
+        accessor_property = "orientType",
+        getter = svg_element_animated_enumeration_getter,
+        data = callback_data_index_value(scope, 11)
+    )]
+    orient_type: (),
+
+    #[webapi(
+        accessor_property = "orientAngle",
+        getter = svg_marker_orient_angle_getter
+    )]
+    orient_angle: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
 #[webapi(name = "SVGElement", enumerable)]
 struct SvgElementPrototypeAccessorsDeclaration {
     #[webapi(
@@ -1163,12 +1343,30 @@ pub(super) fn install_svg_length_bindings<'s>(
     SvgLengthTemplateMethodsDeclaration::initialize_prototype_template(scope, proto);
 }
 
+pub(super) fn install_svg_angle_bindings<'s>(
+    scope: &mut v8::PinScope<'s, '_, ()>,
+    template: v8::Local<'s, v8::FunctionTemplate>,
+) {
+    let proto = template.prototype_template(scope);
+    SvgAngleTemplateMethodsDeclaration::initialize_template(scope, template);
+    SvgAngleTemplateAccessorsDeclaration::initialize_prototype_template(scope, proto);
+    SvgAngleTemplateMethodsDeclaration::initialize_prototype_template(scope, proto);
+}
+
 pub(super) fn install_svg_animated_length_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
 ) {
     let proto = template.prototype_template(scope);
     SvgAnimatedLengthTemplateAccessorsDeclaration::initialize_prototype_template(scope, proto);
+}
+
+pub(super) fn install_svg_animated_angle_bindings<'s>(
+    scope: &mut v8::PinScope<'s, '_, ()>,
+    template: v8::Local<'s, v8::FunctionTemplate>,
+) {
+    let proto = template.prototype_template(scope);
+    SvgAnimatedAngleTemplateAccessorsDeclaration::initialize_prototype_template(scope, proto);
 }
 
 pub(super) fn install_svg_number_bindings<'s>(
@@ -1349,6 +1547,15 @@ pub(super) fn install_svg_text_content_element_bindings<'s>(
     SvgTextContentElementTemplateMethodsDeclaration::initialize_prototype_template(scope, proto);
 }
 
+pub(super) fn install_svg_marker_element_bindings<'s>(
+    scope: &mut v8::PinScope<'s, '_, ()>,
+    template: v8::Local<'s, v8::FunctionTemplate>,
+) {
+    let proto = template.prototype_template(scope);
+    SvgMarkerElementTemplateMethodsDeclaration::initialize_template(scope, template);
+    SvgMarkerElementTemplateMethodsDeclaration::initialize_prototype_template(scope, proto);
+}
+
 pub(super) fn install_svg_svg_element_bindings(
     scope: &mut v8::PinScope<'_, '_, ()>,
     template: v8::Local<'_, v8::FunctionTemplate>,
@@ -1434,6 +1641,11 @@ pub(super) fn install_svg_element_accessor_bindings<'s>(
         }
         "SVGLineElement" => {
             SvgLineElementPrototypeAccessorsDeclaration::initialize_prototype_template(
+                scope, prototype,
+            );
+        }
+        "SVGMarkerElement" => {
+            SvgMarkerElementPrototypeAccessorsDeclaration::initialize_prototype_template(
                 scope, prototype,
             );
         }

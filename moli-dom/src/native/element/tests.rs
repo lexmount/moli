@@ -252,6 +252,7 @@ fn svg_element_interface_name_specializes_standard_elements() {
         "SVGLinearGradientElement"
     );
     assert_eq!(svg_element_interface_name("metadata"), "SVGMetadataElement");
+    assert_eq!(svg_element_interface_name("marker"), "SVGMarkerElement");
     assert_eq!(svg_element_interface_name("mask"), "SVGMaskElement");
     assert_eq!(svg_element_interface_name("path"), "SVGPathElement");
     assert_eq!(svg_element_interface_name("pattern"), "SVGPatternElement");

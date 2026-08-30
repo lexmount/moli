@@ -119,6 +119,18 @@ struct SvgAnimatedLengthObjectDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
+#[webapi(
+    interface = web_api_interfaces::SVGAnimatedAngle,
+    fallback_to_string_tag = "SVGAnimatedAngle"
+)]
+struct SvgAnimatedAngleObjectDeclaration<'scope> {
+    #[webapi(slot = SVG_ANIMATED_ANGLE_BASE_VAL_SLOT)]
+    base_val: v8::Local<'scope, v8::Object>,
+    #[webapi(slot = SVG_ANIMATED_ANGLE_ANIM_VAL_SLOT)]
+    anim_val: v8::Local<'scope, v8::Object>,
+}
+
+#[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::SVGLength, fallback_to_string_tag = "SVGLength")]
 struct SvgLengthObjectDeclaration {
     #[webapi(slot = SVG_LENGTH_UNIT_TYPE_SLOT)]
@@ -127,6 +139,21 @@ struct SvgLengthObjectDeclaration {
     value: f64,
     #[webapi(slot = SVG_LENGTH_VALUE_AS_STRING_SLOT)]
     value_as_string: String,
+}
+
+#[derive(WebApiObject)]
+#[webapi(interface = web_api_interfaces::SVGAngle, fallback_to_string_tag = "SVGAngle")]
+struct SvgAngleObjectDeclaration {
+    #[webapi(slot = SVG_ANGLE_UNIT_TYPE_SLOT)]
+    unit_type: u32,
+    #[webapi(slot = SVG_ANGLE_VALUE_SLOT)]
+    value: f64,
+    #[webapi(slot = SVG_ANGLE_VALUE_IN_SPECIFIED_UNITS_SLOT)]
+    value_in_specified_units: f64,
+    #[webapi(slot = SVG_ANGLE_VALUE_AS_STRING_SLOT)]
+    value_as_string: String,
+    #[webapi(slot = SVG_ANGLE_READ_ONLY_SLOT)]
+    read_only: bool,
 }
 
 #[derive(WebApiObject)]
@@ -633,6 +660,21 @@ pub(super) fn parse_svg_animated_enumeration(
         (SvgAnimatedEnumerationKind::LengthAdjust, "spacingAndGlyphs") => {
             Some(SVG_LENGTH_ADJUST_SPACING_AND_GLYPHS)
         }
+        (SvgAnimatedEnumerationKind::MarkerUnits, "userSpaceOnUse") => {
+            Some(SVG_MARKER_UNITS_USER_SPACE_ON_USE)
+        }
+        (SvgAnimatedEnumerationKind::MarkerUnits, "strokeWidth") => {
+            Some(SVG_MARKER_UNITS_STROKE_WIDTH)
+        }
+        (SvgAnimatedEnumerationKind::MarkerOrient, "auto") => Some(SVG_MARKER_ORIENT_AUTO),
+        (SvgAnimatedEnumerationKind::MarkerOrient, "auto-start-reverse") => {
+            Some(SVG_MARKER_ORIENT_AUTO_START_REVERSE)
+        }
+        (SvgAnimatedEnumerationKind::MarkerOrient, value)
+            if parse_svg_angle_value(value).is_some() =>
+        {
+            Some(SVG_MARKER_ORIENT_ANGLE)
+        }
         _ => None,
     }
 }
@@ -654,6 +696,17 @@ pub(super) fn serialize_svg_animated_enumeration(
         (SvgAnimatedEnumerationKind::LengthAdjust, SVG_LENGTH_ADJUST_SPACING) => Some("spacing"),
         (SvgAnimatedEnumerationKind::LengthAdjust, SVG_LENGTH_ADJUST_SPACING_AND_GLYPHS) => {
             Some("spacingAndGlyphs")
+        }
+        (SvgAnimatedEnumerationKind::MarkerUnits, SVG_MARKER_UNITS_USER_SPACE_ON_USE) => {
+            Some("userSpaceOnUse")
+        }
+        (SvgAnimatedEnumerationKind::MarkerUnits, SVG_MARKER_UNITS_STROKE_WIDTH) => {
+            Some("strokeWidth")
+        }
+        (SvgAnimatedEnumerationKind::MarkerOrient, SVG_MARKER_ORIENT_AUTO) => Some("auto"),
+        (SvgAnimatedEnumerationKind::MarkerOrient, SVG_MARKER_ORIENT_ANGLE) => Some("0"),
+        (SvgAnimatedEnumerationKind::MarkerOrient, SVG_MARKER_ORIENT_AUTO_START_REVERSE) => {
+            Some("auto-start-reverse")
         }
         _ => None,
     }
@@ -917,6 +970,44 @@ pub(super) fn build_svg_animated_length_for_attribute<'s>(
     SvgAnimatedLengthObjectDeclaration::new(base_val, anim_val)
         .bind(scope)
         .expect("SVGAnimatedLength declaration should bind")
+}
+
+pub(super) fn build_svg_animated_angle_for_attribute<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+    attribute: &str,
+) -> v8::Local<'s, v8::Object> {
+    let parsed = svg_owner_attribute_value(scope, owner, attribute)
+        .as_deref()
+        .and_then(parse_svg_orient_angle_value)
+        .unwrap_or_default();
+    let base_val = build_svg_angle_from_parsed(scope, &parsed, false);
+    set_svg_angle_owner_attribute(scope, base_val, owner, attribute);
+    let anim_val = build_svg_angle_from_parsed(scope, &parsed, true);
+    set_svg_angle_owner_attribute(scope, anim_val, owner, attribute);
+    SvgAnimatedAngleObjectDeclaration::new(base_val, anim_val)
+        .bind(scope)
+        .expect("SVGAnimatedAngle declaration should bind")
+}
+
+pub(super) fn build_svg_angle<'s>(scope: &mut v8::PinScope<'s, '_>) -> v8::Local<'s, v8::Object> {
+    build_svg_angle_from_parsed(scope, &SvgParsedAngle::default(), false)
+}
+
+pub(super) fn build_svg_angle_from_parsed<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    parsed: &SvgParsedAngle,
+    read_only: bool,
+) -> v8::Local<'s, v8::Object> {
+    SvgAngleObjectDeclaration::new(
+        parsed.unit_type,
+        parsed.value,
+        parsed.value_in_specified_units,
+        parsed.value_as_string.clone(),
+        read_only,
+    )
+    .bind(scope)
+    .expect("SVGAngle declaration should bind")
 }
 
 pub(super) fn build_svg_length<'s>(
@@ -2148,6 +2239,309 @@ pub(super) fn svg_animated_length_attribute_slot(name: &str) -> &'static str {
         "y2" => "__moliSvgAnimatedY2",
         _ => "__moliSvgAnimatedUnknown",
     }
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct SvgParsedAngle {
+    value: f64,
+    value_in_specified_units: f64,
+    unit_type: u32,
+    value_as_string: String,
+}
+
+impl Default for SvgParsedAngle {
+    fn default() -> Self {
+        Self {
+            value: 0.0,
+            value_in_specified_units: 0.0,
+            unit_type: SVG_ANGLE_TYPE_UNSPECIFIED,
+            value_as_string: "0".to_owned(),
+        }
+    }
+}
+
+pub(super) fn parse_svg_orient_angle_value(raw: &str) -> Option<SvgParsedAngle> {
+    if matches!(
+        raw.trim().to_ascii_lowercase().as_str(),
+        "auto" | "auto-start-reverse"
+    ) {
+        return Some(SvgParsedAngle::default());
+    }
+    parse_svg_angle_value(raw)
+}
+
+pub(super) fn parse_svg_angle_value(raw: &str) -> Option<SvgParsedAngle> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let lowercase = raw.to_ascii_lowercase();
+    let (number_raw, unit_type, degrees_per_unit) = if lowercase.ends_with("deg") {
+        (&raw[..raw.len() - 3], SVG_ANGLE_TYPE_DEG, 1.0)
+    } else if lowercase.ends_with("grad") {
+        (&raw[..raw.len() - 4], SVG_ANGLE_TYPE_GRAD, 0.9)
+    } else if lowercase.ends_with("rad") {
+        (
+            &raw[..raw.len() - 3],
+            SVG_ANGLE_TYPE_RAD,
+            180.0 / std::f64::consts::PI,
+        )
+    } else if lowercase.ends_with("turn") {
+        (&raw[..raw.len() - 4], SVG_ANGLE_TYPE_UNKNOWN, 360.0)
+    } else {
+        (raw, SVG_ANGLE_TYPE_UNSPECIFIED, 1.0)
+    };
+    let value_in_specified_units = moli_css_parse::parse_number(number_raw.trim())?;
+    Some(SvgParsedAngle {
+        value: value_in_specified_units * degrees_per_unit,
+        value_in_specified_units,
+        unit_type,
+        value_as_string: raw.to_owned(),
+    })
+}
+
+pub(super) fn svg_angle_number_slot<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    slot: &str,
+) -> Option<f64> {
+    get_private_value(scope, object, slot)?.number_value(scope)
+}
+
+pub(super) fn svg_angle_string_slot<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    slot: &str,
+) -> Option<String> {
+    get_private_value(scope, object, slot)
+        .and_then(|value| value.to_string(scope))
+        .map(|value| value.to_rust_string_lossy(scope))
+}
+
+pub(super) fn svg_angle_is_read_only<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> bool {
+    get_private_value(scope, object, SVG_ANGLE_READ_ONLY_SLOT).is_some_and(|value| value.is_true())
+}
+
+pub(super) fn set_svg_angle_parsed_value(
+    scope: &mut v8::PinScope<'_, '_>,
+    object: v8::Local<'_, v8::Object>,
+    parsed: &SvgParsedAngle,
+) {
+    set_private_value(
+        scope,
+        object,
+        SVG_ANGLE_UNIT_TYPE_SLOT,
+        v8::Integer::new_from_unsigned(scope, parsed.unit_type).into(),
+    );
+    set_private_value(
+        scope,
+        object,
+        SVG_ANGLE_VALUE_SLOT,
+        v8::Number::new(scope, parsed.value).into(),
+    );
+    set_private_value(
+        scope,
+        object,
+        SVG_ANGLE_VALUE_IN_SPECIFIED_UNITS_SLOT,
+        v8::Number::new(scope, parsed.value_in_specified_units).into(),
+    );
+    set_private_value(
+        scope,
+        object,
+        SVG_ANGLE_VALUE_AS_STRING_SLOT,
+        v8_string(scope, &parsed.value_as_string)
+            .unwrap_or_else(|| v8str(scope, "0"))
+            .into(),
+    );
+}
+
+fn svg_angle_current_unit<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> (u32, bool) {
+    let unit_type = svg_angle_number_slot(scope, object, SVG_ANGLE_UNIT_TYPE_SLOT)
+        .unwrap_or(SVG_ANGLE_TYPE_UNSPECIFIED as f64) as u32;
+    let is_turn = unit_type == SVG_ANGLE_TYPE_UNKNOWN
+        && svg_angle_string_slot(scope, object, SVG_ANGLE_VALUE_AS_STRING_SLOT)
+            .is_some_and(|value| value.trim().to_ascii_lowercase().ends_with("turn"));
+    (unit_type, is_turn)
+}
+
+fn svg_angle_degrees_per_unit(unit_type: u32, is_turn: bool) -> f64 {
+    match unit_type {
+        SVG_ANGLE_TYPE_RAD => 180.0 / std::f64::consts::PI,
+        SVG_ANGLE_TYPE_GRAD => 0.9,
+        SVG_ANGLE_TYPE_UNKNOWN if is_turn => 360.0,
+        _ => 1.0,
+    }
+}
+
+fn svg_angle_unit_suffix(unit_type: u32, is_turn: bool) -> &'static str {
+    match unit_type {
+        SVG_ANGLE_TYPE_DEG => "deg",
+        SVG_ANGLE_TYPE_RAD => "rad",
+        SVG_ANGLE_TYPE_GRAD => "grad",
+        SVG_ANGLE_TYPE_UNKNOWN if is_turn => "turn",
+        _ => "",
+    }
+}
+
+fn svg_angle_from_specified_value(
+    value_in_specified_units: f64,
+    unit_type: u32,
+    is_turn: bool,
+) -> SvgParsedAngle {
+    SvgParsedAngle {
+        value: value_in_specified_units * svg_angle_degrees_per_unit(unit_type, is_turn),
+        value_in_specified_units,
+        unit_type,
+        value_as_string: format!(
+            "{}{}",
+            svg_geometry::serialize_number(value_in_specified_units),
+            svg_angle_unit_suffix(unit_type, is_turn)
+        ),
+    }
+}
+
+pub(super) fn set_svg_angle_value_degrees<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    value: f64,
+) {
+    let (unit_type, is_turn) = svg_angle_current_unit(scope, object);
+    let specified = value / svg_angle_degrees_per_unit(unit_type, is_turn);
+    let parsed = svg_angle_from_specified_value(specified, unit_type, is_turn);
+    set_svg_angle_parsed_value(scope, object, &parsed);
+}
+
+pub(super) fn set_svg_angle_value_in_specified_units<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    value: f64,
+) {
+    let (unit_type, is_turn) = svg_angle_current_unit(scope, object);
+    let parsed = svg_angle_from_specified_value(value, unit_type, is_turn);
+    set_svg_angle_parsed_value(scope, object, &parsed);
+}
+
+pub(super) fn set_svg_angle_new_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    unit_type: u32,
+    value: f64,
+) -> bool {
+    if !(SVG_ANGLE_TYPE_UNSPECIFIED..=SVG_ANGLE_TYPE_GRAD).contains(&unit_type) {
+        return false;
+    }
+    let parsed = svg_angle_from_specified_value(value, unit_type, false);
+    set_svg_angle_parsed_value(scope, object, &parsed);
+    true
+}
+
+pub(super) fn convert_svg_angle_to_unit<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    unit_type: u32,
+) -> bool {
+    if !(SVG_ANGLE_TYPE_UNSPECIFIED..=SVG_ANGLE_TYPE_GRAD).contains(&unit_type) {
+        return false;
+    }
+    let value = svg_angle_number_slot(scope, object, SVG_ANGLE_VALUE_SLOT).unwrap_or(0.0);
+    let specified = value / svg_angle_degrees_per_unit(unit_type, false);
+    let parsed = svg_angle_from_specified_value(specified, unit_type, false);
+    set_svg_angle_parsed_value(scope, object, &parsed);
+    true
+}
+
+pub(super) fn set_svg_angle_owner_attribute<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    angle: v8::Local<'s, v8::Object>,
+    owner: v8::Local<'s, v8::Object>,
+    attribute: &str,
+) {
+    set_private_value(scope, angle, SVG_ANGLE_OWNER_ELEMENT_SLOT, owner.into());
+    set_private_value(
+        scope,
+        angle,
+        SVG_ANGLE_OWNER_ATTRIBUTE_SLOT,
+        v8_string(scope, attribute)
+            .unwrap_or_else(|| v8str(scope, ""))
+            .into(),
+    );
+}
+
+pub(super) fn sync_svg_angle_from_owner_attribute<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    angle: v8::Local<'s, v8::Object>,
+) {
+    let Some(owner) = get_private_value(scope, angle, SVG_ANGLE_OWNER_ELEMENT_SLOT)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+    else {
+        return;
+    };
+    let Some(attribute) = svg_angle_string_slot(scope, angle, SVG_ANGLE_OWNER_ATTRIBUTE_SLOT)
+        .filter(|value| !value.is_empty())
+    else {
+        return;
+    };
+    let parsed = svg_owner_attribute_value(scope, owner, &attribute)
+        .as_deref()
+        .and_then(parse_svg_orient_angle_value)
+        .unwrap_or_default();
+    set_svg_angle_parsed_value(scope, angle, &parsed);
+}
+
+pub(super) fn sync_svg_animated_angle_from_owner_attribute<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    animated: v8::Local<'s, v8::Object>,
+    owner: v8::Local<'s, v8::Object>,
+    attribute: &str,
+) {
+    let parsed = svg_owner_attribute_value(scope, owner, attribute)
+        .as_deref()
+        .and_then(parse_svg_orient_angle_value)
+        .unwrap_or_default();
+    if let Some(base_val) = get_private_value(scope, animated, SVG_ANIMATED_ANGLE_BASE_VAL_SLOT)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+    {
+        set_svg_angle_parsed_value(scope, base_val, &parsed);
+        set_svg_angle_owner_attribute(scope, base_val, owner, attribute);
+    }
+    if let Some(anim_val) = get_private_value(scope, animated, SVG_ANIMATED_ANGLE_ANIM_VAL_SLOT)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+    {
+        set_svg_angle_parsed_value(scope, anim_val, &parsed);
+        set_svg_angle_owner_attribute(scope, anim_val, owner, attribute);
+    }
+}
+
+pub(super) fn reflect_svg_angle_to_owner_attribute<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    angle: v8::Local<'s, v8::Object>,
+) {
+    let Some(owner) = get_private_value(scope, angle, SVG_ANGLE_OWNER_ELEMENT_SLOT)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+    else {
+        return;
+    };
+    let Some(attribute) = svg_angle_string_slot(scope, angle, SVG_ANGLE_OWNER_ATTRIBUTE_SLOT)
+        .filter(|value| !value.is_empty())
+    else {
+        return;
+    };
+    let Some(value) = svg_angle_string_slot(scope, angle, SVG_ANGLE_VALUE_AS_STRING_SLOT) else {
+        return;
+    };
+    let Ok((runtime_ptr, handle)) =
+        crate::native_bridge::node_runtime_and_handle_from_object(scope, owner)
+    else {
+        return;
+    };
+    let runtime = unsafe { &mut *runtime_ptr };
+    let _ = runtime.set_attribute(scope, runtime_ptr, handle, &attribute, &value);
 }
 
 #[derive(Clone, Copy)]

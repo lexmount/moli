@@ -318,6 +318,112 @@ fn svg_element_animated_length_getter<'s>(
     rv.set(value.into());
 }
 
+fn svg_marker_runtime_and_handle<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+    member: &str,
+) -> Option<(
+    *mut crate::native_bridge::JsContextHost,
+    crate::document_runtime::DomHandle,
+)> {
+    let Ok((runtime_ptr, handle)) =
+        crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, receiver)
+    else {
+        webidl::throw_type_error(
+            scope,
+            &format!("SVGMarkerElement.{member} called on incompatible receiver."),
+        );
+        return None;
+    };
+    let is_marker = unsafe { &*runtime_ptr }
+        .dom_host()
+        .node(handle)
+        .and_then(|node| node.as_element())
+        .is_some_and(|element| element.is_svg_element("marker"));
+    if !is_marker {
+        webidl::throw_type_error(
+            scope,
+            &format!("SVGMarkerElement.{member} called on incompatible receiver."),
+        );
+        return None;
+    }
+    Some((runtime_ptr, handle))
+}
+
+pub(super) fn svg_marker_orient_angle_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let owner = args.this();
+    if svg_marker_runtime_and_handle(scope, owner, "orientAngle").is_none() {
+        return;
+    }
+    if let Some(value) = get_private_value(scope, owner, SVG_MARKER_ORIENT_ANGLE_SLOT) {
+        if let Ok(animated) = v8::Local::<v8::Object>::try_from(value) {
+            sync_svg_animated_angle_from_owner_attribute(scope, animated, owner, "orient");
+        }
+        rv.set(value);
+        return;
+    }
+    let value = build_svg_animated_angle_for_attribute(scope, owner, "orient");
+    set_private_value(scope, owner, SVG_MARKER_ORIENT_ANGLE_SLOT, value.into());
+    rv.set(value.into());
+}
+
+fn set_svg_marker_orient_attribute<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    marker: v8::Local<'s, v8::Object>,
+    member: &str,
+    value: &str,
+) -> bool {
+    let Some((runtime_ptr, handle)) = svg_marker_runtime_and_handle(scope, marker, member) else {
+        return false;
+    };
+    let runtime = unsafe { &mut *runtime_ptr };
+    let _ = runtime.set_attribute(scope, runtime_ptr, handle, "orient", value);
+    true
+}
+
+pub(super) fn svg_marker_set_orient_to_auto_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if set_svg_marker_orient_attribute(scope, args.this(), "setOrientToAuto", "auto") {
+        rv.set_undefined();
+    }
+}
+
+pub(super) fn svg_marker_set_orient_to_angle_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Ok(angle) = v8::Local::<v8::Object>::try_from(args.get(0)) else {
+        webidl::throw_type_error(
+            scope,
+            "SVGMarkerElement.setOrientToAngle requires an SVGAngle.",
+        );
+        return;
+    };
+    if !require_svg_receiver(
+        scope,
+        angle,
+        SVG_ANGLE_UNIT_TYPE_SLOT,
+        "SVGAngle",
+        "setOrientToAngle argument",
+    ) {
+        return;
+    }
+    sync_svg_angle_from_owner_attribute(scope, angle);
+    let value = svg_angle_string_slot(scope, angle, SVG_ANGLE_VALUE_AS_STRING_SLOT)
+        .unwrap_or_else(|| "0".to_owned());
+    if set_svg_marker_orient_attribute(scope, args.this(), "setOrientToAngle", &value) {
+        rv.set_undefined();
+    }
+}
+
 pub(super) fn svg_graphics_transform_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -728,6 +834,42 @@ pub(super) fn svg_animated_length_getter<'s>(
     );
 }
 
+pub(super) fn svg_animated_angle_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some(name) = callback_data_item(
+        scope,
+        &args,
+        SVG_ANIMATED_ACCESSOR_NAMES,
+        "SVGAnimatedAngle attributes",
+    ) else {
+        rv.set_undefined();
+        return;
+    };
+    if !require_svg_receiver(
+        scope,
+        args.this(),
+        SVG_ANIMATED_ANGLE_BASE_VAL_SLOT,
+        "SVGAnimatedAngle",
+        &format!("{name} getter"),
+    ) {
+        return;
+    }
+    let slot = match name {
+        "baseVal" => SVG_ANIMATED_ANGLE_BASE_VAL_SLOT,
+        "animVal" => SVG_ANIMATED_ANGLE_ANIM_VAL_SLOT,
+        _ => {
+            rv.set_undefined();
+            return;
+        }
+    };
+    rv.set(
+        get_private_value(scope, args.this(), slot).unwrap_or_else(|| v8::undefined(scope).into()),
+    );
+}
+
 pub(super) fn svg_animated_length_list_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -799,6 +941,129 @@ pub(super) fn svg_length_getter<'s>(
         }
         _ => rv.set_undefined(),
     }
+}
+
+pub(super) fn svg_angle_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some(name) = callback_data_item(
+        scope,
+        &args,
+        SVG_LENGTH_ACCESSOR_NAMES,
+        "SVGAngle attributes",
+    ) else {
+        rv.set_undefined();
+        return;
+    };
+    if !require_svg_receiver(
+        scope,
+        args.this(),
+        SVG_ANGLE_UNIT_TYPE_SLOT,
+        "SVGAngle",
+        &format!("{name} getter"),
+    ) {
+        return;
+    }
+    sync_svg_angle_from_owner_attribute(scope, args.this());
+    match name {
+        "unitType" => {
+            let value = svg_angle_number_slot(scope, args.this(), SVG_ANGLE_UNIT_TYPE_SLOT)
+                .unwrap_or(SVG_ANGLE_TYPE_UNSPECIFIED as f64);
+            rv.set(v8::Integer::new_from_unsigned(scope, value as u32).into());
+        }
+        "value" => {
+            let value =
+                svg_angle_number_slot(scope, args.this(), SVG_ANGLE_VALUE_SLOT).unwrap_or(0.0);
+            rv.set(v8::Number::new(scope, value).into());
+        }
+        "valueInSpecifiedUnits" => {
+            let value =
+                svg_angle_number_slot(scope, args.this(), SVG_ANGLE_VALUE_IN_SPECIFIED_UNITS_SLOT)
+                    .unwrap_or(0.0);
+            rv.set(v8::Number::new(scope, value).into());
+        }
+        "valueAsString" => rv.set(
+            get_private_value(scope, args.this(), SVG_ANGLE_VALUE_AS_STRING_SLOT)
+                .unwrap_or_else(|| v8str(scope, "0").into()),
+        ),
+        _ => rv.set_undefined(),
+    }
+}
+
+pub(super) fn svg_angle_setter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some(name) = callback_data_item(
+        scope,
+        &args,
+        SVG_LENGTH_ACCESSOR_NAMES,
+        "SVGAngle attributes",
+    ) else {
+        return;
+    };
+    if !require_svg_receiver(
+        scope,
+        args.this(),
+        SVG_ANGLE_UNIT_TYPE_SLOT,
+        "SVGAngle",
+        &format!("{name} setter"),
+    ) {
+        return;
+    }
+    if svg_angle_is_read_only(scope, args.this()) {
+        throw_dom_exception(
+            scope,
+            "NoModificationAllowedError",
+            7,
+            "The SVG angle is read-only.",
+        );
+        return;
+    }
+    sync_svg_angle_from_owner_attribute(scope, args.this());
+    match name {
+        "value" | "valueInSpecifiedUnits" => {
+            let value = match webidl::convert::<webidl::Double>(
+                scope,
+                args.get(0),
+                webidl::Context::member("SVGAngle", name),
+            ) {
+                Ok(value) => value.0,
+                Err(error) => {
+                    webidl::throw_error(scope, &error);
+                    return;
+                }
+            };
+            if name == "value" {
+                set_svg_angle_value_degrees(scope, args.this(), value);
+            } else {
+                set_svg_angle_value_in_specified_units(scope, args.this(), value);
+            }
+        }
+        "valueAsString" => {
+            let value = match webidl::convert::<webidl::DomString>(
+                scope,
+                args.get(0),
+                webidl::Context::member("SVGAngle", "valueAsString"),
+            ) {
+                Ok(value) => value.0,
+                Err(error) => {
+                    webidl::throw_error(scope, &error);
+                    return;
+                }
+            };
+            let Some(parsed) = parse_svg_angle_value(&value) else {
+                throw_dom_exception(scope, "SyntaxError", 12, "Invalid SVG angle value.");
+                return;
+            };
+            set_svg_angle_parsed_value(scope, args.this(), &parsed);
+        }
+        _ => return,
+    }
+    reflect_svg_angle_to_owner_attribute(scope, args.this());
 }
 
 pub(super) fn svg_length_setter<'s>(
@@ -2055,6 +2320,14 @@ pub(super) fn svg_svg_element_create_matrix_callback<'s>(
     rv.set(super::super::geometry_runtime::build_dom_matrix_identity_object(scope).into());
 }
 
+pub(super) fn svg_svg_element_create_angle_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    _args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    rv.set(build_svg_angle(scope).into());
+}
+
 pub(super) fn svg_svg_element_deselect_all_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -2420,6 +2693,46 @@ pub(super) fn svg_length_new_value_specified_units_callback<'s>(
     rv.set_undefined();
 }
 
+pub(super) fn svg_angle_new_value_specified_units_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if !require_svg_receiver(
+        scope,
+        args.this(),
+        SVG_ANGLE_UNIT_TYPE_SLOT,
+        "SVGAngle",
+        "newValueSpecifiedUnits",
+    ) {
+        return;
+    }
+    if svg_angle_is_read_only(scope, args.this()) {
+        throw_dom_exception(
+            scope,
+            "NoModificationAllowedError",
+            7,
+            "The SVG angle is read-only.",
+        );
+        return;
+    }
+    let Some(parsed) = webidl::parse_args::<SvgAngleNewValueSpecifiedUnitsArgs>(scope, &args)
+    else {
+        return;
+    };
+    if !set_svg_angle_new_value(scope, args.this(), parsed.unit_type as u32, parsed.value) {
+        throw_dom_exception(
+            scope,
+            "NotSupportedError",
+            9,
+            "The SVG angle unit type is not supported.",
+        );
+        return;
+    }
+    reflect_svg_angle_to_owner_attribute(scope, args.this());
+    rv.set_undefined();
+}
+
 pub(super) fn svg_length_convert_to_specified_units_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -2432,6 +2745,47 @@ pub(super) fn svg_length_convert_to_specified_units_callback<'s>(
     let value = svg_length_number_slot(scope, args.this(), SVG_LENGTH_VALUE_SLOT).unwrap_or(0.0);
     set_svg_length_numeric_value(scope, args.this(), value, parsed.unit_type as u32);
     reflect_svg_length_to_owner_attribute(scope, args.this());
+    rv.set_undefined();
+}
+
+pub(super) fn svg_angle_convert_to_specified_units_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if !require_svg_receiver(
+        scope,
+        args.this(),
+        SVG_ANGLE_UNIT_TYPE_SLOT,
+        "SVGAngle",
+        "convertToSpecifiedUnits",
+    ) {
+        return;
+    }
+    if svg_angle_is_read_only(scope, args.this()) {
+        throw_dom_exception(
+            scope,
+            "NoModificationAllowedError",
+            7,
+            "The SVG angle is read-only.",
+        );
+        return;
+    }
+    sync_svg_angle_from_owner_attribute(scope, args.this());
+    let Some(parsed) = webidl::parse_args::<SvgAngleConvertToSpecifiedUnitsArgs>(scope, &args)
+    else {
+        return;
+    };
+    if !convert_svg_angle_to_unit(scope, args.this(), parsed.unit_type as u32) {
+        throw_dom_exception(
+            scope,
+            "NotSupportedError",
+            9,
+            "The SVG angle unit type is not supported.",
+        );
+        return;
+    }
+    reflect_svg_angle_to_owner_attribute(scope, args.this());
     rv.set_undefined();
 }
 

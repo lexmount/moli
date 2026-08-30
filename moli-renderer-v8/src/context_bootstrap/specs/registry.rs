@@ -89,6 +89,10 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::SVGAngle::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::SVGNumber::DESCRIPTOR,
         kind: ConstructorKind::Illegal,
     },
@@ -102,6 +106,10 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
     },
     ConstructorSpec {
         interface: web_api_interfaces::SVGAnimatedLength::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::SVGAnimatedAngle::DESCRIPTOR,
         kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {

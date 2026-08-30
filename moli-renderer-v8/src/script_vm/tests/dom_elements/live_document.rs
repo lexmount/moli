@@ -1803,6 +1803,132 @@ fn svg_animated_boolean_reflects_preserve_alpha() {
 }
 
 #[test]
+fn svg_marker_orient_angle_is_a_live_animated_angle() {
+    let mut vm = new_parsed_test_vm(
+        "https://svg-animated-angle.test/",
+        "<!doctype html><html><body></body></html>",
+    );
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const assert = (condition, message) => {
+                if (!condition) throw new Error(message);
+              };
+              const close = (actual, expected) => Math.abs(actual - expected) < 1e-9;
+              const ns = "http://www.w3.org/2000/svg";
+              const marker = document.createElementNS(ns, "marker");
+
+              for (const constructor of [SVGMarkerElement, SVGAnimatedAngle, SVGAngle]) {
+                assert(typeof constructor === "function", `${constructor.name} constructor`);
+                let illegalConstructor = false;
+                try {
+                  new constructor();
+                } catch (error) {
+                  illegalConstructor = error instanceof TypeError;
+                }
+                assert(illegalConstructor, `${constructor.name} illegal constructor`);
+              }
+              assert(marker instanceof SVGMarkerElement, "marker interface");
+              assert(Object.getPrototypeOf(SVGMarkerElement.prototype) === SVGElement.prototype,
+                "marker prototype parent");
+
+              const markerDescriptor = Object.getOwnPropertyDescriptor(
+                SVGMarkerElement.prototype,
+                "orientAngle",
+              );
+              assert(typeof markerDescriptor.get === "function" &&
+                markerDescriptor.set === undefined, "orientAngle readonly descriptor");
+              assert(markerDescriptor.enumerable && markerDescriptor.configurable,
+                "orientAngle descriptor flags");
+
+              const animated = marker.orientAngle;
+              const base = animated.baseVal;
+              const anim = animated.animVal;
+              assert(animated instanceof SVGAnimatedAngle, "animated angle interface");
+              assert(base instanceof SVGAngle && anim instanceof SVGAngle, "angle interfaces");
+              assert(base !== anim, "base and animated values are distinct");
+              assert(marker.orientAngle === animated, "orientAngle SameObject");
+              assert(base.value === 0 && anim.value === 0, "initial values");
+              assert(base.unitType === SVGAngle.SVG_ANGLETYPE_UNSPECIFIED, "initial unit");
+              assert(!marker.hasAttribute("orient"), "getter does not create attribute");
+              assert(marker.orientType instanceof SVGAnimatedEnumeration, "orientType interface");
+              assert(marker.orientType.baseVal === SVGMarkerElement.SVG_MARKER_ORIENT_ANGLE,
+                "initial orientType");
+              assert(marker.markerUnits instanceof SVGAnimatedEnumeration,
+                "markerUnits interface");
+              assert(marker.markerUnits.baseVal ===
+                SVGMarkerElement.SVG_MARKERUNITS_STROKEWIDTH, "initial markerUnits");
+              marker.markerUnits.baseVal = SVGMarkerElement.SVG_MARKERUNITS_USERSPACEONUSE;
+              assert(marker.getAttribute("markerUnits") === "userSpaceOnUse",
+                "markerUnits reflection");
+
+              base.value = 100;
+              assert(base.value === 100 && marker.orientAngle.baseVal.value === 100,
+                "cached base value is live");
+              assert(marker.getAttribute("orient") === "100", "value reflects to orient");
+              marker.orientAngle.baseVal = -1;
+              assert(marker.orientAngle.baseVal === base && base.value === 100,
+                "baseVal assignment is ignored");
+
+              marker.setAttribute("orient", "1.5707963267948966rad");
+              assert(close(base.value, 90), "content attribute converts to degrees");
+              assert(base.unitType === SVGAngle.SVG_ANGLETYPE_RAD, "content attribute unit");
+              assert(close(base.valueInSpecifiedUnits, Math.PI / 2), "specified value");
+              assert(anim.unitType === SVGAngle.SVG_ANGLETYPE_RAD && close(anim.value, 90),
+                "animVal tracks content attribute");
+              assert(marker.orientType.baseVal === SVGMarkerElement.SVG_MARKER_ORIENT_ANGLE,
+                "angle orientType");
+
+              marker.setOrientToAuto();
+              assert(marker.getAttribute("orient") === "auto", "setOrientToAuto reflection");
+              assert(marker.orientType.baseVal === SVGMarkerElement.SVG_MARKER_ORIENT_AUTO,
+                "automatic orientType");
+              assert(base.value === 0 && base.unitType === SVGAngle.SVG_ANGLETYPE_UNSPECIFIED,
+                "automatic orient angle");
+
+              marker.setAttribute("orient", "400grad");
+              assert(base.value === 360 && base.unitType === SVGAngle.SVG_ANGLETYPE_GRAD,
+                "grad content attribute");
+
+              const svg = document.createElementNS(ns, "svg");
+              const standalone = svg.createSVGAngle();
+              assert(standalone instanceof SVGAngle, "createSVGAngle result");
+              standalone.newValueSpecifiedUnits(SVGAngle.SVG_ANGLETYPE_RAD, Math.PI);
+              assert(close(standalone.value, 180), "newValueSpecifiedUnits conversion");
+              standalone.convertToSpecifiedUnits(SVGAngle.SVG_ANGLETYPE_GRAD);
+              assert(close(standalone.valueInSpecifiedUnits, 200), "unit conversion");
+              assert(standalone.valueAsString === "200grad", "unit serialization");
+              marker.setOrientToAngle(standalone);
+              assert(marker.getAttribute("orient") === "200grad", "setOrientToAngle reflection");
+              assert(marker.orientAngle.baseVal.value === 180, "setOrientToAngle value");
+
+              let readonlyAnim = false;
+              try {
+                anim.value = 1;
+              } catch (error) {
+                readonlyAnim = error.name === "NoModificationAllowedError";
+              }
+              assert(readonlyAnim, "animVal is read-only");
+
+              let incompatibleReceiver = false;
+              try {
+                markerDescriptor.get.call(document.createElementNS(ns, "rect"));
+              } catch (error) {
+                incompatibleReceiver = error instanceof TypeError;
+              }
+              assert(incompatibleReceiver, "marker receiver brand");
+              return "ok";
+            })()
+            "#,
+        )
+        .expect("SVG animated angle probe should evaluate");
+
+    assert_eq!(result, "ok");
+}
+
+#[test]
 fn svg_string_lists_reflect_conditional_processing_attributes() {
     let mut vm = new_parsed_test_vm(
         "https://svg-string-list.test/",

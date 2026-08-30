@@ -179,6 +179,7 @@ const NODE_BRIDGE_DESCRIPTORS: &[BridgeDescriptor] = &[
         ELEMENT_GROUPS,
     ),
     descriptor(web_api_interfaces::SVGMaskElement::DESCRIPTOR, ELEMENT_GROUPS),
+    descriptor(web_api_interfaces::SVGMarkerElement::DESCRIPTOR, ELEMENT_GROUPS),
     specialized_descriptor(
         web_api_interfaces::SVGPathElement::DESCRIPTOR,
         ELEMENT_GROUPS,
