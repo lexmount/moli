@@ -1689,6 +1689,120 @@ fn svg_animated_enumerations_reflect_typed_content_attributes() {
 }
 
 #[test]
+fn svg_animated_boolean_reflects_preserve_alpha() {
+    let mut vm = new_parsed_test_vm(
+        "https://svg-animated-boolean.test/",
+        "<!doctype html><html><body></body></html>",
+    );
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const assert = (condition, message) => {
+                if (!condition) throw new Error(message);
+              };
+              const ns = "http://www.w3.org/2000/svg";
+              const element = document.createElementNS(ns, "feConvolveMatrix");
+
+              assert(typeof SVGAnimatedBoolean === "function", "animated boolean constructor");
+              assert(typeof SVGFEConvolveMatrixElement === "function", "element constructor");
+              assert(element instanceof SVGFEConvolveMatrixElement, "element interface");
+              assert(Object.getPrototypeOf(SVGFEConvolveMatrixElement.prototype) === SVGElement.prototype,
+                "element prototype parent");
+
+              for (const constructor of [SVGAnimatedBoolean, SVGFEConvolveMatrixElement]) {
+                let illegalConstructor = false;
+                try {
+                  new constructor();
+                } catch (error) {
+                  illegalConstructor = error instanceof TypeError;
+                }
+                assert(illegalConstructor, `${constructor.name} illegal constructor`);
+              }
+
+              const elementDescriptor = Object.getOwnPropertyDescriptor(
+                SVGFEConvolveMatrixElement.prototype,
+                "preserveAlpha",
+              );
+              assert(typeof elementDescriptor.get === "function", "preserveAlpha getter");
+              assert(elementDescriptor.set === undefined, "preserveAlpha readonly");
+              assert(elementDescriptor.enumerable && elementDescriptor.configurable,
+                "preserveAlpha descriptor flags");
+
+              const animated = element.preserveAlpha;
+              assert(animated instanceof SVGAnimatedBoolean, "animated boolean interface");
+              assert(Object.prototype.toString.call(animated) === "[object SVGAnimatedBoolean]",
+                "animated boolean tag");
+              assert(element.preserveAlpha === animated, "preserveAlpha SameObject");
+              assert(!element.hasAttribute("preserveAlpha"), "getter does not create attribute");
+              assert(animated.baseVal === false && animated.animVal === false, "initial value");
+
+              const baseDescriptor = Object.getOwnPropertyDescriptor(
+                SVGAnimatedBoolean.prototype,
+                "baseVal",
+              );
+              const animDescriptor = Object.getOwnPropertyDescriptor(
+                SVGAnimatedBoolean.prototype,
+                "animVal",
+              );
+              assert(typeof baseDescriptor.get === "function" &&
+                typeof baseDescriptor.set === "function", "baseVal descriptor");
+              assert(typeof animDescriptor.get === "function" && animDescriptor.set === undefined,
+                "animVal descriptor");
+              assert(baseDescriptor.enumerable && baseDescriptor.configurable &&
+                animDescriptor.enumerable && animDescriptor.configurable,
+                "animated boolean descriptor flags");
+
+              element.setAttribute("preserveAlpha", "true");
+              assert(animated.baseVal === true && animated.animVal === true,
+                "true content attribute");
+              element.setAttribute("preserveAlpha", "false");
+              assert(animated.baseVal === false && animated.animVal === false,
+                "false content attribute");
+              element.setAttribute("preserveAlpha", "TRUE");
+              assert(animated.baseVal === false && animated.animVal === false,
+                "invalid content attribute uses initial value");
+              element.removeAttribute("preserveAlpha");
+              assert(animated.baseVal === false && animated.animVal === false,
+                "removed content attribute uses initial value");
+
+              animated.baseVal = true;
+              assert(element.getAttribute("preserveAlpha") === "true", "true reflection");
+              assert(animated.baseVal === true && animated.animVal === true,
+                "true reflected values");
+              animated.baseVal = null;
+              assert(element.getAttribute("preserveAlpha") === "false", "false reflection");
+              assert(animated.baseVal === false && animated.animVal === false,
+                "false reflected values");
+              animated.baseVal = {};
+              assert(element.getAttribute("preserveAlpha") === "true", "WebIDL ToBoolean");
+
+              let incompatibleAnimatedReceiver = false;
+              try {
+                baseDescriptor.get.call({});
+              } catch (error) {
+                incompatibleAnimatedReceiver = error instanceof TypeError;
+              }
+              assert(incompatibleAnimatedReceiver, "animated boolean receiver brand");
+
+              let incompatibleElementReceiver = false;
+              try {
+                elementDescriptor.get.call(document.createElementNS(ns, "rect"));
+              } catch (error) {
+                incompatibleElementReceiver = error instanceof TypeError;
+              }
+              assert(incompatibleElementReceiver, "element receiver brand");
+              return "ok";
+            })()
+            "#,
+        )
+        .expect("SVG animated boolean probe should evaluate");
+
+    assert_eq!(result, "ok");
+}
+
+#[test]
 fn svg_geometry_queries_use_computed_paths_live_tree_and_kurbo_bounds() {
     let mut vm = new_parsed_test_vm(
         "https://svg-geometry-wiring.test/",
