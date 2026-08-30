@@ -1,3 +1,120 @@
+#[test]
+fn frame_owner_get_svg_document_methods_reject_html_documents_and_enforce_brands() {
+    let mut vm = new_storage_test_vm("https://frame-owner-get-svg-document.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  if (!document.documentElement) {
+    const html = document.createElement('html');
+    html.appendChild(document.createElement('body'));
+    document.appendChild(html);
+  }
+  const root = document.body || document.documentElement;
+  const iframe = document.createElement("iframe");
+  iframe.srcdoc = "<body>iframe child</body>";
+  const embed = document.createElement("embed");
+  embed.type = "text/html";
+  embed.src = "about:blank";
+  const object = document.createElement("object");
+  object.type = "text/html";
+  object.data = "about:blank";
+  root.appendChild(iframe);
+  root.appendChild(embed);
+  root.appendChild(object);
+
+  const interfaces = [
+    [HTMLIFrameElement.prototype, iframe, "HTMLIFrameElement"],
+    [HTMLEmbedElement.prototype, embed, "HTMLEmbedElement"],
+    [HTMLObjectElement.prototype, object, "HTMLObjectElement"]
+  ];
+  const descriptors = interfaces.map(([prototype]) => {
+    const descriptor = Object.getOwnPropertyDescriptor(prototype, "getSVGDocument");
+    return {
+      type: typeof descriptor.value,
+      name: descriptor.value.name,
+      length: descriptor.value.length,
+      writable: descriptor.writable,
+      enumerable: descriptor.enumerable,
+      configurable: descriptor.configurable
+    };
+  });
+  const brandErrors = interfaces.map(([prototype], index) => {
+    try {
+      prototype.getSVGDocument.call(interfaces[(index + 1) % interfaces.length][1]);
+      return "accepted";
+    } catch (error) {
+      return error.name;
+    }
+  });
+
+  return JSON.stringify({
+    descriptors,
+    iframeIsNull: iframe.getSVGDocument() === null,
+    embedIsNull: embed.getSVGDocument() === null,
+    objectIsNull: object.getSVGDocument() === null,
+    brandErrors,
+    absentFromBase: !("getSVGDocument" in HTMLElement.prototype)
+  });
+})()
+"#,
+        )
+        .expect("frame owner getSVGDocument methods should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"descriptors":[{"type":"function","name":"getSVGDocument","length":0,"writable":true,"enumerable":true,"configurable":true},{"type":"function","name":"getSVGDocument","length":0,"writable":true,"enumerable":true,"configurable":true},{"type":"function","name":"getSVGDocument","length":0,"writable":true,"enumerable":true,"configurable":true}],"iframeIsNull":true,"embedIsNull":true,"objectIsNull":true,"brandErrors":["TypeError","TypeError","TypeError"],"absentFromBase":true}"#
+    );
+}
+
+#[test]
+fn frame_owner_get_svg_document_uses_native_document_content_type() {
+    let mut vm = new_storage_html_test_vm("https://frame-owner-svg-type.test/");
+    vm.eval(
+        r#"
+for (const tag of ['iframe', 'embed', 'object']) {
+  const owner = document.createElement(tag);
+  owner.id = tag;
+  if (tag === 'object') owner.data = 'about:blank';
+  else owner.src = 'about:blank';
+  document.body.appendChild(owner);
+  if (owner.getSVGDocument() !== null) throw new Error('HTML document accepted');
+}
+"#,
+    )
+    .expect("frame owner setup should evaluate");
+
+    // Simulate the response MIME metadata at a child document commit. Parsing
+    // and frame navigation are covered separately; this checks the public
+    // method against native metadata rather than author-visible properties.
+    {
+        let mut host = vm._context_host.borrow_mut();
+        for id in ["iframe", "embed", "object"] {
+            let owner = host.dom_host().element_handle_by_id(id).unwrap();
+            let document = host.child_browsing_context_document_handle(owner).unwrap();
+            host.set_dom_document_content_type_for_handle(document, "image/svg+xml");
+        }
+    }
+    assert_eq!(
+        vm.eval(
+            r#"
+['iframe', 'embed', 'object'].every(id => {
+  const owner = document.getElementById(id);
+  const svg = owner.getSVGDocument();
+  if (svg === null || svg.contentType !== 'image/svg+xml') return false;
+  if (id !== 'embed' && svg !== owner.contentDocument) return false;
+  Object.defineProperty(svg, 'contentType', {value: 'text/html', configurable: true});
+  return owner.getSVGDocument() === svg;
+})
+"#
+        )
+        .expect("native SVG document metadata should determine the result"),
+        "true"
+    );
+}
+
+
 use super::*;
 
 fn new_vm_with_pending_response_for_teardown_test()
@@ -2740,120 +2857,84 @@ fn same_name_isolated_worlds_are_scoped_to_devtools_session_and_detach() {
     );
 }
 
-#[test]
-fn frame_owner_get_svg_document_methods_reject_html_documents_and_enforce_brands() {
-    let mut vm = new_storage_test_vm("https://frame-owner-get-svg-document.test/");
-
-    let result = vm
-        .eval(
-            r#"
-(() => {
-  if (!document.documentElement) {
-    const html = document.createElement('html');
-    html.appendChild(document.createElement('body'));
-    document.appendChild(html);
-  }
-  const root = document.body || document.documentElement;
-  const iframe = document.createElement("iframe");
-  iframe.srcdoc = "<body>iframe child</body>";
-  const embed = document.createElement("embed");
-  embed.type = "text/html";
-  embed.src = "about:blank";
-  const object = document.createElement("object");
-  object.type = "text/html";
-  object.data = "about:blank";
-  root.appendChild(iframe);
-  root.appendChild(embed);
-  root.appendChild(object);
-
-  const interfaces = [
-    [HTMLIFrameElement.prototype, iframe, "HTMLIFrameElement"],
-    [HTMLEmbedElement.prototype, embed, "HTMLEmbedElement"],
-    [HTMLObjectElement.prototype, object, "HTMLObjectElement"]
-  ];
-  const descriptors = interfaces.map(([prototype]) => {
-    const descriptor = Object.getOwnPropertyDescriptor(prototype, "getSVGDocument");
-    return {
-      type: typeof descriptor.value,
-      name: descriptor.value.name,
-      length: descriptor.value.length,
-      writable: descriptor.writable,
-      enumerable: descriptor.enumerable,
-      configurable: descriptor.configurable
-    };
-  });
-  const brandErrors = interfaces.map(([prototype], index) => {
-    try {
-      prototype.getSVGDocument.call(interfaces[(index + 1) % interfaces.length][1]);
-      return "accepted";
-    } catch (error) {
-      return error.name;
-    }
-  });
-
-  return JSON.stringify({
-    descriptors,
-    iframeIsNull: iframe.getSVGDocument() === null,
-    embedIsNull: embed.getSVGDocument() === null,
-    objectIsNull: object.getSVGDocument() === null,
-    brandErrors,
-    absentFromBase: !("getSVGDocument" in HTMLElement.prototype)
-  });
-})()
-"#,
-        )
-        .expect("frame owner getSVGDocument methods should evaluate");
+#[tokio::test]
+async fn failed_object_attribute_navigation_enters_fallback_without_recreating_child_context() {
+    let (object_url, request_rx, release_tx, server) =
+        spawn_gated_child_document_resource_server(404).await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        &object_url.replace("/child.html", "/page"),
+        &loader,
+    );
 
     assert_eq!(
-        result,
-        r#"{"descriptors":[{"type":"function","name":"getSVGDocument","length":0,"writable":true,"enumerable":true,"configurable":true},{"type":"function","name":"getSVGDocument","length":0,"writable":true,"enumerable":true,"configurable":true},{"type":"function","name":"getSVGDocument","length":0,"writable":true,"enumerable":true,"configurable":true}],"iframeIsNull":true,"embedIsNull":true,"objectIsNull":true,"brandErrors":["TypeError","TypeError","TypeError"],"absentFromBase":true}"#
+        vm.eval(&format!(
+            r#"
+(() => {{
+  const root = document.body || document.documentElement || document;
+  const object = document.createElement('object');
+  object.type = 'text/html';
+  object.data = {object_url:?};
+  globalThis.__failedObjectEvents = [];
+  object.addEventListener('load', () => __failedObjectEvents.push('load'));
+  object.addEventListener('error', event => __failedObjectEvents.push(
+    `error:${{event.isTrusted}}:${{object.contentWindow === null}}`
+  ));
+  const fallback = document.createElement('span');
+  fallback.id = 'object-fallback';
+  fallback.textContent = 'fallback';
+  object.appendChild(fallback);
+  root.appendChild(object);
+  globalThis.__failedObject = object;
+  return [object.contentWindow !== null, window.length].join('|');
+}})()
+"#
+        ))
+        .expect("failed object setup should evaluate"),
+        "true|1",
+        "the object should expose its initial child browsing context while loading"
     );
-}
-
-#[test]
-fn frame_owner_get_svg_document_uses_native_document_content_type() {
-    let mut vm = new_storage_html_test_vm("https://frame-owner-svg-type.test/");
-    vm.eval(
-        r#"
-for (const tag of ['iframe', 'embed', 'object']) {
-  const owner = document.createElement(tag);
-  owner.id = tag;
-  if (tag === 'object') owner.data = 'about:blank';
-  else owner.src = 'about:blank';
-  document.body.appendChild(owner);
-  if (owner.getSVGDocument() !== null) throw new Error('HTML document accepted');
-}
-"#,
+    run_page_realm_prerequisite_then_expected_child_frame_semantic_turn(
+        &mut vm,
+        &loader,
+        ChildFrameSemanticTurnKind::NavigationCommit,
+        "object attribute navigation should start from its frame-lane commit",
     )
-    .expect("frame owner setup should evaluate");
+    .await;
+    request_rx
+        .await
+        .expect("failed object document request should arrive");
+    release_tx
+        .send(())
+        .expect("release failed object document response");
+    wait_for_one_page_resource_completion_selected_task_executor_test_turn(
+        &mut vm,
+        &loader,
+        "failed object document completion",
+    )
+    .await;
 
-    // Simulate the response MIME metadata at a child document commit. Parsing
-    // and frame navigation are covered separately; this checks the public
-    // method against native metadata rather than author-visible properties.
-    {
-        let mut host = vm._context_host.borrow_mut();
-        for id in ["iframe", "embed", "object"] {
-            let owner = host.dom_host().element_handle_by_id(id).unwrap();
-            let document = host.child_browsing_context_document_handle(owner).unwrap();
-            host.set_dom_document_content_type_for_handle(document, "image/svg+xml");
-        }
-    }
     assert_eq!(
         vm.eval(
             r#"
-['iframe', 'embed', 'object'].every(id => {
-  const owner = document.getElementById(id);
-  const svg = owner.getSVGDocument();
-  if (svg === null || svg.contentType !== 'image/svg+xml') return false;
-  if (id !== 'embed' && svg !== owner.contentDocument) return false;
-  Object.defineProperty(svg, 'contentType', {value: 'text/html', configurable: true});
-  return owner.getSVGDocument() === svg;
+JSON.stringify({
+  contentWindowIsNull: __failedObject.contentWindow === null,
+  contentDocumentIsNull: __failedObject.contentDocument === null,
+  childCount: window.length,
+  fallbackConnected: document.getElementById('object-fallback').isConnected,
+  events: __failedObjectEvents
 })
-"#
+"#,
         )
-        .expect("native SVG document metadata should determine the result"),
-        "true"
+        .expect("failed object fallback state should evaluate"),
+        r#"{"contentWindowIsNull":true,"contentDocumentIsNull":true,"childCount":0,"fallbackConnected":true,"events":["error:true:true"]}"#
     );
+    assert_eq!(
+        vm._context_host.borrow().child_browsing_context_count(),
+        0,
+        "contentWindow and contentDocument getters must not recreate a failed object context"
+    );
+    server.await.expect("failed object server should finish");
 }
 
 async fn commit_opaque_child_for_test(vm: &mut StandaloneScriptVmHarness, element_id: &str) -> i64 {
