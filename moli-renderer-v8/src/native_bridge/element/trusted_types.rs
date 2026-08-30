@@ -6,6 +6,7 @@ pub(in crate::native_bridge::element) enum TrustedHtmlSink {
     ElementInnerHtml,
     ShadowRootInnerHtml,
     ElementOuterHtml,
+    IframeSrcdoc,
     ElementSetHtmlUnsafe,
     ShadowRootSetHtmlUnsafe,
     ElementInsertAdjacentHtml,
@@ -46,6 +47,7 @@ impl TrustedHtmlSink {
             Self::ElementInnerHtml => "Element innerHTML",
             Self::ShadowRootInnerHtml => "ShadowRoot innerHTML",
             Self::ElementOuterHtml => "Element outerHTML",
+            Self::IframeSrcdoc => "HTMLIFrameElement srcdoc",
             Self::ElementSetHtmlUnsafe => "Element setHTMLUnsafe",
             Self::ShadowRootSetHtmlUnsafe => "ShadowRoot setHTMLUnsafe",
             Self::ElementInsertAdjacentHtml => "Element insertAdjacentHTML",
@@ -56,6 +58,7 @@ impl TrustedHtmlSink {
         match self {
             Self::ElementInnerHtml | Self::ShadowRootInnerHtml => "innerHTML",
             Self::ElementOuterHtml => "outerHTML",
+            Self::IframeSrcdoc => "srcdoc",
             Self::ElementSetHtmlUnsafe | Self::ShadowRootSetHtmlUnsafe => "setHTMLUnsafe",
             Self::ElementInsertAdjacentHtml => "insertAdjacentHTML",
         }
