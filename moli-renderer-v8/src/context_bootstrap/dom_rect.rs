@@ -561,6 +561,37 @@ fn dom_rect_receiver_branded<'s>(
     web_api_interfaces::DOMRectReadOnly::is_instance(scope, receiver)
 }
 
+pub(super) fn dom_rect_clone_data<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> Option<(bool, [f64; 4])> {
+    if !dom_rect_receiver_branded(scope, object) {
+        return None;
+    }
+    let mutable = web_api_interfaces::DOMRect::is_instance(scope, object);
+    Some((
+        mutable,
+        [
+            dom_rect_slot(object, scope, DOM_RECT_X_SLOT),
+            dom_rect_slot(object, scope, DOM_RECT_Y_SLOT),
+            dom_rect_slot(object, scope, DOM_RECT_WIDTH_SLOT),
+            dom_rect_slot(object, scope, DOM_RECT_HEIGHT_SLOT),
+        ],
+    ))
+}
+
+pub(super) fn build_dom_rect_clone_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    mutable: bool,
+    [x, y, width, height]: [f64; 4],
+) -> v8::Local<'s, v8::Object> {
+    if mutable {
+        build_dom_rect_object(scope, x, y, width, height)
+    } else {
+        build_dom_rect_readonly_object(scope, x, y, width, height)
+    }
+}
+
 const DOM_RECT_WRITABLE_ATTRIBUTE_SLOTS: &[&str] = &[
     DOM_RECT_X_SLOT,
     DOM_RECT_Y_SLOT,
