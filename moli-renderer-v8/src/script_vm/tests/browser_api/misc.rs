@@ -5526,29 +5526,63 @@ fn dom_quad_factories_and_default_to_json_use_the_function_realm() {
 }
 
 #[test]
-fn dom_matrix_exposes_webkit_css_matrix_alias() {
-    let mut vm = new_storage_test_vm("https://dommatrix-webkit-alias.test/");
+fn geometry_exposes_legacy_window_aliases_without_replacing_native_svg_rect() {
+    let mut vm = new_storage_test_vm("https://geometry-legacy-window-aliases.test/");
 
     let result = vm
         .eval(
             r#"
 (() => {
-  const webkitDescriptor = Object.getOwnPropertyDescriptor(globalThis, "WebKitCSSMatrix");
-  const matrix = new WebKitCSSMatrix();
-  return [
-    WebKitCSSMatrix === DOMMatrix,
-    WebKitCSSMatrix.prototype === DOMMatrix.prototype,
-    WebKitCSSMatrix.name,
-    matrix instanceof DOMMatrix,
-    matrix instanceof DOMMatrixReadOnly,
-    [webkitDescriptor.writable, webkitDescriptor.enumerable, webkitDescriptor.configurable].join(",")
-  ].join("|");
+  const interfaces = ["SVGPoint", "SVGRect", "SVGMatrix", "WebKitCSSMatrix"];
+  const descriptorShape = name => {
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, name);
+    return [
+      descriptor.value === globalThis[name],
+      descriptor.writable,
+      descriptor.enumerable,
+      descriptor.configurable
+    ].join(",");
+  };
+  const point = new SVGPoint(1, 2);
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  const rect = svg.createSVGRect();
+  rect.x = 3;
+  rect.y = 4;
+  rect.width = 5;
+  rect.height = 6;
+  const matrix = svg.createSVGMatrix();
+  matrix.a = 2;
+  return JSON.stringify({
+    identities: [
+      SVGPoint === DOMPoint,
+      SVGRect === DOMRect,
+      SVGMatrix === DOMMatrix,
+      WebKitCSSMatrix === DOMMatrix
+    ].join(","),
+    point: [point instanceof DOMPoint, point.x, point.y, String(point)].join(","),
+    rect: [rect instanceof SVGRect, rect instanceof DOMRect, rect.x, rect.height, String(rect)].join(","),
+    matrix: [
+      matrix instanceof DOMMatrix,
+      matrix instanceof SVGMatrix,
+      DOMMatrix.prototype.isPrototypeOf(matrix),
+      matrix.a,
+      Object.prototype.toString.call(matrix)
+    ].join(","),
+    descriptors: interfaces.map(descriptorShape).join("|")
+  });
 })()
 "#,
         )
-        .expect("DOMMatrix legacy Window aliases should evaluate");
+        .expect("Geometry legacy Window aliases should evaluate");
 
-    assert_eq!(result, "true|true|DOMMatrix|true|true|true,false,true");
+    assert_eq!(
+        result,
+        concat!(
+            r#"{"identities":"true,false,true,true","point":"true,1,2,[object DOMPoint]","rect":"true,false,3,6,[object SVGRect]","matrix":"true,true,true,2,[object SVGMatrix]","descriptors":""#,
+            "true,true,false,true|true,true,false,true|",
+            "true,true,false,true|true,true,false,true\"}"
+        )
+    );
 }
 
 #[test]

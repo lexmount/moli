@@ -17,6 +17,8 @@ use crate::util::{
 };
 
 const LEGACY_WINDOW_INTERFACE_ALIASES: &[(&str, &str)] = &[
+    ("SVGPoint", "DOMPoint"),
+    ("SVGMatrix", "DOMMatrix"),
     ("webkitAudioContext", "AudioContext"),
     ("WebKitCSSMatrix", "DOMMatrix"),
 ];
@@ -331,6 +333,9 @@ pub(crate) fn lazy_window_interface_names(scope: &mut v8::PinScope<'_, '_>) -> V
         .filter(|metadata| {
             metadata.installation == GlobalInstallation::Lazy
                 && metadata.is_exposed(RealmKind::Window, true)
+                && !LEGACY_WINDOW_INTERFACE_ALIASES
+                    .iter()
+                    .any(|(alias, _)| *alias == metadata.name)
         })
         .map(|metadata| metadata.name)
         .collect()

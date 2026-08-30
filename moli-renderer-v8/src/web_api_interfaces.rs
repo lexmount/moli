@@ -388,7 +388,7 @@ interfaces! {
     SVGLengthList;
     SVGLineElement: SVGGeometryElement;
     SVGLinearGradientElement: SVGGradientElement;
-    SVGMatrix;
+    SVGMatrix: DOMMatrix;
     SVGMetadataElement: SVGElement;
     SVGNumber;
     SVGNumberList;
