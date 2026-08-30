@@ -3132,6 +3132,7 @@ css/geometry/DOMMatrix-invert-non-invertible.html
 css/geometry/DOMMatrix-invert-preserves-2d.html
 css/geometry/DOMMatrix-invertSelf.html
 css/geometry/DOMMatrix-newobject.html
+css/geometry/DOMPoint-001.html
 css/geometry/DOMRect-001.html
 css/geometry/DOMRect-002.html
 css/geometry/DOMRect-nan.html

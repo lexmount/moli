@@ -19,7 +19,10 @@ use super::super::{
         file_reader_sync_constructor_callback,
     },
     form_data_runtime::build_form_data_constructor_template,
-    geometry_runtime::{dom_matrix_constructor_callback, dom_point_constructor_callback},
+    geometry_runtime::{
+        dom_matrix_constructor_callback, dom_point_constructor_callback,
+        dom_point_readonly_constructor_callback,
+    },
     idle_detection::idle_detector_constructor_callback,
     image_data::image_data_constructor_callback,
     location_runtime::build_location_constructor_template,
@@ -484,6 +487,14 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
                 web_api_interfaces::DOMRect,
                 super::super::dom_rect::dom_rect_constructor_callback
+            ))
+            .length(0)
+            .build(scope)
+        }
+        ConstructorKind::DomPointReadOnly => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::DOMPointReadOnly,
+                dom_point_readonly_constructor_callback
             ))
             .length(0)
             .build(scope)

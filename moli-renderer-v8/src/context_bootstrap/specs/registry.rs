@@ -977,7 +977,7 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
     },
     ConstructorSpec {
         interface: web_api_interfaces::DOMPointReadOnly::DESCRIPTOR,
-        kind: ConstructorKind::Illegal,
+        kind: ConstructorKind::DomPointReadOnly,
     },
     ConstructorSpec {
         interface: web_api_interfaces::DOMPoint::DESCRIPTOR,
