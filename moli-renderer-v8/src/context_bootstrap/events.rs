@@ -15,6 +15,7 @@ const SUBMIT_EVENT_SUBMITTER_SLOT: &str = "__moliSubmitEventSubmitter";
 const FORM_DATA_EVENT_FORM_DATA_SLOT: &str = "__moliFormDataEventFormData";
 const TRACK_EVENT_TRACK_SLOT: &str = "__moliTrackEventTrack";
 const EVENT_SUBCLASS_KIND_SLOT: &str = "__moliEventSubclassKind";
+const BEFORE_UNLOAD_EVENT_RETURN_VALUE_SLOT: &str = "__moliBeforeUnloadEventReturnValue";
 #[derive(WebApiObject)]
 #[webapi(plain)]
 struct PageTransitionEventInitDeclaration {
@@ -60,6 +61,102 @@ pub(crate) fn construct_original_event<'s>(
         let scope = try_catch.init();
         event_ctor.new_instance(&scope, &[event_type.into()])
     }
+}
+
+fn new_before_unload_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event_type: &str,
+    cancelable: bool,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let prototype = global_constructor_prototype(scope, "BeforeUnloadEvent")?;
+    let event = v8::Object::new(scope);
+    if event.set_prototype(scope, prototype.into()) != Some(true) {
+        return None;
+    }
+    base::initialize_event_object(scope, event, event_type, false, cancelable);
+    set_private_value(
+        scope,
+        event,
+        BEFORE_UNLOAD_EVENT_RETURN_VALUE_SLOT,
+        v8str(scope, "").into(),
+    );
+    Some(event)
+}
+
+pub(crate) fn construct_original_before_unload_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    new_before_unload_event(scope, "beforeunload", true)
+}
+
+pub(in crate::context_bootstrap) fn new_uninitialized_before_unload_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let event = new_before_unload_event(scope, "", false)?;
+    base::set_event_initialized(scope, event, false);
+    Some(event)
+}
+
+fn before_unload_event_return_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::String>> {
+    get_private_value(scope, event, BEFORE_UNLOAD_EVENT_RETURN_VALUE_SLOT)
+        .and_then(|value| v8::Local::<v8::String>::try_from(value).ok())
+}
+
+pub(crate) fn event_is_before_unload_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event: v8::Local<'s, v8::Object>,
+) -> bool {
+    before_unload_event_return_value(scope, event).is_some()
+}
+
+pub(crate) fn set_before_unload_event_return_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event: v8::Local<'s, v8::Object>,
+    value: v8::Local<'s, v8::String>,
+) {
+    set_private_value(
+        scope,
+        event,
+        BEFORE_UNLOAD_EVENT_RETURN_VALUE_SLOT,
+        value.into(),
+    );
+}
+
+pub(crate) fn before_unload_event_return_value_is_empty<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event: v8::Local<'s, v8::Object>,
+) -> bool {
+    before_unload_event_return_value(scope, event).is_some_and(|value| value.length() == 0)
+}
+
+pub(super) fn before_unload_event_return_value_getter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some(value) = before_unload_event_return_value(scope, args.this()) else {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    };
+    rv.set(value.into());
+}
+
+pub(super) fn before_unload_event_return_value_setter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if !event_is_before_unload_event(scope, args.this()) {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    }
+    let Some(value) = args.get(0).to_string(scope) else {
+        return;
+    };
+    set_before_unload_event_return_value(scope, args.this(), value);
 }
 
 pub(in crate::context_bootstrap) fn new_uninitialized_text_event<'s>(
@@ -340,7 +437,10 @@ pub(super) use base::{
     set_event_initialized,
 };
 pub(super) use kind::EventSubclassKind;
-pub(crate) use methods::{EventHandlerType, apply_event_handler_return_value};
+pub(crate) use methods::{
+    EventHandlerType, apply_before_unload_event_handler_return_value,
+    apply_event_handler_return_value,
+};
 pub(super) use methods::{
     event_cancel_bubble_getter_function, event_cancel_bubble_setter_function,
     event_composed_path_callback, event_prevent_default_callback,

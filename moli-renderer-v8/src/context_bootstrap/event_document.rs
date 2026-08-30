@@ -1,4 +1,6 @@
-use super::events::{new_uninitialized_text_event, set_event_initialized};
+use super::events::{
+    new_uninitialized_before_unload_event, new_uninitialized_text_event, set_event_initialized,
+};
 use super::*;
 use crate::webidl;
 use std::str::FromStr;
@@ -42,7 +44,7 @@ enum DocumentCreateEventKind {
 impl DocumentCreateEventKind {
     fn constructor_name(self) -> &'static str {
         match self {
-            DocumentCreateEventKind::BeforeUnloadEvent => "Event",
+            DocumentCreateEventKind::BeforeUnloadEvent => "BeforeUnloadEvent",
             DocumentCreateEventKind::Event => "Event",
             DocumentCreateEventKind::CustomEvent => "CustomEvent",
             DocumentCreateEventKind::DeviceMotionEvent => "Event",
@@ -78,8 +80,18 @@ pub(super) fn document_create_event_callback<'s>(
         throw_not_supported_dom_exception(scope, "The provided event type is not supported.");
         return;
     };
-    if kind == DocumentCreateEventKind::TextEvent {
-        match new_uninitialized_text_event(scope) {
+    if matches!(
+        kind,
+        DocumentCreateEventKind::BeforeUnloadEvent | DocumentCreateEventKind::TextEvent
+    ) {
+        let event = match kind {
+            DocumentCreateEventKind::BeforeUnloadEvent => {
+                new_uninitialized_before_unload_event(scope)
+            }
+            DocumentCreateEventKind::TextEvent => new_uninitialized_text_event(scope),
+            _ => unreachable!(),
+        };
+        match event {
             Some(event) => rv.set(event.into()),
             None => rv.set_undefined(),
         }

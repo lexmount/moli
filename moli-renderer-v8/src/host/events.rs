@@ -1,7 +1,8 @@
 use super::*;
 use crate::{
     context_bootstrap::{
-        CHILD_BROWSING_CONTEXT_HANDLE_SLOT, EventHandlerType, apply_event_handler_return_value,
+        CHILD_BROWSING_CONTEXT_HANDLE_SLOT, EventHandlerType,
+        apply_before_unload_event_handler_return_value, apply_event_handler_return_value,
         clear_event_composed_path, event_is_error_event, mark_event_trusted,
         set_event_composed_path,
     },
@@ -327,6 +328,98 @@ fn invoke_prepared_event_callback_with_receiver<'s>(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn invoke_prepared_before_unload_event_handler<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    host_ptr: *mut JsContextHost,
+    target: EventTargetHandle,
+    invocation_target_in_shadow_tree: bool,
+    event_type: &str,
+    callback_name: &str,
+    callback: crate::native_bridge::PreparedEventCallback,
+    event: v8::Local<'s, v8::Object>,
+) {
+    let receiver = event_target_receiver(scope, host_ptr, target, event);
+    let _dom_debugger_pause = unsafe { &*host_ptr }
+        .schedule_dom_debugger_event_listener_pause_for_target(event_type, target);
+    let relevant_identity = callback.relevant_identity();
+    let arguments = [event.into()];
+    let invocation = CallbackInvocation::new(
+        callback.callback(scope),
+        receiver,
+        callback.relevant_context(scope),
+        callback.incumbent_context(scope),
+        callback.is_callable(),
+        "handleEvent",
+        &arguments,
+        (!invocation_target_in_shadow_tree).then_some(event),
+    )
+    .with_execution_context_currentness(host_ptr, relevant_identity);
+    CallbackInvoker::invoke_event_and_then(
+        scope,
+        "event listener",
+        "host event listener threw",
+        crate::exception_reporting::CallbackExceptionLogLevel::Debug,
+        callback_name,
+        invocation,
+        |scope, outcome| match outcome {
+            CallbackInvocationOutcome::Returned(value) => {
+                let value = v8::Local::new(scope, value);
+                if value.is_null_or_undefined() {
+                    return;
+                }
+                let conversion_report = {
+                    let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
+                    let mut conversion_scope = try_catch.init();
+                    match value.to_string(&conversion_scope) {
+                        Some(value) => {
+                            apply_before_unload_event_handler_return_value(
+                                &mut conversion_scope,
+                                event,
+                                value,
+                            );
+                            None
+                        }
+                        None if conversion_scope.has_caught() => {
+                            let exception = conversion_scope.exception();
+                            let message = conversion_scope.message();
+                            let stack_trace = conversion_scope.stack_trace();
+                            Some(build_event_handler_exception_report(
+                                &mut conversion_scope,
+                                exception,
+                                message,
+                                stack_trace,
+                            ))
+                        }
+                        None => None,
+                    }
+                };
+                if let Some(report) = conversion_report {
+                    report_event_callback_exception(
+                        scope,
+                        host_ptr,
+                        event_type,
+                        relevant_identity,
+                        None,
+                        &report,
+                    );
+                }
+            }
+            CallbackInvocationOutcome::Threw(report) => {
+                report_event_callback_exception(
+                    scope,
+                    host_ptr,
+                    event_type,
+                    relevant_identity,
+                    None,
+                    &report,
+                );
+            }
+            CallbackInvocationOutcome::Retired => {}
+        },
+    );
+}
+
 fn invoke_event_handler_property<'s>(
     registry: &mut HostEventTargetRegistry,
     scope: &mut v8::PinScope<'s, '_>,
@@ -461,6 +554,30 @@ fn invoke_registered_event_handler<'s>(
                 EventHandlerType::OnErrorEventHandler,
             );
         }
+        if let Some(timing_started) = timing_started {
+            tracing::info!(
+                target: "moli_cdp_nav_timing",
+                stage = "event_handler_property_invoked",
+                event_type,
+                handler_name,
+                ?target,
+                elapsed_ms = timing_started.elapsed().as_millis(),
+            );
+        }
+        return;
+    }
+
+    if event_type == "beforeunload" {
+        invoke_prepared_before_unload_event_handler(
+            scope,
+            host_ptr,
+            target,
+            invocation_target_in_shadow_tree,
+            event_type,
+            &handler_name,
+            prepared,
+            event,
+        );
         if let Some(timing_started) = timing_started {
             tracing::info!(
                 target: "moli_cdp_nav_timing",
