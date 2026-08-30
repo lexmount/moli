@@ -103,6 +103,7 @@ pub fn svg_element_interface_name(local_name: &str) -> &'static str {
         "image" => "SVGImageElement",
         "line" => "SVGLineElement",
         "linearGradient" => "SVGLinearGradientElement",
+        "marker" => "SVGMarkerElement",
         "mask" => "SVGMaskElement",
         "metadata" => "SVGMetadataElement",
         "path" => "SVGPathElement",
