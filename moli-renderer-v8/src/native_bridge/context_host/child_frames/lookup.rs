@@ -41,6 +41,11 @@ impl JsContextHost {
             .len()
     }
 
+    pub(crate) fn child_browsing_context_count_for_document(&self, document: DomHandle) -> usize {
+        self.child_browsing_context_direct_frame_handles_for_document(document)
+            .len()
+    }
+
     pub(crate) fn child_browsing_context_handles_in_document_order(&self) -> Vec<DomHandle> {
         let mut handles = Vec::new();
         self.collect_child_browsing_context_handles_in_document_order_from_document(
@@ -140,22 +145,38 @@ impl JsContextHost {
             .collect()
     }
 
+    fn child_browsing_context_direct_frame_handles_for_document(
+        &self,
+        document: DomHandle,
+    ) -> Vec<DomHandle> {
+        self.child_browsing_contexts
+            .keys()
+            .copied()
+            .filter(|handle| {
+                self.dom_host().node(*handle).and_then(Node::owner_document) == Some(document)
+            })
+            .collect()
+    }
+
+    #[cfg(test)]
     pub(crate) fn child_browsing_context_handle_by_index(&self, index: usize) -> Option<DomHandle> {
-        // Window indexed/named interceptors hit this on every miss.
-        if self.child_browsing_contexts.is_empty() {
-            return None;
-        }
+        // Tests use this to inspect the global frame-tree projection rather
+        // than one Window's scoped indexed properties.
         self.top_level_child_browsing_context_handles_in_frame_tree_order()
             .into_iter()
             .nth(index)
     }
 
-    pub(crate) fn child_browsing_context_child_frame_handle_by_index(
+    pub(crate) fn child_browsing_context_handle_by_index_for_document(
         &self,
-        parent: DomHandle,
+        document: DomHandle,
         index: usize,
     ) -> Option<DomHandle> {
-        self.child_browsing_context_child_frame_handles(parent)
+        // Window indexed/named interceptors hit this on every miss.
+        if self.child_browsing_contexts.is_empty() {
+            return None;
+        }
+        self.child_browsing_context_direct_frame_handles_for_document(document)
             .into_iter()
             .nth(index)
     }
@@ -164,11 +185,9 @@ impl JsContextHost {
         &self,
         parent: DomHandle,
     ) -> Vec<DomHandle> {
-        self.child_browsing_contexts
-            .keys()
-            .copied()
-            .filter(|handle| self.child_browsing_context_parent_handle(*handle) == Some(parent))
-            .collect()
+        self.child_browsing_context_document_handle(parent)
+            .map(|document| self.child_browsing_context_direct_frame_handles_for_document(document))
+            .unwrap_or_default()
     }
 
     pub(crate) fn child_browsing_context_direct_host_handles(

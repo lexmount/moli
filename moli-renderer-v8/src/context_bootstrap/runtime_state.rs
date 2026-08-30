@@ -628,9 +628,23 @@ fn window_length_replaceable_getter<'s>(
         return;
     };
     let host = unsafe { &mut *host_ptr };
-    let count = child_context_handle_from_owner(scope, args.this())
-        .map(|handle| host.child_browsing_context_child_frame_count(handle))
-        .unwrap_or_else(|| host.child_browsing_context_count());
+    let document = match super::navigation_window::runtime_window_dispatch_scope(scope, args.this())
+    {
+        Some(crate::native_bridge::OwnerDispatchScope::Top) => Some(host.document_handle()),
+        Some(crate::native_bridge::OwnerDispatchScope::Child(handle)) => {
+            host.child_browsing_context_document_handle(handle)
+        }
+        Some(crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id)) => {
+            host.lightweight_popup_document_handle(popup_id)
+        }
+        None => None,
+    };
+    let count = document
+        .map(|document| {
+            host.sync_child_browsing_context_subtree(scope, document);
+            host.child_browsing_context_count_for_document(document)
+        })
+        .unwrap_or(0);
     rv.set(v8::Number::new(scope, count as f64).into());
 }
 

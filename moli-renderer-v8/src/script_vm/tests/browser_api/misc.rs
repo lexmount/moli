@@ -26099,6 +26099,106 @@ async fn lightweight_popup_load_waits_for_external_child_frame_and_focus_handler
 }
 
 #[tokio::test]
+async fn lightweight_popup_window_child_queries_stay_in_the_popup_document() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm =
+        new_page_task_executor_test_vm_with_loader("https://example.com/base/page.html", &loader);
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  globalThis.__popupFrameScopeProbe = "pending";
+  const topFrame = document.createElement("iframe");
+  topFrame.name = "top-child";
+  document.body.appendChild(topFrame);
+  topFrame.contentDocument.body.innerHTML = '<p id="top-only"></p>';
+
+  const popupMarkup = `
+    <!doctype html>
+    <iframe name="popup-child" srcdoc="<p id='popup-only'></p>"></iframe>
+    <script>
+      addEventListener("load", () => {
+        const childDocument = frames[0].document;
+        opener.__popupFrameScopeProbe = JSON.stringify({
+          length: window.length,
+          name: frames[0].name,
+          popupNode: childDocument.getElementById("popup-only") !== null,
+          topNode: childDocument.getElementById("top-only") !== null
+        });
+      });
+    <\/script>
+  `;
+  open(URL.createObjectURL(new Blob([popupMarkup], { type: "text/html" })));
+  return __popupFrameScopeProbe;
+})()
+"#,
+        )
+        .expect("popup child-query scope setup should evaluate");
+
+    assert_eq!(result, "pending");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "__popupFrameScopeProbe",
+        r#"{"length":1,"name":"popup-child","popupNode":true,"topNode":false}"#,
+        "popup child-query document scope",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn noopener_hyperlink_reuses_an_existing_named_popup_and_preserves_its_opener() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm =
+        new_page_task_executor_test_vm_with_loader("https://example.com/base/page.html", &loader);
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const popupName = "moli-noopener-named-target";
+  const popup = open("about:blank", popupName);
+  const targetMarkup = '<!doctype html><p id="named-target"></p>';
+  const targetUrl = URL.createObjectURL(new Blob([targetMarkup], { type: "text/html" }));
+  const link = document.createElement("a");
+  link.rel = "noopener";
+  link.target = popupName;
+  link.href = targetUrl;
+  document.body.appendChild(link);
+  globalThis.__namedNoopenerPopup = popup;
+  globalThis.__namedNoopenerTargetUrl = targetUrl;
+  link.click();
+  return String(popup.location.href === targetUrl && popup.opener === window);
+})()
+"#,
+        )
+        .expect("named noopener popup setup should evaluate");
+
+    assert_eq!(result, "true");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__namedNoopenerPopup.document.getElementById('named-target') !== null)",
+        "true",
+        "named noopener target navigation",
+    )
+    .await;
+
+    assert_eq!(
+        vm.eval(
+            r#"JSON.stringify({
+  openerPreserved: __namedNoopenerPopup.opener === window,
+  namePreserved: __namedNoopenerPopup.name === "moli-noopener-named-target",
+  targetCommitted: __namedNoopenerPopup.location.href === __namedNoopenerTargetUrl
+})"#,
+        )
+        .expect("named noopener popup result should evaluate"),
+        r#"{"openerPreserved":true,"namePreserved":true,"targetCommitted":true}"#
+    );
+}
+
+#[tokio::test]
 async fn lightweight_popup_post_message_interleaves_opener_promise_waiters() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm =

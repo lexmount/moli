@@ -1,5 +1,6 @@
 use super::helpers::{
-    window_child_context_handle, window_hidden_value, window_host_ptr, window_receiver,
+    window_child_context_handle, window_document_handle, window_hidden_value, window_host_ptr,
+    window_receiver,
 };
 use super::*;
 
@@ -16,11 +17,12 @@ pub(in crate::context_bootstrap) fn window_length_getter<'s>(
         return;
     };
     let runtime = unsafe { &mut *host_ptr };
-    let count = if let Some(handle) = window_child_context_handle(scope, receiver) {
-        runtime.child_browsing_context_child_frame_count(handle)
-    } else {
-        runtime.child_browsing_context_count()
-    };
+    let count = window_document_handle(scope, receiver, runtime)
+        .map(|document| {
+            runtime.sync_child_browsing_context_subtree(scope, document);
+            runtime.child_browsing_context_count_for_document(document)
+        })
+        .unwrap_or(0);
     rv.set(v8::Number::new(scope, count as f64).into());
 }
 

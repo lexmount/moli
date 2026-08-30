@@ -629,8 +629,7 @@ impl JsContextHost {
         creator_base_url: Url,
         creator_policy_container: DocumentPolicyContainer,
     ) -> Option<OpenedLightweightPopup<'s>> {
-        if opener.is_some()
-            && let Some(name) = trackable_lightweight_popup_window_name(target_name)
+        if let Some(name) = trackable_lightweight_popup_window_name(target_name)
             && let Some(popup_id) = self.lightweight_popup_window_names.get(&name).copied()
             && self.lightweight_popup_is_open(popup_id)
             && let Some(window) = self.reopen_lightweight_popup_window(
