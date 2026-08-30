@@ -206,16 +206,22 @@ impl CookieStore {
             .is_some()
     }
 
-    /// Specify a `publicsuffix::List` for the `CookieStore` to allow [public suffix
+    /// Specify a public suffix lookup for the `CookieStore` to allow [public suffix
     /// matching](https://datatracker.ietf.org/doc/html/rfc6265#section-5.3).
     #[cfg(feature = "public_suffix")]
-    pub fn with_suffix_list(self, psl: publicsuffix::List) -> CookieStore {
+    pub fn with_suffix_list<L>(self, psl: L) -> CookieStore
+    where
+        L: crate::CookiePublicSuffixList + 'static,
+    {
         self.with_shared_suffix_list(std::sync::Arc::new(psl))
     }
 
-    /// Specify an immutable shared public suffix list without copying its parsed rule table.
+    /// Specify an immutable shared public suffix lookup without copying its rule table.
     #[cfg(feature = "public_suffix")]
-    pub fn with_shared_suffix_list(self, psl: std::sync::Arc<publicsuffix::List>) -> CookieStore {
+    pub fn with_shared_suffix_list<L>(self, psl: std::sync::Arc<L>) -> CookieStore
+    where
+        L: crate::CookiePublicSuffixList + 'static,
+    {
         CookieStore {
             cookies: self.cookies,
             next_creation_index: self.next_creation_index,

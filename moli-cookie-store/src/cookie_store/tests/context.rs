@@ -56,20 +56,19 @@ fn shared_public_suffix_list_is_retained_across_store_clones() {
     let store = CookieStore::default().with_shared_suffix_list(std::sync::Arc::clone(&suffix_list));
     let cloned = store.clone();
 
-    assert!(std::sync::Arc::ptr_eq(
-        store
-            .public_suffix_list
-            .as_ref()
-            .expect("store should retain the shared PSL"),
-        &suffix_list,
-    ));
-    assert!(std::sync::Arc::ptr_eq(
-        cloned
-            .public_suffix_list
-            .as_ref()
-            .expect("cloned store should retain the shared PSL"),
-        &suffix_list,
-    ));
+    let stored = store
+        .public_suffix_list
+        .as_ref()
+        .expect("store should retain the shared PSL");
+    let cloned = cloned
+        .public_suffix_list
+        .as_ref()
+        .expect("cloned store should retain the shared PSL");
+    assert!(std::sync::Arc::ptr_eq(stored, cloned));
+    assert_eq!(
+        std::sync::Arc::as_ptr(stored) as *const (),
+        std::sync::Arc::as_ptr(&suffix_list) as *const (),
+    );
 }
 
 #[cfg(feature = "public_suffix")]

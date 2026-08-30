@@ -2356,7 +2356,7 @@ dependencies = [
  "document-features",
  "idna",
  "indexmap",
- "publicsuffix",
+ "psl-types",
  "time",
  "url",
 ]
@@ -2883,7 +2883,6 @@ dependencies = [
  "percent-encoding",
  "png",
  "precomputed-hash",
- "publicsuffix",
  "selectors",
  "serde",
  "serde_json",
@@ -2954,7 +2953,7 @@ name = "moli-site"
 version = "0.1.0"
 dependencies = [
  "moli-url",
- "publicsuffix",
+ "psl-types",
  "url",
 ]
 
@@ -3901,16 +3900,6 @@ name = "psl-types"
 version = "2.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "33cb294fe86a74cbcf50d4445b37da762029549ebeea341421c7c70370f86cac"
-
-[[package]]
-name = "publicsuffix"
-version = "2.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6f42ea446cab60335f76979ec15e12619a2165b5ae2c12166bef27d283a9fadf"
-dependencies = [
- "idna",
- "psl-types",
-]
 
 [[package]]
 name = "pxfm"

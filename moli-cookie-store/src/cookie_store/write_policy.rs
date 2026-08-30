@@ -26,7 +26,7 @@ pub(super) fn canonicalize_cookie_for_store_checks<'a>(
 ) -> Result<Cookie<'a>, CookieError> {
     #[cfg(feature = "public_suffix")]
     if let Some(ref psl) = store.public_suffix_list {
-        if cookie.domain.is_public_suffix(psl) {
+        if cookie.domain.is_public_suffix(psl.as_ref()) {
             if cookie.domain.host_is_identical(request_url) {
                 cookie.domain = crate::cookie_domain::CookieDomain::host_only(request_url)?;
             } else {

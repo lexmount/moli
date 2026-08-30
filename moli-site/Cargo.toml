@@ -7,7 +7,7 @@ description = "Moli registrable-site and schemeful-site helpers"
 
 [dependencies]
 moli-url = { path = "../moli-url" }
-publicsuffix = "2.3.0"
+psl-types = "2.0.11"
 url = "2.5.7"
 
 [lints]

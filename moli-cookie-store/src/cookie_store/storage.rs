@@ -149,17 +149,6 @@ impl CookieStore {
         }
     }
 
-    #[cfg(feature = "public_suffix")]
-    pub fn new_with_public_suffix(public_suffix_list: Option<publicsuffix::List>) -> Self {
-        Self {
-            cookies: DomainMap::new(),
-            next_creation_index: 0,
-            next_access_index: 0,
-            limits: CookieStoreLimits::default(),
-            public_suffix_list: public_suffix_list.map(std::sync::Arc::new),
-        }
-    }
-
     pub(super) fn bump_creation_index(&mut self) -> u64 {
         let index = self.next_creation_index;
         self.next_creation_index = self.next_creation_index.saturating_add(1);

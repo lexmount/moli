@@ -1,7 +1,10 @@
 use super::{
-    host_is_public_suffix, public_suffix_list, registrable_site_host, same_site_hosts,
-    same_site_urls, schemeful_site_for_url, site_key_for_host,
+    StaticPublicSuffixList, host_is_public_suffix, public_suffix_list, registrable_site_host,
+    same_site_hosts, same_site_urls, schemeful_site_for_url, site_key_for_host,
 };
+use crate::public_suffix::{STATIC_RULE_COUNT, static_table_size_bytes};
+use psl_types::List as _;
+use std::collections::HashSet;
 use std::sync::Arc;
 use url::Url;
 
@@ -195,4 +198,110 @@ fn public_suffix_list_returns_the_shared_snapshot() {
     let second = public_suffix_list();
 
     assert!(Arc::ptr_eq(&first, &second));
+}
+
+#[test]
+fn static_public_suffix_tables_are_compact_and_allocation_free() {
+    assert_eq!(std::mem::size_of::<StaticPublicSuffixList>(), 0);
+    assert_eq!(STATIC_RULE_COUNT, 8_818);
+    assert!(static_table_size_bytes() < 256 * 1024);
+}
+
+#[test]
+fn deeper_exact_branch_does_not_shadow_a_parent_wildcard() {
+    assert!(host_is_public_suffix("oci.customer-oci.com"));
+    assert_eq!(
+        registrable_site_host("oci.customer-oci.com"),
+        "oci.customer-oci.com"
+    );
+    assert_eq!(
+        registrable_site_host("tenant.oci.customer-oci.com"),
+        "tenant.oci.customer-oci.com"
+    );
+}
+
+#[test]
+fn static_public_suffix_lookup_preserves_the_previous_site_semantics() {
+    let source = include_str!("data/public_domains.txt");
+    let static_list = StaticPublicSuffixList;
+    let mut legacy_rules = HashSet::new();
+    let mut legacy_wildcards = HashSet::new();
+    let mut legacy_exceptions = HashSet::new();
+    for rule in source
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with("//"))
+    {
+        if let Some(rule) = rule.strip_prefix('!') {
+            legacy_exceptions.insert(rule);
+        } else if let Some(rule) = rule.strip_prefix("*.") {
+            legacy_wildcards.insert(rule);
+        } else {
+            legacy_rules.insert(rule);
+        }
+    }
+
+    for raw_rule in source
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with("//"))
+    {
+        let rule = raw_rule.strip_prefix('!').unwrap_or(raw_rule);
+        let base = rule.strip_prefix("*.").unwrap_or(rule);
+        for domain in [
+            base.to_owned(),
+            format!("probe.{base}"),
+            format!("deep.probe.{base}"),
+        ] {
+            let (legacy_suffix, legacy_domain) = legacy_suffix_pair(
+                &domain,
+                &legacy_rules,
+                &legacy_wildcards,
+                &legacy_exceptions,
+            );
+            let static_suffix = static_list
+                .suffix(domain.as_bytes())
+                .and_then(|suffix| std::str::from_utf8(suffix.as_bytes()).ok());
+            assert_eq!(
+                static_suffix,
+                Some(legacy_suffix),
+                "suffix differs for {domain} while checking rule {raw_rule}"
+            );
+
+            let static_domain = static_list
+                .domain(domain.as_bytes())
+                .and_then(|domain| std::str::from_utf8(domain.as_bytes()).ok())
+                .unwrap_or(&domain);
+            assert_eq!(
+                static_domain, legacy_domain,
+                "site key differs for {domain} while checking rule {raw_rule}"
+            );
+            assert_eq!(registrable_site_host(&domain), legacy_domain);
+        }
+    }
+}
+
+fn legacy_suffix_pair<'a>(
+    domain: &'a str,
+    rules: &HashSet<&str>,
+    wildcards: &HashSet<&str>,
+    exceptions: &HashSet<&str>,
+) -> (&'a str, &'a str) {
+    let domain = domain.trim_start_matches('.');
+    let mut suffix = domain;
+    let mut previous_suffix = domain;
+
+    for (index, _) in domain.match_indices('.') {
+        let next_suffix = &domain[index + 1..];
+        if exceptions.contains(suffix) {
+            return (next_suffix, suffix);
+        }
+        if wildcards.contains(next_suffix) || rules.contains(suffix) {
+            return (suffix, previous_suffix);
+        }
+        previous_suffix = suffix;
+        suffix = next_suffix;
+    }
+
+    (suffix, previous_suffix)
 }

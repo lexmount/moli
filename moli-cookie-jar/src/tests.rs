@@ -4705,6 +4705,20 @@ fn upstream_public_suffix_domain_rejection() {
 }
 
 #[test]
+fn deeper_rule_does_not_shadow_parent_wildcard_during_domain_rejection() {
+    let mut store = BrowserCookieStore::default();
+    store.store_response_headers(
+        &parse("https://foo.oci.customer-oci.com/"),
+        &[(
+            "set-cookie".to_owned(),
+            "wide=1; Domain=oci.customer-oci.com; Path=/; Secure".to_owned(),
+        )],
+    );
+
+    assert!(store.cookies().is_empty());
+}
+
+#[test]
 fn public_suffix_identical_host_domain_downgrades_to_host_only() {
     let mut store = BrowserCookieStore::default();
     store.store_response_headers(

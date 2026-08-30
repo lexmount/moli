@@ -84,11 +84,19 @@ fn add_cookie(
 }
 
 #[cfg(feature = "public_suffix")]
-fn make_public_suffix_list() -> publicsuffix::List {
-    publicsuffix::List::from_bytes(
-        b"// BEGIN ICANN DOMAINS\nco.uk\ngov.uk\ngithub.io\n// BEGIN PRIVATE DOMAINS\n",
-    )
-    .expect("test PSL must parse")
+#[derive(Debug)]
+struct TestPublicSuffixList;
+
+#[cfg(feature = "public_suffix")]
+impl crate::CookiePublicSuffixList for TestPublicSuffixList {
+    fn is_public_suffix(&self, domain: &[u8]) -> bool {
+        matches!(domain, b"co.uk" | b"gov.uk" | b"github.io")
+    }
+}
+
+#[cfg(feature = "public_suffix")]
+fn make_public_suffix_list() -> TestPublicSuffixList {
+    TestPublicSuffixList
 }
 
 fn make_match_store() -> CookieStore {

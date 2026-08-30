@@ -25,8 +25,8 @@ pub struct CookieStore {
     next_access_index: u64,
     limits: CookieStoreLimits,
     #[cfg(feature = "public_suffix")]
-    /// If set, enables [public suffix](https://datatracker.ietf.org/doc/html/rfc6265#section-5.3) rejection based on the provided `publicsuffix::List`
-    public_suffix_list: Option<std::sync::Arc<publicsuffix::List>>,
+    /// If set, enables [public suffix](https://datatracker.ietf.org/doc/html/rfc6265#section-5.3) rejection based on the provided rule lookup.
+    public_suffix_list: Option<std::sync::Arc<dyn crate::CookiePublicSuffixList>>,
 }
 
 #[cfg(test)]

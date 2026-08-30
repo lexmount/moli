@@ -35,6 +35,10 @@ pub use crate::cookie_store::{
     SameSiteContextHttpMethod, SameSiteContextMetadata, SameSiteContextRedirectType,
     SameSiteContextTrackMetadata, SameSiteRequestContext, StorageAccessStatus, StoreAction,
 };
+#[cfg(feature = "public_suffix")]
+mod public_suffix;
+#[cfg(feature = "public_suffix")]
+pub use crate::public_suffix::CookiePublicSuffixList;
 mod utils;
 
 #[derive(Debug)]

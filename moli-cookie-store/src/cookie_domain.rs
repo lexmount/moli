@@ -1,6 +1,4 @@
 use cookie::Cookie as RawCookie;
-#[cfg(feature = "public_suffix")]
-use publicsuffix::{List, Psl, Suffix};
 use std::convert::TryFrom;
 use url::{Host, Url};
 
@@ -112,17 +110,11 @@ impl CookieDomain {
         }
     }
 
-    /// Tests if the domain-attribute is a public suffix as indicated by the provided
-    /// `publicsuffix::List`.
+    /// Tests if the domain-attribute is a public suffix as indicated by the provided lookup.
     #[cfg(feature = "public_suffix")]
-    pub fn is_public_suffix(&self, psl: &List) -> bool {
+    pub fn is_public_suffix(&self, psl: &dyn crate::CookiePublicSuffixList) -> bool {
         if let Some(domain) = self.as_cow().as_ref().map(|d| d.as_bytes()) {
-            psl.suffix(domain)
-                // Only consider suffixes explicitly listed in the public suffix list
-                // to avoid issues like https://github.com/curl/curl/issues/658
-                .filter(Suffix::is_known)
-                .filter(|suffix| suffix == &domain)
-                .is_some()
+            psl.is_public_suffix(domain)
         } else {
             false
         }
