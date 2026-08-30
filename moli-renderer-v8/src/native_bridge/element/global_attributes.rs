@@ -1783,7 +1783,7 @@ pub(in crate::native_bridge) fn canonical_preload_value(raw: &str) -> &'static s
     }
 }
 
-fn canonical_fetch_priority_value(raw: &str) -> &'static str {
+pub(super) fn canonical_fetch_priority_value(raw: &str) -> &'static str {
     if raw.eq_ignore_ascii_case("low") {
         "low"
     } else if raw.eq_ignore_ascii_case("high") {
