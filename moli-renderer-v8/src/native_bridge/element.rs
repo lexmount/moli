@@ -58,7 +58,8 @@ pub(in crate::native_bridge) use trusted_types::{
     TrustedAttributeSetter, trusted_attribute_string_value, trusted_attribute_value_string,
 };
 use trusted_types::{
-    TrustedScriptElementSink, trusted_script_element_sink_string, trusted_script_url_sink_string,
+    TrustedHtmlSink, TrustedScriptElementSink, trusted_html_sink_string,
+    trusted_script_element_sink_string, trusted_script_url_sink_string,
 };
 pub(crate) use trusted_types::{
     prepare_trusted_script_text, set_svg_animated_string_base_value,
@@ -3291,8 +3292,12 @@ fn iframe_srcdoc_setter_function<'s>(
     else {
         return;
     };
-    let Some(value) = property_dom_string_value(scope, args.get(0), "HTMLIFrameElement", "srcdoc")
-    else {
+    let Some(value) = trusted_html_sink_string(
+        scope,
+        runtime_ptr,
+        args.get(0),
+        TrustedHtmlSink::IframeSrcdoc,
+    ) else {
         return;
     };
     set_reflected_attribute(scope, runtime_ptr, handle, "srcdoc", &value);
