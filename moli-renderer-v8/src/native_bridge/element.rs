@@ -3519,6 +3519,53 @@ fn frame_owner_content_document_getter_function<'s>(
     }
 }
 
+fn frame_owner_get_svg_document_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Value>,
+    interface: &'static str,
+    local_name: &'static str,
+) {
+    let Ok((runtime_ptr, handle)) =
+        node_runtime_and_handle_from_object_or_detached(scope, args.this())
+    else {
+        throw_incompatible_method_receiver(scope, interface, "getSVGDocument");
+        return;
+    };
+    if !unsafe { &*runtime_ptr }
+        .dom_host()
+        .is_html_element_named(handle, local_name)
+    {
+        throw_incompatible_method_receiver(scope, interface, "getSVGDocument");
+        return;
+    }
+    frame_owner_content_document_getter_function(scope, args, rv);
+}
+
+fn iframe_get_svg_document_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    frame_owner_get_svg_document_callback(scope, args, rv, "HTMLIFrameElement", "iframe");
+}
+
+fn embed_get_svg_document_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    frame_owner_get_svg_document_callback(scope, args, rv, "HTMLEmbedElement", "embed");
+}
+
+fn object_get_svg_document_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    frame_owner_get_svg_document_callback(scope, args, rv, "HTMLObjectElement", "object");
+}
+
 fn frame_owner_content_window_getter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -4101,6 +4148,12 @@ struct HtmlEmbedElementUrlPrototypeDeclaration {
         setter_data = DomStringReflection::EmbedType
     )]
     r#type: (),
+    #[webapi(
+        method = "getSVGDocument",
+        length = 0,
+        callback = embed_get_svg_document_callback
+    )]
+    get_svg_document: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -4277,6 +4330,12 @@ struct HtmlIFrameElementPrototypeDeclaration {
         receiver = web_api_interfaces::HTMLIFrameElement::is_instance
     )]
     content_window: (),
+    #[webapi(
+        method = "getSVGDocument",
+        length = 0,
+        callback = iframe_get_svg_document_callback
+    )]
+    get_svg_document: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -5593,6 +5652,12 @@ struct HtmlObjectElementPrototypeDeclaration {
         getter = frame_owner_content_window_getter_function
     )]
     content_window: (),
+    #[webapi(
+        method = "getSVGDocument",
+        length = 0,
+        callback = object_get_svg_document_callback
+    )]
+    get_svg_document: (),
     #[webapi(
         accessor_property,
         getter = html_border_getter_function,
