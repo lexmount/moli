@@ -657,6 +657,28 @@ pub(super) fn dom_matrix_constructor_callback<'s>(
     rv.set(args.this().into());
 }
 
+pub(super) fn dom_matrix_readonly_constructor_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if !args.is_construct_call() {
+        throw_type_error(
+            scope,
+            "Failed to construct 'DOMMatrixReadOnly': Please use the 'new' operator.",
+        );
+        return;
+    }
+    initialize_dom_matrix_readonly_identity_object(scope, args.this());
+    if args.length() > 0
+        && !args.get(0).is_undefined()
+        && !apply_dom_matrix_init(scope, args.this(), args.get(0))
+    {
+        return;
+    }
+    rv.set(args.this().into());
+}
+
 pub(in crate::context_bootstrap) fn initialize_dom_point_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
@@ -1175,6 +1197,37 @@ fn dom_point_receiver_branded<'s>(
     web_api_interfaces::DOMPointReadOnly::is_instance(scope, receiver)
 }
 
+pub(super) fn dom_point_clone_data<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> Option<(bool, [f64; 4])> {
+    if !dom_point_receiver_branded(scope, object) {
+        return None;
+    }
+    let mutable = web_api_interfaces::DOMPoint::is_instance(scope, object);
+    Some((
+        mutable,
+        [
+            dom_point_slot(scope, object, DOM_POINT_X_SLOT, 0.0),
+            dom_point_slot(scope, object, DOM_POINT_Y_SLOT, 0.0),
+            dom_point_slot(scope, object, DOM_POINT_Z_SLOT, 0.0),
+            dom_point_slot(scope, object, DOM_POINT_W_SLOT, 1.0),
+        ],
+    ))
+}
+
+pub(super) fn build_dom_point_clone_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    mutable: bool,
+    [x, y, z, w]: [f64; 4],
+) -> v8::Local<'s, v8::Object> {
+    if mutable {
+        build_dom_point_object(scope, x, y, z, w)
+    } else {
+        build_dom_point_readonly_object(scope, x, y, z, w)
+    }
+}
+
 fn dom_matrix_require_readonly_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
@@ -1195,6 +1248,107 @@ fn dom_matrix_require_mutable_receiver<'s>(
     }
     throw_type_error(scope, "Illegal invocation");
     false
+}
+
+pub(super) fn dom_matrix_clone_data<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> Option<(bool, bool, [f64; DOM_MATRIX_COMPONENT_COUNT])> {
+    if !web_api_interfaces::DOMMatrixReadOnly::is_instance(scope, object) {
+        return None;
+    }
+    let mutable = web_api_interfaces::DOMMatrix::is_instance(scope, object);
+    let is_2d = dom_matrix_is_2d(scope, object);
+    let mut components = dom_matrix_components(scope, object);
+    if is_2d {
+        components = DomMatrixComponents {
+            m11: components.m11,
+            m12: components.m12,
+            m21: components.m21,
+            m22: components.m22,
+            m41: components.m41,
+            m42: components.m42,
+            ..DomMatrixComponents::identity()
+        };
+    }
+    Some((
+        mutable,
+        is_2d,
+        [
+            components.m11,
+            components.m12,
+            components.m13,
+            components.m14,
+            components.m21,
+            components.m22,
+            components.m23,
+            components.m24,
+            components.m31,
+            components.m32,
+            components.m33,
+            components.m34,
+            components.m41,
+            components.m42,
+            components.m43,
+            components.m44,
+        ],
+    ))
+}
+
+pub(super) fn build_dom_matrix_clone_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    mutable: bool,
+    is_2d: bool,
+    values: [f64; DOM_MATRIX_COMPONENT_COUNT],
+) -> v8::Local<'s, v8::Object> {
+    let [
+        m11,
+        m12,
+        m13,
+        m14,
+        m21,
+        m22,
+        m23,
+        m24,
+        m31,
+        m32,
+        m33,
+        m34,
+        m41,
+        m42,
+        m43,
+        m44,
+    ] = values;
+    let value = DomMatrixValue {
+        components: DomMatrixComponents {
+            m11,
+            m12,
+            m13,
+            m14,
+            m21,
+            m22,
+            m23,
+            m24,
+            m31,
+            m32,
+            m33,
+            m34,
+            m41,
+            m42,
+            m43,
+            m44,
+        },
+        is_2d,
+    };
+    if mutable {
+        DomMatrixObjectDeclaration::from_value(value)
+            .bind(scope)
+            .expect("DOMMatrix clone declaration should bind")
+    } else {
+        DomMatrixReadOnlyObjectDeclaration::from_value(value)
+            .bind(scope)
+            .expect("DOMMatrixReadOnly clone declaration should bind")
+    }
 }
 
 fn dom_matrix_to_json_callback<'s>(
@@ -2329,6 +2483,15 @@ fn initialize_dom_matrix_identity_object<'s>(
     DomMatrixObjectDeclaration::identity()
         .initialize(scope, object)
         .expect("DOMMatrix declaration should initialize object");
+}
+
+fn initialize_dom_matrix_readonly_identity_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) {
+    DomMatrixReadOnlyObjectDeclaration::identity()
+        .initialize(scope, object)
+        .expect("DOMMatrixReadOnly declaration should initialize object");
 }
 
 fn dom_matrix_is_2d<'s>(
