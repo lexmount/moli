@@ -37,6 +37,13 @@ impl XmlPrepassError {
         }
     }
 
+    fn before_document_element(detail: impl Into<String>) -> Self {
+        Self {
+            detail: detail.into(),
+            discard_partial_tree: true,
+        }
+    }
+
     fn namespace(detail: impl Into<String>) -> Self {
         Self {
             detail: detail.into(),
@@ -159,10 +166,12 @@ fn xml_element_stack_error(xml: &str) -> Option<XmlPrepassError> {
     let mut pending_declared_prefixes = Vec::new();
     let mut open_elements = Vec::new();
     let mut active_prefixes = HashMap::from([("xml".to_owned(), 1usize)]);
+    let mut saw_document_element = false;
 
     for token in XmlTokenizer::from(xml) {
         match token {
             Ok(XmlTokenizerToken::ElementStart { prefix, local, .. }) => {
+                saw_document_element = true;
                 let prefix = prefix.as_str();
                 if !prefix.is_empty() {
                     pending_used_prefixes.push(prefix.to_owned());
@@ -243,7 +252,17 @@ fn xml_element_stack_error(xml: &str) -> Option<XmlPrepassError> {
                 }
             },
             Ok(_) => {}
-            Err(error) => return Some(XmlPrepassError::tree(error.to_string())),
+            Err(error) => {
+                let detail = error.to_string();
+                return Some(if saw_document_element {
+                    XmlPrepassError::tree(detail)
+                } else {
+                    // xml5ever can recover a malformed prologue or doctype and
+                    // then expose nodes parsed after the error. DOMParser error
+                    // documents must not retain that recovered document tree.
+                    XmlPrepassError::before_document_element(detail)
+                });
+            }
         }
     }
 
@@ -799,6 +818,39 @@ mod tests {
                 .child_ids(undeclared.document_node_id())
                 .all(|child| !undeclared.node(child).is_some_and(Node::is_element))
         );
+    }
+
+    #[test]
+    fn xml_parser_discards_recovered_tree_after_doctype_error() {
+        let url = Url::parse("https://example.test/doctype.xml").unwrap();
+        let invalid = XmlParser.parse(
+            url.clone(),
+            concat!(
+                "<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Strict//EN\">",
+                "<html><div id=\"test\"/></html>"
+            )
+            .to_owned(),
+        );
+        assert!(!invalid.parse_errors().is_empty());
+        assert!(
+            invalid
+                .child_ids(invalid.document_node_id())
+                .all(|child| !invalid.node(child).is_some_and(Node::is_element))
+        );
+
+        for system_id in ["", "x"] {
+            let valid = XmlParser.parse(
+                url.clone(),
+                format!(
+                    "<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Strict//EN\" \"{system_id}\"><html/>"
+                ),
+            );
+            assert!(
+                valid.parse_errors().is_empty(),
+                "system ID `{system_id}` should be accepted: {:?}",
+                valid.parse_errors()
+            );
+        }
     }
 
     #[test]
