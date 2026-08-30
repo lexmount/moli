@@ -130,6 +130,39 @@ pub(crate) enum InlineDirection {
     Rtl,
 }
 
+impl InlineDirection {
+    pub(crate) const fn to_taffy(self) -> taffy::Direction {
+        match self {
+            Self::Ltr => taffy::Direction::Ltr,
+            Self::Rtl => taffy::Direction::Rtl,
+        }
+    }
+}
+
+/// Dominant baseline selected by the inline formatting context.
+///
+/// CSS Writing Modes uses the alphabetic baseline for horizontal flow and the
+/// ideographic baseline for vertical flow. Keeping this as an explicit layout
+/// protocol mirrors Blink's `FontBaseline`: descendants without a compatible
+/// baseline do not silently synthesize one from a physical bottom edge.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum InlineBaselineType {
+    #[default]
+    Alphabetic,
+    Ideographic,
+}
+
+impl InlineBaselineType {
+    pub(crate) const fn synthesized_ascent(self, block_size: f32) -> f32 {
+        match self {
+            Self::Alphabetic => block_size,
+            // Blink synthesizes an ideographic baseline at the block-axis
+            // center when a child cannot export one to this writing mode.
+            Self::Ideographic => block_size * 0.5,
+        }
+    }
+}
+
 /// Physical block-flow direction retained at the Stylo/Taffy boundary.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum LayoutWritingMode {
@@ -137,6 +170,8 @@ pub(crate) enum LayoutWritingMode {
     HorizontalTb,
     VerticalRl,
     VerticalLr,
+    SidewaysRl,
+    SidewaysLr,
 }
 
 impl LayoutWritingMode {
@@ -145,6 +180,16 @@ impl LayoutWritingMode {
             StyloWritingMode::HorizontalTb => Self::HorizontalTb,
             StyloWritingMode::VerticalRl => Self::VerticalRl,
             StyloWritingMode::VerticalLr => Self::VerticalLr,
+        }
+    }
+
+    const fn from_taffy(value: taffy::WritingMode) -> Self {
+        match value {
+            taffy::WritingMode::HorizontalTb => Self::HorizontalTb,
+            taffy::WritingMode::VerticalRl => Self::VerticalRl,
+            taffy::WritingMode::VerticalLr => Self::VerticalLr,
+            taffy::WritingMode::SidewaysRl => Self::SidewaysRl,
+            taffy::WritingMode::SidewaysLr => Self::SidewaysLr,
         }
     }
 
@@ -158,15 +203,8 @@ impl LayoutWritingMode {
             Self::HorizontalTb => taffy::WritingMode::HorizontalTb,
             Self::VerticalRl => taffy::WritingMode::VerticalRl,
             Self::VerticalLr => taffy::WritingMode::VerticalLr,
-        }
-    }
-
-    /// Physical edge used as block-start by vertical normal flow.
-    pub(crate) const fn vertical_block_start_is_right(self) -> Option<bool> {
-        match self {
-            Self::HorizontalTb => None,
-            Self::VerticalRl => Some(true),
-            Self::VerticalLr => Some(false),
+            Self::SidewaysRl => taffy::WritingMode::SidewaysRl,
+            Self::SidewaysLr => taffy::WritingMode::SidewaysLr,
         }
     }
 }
@@ -1027,6 +1065,12 @@ impl ResolvedLayoutStyle {
         self.font_size = font_size;
         self.line_height = line_height;
         self.include_used_font_metrics = false;
+        self
+    }
+
+    /// Selects a writing mode for DOM-free layout and geometry tests.
+    pub fn with_writing_mode(mut self, writing_mode: taffy::WritingMode) -> Self {
+        self.writing_mode = LayoutWritingMode::from_taffy(writing_mode);
         self
     }
 
@@ -1936,13 +1980,26 @@ impl ResolvedLayoutStyle {
         self.writing_mode.is_horizontal()
     }
 
-    pub(crate) const fn vertical_block_start_is_right(&self) -> Option<bool> {
-        self.writing_mode.vertical_block_start_is_right()
-    }
-
     /// Returns the inherited writing mode used by the numeric layout tree.
     pub(crate) const fn writing_mode(&self) -> taffy::WritingMode {
         self.writing_mode.to_taffy()
+    }
+
+    /// Returns the dominant baseline selected by the inherited writing mode.
+    pub(crate) const fn inline_baseline_type(&self) -> InlineBaselineType {
+        if self.writing_mode.is_horizontal() {
+            InlineBaselineType::Alphabetic
+        } else {
+            InlineBaselineType::Ideographic
+        }
+    }
+
+    /// Returns the complete inherited flow direction used at logical layout
+    /// boundaries. Keeping writing mode and bidi direction paired prevents a
+    /// caller from converting edges with only half of the CSS coordinate
+    /// system.
+    pub(crate) const fn writing_direction(&self) -> taffy::WritingDirection {
+        taffy::WritingDirection::new(self.writing_mode.to_taffy(), self.direction.to_taffy())
     }
 
     pub(crate) fn text_leaf_from(parent: &Self) -> Self {

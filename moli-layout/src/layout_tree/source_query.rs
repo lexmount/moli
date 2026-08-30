@@ -7,8 +7,8 @@ use crate::LayoutPosition;
 use super::{
     model::{
         LayoutBoxModel, LayoutCoordinateSpaceId, LayoutFragmentBoxModel, LayoutFragmentKind,
-        LayoutOutputBoxId, LayoutPoint, LayoutQuad, LayoutRect, LayoutResolvedGridTracks,
-        LayoutSize, LayoutTransform2D,
+        LayoutInlineAxis, LayoutOutputBoxId, LayoutPoint, LayoutQuad, LayoutRect,
+        LayoutResolvedGridTracks, LayoutSize, LayoutTransform2D,
     },
     query::{LayoutElementMetrics, LayoutNodeOutput},
     tree::FrozenLayoutTree,
@@ -348,6 +348,7 @@ where
             box_id: LayoutOutputBoxId,
             line_index: usize,
             rtl: bool,
+            inline_axis: LayoutInlineAxis,
             coordinate_space: LayoutCoordinateSpaceId,
             rect: LayoutRect,
         }
@@ -396,16 +397,14 @@ where
                 let start_ratio = selected_start as f32 / denominator;
                 let end_ratio = selected_end as f32 / denominator;
                 let visual_start_ratio = if *rtl { 1.0 - end_ratio } else { start_ratio };
-                let rect = LayoutRect::new(
-                    fragment.rect.x + fragment.rect.width * visual_start_ratio,
-                    fragment.rect.y,
-                    fragment.rect.width * (end_ratio - start_ratio),
-                    fragment.rect.height,
-                );
+                let inline_axis = self.boxes.get(box_id.index())?.geometry.inline_axis;
+                let rect =
+                    inline_axis.slice(fragment.rect, visual_start_ratio, end_ratio - start_ratio);
                 Some(SelectedTextRect {
                     box_id: *box_id,
                     line_index: *line_index,
                     rtl: *rtl,
+                    inline_axis,
                     coordinate_space: fragment.coordinate_space,
                     rect,
                 })
@@ -423,27 +422,45 @@ where
                 .then_with(|| left.box_id.index().cmp(&right.box_id.index()))
                 .then_with(|| left.line_index.cmp(&right.line_index))
                 .then_with(|| left.rtl.cmp(&right.rtl))
-                .then_with(|| left.rect.y.total_cmp(&right.rect.y))
-                .then_with(|| left.rect.x.total_cmp(&right.rect.x))
+                .then_with(|| {
+                    left.inline_axis
+                        .block_start(left.rect)
+                        .total_cmp(&right.inline_axis.block_start(right.rect))
+                })
+                .then_with(|| {
+                    left.inline_axis
+                        .inline_start(left.rect)
+                        .total_cmp(&right.inline_axis.inline_start(right.rect))
+                })
         });
         let mut merged: Vec<SelectedTextRect> = Vec::with_capacity(selected.len());
         for fragment in selected {
             let can_merge = merged.last().is_some_and(|previous| {
                 let tolerance = previous
-                    .rect
-                    .width
+                    .inline_axis
+                    .inline_size(previous.rect)
                     .abs()
-                    .max(fragment.rect.width.abs())
+                    .max(fragment.inline_axis.inline_size(fragment.rect).abs())
                     .max(1.0)
                     * f32::EPSILON
                     * 16.0;
                 previous.box_id == fragment.box_id
                     && previous.line_index == fragment.line_index
                     && previous.rtl == fragment.rtl
+                    && previous.inline_axis == fragment.inline_axis
                     && previous.coordinate_space == fragment.coordinate_space
-                    && (previous.rect.y - fragment.rect.y).abs() <= tolerance
-                    && (previous.rect.height - fragment.rect.height).abs() <= tolerance
-                    && fragment.rect.x <= previous.rect.right() + tolerance
+                    && (previous.inline_axis.block_start(previous.rect)
+                        - fragment.inline_axis.block_start(fragment.rect))
+                    .abs()
+                        <= tolerance
+                    && (previous.inline_axis.block_size(previous.rect)
+                        - fragment.inline_axis.block_size(fragment.rect))
+                    .abs()
+                        <= tolerance
+                    && fragment.inline_axis.inline_start(fragment.rect)
+                        <= previous.inline_axis.inline_start(previous.rect)
+                            + previous.inline_axis.inline_size(previous.rect)
+                            + tolerance
             });
             if can_merge {
                 let previous = merged.last_mut().expect("checked above");
@@ -453,21 +470,13 @@ where
             }
         }
 
-        let mut quads = merged
+        merged
             .into_iter()
             .filter_map(|fragment| {
                 self.coordinate_space(fragment.coordinate_space)
                     .map(|space| space.local_to_viewport.map_rect(fragment.rect))
             })
-            .collect::<Vec<_>>();
-        quads.sort_by(|left, right| {
-            let left = left.bounding_rect();
-            let right = right.bounding_rect();
-            left.y
-                .total_cmp(&right.y)
-                .then_with(|| left.x.total_cmp(&right.x))
-        });
-        quads
+            .collect()
     }
 }
 
@@ -759,6 +768,7 @@ mod tests {
                 geometry: LayoutBoxGeometry {
                     id: box_id,
                     effective_zoom: 1.0,
+                    inline_axis: LayoutInlineAxis::Horizontal,
                     structural_parent: None,
                     parent: None,
                     layout_parent: None,

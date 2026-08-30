@@ -2502,6 +2502,89 @@ fn caret_query_uses_parley_cluster_sides_and_inline_direction() {
 }
 
 #[test]
+fn vertical_text_queries_follow_the_physical_inline_axis() {
+    let source = Source(vec![
+        Node::element("root", vec![1]),
+        Node::text("text", "ab"),
+    ]);
+    let mut styles = Styles::default();
+    styles.0.insert(
+        0,
+        fixed_size(LayoutDisplay::Block, 100.0, 200.0)
+            .with_text_metrics(20.0, 20.0)
+            .with_writing_mode(taffy::WritingMode::VerticalRl),
+    );
+    styles.0.insert(
+        1,
+        resolved(LayoutDisplay::Inline, Style::default())
+            .with_text_metrics(20.0, 20.0)
+            .with_writing_mode(taffy::WritingMode::VerticalRl),
+    );
+
+    let output = build(&source, &mut styles);
+    let fragments = output
+        .source_output(1)
+        .into_iter()
+        .flat_map(|source| source.fragments)
+        .filter_map(|id| output.fragment(id))
+        .filter(|fragment| matches!(fragment.kind, LayoutFragmentKind::Text { .. }))
+        .collect::<Vec<_>>();
+    assert_eq!(fragments.len(), 2, "each ASCII cluster should be retained");
+    let fragment = fragments
+        .iter()
+        .find(|fragment| {
+            matches!(
+                fragment.kind,
+                LayoutFragmentKind::Text {
+                    source_utf16_range: ref range,
+                    ..
+                } if *range == (0..1)
+            )
+        })
+        .expect("the first code unit should retain one vertical text fragment");
+    assert!(fragment.rect.width > 0.0 && fragment.rect.height > 0.0);
+
+    let top = output
+        .caret_position(LayoutPoint::new(
+            fragment.rect.x + fragment.rect.width * 0.5,
+            fragment.rect.y + fragment.rect.height * 0.25,
+        ))
+        .expect("the upper cluster half should resolve a caret");
+    let bottom = output
+        .caret_position(LayoutPoint::new(
+            fragment.rect.x + fragment.rect.width * 0.5,
+            fragment.rect.y + fragment.rect.height * 0.75,
+        ))
+        .expect("the lower cluster half should resolve a caret");
+    assert_eq!(top.utf16_offset, Some(0));
+    assert_eq!(bottom.utf16_offset, Some(1));
+    let top_rect = top.rect.bounding_rect();
+    let bottom_rect = bottom.rect.bounding_rect();
+    assert_close(top_rect.x, fragment.rect.x);
+    assert_close(top_rect.y, fragment.rect.y);
+    assert_close(top_rect.width, fragment.rect.width);
+    assert_close(top_rect.height, 0.0);
+    assert_close(bottom_rect.x, fragment.rect.x);
+    assert_close(bottom_rect.y, fragment.rect.bottom());
+    assert_close(bottom_rect.width, fragment.rect.width);
+    assert_close(bottom_rect.height, 0.0);
+
+    let whole = output.text_range_rects(1, 0..2);
+    assert_eq!(
+        whole.len(),
+        1,
+        "adjacent vertical clusters should form one directional Range rect"
+    );
+    let whole = whole[0].bounding_rect();
+    let expected = fragments
+        .iter()
+        .map(|fragment| fragment.rect)
+        .reduce(LayoutRect::union)
+        .expect("the fixture has text fragments");
+    assert_rect(whole, expected);
+}
+
+#[test]
 fn split_inline_continuations_remain_mapped_to_the_originating_element() {
     let source = Source(vec![
         Node::element("root", vec![1]),

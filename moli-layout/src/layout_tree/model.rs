@@ -49,6 +49,25 @@ pub struct LayoutSize {
     pub height: f32,
 }
 
+/// Physical axis corresponding to CSS inline progression for a frozen box.
+///
+/// Geometry in the frozen tree is physical, but caret and Range algorithms
+/// still need to know which physical axis came from logical inline flow. This
+/// survives the layout pass for exactly that purpose; query code must not
+/// infer writing mode from a rectangle's aspect ratio.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LayoutInlineAxis {
+    #[default]
+    Horizontal,
+    Vertical,
+}
+
+impl LayoutInlineAxis {
+    pub const fn is_horizontal(self) -> bool {
+        matches!(self, Self::Horizontal)
+    }
+}
+
 impl LayoutSize {
     pub const ZERO: Self = Self::new(0.0, 0.0);
 
@@ -133,6 +152,67 @@ impl LayoutRect {
         let right = self.right().max(other.right());
         let bottom = self.bottom().max(other.bottom());
         Self::new(left, top, (right - left).max(0.0), (bottom - top).max(0.0))
+    }
+}
+
+impl LayoutInlineAxis {
+    pub(crate) const fn point_coordinate(self, point: LayoutPoint) -> f32 {
+        match self {
+            Self::Horizontal => point.x,
+            Self::Vertical => point.y,
+        }
+    }
+
+    pub(crate) const fn inline_start(self, rect: LayoutRect) -> f32 {
+        match self {
+            Self::Horizontal => rect.x,
+            Self::Vertical => rect.y,
+        }
+    }
+
+    pub(crate) const fn inline_size(self, rect: LayoutRect) -> f32 {
+        match self {
+            Self::Horizontal => rect.width,
+            Self::Vertical => rect.height,
+        }
+    }
+
+    pub(crate) const fn block_start(self, rect: LayoutRect) -> f32 {
+        match self {
+            Self::Horizontal => rect.y,
+            Self::Vertical => rect.x,
+        }
+    }
+
+    pub(crate) const fn block_size(self, rect: LayoutRect) -> f32 {
+        match self {
+            Self::Horizontal => rect.height,
+            Self::Vertical => rect.width,
+        }
+    }
+
+    pub(crate) fn slice(self, rect: LayoutRect, start_ratio: f32, size_ratio: f32) -> LayoutRect {
+        match self {
+            Self::Horizontal => LayoutRect::new(
+                rect.x + rect.width * start_ratio,
+                rect.y,
+                rect.width * size_ratio,
+                rect.height,
+            ),
+            Self::Vertical => LayoutRect::new(
+                rect.x,
+                rect.y + rect.height * start_ratio,
+                rect.width,
+                rect.height * size_ratio,
+            ),
+        }
+    }
+
+    pub(crate) fn caret_rect(self, rect: LayoutRect, inline_offset: f32) -> LayoutRect {
+        match self {
+            Self::Horizontal => LayoutRect::new(inline_offset, rect.y, 0.0, rect.height),
+            Self::Vertical => LayoutRect::new(rect.x, inline_offset, rect.width, 0.0),
+        }
     }
 }
 
@@ -365,6 +445,8 @@ pub struct LayoutBoxGeometry {
     /// metrics divide their untransformed layout values by this factor, as
     /// Blink's `AdjustForAbsoluteZoom` does at its DOM binding boundary.
     pub effective_zoom: f32,
+    /// Physical axis selected by the box's inherited `writing-mode`.
+    pub inline_axis: LayoutInlineAxis,
     /// Source/LayoutObject ancestry before formatting-tree normalization.
     pub structural_parent: Option<LayoutOutputBoxId>,
     /// Parent in the normalized formatting tree.

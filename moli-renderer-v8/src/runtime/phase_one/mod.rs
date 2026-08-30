@@ -664,6 +664,214 @@ html { scrollbar-width: none }
     }
 
     #[test]
+    fn layout_renderer_uses_logical_float_contributions_for_orthogonal_flex_basis() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html, body { display: block; margin: 0; padding: 0 }
+html { scrollbar-width: none }
+.case { position: absolute; top: 0; display: flex; flex-flow: column;
+  width: 75px; height: 75px }
+.item { flex-shrink: 0; min-width: 0; min-height: 0; writing-mode: vertical-rl }
+.float { float: left; width: 50px; height: 50px }
+#min-case { left: 0 } #min { flex-basis: min-content; background: rgb(41, 51, 161) }
+#max-case { left: 100px } #max { flex-basis: max-content; background: rgb(42, 52, 162) }
+#fit-case { left: 200px } #fit { flex-basis: fit-content; background: rgb(43, 53, 163) }
+</style></head><body>
+<div id=min-case class=case><div id=min class=item><i class=float></i><i class=float></i></div></div>
+<div id=max-case class=case><div id=max class=item><i class=float></i><i class=float></i></div></div>
+<div id=fit-case class=case><div id=fit class=item><i class=float></i><i class=float></i></div></div>
+</body></html>"#,
+            )
+            .await;
+
+            // Mirrors the three orthogonal column cases in WPT
+            // css/css-flexbox/flex-basis-intrinsics-001.html. The two floats
+            // contribute 50px min-content, 100px max-content, and a 75px
+            // fit-content clamp along the vertical owner's logical inline axis.
+            for (color, expected) in [
+                (rgb(41, 51, 161), moli_layout::PaintRect::new(0.0, 0.0, 75.0, 50.0)),
+                (
+                    rgb(42, 52, 162),
+                    moli_layout::PaintRect::new(100.0, 0.0, 75.0, 100.0),
+                ),
+                (
+                    rgb(43, 53, 163),
+                    moli_layout::PaintRect::new(200.0, 0.0, 75.0, 75.0),
+                ),
+            ] {
+                assert_paint_rect(solid_paint_rect(&snapshot, color), expected);
+            }
+        }));
+    }
+
+    #[test]
+    fn layout_renderer_projects_vertical_inline_fragments_in_physical_space() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0} html{scrollbar-width:none}
+#host{writing-mode:vertical-rl;direction:ltr;width:100px;height:200px;font-size:0;line-height:0;background:rgb(1,2,3)}
+#inline{margin:3px 2px 4px 1px;padding:7px 6px 8px 5px;border-style:solid;border-width:11px 10px 12px 9px;background:rgb(4,5,6)}
+#atomic{display:inline-block;width:20px;height:30px;background:rgb(7,8,9)}
+</style></head><body><div id=host><span id=inline><i id=atomic></i></span></div></body></html>"#,
+            )
+            .await;
+
+            assert_paint_rect(
+                solid_paint_rect(&snapshot, rgb(1, 2, 3)),
+                moli_layout::PaintRect::new(0.0, 0.0, 100.0, 200.0),
+            );
+            assert_paint_rect(
+                solid_paint_rect(&snapshot, rgb(4, 5, 6)),
+                moli_layout::PaintRect::new(76.0, 3.0, 30.0, 68.0),
+            );
+            assert_paint_rect(
+                solid_paint_rect(&snapshot, rgb(7, 8, 9)),
+                moli_layout::PaintRect::new(80.0, 21.0, 20.0, 30.0),
+            );
+        }));
+    }
+
+    #[test]
+    fn layout_renderer_projects_vertical_text_origins_and_decorations() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let color = rgb(31, 32, 33);
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0} html{scrollbar-width:none}
+#host{writing-mode:vertical-lr;direction:ltr;width:100px;height:200px;font-size:20px;line-height:20px;color:rgb(31,32,33);text-decoration:underline}
+</style></head><body><div id=host>AB</div></body></html>"#,
+            )
+            .await;
+
+            // This locks the logical-to-physical origin mapping. Vertical
+            // OpenType shaping and glyph orientation are separate text-engine
+            // capabilities; their absence must not make layout coordinates
+            // horizontal again.
+            let mut glyphs = snapshot
+                .fragments
+                .iter()
+                .filter_map(|fragment| match fragment {
+                    moli_layout::PaintFragment::GlyphRun(run) if run.color == color => {
+                        Some(run.glyphs_in_surface())
+                    }
+                    _ => None,
+                })
+                .flatten()
+                .collect::<Vec<_>>();
+            glyphs.sort_by(|left, right| left.y.total_cmp(&right.y));
+            assert_eq!(glyphs.len(), 2, "the fixture must shape two glyphs");
+            assert!(
+                (glyphs[0].x - glyphs[1].x).abs() <= 0.01,
+                "vertical glyph origins must share the physical baseline axis: {glyphs:?}"
+            );
+            assert!(
+                glyphs[1].y > glyphs[0].y,
+                "visual inline advance must map onto physical y: {glyphs:?}"
+            );
+
+            let decoration = snapshot
+                .fragments
+                .iter()
+                .find_map(|fragment| match fragment {
+                    moli_layout::PaintFragment::TextDecoration(decoration)
+                        if decoration.color == color =>
+                    {
+                        Some(decoration)
+                    }
+                    _ => None,
+                })
+                .expect("vertical underline should be projected");
+            let start = decoration.transform.map_point(decoration.start);
+            let end = decoration.transform.map_point(decoration.end);
+            assert!(
+                (start.x - end.x).abs() <= 0.01 && end.y > start.y,
+                "decoration centerline must follow the physical inline axis: {start:?}..{end:?}"
+            );
+        }));
+    }
+
+    #[test]
+    fn layout_renderer_uses_line_over_inside_vertical_lr_lines() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0} html{scrollbar-width:none}
+#host{writing-mode:vertical-lr;direction:ltr;width:100px;height:200px;font-size:20px;line-height:20px;background:rgb(11,12,13)}
+#atomic{display:inline-block;vertical-align:top;width:10px;height:30px;background:rgb(14,15,16)}
+</style></head><body><div id=host><i id=atomic></i></div></body></html>"#,
+            )
+            .await;
+
+            assert_paint_rect(
+                solid_paint_rect(&snapshot, rgb(11, 12, 13)),
+                moli_layout::PaintRect::new(0.0, 0.0, 100.0, 200.0),
+            );
+            assert_paint_rect(
+                solid_paint_rect(&snapshot, rgb(14, 15, 16)),
+                moli_layout::PaintRect::new(10.0, 0.0, 10.0, 30.0),
+            );
+        }));
+    }
+
+    #[test]
+    fn layout_renderer_synthesizes_baselines_for_orthogonal_atomic_inlines() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0} html{scrollbar-width:none}
+#host{writing-mode:vertical-lr;direction:ltr;width:100px;height:200px;font-size:0;line-height:0}
+.atomic{display:inline-block;width:40px;height:30px}
+#same{background:rgb(21,22,23)}
+#orthogonal{writing-mode:vertical-rl;background:rgb(24,25,26)}
+#inner{display:inline-block;width:10px;height:10px;background:rgb(27,28,29)}
+</style></head><body><div id=host><i id=same class=atomic></i><i id=orthogonal class=atomic><b id=inner></b></i></div></body></html>"#,
+            )
+            .await;
+
+            for (color, expected) in [
+                (rgb(21, 22, 23), moli_layout::PaintRect::new(0.0, 0.0, 40.0, 30.0)),
+                (
+                    rgb(24, 25, 26),
+                    moli_layout::PaintRect::new(0.0, 30.0, 40.0, 30.0),
+                ),
+                (
+                    rgb(27, 28, 29),
+                    moli_layout::PaintRect::new(30.0, 30.0, 10.0, 10.0),
+                ),
+            ] {
+                assert_paint_rect(solid_paint_rect(&snapshot, color), expected);
+            }
+        }));
+    }
+
+    #[test]
     fn layout_renderer_computes_phase_two_grid_calc_and_positioned_geometry_from_stylo() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
