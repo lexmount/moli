@@ -2362,7 +2362,6 @@ css/css-variables/variable-reference-perspective-origin.html
 css/css-variables/variable-reference.html
 css/css-variables/variable-substitution-variable-declaration.html
 css/css-variables/variables-animation-math-functions.html
-css/cssom-view/DOMRectList.html
 css/cssom-view/HTMLBody-ScrollArea_quirksmode.html
 css/cssom-view/MediaQueryList-addListener-handleEvent.html
 css/cssom-view/MediaQueryList-addListener-removeListener.html
@@ -2483,7 +2482,6 @@ css/cssom/getComputedStyle-layout-dependent-replaced-into-ib-split.html
 css/cssom/idlharness.html
 css/cssom/style-sheet-interfaces-001.html
 css/geometry/DOMMatrix2DInit-validate-fixup.html
-css/geometry/DOMRectList.html
 css/geometry/structured-serialization.html
 css/mediaqueries/at-custom-media-cssom.html
 css/mediaqueries/at-custom-media-parsing.html

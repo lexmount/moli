@@ -1,5 +1,5 @@
 use super::*;
-use crate::util::{call_object_method, object_string_property, serialize_v8_array};
+use crate::util::{call_object_method, object_string_property};
 
 enum NativeRangeGeometryQuery {
     Text,
@@ -330,7 +330,7 @@ pub(in crate::context_bootstrap) fn range_geometry_dom_rect<'s>(
 pub(in crate::context_bootstrap) fn range_geometry_client_rects<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     range: v8::Local<'s, v8::Object>,
-) -> Option<v8::Local<'s, v8::Array>> {
+) -> Option<v8::Local<'s, v8::Object>> {
     if let Some(rects) = native_range_client_rects(scope, range) {
         return match rects {
             Ok(rects) => {
@@ -338,7 +338,7 @@ pub(in crate::context_bootstrap) fn range_geometry_client_rects<'s>(
                     .into_iter()
                     .filter_map(|rect| new_dom_rect_from_client_rect(scope, rect))
                     .collect::<Vec<_>>();
-                serialize_v8_array(scope, rects)
+                Some(dom_rect_list::build_dom_rect_list_object(scope, &rects))
             }
             Err(error) => {
                 throw_range_layout_error(scope, error);
@@ -348,12 +348,12 @@ pub(in crate::context_bootstrap) fn range_geometry_client_rects<'s>(
     }
     if let Some(rect) = collapsed_text_range_client_rect(scope, range) {
         let rect = new_dom_rect_from_client_rect(scope, rect)?;
-        return serialize_v8_array(scope, [rect]);
+        return Some(dom_rect_list::build_dom_rect_list_object(scope, &[rect]));
     }
     let target = range_geometry_target(scope, range)?;
     let rect = client_rect_for_object(scope, target)?;
     let rect = new_dom_rect_from_client_rect(scope, rect)?;
-    serialize_v8_array(scope, [rect])
+    Some(dom_rect_list::build_dom_rect_list_object(scope, &[rect]))
 }
 
 pub(in crate::context_bootstrap) fn new_dom_rect_zero<'s>(

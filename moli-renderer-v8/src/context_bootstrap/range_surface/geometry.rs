@@ -18,11 +18,10 @@ pub(super) fn range_get_client_rects_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let rects =
-        range_geometry_client_rects(scope, args.this()).or_else(|| Some(v8::Array::new(scope, 0)));
-    if let Some(rects) = rects {
-        rv.set(rects.into());
-    } else {
-        rv.set(v8::undefined(scope).into());
-    }
+    // Build the no-geometry fallback before querying layout. The query may
+    // throw, and allocating a wrapper after that would disturb V8's pending
+    // exception state.
+    let empty = dom_rect_list::build_dom_rect_list_object(scope, &[]);
+    let rects = range_geometry_client_rects(scope, args.this()).unwrap_or(empty);
+    rv.set(rects.into());
 }
