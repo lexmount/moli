@@ -5551,6 +5551,7 @@ fn geometry_exposes_legacy_window_aliases_without_replacing_native_svg_rect() {
   rect.width = 5;
   rect.height = 6;
   const matrix = svg.createSVGMatrix();
+  const multiplied = matrix.multiply({a: 3, d: 2});
   matrix.a = 2;
   return JSON.stringify({
     identities: [
@@ -5564,8 +5565,11 @@ fn geometry_exposes_legacy_window_aliases_without_replacing_native_svg_rect() {
     matrix: [
       matrix instanceof DOMMatrix,
       matrix instanceof SVGMatrix,
-      DOMMatrix.prototype.isPrototypeOf(matrix),
+      Object.getPrototypeOf(matrix) === DOMMatrix.prototype,
+      !Object.hasOwn(matrix, "multiply"),
       matrix.a,
+      multiplied.a,
+      multiplied.d,
       Object.prototype.toString.call(matrix)
     ].join(","),
     descriptors: interfaces.map(descriptorShape).join("|")
@@ -5578,10 +5582,58 @@ fn geometry_exposes_legacy_window_aliases_without_replacing_native_svg_rect() {
     assert_eq!(
         result,
         concat!(
-            r#"{"identities":"true,false,true,true","point":"true,1,2,[object DOMPoint]","rect":"true,false,3,6,[object SVGRect]","matrix":"true,true,true,2,[object SVGMatrix]","descriptors":""#,
+            r#"{"identities":"true,false,true,true","point":"true,1,2,[object DOMPoint]","rect":"true,false,3,6,[object SVGRect]","matrix":"true,true,true,true,2,3,2,[object DOMMatrix]","descriptors":""#,
             "true,true,false,true|true,true,false,true|",
             "true,true,false,true|true,true,false,true\"}"
         )
+    );
+}
+
+#[test]
+fn svg_transform_factories_convert_optional_dom_matrix_2d_init() {
+    let mut vm = new_storage_test_vm("https://svg-transform-dom-matrix-init.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const SVG_NS = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(SVG_NS, "svg");
+  const group = document.createElementNS(SVG_NS, "g");
+  const fromElement = svg.createSVGTransformFromMatrix({a: 2, e: 5});
+  const defaultElement = svg.createSVGTransformFromMatrix();
+  const fromFactory = svg.createSVGTransformFromMatrix(svg.createSVGMatrix().translate(9, 10));
+  const transform = svg.createSVGTransform();
+  transform.setMatrix({b: 4, f: 6});
+  const fromList = group.transform.baseVal.createSVGTransformFromMatrix({c: 7, d: 8});
+  let mismatch;
+  try {
+    transform.setMatrix({a: 1, m11: 2});
+    mismatch = "none";
+  } catch (error) {
+    mismatch = error.name;
+  }
+  return JSON.stringify({
+    fromElement: [fromElement.matrix.a, fromElement.matrix.e].join(","),
+    defaultElement: [defaultElement.matrix.a, defaultElement.matrix.d].join(","),
+    fromFactory: [fromFactory.matrix.e, fromFactory.matrix.f].join(","),
+    setMatrix: [transform.matrix.b, transform.matrix.f].join(","),
+    fromList: [fromList.matrix.c, fromList.matrix.d].join(","),
+    mismatch,
+    lengths: [
+      SVGSVGElement.prototype.createSVGTransformFromMatrix.length,
+      SVGTransform.prototype.setMatrix.length,
+      SVGTransformList.prototype.createSVGTransformFromMatrix.length
+    ].join(",")
+  });
+})()
+"#,
+        )
+        .expect("SVG transform DOMMatrix2DInit conversion should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"fromElement":"2,5","defaultElement":"1,1","fromFactory":"9,10","setMatrix":"4,6","fromList":"7,8","mismatch":"TypeError","lengths":"0,0,0"}"#
     );
 }
 

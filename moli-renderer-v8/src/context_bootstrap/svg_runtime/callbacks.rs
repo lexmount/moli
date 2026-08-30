@@ -18,6 +18,16 @@ const SVG_ANIMATED_ACCESSOR_NAMES: &[&str] = &["baseVal", "animVal"];
 const SVG_TRANSFORM_ACCESSOR_NAMES: &[&str] = &["type", "matrix", "angle"];
 const SVG_MATRIX_ACCESSOR_NAMES: &[&str] = &["a", "b", "c", "d", "e", "f"];
 
+fn svg_dom_matrix_2d_init_arg<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: &v8::FunctionCallbackArguments<'s>,
+    prefix: &'static str,
+) -> Option<SvgMatrixComponents> {
+    let [a, b, c, d, e, f] =
+        super::super::geometry_runtime::dom_matrix_2d_init_arg(scope, args, 0, prefix)?;
+    Some(SvgMatrixComponents { a, b, c, d, e, f })
+}
+
 const SVG_TEXT_POSITIONING_LIST_ATTRIBUTES: &[(&str, &str, SvgListKind)] = &[
     ("x", SVG_TEXT_POSITIONING_X_SLOT, SvgListKind::Length),
     ("y", SVG_TEXT_POSITIONING_Y_SLOT, SvgListKind::Length),
@@ -1312,13 +1322,13 @@ pub(super) fn svg_transform_list_create_transform_from_matrix_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(parsed) = webidl::parse_args::<SvgListItemArgs>(scope, &args) else {
+    let Some(components) = svg_dom_matrix_2d_init_arg(
+        scope,
+        &args,
+        "SVGTransformList.createSVGTransformFromMatrix",
+    ) else {
         return;
     };
-    let Some(matrix) = cloned_svg_matrix_value_or_throw(scope, parsed.item) else {
-        return;
-    };
-    let components = svg_matrix_components(scope, matrix);
     rv.set(build_svg_transform(scope, SvgTransform::matrix(components)).into());
 }
 
@@ -1390,13 +1400,10 @@ pub(super) fn svg_transform_set_matrix_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(parsed) = webidl::parse_args::<SvgMatrixArg>(scope, &args) else {
+    let Some(components) = svg_dom_matrix_2d_init_arg(scope, &args, "SVGTransform.setMatrix")
+    else {
         return;
     };
-    let Some(matrix) = cloned_svg_matrix_value_or_throw(scope, parsed.matrix) else {
-        return;
-    };
-    let components = svg_matrix_components(scope, matrix);
     set_svg_transform_state(scope, args.this(), SvgTransform::matrix(components));
     reflect_svg_transform_item_to_owner_list(scope, args.this());
     rv.set_undefined();
@@ -1407,7 +1414,7 @@ pub(super) fn svg_svg_element_create_matrix_callback<'s>(
     _args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    rv.set(build_svg_matrix(scope, SvgMatrixComponents::identity()).into());
+    rv.set(super::super::geometry_runtime::build_dom_matrix_identity_object(scope).into());
 }
 
 pub(super) fn svg_svg_element_create_transform_callback<'s>(
@@ -1425,13 +1432,11 @@ pub(super) fn svg_svg_element_create_transform_from_matrix_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(parsed) = webidl::parse_args::<SvgMatrixArg>(scope, &args) else {
+    let Some(components) =
+        svg_dom_matrix_2d_init_arg(scope, &args, "SVGSVGElement.createSVGTransformFromMatrix")
+    else {
         return;
     };
-    let Some(matrix) = cloned_svg_matrix_value_or_throw(scope, parsed.matrix) else {
-        return;
-    };
-    let components = svg_matrix_components(scope, matrix);
     rv.set(build_svg_transform(scope, SvgTransform::matrix(components)).into());
 }
 
