@@ -322,6 +322,27 @@ fn dom_quad_points<'s>(
     ])
 }
 
+pub(super) fn dom_quad_clone_data<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> Option<[[f64; 4]; 4]> {
+    let points = dom_quad_points(scope, object)?;
+    Some(points.map(|point| {
+        let point = geometry_runtime::dom_point_init_from_object(scope, point);
+        [point.x, point.y, point.z, point.w]
+    }))
+}
+
+pub(super) fn build_dom_quad_clone_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    points: [[f64; 4]; 4],
+) -> v8::Local<'s, v8::Object> {
+    build_dom_quad(
+        scope,
+        points.map(|[x, y, z, w]| geometry_runtime::DomPointInit { x, y, z, w }),
+    )
+}
+
 fn dom_quad_receiver_branded<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,

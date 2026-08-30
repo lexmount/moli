@@ -997,7 +997,7 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
     },
     ConstructorSpec {
         interface: web_api_interfaces::DOMMatrixReadOnly::DESCRIPTOR,
-        kind: ConstructorKind::DomMatrix,
+        kind: ConstructorKind::DomMatrixReadOnly,
     },
     ConstructorSpec {
         interface: web_api_interfaces::DOMMatrix::DESCRIPTOR,
