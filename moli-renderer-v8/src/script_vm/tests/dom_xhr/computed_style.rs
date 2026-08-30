@@ -12473,6 +12473,53 @@ fn computed_style_resolves_valid_typed_css_math_and_rejects_invalid_unit_algebra
 }
 
 #[test]
+fn svg_generic_presentation_attributes_apply_to_every_svg_element() {
+    let mut vm = new_parsed_test_vm(
+        "https://svg-generic-presentation-attributes.test/",
+        r#"<!doctype html><svg id="svg"></svg>"#,
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const namespace = 'http://www.w3.org/2000/svg';
+  const svg = document.getElementById('svg');
+  const attributes = [
+    ['font-size-adjust', '0.5'],
+    ['text-overflow', 'ellipsis'],
+    ['white-space', 'pre'],
+  ];
+  const values = [];
+
+  for (const localName of ['text', 'rect', 'unknown']) {
+    const element = document.createElementNS(namespace, localName);
+    svg.append(element);
+    const before = getComputedStyle(element);
+    values.push(...attributes.map(([property]) => before.getPropertyValue(property)));
+    for (const [attribute, value] of attributes)
+      element.setAttribute(attribute, value);
+    const after = getComputedStyle(element);
+    values.push(...attributes.map(([property]) => after.getPropertyValue(property)));
+    for (const [attribute] of attributes)
+      element.removeAttribute(attribute);
+    const removed = getComputedStyle(element);
+    values.push(...attributes.map(([property]) => removed.getPropertyValue(property)));
+  }
+
+  return values.join('|');
+})()
+"#,
+        )
+        .expect("generic SVG presentation attributes should evaluate");
+
+    assert_eq!(
+        result,
+        "none|clip|normal|0.5|ellipsis|pre|none|clip|normal|none|clip|normal|0.5|ellipsis|pre|none|clip|normal|none|clip|normal|0.5|ellipsis|pre|none|clip|normal"
+    );
+}
+
+#[test]
 fn svg_special_presentation_attributes_follow_element_scopes_and_cascade() {
     let mut vm = new_parsed_test_vm(
         "https://svg-special-presentation-attributes.test/",
