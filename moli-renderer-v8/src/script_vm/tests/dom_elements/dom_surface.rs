@@ -8669,6 +8669,89 @@ fn svg_svg_element_deselect_all_clears_the_owner_document_selection() {
 }
 
 #[test]
+fn svg_href_animated_string_prefers_href_and_falls_back_to_xlink_href() {
+    let mut vm = new_storage_test_vm("https://svg-href-reflection.test/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const assert = (condition, message) => {
+                if (!condition) throw new Error(message);
+              };
+              const svg = "http://www.w3.org/2000/svg";
+              const xlink = "http://www.w3.org/1999/xlink";
+              const unrelated = "https://namespaced-href.test/";
+              const exercise = ownerDocument => {
+                const anchor = ownerDocument.createElementNS(svg, "a");
+                const href = anchor.href;
+                assert(href === anchor.href, "href is SameObject");
+
+                anchor.setAttributeNS(xlink, "href", "xlink-unprefixed");
+                assert(href.baseVal === "xlink-unprefixed", "unprefixed XLink fallback");
+                assert(href.animVal === "xlink-unprefixed", "XLink animVal fallback");
+                href.baseVal = "xlink-updated";
+                assert(anchor.getAttributeNS(xlink, "href") === "xlink-updated",
+                  "baseVal updates the XLink attribute");
+                assert(!anchor.hasAttributeNS(null, "href"),
+                  "XLink update does not create href");
+
+                anchor.setAttributeNS(null, "href", "preferred");
+                assert(href.baseVal === "preferred", "href wins regardless of insertion order");
+                href.baseVal = "preferred-updated";
+                assert(anchor.getAttributeNS(null, "href") === "preferred-updated",
+                  "baseVal updates preferred href");
+                assert(anchor.getAttributeNS(xlink, "href") === "xlink-updated",
+                  "preferred href leaves XLink unchanged");
+
+                anchor.removeAttributeNS(null, "href");
+                assert(href.baseVal === "xlink-updated", "removing href restores fallback");
+                anchor.removeAttributeNS(xlink, "href");
+                assert(href.baseVal === "" && href.animVal === "", "removing fallback resets values");
+
+                anchor.setAttributeNS(xlink, "xlink:href", "xlink-prefixed");
+                assert(href.baseVal === "xlink-prefixed", "prefixed XLink fallback");
+                href.baseVal = "xlink-prefixed-updated";
+                assert(anchor.getAttributeNS(xlink, "href") === "xlink-prefixed-updated",
+                  "baseVal updates prefixed XLink attribute");
+                assert(anchor.getAttributeNames().includes("xlink:href"),
+                  "baseVal preserves the XLink prefix");
+
+                anchor.removeAttributeNS(xlink, "href");
+                anchor.setAttributeNS(unrelated, "href", "unrelated");
+                assert(href.baseVal === "", "unrelated namespaced href is ignored");
+                href.baseVal = "created";
+                assert(anchor.getAttributeNS(null, "href") === "created",
+                  "baseVal creates an unnamespaced href");
+                assert(anchor.getAttributeNS(unrelated, "href") === "unrelated",
+                  "baseVal leaves unrelated namespaced href unchanged");
+
+                anchor.removeAttributeNS(null, "href");
+                anchor.setAttributeNS(xlink, "xlink:href", "side-effect-fallback");
+                href.baseVal = {
+                  toString() {
+                    anchor.setAttributeNS(null, "href", "created-during-conversion");
+                    return "converted";
+                  }
+                };
+                assert(anchor.getAttributeNS(null, "href") === "converted",
+                  "baseVal chooses its backing attribute after value conversion");
+                assert(anchor.getAttributeNS(xlink, "href") === "side-effect-fallback",
+                  "conversion-created href leaves XLink fallback unchanged");
+              };
+
+              exercise(document);
+              exercise(document.implementation.createHTMLDocument(""));
+              return "ok";
+            })()
+            "#,
+        )
+        .expect("SVG href reflection should evaluate");
+
+    assert_eq!(result, "ok");
+}
+
+#[test]
 fn html_rel_list_supported_tokens_are_ascii_case_insensitive_and_owner_specific() {
     let mut vm = new_storage_test_vm("https://rel-list-supports.test/");
 
