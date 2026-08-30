@@ -233,6 +233,22 @@ struct SvgAnimatedNumberProperty {
     component: SvgAnimatedNumberComponent,
 }
 
+#[derive(Clone, Copy)]
+enum SvgAnimatedEnumerationKind {
+    UnitType,
+    SpreadMethod,
+    LengthAdjust,
+}
+
+#[derive(Clone, Copy)]
+struct SvgAnimatedEnumerationProperty {
+    index: usize,
+    attribute: &'static str,
+    cache_slot: &'static str,
+    initial_value: u32,
+    kind: SvgAnimatedEnumerationKind,
+}
+
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "SVG list item")]
 struct SvgListItemArgs<'s> {
@@ -1324,6 +1340,7 @@ pub(in crate::context_bootstrap) fn install_svg_template_bindings<'s>(
         "SVGAnimatedEnumeration" => {
             bindings::install_svg_animated_enumeration_bindings(scope, template)
         }
+        "SVGUnitTypes" => bindings::install_svg_unit_types_bindings(scope, template),
         "SVGAnimatedTransformList" => {
             bindings::install_svg_animated_transform_list_bindings(scope, template)
         }
