@@ -18,6 +18,18 @@ struct SvgAnimatedStringObjectDeclaration {
 
 #[derive(WebApiObject)]
 #[webapi(
+    interface = web_api_interfaces::SVGAnimatedBoolean,
+    own_to_string_tag = "SVGAnimatedBoolean"
+)]
+struct SvgAnimatedBooleanObjectDeclaration {
+    #[webapi(slot = SVG_ANIMATED_BOOLEAN_BASE_VAL_SLOT)]
+    base_val: bool,
+    #[webapi(slot = SVG_ANIMATED_BOOLEAN_ANIM_VAL_SLOT)]
+    anim_val: bool,
+}
+
+#[derive(WebApiObject)]
+#[webapi(
     interface = web_api_interfaces::SVGAnimatedNumber,
     own_to_string_tag = "SVGAnimatedNumber"
 )]
@@ -274,6 +286,120 @@ pub(super) fn build_svg_animated_string_for_attribute<'s>(
         .expect("SVGAnimatedString declaration should bind");
     set_svg_animated_string_owner_attribute(scope, object, owner, attribute);
     object
+}
+
+pub(super) fn build_svg_animated_boolean_for_attribute<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+    attribute: &str,
+    initial_value: bool,
+) -> v8::Local<'s, v8::Object> {
+    let object = SvgAnimatedBooleanObjectDeclaration::new(initial_value, initial_value)
+        .bind(scope)
+        .expect("SVGAnimatedBoolean declaration should bind");
+    set_private_value(
+        scope,
+        object,
+        SVG_ANIMATED_BOOLEAN_OWNER_ELEMENT_SLOT,
+        owner.into(),
+    );
+    set_private_value(
+        scope,
+        object,
+        SVG_ANIMATED_BOOLEAN_OWNER_ATTRIBUTE_SLOT,
+        v8_string(scope, attribute)
+            .unwrap_or_else(|| v8str(scope, ""))
+            .into(),
+    );
+    set_private_value(
+        scope,
+        object,
+        SVG_ANIMATED_BOOLEAN_INITIAL_VALUE_SLOT,
+        v8::Boolean::new(scope, initial_value).into(),
+    );
+    sync_svg_animated_boolean_from_owner_attribute(scope, object);
+    object
+}
+
+pub(super) fn sync_svg_animated_boolean_from_owner_attribute<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    animated: v8::Local<'s, v8::Object>,
+) {
+    let Some(owner) = get_private_value(scope, animated, SVG_ANIMATED_BOOLEAN_OWNER_ELEMENT_SLOT)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+    else {
+        return;
+    };
+    let Some(attribute) =
+        get_private_value(scope, animated, SVG_ANIMATED_BOOLEAN_OWNER_ATTRIBUTE_SLOT)
+            .and_then(|value| value.to_string(scope))
+            .map(|value| value.to_rust_string_lossy(scope))
+            .filter(|value| !value.is_empty())
+    else {
+        return;
+    };
+    let initial_value = get_private_value(scope, animated, SVG_ANIMATED_BOOLEAN_INITIAL_VALUE_SLOT)
+        .is_some_and(|value| value.is_true());
+    let value = match svg_owner_attribute_value(scope, owner, &attribute).as_deref() {
+        Some("true") => true,
+        Some("false") => false,
+        _ => initial_value,
+    };
+    set_svg_animated_boolean_values(scope, animated, value);
+}
+
+pub(super) fn set_svg_animated_boolean_values(
+    scope: &mut v8::PinScope<'_, '_>,
+    animated: v8::Local<'_, v8::Object>,
+    value: bool,
+) {
+    let value = v8::Boolean::new(scope, value);
+    set_private_value(
+        scope,
+        animated,
+        SVG_ANIMATED_BOOLEAN_BASE_VAL_SLOT,
+        value.into(),
+    );
+    set_private_value(
+        scope,
+        animated,
+        SVG_ANIMATED_BOOLEAN_ANIM_VAL_SLOT,
+        value.into(),
+    );
+}
+
+pub(super) fn reflect_svg_animated_boolean_to_owner_attribute<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    animated: v8::Local<'s, v8::Object>,
+) {
+    let Some(owner) = get_private_value(scope, animated, SVG_ANIMATED_BOOLEAN_OWNER_ELEMENT_SLOT)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+    else {
+        return;
+    };
+    let Some(attribute) =
+        get_private_value(scope, animated, SVG_ANIMATED_BOOLEAN_OWNER_ATTRIBUTE_SLOT)
+            .and_then(|value| value.to_string(scope))
+            .map(|value| value.to_rust_string_lossy(scope))
+            .filter(|value| !value.is_empty())
+    else {
+        return;
+    };
+    let value = get_private_value(scope, animated, SVG_ANIMATED_BOOLEAN_BASE_VAL_SLOT)
+        .is_some_and(|value| value.is_true());
+    let Ok((runtime_ptr, handle)) =
+        crate::native_bridge::node_runtime_and_handle_from_object(scope, owner)
+    else {
+        return;
+    };
+    let runtime = unsafe { &mut *runtime_ptr };
+    let _ = runtime.set_attribute(
+        scope,
+        runtime_ptr,
+        handle,
+        &attribute,
+        if value { "true" } else { "false" },
+    );
 }
 
 pub(super) fn build_svg_animated_length_list<'s>(

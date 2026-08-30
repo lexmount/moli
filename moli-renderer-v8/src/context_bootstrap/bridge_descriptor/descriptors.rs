@@ -132,6 +132,10 @@ const NODE_BRIDGE_DESCRIPTORS: &[BridgeDescriptor] = &[
         SVG_GEOMETRY_RUNTIME_INSTALL_GROUPS,
     ),
     descriptor(
+        web_api_interfaces::SVGFEConvolveMatrixElement::DESCRIPTOR,
+        ELEMENT_GROUPS,
+    ),
+    descriptor(
         web_api_interfaces::SVGForeignObjectElement::DESCRIPTOR,
         ELEMENT_GROUPS,
     ),

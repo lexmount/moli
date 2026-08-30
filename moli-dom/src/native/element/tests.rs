@@ -235,6 +235,10 @@ fn svg_element_interface_name_specializes_standard_elements() {
     assert_eq!(svg_element_interface_name("defs"), "SVGDefsElement");
     assert_eq!(svg_element_interface_name("desc"), "SVGDescElement");
     assert_eq!(svg_element_interface_name("ellipse"), "SVGEllipseElement");
+    assert_eq!(
+        svg_element_interface_name("feConvolveMatrix"),
+        "SVGFEConvolveMatrixElement"
+    );
     assert_eq!(svg_element_interface_name("filter"), "SVGFilterElement");
     assert_eq!(
         svg_element_interface_name("foreignObject"),

@@ -131,6 +131,62 @@ pub(super) fn svg_uri_href_getter<'s>(
     svg_animated_string_attribute_getter(scope, args, rv, SVG_URI_HREF_SLOT, "href");
 }
 
+pub(super) fn svg_fe_convolve_matrix_preserve_alpha_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let owner = args.this();
+    let Ok((runtime_ptr, handle)) =
+        crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, owner)
+    else {
+        webidl::throw_type_error(
+            scope,
+            "SVGFEConvolveMatrixElement.preserveAlpha called on incompatible receiver.",
+        );
+        return;
+    };
+    let runtime = unsafe { &*runtime_ptr };
+    if !runtime.dom_host().node(handle).is_some_and(|node| {
+        node.namespace() == Some(crate::native_bridge::document::SVG_NS)
+            && node.local_name() == Some("feConvolveMatrix")
+    }) {
+        webidl::throw_type_error(
+            scope,
+            "SVGFEConvolveMatrixElement.preserveAlpha called on incompatible receiver.",
+        );
+        return;
+    }
+    svg_animated_boolean_attribute_getter(
+        scope,
+        owner,
+        rv,
+        SVG_FE_CONVOLVE_MATRIX_PRESERVE_ALPHA_SLOT,
+        "preserveAlpha",
+        false,
+    );
+}
+
+fn svg_animated_boolean_attribute_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+    slot: &'static str,
+    attribute: &'static str,
+    initial_value: bool,
+) {
+    if let Some(value) = get_private_value(scope, owner, slot) {
+        if let Ok(animated) = v8::Local::<v8::Object>::try_from(value) {
+            sync_svg_animated_boolean_from_owner_attribute(scope, animated);
+        }
+        rv.set(value);
+        return;
+    }
+    let value = build_svg_animated_boolean_for_attribute(scope, owner, attribute, initial_value);
+    set_private_value(scope, owner, slot, value.into());
+    rv.set(value.into());
+}
+
 fn svg_animated_string_attribute_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -430,6 +486,80 @@ pub(super) fn svg_animated_string_getter<'s>(
     rv.set(
         get_private_value(scope, animated, slot).unwrap_or_else(|| v8::String::empty(scope).into()),
     );
+}
+
+pub(super) fn svg_animated_boolean_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some(name) = callback_data_item(
+        scope,
+        &args,
+        SVG_ANIMATED_ACCESSOR_NAMES,
+        "SVGAnimatedBoolean attributes",
+    ) else {
+        rv.set_undefined();
+        return;
+    };
+    if !require_svg_receiver(
+        scope,
+        args.this(),
+        SVG_ANIMATED_BOOLEAN_BASE_VAL_SLOT,
+        "SVGAnimatedBoolean",
+        &format!("{name} getter"),
+    ) {
+        return;
+    }
+    let slot = match name {
+        "baseVal" => SVG_ANIMATED_BOOLEAN_BASE_VAL_SLOT,
+        "animVal" => SVG_ANIMATED_BOOLEAN_ANIM_VAL_SLOT,
+        _ => {
+            rv.set_undefined();
+            return;
+        }
+    };
+    sync_svg_animated_boolean_from_owner_attribute(scope, args.this());
+    let value = get_private_value(scope, args.this(), slot).is_some_and(|value| value.is_true());
+    rv.set(v8::Boolean::new(scope, value).into());
+}
+
+pub(super) fn svg_animated_boolean_setter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some(name) = callback_data_item(
+        scope,
+        &args,
+        SVG_ANIMATED_ACCESSOR_NAMES,
+        "SVGAnimatedBoolean attributes",
+    ) else {
+        return;
+    };
+    if !require_svg_receiver(
+        scope,
+        args.this(),
+        SVG_ANIMATED_BOOLEAN_BASE_VAL_SLOT,
+        "SVGAnimatedBoolean",
+        &format!("{name} setter"),
+    ) || name != "baseVal"
+    {
+        return;
+    }
+    let value = match webidl::convert::<webidl::Boolean>(
+        scope,
+        args.get(0),
+        webidl::Context::member("SVGAnimatedBoolean", "baseVal"),
+    ) {
+        Ok(value) => value.0,
+        Err(error) => {
+            webidl::throw_error(scope, &error);
+            return;
+        }
+    };
+    set_svg_animated_boolean_values(scope, args.this(), value);
+    reflect_svg_animated_boolean_to_owner_attribute(scope, args.this());
 }
 
 pub(super) fn svg_animated_string_setter<'s>(
