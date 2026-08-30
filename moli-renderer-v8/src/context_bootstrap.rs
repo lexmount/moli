@@ -22,6 +22,7 @@ mod events;
 pub(crate) mod exposed_interfaces;
 mod file_api;
 mod form_data_runtime;
+mod geometry_clone;
 mod geometry_runtime;
 mod history_mutation;
 mod history_runtime;
@@ -268,6 +269,10 @@ pub(crate) use self::file_api::{
     flush_one_pending_file_reader, is_file_list_object, selected_file_from_object,
 };
 pub(crate) use self::form_data_runtime::form_data_request_body;
+pub(crate) use self::geometry_clone::{
+    GeometryClonePayload, build_geometry_object_from_clone_payload,
+    geometry_clone_payload_from_object,
+};
 use self::geometry_runtime::{build_dom_point_object, optional_dom_point_init_arg};
 pub(crate) use self::image_data::{
     ImageDataClonePayload, build_image_data_object_from_clone_payload,
