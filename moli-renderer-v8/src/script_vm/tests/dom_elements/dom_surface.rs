@@ -8186,6 +8186,7 @@ fn svg_list_matrix_and_transform_declared_methods_keep_descriptors() {
                 numberInsertItemBefore: methodDescriptor(numberList, "insertItemBefore"),
                 transformListCreate: methodDescriptor(transformList, "createSVGTransformFromMatrix"),
                 transformListConsolidate: methodDescriptor(transformList, "consolidate"),
+                transformSetMatrix: methodDescriptor(transform, "setMatrix"),
                 transformSetRotate: methodDescriptor(transform, "setRotate"),
                 transformSetSkewX: methodDescriptor(transform, "setSkewX"),
                 matrixScaleNonUniform: methodDescriptor(matrix, "scaleNonUniform"),
@@ -8205,7 +8206,7 @@ fn svg_list_matrix_and_transform_declared_methods_keep_descriptors() {
 
     assert_eq!(
         result,
-        r#"{"lengthGetItem":"false,true,true,getItem,1","lengthAppendItem":"false,true,true,appendItem,1","numberInsertItemBefore":"false,true,true,insertItemBefore,2","transformListCreate":"false,true,true,createSVGTransformFromMatrix,1","transformListConsolidate":"false,true,true,consolidate,0","transformSetRotate":"false,true,true,setRotate,3","transformSetSkewX":"false,true,true,setSkewX,1","matrixScaleNonUniform":"false,true,true,scaleNonUniform,2","matrixRotateFromVector":"false,true,true,rotateFromVector,2","matrixFlipX":"false,true,true,flipX,0","transformOwnMethods":["setMatrix","setRotate","setScale","setSkewX","setSkewY","setTranslate"],"matrixOwnMethods":["flipX","flipY","inverse","multiply","rotate","rotateFromVector","scale","scaleNonUniform","skewX","skewY","translate"]}"#
+        r#"{"lengthGetItem":"false,true,true,getItem,1","lengthAppendItem":"false,true,true,appendItem,1","numberInsertItemBefore":"false,true,true,insertItemBefore,2","transformListCreate":"false,true,true,createSVGTransformFromMatrix,0","transformListConsolidate":"false,true,true,consolidate,0","transformSetMatrix":"false,true,true,setMatrix,0","transformSetRotate":"false,true,true,setRotate,3","transformSetSkewX":"false,true,true,setSkewX,1","matrixScaleNonUniform":"false,true,true,scaleNonUniform,2","matrixRotateFromVector":"false,true,true,rotateFromVector,2","matrixFlipX":"false,true,true,flipX,0","transformOwnMethods":["setMatrix","setRotate","setScale","setSkewX","setSkewY","setTranslate"],"matrixOwnMethods":["flipX","flipY","inverse","multiply","rotate","rotateFromVector","scale","scaleNonUniform","skewX","skewY","translate"]}"#
     );
 }
 
