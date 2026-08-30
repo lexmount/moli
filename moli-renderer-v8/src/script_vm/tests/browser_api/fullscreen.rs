@@ -1,5 +1,37 @@
 use super::*;
 
+#[test]
+fn fullscreen_enabled_reflects_committed_document_policy() {
+    let mut vm = new_parsed_test_vm(
+        "https://fullscreen-policy.test/",
+        "<!doctype html><iframe id='child'></iframe>",
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const child = document.getElementById("child");
+  child.allow = "sync-xhr 'none'";
+  return JSON.stringify({
+    enabled: [
+      document.fullscreenEnabled,
+      child.contentDocument.fullscreenEnabled,
+      new Document().fullscreenEnabled
+    ],
+    allow: [child.allow, child.getAttribute("allow")]
+  });
+})()
+"#,
+        )
+        .expect("fullscreen policy probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"enabled":[true,true,false],"allow":["sync-xhr 'none'","sync-xhr 'none'"]}"#
+    );
+}
+
 #[tokio::test]
 async fn unsupported_fullscreen_requests_reject_and_queue_spec_shaped_error_events() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
@@ -102,7 +134,7 @@ async fn unsupported_fullscreen_requests_reject_and_queue_spec_shaped_error_even
 
     assert_eq!(
         before,
-        r#"{"requestShape":["function",0,true,true],"documentShape":["function",0,true,true,false],"promises":true,"conversionPromiseShapes":[true,true,true,true],"contentAttributeInstalled":true,"optionReads":["keyboardLock","navigationUI"],"wrongReceivers":["TypeError","TypeError"],"events":0}"#,
+        r#"{"requestShape":["function",0,true,true],"documentShape":["function",0,true,true,true],"promises":true,"conversionPromiseShapes":[true,true,true,true],"contentAttributeInstalled":true,"optionReads":["keyboardLock","navigationUI"],"wrongReceivers":["TypeError","TypeError"],"events":0}"#,
     );
 
     vm.advance_timers_until_deadline_for_test(&loader)
