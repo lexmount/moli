@@ -13,7 +13,7 @@ use super::super::{
     css_stylesheet_runtime::css_style_sheet_constructor_callback,
     dom_quad::dom_quad_constructor_callback,
     events::{EventSubclassKind, build_event_subclass_template, event_constructor_callback},
-    exposed_interfaces::install_interface_template_metadata,
+    exposed_interfaces::{TemplateBuildProfile, install_interface_template_metadata},
     file_api::{
         data_transfer_constructor_callback, file_constructor_callback,
         file_list_constructor_callback, file_reader_constructor_callback,
@@ -83,6 +83,14 @@ use anyhow::{Result, anyhow};
 pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     spec: ConstructorSpec,
+) -> Result<v8::Local<'s, v8::FunctionTemplate>> {
+    build_constructor_template_for_profile(scope, spec, TemplateBuildProfile::Window)
+}
+
+pub(in crate::context_bootstrap) fn build_constructor_template_for_profile<'s>(
+    scope: &mut v8::PinScope<'s, '_, ()>,
+    spec: ConstructorSpec,
+    profile: TemplateBuildProfile,
 ) -> Result<v8::Local<'s, v8::FunctionTemplate>> {
     let template = match spec.kind {
         ConstructorKind::Illegal => v8::FunctionTemplate::builder(illegal_constructor_callback)
@@ -961,24 +969,27 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
             .build(scope)
         }
     };
-    finalize_constructor_template(scope, spec, template)
+    finalize_constructor_template(scope, spec, template, profile)
 }
 
 pub(in crate::context_bootstrap) fn build_constructor_template_with_callback<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     spec: ConstructorSpec,
+    length: i32,
+    profile: TemplateBuildProfile,
     callback: impl v8::MapFnTo<v8::FunctionCallback>,
 ) -> Result<v8::Local<'s, v8::FunctionTemplate>> {
     let template = v8::FunctionTemplate::builder(callback)
-        .length(1)
+        .length(length)
         .build(scope);
-    finalize_constructor_template(scope, spec, template)
+    finalize_constructor_template(scope, spec, template, profile)
 }
 
 fn finalize_constructor_template<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     spec: ConstructorSpec,
     template: v8::Local<'s, v8::FunctionTemplate>,
+    profile: TemplateBuildProfile,
 ) -> Result<v8::Local<'s, v8::FunctionTemplate>> {
     let class_name = v8_string(scope, spec.interface.name()).ok_or_else(|| {
         anyhow!(
@@ -995,7 +1006,7 @@ fn finalize_constructor_template<'s>(
         template.read_only_prototype();
     }
 
-    install_constructor_template_bindings(scope, template, spec);
+    install_constructor_template_bindings(scope, template, spec, profile);
     install_interface_template_metadata(scope, template, spec.interface.name());
 
     Ok(template)
