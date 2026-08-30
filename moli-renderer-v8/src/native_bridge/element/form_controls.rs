@@ -340,6 +340,12 @@ pub(super) struct HtmlInputElementValuePrototypeDeclaration {
 #[webapi(interface = web_api_interfaces::HTMLOutputElement, enumerable)]
 pub(super) struct HtmlOutputElementValuePrototypeDeclaration {
     #[webapi(
+        accessor_property = "htmlFor",
+        getter = output_html_for_getter_function,
+        setter = output_html_for_setter_function
+    )]
+    html_for: (),
+    #[webapi(
         accessor_property,
         getter = output_default_value_getter_function,
         setter = output_default_value_setter_function
@@ -353,6 +359,17 @@ pub(super) struct HtmlOutputElementValuePrototypeDeclaration {
     value: (),
     #[webapi(accessor_property = "type", getter = output_type_getter_function)]
     type_: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::SVGAElement, enumerable)]
+struct SvgAElementRelListPrototypeDeclaration {
+    #[webapi(
+        accessor_property = "relList",
+        getter = html_rel_list_getter_function,
+        setter = svg_rel_list_setter_function
+    )]
+    rel_list: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
