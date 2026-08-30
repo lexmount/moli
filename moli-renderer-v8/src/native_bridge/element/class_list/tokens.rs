@@ -40,5 +40,8 @@ pub(super) fn token_list_attribute_name(kind: DomTokenListKind) -> &'static str 
         DomTokenListKind::Class => "class",
         DomTokenListKind::Part => "part",
         DomTokenListKind::Rel => "rel",
+        DomTokenListKind::HtmlFor => "for",
+        DomTokenListKind::Sandbox => "sandbox",
+        DomTokenListKind::Sizes => "sizes",
     }
 }

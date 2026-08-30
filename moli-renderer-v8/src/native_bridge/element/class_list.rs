@@ -15,7 +15,9 @@ mod template;
 mod tokens;
 
 pub(in crate::native_bridge) use self::accessors::{
-    html_rel_list_getter_function, html_rel_list_setter_function,
+    html_rel_list_getter_function, html_rel_list_setter_function, iframe_sandbox_getter_function,
+    iframe_sandbox_setter_function, link_sizes_getter_function, link_sizes_setter_function,
+    output_html_for_getter_function, output_html_for_setter_function, svg_rel_list_setter_function,
 };
 pub(in crate::native_bridge) use self::template::build_dom_token_list_wrapper_template;
 pub(crate) use self::template::install_dom_token_list_prototype_bindings;
