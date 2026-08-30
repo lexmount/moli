@@ -237,6 +237,7 @@ impl JsContextHost {
             observers: ObserverStore::default(),
             text_codecs: TextCodecStore::default(),
             child_browsing_contexts: IndexMap::new(),
+            object_fallback_bootstraps: HashMap::new(),
             frame_owner_store,
             frame_parser_classic_scripts: FrameParserClassicScriptRunnerStore::default(),
             frame_parser_deferred_script_order: FrameParserDeferredScriptOrderStore::default(),
