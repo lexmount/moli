@@ -1,6 +1,6 @@
 use super::helpers::{
-    window_child_context_handle, window_current_dispatch_scope, window_hidden_value,
-    window_host_ptr, window_is_closed, window_receiver,
+    window_child_context_handle, window_document_handle, window_hidden_value, window_host_ptr,
+    window_is_closed, window_receiver,
 };
 use super::*;
 
@@ -21,15 +21,12 @@ pub(crate) fn window_length_getter<'s>(
         return;
     };
     let runtime = unsafe { &mut *host_ptr };
-    let Some(owner) = window_current_dispatch_scope(scope, receiver, runtime) else {
-        rv.set(v8::Number::new(scope, 0.0).into());
-        return;
-    };
-    let count = if let Some(handle) = owner.child_window() {
-        runtime.child_browsing_context_child_frame_count(handle)
-    } else {
-        runtime.child_browsing_context_count()
-    };
+    let count = window_document_handle(scope, receiver, runtime)
+        .map(|document| {
+            runtime.sync_child_browsing_context_subtree(scope, document);
+            runtime.child_browsing_context_count_for_document(document)
+        })
+        .unwrap_or(0);
     rv.set(v8::Number::new(scope, count as f64).into());
 }
 
