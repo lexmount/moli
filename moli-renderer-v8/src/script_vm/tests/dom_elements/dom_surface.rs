@@ -8467,6 +8467,104 @@ fn html_link_rel_list_exposes_supported_tokens() {
 }
 
 #[test]
+fn reflected_dom_token_list_attributes_are_live_same_object_and_owner_scoped() {
+    let mut vm = new_storage_test_vm("https://reflected-token-lists.test/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const assert = (condition, message) => {
+                if (!condition) throw new Error(message);
+              };
+              const svg = "http://www.w3.org/2000/svg";
+              const detached = document.implementation.createHTMLDocument("");
+              const descriptors = [
+                [HTMLIFrameElement.prototype, "sandbox"],
+                [HTMLLinkElement.prototype, "sizes"],
+                [HTMLOutputElement.prototype, "htmlFor"],
+                [SVGAElement.prototype, "relList"]
+              ];
+              for (const [prototype, name] of descriptors) {
+                const descriptor = Object.getOwnPropertyDescriptor(prototype, name);
+                assert(!!descriptor, `${prototype.constructor.name}.${name} descriptor`);
+                assert(typeof descriptor.get === "function", `${name} getter`);
+                assert(typeof descriptor.set === "function", `${name} PutForwards setter`);
+                assert(descriptor.enumerable && descriptor.configurable, `${name} descriptor flags`);
+              }
+
+              const noSupportedTokens = list => {
+                try {
+                  list.supports("anything");
+                  return false;
+                } catch (error) {
+                  return error && error.name === "TypeError";
+                }
+              };
+              const exercise = ownerDocument => {
+                const iframe = ownerDocument.createElement("iframe");
+                const sandbox = iframe.sandbox;
+                assert(Object.prototype.toString.call(sandbox) === "[object DOMTokenList]", "sandbox type");
+                assert(sandbox === iframe.sandbox, "sandbox SameObject");
+                iframe.sandbox = "allow-scripts allow-forms allow-scripts";
+                assert(sandbox.length === 2 && sandbox.contains("allow-forms"), "sandbox tokens");
+                assert(iframe.getAttribute("sandbox") === "allow-scripts allow-forms allow-scripts", "sandbox PutForwards");
+                assert(sandbox.supports("ALLOW-SCRIPTS"), "sandbox supports ASCII case-insensitively");
+                assert(sandbox.supports("allow-storage-access-by-user-activation"), "sandbox storage-access token");
+                assert(!sandbox.supports("unknown"), "sandbox rejects unknown token");
+                sandbox.add("allow-popups");
+                assert(iframe.getAttribute("sandbox") === "allow-scripts allow-forms allow-popups", "sandbox mutation reflects");
+
+                const output = ownerDocument.createElement("output");
+                const htmlFor = output.htmlFor;
+                assert(Object.prototype.toString.call(htmlFor) === "[object DOMTokenList]", "htmlFor type");
+                assert(htmlFor === output.htmlFor, "htmlFor SameObject");
+                output.htmlFor = "first second first";
+                htmlFor.add("third");
+                assert(output.getAttribute("for") === "first second third", "htmlFor reflects for");
+                assert(noSupportedTokens(htmlFor), "htmlFor has no supported tokens");
+
+                const link = ownerDocument.createElement("link");
+                const sizes = link.sizes;
+                assert(Object.prototype.toString.call(sizes) === "[object DOMTokenList]", "sizes type");
+                assert(sizes === link.sizes, "sizes SameObject");
+                assert(sizes !== link.relList, "link token lists have distinct identity");
+                link.sizes = "16x16 32x32 16x16";
+                sizes.remove("16x16");
+                assert(link.getAttribute("sizes") === "32x32", "sizes mutation reflects");
+                assert(noSupportedTokens(sizes), "sizes has no supported tokens");
+
+                const anchor = ownerDocument.createElementNS(svg, "a");
+                const relList = anchor.relList;
+                assert(Object.prototype.toString.call(relList) === "[object DOMTokenList]", "SVG relList type");
+                assert(relList === anchor.relList, "SVG relList SameObject");
+                anchor.relList = "noopener noreferrer";
+                relList.add("opener");
+                assert(anchor.getAttribute("rel") === "noopener noreferrer opener", "SVG relList reflects rel");
+                assert(relList.supports("NOOPENER"), "SVG relList supported tokens");
+              };
+
+              exercise(document);
+              exercise(detached);
+
+              const div = document.createElement("div");
+              for (const name of ["htmlFor", "sandbox", "sizes", "relList"]) {
+                assert(div[name] === undefined, `div.${name} should be undefined`);
+              }
+              assert(document.createElementNS(svg, "link").sizes === undefined, "SVG link.sizes");
+              assert(document.createElementNS(svg, "output").htmlFor === undefined, "SVG output.htmlFor");
+              assert(document.createElementNS(svg, "iframe").sandbox === undefined, "SVG iframe.sandbox");
+              assert(document.createElement("svg").relList === undefined, "HTML svg.relList");
+              return "ok";
+            })()
+            "#,
+        )
+        .expect("reflected DOMTokenList attributes should evaluate");
+
+    assert_eq!(result, "ok");
+}
+
+#[test]
 fn html_rel_list_supported_tokens_are_ascii_case_insensitive_and_owner_specific() {
     let mut vm = new_storage_test_vm("https://rel-list-supports.test/");
 

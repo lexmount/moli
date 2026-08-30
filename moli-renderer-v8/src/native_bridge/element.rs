@@ -169,7 +169,9 @@ pub(crate) use canvas::{
 pub(crate) use class_list::install_dom_token_list_prototype_bindings;
 pub(super) use class_list::{
     build_dom_token_list_wrapper_template, html_rel_list_getter_function,
-    html_rel_list_setter_function,
+    html_rel_list_setter_function, iframe_sandbox_getter_function, iframe_sandbox_setter_function,
+    link_sizes_getter_function, link_sizes_setter_function, output_html_for_getter_function,
+    output_html_for_setter_function, svg_rel_list_setter_function,
 };
 pub(super) use content::{
     node_direct_text_content, node_get_html_callback, node_inner_html_getter_function,
@@ -456,10 +458,9 @@ pub(super) use global_attributes::{
     node_hidden_setter_function, node_inert_getter_function, node_inert_setter_function,
     node_input_mode_getter_function, node_input_mode_setter_function,
     node_is_content_editable_getter_function, node_lang_getter_function, node_lang_setter_function,
-    node_sandbox_getter_function, node_sandbox_setter_function, node_spellcheck_getter_function,
-    node_spellcheck_setter_function, node_tab_index_getter_function,
-    node_tab_index_setter_function, node_title_getter_function, node_title_setter_function,
-    node_translate_getter_function, node_translate_setter_function,
+    node_spellcheck_getter_function, node_spellcheck_setter_function,
+    node_tab_index_getter_function, node_tab_index_setter_function, node_title_getter_function,
+    node_title_setter_function, node_translate_getter_function, node_translate_setter_function,
     node_writing_suggestions_getter_function, node_writing_suggestions_setter_function,
     null_to_empty_dom_string_reflection_getter_function,
     null_to_empty_dom_string_reflection_setter_function, object_archive_getter_function,
@@ -4073,8 +4074,8 @@ struct HtmlIFrameElementPrototypeDeclaration {
     referrer_policy: (),
     #[webapi(
         accessor_property,
-        getter = node_sandbox_getter_function,
-        setter = node_sandbox_setter_function
+        getter = iframe_sandbox_getter_function,
+        setter = iframe_sandbox_setter_function
     )]
     sandbox: (),
     #[webapi(
@@ -4213,6 +4214,12 @@ struct HtmlLinkElementUrlPrototypeDeclaration {
         setter_data = DomStringReflection::LinkHreflang
     )]
     hreflang: (),
+    #[webapi(
+        accessor_property,
+        getter = link_sizes_getter_function,
+        setter = link_sizes_setter_function
+    )]
+    sizes: (),
     #[webapi(
         accessor_property,
         getter = html_charset_getter_function,
@@ -5048,6 +5055,12 @@ struct HtmlInputElementValuePrototypeDeclaration {
 #[webapi(interface = web_api_interfaces::HTMLOutputElement, enumerable)]
 struct HtmlOutputElementValuePrototypeDeclaration {
     #[webapi(
+        accessor_property = "htmlFor",
+        getter = output_html_for_getter_function,
+        setter = output_html_for_setter_function
+    )]
+    html_for: (),
+    #[webapi(
         accessor_property,
         getter = output_default_value_getter_function,
         setter = output_default_value_setter_function
@@ -5061,6 +5074,17 @@ struct HtmlOutputElementValuePrototypeDeclaration {
     value: (),
     #[webapi(accessor_property = "type", getter = output_type_getter_function)]
     type_: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::SVGAElement, enumerable)]
+struct SvgAElementRelListPrototypeDeclaration {
+    #[webapi(
+        accessor_property = "relList",
+        getter = html_rel_list_getter_function,
+        setter = svg_rel_list_setter_function
+    )]
+    rel_list: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -7334,6 +7358,7 @@ pub(crate) fn install_element_template_bindings<'s>(
         "HTMLMarqueeElement" => install!(HtmlMarqueeElementLegacyPrototypeDeclaration),
         "HTMLScriptElement" => install!(HtmlScriptElementPrototypeDeclaration),
         "SVGScriptElement" => install!(SvgScriptElementPrototypeDeclaration),
+        "SVGAElement" => install!(SvgAElementRelListPrototypeDeclaration),
         "HTMLStyleElement" => install!(HtmlStyleElementPrototypeDeclaration),
         "SVGStyleElement" => install!(SvgStyleElementPrototypeDeclaration),
         "HTMLTableElement" => install!(HtmlTableElementPrototypeDeclaration),
