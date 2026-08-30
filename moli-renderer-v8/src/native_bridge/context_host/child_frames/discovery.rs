@@ -49,6 +49,13 @@ impl PageScriptHost {
         self.child_frame_owner_element_kind(handle).is_some()
     }
 
+    pub(in crate::native_bridge::context_host) fn child_browsing_context_host_is_object_element(
+        &self,
+        handle: DomHandle,
+    ) -> bool {
+        self.child_frame_owner_element_kind(handle) == Some(ChildFrameOwnerElementKind::Object)
+    }
+
     fn child_frame_owner_element_kind(
         &self,
         handle: DomHandle,
@@ -96,6 +103,20 @@ impl PageScriptHost {
     ) -> bool {
         self.child_frame_owner_element_kind(handle)
             .is_some_and(|kind| attribute_name.eq_ignore_ascii_case(kind.navigation_attribute()))
+    }
+
+    pub(crate) fn clear_object_fallback_for_attribute_change(
+        &mut self,
+        handle: DomHandle,
+        attribute_name: &str,
+    ) {
+        if self.child_browsing_context_host_is_object_element(handle)
+            && ["data", "type"]
+                .into_iter()
+                .any(|name| attribute_name.eq_ignore_ascii_case(name))
+        {
+            self.object_fallback_bootstraps.remove(&handle);
+        }
     }
 
     pub(crate) fn child_browsing_context_host_is_active(&self, handle: DomHandle) -> bool {
@@ -209,7 +230,13 @@ impl PageScriptHost {
         {
             return None;
         }
-        Some(ChildBrowsingContextBootstrap::Url(url))
+        let bootstrap = ChildBrowsingContextBootstrap::Url(url);
+        if kind == ChildFrameOwnerElementKind::Object
+            && self.object_fallback_bootstraps.get(&handle) == Some(&bootstrap)
+        {
+            return None;
+        }
+        Some(bootstrap)
     }
 
     fn embedded_content_is_inside_media_element(&self, handle: DomHandle) -> bool {
