@@ -847,6 +847,10 @@ pub(crate) struct JsContextHost {
     text_codecs: TextCodecStore,
     // Key order is browsing-context insertion order and therefore frame-tree sibling order.
     child_browsing_contexts: IndexMap<DomHandle, ChildBrowsingContextEntry>,
+    // A failed `data` attribute load keeps an object in fallback until that
+    // resource selection is invalidated; ordinary context discovery must not
+    // recreate its nested browsing context in the meantime.
+    object_fallback_bootstraps: HashMap<DomHandle, ChildBrowsingContextBootstrap>,
     frame_owner_store: FrameOwnerStore,
     frame_parser_classic_scripts: FrameParserClassicScriptRunnerStore,
     frame_parser_deferred_script_order: FrameParserDeferredScriptOrderStore,
