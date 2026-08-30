@@ -1676,3 +1676,74 @@ fn selection_endpoints_follow_associated_live_range_mutations() {
         ""
     );
 }
+
+#[test]
+fn before_unload_event_uses_its_string_return_value_interface() {
+    let mut vm = new_storage_test_vm("https://before-unload-event-interface.test/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const errorName = callback => {
+                try {
+                  callback();
+                  return "none";
+                } catch (error) {
+                  return error.name;
+                }
+              };
+              const descriptor = Object.getOwnPropertyDescriptor(
+                BeforeUnloadEvent.prototype,
+                "returnValue"
+              );
+              const event = document.createEvent("BeforeUnloadEvent");
+              const initial = [
+                event instanceof BeforeUnloadEvent,
+                event instanceof Event,
+                Object.hasOwn(event, "returnValue"),
+                event.returnValue
+              ];
+              event.initEvent("beforeunload", false, true);
+              event.returnValue = null;
+              const nullValue = event.returnValue;
+              event.returnValue = undefined;
+              const undefinedValue = event.returnValue;
+              event.returnValue = { toString() { return "object value"; } };
+              const objectValue = event.returnValue;
+              const symbolError = errorName(() => {
+                event.returnValue = Symbol("return value");
+              });
+
+              return JSON.stringify({
+                constructor: [
+                  typeof BeforeUnloadEvent,
+                  Object.getPrototypeOf(BeforeUnloadEvent.prototype) === Event.prototype,
+                  errorName(() => new BeforeUnloadEvent())
+                ],
+                initial,
+                initialized: [event.type, event.cancelable],
+                values: [nullValue, undefinedValue, objectValue, symbolError, event.returnValue],
+                metadata: [
+                  descriptor.get.name,
+                  descriptor.get.length,
+                  descriptor.set.name,
+                  descriptor.set.length,
+                  descriptor.enumerable,
+                  descriptor.configurable
+                ],
+                receiverErrors: [
+                  errorName(() => descriptor.get.call(new Event("plain"))),
+                  errorName(() => descriptor.set.call({}, "value"))
+                ]
+              });
+            })()
+            "#,
+        )
+        .expect("BeforeUnloadEvent returnValue interface probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"constructor":["function",true,"TypeError"],"initial":[true,true,false,""],"initialized":["beforeunload",true],"values":["null","undefined","object value","TypeError","object value"],"metadata":["get returnValue",0,"set returnValue",1,true,true],"receiverErrors":["TypeError","TypeError"]}"#
+    );
+}

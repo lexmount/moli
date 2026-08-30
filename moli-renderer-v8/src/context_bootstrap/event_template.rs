@@ -6,6 +6,8 @@ use super::{
         ui_event_init_callback,
     },
     events::{
+        before_unload_event_return_value_getter_function,
+        before_unload_event_return_value_setter_function,
         close_event_code_getter_function, close_event_reason_getter_function,
         close_event_was_clean_getter_function, event_bubbles_getter_function,
         event_cancel_bubble_getter_function, event_cancel_bubble_setter_function,
@@ -124,6 +126,17 @@ struct EventBaseTemplateMethodsDeclaration {
 
     #[webapi(method = "initEvent", length = 1, callback = event_init_event_callback)]
     init_event: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::BeforeUnloadEvent, enumerable, receiver)]
+struct BeforeUnloadEventTemplateAccessorsDeclaration {
+    #[webapi(
+        accessor_property = "returnValue",
+        getter = before_unload_event_return_value_getter_function,
+        setter = before_unload_event_return_value_setter_function
+    )]
+    return_value: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -504,6 +517,7 @@ fn install_declaration<'s, D: WebApiFunctionTemplateDeclaration>(
 // prototype mutations cannot change which fields are exposed as own properties.
 fn event_template_declaration(interface: &str) -> Option<EventTemplateDeclaration> {
     Some(match interface {
+        "BeforeUnloadEvent" => EventTemplateDeclaration::new::<BeforeUnloadEventTemplateAccessorsDeclaration>(),
         "ErrorEvent" => EventTemplateDeclaration::new::<ErrorEventTemplateAccessorsDeclaration>(),
         "SecurityPolicyViolationEvent" => EventTemplateDeclaration::new::<
             SecurityPolicyViolationEventTemplateAccessorsDeclaration,

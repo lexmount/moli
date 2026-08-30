@@ -1,4 +1,7 @@
-use super::events::{construct_original_event, run_navigate_event_precommit_handlers};
+use super::events::{
+    construct_original_before_unload_event, construct_original_event,
+    run_navigate_event_precommit_handlers,
+};
 use super::location_runtime::{is_same_document_fragment_navigation, location_href_slot};
 use super::media_queries::dispatch_simple_event_target_event;
 use super::navigation_callbacks::cancel_active_intercepted_same_document_navigation;
@@ -632,7 +635,7 @@ pub(crate) fn dispatch_beforeunload_for_runtime_owner<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
 ) {
-    let Some(event) = construct_original_event(scope, "beforeunload") else {
+    let Some(event) = construct_original_before_unload_event(scope) else {
         return;
     };
     dispatch_unload_lifecycle_event_for_runtime_owner(scope, owner, "beforeunload", event);
