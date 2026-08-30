@@ -6619,6 +6619,88 @@ fn detached_frame_legacy_accessors_use_owner_prototypes() {
 }
 
 #[test]
+fn detached_obsolete_element_reflectors_use_owner_prototypes() {
+    let mut vm = new_storage_test_vm("https://detached-obsolete-reflectors.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const doc = document.implementation.createHTMLDocument("");
+  const frameset = doc.createElement("frameset");
+  const frame = doc.createElement("frame");
+  const font = doc.createElement("font");
+  const marquee = doc.createElement("marquee");
+  const div = doc.createElement("div");
+
+  const assert = (condition, message) => {
+    if (!condition) throw new Error(message);
+  };
+  const own = (object, name) => Object.prototype.hasOwnProperty.call(object, name);
+  const throwsTypeError = callback => {
+    try {
+      callback();
+      return false;
+    } catch (error) {
+      return error.name === "TypeError";
+    }
+  };
+  const cases = [
+    [HTMLFrameSetElement.prototype, frameset, "cols", "40%,60%", "cols"],
+    [HTMLFrameSetElement.prototype, frameset, "rows", "100,*", "rows"],
+    [HTMLFontElement.prototype, font, "face", "serif, sans-serif", "face"],
+  ];
+
+  for (const [prototype, element, name, value, attribute] of cases) {
+    const descriptor = Object.getOwnPropertyDescriptor(prototype, name);
+    assert(!!descriptor, `${name} descriptor`);
+    assert(typeof descriptor.get === "function", `${name} getter`);
+    assert(typeof descriptor.set === "function", `${name} setter`);
+    assert(descriptor.enumerable && descriptor.configurable, `${name} descriptor flags`);
+    assert(!own(HTMLElement.prototype, name), `${name} owner`);
+    assert(!(name in div), `${name} should not be on div`);
+    assert(throwsTypeError(() => descriptor.get.call(div)), `${name} getter brand`);
+    assert(throwsTypeError(() => descriptor.set.call(div, value)), `${name} setter brand`);
+    assert(element[name] === "", `${name} default`);
+    element[name] = value;
+    assert(element[name] === value, `${name} value`);
+    assert(element.getAttribute(attribute) === value, `${name} attribute`);
+    assert(!own(element, name), `${name} should stay inherited`);
+  }
+
+  for (const [prototype, element, name, attribute] of [
+    [HTMLFrameElement.prototype, frame, "noResize", "noresize"],
+    [HTMLMarqueeElement.prototype, marquee, "trueSpeed", "truespeed"],
+  ]) {
+    const descriptor = Object.getOwnPropertyDescriptor(prototype, name);
+    assert(!!descriptor, `${name} descriptor`);
+    assert(typeof descriptor.get === "function", `${name} getter`);
+    assert(typeof descriptor.set === "function", `${name} setter`);
+    assert(descriptor.enumerable && descriptor.configurable, `${name} descriptor flags`);
+    assert(!own(HTMLElement.prototype, name), `${name} owner`);
+    assert(!(name in div), `${name} should not be on div`);
+    assert(throwsTypeError(() => descriptor.get.call(div)), `${name} getter brand`);
+    assert(throwsTypeError(() => descriptor.set.call(div, true)), `${name} setter brand`);
+    assert(element[name] === false, `${name} default`);
+    element.setAttribute(attribute, "false");
+    assert(element[name] === true, `${name} attribute presence`);
+    element[name] = false;
+    assert(!element.hasAttribute(attribute), `${name} false removes attribute`);
+    element[name] = true;
+    assert(element.getAttribute(attribute) === "", `${name} true adds attribute`);
+    assert(!own(element, name), `${name} should stay inherited`);
+  }
+
+  return "ok";
+})()
+"#,
+        )
+        .expect("detached obsolete element reflectors should evaluate");
+
+    assert_eq!(result, "ok");
+}
+
+#[test]
 fn detached_resource_legacy_accessors_use_owner_prototypes() {
     let mut vm =
         new_storage_test_vm("https://detached-resource-legacy-prototypes.test/base/page.html");
