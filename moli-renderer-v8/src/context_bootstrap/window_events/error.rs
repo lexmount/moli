@@ -219,6 +219,20 @@ pub(crate) fn dispatch_window_error_event<'s>(
     colno: u32,
     error_value: Option<v8::Local<'s, v8::Value>>,
 ) -> std::result::Result<Option<v8::Local<'s, v8::Object>>, String> {
+    let current_context = scope.get_current_context();
+    let reporting_owner = unsafe { &*host_ptr }
+        .window_execution_context_identity_for_v8_context(scope, current_context)
+        .map(|identity| identity.owner());
+    let _error_reporting_scope = if let Some(owner) = reporting_owner {
+        let Some(reporting_scope) =
+            (unsafe { &mut *host_ptr }).enter_window_error_reporting_scope(owner)
+        else {
+            return Ok(None);
+        };
+        Some(reporting_scope)
+    } else {
+        None
+    };
     let popup_id = crate::native_bridge::active_lightweight_popup_id(scope);
     if popup_id.is_none() {
         ensure_window_reflecting_body_onerror_handler(scope);
