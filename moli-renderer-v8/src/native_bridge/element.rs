@@ -103,7 +103,8 @@ pub(in crate::native_bridge) use trusted_types::{
     TrustedAttributeSetter, trusted_attribute_string_value, trusted_attribute_value_string,
 };
 use trusted_types::{
-    TrustedScriptElementSink, trusted_script_element_sink_string, trusted_script_url_sink_string,
+    TrustedHtmlSink, TrustedScriptElementSink, trusted_html_sink_string,
+    trusted_script_element_sink_string, trusted_script_url_sink_string,
 };
 pub(crate) use trusted_types::{
     prepare_trusted_script_text, set_svg_animated_string_base_value,

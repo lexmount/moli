@@ -37,6 +37,7 @@ impl TrustedAttributeSetter {
 }
 
 enum TrustedAttributeSink {
+    Html(&'static str),
     Script(String),
     ScriptUrl(&'static str),
 }
@@ -44,6 +45,7 @@ enum TrustedAttributeSink {
 impl TrustedAttributeSink {
     fn type_name(&self) -> &'static str {
         match self {
+            Self::Html(_) => "TrustedHTML",
             Self::Script(_) => "TrustedScript",
             Self::ScriptUrl(_) => "TrustedScriptURL",
         }
@@ -78,6 +80,9 @@ fn trusted_attribute_sink_for_names(
         attribute_namespace,
         attribute_local_name,
     ) {
+        ("http://www.w3.org/1999/xhtml", "iframe", None, "srcdoc") => {
+            Some(TrustedAttributeSink::Html("HTMLIFrameElement srcdoc"))
+        }
         ("http://www.w3.org/1999/xhtml", "script", None, "src") => {
             Some(TrustedAttributeSink::ScriptUrl("HTMLScriptElement src"))
         }
@@ -129,6 +134,7 @@ pub(in crate::native_bridge::element) enum TrustedHtmlSink {
     ElementInnerHtml,
     ShadowRootInnerHtml,
     ElementOuterHtml,
+    IframeSrcdoc,
     ElementSetHtmlUnsafe,
     ShadowRootSetHtmlUnsafe,
     ElementInsertAdjacentHtml,
@@ -169,6 +175,7 @@ impl TrustedHtmlSink {
             Self::ElementInnerHtml => "Element innerHTML",
             Self::ShadowRootInnerHtml => "ShadowRoot innerHTML",
             Self::ElementOuterHtml => "Element outerHTML",
+            Self::IframeSrcdoc => "HTMLIFrameElement srcdoc",
             Self::ElementSetHtmlUnsafe => "Element setHTMLUnsafe",
             Self::ShadowRootSetHtmlUnsafe => "ShadowRoot setHTMLUnsafe",
             Self::ElementInsertAdjacentHtml => "Element insertAdjacentHTML",
@@ -179,6 +186,7 @@ impl TrustedHtmlSink {
         match self {
             Self::ElementInnerHtml | Self::ShadowRootInnerHtml => "innerHTML",
             Self::ElementOuterHtml => "outerHTML",
+            Self::IframeSrcdoc => "srcdoc",
             Self::ElementSetHtmlUnsafe | Self::ShadowRootSetHtmlUnsafe => "setHTMLUnsafe",
             Self::ElementInsertAdjacentHtml => "insertAdjacentHTML",
         }
@@ -274,6 +282,15 @@ pub(in crate::native_bridge) fn trusted_attribute_value_string<'s>(
     if let Some((runtime_ptr, sink)) = sink {
         let requirements = unsafe { &*runtime_ptr }.trusted_types_for_script_requirements(scope);
         return match sink {
+            TrustedAttributeSink::Html(sink) => {
+                crate::context_bootstrap::trusted_html_string_or_throw(
+                    scope,
+                    value,
+                    requirements,
+                    sink,
+                    setter.api_name(),
+                )
+            }
             TrustedAttributeSink::Script(sink) => {
                 crate::context_bootstrap::trusted_script_string_or_type_error(
                     scope,
