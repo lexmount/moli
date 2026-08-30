@@ -1030,30 +1030,6 @@ pub(in crate::native_bridge) fn html_color_getter_function<'s>(
     attribute_property_getter_from_object_or_detached(scope, args.this(), "color", rv);
 }
 
-pub(in crate::native_bridge) fn node_sandbox_getter_function<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    attribute_property_getter_from_object_or_detached(scope, args.this(), "sandbox", rv);
-}
-
-pub(in crate::native_bridge) fn node_sandbox_setter_function<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    set_dom_string_attribute_property_on_object(
-        scope,
-        args.this(),
-        "sandbox",
-        args.get(0),
-        "HTMLIFrameElement",
-        "sandbox",
-    );
-    rv.set_undefined();
-}
-
 fn set_dom_string_treat_null_as_empty_on_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
