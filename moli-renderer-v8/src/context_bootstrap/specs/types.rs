@@ -132,6 +132,7 @@ pub(in crate::context_bootstrap) enum ConstructorKind {
     WebSocketStream,
     DomRectReadOnly,
     DomRect,
+    DomPointReadOnly,
     DomPoint,
     DomMatrix,
     ResizeObserver,
