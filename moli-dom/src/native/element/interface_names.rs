@@ -96,6 +96,7 @@ pub fn svg_element_interface_name(local_name: &str) -> &'static str {
         "defs" => "SVGDefsElement",
         "desc" => "SVGDescElement",
         "ellipse" => "SVGEllipseElement",
+        "feConvolveMatrix" => "SVGFEConvolveMatrixElement",
         "filter" => "SVGFilterElement",
         "foreignObject" => "SVGForeignObjectElement",
         "g" => "SVGGElement",
