@@ -8,7 +8,7 @@ use crate::{
     frame_owner_model::{FrameDocumentTaskOwner, LocalWindowId},
     host::{
         ChildWindowEventTarget, DispatchStatus, create_host_event, event_dispatch_status,
-        invoke_prepared_event_callback,
+        invoke_prepared_before_unload_event_handler, invoke_prepared_event_callback,
     },
     native_bridge::{
         ACTIVE_CHILD_WINDOW_HANDLE_SLOT, EventCallbackId, PreparedEventCallback,
@@ -617,6 +617,21 @@ impl JsContextHost {
     ) -> (bool, Option<v8::Global<v8::Value>>) {
         if !self.child_window_event_target_is_current(ready.target) {
             return (false, None);
+        }
+        if ready.registration_kind == ChildWindowEventRegistrationKind::EventHandlerProperty
+            && event_type == "beforeunload"
+        {
+            invoke_prepared_before_unload_event_handler(
+                scope,
+                self as *mut JsContextHost,
+                EventTargetHandle::ChildWindow(ready.target),
+                false,
+                event_type,
+                &format!("child window {event_type} listener"),
+                ready.callback,
+                event,
+            );
+            return (true, None);
         }
         let arguments = child_window_event_callback_arguments(
             scope,
