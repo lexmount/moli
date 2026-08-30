@@ -19,7 +19,7 @@ use moli_svg::{
 };
 use moli_webapi::svg_values::constants::*;
 use moli_webapi::svg_values::matrix::{
-    SvgMatrixArg, build_svg_matrix, cloned_svg_matrix_value_or_throw, install_svg_matrix_bindings,
+    SvgMatrixArg, cloned_svg_matrix_value_or_throw, install_svg_matrix_bindings,
     svg_matrix_components,
 };
 use moli_webapi::svg_values::{
