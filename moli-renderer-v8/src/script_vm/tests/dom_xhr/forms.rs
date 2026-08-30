@@ -4895,6 +4895,79 @@ fn empty_get_form_submit_replaces_existing_action_query() {
         .expect("empty GET form submit should queue a pending location navigation");
     assert_eq!(pending.url.as_str(), "https://form-empty-get.test/submit?");
 }
+
+#[test]
+fn textarea_hard_wrap_is_ascii_case_insensitive_in_form_entries() {
+    let mut vm = new_storage_test_vm("https://textarea-hard-wrap.test/path/index.html");
+
+    let form_data_values = vm
+        .eval(
+            r#"
+(() => {
+  const root = document.documentElement || document.appendChild(document.createElement('html'));
+  const body = document.body || root.appendChild(document.createElement('body'));
+  const form = document.createElement('form');
+  form.action = '/submit';
+  const add = (name, wrap, cols, value) => {
+    const textarea = document.createElement('textarea');
+    textarea.name = name;
+    textarea.setAttribute('wrap', wrap);
+    textarea.setAttribute('cols', cols);
+    textarea.value = value;
+    form.append(textarea);
+    return textarea;
+  };
+  const lower = add('lower', 'hard', '7', 'hello world');
+  add('mixed', 'HaRd', '7', 'hello world');
+  add('soft', 'SoFt', '7', 'hello world');
+  add('invalid', 'ſoft', '7', 'hello world');
+  add('existing', 'HARD', '3', 'ab\ncdef');
+  body.append(form);
+  const data = new FormData(form);
+  const visible = value => value.replaceAll('\n', '<LF>');
+  const result = [
+    lower.value.includes('\n'),
+    ...['lower', 'mixed', 'soft', 'invalid', 'existing'].map(name => visible(data.get(name)))
+  ].join('|');
+  form.submit();
+  return result;
+})()
+"#,
+        )
+        .expect("textarea hard-wrap form submission should evaluate");
+
+    assert_eq!(
+        form_data_values,
+        "false|hello w<LF>orld|hello w<LF>orld|hello world|hello world|ab<LF>cde<LF>f"
+    );
+
+    let pending = vm
+        .take_pending_location_navigation_with_seed()
+        .expect("textarea GET submission should queue a pending navigation");
+    let values = pending
+        .url
+        .query_pairs()
+        .into_owned()
+        .collect::<std::collections::HashMap<_, _>>();
+    assert_eq!(
+        values.get("lower").map(String::as_str),
+        Some("hello w\r\norld")
+    );
+    assert_eq!(
+        values.get("mixed").map(String::as_str),
+        Some("hello w\r\norld")
+    );
+    assert_eq!(values.get("soft").map(String::as_str), Some("hello world"));
+    assert_eq!(
+        values.get("invalid").map(String::as_str),
+        Some("hello world")
+    );
+    assert_eq!(
+        values.get("existing").map(String::as_str),
+        Some("ab\r\ncde\r\nf")
+    );
+}
+
 #[test]
 fn get_form_submit_dispatches_cancelable_navigate_event_with_source_element() {
     let mut vm = new_storage_test_vm("https://form-get-navigate.test/path/index.html");
