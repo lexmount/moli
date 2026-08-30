@@ -5673,10 +5673,13 @@ fn fetch_priority_reflection_is_shared_by_supported_elements() {
       return error instanceof TypeError;
     }
   };
+  const svgNamespace = "http://www.w3.org/2000/svg";
   const cases = [
     [HTMLImageElement.prototype, document.createElement("img"), "img"],
     [HTMLLinkElement.prototype, document.createElement("link"), "link"],
-    [HTMLScriptElement.prototype, document.createElement("script"), "script"]
+    [HTMLScriptElement.prototype, document.createElement("script"), "script"],
+    [SVGImageElement.prototype, document.createElementNS(svgNamespace, "image"), "svg image"],
+    [SVGScriptElement.prototype, document.createElementNS(svgNamespace, "script"), "svg script"]
   ];
 
   for (const [prototype, element, label] of cases) {

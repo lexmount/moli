@@ -418,6 +418,7 @@ pub(super) use geometry::{
     node_scroll_top_getter_function, node_scroll_top_setter_function,
     node_scroll_width_getter_function,
 };
+use global_attributes::canonical_fetch_priority_value;
 pub(super) use global_attributes::{
     anchor_target_getter_function, anchor_target_setter_function, area_no_href_setter_function,
     area_target_getter_function, area_target_setter_function, base_target_getter_function,
@@ -2836,6 +2837,114 @@ fn svg_script_type_setter_function<'s>(
     rv.set_undefined();
 }
 
+fn svg_fetch_priority_receiver<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+    interface: &'static str,
+    local_name: &'static str,
+    setter: bool,
+) -> Option<(*mut JsContextHost, DomHandle)> {
+    let Ok((runtime_ptr, handle)) =
+        node_runtime_and_handle_from_object_or_detached(scope, receiver)
+    else {
+        if setter {
+            throw_incompatible_setter_receiver(scope, interface, "fetchPriority");
+        } else {
+            throw_incompatible_getter_receiver(scope, interface, "fetchPriority");
+        }
+        return None;
+    };
+    let is_expected_element = unsafe { &*runtime_ptr }
+        .dom_host()
+        .node(handle)
+        .and_then(crate::dom::native::Node::as_element)
+        .is_some_and(|element| element.is_svg_element(local_name));
+    if !is_expected_element {
+        if setter {
+            throw_incompatible_setter_receiver(scope, interface, "fetchPriority");
+        } else {
+            throw_incompatible_getter_receiver(scope, interface, "fetchPriority");
+        }
+        return None;
+    }
+    Some((runtime_ptr, handle))
+}
+
+fn svg_fetch_priority_getter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+    interface: &'static str,
+    local_name: &'static str,
+) {
+    let Some((runtime_ptr, handle)) =
+        svg_fetch_priority_receiver(scope, args.this(), interface, local_name, false)
+    else {
+        return;
+    };
+    let raw = unsafe { &*runtime_ptr }
+        .dom_host()
+        .get_attribute(handle, "fetchpriority")
+        .unwrap_or_default();
+    let Some(value) = v8_string(scope, canonical_fetch_priority_value(&raw)) else {
+        rv.set_empty_string();
+        return;
+    };
+    rv.set(value.into());
+}
+
+fn svg_fetch_priority_setter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+    interface: &'static str,
+    local_name: &'static str,
+) {
+    let Some((runtime_ptr, handle)) =
+        svg_fetch_priority_receiver(scope, args.this(), interface, local_name, true)
+    else {
+        return;
+    };
+    let Some(value) = property_dom_string_value(scope, args.get(0), interface, "fetchPriority")
+    else {
+        return;
+    };
+    set_reflected_attribute(scope, runtime_ptr, handle, "fetchpriority", &value);
+    rv.set_undefined();
+}
+
+fn svg_image_fetch_priority_getter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    svg_fetch_priority_getter_function(scope, args, rv, "SVGImageElement", "image");
+}
+
+fn svg_image_fetch_priority_setter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    svg_fetch_priority_setter_function(scope, args, rv, "SVGImageElement", "image");
+}
+
+fn svg_script_fetch_priority_getter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    svg_fetch_priority_getter_function(scope, args, rv, "SVGScriptElement", "script");
+}
+
+fn svg_script_fetch_priority_setter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    svg_fetch_priority_setter_function(scope, args, rv, "SVGScriptElement", "script");
+}
+
 fn node_nonce_getter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -3612,6 +3721,12 @@ struct HtmlScriptElementPrototypeDeclaration {
 #[webapi(interface = web_api_interfaces::SVGScriptElement, enumerable)]
 struct SvgScriptElementPrototypeDeclaration {
     #[webapi(
+        accessor_property = "fetchPriority",
+        getter = svg_script_fetch_priority_getter_function,
+        setter = svg_script_fetch_priority_setter_function
+    )]
+    fetch_priority: (),
+    #[webapi(
         accessor_property = "type",
         getter = script_type_getter_function,
         setter = svg_script_type_setter_function
@@ -3623,6 +3738,17 @@ struct SvgScriptElementPrototypeDeclaration {
         setter = script_async_setter_function
     )]
     r#async: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::SVGImageElement, enumerable)]
+struct SvgImageElementPrototypeDeclaration {
+    #[webapi(
+        accessor_property = "fetchPriority",
+        getter = svg_image_fetch_priority_getter_function,
+        setter = svg_image_fetch_priority_setter_function
+    )]
+    fetch_priority: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -7358,6 +7484,7 @@ pub(crate) fn install_element_template_bindings<'s>(
         "HTMLMarqueeElement" => install!(HtmlMarqueeElementLegacyPrototypeDeclaration),
         "HTMLScriptElement" => install!(HtmlScriptElementPrototypeDeclaration),
         "SVGScriptElement" => install!(SvgScriptElementPrototypeDeclaration),
+        "SVGImageElement" => install!(SvgImageElementPrototypeDeclaration),
         "SVGAElement" => install!(SvgAElementRelListPrototypeDeclaration),
         "HTMLStyleElement" => install!(HtmlStyleElementPrototypeDeclaration),
         "SVGStyleElement" => install!(SvgStyleElementPrototypeDeclaration),
