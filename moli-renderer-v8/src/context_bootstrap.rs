@@ -13,6 +13,7 @@ mod css_runtime;
 pub(crate) mod css_stylesheet_runtime;
 mod dom_quad;
 mod dom_rect;
+mod dom_rect_list;
 mod event_document;
 mod event_legacy;
 pub(crate) mod event_target_dispatch;
@@ -246,6 +247,7 @@ pub(crate) use self::css_stylesheet_runtime::{
     sync_css_style_sheet_shadow_root_adopted_owner_tracking,
 };
 pub(crate) use self::dom_rect::build_dom_rect_object;
+pub(crate) use self::dom_rect_list::{build_dom_rect_list_object};
 pub(crate) use self::events::{
     EVENT_DISPATCHING_SLOT, EVENT_PASSIVE_SLOT, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT,
     EVENT_STOP_PROPAGATION_SLOT, EventHandlerType, apply_event_handler_return_value, clear_event_composed_path, event_attribute, event_backing,
