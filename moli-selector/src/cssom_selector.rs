@@ -903,7 +903,7 @@ fn parse_functional_pseudo_element_argument<'i>(
     }
 }
 
-fn consume_nested_component_value<'i>(
+pub(crate) fn consume_nested_component_value<'i>(
     input: &mut Parser<'i>,
     token: &Token<'i>,
 ) -> Result<(), cssparser::ParseError<()>> {
