@@ -42,6 +42,20 @@ pub(crate) fn apply_event_handler_return_value<'s>(
     }
 }
 
+pub(crate) fn apply_before_unload_event_handler_return_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event: v8::Local<'s, v8::Object>,
+    returned: v8::Local<'s, v8::String>,
+) {
+    if !event_is_before_unload_event(scope, event) {
+        return;
+    }
+    set_event_default_prevented(scope, event);
+    if before_unload_event_return_value_is_empty(scope, event) {
+        set_before_unload_event_return_value(scope, event, returned);
+    }
+}
+
 pub(in crate::context_bootstrap) fn event_prevent_default_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
