@@ -895,6 +895,44 @@ fn css_color_properties_use_pdb_entries() {
 }
 
 #[test]
+fn unresolved_legacy_color_functions_use_canonical_component_units() {
+    for (input, expected) in [
+        (
+            "rgba(calc(50 + (sign(1em - 10px) * 10)) 400% -400% / 50%)",
+            "rgb(calc(50 + (10 * sign(1em - 10px))) 255 0 / 0.5)",
+        ),
+        (
+            "hsla(calc(50deg + (sign(1em - 10px) * 10deg)) -100% 300% / 50%)",
+            "hsl(calc(50deg + (10deg * sign(1em - 10px))) 0 300 / 0.5)",
+        ),
+        (
+            "hwb(calc(110deg + (sign(1em - 10px) * 10deg)) 30% 50% / 50%)",
+            "hwb(calc(110deg + (10deg * sign(1em - 10px))) 30 50 / 0.5)",
+        ),
+        (
+            "hwb(120deg 30% 50% / calc(50% + (sign(1em - 10px) * 10%)))",
+            "hwb(120 30 50 / calc(50% + (10% * sign(1em - 10px))))",
+        ),
+    ] {
+        let parsed = parse_style_property_entries_for_cssom_write("color", input, false, None)
+            .unwrap_or_else(|| panic!("color should accept {input}"));
+        assert_eq!(parsed.entries.len(), 1);
+        assert_eq!(parsed.entries[0].value, expected);
+
+        let mut block = moli_css_parse::CssDeclarationBlock::default();
+        assert_ne!(
+            block.set_property("color", input, false),
+            moli_css_parse::CssSetResult::ParseError
+        );
+        assert_eq!(
+            pdb_property_value_for_cssom_query_with_side_entries(&block, "color", &[])
+                .as_deref(),
+            Some(expected)
+        );
+    }
+}
+
+#[test]
 fn background_image_serializes_resolution_math_with_stylo_parser() {
     let parsed = parse_style_property_entries_with_base(
         "background-image",
