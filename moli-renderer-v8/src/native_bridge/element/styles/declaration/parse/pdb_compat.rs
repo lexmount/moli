@@ -1,4 +1,5 @@
 use super::declaration_parser::{
+    canonical_unresolved_legacy_color_function,
     css_color_value_property_requires_stylo_parser, css_math_value_property_requires_stylo_parser,
     cssom_style_entry_requires_structured_parser, parse_animation_numeric_property_entries,
     parse_transition_numeric_property_entries,
@@ -709,6 +710,9 @@ pub(super) fn stylo_pdb_entries_for_property(
     if projection.set_result == moli_css_parse::CssSetResult::ParseError {
         return None;
     }
+    let canonical_unresolved_color = css_color_value_property_requires_stylo_parser(name)
+        .then(|| canonical_unresolved_legacy_color_function(value))
+        .flatten();
     let mut accepted_names = projection.stored_names.clone();
     append_unique_name(&mut accepted_names, name);
     let affected_names = projection.affected_names.clone();
@@ -728,12 +732,13 @@ pub(super) fn stylo_pdb_entries_for_property(
     let mut entries = Vec::new();
     for entry in block_entries {
         let entry_name = canonical_style_property_name(&entry.name);
-        let is_declared_empty_custom_property = entry.value.is_empty()
+        let mut entry_value = entry.value;
+        let is_declared_empty_custom_property = entry_value.is_empty()
             && !value.is_empty()
             && moli_css_parse::is_cssom_custom_property_name(&entry_name)
             && block.property_is_declared(&entry_name);
         if entry_name.is_empty()
-            || entry.value.is_empty() && !is_declared_empty_custom_property
+            || entry_value.is_empty() && !is_declared_empty_custom_property
             || entry.priority != priority
             || !accepted_names
                 .iter()
@@ -741,9 +746,14 @@ pub(super) fn stylo_pdb_entries_for_property(
         {
             return None;
         }
+        if entry_name == name
+            && let Some(canonical) = canonical_unresolved_color.as_ref()
+        {
+            entry_value.clone_from(canonical);
+        }
         entries.push(StyleEntry {
             name: entry_name,
-            value: entry.value,
+            value: entry_value,
             priority: entry.priority,
         });
     }
