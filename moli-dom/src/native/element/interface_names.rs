@@ -92,14 +92,17 @@ pub fn svg_element_interface_name(local_name: &str) -> &'static str {
     match local_name {
         "a" => "SVGAElement",
         "circle" => "SVGCircleElement",
+        "clipPath" => "SVGClipPathElement",
         "defs" => "SVGDefsElement",
         "desc" => "SVGDescElement",
         "ellipse" => "SVGEllipseElement",
+        "filter" => "SVGFilterElement",
         "foreignObject" => "SVGForeignObjectElement",
         "g" => "SVGGElement",
         "image" => "SVGImageElement",
         "line" => "SVGLineElement",
         "linearGradient" => "SVGLinearGradientElement",
+        "mask" => "SVGMaskElement",
         "metadata" => "SVGMetadataElement",
         "path" => "SVGPathElement",
         "pattern" => "SVGPatternElement",
@@ -115,6 +118,7 @@ pub fn svg_element_interface_name(local_name: &str) -> &'static str {
         "title" => "SVGTitleElement",
         "tspan" => "SVGTSpanElement",
         "use" => "SVGUseElement",
+        "view" => "SVGViewElement",
         _ => "SVGElement",
     }
 }
