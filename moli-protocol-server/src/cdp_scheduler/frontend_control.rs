@@ -202,12 +202,10 @@ impl CdpFrontendControlState {
                 send_cookie_checkpoint(scheduler, owner_lifecycle);
                 true
             }
-            CdpFrontendControlRequest::EnsureDefaultTarget { completion_tx } => {
-                let result = self
-                    .target_control
-                    .ensure_default_target_is_materialized(scheduler, frontend_router)
-                    .await;
-                let _ = completion_tx.send(result);
+            CdpFrontendControlRequest::EnsureDefaultTargetPublished { completion_tx } => {
+                self.target_control
+                    .ensure_default_target_is_published(scheduler);
+                let _ = completion_tx.send(Ok(()));
                 true
             }
             CdpFrontendControlRequest::Shutdown => false,

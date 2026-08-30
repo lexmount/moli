@@ -212,7 +212,7 @@ async fn ensure_default_target_is_published(state: &AppState) -> Result<(), Stri
         .shared_owner()
         .map_err(|error| error.to_string())?;
     endpoint
-        .ensure_default_target()
+        .ensure_default_target_published()
         .await
         .map_err(|error| error.to_string())
 }

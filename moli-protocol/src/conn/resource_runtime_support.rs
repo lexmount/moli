@@ -10,11 +10,16 @@ use super::{
 
 impl CdpConnection {
     pub(crate) fn invalidate_resource_runtime(&mut self) {
-        self.engine.reset_resource_runtime_without_loaded_page();
+        self.engine
+            .ensure_mut()
+            .reset_resource_runtime_without_loaded_page();
     }
 
     pub(crate) async fn invalidate_resource_runtime_async(&mut self) {
-        self.engine.reset_resource_runtime_async(None).await;
+        self.engine
+            .ensure_mut()
+            .reset_resource_runtime_async(None)
+            .await;
     }
 
     pub(crate) fn resource_storage_handles(&self) -> BrowserContextResourceStorageHandles {
@@ -30,9 +35,11 @@ impl CdpConnection {
         self.apply_active_engine_fetch_overrides();
         let storage = self.resource_storage_handles();
         self.engine
+            .ensure_mut()
             .ensure_resource_runtime_ready_for_navigation_storage(storage.into_navigation_storage())
             .map_err(|error| format!("failed to initialize resource runtime: {error}"))?;
         self.engine
+            .ensure()
             .resource_request_client()
             .ok_or_else(|| "resource request client unavailable".to_owned())
     }
@@ -63,9 +70,11 @@ impl CdpConnection {
         self.apply_navigation_load_input_engine_fetch_overrides(load_inputs);
         let storage = load_inputs.resource_storage_handles();
         self.engine
+            .ensure_mut()
             .ensure_resource_runtime_ready_for_navigation_storage(storage.into_navigation_storage())
             .map_err(|error| format!("failed to initialize resource runtime: {error}"))?;
         self.engine
+            .ensure()
             .resource_request_client()
             .ok_or_else(|| "resource request client unavailable".to_owned())
     }
@@ -77,6 +86,7 @@ impl CdpConnection {
         let Some(browser_context_id) = load_inputs.browser_context_id.as_deref() else {
             return self
                 .engine
+                .ensure()
                 .browser_context_runtime()
                 .shares_state_with(&load_inputs.renderer_runtime.runtime());
         };
@@ -85,6 +95,7 @@ impl CdpConnection {
                 && context.active_target_id() == load_inputs.root_frame_id.as_deref()
                 && self
                     .engine
+                    .ensure()
                     .browser_context_runtime()
                     .shares_state_with(&load_inputs.renderer_runtime.runtime())
         })
@@ -110,12 +121,12 @@ impl CdpConnection {
         let tls_verify_host = load_inputs
             .tls_verify_host_override
             .unwrap_or(self.base_tls_verify_host);
-        self.engine.set_browser_identity_override(browser_identity);
-        self.engine.set_http_proxy_override(http_proxy);
-        self.engine.set_http_no_proxy_override(http_no_proxy);
-        self.engine.set_tls_verify_host(tls_verify_host);
-        self.engine
-            .set_bypass_service_worker(load_inputs.bypass_service_worker);
+        let engine = self.engine.ensure_mut();
+        engine.set_browser_identity_override(browser_identity);
+        engine.set_http_proxy_override(http_proxy);
+        engine.set_http_no_proxy_override(http_no_proxy);
+        engine.set_tls_verify_host(tls_verify_host);
+        engine.set_bypass_service_worker(load_inputs.bypass_service_worker);
     }
 
     pub(crate) fn build_registered_browser_resource_runtime_for_navigation_load_inputs(
@@ -163,6 +174,7 @@ impl CdpConnection {
         self.apply_active_engine_fetch_overrides();
         let storage = self.resource_storage_handles();
         self.engine
+            .ensure_mut()
             .ensure_cookie_store_for_navigation_storage(storage.into_navigation_storage())
             .map_err(|error| format!("failed to initialize loader: {error}"))
     }
@@ -173,7 +185,10 @@ impl CdpConnection {
             .browser_context
             .as_mut()
             .and_then(|bc| bc.active_target.runtime_slot.loaded_page_mut());
-        self.engine.reset_resource_runtime_async(page).await;
+        self.engine
+            .ensure_mut()
+            .reset_resource_runtime_async(page)
+            .await;
     }
 
     pub(crate) async fn rebuild_resource_runtime_for_loaded_page_async(&mut self) {
@@ -184,6 +199,7 @@ impl CdpConnection {
                 .as_mut()
                 .and_then(|bc| bc.active_target.runtime_slot.loaded_page_mut());
             self.engine
+                .ensure_mut()
                 .rebuild_resource_runtime_for_page_with_storage_async(
                     storage.into_navigation_storage(),
                     page,
@@ -195,7 +211,10 @@ impl CdpConnection {
                 .browser_context
                 .as_mut()
                 .and_then(|bc| bc.active_target.runtime_slot.loaded_page_mut());
-            self.engine.reset_resource_runtime_async(page).await;
+            self.engine
+                .ensure_mut()
+                .reset_resource_runtime_async(page)
+                .await;
         }
     }
 
@@ -208,6 +227,7 @@ impl CdpConnection {
         let request_client = if self.navigation_load_inputs_use_primary_engine(&load_inputs) {
             self.apply_navigation_load_input_engine_fetch_overrides(&load_inputs);
             self.engine
+                .ensure_mut()
                 .rebuild_resource_request_client_for_navigation_storage(
                     storage.into_navigation_storage(),
                 )

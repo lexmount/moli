@@ -143,7 +143,7 @@ impl CdpConnection {
                 inactive_browser_contexts,
                 &route,
             )?;
-            return Some((engine, slot));
+            return Some((engine.ensure_mut(), slot));
         }
 
         let (browser_context_id, target_id) = match &route {

@@ -116,7 +116,10 @@ impl CdpConnection {
                 .expect("active BrowserContext owner must be live")
             });
             self.apply_scheduler_senders_to_navigation_engine(&next_engine);
-            let active_engine = self.engine.replace(next_engine);
+            let active_engine = self
+                .engine
+                .replace(next_engine)
+                .expect("active target must have a navigation engine");
             self.retain_background_navigation_engine(
                 browser_context_id,
                 active_target_id,
@@ -147,7 +150,10 @@ impl CdpConnection {
         )
         .expect("active BrowserContext owner must be live");
         self.apply_scheduler_senders_to_navigation_engine(&next_engine);
-        let active_engine = self.engine.replace(next_engine);
+        let active_engine = self
+            .engine
+            .replace(next_engine)
+            .expect("active target must have a navigation engine");
         self.retain_background_navigation_engine(
             browser_context_id,
             active_target_id,

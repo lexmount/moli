@@ -118,6 +118,12 @@ pub(crate) struct CdpScheduler {
     page_screencasts: HashMap<Option<String>, PageScreencastSchedule>,
 }
 
+#[derive(Clone, Copy)]
+enum DefaultTargetRuntimeInitialization {
+    Materialized,
+    Deferred,
+}
+
 impl CdpScheduler {
     pub(crate) fn page_residence_identity_for_devtools_context(
         &mut self,
@@ -715,16 +721,59 @@ impl CdpScheduler {
         navigation_runtime_config: NavigationRuntimeConfig,
         target_host_integration: Option<CdpTargetHostIntegration>,
     ) -> (Self, CdpSchedulerEventReceivers) {
-        let mut scheduler = Self::new(
-            CdpConnection::new_with_initial_storage_partition_and_runtime_config(
-                initial_storage_partition,
-                navigation_runtime_config,
-            ),
-        );
+        Self::new_with_default_target_runtime_initialization(
+            initial_storage_partition,
+            navigation_runtime_config,
+            target_host_integration,
+            DefaultTargetRuntimeInitialization::Materialized,
+        )
+    }
+
+    pub(crate) fn new_with_deferred_default_target_runtime(
+        initial_storage_partition: CdpInitialStoragePartition,
+        navigation_runtime_config: NavigationRuntimeConfig,
+        target_host_integration: Option<CdpTargetHostIntegration>,
+    ) -> (Self, CdpSchedulerEventReceivers) {
+        Self::new_with_default_target_runtime_initialization(
+            initial_storage_partition,
+            navigation_runtime_config,
+            target_host_integration,
+            DefaultTargetRuntimeInitialization::Deferred,
+        )
+    }
+
+    fn new_with_default_target_runtime_initialization(
+        initial_storage_partition: CdpInitialStoragePartition,
+        navigation_runtime_config: NavigationRuntimeConfig,
+        target_host_integration: Option<CdpTargetHostIntegration>,
+        initialization: DefaultTargetRuntimeInitialization,
+    ) -> (Self, CdpSchedulerEventReceivers) {
+        let conn = match initialization {
+            DefaultTargetRuntimeInitialization::Materialized => {
+                CdpConnection::new_with_initial_storage_partition_and_runtime_config(
+                    initial_storage_partition,
+                    navigation_runtime_config,
+                )
+            }
+            DefaultTargetRuntimeInitialization::Deferred => {
+                CdpConnection::new_with_deferred_navigation_runtime(
+                    initial_storage_partition,
+                    navigation_runtime_config,
+                )
+            }
+        };
+        let mut scheduler = Self::new(conn);
         if let Some(target_host_integration) = target_host_integration {
             target_host_integration.install(&mut scheduler.conn);
         }
-        scheduler.conn.install_default_browser_target();
+        match initialization {
+            DefaultTargetRuntimeInitialization::Materialized => {
+                scheduler.conn.install_default_browser_target();
+            }
+            DefaultTargetRuntimeInitialization::Deferred => {
+                scheduler.conn.publish_default_browser_target();
+            }
+        }
         scheduler.conn.enable_default_target_on_auto_attach();
         let (background_event_tx, background_event_rx) = mpsc::unbounded_channel();
         scheduler

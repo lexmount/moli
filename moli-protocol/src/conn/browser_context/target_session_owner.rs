@@ -2404,7 +2404,7 @@ impl CdpConnection {
             Some(TargetSessionOwnerRef::NoLoadedBrowserContext) | None => {
                 TargetNavigationLoadInputs::no_loaded_browser_context(
                     self.initial_storage_partition.page_storage_handles(),
-                    self.engine.browser_context_owner_access(),
+                    self.engine.ensure().browser_context_owner_access(),
                 )
             }
             Some(owner) => owner.navigation_load_inputs(),

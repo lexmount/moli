@@ -281,10 +281,7 @@ pub(super) fn execute_devtools_create_target_command(
         restore_previously_active_browser_context(conn, restore_browser_context_id.as_deref());
         return Err(error);
     }
-    if conn.browser_context.is_none() && conn.inactive_browser_contexts.is_empty() {
-        let id = conn.gen_bc_id();
-        conn.insert_browser_context(conn.new_browser_context(id));
-    }
+    conn.ensure_browser_context_for_implicit_target_creation();
 
     let target_id = conn.gen_target_id();
     let default_target_id = conn.default_target_id();

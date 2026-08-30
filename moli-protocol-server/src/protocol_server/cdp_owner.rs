@@ -206,7 +206,7 @@ fn spawn_owner_task(
 ) -> oneshot::Receiver<()> {
     spawn_protocol_local_task("cdp-owner", move || async move {
         let (scheduler, scheduler_receivers) =
-            CdpScheduler::new_with_initial_state_runtime_config_and_target_host_integration(
+            CdpScheduler::new_with_deferred_default_target_runtime(
                 initial_storage_partition,
                 navigation_runtime_config,
                 target_host_integration,

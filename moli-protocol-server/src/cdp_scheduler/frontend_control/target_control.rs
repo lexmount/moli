@@ -8,7 +8,6 @@ use super::super::{CdpScheduler, ProtocolOutputSequence};
 pub(super) struct CdpFrontendTargetControl {
     next_command_id: u64,
     browser_control_session_id: Option<String>,
-    default_page_materialized: bool,
 }
 
 impl Default for CdpFrontendTargetControl {
@@ -16,7 +15,6 @@ impl Default for CdpFrontendTargetControl {
         Self {
             next_command_id: u64::MAX,
             browser_control_session_id: None,
-            default_page_materialized: false,
         }
     }
 }
@@ -28,10 +26,6 @@ impl CdpFrontendTargetControl {
         frontend_router: &CdpFrontendRouter,
         target_id: &str,
     ) -> Result<String> {
-        if target_id == scheduler.conn.default_tab_target_id() {
-            self.ensure_default_target_is_materialized(scheduler, frontend_router)
-                .await?;
-        }
         self.attach_target_session(scheduler, frontend_router, target_id)
             .await
     }
@@ -58,9 +52,6 @@ impl CdpFrontendTargetControl {
             .as_str()
             .with_context(|| format!("CDP target {target_id} did not return an attach session"))?
             .to_owned();
-        if target_id == scheduler.conn.default_target_id() {
-            self.default_page_materialized = true;
-        }
         Ok(session_id)
     }
 
@@ -69,8 +60,6 @@ impl CdpFrontendTargetControl {
         scheduler: &mut CdpScheduler,
         frontend_router: &CdpFrontendRouter,
     ) -> Result<String> {
-        self.ensure_default_target_is_materialized(scheduler, frontend_router)
-            .await?;
         let response = self
             .execute_command(
                 scheduler,
@@ -129,8 +118,6 @@ impl CdpFrontendTargetControl {
         frontend_router: &CdpFrontendRouter,
         target_url: &str,
     ) -> Result<CdpCreatedTarget> {
-        self.ensure_default_target_is_materialized(scheduler, frontend_router)
-            .await?;
         let response = self
             .execute_command(
                 scheduler,
@@ -201,44 +188,8 @@ impl CdpFrontendTargetControl {
         Ok(session_id)
     }
 
-    pub(super) async fn ensure_default_target_is_materialized(
-        &mut self,
-        scheduler: &mut CdpScheduler,
-        frontend_router: &CdpFrontendRouter,
-    ) -> Result<()> {
-        if self.default_page_materialized {
-            return Ok(());
-        }
-        // A fresh connection may reuse its unclaimed default placeholder for
-        // the first createTarget. The protocol server publishes that default
-        // ID permanently, so materialize it before creating another target.
-        let default_target_id = scheduler.conn.default_target_id().to_owned();
-        let control_session_id = self
-            .ensure_browser_control_session(scheduler, frontend_router)
-            .await?;
-        let response = self
-            .execute_command(
-                scheduler,
-                frontend_router,
-                Some(&control_session_id),
-                "Target.attachToTarget",
-                json!({ "targetId": default_target_id, "flatten": true }),
-            )
-            .await?;
-        let reservation_session_id = response["result"]["sessionId"]
-            .as_str()
-            .context("default target reservation returned no sessionId")?
-            .to_owned();
-        self.execute_command(
-            scheduler,
-            frontend_router,
-            Some(&control_session_id),
-            "Target.detachFromTarget",
-            json!({ "sessionId": reservation_session_id }),
-        )
-        .await?;
-        self.default_page_materialized = true;
-        Ok(())
+    pub(super) fn ensure_default_target_is_published(&mut self, scheduler: &mut CdpScheduler) {
+        scheduler.conn.publish_default_browser_target();
     }
 
     async fn execute_command(

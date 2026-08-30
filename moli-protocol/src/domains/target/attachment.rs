@@ -135,6 +135,7 @@ fn do_attach(conn: &mut CdpConnection, cmd: &Cmd<'_>, target_id: &str) -> Target
         // AttachToBrowserTarget action, not to generic attachment of a known host.
         return TargetCommandTaskStep::Complete(attach_browser_target(conn, cmd.session_id));
     }
+    conn.ensure_default_target_live(target_id);
     let attach_from_browser_session = conn.is_browser_session_id(cmd.session_id);
     if conn
         .primary_page_target_id_for_tab_target_id(target_id)

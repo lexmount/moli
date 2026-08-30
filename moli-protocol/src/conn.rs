@@ -1,4 +1,5 @@
 use std::{
+    cell::OnceCell,
     collections::{HashMap, HashSet},
     path::PathBuf,
     sync::{
@@ -117,7 +118,10 @@ pub use moli_protocol_cdp::{
     CdpRendererCommandAccess, CdpRendererCommandPolicy, CdpRendererCommandReplacement,
     CdpRendererCommandReplayDispatch, CdpRequest, ParsedCdpCommand,
 };
-pub(crate) use target::{CdpSessionRoute, TargetActivationTransition, TargetHandlerAccessMode};
+use target::DEFAULT_BROWSER_CONTEXT_ID;
+pub(crate) use target::{
+    CdpSessionRoute, DefaultTargetLifecycle, TargetActivationTransition, TargetHandlerAccessMode,
+};
 
 #[derive(Clone, Debug)]
 pub enum CdpTargetHostLifecycleDelta {
@@ -1045,42 +1049,100 @@ pub(crate) struct ServiceWorkerAutoAttachRelatedOwnerSession {
 /// BrowserContext network roots. A plain field would only be dropped after the
 /// Drop implementation returned, which reverses that order.
 struct NavigationEngineOwnerSlot {
-    engine: Option<NavigationEngine>,
+    engine: OnceCell<NavigationEngine>,
+    runtime_config: NavigationRuntimeConfig,
+    renderer_publication_sender: Option<moli_core::RendererOutputTransportSender>,
 }
 
 impl NavigationEngineOwnerSlot {
-    fn new(engine: NavigationEngine) -> Self {
+    fn materialized(engine: NavigationEngine) -> Self {
+        let runtime_config = engine.runtime_config();
+        let slot = Self {
+            engine: OnceCell::new(),
+            runtime_config,
+            renderer_publication_sender: None,
+        };
+        slot.engine
+            .set(engine)
+            .expect("fresh navigation engine slot must be empty");
+        slot
+    }
+
+    fn deferred(runtime_config: NavigationRuntimeConfig) -> Self {
         Self {
-            engine: Some(engine),
+            engine: OnceCell::new(),
+            runtime_config,
+            renderer_publication_sender: None,
         }
     }
 
-    fn replace(&mut self, engine: NavigationEngine) -> NavigationEngine {
+    #[cfg(test)]
+    fn is_materialized(&self) -> bool {
+        self.engine.get().is_some()
+    }
+
+    fn runtime_config(&self) -> NavigationRuntimeConfig {
         self.engine
-            .replace(engine)
-            .expect("CDP active navigation engine was already taken")
+            .get()
+            .map(NavigationEngine::runtime_config)
+            .unwrap_or_else(|| self.runtime_config.clone())
+    }
+
+    fn fetch_config(&self) -> &moli_fetch::FetchConfig {
+        self.engine
+            .get()
+            .map(NavigationEngine::fetch_config)
+            .unwrap_or_else(|| self.runtime_config.fetch_config())
+    }
+
+    fn layout_policy(&self) -> LayoutPolicy {
+        self.engine
+            .get()
+            .map(NavigationEngine::layout_policy)
+            .unwrap_or_else(|| self.runtime_config.layout_policy())
+    }
+
+    fn set_renderer_output_transport_sender(
+        &mut self,
+        sender: moli_core::RendererOutputTransportSender,
+    ) {
+        if let Some(engine) = self.engine.get() {
+            engine.set_renderer_output_transport_sender(sender.clone());
+        }
+        self.renderer_publication_sender = Some(sender);
+    }
+
+    fn replace(&mut self, engine: NavigationEngine) -> Option<NavigationEngine> {
+        self.runtime_config = engine.runtime_config();
+        if let Some(sender) = self.renderer_publication_sender.as_ref() {
+            engine.set_renderer_output_transport_sender(sender.clone());
+        }
+        let previous = self.engine.take();
+        self.engine
+            .set(engine)
+            .expect("navigation engine slot must be empty after take");
+        previous
     }
 
     fn take(&mut self) -> Option<NavigationEngine> {
         self.engine.take()
     }
-}
 
-impl std::ops::Deref for NavigationEngineOwnerSlot {
-    type Target = NavigationEngine;
-
-    fn deref(&self) -> &Self::Target {
-        self.engine
-            .as_ref()
-            .expect("CDP active navigation engine was already taken")
+    fn ensure(&self) -> &NavigationEngine {
+        self.engine.get_or_init(|| {
+            let engine = NavigationEngine::new_with_runtime_config(self.runtime_config.clone());
+            if let Some(sender) = self.renderer_publication_sender.as_ref() {
+                engine.set_renderer_output_transport_sender(sender.clone());
+            }
+            engine
+        })
     }
-}
 
-impl std::ops::DerefMut for NavigationEngineOwnerSlot {
-    fn deref_mut(&mut self) -> &mut Self::Target {
+    fn ensure_mut(&mut self) -> &mut NavigationEngine {
+        self.ensure();
         self.engine
-            .as_mut()
-            .expect("CDP active navigation engine was already taken")
+            .get_mut()
+            .expect("navigation engine was just materialized")
     }
 }
 
@@ -1105,6 +1167,7 @@ pub struct CdpConnection {
     pub auto_attach_wait_for_debugger_on_start: bool,
     auto_attach_owner_sessions: HashMap<Option<String>, AutoAttachOwnerPolicy>,
     target_control: TargetControlPlane,
+    default_target_lifecycle: DefaultTargetLifecycle,
     service_worker_auto_attach_related_owners: Vec<ServiceWorkerAutoAttachRelatedOwner>,
     service_worker_pause_on_start_owner_sessions: HashSet<Option<String>>,
     dedicated_worker_pause_on_start_owner_sessions: HashSet<Option<String>>,
@@ -1324,11 +1387,42 @@ impl CdpConnection {
         )
     }
 
+    /// Creates protocol state without starting the renderer runtime.
+    ///
+    /// The runtime is materialized on first engine-backed operation. This is
+    /// intended for browser-level CDP owners that publish a target before any
+    /// frontend attaches to its page.
+    pub fn new_with_deferred_navigation_runtime(
+        initial_storage_partition: CdpInitialStoragePartition,
+        navigation_runtime_config: NavigationRuntimeConfig,
+    ) -> Self {
+        let initial_storage_partition =
+            CdpInitialStoragePartitionOwner::from_initial_storage_partition(
+                initial_storage_partition,
+            );
+        Self::new_with_initial_storage_partition_owner_and_engine(
+            initial_storage_partition,
+            NavigationEngineOwnerSlot::deferred(navigation_runtime_config),
+        )
+    }
+
     fn new_with_initial_storage_partition_owner_and_runtime_config(
         initial_storage_partition: CdpInitialStoragePartitionOwner,
         navigation_runtime_config: NavigationRuntimeConfig,
     ) -> Self {
-        let fetch_config = navigation_runtime_config.fetch_config();
+        Self::new_with_initial_storage_partition_owner_and_engine(
+            initial_storage_partition,
+            NavigationEngineOwnerSlot::materialized(NavigationEngine::new_with_runtime_config(
+                navigation_runtime_config,
+            )),
+        )
+    }
+
+    fn new_with_initial_storage_partition_owner_and_engine(
+        initial_storage_partition: CdpInitialStoragePartitionOwner,
+        engine: NavigationEngineOwnerSlot,
+    ) -> Self {
+        let fetch_config = engine.fetch_config();
         let base_browser_identity = fetch_config.browser_identity().clone();
         let base_http_proxy = fetch_config.http_proxy().map(str::to_owned);
         let base_http_no_proxy = fetch_config.http_no_proxy().map(str::to_owned);
@@ -1344,6 +1438,7 @@ impl CdpConnection {
             auto_attach_wait_for_debugger_on_start: false,
             auto_attach_owner_sessions: HashMap::new(),
             target_control: TargetControlPlane::default(),
+            default_target_lifecycle: DefaultTargetLifecycle::default(),
             service_worker_auto_attach_related_owners: Vec::new(),
             service_worker_pause_on_start_owner_sessions: HashSet::new(),
             dedicated_worker_pause_on_start_owner_sessions: HashSet::new(),
@@ -1381,9 +1476,7 @@ impl CdpConnection {
             target_host_lifecycle_observer: None,
             scheduler_state: CdpConnectionSchedulerState::default(),
             none_session_owner_route_override: None,
-            engine: NavigationEngineOwnerSlot::new(NavigationEngine::new_with_runtime_config(
-                navigation_runtime_config,
-            )),
+            engine,
             retained_background_navigation_engines: HashMap::new(),
         }
     }
@@ -3020,7 +3113,8 @@ impl CdpConnection {
         }
         let retained_background_navigation_engine_count =
             self.retained_background_navigation_engines.len();
-        let active_renderer_owner_id = self.engine.renderer_owner_id_for_diagnostics();
+        let active_engine = self.engine.ensure();
+        let active_renderer_owner_id = active_engine.renderer_owner_id_for_diagnostics();
         let mut retained_background_navigation_engine_renderer_owner_ids = HashSet::new();
         let mut estimated_renderer_owner_ids = HashSet::new();
         estimated_renderer_owner_ids.insert(active_renderer_owner_id);
@@ -3035,10 +3129,11 @@ impl CdpConnection {
         let retained_background_navigation_engine_renderer_owner_count =
             retained_background_navigation_engine_renderer_owner_ids.len();
         let estimated_renderer_owner_count = estimated_renderer_owner_ids.len();
-        let document_isolate_model = self.engine.document_isolate_model_for_diagnostics();
+        let document_isolate_model = active_engine.document_isolate_model_for_diagnostics();
         let estimated_document_isolate_count =
             loaded_document_page_count + pending_document_page_build_count;
-        let document_isolate_accounting = self.engine.document_isolate_accounting_for_diagnostics();
+        let document_isolate_accounting =
+            active_engine.document_isolate_accounting_for_diagnostics();
         let document_isolate_accounting = json!({
             "scope": "renderer-process",
             "created": document_isolate_accounting.created,
@@ -3050,8 +3145,7 @@ impl CdpConnection {
             + shared_worker_running_worker_isolate_count;
         let estimated_live_v8_isolate_count =
             estimated_document_isolate_count + estimated_worker_isolate_count;
-        let active_navigation_engine_resource_runtime = self
-            .engine
+        let active_navigation_engine_resource_runtime = active_engine
             .resource_request_client()
             .map(|client| client.resource_runtime_diagnostics());
         let active_navigation_engine_resource_runtime_id =
@@ -3074,12 +3168,12 @@ impl CdpConnection {
                 "targetDiscoveryEnabled": self.target_discovery_enabled,
                 "targetInfoChangeEventsEnabled": self.target_info_change_events_enabled,
                 "activeNavigationEngine": {
-                    "imageFetchEnabled": self.engine.image_fetch_enabled(),
-                    "optionalResourceFetchMask": self.engine.optional_resource_fetch_mask().bits(),
-                    "subframeLoadingEnabled": self.engine.subframe_loading_enabled(),
+                    "imageFetchEnabled": active_engine.image_fetch_enabled(),
+                    "optionalResourceFetchMask": active_engine.optional_resource_fetch_mask().bits(),
+                    "subframeLoadingEnabled": active_engine.subframe_loading_enabled(),
                     "resourceRuntimeId": active_navigation_engine_resource_runtime_id,
                     "networkMemoryCache": active_navigation_engine_memory_cache,
-                    "browserContextRuntime": self.engine
+                    "browserContextRuntime": active_engine
                         .browser_context_runtime()
                         .moli_memory_diagnostics(),
                 },
@@ -3217,6 +3311,18 @@ impl CdpConnection {
         browser_context
     }
 
+    pub(crate) fn ensure_browser_context_for_implicit_target_creation(&mut self) {
+        if self.browser_context.is_some() || !self.inactive_browser_contexts.is_empty() {
+            return;
+        }
+        let browser_context_id = if self.default_target_lifecycle.is_placeholder() {
+            self.default_browser_context_id().to_owned()
+        } else {
+            self.gen_bc_id()
+        };
+        self.insert_browser_context(self.new_browser_context(browser_context_id));
+    }
+
     fn apply_global_browser_context_state(&self, browser_context: &mut BrowserContext) {
         browser_context
             .network_policy
@@ -3284,7 +3390,7 @@ impl CdpConnection {
     }
 
     pub fn default_browser_context_id(&self) -> &'static str {
-        "BID-default"
+        DEFAULT_BROWSER_CONTEXT_ID
     }
 
     pub fn default_target_id(&self) -> &'static str {
@@ -3293,6 +3399,112 @@ impl CdpConnection {
 
     pub fn default_tab_target_id(&self) -> &'static str {
         DEFAULT_CDP_TAB_TARGET_ID
+    }
+
+    pub(crate) fn devtools_target_info(&self, target_id: &str) -> Option<DevToolsTargetInfo> {
+        if let Some(page_target_id) = self.primary_page_target_id_for_tab_target_id(target_id) {
+            let page_target_info = self.devtools_page_or_worker_target_info(page_target_id)?;
+            return self
+                .target_control
+                .tab_target_info_for_page_target_info(page_target_info);
+        }
+        self.devtools_page_or_worker_target_info(target_id)
+    }
+
+    fn devtools_page_or_worker_target_info(&self, target_id: &str) -> Option<DevToolsTargetInfo> {
+        self.browser_contexts()
+            .find_map(|browser_context| browser_context.devtools_target_info(target_id))
+            .or_else(|| {
+                (target_id == DEFAULT_CDP_PAGE_TARGET_ID)
+                    .then(|| self.default_target_lifecycle.placeholder_page_info())
+                    .flatten()
+            })
+    }
+
+    pub(crate) fn devtools_target_infos(&self) -> Vec<DevToolsTargetInfo> {
+        let mut target_infos = Vec::new();
+        if let Some(page_target_info) = self.default_target_lifecycle.placeholder_page_info() {
+            if let Some(tab_target_info) = self
+                .target_control
+                .tab_target_info_for_page_target_info(page_target_info.clone())
+            {
+                target_infos.push(tab_target_info);
+            }
+            target_infos.push(page_target_info);
+        }
+        for browser_context in self.browser_contexts() {
+            for mut page_or_worker_target_info in browser_context.devtools_target_infos() {
+                if let Some(target_id) = page_or_worker_target_info.target_id.as_ref() {
+                    page_or_worker_target_info.moli_popup_id =
+                        browser_context.target_popup_id(target_id.as_str());
+                }
+                if let Some(tab_target_info) = self
+                    .target_control
+                    .tab_target_info_for_page_target_info(page_or_worker_target_info.clone())
+                {
+                    target_infos.push(tab_target_info);
+                }
+                target_infos.push(page_or_worker_target_info);
+            }
+        }
+        target_infos
+    }
+
+    pub fn publish_default_browser_target(&mut self) {
+        if !self.default_target_lifecycle.publish() {
+            return;
+        }
+        let default_target_id = self.default_target_id().to_owned();
+        self.register_top_level_page_target(&default_target_id);
+        self.notify_target_host_activated(&default_target_id);
+    }
+
+    /// Crosses the default target's placeholder-to-live boundary when the
+    /// requested operation genuinely needs a page owner.
+    pub(crate) fn ensure_default_target_live(&mut self, target_id: &str) {
+        if self
+            .default_target_lifecycle
+            .is_placeholder_target(target_id)
+        {
+            self.install_default_browser_target();
+        }
+    }
+
+    pub(crate) fn default_placeholder_is_logically_active(&self, target_id: &str) -> bool {
+        self.default_target_lifecycle
+            .is_placeholder_target(target_id)
+            && self.browser_contexts().all(|browser_context| {
+                !browser_context.has_active_target()
+                    && browser_context.background_targets.is_empty()
+            })
+    }
+
+    pub(crate) fn close_default_target_placeholder(
+        &mut self,
+        target_id: &str,
+    ) -> Option<TargetEventPlan> {
+        if !self
+            .default_target_lifecycle
+            .is_placeholder_target(target_id)
+        {
+            return None;
+        }
+
+        let target_host_closure = self.prepare_target_host_closure(DEFAULT_CDP_PAGE_TARGET_ID);
+        let (detached_info_deltas, destroyed_deltas) = target_host_closure.into_parts();
+        let mut plan = self.prepared_target_host_deltas_event_plan(detached_info_deltas);
+        plan.extend(self.detach_closed_top_level_target_sessions_event_plan(
+            DEFAULT_CDP_PAGE_TARGET_ID,
+            Some("Render process gone."),
+        ));
+        let closed = self.default_target_lifecycle.close_placeholder(target_id);
+        debug_assert!(closed, "validated default placeholder must close");
+        plan.extend(self.prepared_target_host_deltas_event_plan(destroyed_deltas));
+        Some(plan)
+    }
+
+    pub(crate) fn mark_default_browser_target_closed(&mut self) {
+        self.default_target_lifecycle.mark_closed();
     }
 
     pub(crate) fn register_top_level_page_target(&mut self, page_target_id: &str) -> String {
@@ -3439,11 +3651,8 @@ impl CdpConnection {
     }
 
     pub(crate) fn tab_target_info(&self, tab_target_id: &str) -> Option<DevToolsTargetInfo> {
-        let page_target_id = self.primary_page_target_id_for_tab_target_id(tab_target_id)?;
-        let page_target_info = self
-            .browser_contexts()
-            .find_map(|browser_context| browser_context.devtools_target_info(page_target_id))?;
-        self.tab_target_info_for_page_target_info(&page_target_info)
+        let target_info = self.devtools_target_info(tab_target_id)?;
+        (target_info.kind == DevToolsTargetKind::Tab).then_some(target_info)
     }
 
     pub(crate) fn set_target_discovery_for_owner(
@@ -3717,10 +3926,7 @@ impl CdpConnection {
     }
 
     fn target_info_for_host_delta(&self, target_id: &str) -> Option<DevToolsTargetInfo> {
-        self.tab_target_info(target_id).or_else(|| {
-            self.browser_contexts()
-                .find_map(|browser_context| browser_context.devtools_target_info(target_id))
-        })
+        self.devtools_target_info(target_id)
     }
 
     fn exact_target_info_changed_events_for_all_observer_owners(
@@ -3777,19 +3983,51 @@ impl CdpConnection {
     }
 
     pub fn install_default_browser_target(&mut self) {
-        if self.browser_context.is_some() || !self.inactive_browser_contexts.is_empty() {
+        if self.default_target_lifecycle.is_live() || self.default_target_lifecycle.is_closed() {
             return;
         }
 
-        let mut browser_context =
-            self.new_browser_context(self.default_browser_context_id().to_owned());
-        browser_context.set_active_target_id(self.default_target_id().to_owned());
-        browser_context.set_target_url("about:blank".to_owned());
-        browser_context.begin_active_target_initial_empty_document("about:blank".to_owned());
-        self.insert_browser_context(browser_context);
+        let was_placeholder = self.default_target_lifecycle.is_placeholder();
+        let default_browser_context_id = self.default_browser_context_id().to_owned();
         let default_target_id = self.default_target_id().to_owned();
-        self.register_top_level_page_target(&default_target_id);
-        self.notify_target_host_activated(&default_target_id);
+        if !self.has_browser_context_id(&default_browser_context_id) {
+            let mut browser_context = self.new_browser_context(default_browser_context_id.clone());
+            browser_context.set_active_target_id(default_target_id.clone());
+            browser_context.set_target_url("about:blank".to_owned());
+            browser_context.begin_active_target_initial_empty_document("about:blank".to_owned());
+            self.insert_browser_context(browser_context);
+        } else {
+            let browser_context = self
+                .browser_context_by_id_mut(&default_browser_context_id)
+                .expect("known default BrowserContext must remain addressable");
+            if !browser_context.is_active_target(&default_target_id)
+                && browser_context
+                    .background_target(&default_target_id)
+                    .is_none()
+            {
+                if browser_context.has_active_target() {
+                    browser_context.stage_background_target(
+                        default_target_id.clone(),
+                        None,
+                        "about:blank".to_owned(),
+                        Some("about:blank".to_owned()),
+                        None,
+                    );
+                } else {
+                    browser_context.set_active_target_id(default_target_id.clone());
+                    browser_context.set_target_url("about:blank".to_owned());
+                    browser_context
+                        .begin_active_target_initial_empty_document("about:blank".to_owned());
+                }
+            }
+        }
+        if self.target_control.host_kind(&default_target_id).is_none() {
+            self.register_top_level_page_target(&default_target_id);
+        }
+        self.default_target_lifecycle.mark_live();
+        if !was_placeholder {
+            self.notify_target_host_activated(&default_target_id);
+        }
     }
 
     pub fn enable_default_target_on_auto_attach(&mut self) {

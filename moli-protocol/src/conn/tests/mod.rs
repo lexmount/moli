@@ -49,6 +49,157 @@ mod resource_runtime;
 mod site_data;
 
 #[test]
+fn published_default_target_defers_navigation_runtime_until_materialization() {
+    let mut conn = CdpConnection::new_with_deferred_navigation_runtime(
+        crate::CdpInitialStoragePartition::memory(),
+        NavigationRuntimeConfig::default(),
+    );
+
+    assert!(!conn.engine.is_materialized());
+    let (renderer_publication_sender, _renderer_publication_receiver) =
+        moli_core::renderer_output_transport_channel();
+    conn.set_renderer_publication_sender(renderer_publication_sender);
+    conn.publish_default_browser_target();
+
+    assert!(!conn.engine.is_materialized());
+    let page = conn
+        .devtools_target_info(conn.default_target_id())
+        .expect("published default page target");
+    let tab = conn
+        .devtools_target_info(conn.default_tab_target_id())
+        .expect("published default tab target");
+    assert_eq!(page.url, "about:blank");
+    assert_eq!(tab.url, "about:blank");
+
+    conn.install_default_browser_target();
+
+    assert!(conn.engine.is_materialized());
+    assert!(
+        conn.devtools_target_info(conn.default_target_id())
+            .is_some()
+    );
+    assert_eq!(
+        conn.browser_context
+            .as_ref()
+            .and_then(BrowserContext::active_target_id),
+        Some(conn.default_target_id())
+    );
+}
+
+fn deferred_default_connection() -> CdpConnection {
+    let mut conn = CdpConnection::new_with_deferred_navigation_runtime(
+        crate::CdpInitialStoragePartition::memory(),
+        NavigationRuntimeConfig::default(),
+    );
+    conn.publish_default_browser_target();
+    conn
+}
+
+#[tokio::test]
+async fn activating_the_only_default_placeholder_does_not_start_the_runtime() {
+    let mut conn = deferred_default_connection();
+    let target_id = conn.default_target_id();
+    let raw = json!({
+        "id": 1,
+        "method": "Target.activateTarget",
+        "params": { "targetId": target_id },
+    })
+    .to_string();
+
+    let messages = conn.process_message_messages_only_for_test(&raw).await;
+
+    assert_eq!(messages, vec![json!({ "id": 1, "result": {} })]);
+    assert!(!conn.engine.is_materialized());
+    assert!(conn.devtools_target_info(target_id).is_some());
+}
+
+#[tokio::test]
+async fn closing_the_default_placeholder_does_not_start_the_runtime() {
+    let mut conn = deferred_default_connection();
+    let raw = json!({
+        "id": 2,
+        "method": "Target.closeTarget",
+        "params": { "targetId": conn.default_tab_target_id() },
+    })
+    .to_string();
+
+    let messages = conn.process_message_messages_only_for_test(&raw).await;
+
+    assert_eq!(
+        messages.first(),
+        Some(&json!({ "id": 2, "result": { "success": true } }))
+    );
+    assert!(!conn.engine.is_materialized());
+    assert!(
+        conn.devtools_target_info(conn.default_target_id())
+            .is_none()
+    );
+    assert!(
+        conn.target_registry_host_kind(conn.default_target_id())
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn creating_a_target_preserves_the_published_default_as_a_placeholder() {
+    let mut conn = deferred_default_connection();
+    let raw = json!({
+        "id": 3,
+        "method": "Target.createTarget",
+        "params": { "url": "about:blank" },
+    })
+    .to_string();
+
+    let messages = conn.process_message_messages_only_for_test(&raw).await;
+    let created_target_id = messages
+        .iter()
+        .find(|message| message["id"] == json!(3))
+        .and_then(|message| message["result"]["targetId"].as_str())
+        .expect("createTarget response");
+
+    assert_ne!(created_target_id, conn.default_target_id());
+    assert!(conn.engine.is_materialized());
+    assert!(conn.default_target_lifecycle.is_placeholder());
+    assert!(
+        conn.devtools_target_info(conn.default_target_id())
+            .is_some()
+    );
+    assert_eq!(
+        conn.browser_context
+            .as_ref()
+            .map(|context| context.id.as_str()),
+        Some(conn.default_browser_context_id())
+    );
+
+    let attach_raw = json!({
+        "id": 4,
+        "method": "Target.attachToTarget",
+        "params": { "targetId": conn.default_target_id(), "flatten": true },
+    })
+    .to_string();
+    let attach_messages = conn
+        .process_message_messages_only_for_test(&attach_raw)
+        .await;
+
+    assert!(attach_messages.iter().any(|message| {
+        message["id"] == json!(4) && message["result"]["sessionId"].is_string()
+    }));
+    assert!(conn.default_target_lifecycle.is_live());
+    let browser_context = conn.browser_context.as_ref().expect("default context");
+    assert_eq!(
+        browser_context.active_target_id(),
+        Some(created_target_id),
+        "attaching the placeholder must not activate it"
+    );
+    assert!(
+        browser_context
+            .background_target(conn.default_target_id())
+            .is_some(),
+        "first live use should materialize the default behind the catalog entry"
+    );
+}
+
+#[test]
 fn idle_navigation_engine_reset_preserves_mock_layout_policy() {
     let mut conn = CdpConnection::new_with_initial_storage_partition_and_runtime_config(
         crate::CdpInitialStoragePartition::memory(),
@@ -364,6 +515,7 @@ fn active_browser_context_installs_its_renderer_runtime_on_engine() {
 
     assert!(
         conn.engine
+            .ensure()
             .browser_context_runtime()
             .shares_state_with(&renderer_runtime)
     );
@@ -382,6 +534,7 @@ fn activating_inactive_browser_context_switches_engine_renderer_runtime() {
 
     assert!(
         conn.engine
+            .ensure()
             .browser_context_runtime()
             .shares_state_with(&second_renderer_runtime)
     );
@@ -408,6 +561,7 @@ async fn removing_active_browser_context_switches_engine_to_promoted_context() {
     );
     assert!(
         conn.engine
+            .ensure()
             .browser_context_runtime()
             .shares_state_with(&second_renderer_runtime)
     );
@@ -662,12 +816,12 @@ async fn memory_diagnostics_ignores_empty_retained_renderer_owner_for_document_i
     let retained = NavigationEngine::new_with_fetch_config_and_browser_context_access(
         FetchConfig::default(),
         retained_context.renderer_runtime_owner_access(),
-        conn.engine.optional_resource_fetch_mask(),
-        conn.engine.subframe_loading_enabled(),
+        conn.engine.ensure().optional_resource_fetch_mask(),
+        conn.engine.ensure().subframe_loading_enabled(),
     )
     .expect("retained diagnostics context owner should be live");
     assert!(
-        !retained.shares_renderer_owner_with(&conn.engine),
+        !retained.shares_renderer_owner_with(conn.engine.ensure()),
         "test setup must retain a distinct renderer owner without a loaded document"
     );
     conn.inactive_browser_contexts.push(retained_context);
@@ -856,8 +1010,8 @@ fn memory_diagnostics_counts_shared_retained_background_engine_by_renderer_owner
     let active = NavigationEngine::new_with_fetch_config_and_browser_context_access(
         FetchConfig::default(),
         browser_context.renderer_runtime_owner_access(),
-        conn.engine.optional_resource_fetch_mask(),
-        conn.engine.subframe_loading_enabled(),
+        conn.engine.ensure().optional_resource_fetch_mask(),
+        conn.engine.ensure().subframe_loading_enabled(),
     )
     .expect("active diagnostics context owner should be live");
     conn.replace_navigation_engine(active);
@@ -865,13 +1019,13 @@ fn memory_diagnostics_counts_shared_retained_background_engine_by_renderer_owner
 
     let retained = NavigationEngine::new_with_fetch_config_and_shared_renderer_owner(
         FetchConfig::default(),
-        &conn.engine,
-        conn.engine.optional_resource_fetch_mask(),
-        conn.engine.subframe_loading_enabled(),
+        conn.engine.ensure(),
+        conn.engine.ensure().optional_resource_fetch_mask(),
+        conn.engine.ensure().subframe_loading_enabled(),
     )
     .expect("retained diagnostics wrapper should share a live context owner");
     assert!(
-        retained.shares_renderer_owner_with(&conn.engine),
+        retained.shares_renderer_owner_with(conn.engine.ensure()),
         "test setup must retain a NavigationEngine wrapper that shares the active renderer owner"
     );
     conn.retain_background_navigation_engine(
@@ -907,8 +1061,8 @@ fn retained_background_engine_rejects_a_foreign_browser_context_route() {
     let foreign_engine = NavigationEngine::new_with_fetch_config_and_browser_context_access(
         FetchConfig::default(),
         foreign_context.renderer_runtime_owner_access(),
-        conn.engine.optional_resource_fetch_mask(),
-        conn.engine.subframe_loading_enabled(),
+        conn.engine.ensure().optional_resource_fetch_mask(),
+        conn.engine.ensure().subframe_loading_enabled(),
     )
     .expect("foreign context owner should be live during the regression");
 

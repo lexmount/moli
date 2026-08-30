@@ -184,7 +184,10 @@ impl CdpConnection {
         });
         if let Some((browser_context_id, target_id)) = current_active_engine_key {
             self.apply_scheduler_senders_to_navigation_engine(&next_engine);
-            let active_engine = self.engine.replace(next_engine);
+            let active_engine = self
+                .engine
+                .replace(next_engine)
+                .expect("active browser context must have a navigation engine");
             self.retain_background_navigation_engine(browser_context_id, target_id, active_engine)
                 .expect("inactive BrowserContext must retain its exact active-target engine");
         } else {

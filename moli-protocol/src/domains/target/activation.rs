@@ -59,6 +59,10 @@ pub(super) async fn execute_devtools_activate_target_command_async(
     conn: &mut CdpConnection,
     command: DevToolsActivateTargetCommand,
 ) -> Result<Vec<BackgroundProtocolEvent>, DevToolsError> {
+    if conn.default_placeholder_is_logically_active(command.target_id.as_str()) {
+        return Ok(Vec::new());
+    }
+    conn.ensure_default_target_live(command.target_id.as_str());
     let target_id = conn
         .primary_page_target_id_for_tab_target_id(command.target_id.as_str())
         .map(str::to_owned)

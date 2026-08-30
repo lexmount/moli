@@ -48,7 +48,7 @@ pub(crate) enum CdpFrontendControlRequest {
         target_url: String,
         completion_tx: oneshot::Sender<Result<CdpCreatedTarget>>,
     },
-    EnsureDefaultTarget {
+    EnsureDefaultTargetPublished {
         completion_tx: oneshot::Sender<Result<()>>,
     },
     Shutdown,
@@ -212,13 +212,13 @@ impl CdpFrontendEndpoint {
         }
     }
 
-    pub(crate) async fn ensure_default_target(&self) -> Result<()> {
+    pub(crate) async fn ensure_default_target_published(&self) -> Result<()> {
         if self.is_shutting_down() {
             bail!("CDP target owner is shutting down");
         }
         let (completion_tx, completion_rx) = oneshot::channel();
         self.control_tx
-            .send(CdpFrontendControlRequest::EnsureDefaultTarget { completion_tx })
+            .send(CdpFrontendControlRequest::EnsureDefaultTargetPublished { completion_tx })
             .context("CDP owner is no longer available")?;
         tokio::select! {
             biased;

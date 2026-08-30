@@ -92,6 +92,14 @@ pub(super) fn execute_devtools_get_target_info_command(
             target_info: super::browser_context::devtools_browser_target_info(),
         });
     }
+    if let Some(target_info) = conn.devtools_target_info(wanted) {
+        if let Some(message) =
+            super::transient_no_page_devtools_target_info_error(conn, &target_info)
+        {
+            return Err(DevToolsError::new(DevToolsErrorKind::Internal, message));
+        }
+        return Ok(DevToolsGetTargetInfoResult { target_info });
+    }
     if conn.browser_context.is_none() && conn.inactive_browser_contexts.is_empty() {
         return Err(DevToolsError::new(
             DevToolsErrorKind::NoSuchTarget,
@@ -111,16 +119,8 @@ pub(super) fn execute_devtools_get_target_info_command(
             "TargetNotLoaded",
         ));
     }
-    let target_info = conn.tab_target_info(wanted);
-    if let Some(target_info) = target_info {
-        return Ok(DevToolsGetTargetInfoResult { target_info });
-    }
-    let target_info = conn
-        .browser_contexts()
-        .find_map(|browser_context| browser_context.devtools_target_info(wanted))
-        .ok_or_else(|| DevToolsError::new(DevToolsErrorKind::NoSuchTarget, "UnknownTargetId"))?;
-    if let Some(message) = super::transient_no_page_devtools_target_info_error(conn, &target_info) {
-        return Err(DevToolsError::new(DevToolsErrorKind::Internal, message));
-    }
-    Ok(DevToolsGetTargetInfoResult { target_info })
+    Err(DevToolsError::new(
+        DevToolsErrorKind::NoSuchTarget,
+        "UnknownTargetId",
+    ))
 }

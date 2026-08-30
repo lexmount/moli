@@ -28,11 +28,12 @@ impl CdpConnection {
             .browser_context
             .as_ref()
             .is_some_and(|bc| bc.network_policy.bypass_service_worker());
-        self.engine.set_browser_identity_override(browser_identity);
-        self.engine.set_http_proxy_override(http_proxy);
-        self.engine.set_http_no_proxy_override(http_no_proxy);
-        self.engine.set_tls_verify_host(tls_verify_host);
-        self.engine.set_bypass_service_worker(bypass_service_worker);
+        let engine = self.engine.ensure_mut();
+        engine.set_browser_identity_override(browser_identity);
+        engine.set_http_proxy_override(http_proxy);
+        engine.set_http_no_proxy_override(http_no_proxy);
+        engine.set_tls_verify_host(tls_verify_host);
+        engine.set_bypass_service_worker(bypass_service_worker);
     }
 
     pub async fn set_tls_verify_host_async(&mut self, enabled: bool) {

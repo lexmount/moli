@@ -2271,7 +2271,7 @@ impl CdpConnection {
         body_progress_source: MainDocumentBodyProgressSource,
     ) -> Result<NavigationLoadOutcome, String> {
         if load_inputs.browser_context_id.is_none() {
-            let page_reservation = self.engine.reserve_page_for_creation();
+            let page_reservation = self.engine.ensure().reserve_page_for_creation();
             if let Some(navigation) = self
                 .load_inline_html_navigation_async(
                     page_reservation,
@@ -2285,7 +2285,7 @@ impl CdpConnection {
                 return navigation;
             }
             if let Some(navigation) = load_data_url_navigation_with_engine_async(
-                &mut self.engine,
+                self.engine.ensure_mut(),
                 page_reservation,
                 &load_inputs,
                 method,
@@ -2516,12 +2516,13 @@ impl CdpConnection {
         // renderer owners.
         let mut engine = if self
             .engine
+            .ensure()
             .browser_context_runtime()
             .shares_state_with(&load_inputs.renderer_runtime.runtime())
         {
             NavigationEngine::new_with_runtime_config_and_shared_renderer_owner(
                 self.navigation_runtime_config_for_load_inputs(load_inputs),
-                &self.engine,
+                self.engine.ensure(),
             )
             .expect("active shared BrowserContext owner must be live")
         } else if let Some(engine) = self
@@ -2612,11 +2613,13 @@ impl CdpConnection {
         }
         let resource_storage = load_inputs.resource_storage_handles();
         self.engine
+            .ensure_mut()
             .ensure_resource_runtime_ready_for_navigation_storage(
                 resource_storage.into_navigation_storage(),
             )
             .ok()?;
         self.engine
+            .ensure()
             .resource_request_client()
             .map(|client| client.browser_resource_runtime())
     }
@@ -2627,6 +2630,7 @@ impl CdpConnection {
     ) -> bool {
         if !self
             .engine
+            .ensure()
             .browser_context_runtime()
             .shares_state_with(&load_inputs.renderer_runtime.runtime())
         {
@@ -2688,7 +2692,7 @@ impl CdpConnection {
         request_headers: Vec<(String, String)>,
     ) -> Option<Result<NavigationLoadOutcome, String>> {
         load_inline_html_navigation_with_engine_async(
-            &mut self.engine,
+            self.engine.ensure_mut(),
             page_reservation,
             load_inputs,
             method,
@@ -2896,14 +2900,14 @@ impl CdpConnection {
             from_cache: false,
             negotiated_http_version: None,
         };
-        let page_reservation = self.engine.reserve_page_for_creation();
+        let page_reservation = self.engine.ensure().reserve_page_for_creation();
         self.bind_renderer_page_reservation_for_session_owner(
             session_id,
             load_inputs,
             page_reservation,
         );
         prepare_navigation_from_captured_raw_response_with_engine_async(
-            &mut self.engine,
+            self.engine.ensure_mut(),
             page_reservation,
             load_inputs,
             requested_url,
@@ -2943,6 +2947,7 @@ impl CdpConnection {
             .map(Arc::new);
         let built = self
             .engine
+            .ensure_mut()
             .build_html_page_from_response_with_storage_and_inspector_session_restores_async(
                 page_storage.into_navigation_storage(),
                 requested_url.clone(),
@@ -3042,8 +3047,10 @@ impl CdpConnection {
         }
         let resource_storage = load_inputs.resource_storage_handles();
         self.engine
+            .ensure_mut()
             .set_bypass_service_worker(load_inputs.bypass_service_worker);
         self.engine
+            .ensure_mut()
             .fetch_navigation_response_with_storage_async(
                 resource_storage.into_navigation_storage(),
                 load_inputs.navigation_initiator_url.as_ref(),
@@ -3232,6 +3239,7 @@ impl CdpConnection {
             .map(Arc::new);
         let built = self
             .engine
+            .ensure_mut()
             .build_html_page_from_response_with_storage_and_inspector_session_restores_async(
                 page_storage.into_navigation_storage(),
                 requested_url.clone(),
@@ -3464,14 +3472,14 @@ impl CdpConnection {
             ));
         }
 
-        let page_reservation = self.engine.reserve_page_for_creation();
+        let page_reservation = self.engine.ensure().reserve_page_for_creation();
         self.bind_renderer_page_reservation_for_session_owner(
             session_id,
             load_inputs,
             page_reservation,
         );
         prepare_navigation_from_captured_raw_response_with_engine_async(
-            &mut self.engine,
+            self.engine.ensure_mut(),
             page_reservation,
             load_inputs,
             requested_url,
@@ -3592,9 +3600,9 @@ impl CdpConnection {
         let (response, network_observation_journal) =
             response.into_parts_with_observation_journal();
         if load_inputs.browser_context_id.is_none() {
-            let page_reservation = self.engine.reserve_page_for_creation();
+            let page_reservation = self.engine.ensure().reserve_page_for_creation();
             return build_navigation_from_streaming_raw_response_with_engine_async(
-                &mut self.engine,
+                self.engine.ensure_mut(),
                 page_reservation,
                 load_inputs,
                 requested_url,

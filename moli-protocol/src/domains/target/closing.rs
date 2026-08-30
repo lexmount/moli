@@ -80,9 +80,20 @@ pub(super) async fn execute_devtools_close_target_command_async(
     out: &mut events::TargetProtocolSideEffects,
     command_context: &mut crate::conn::CommandDispatchContext,
 ) -> Result<DevToolsCloseTargetResult, DevToolsError> {
+    let closes_default_target = matches!(
+        command.target_id.as_str(),
+        crate::DEFAULT_CDP_PAGE_TARGET_ID | crate::DEFAULT_CDP_TAB_TARGET_ID
+    );
     let target_id = command.target_id.into_string();
+    if let Some(plan) = conn.close_default_target_placeholder(&target_id) {
+        out.extend_background_events(plan.into_background_events());
+        return Ok(DevToolsCloseTargetResult { success: true });
+    }
     let restore_browser_context_id = previously_active_browser_context_id(conn);
     let result = close_target_inner_async(conn, out, command_context, target_id).await;
+    if result.is_ok() && closes_default_target {
+        conn.mark_default_browser_target_closed();
+    }
     restore_previously_active_browser_context(conn, restore_browser_context_id.as_deref());
     result
 }

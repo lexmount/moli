@@ -408,27 +408,15 @@ fn devtools_target_infos(
     filter: Option<&[DevToolsTargetFilterEntry]>,
 ) -> Result<Vec<DevToolsTargetInfo>, DevToolsError> {
     let mut targets = Vec::new();
-    for browser_context in conn.browser_contexts() {
-        for mut target_info in browser_context.devtools_target_infos() {
-            if let Some(message) =
-                super::transient_no_page_devtools_target_info_error(conn, &target_info)
-            {
-                return Err(DevToolsError::new(DevToolsErrorKind::Internal, message));
-            }
-            if let Some(target_id) = target_info.target_id.as_ref() {
-                target_info.moli_popup_id = browser_context.target_popup_id(target_id.as_str());
-            }
-            if let Some(tab_target_info) = conn.tab_target_info_for_page_target_info(&target_info)
-                && target_info_matches_root(&tab_target_info, root)
-                && target_filter_allows_info(filter, &tab_target_info)
-            {
-                targets.push(tab_target_info);
-            }
-            if !target_info_matches_root(&target_info, root)
-                || !target_filter_allows_info(filter, &target_info)
-            {
-                continue;
-            }
+    for target_info in conn.devtools_target_infos() {
+        if let Some(message) =
+            super::transient_no_page_devtools_target_info_error(conn, &target_info)
+        {
+            return Err(DevToolsError::new(DevToolsErrorKind::Internal, message));
+        }
+        if target_info_matches_root(&target_info, root)
+            && target_filter_allows_info(filter, &target_info)
+        {
             targets.push(target_info);
         }
     }
