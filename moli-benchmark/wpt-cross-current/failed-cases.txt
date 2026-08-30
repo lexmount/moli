@@ -2488,7 +2488,6 @@ css/geometry/DOMMatrix-attributes.html
 css/geometry/DOMMatrix-stringifier.html
 css/geometry/DOMMatrix2DInit-validate-fixup.html
 css/geometry/DOMMatrixInit-validate-fixup.html
-css/geometry/DOMPoint-002.html
 css/geometry/DOMQuad-001.html
 css/geometry/DOMQuad-002.html
 css/geometry/DOMQuad-nan.html

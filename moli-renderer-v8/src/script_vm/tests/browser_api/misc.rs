@@ -5329,6 +5329,66 @@ fn dom_point_readonly_from_point_uses_dictionary_conversion_and_function_realm()
 }
 
 #[test]
+fn dom_point_matrix_transform_validates_matrix_init_and_returns_in_the_function_realm() {
+    let mut vm = new_storage_test_vm("https://dompoint-matrix-transform.test/");
+
+    vm.eval(
+        r#"
+(() => {
+  const root = document.documentElement ||
+    document.appendChild(document.createElement("html"));
+  const body = document.body || root.appendChild(document.createElement("body"));
+  const frame = document.createElement("iframe");
+  frame.id = "dompoint-matrix-transform-realm";
+  body.appendChild(frame);
+})()
+"#,
+    )
+    .expect("DOMPoint matrixTransform child frame should be created");
+    materialize_single_child_default_realm_for_test(
+        &mut vm,
+        "DOMPoint matrixTransform child Realm",
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const other = document.getElementById("dompoint-matrix-transform-realm").contentWindow;
+  const source = new DOMPointReadOnly(5, 4, 3, 2);
+  const transformed = other.DOMPointReadOnly.prototype.matrixTransform.call(source, {
+    a: 2, m11: 2, d: 3, e: 10, f: 20, m33: 4, m44: 5
+  });
+  const outcome = init => {
+    try {
+      source.matrixTransform(init);
+      return "no throw";
+    } catch (error) {
+      return error.name;
+    }
+  };
+  return [
+    other.DOMPointReadOnly.prototype.matrixTransform.length,
+    transformed instanceof other.DOMPoint,
+    transformed instanceof DOMPoint,
+    [transformed.x, transformed.y, transformed.z, transformed.w].join(","),
+    outcome({a: 1, m11: 2}),
+    outcome({is2D: true, m33: 1.0000001}),
+    outcome({a: NaN, m11: NaN}),
+    outcome({a: 0, m11: -0})
+  ].join("|");
+})()
+"#,
+        )
+        .expect("DOMPoint matrixTransform should evaluate");
+
+    assert_eq!(
+        result,
+        "0|true|false|30,52,12,10|TypeError|TypeError|no throw|no throw"
+    );
+}
+
+#[test]
 fn dom_matrix_objects_keep_declared_brand_and_own_slots() {
     let mut vm = new_storage_test_vm("https://dommatrix-declared-slots.test/");
 
