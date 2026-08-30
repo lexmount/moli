@@ -2151,9 +2151,20 @@ pub(super) fn svg_owner_attribute_value<'s>(
     attribute: &str,
 ) -> Option<String> {
     let (runtime_ptr, handle) =
-        crate::native_bridge::node_runtime_and_handle_from_object(scope, owner).ok()?;
-    let runtime = unsafe { &mut *runtime_ptr };
-    runtime.dom_host().get_attribute(handle, attribute)
+        crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, owner).ok()?;
+    let runtime = unsafe { &*runtime_ptr };
+    if attribute != "href" {
+        return runtime.dom_host().get_attribute(handle, attribute);
+    }
+    let value = runtime.dom_host().get_attribute_ns(handle, None, attribute);
+    if value.is_some() {
+        return value;
+    }
+    runtime.dom_host().get_attribute_ns(
+        handle,
+        Some(crate::native_bridge::document::XLINK_NS),
+        attribute,
+    )
 }
 
 pub(super) fn parse_svg_length_value(raw: &str) -> Option<SvgParsedLength> {
