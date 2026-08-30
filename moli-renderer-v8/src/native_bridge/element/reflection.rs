@@ -183,9 +183,12 @@ pub(super) enum DomStringReflection {
     EmbedHeight,
     EmbedType,
     EmbedWidth,
+    FontFace,
     FontSize,
     FrameFrameBorder,
     FrameScrolling,
+    FrameSetCols,
+    FrameSetRows,
     HrColor,
     HrSize,
     HrWidth,
@@ -400,6 +403,15 @@ const DOM_STRING_REFLECTION_DESCRIPTORS: &[(DomStringReflection, DomStringReflec
             DomStringReflectionDescriptor::new("HTMLEmbedElement", "width", "width"),
         ),
         (
+            DomStringReflection::FontFace,
+            DomStringReflectionDescriptor::new_html_element(
+                "HTMLFontElement",
+                "font",
+                "face",
+                "face",
+            ),
+        ),
+        (
             DomStringReflection::FontSize,
             DomStringReflectionDescriptor::new("HTMLFontElement", "size", "size"),
         ),
@@ -410,6 +422,24 @@ const DOM_STRING_REFLECTION_DESCRIPTORS: &[(DomStringReflection, DomStringReflec
         (
             DomStringReflection::FrameScrolling,
             DomStringReflectionDescriptor::new("HTMLFrameElement", "scrolling", "scrolling"),
+        ),
+        (
+            DomStringReflection::FrameSetCols,
+            DomStringReflectionDescriptor::new_html_element(
+                "HTMLFrameSetElement",
+                "frameset",
+                "cols",
+                "cols",
+            ),
+        ),
+        (
+            DomStringReflection::FrameSetRows,
+            DomStringReflectionDescriptor::new_html_element(
+                "HTMLFrameSetElement",
+                "frameset",
+                "rows",
+                "rows",
+            ),
         ),
         (
             DomStringReflection::HrColor,

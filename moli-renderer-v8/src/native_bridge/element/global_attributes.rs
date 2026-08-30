@@ -20,8 +20,8 @@ use super::reflection::{
 use super::{
     attribute_property_getter_from_object_or_detached,
     boolean_attribute_property_getter_from_object_or_detached, element_attribute,
-    form_associated_form_owner, html_element_getter_receiver, html_element_setter_receiver,
-    property_dom_string_value, resolve_url_like_attribute,
+    element_has_attribute, form_associated_form_owner, html_element_getter_receiver,
+    html_element_setter_receiver, property_dom_string_value, resolve_url_like_attribute,
     set_attribute_property_on_object_or_detached,
     set_boolean_attribute_property_on_object_or_detached,
     set_dom_string_attribute_property_on_object, set_reflected_attribute,
@@ -1227,6 +1227,117 @@ pub(in crate::native_bridge) fn html_no_shade_setter_function<'s>(
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     set_boolean_attribute_on_object_or_detached(scope, args.this(), "noshade", args.get(0));
+    rv.set_undefined();
+}
+
+fn html_boolean_attribute_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+    interface: &'static str,
+    member: &'static str,
+    local_name: &'static str,
+    attribute: &'static str,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let Some((runtime_ptr, handle)) =
+        html_element_getter_receiver(scope, receiver, interface, member, local_name)
+    else {
+        rv.set_bool(false);
+        return;
+    };
+    rv.set_bool(element_has_attribute(
+        unsafe { &*runtime_ptr },
+        handle,
+        attribute,
+    ));
+}
+
+fn html_boolean_attribute_setter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+    value: v8::Local<'s, v8::Value>,
+    interface: &'static str,
+    member: &'static str,
+    local_name: &'static str,
+    attribute: &'static str,
+) {
+    let Some((runtime_ptr, handle)) =
+        html_element_setter_receiver(scope, receiver, interface, member, local_name)
+    else {
+        return;
+    };
+    set_reflected_boolean_attribute(
+        scope,
+        runtime_ptr,
+        handle,
+        attribute,
+        value.boolean_value(scope),
+    );
+}
+
+pub(in crate::native_bridge) fn html_no_resize_getter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    html_boolean_attribute_getter(
+        scope,
+        args.this(),
+        "HTMLFrameElement",
+        "noResize",
+        "frame",
+        "noresize",
+        rv,
+    );
+}
+
+pub(in crate::native_bridge) fn html_no_resize_setter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    html_boolean_attribute_setter(
+        scope,
+        args.this(),
+        args.get(0),
+        "HTMLFrameElement",
+        "noResize",
+        "frame",
+        "noresize",
+    );
+    rv.set_undefined();
+}
+
+pub(in crate::native_bridge) fn html_true_speed_getter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    html_boolean_attribute_getter(
+        scope,
+        args.this(),
+        "HTMLMarqueeElement",
+        "trueSpeed",
+        "marquee",
+        "truespeed",
+        rv,
+    );
+}
+
+pub(in crate::native_bridge) fn html_true_speed_setter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    html_boolean_attribute_setter(
+        scope,
+        args.this(),
+        args.get(0),
+        "HTMLMarqueeElement",
+        "trueSpeed",
+        "marquee",
+        "truespeed",
+    );
     rv.set_undefined();
 }
 
