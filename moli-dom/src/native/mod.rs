@@ -7,7 +7,7 @@ mod node;
 mod queries;
 mod scripts;
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 pub use document::{
     Document, DocumentFragment, DocumentReadyState, DocumentTitleSetterTarget, DocumentType,
@@ -142,6 +142,7 @@ impl std::iter::FusedIterator for NativeDomNodes<'_> {}
 pub struct NativeDom {
     nodes: NativeNodeStorage,
     document_node_id: NativeNodeId,
+    inert_template_documents: HashMap<NativeNodeId, NativeNodeId>,
     stylesheet_candidate_registries: StylesheetCandidateRegistries,
     parse_errors: Vec<String>,
 }
@@ -176,6 +177,7 @@ impl NativeDom {
         Self {
             nodes: NativeNodeStorage::from_node(document_node),
             document_node_id,
+            inert_template_documents: HashMap::new(),
             stylesheet_candidate_registries: StylesheetCandidateRegistries::default(),
             parse_errors: Vec::new(),
         }
@@ -193,6 +195,7 @@ impl NativeDom {
         Self {
             nodes: NativeNodeStorage::from_node(document_node),
             document_node_id,
+            inert_template_documents: HashMap::new(),
             stylesheet_candidate_registries: StylesheetCandidateRegistries::default(),
             parse_errors: Vec::new(),
         }
@@ -503,22 +506,56 @@ impl NativeDom {
         self.create_template_contents_fragment_for_document(self.document_node_id)
     }
 
+    pub fn is_inert_template_document(&self, document_handle: NativeNodeId) -> bool {
+        self.inert_template_documents.get(&document_handle) == Some(&document_handle)
+    }
+
     pub fn create_template_contents_fragment_for_document(
         &mut self,
         document_handle: NativeNodeId,
     ) -> NativeNodeId {
-        let url = self
-            .node(document_handle)
-            .and_then(Node::as_document)
-            .map(|document| document.url().clone())
-            .unwrap_or_else(|| url::Url::parse("about:blank").expect("about:blank is valid"));
-        let owner_document = self.create_node(
-            NodeData::Document(Box::new(Document::new_html_with_scripting(url, false))),
-            None,
-            false,
-            false,
-        );
+        let owner_document = self.appropriate_template_contents_owner_document(document_handle);
         self.create_document_fragment_for_document(owner_document)
+    }
+
+    pub(crate) fn appropriate_template_contents_owner_document(
+        &mut self,
+        document_handle: NativeNodeId,
+    ) -> NativeNodeId {
+        if let Some(owner_document) = self.inert_template_documents.get(&document_handle).copied() {
+            owner_document
+        } else {
+            let (url, is_html_document) = self
+                .node(document_handle)
+                .and_then(Node::as_document)
+                .map(|document| (document.url().clone(), document.is_html_document()))
+                .unwrap_or_else(|| {
+                    (
+                        url::Url::parse("about:blank").expect("about:blank is valid"),
+                        true,
+                    )
+                });
+            let inert_document = if is_html_document {
+                Document::new_html_with_scripting(url, false)
+            } else {
+                let mut document = Document::new_xml(url);
+                document.set_scripting_enabled(false);
+                document
+            };
+            let owner_document = self.create_node(
+                NodeData::Document(Box::new(inert_document)),
+                None,
+                false,
+                false,
+            );
+            self.inert_template_documents
+                .insert(document_handle, owner_document);
+            // Documents created by this algorithm reuse themselves for nested
+            // template contents instead of allocating another inert document.
+            self.inert_template_documents
+                .insert(owner_document, owner_document);
+            owner_document
+        }
     }
 
     pub fn create_processing_instruction(&mut self, target: &str, data: &str) -> NativeNodeId {
@@ -2595,6 +2632,23 @@ mod tests {
                 .and_then(Node::as_document)
                 .map(Document::scripting_enabled),
             Some(false)
+        );
+        assert!(dom.is_inert_template_document(content_owner));
+
+        let second_template = dom.create_element("template");
+        let second_content_owner = dom
+            .node(second_template)
+            .and_then(Node::as_element)
+            .and_then(Element::template_contents)
+            .and_then(|contents| dom.node(contents))
+            .and_then(Node::owner_document)
+            .expect("second template content owner document");
+        assert_eq!(second_content_owner, content_owner);
+
+        let nested_content = dom.create_template_contents_fragment_for_document(content_owner);
+        assert_eq!(
+            dom.node(nested_content).and_then(Node::owner_document),
+            Some(content_owner)
         );
 
         let child = dom.create_element("span");
