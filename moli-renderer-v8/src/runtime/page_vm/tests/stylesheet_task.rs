@@ -2707,11 +2707,14 @@ document.head.append(dynamicStyle);
             "a dynamic non-parser-owned stylesheet must not manufacture parser work"
         );
         assert!(page_vm.has_ready_dom_manipulation_task_for_test());
-        assert!(
-            page_vm
-                .run_one_oldest_ready_page_task_on_owner_lane_for_test(&loader)
-                .await?
-        );
+        let event = take_next_link_element_event_task_for_test(&mut page_vm)
+            .expect("the dynamic link event must be independently selectable");
+        page_vm
+            .run_claimed_dom_manipulation_task_through_selected_dispatcher_for_test(
+                crate::page_task_queue::RendererPageDomManipulationTask::ConnectedStyleEvent(event),
+                &loader,
+            )
+            .await?;
         assert_eq!(
             page_vm.vm_mut().eval("__dynamicStyleEvents.join('|')")?,
             "load"
