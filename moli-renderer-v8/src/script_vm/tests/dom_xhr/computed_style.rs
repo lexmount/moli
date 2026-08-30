@@ -12520,6 +12520,80 @@ fn svg_generic_presentation_attributes_apply_to_every_svg_element() {
 }
 
 #[test]
+fn computed_mask_serializes_from_computed_longhands() {
+    let mut vm = new_parsed_test_vm(
+        "https://svg-mask-computed-shorthand.test/path/page.html",
+        r#"<!doctype html>
+        <style>
+          #stylesheet { mask: url(#stylesheet-mask); }
+          #layered {
+            mask: url(#layered-mask) center / contain no-repeat content-box exclude luminance;
+          }
+          #cascade { mask: url(#rule-mask); }
+        </style>
+        <svg id="svg">
+          <g id="stylesheet"></g>
+          <g id="attribute" mask="url(#attribute-mask)"></g>
+          <g id="layered"></g>
+          <g id="cascade" mask="url(#attribute-loses)"></g>
+        </svg>"#,
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const namespace = 'http://www.w3.org/2000/svg';
+  const svg = document.getElementById('svg');
+  const value = element => getComputedStyle(element).getPropertyValue('mask');
+  const dynamic = document.createElementNS(namespace, 'unknown');
+  svg.append(dynamic);
+  const values = [
+    CSS.supports('mask', 'url(#supported)'),
+    value(dynamic),
+    value(document.getElementById('stylesheet')),
+    value(document.getElementById('attribute')),
+    value(document.getElementById('layered')),
+    value(document.getElementById('cascade')),
+  ];
+
+  dynamic.setAttribute('mask', 'url(#dynamic-mask)');
+  values.push(value(dynamic));
+  dynamic.removeAttribute('mask');
+  values.push(value(dynamic));
+
+  dynamic.style.mask =
+    'url(#inline-mask) center / contain no-repeat content-box exclude luminance';
+  values.push(value(dynamic));
+  dynamic.style.mask = 'none';
+  dynamic.style.maskImage = 'url(#longhand-mask)';
+  dynamic.style.maskMode = 'luminance';
+  values.push(value(dynamic));
+
+  return values.join('|');
+})()
+"#,
+        )
+        .expect("computed mask shorthand should evaluate");
+
+    assert_eq!(
+        result,
+        concat!(
+            "true|none|",
+            "url(\"https://svg-mask-computed-shorthand.test/path/page.html#stylesheet-mask\")|",
+            "url(\"https://svg-mask-computed-shorthand.test/path/page.html#attribute-mask\")|",
+            "url(\"https://svg-mask-computed-shorthand.test/path/page.html#layered-mask\") ",
+            "50% 50% / contain no-repeat content-box exclude luminance|",
+            "url(\"https://svg-mask-computed-shorthand.test/path/page.html#rule-mask\")|",
+            "url(\"https://svg-mask-computed-shorthand.test/path/page.html#dynamic-mask\")|none|",
+            "url(\"https://svg-mask-computed-shorthand.test/path/page.html#inline-mask\") ",
+            "50% 50% / contain no-repeat content-box exclude luminance|",
+            "url(\"https://svg-mask-computed-shorthand.test/path/page.html#longhand-mask\") luminance",
+        )
+    );
+}
+
+#[test]
 fn svg_special_presentation_attributes_follow_element_scopes_and_cascade() {
     let mut vm = new_parsed_test_vm(
         "https://svg-special-presentation-attributes.test/",
