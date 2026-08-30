@@ -47,12 +47,14 @@ pub(crate) fn window_length_value<'s>(
 ) -> Option<v8::Local<'s, v8::Value>> {
     let count = if !window_is_closed(scope, receiver)
         && let Some(host) = window_host_ptr(scope, receiver)
-        && let Some(owner) = window_current_dispatch_scope(scope, receiver, unsafe { &*host })
     {
         let host = unsafe { &mut *host };
-        match owner.child_window() {
-            Some(handle) => host.child_browsing_context_child_frame_count(handle),
-            None => host.child_browsing_context_count(),
+        match super::helpers::window_document_handle(scope, receiver, host) {
+            Some(document) => {
+                host.sync_child_browsing_context_subtree(scope, document);
+                host.child_browsing_context_count_for_document(document)
+            }
+            None => 0,
         }
     } else {
         0
