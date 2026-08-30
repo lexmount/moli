@@ -1,3 +1,6 @@
+use super::declaration_parser::{
+    canonical_unresolved_legacy_color_function, css_color_value_property_requires_stylo_parser,
+};
 use super::inline_state::unresolved_box_shorthand_longhands;
 use super::pdb_compat::{
     css_value_uses_unresolved_cssom_storage, cssom_style_property_query_uses_pdb,
@@ -234,12 +237,17 @@ pub(crate) fn pdb_property_value_for_cssom_query_with_side_entries(
     if !pdb_property_is_declared_for_cssom_query(block, property) {
         return None;
     }
-    let value = block.property_value(property)?;
+    let mut value = block.property_value(property)?;
     if value.is_empty() && moli_css_parse::is_cssom_custom_property_name(property) {
         return Some(" ".to_owned());
     }
     if value.is_empty() && !moli_css_parse::is_cssom_custom_property_name(property) {
         return None;
+    }
+    if css_color_value_property_requires_stylo_parser(property)
+        && let Some(canonical) = canonical_unresolved_legacy_color_function(&value)
+    {
+        value = canonical;
     }
     Some(value)
 }

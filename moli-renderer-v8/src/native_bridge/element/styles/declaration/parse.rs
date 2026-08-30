@@ -25,13 +25,20 @@ use super::values::{
     parse_transition_shorthand_entries,
 };
 use style::{
+    color::{
+        ColorFunction,
+        component::ColorComponent,
+        parsing::{NumberOrAngleComponent, NumberOrPercentageComponent},
+    },
     context::QuirksMode,
     properties::{
-        PropertyDeclarationId, PropertyId, SourcePropertyDeclaration, parse_one_declaration_into,
+        PropertyDeclaration, PropertyDeclarationId, PropertyId, SourcePropertyDeclaration,
+        parse_one_declaration_into,
     },
     stylesheets::{CssRuleType, Origin, UrlExtraData},
+    values::specified::{Color as SpecifiedColor, ColorPropertyValue},
 };
-use style_traits::{CssString, ParsingMode};
+use style_traits::{CssString, ParsingMode, ToCss};
 
 mod cssom_mutation;
 mod declaration_parser;
