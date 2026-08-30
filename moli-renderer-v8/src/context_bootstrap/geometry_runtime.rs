@@ -581,6 +581,23 @@ struct DomMatrixInit {
     m44: Option<f64>,
 }
 
+#[derive(Default, webidl::WebIdlDictionary)]
+#[webidl(prefix = "DOMMatrix2DInit")]
+struct DomMatrix2DInit {
+    a: Option<f64>,
+    b: Option<f64>,
+    c: Option<f64>,
+    d: Option<f64>,
+    e: Option<f64>,
+    f: Option<f64>,
+    m11: Option<f64>,
+    m12: Option<f64>,
+    m21: Option<f64>,
+    m22: Option<f64>,
+    m41: Option<f64>,
+    m42: Option<f64>,
+}
+
 #[derive(Clone, Copy)]
 struct DomMatrixValue {
     components: DomMatrixComponents,
@@ -1034,6 +1051,37 @@ fn dom_matrix_init_arg<'s>(
     dom_matrix_init_value(scope, args.get(index), prefix, (index + 1) as usize)
 }
 
+pub(in crate::context_bootstrap) fn dom_matrix_2d_init_arg<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: &v8::FunctionCallbackArguments<'s>,
+    index: i32,
+    prefix: &'static str,
+) -> Option<[f64; 6]> {
+    if index >= args.length() || args.get(index).is_undefined() {
+        return Some([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+    }
+    let init = match webidl::parse_dictionary::<DomMatrix2DInit>(
+        scope,
+        args.get(index),
+        webidl::Context::argument(prefix, (index + 1) as usize),
+    ) {
+        Ok(Some(init)) => init,
+        Ok(None) => DomMatrix2DInit::default(),
+        Err(error) => {
+            webidl::throw_error(scope, &error);
+            return None;
+        }
+    };
+    Some([
+        validated_dom_matrix_alias(scope, "DOMMatrix2DInit", "a", init.a, "m11", init.m11, 1.0)?,
+        validated_dom_matrix_alias(scope, "DOMMatrix2DInit", "b", init.b, "m12", init.m12, 0.0)?,
+        validated_dom_matrix_alias(scope, "DOMMatrix2DInit", "c", init.c, "m21", init.m21, 0.0)?,
+        validated_dom_matrix_alias(scope, "DOMMatrix2DInit", "d", init.d, "m22", init.m22, 1.0)?,
+        validated_dom_matrix_alias(scope, "DOMMatrix2DInit", "e", init.e, "m41", init.m41, 0.0)?,
+        validated_dom_matrix_alias(scope, "DOMMatrix2DInit", "f", init.f, "m42", init.m42, 0.0)?,
+    ])
+}
+
 fn dom_matrix_init_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
@@ -1059,12 +1107,18 @@ fn validated_dom_matrix_init(
     scope: &mut v8::PinScope<'_, '_>,
     init: DomMatrixInit,
 ) -> Option<DomMatrixValue> {
-    let m11 = validated_dom_matrix_alias(scope, "a", init.a, "m11", init.m11, 1.0)?;
-    let m12 = validated_dom_matrix_alias(scope, "b", init.b, "m12", init.m12, 0.0)?;
-    let m21 = validated_dom_matrix_alias(scope, "c", init.c, "m21", init.m21, 0.0)?;
-    let m22 = validated_dom_matrix_alias(scope, "d", init.d, "m22", init.m22, 1.0)?;
-    let m41 = validated_dom_matrix_alias(scope, "e", init.e, "m41", init.m41, 0.0)?;
-    let m42 = validated_dom_matrix_alias(scope, "f", init.f, "m42", init.m42, 0.0)?;
+    let m11 =
+        validated_dom_matrix_alias(scope, "DOMMatrixInit", "a", init.a, "m11", init.m11, 1.0)?;
+    let m12 =
+        validated_dom_matrix_alias(scope, "DOMMatrixInit", "b", init.b, "m12", init.m12, 0.0)?;
+    let m21 =
+        validated_dom_matrix_alias(scope, "DOMMatrixInit", "c", init.c, "m21", init.m21, 0.0)?;
+    let m22 =
+        validated_dom_matrix_alias(scope, "DOMMatrixInit", "d", init.d, "m22", init.m22, 1.0)?;
+    let m41 =
+        validated_dom_matrix_alias(scope, "DOMMatrixInit", "e", init.e, "m41", init.m41, 0.0)?;
+    let m42 =
+        validated_dom_matrix_alias(scope, "DOMMatrixInit", "f", init.f, "m42", init.m42, 0.0)?;
     let components = DomMatrixComponents {
         m11,
         m12,
@@ -1099,6 +1153,7 @@ fn validated_dom_matrix_init(
 
 fn validated_dom_matrix_alias(
     scope: &mut v8::PinScope<'_, '_>,
+    dictionary_name: &'static str,
     alias_name: &'static str,
     alias: Option<f64>,
     matrix_name: &'static str,
@@ -1110,7 +1165,7 @@ fn validated_dom_matrix_alias(
     {
         throw_type_error(
             scope,
-            &format!("DOMMatrixInit {alias_name} and {matrix_name} values differ."),
+            &format!("{dictionary_name} {alias_name} and {matrix_name} values differ."),
         );
         return None;
     }
