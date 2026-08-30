@@ -848,7 +848,7 @@ fn build_dom_point_readonly_object<'s>(
     object
 }
 
-fn build_dom_matrix_identity_object<'s>(
+pub fn build_dom_matrix_identity_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
 ) -> v8::Local<'s, v8::Object> {
     build_dom_matrix_object(scope, DomMatrixComponents::identity())

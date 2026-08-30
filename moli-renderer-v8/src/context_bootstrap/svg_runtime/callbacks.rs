@@ -3300,7 +3300,7 @@ pub(super) fn svg_svg_element_create_matrix_callback<'s>(
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     if require_svg_svg_element_receiver(scope, args.this(), "createSVGMatrix") {
-        rv.set(build_svg_matrix(scope, SvgMatrixComponents::identity()).into());
+        rv.set(super::super::geometry_runtime::build_dom_matrix_identity_object(scope).into());
     }
 }
 
