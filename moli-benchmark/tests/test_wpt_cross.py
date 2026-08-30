@@ -43,6 +43,7 @@ from moli_benchmark.wpt_cross.case_set import (
     DEFAULT_EXCLUDE_DIR_PREFIXES,
     FuzzyTolerance,
     LAYOUT_PROFILE_DIR_PREFIXES,
+    LAYOUT_SYNCHRONOUS_GEOMETRY_CASES,
     LONG_TIMEOUT_MULTIPLIER,
     ReftestReference,
     WptCase,
@@ -766,6 +767,40 @@ class WptCrossTests(unittest.TestCase):
         )
         self.assertEqual(LAYOUT_VIEWPORT.device_scale_factor, 1.0)
         self.assertEqual(WPT_CROSS_PARALLELISM, 50)
+
+    def test_layout_static_profile_excludes_synchronous_geometry_flush_cases(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            wpt_root = Path(temp_dir)
+            case_html = """<!doctype html>
+<script src="/resources/testharness.js"></script>
+<script>test(() => {}, "ok");</script>
+"""
+            for rel in [*LAYOUT_SYNCHRONOUS_GEOMETRY_CASES, "css/css-grid/static.html"]:
+                path = wpt_root / rel
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(case_html, encoding="utf-8")
+
+            static_cases = enumerate_cases(
+                wpt_root,
+                dir_prefixes=("css/css-grid",),
+                layout_static_only=True,
+            )
+            focused_cases = enumerate_cases(
+                wpt_root,
+                dir_prefixes=("css/css-grid",),
+                layout_static_only=False,
+            )
+
+        self.assertEqual(
+            [case.case_path for case in static_cases],
+            ["css/css-grid/static.html"],
+        )
+        self.assertEqual(
+            {case.case_path for case in focused_cases},
+            {*LAYOUT_SYNCHRONOUS_GEOMETRY_CASES, "css/css-grid/static.html"},
+        )
 
     def test_all_profile_matrix_deduplicates_default_and_layout_cases(self) -> None:
         semantic = WptCase("css/cssom-view/shared.html")

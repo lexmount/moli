@@ -61,17 +61,18 @@ therefore have the largest non-safety blast radius.
 
 ### P2 — ordinary Grid track sizing and placement
 
-Start with focused cases that expose final geometry rather than only CSSOM
-strings:
+Start with focused screenshot cases that expose final geometry:
 
 - `css/css-grid/grid-template-flexible-rerun-track-sizing.html`
 - `css/css-grid/grid-flex-spanning-items-001.html`
-- `css/css-grid/grid-minimum-contribution-with-percentages.html`
-- `css/css-grid/grid-intrinsic-track-sizes-001.html`
 
 Resolve track initialization, intrinsic contribution collection, spanning
 item distribution, flex-track reruns, gaps, and final item placement. Then run
 the nearby previously passing Grid cases to catch regressions.
+
+Do not infer the owning implementation from a WPT directory. For example,
+`fr-unit.html` and `fr-unit-with-percentage.html` currently diverge in their
+table-based reference document rather than in the Grid fragment.
 
 ### P3 — ordinary Flex layout
 
@@ -105,8 +106,11 @@ that representation exists, do not add a baseline-only correction.
 Project already-computed geometry for resolved Grid tracks, used box sizes and
 margins, client/offset/scroll metrics, and zoom. For example,
 `grid-support-flexible-lengths-001.html` and `grid-support-repeat-001.html`
-mostly diagnose resolved-track serialization and should not drive track-size
-algorithm changes by themselves.
+repeatedly mutate style and synchronously read used track values. The same is
+true of `grid-minimum-contribution-with-percentages.html` and
+`grid-intrinsic-track-sizes-001.html`. Moli deliberately publishes those new
+values at an explicit rendering update, so these cases stay out of the static
+profile and must not drive track-size algorithm changes by themselves.
 
 ### P8 — paint, clipping, hit testing, and scrolling
 
