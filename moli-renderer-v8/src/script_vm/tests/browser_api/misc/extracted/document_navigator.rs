@@ -870,3 +870,35 @@ async fn request_relative_urls_follow_live_http_iframe_base_urls() {
     assert_retained_request_uses_child_document(&mut vm, child_url.as_str());
     server.await.expect("iframe response server should finish");
 }
+
+#[test]
+fn dom_point_readonly_constructor_uses_readonly_instances_and_shared_methods() {
+    let mut vm = new_storage_test_vm("https://dompoint-readonly-constructor.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const point = new DOMPointReadOnly(1, 2, 3, 4);
+  point.x = 9;
+  return [
+    point instanceof DOMPointReadOnly,
+    point instanceof DOMPoint,
+    [point.x, point.y, point.z, point.w].join(","),
+    JSON.stringify(point.toJSON()),
+    Object.hasOwn(DOMPointReadOnly.prototype, "x"),
+    Object.getOwnPropertyDescriptor(DOMPointReadOnly.prototype, "x").set === undefined,
+    Object.hasOwn(DOMPointReadOnly.prototype, "toJSON"),
+    Object.hasOwn(DOMPoint.prototype, "toJSON"),
+    new DOMPoint() instanceof DOMPointReadOnly
+  ].join("|");
+})()
+"#,
+        )
+        .expect("DOMPointReadOnly constructor should evaluate");
+
+    assert_eq!(
+        result,
+        "true|false|1,2,3,4|{\"x\":1,\"y\":2,\"z\":3,\"w\":4}|true|true|true|false|true"
+    );
+}
