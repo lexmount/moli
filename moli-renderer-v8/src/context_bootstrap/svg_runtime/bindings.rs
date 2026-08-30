@@ -434,6 +434,53 @@ struct SvgTextContentElementTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::SVGUnitTypes, enumerable)]
+struct SvgUnitTypesTemplateConstantsDeclaration {
+    #[webapi(constant = "SVG_UNIT_TYPE_UNKNOWN", value = SVG_UNIT_TYPE_UNKNOWN)]
+    unknown: (),
+
+    #[webapi(
+        constant = "SVG_UNIT_TYPE_USERSPACEONUSE",
+        value = SVG_UNIT_TYPE_USER_SPACE_ON_USE
+    )]
+    user_space_on_use: (),
+
+    #[webapi(
+        constant = "SVG_UNIT_TYPE_OBJECTBOUNDINGBOX",
+        value = SVG_UNIT_TYPE_OBJECT_BOUNDING_BOX
+    )]
+    object_bounding_box: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::SVGGradientElement, enumerable)]
+struct SvgGradientElementTemplateConstantsDeclaration {
+    #[webapi(
+        constant = "SVG_SPREADMETHOD_UNKNOWN",
+        value = SVG_SPREAD_METHOD_UNKNOWN
+    )]
+    spread_method_unknown: (),
+
+    #[webapi(
+        constant = "SVG_SPREADMETHOD_PAD",
+        value = SVG_SPREAD_METHOD_PAD
+    )]
+    spread_method_pad: (),
+
+    #[webapi(
+        constant = "SVG_SPREADMETHOD_REFLECT",
+        value = SVG_SPREAD_METHOD_REFLECT
+    )]
+    spread_method_reflect: (),
+
+    #[webapi(
+        constant = "SVG_SPREADMETHOD_REPEAT",
+        value = SVG_SPREAD_METHOD_REPEAT
+    )]
+    spread_method_repeat: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::SVGSVGElement, enumerable)]
 struct SvgSvgElementTemplateMethodsDeclaration {
     #[webapi(
@@ -776,7 +823,11 @@ struct SvgTextContentElementPrototypeAccessorsDeclaration {
     #[webapi(accessor_property = "textLength", getter = svg_text_content_text_length_getter)]
     text_length: (),
 
-    #[webapi(accessor_property = "lengthAdjust", getter = svg_text_content_length_adjust_getter)]
+    #[webapi(
+        accessor_property = "lengthAdjust",
+        getter = svg_element_animated_enumeration_getter,
+        data = callback_data_index_value(scope, 9)
+    )]
     length_adjust: (),
 }
 
@@ -802,6 +853,20 @@ struct SvgTextPositioningElementPrototypeAccessorsDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::SVGPatternElement, enumerable)]
 struct SvgPatternElementPrototypeAccessorsDeclaration {
+    #[webapi(
+        accessor_property = "patternUnits",
+        getter = svg_element_animated_enumeration_getter,
+        data = callback_data_index_value(scope, 7)
+    )]
+    pattern_units: (),
+
+    #[webapi(
+        accessor_property = "patternContentUnits",
+        getter = svg_element_animated_enumeration_getter,
+        data = callback_data_index_value(scope, 8)
+    )]
+    pattern_content_units: (),
+
     #[webapi(accessor_property = "patternTransform", getter = svg_pattern_transform_getter)]
     pattern_transform: (),
 }
@@ -809,8 +874,69 @@ struct SvgPatternElementPrototypeAccessorsDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::SVGGradientElement, enumerable)]
 struct SvgGradientElementPrototypeAccessorsDeclaration {
+    #[webapi(
+        accessor_property = "gradientUnits",
+        getter = svg_element_animated_enumeration_getter,
+        data = callback_data_index_value(scope, 3)
+    )]
+    gradient_units: (),
+
+    #[webapi(
+        accessor_property = "spreadMethod",
+        getter = svg_element_animated_enumeration_getter,
+        data = callback_data_index_value(scope, 4)
+    )]
+    spread_method: (),
+
     #[webapi(accessor_property = "gradientTransform", getter = svg_gradient_transform_getter)]
     gradient_transform: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::SVGClipPathElement, enumerable)]
+struct SvgClipPathElementPrototypeAccessorsDeclaration {
+    #[webapi(
+        accessor_property = "clipPathUnits",
+        getter = svg_element_animated_enumeration_getter,
+        data = callback_data_index_value(scope, 0)
+    )]
+    clip_path_units: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::SVGFilterElement, enumerable)]
+struct SvgFilterElementPrototypeAccessorsDeclaration {
+    #[webapi(
+        accessor_property = "filterUnits",
+        getter = svg_element_animated_enumeration_getter,
+        data = callback_data_index_value(scope, 1)
+    )]
+    filter_units: (),
+
+    #[webapi(
+        accessor_property = "primitiveUnits",
+        getter = svg_element_animated_enumeration_getter,
+        data = callback_data_index_value(scope, 2)
+    )]
+    primitive_units: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::SVGMaskElement, enumerable)]
+struct SvgMaskElementPrototypeAccessorsDeclaration {
+    #[webapi(
+        accessor_property = "maskUnits",
+        getter = svg_element_animated_enumeration_getter,
+        data = callback_data_index_value(scope, 5)
+    )]
+    mask_units: (),
+
+    #[webapi(
+        accessor_property = "maskContentUnits",
+        getter = svg_element_animated_enumeration_getter,
+        data = callback_data_index_value(scope, 6)
+    )]
+    mask_content_units: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -999,6 +1125,24 @@ pub(super) fn install_svg_animated_enumeration_bindings<'s>(
     SvgAnimatedEnumerationTemplateAccessorsDeclaration::initialize_prototype_template(scope, proto);
 }
 
+pub(super) fn install_svg_unit_types_bindings<'s>(
+    scope: &mut v8::PinScope<'s, '_, ()>,
+    template: v8::Local<'s, v8::FunctionTemplate>,
+) {
+    let prototype = template.prototype_template(scope);
+    SvgUnitTypesTemplateConstantsDeclaration::initialize_template(scope, template);
+    SvgUnitTypesTemplateConstantsDeclaration::initialize_prototype_template(scope, prototype);
+}
+
+pub(super) fn install_svg_gradient_element_bindings<'s>(
+    scope: &mut v8::PinScope<'s, '_, ()>,
+    template: v8::Local<'s, v8::FunctionTemplate>,
+) {
+    let prototype = template.prototype_template(scope);
+    SvgGradientElementTemplateConstantsDeclaration::initialize_template(scope, template);
+    SvgGradientElementTemplateConstantsDeclaration::initialize_prototype_template(scope, prototype);
+}
+
 pub(super) fn install_svg_value_list_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
@@ -1107,6 +1251,21 @@ pub(super) fn install_svg_element_accessor_bindings<'s>(
         }
         "SVGTextContentElement" => {
             SvgTextContentElementPrototypeAccessorsDeclaration::initialize_prototype_template(
+                scope, prototype,
+            );
+        }
+        "SVGClipPathElement" => {
+            SvgClipPathElementPrototypeAccessorsDeclaration::initialize_prototype_template(
+                scope, prototype,
+            );
+        }
+        "SVGFilterElement" => {
+            SvgFilterElementPrototypeAccessorsDeclaration::initialize_prototype_template(
+                scope, prototype,
+            );
+        }
+        "SVGMaskElement" => {
+            SvgMaskElementPrototypeAccessorsDeclaration::initialize_prototype_template(
                 scope, prototype,
             );
         }
