@@ -465,7 +465,10 @@ fn worker_geometry_interfaces_use_worker_specific_matrix_surface() {
             windowOnly: [
               Object.hasOwn(DOMMatrixReadOnly.prototype, "toString"),
               "setMatrixValue" in DOMMatrix.prototype,
-              "WebKitCSSMatrix" in globalThis
+              "WebKitCSSMatrix" in globalThis,
+              "SVGPoint" in globalThis,
+              "SVGRect" in globalThis,
+              "SVGMatrix" in globalThis
             ].join(","),
             operations: operationSets.every(([owner, operationNames]) =>
               operationNames.every(name => hasWebIdlOperationDescriptor(owner, name))
@@ -484,6 +487,6 @@ fn worker_geometry_interfaces_use_worker_specific_matrix_surface() {
 
     assert_eq!(
         result,
-        r#"{"constructors":"function,function,function,function,function,function,function","strings":"TypeError,TypeError","tags":"[object DOMMatrix],[object DOMMatrixReadOnly],[object DOMMatrix]","windowOnly":"false,false,false","operations":true,"lengths":"0,0"}"#
+        r#"{"constructors":"function,function,function,function,function,function,function","strings":"TypeError,TypeError","tags":"[object DOMMatrix],[object DOMMatrixReadOnly],[object DOMMatrix]","windowOnly":"false,false,false,false,false,false","operations":true,"lengths":"0,0"}"#
     );
 }
