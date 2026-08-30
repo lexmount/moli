@@ -1498,6 +1498,44 @@ pub(super) fn build_svg_angle_from_parsed<'s>(
     .expect("SVGAngle declaration should bind")
 }
 
+pub(super) fn build_svg_animated_angle_for_attribute<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+    attribute: &str,
+) -> v8::Local<'s, v8::Object> {
+    let parsed = svg_owner_attribute_value(scope, owner, attribute)
+        .as_deref()
+        .and_then(parse_svg_orient_angle_value)
+        .unwrap_or_default();
+    let base_val = build_svg_angle_from_parsed(scope, &parsed, false);
+    set_svg_angle_owner_attribute(scope, base_val, owner, attribute);
+    let anim_val = build_svg_angle_from_parsed(scope, &parsed, true);
+    set_svg_angle_owner_attribute(scope, anim_val, owner, attribute);
+    SvgAnimatedAngleObjectDeclaration::new(base_val, anim_val)
+        .bind(scope)
+        .expect("SVGAnimatedAngle declaration should bind")
+}
+
+pub(super) fn build_svg_angle<'s>(scope: &mut v8::PinScope<'s, '_>) -> v8::Local<'s, v8::Object> {
+    build_svg_angle_from_parsed(scope, &SvgParsedAngle::default(), false)
+}
+
+pub(super) fn build_svg_angle_from_parsed<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    parsed: &SvgParsedAngle,
+    read_only: bool,
+) -> v8::Local<'s, v8::Object> {
+    SvgAngleObjectDeclaration::new(
+        parsed.unit_type,
+        parsed.value,
+        parsed.value_in_specified_units,
+        parsed.value_as_string.clone(),
+        read_only,
+    )
+    .bind(scope)
+    .expect("SVGAngle declaration should bind")
+}
+
 pub(super) fn build_svg_length<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: f64,
