@@ -9,8 +9,8 @@ use std::{
 use crate::{
     context_bootstrap::{
         CryptoKeyAlgorithmClonePayload, CryptoKeyClonePayload, FileSystemFileSnapshotClonePayload,
-        FileSystemHandleClonePayload, ImageDataClonePayload, ReadableStreamClonePayload,
-        TransformStreamClonePayload, WritableStreamClonePayload,
+        FileSystemHandleClonePayload, GeometryClonePayload, ImageDataClonePayload,
+        ReadableStreamClonePayload, TransformStreamClonePayload, WritableStreamClonePayload,
         attach_file_system_file_snapshot_clone_payload, build_file_object,
         build_file_system_handle_from_clone_payload, build_image_data_object_from_clone_payload,
         build_readable_stream_clone_shell, build_transform_stream_clone_shell,
@@ -25,6 +25,7 @@ use crate::{
         prepare_transform_stream_transfer, prepare_writable_stream_transfer,
         quota_exceeded_error_clone_fields, require_internal_stream_value,
         selected_file_from_object,
+        build_geometry_object_from_clone_payload, geometry_clone_payload_from_object,
     },
     dom::native::SelectedFile,
     types::MessagePortId,
@@ -44,6 +45,15 @@ pub(crate) const HOST_OBJECT_TAG_FILE_SYSTEM_HANDLE: u32 = 7;
 const HOST_OBJECT_TAG_QUOTA_EXCEEDED_ERROR: u32 = 8;
 const HOST_OBJECT_TAG_WRITABLE_STREAM: u32 = 9;
 const HOST_OBJECT_TAG_TRANSFORM_STREAM: u32 = 10;
+const HOST_OBJECT_TAG_GEOMETRY: u32 = 11;
+
+const GEOMETRY_KIND_DOM_POINT_READONLY: u32 = 0;
+const GEOMETRY_KIND_DOM_POINT: u32 = 1;
+const GEOMETRY_KIND_DOM_RECT_READONLY: u32 = 2;
+const GEOMETRY_KIND_DOM_RECT: u32 = 3;
+const GEOMETRY_KIND_DOM_QUAD: u32 = 4;
+const GEOMETRY_KIND_DOM_MATRIX_READONLY: u32 = 5;
+const GEOMETRY_KIND_DOM_MATRIX: u32 = 6;
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct V8StructuredClonePayload {
@@ -329,6 +339,12 @@ impl v8::ValueSerializerImpl for WireSerializer {
                     return Some(true);
                 }
             }
+            Some("DOMPoint" | "DOMPointReadOnly" | "DOMRect" | "DOMRectReadOnly" | "DOMQuad" | "DOMMatrix" | "DOMMatrixReadOnly") => {
+                if let Some(payload) = geometry_clone_payload_from_object(scope, object) {
+                    write_geometry_clone_payload(serializer, payload);
+                    return Some(true);
+                }
+            }
             Some("ImageData") => {
                 if let Some(payload) = image_data_clone_payload_from_object(scope, object) {
                     write_image_data_payload(serializer, payload);
@@ -554,6 +570,15 @@ impl v8::ValueDeserializerImpl for WireDeserializer {
                     None
                 })
             }
+            HOST_OBJECT_TAG_GEOMETRY => read_geometry_clone_payload(deserializer)
+                .map(|payload| build_geometry_object_from_clone_payload(scope, payload))
+                .or_else(|| {
+                    throw_data_clone_exception(
+                        scope,
+                        "Failed to deserialize structured clone Geometry object.",
+                    );
+                    None
+                }),
             HOST_OBJECT_TAG_READABLE_STREAM => {
                 let clone_id = read_u32(deserializer)?;
                 let Some(payload) = self.readable_streams.get(&clone_id).cloned() else {
@@ -783,6 +808,125 @@ fn read_image_data_payload<'s>(
             bytes,
         },
     )
+}
+
+fn write_geometry_clone_payload(
+    serializer: &dyn v8::ValueSerializerHelper,
+    payload: GeometryClonePayload,
+) {
+    serializer.write_uint32(HOST_OBJECT_TAG_GEOMETRY);
+    match payload {
+        GeometryClonePayload::Point { mutable, values } => {
+            serializer.write_uint32(if mutable {
+                GEOMETRY_KIND_DOM_POINT
+            } else {
+                GEOMETRY_KIND_DOM_POINT_READONLY
+            });
+            write_doubles(serializer, &values);
+        }
+        GeometryClonePayload::Rect { mutable, values } => {
+            serializer.write_uint32(if mutable {
+                GEOMETRY_KIND_DOM_RECT
+            } else {
+                GEOMETRY_KIND_DOM_RECT_READONLY
+            });
+            write_doubles(serializer, &values);
+        }
+        GeometryClonePayload::Quad { points } => {
+            serializer.write_uint32(GEOMETRY_KIND_DOM_QUAD);
+            for point in points {
+                write_doubles(serializer, &point);
+            }
+        }
+        GeometryClonePayload::Matrix {
+            mutable,
+            is_2d,
+            values,
+        } => {
+            serializer.write_uint32(if mutable {
+                GEOMETRY_KIND_DOM_MATRIX
+            } else {
+                GEOMETRY_KIND_DOM_MATRIX_READONLY
+            });
+            serializer.write_uint32(u32::from(is_2d));
+            if is_2d {
+                write_doubles(
+                    serializer,
+                    &[
+                        values[0], values[1], values[4], values[5], values[12], values[13],
+                    ],
+                );
+            } else {
+                write_doubles(serializer, &values);
+            }
+        }
+    }
+}
+
+fn read_geometry_clone_payload(
+    deserializer: &dyn v8::ValueDeserializerHelper,
+) -> Option<GeometryClonePayload> {
+    let kind = read_u32(deserializer)?;
+    match kind {
+        GEOMETRY_KIND_DOM_POINT_READONLY | GEOMETRY_KIND_DOM_POINT => {
+            Some(GeometryClonePayload::Point {
+                mutable: kind == GEOMETRY_KIND_DOM_POINT,
+                values: read_doubles(deserializer)?,
+            })
+        }
+        GEOMETRY_KIND_DOM_RECT_READONLY | GEOMETRY_KIND_DOM_RECT => {
+            Some(GeometryClonePayload::Rect {
+                mutable: kind == GEOMETRY_KIND_DOM_RECT,
+                values: read_doubles(deserializer)?,
+            })
+        }
+        GEOMETRY_KIND_DOM_QUAD => {
+            let mut points = [[0.0; 4]; 4];
+            for point in &mut points {
+                *point = read_doubles(deserializer)?;
+            }
+            Some(GeometryClonePayload::Quad { points })
+        }
+        GEOMETRY_KIND_DOM_MATRIX_READONLY | GEOMETRY_KIND_DOM_MATRIX => {
+            let is_2d = match read_u32(deserializer)? {
+                0 => false,
+                1 => true,
+                _ => return None,
+            };
+            let values = if is_2d {
+                let [m11, m12, m21, m22, m41, m42] = read_doubles(deserializer)?;
+                [
+                    m11, m12, 0.0, 0.0, m21, m22, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, m41, m42, 0.0, 1.0,
+                ]
+            } else {
+                read_doubles(deserializer)?
+            };
+            Some(GeometryClonePayload::Matrix {
+                mutable: kind == GEOMETRY_KIND_DOM_MATRIX,
+                is_2d,
+                values,
+            })
+        }
+        _ => None,
+    }
+}
+
+fn write_doubles(serializer: &dyn v8::ValueSerializerHelper, values: &[f64]) {
+    for value in values {
+        serializer.write_double(*value);
+    }
+}
+
+fn read_doubles<const N: usize>(
+    deserializer: &dyn v8::ValueDeserializerHelper,
+) -> Option<[f64; N]> {
+    let mut values = [0.0; N];
+    for value in &mut values {
+        if !deserializer.read_double(value) {
+            return None;
+        }
+    }
+    Some(values)
 }
 
 pub(crate) fn write_crypto_key_payload<'s>(
