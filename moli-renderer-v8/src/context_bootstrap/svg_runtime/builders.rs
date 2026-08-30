@@ -374,6 +374,158 @@ pub(super) fn build_svg_animated_enumeration<'s>(
         .expect("SVGAnimatedEnumeration declaration should bind")
 }
 
+pub(super) fn build_svg_animated_enumeration_for_property<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+    property: SvgAnimatedEnumerationProperty,
+) -> v8::Local<'s, v8::Object> {
+    let object = build_svg_animated_enumeration(scope, property.initial_value);
+    set_private_value(
+        scope,
+        object,
+        SVG_ANIMATED_ENUMERATION_OWNER_ELEMENT_SLOT,
+        owner.into(),
+    );
+    let index = u32::try_from(property.index).expect("SVG enumeration property index exceeds u32");
+    let index = v8::Integer::new_from_unsigned(scope, index);
+    set_private_value(
+        scope,
+        object,
+        SVG_ANIMATED_ENUMERATION_PROPERTY_INDEX_SLOT,
+        index.into(),
+    );
+    sync_svg_animated_enumeration_from_owner_attribute(scope, object);
+    object
+}
+
+pub(super) fn svg_animated_enumeration_property<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    animated: v8::Local<'s, v8::Object>,
+) -> Option<SvgAnimatedEnumerationProperty> {
+    let index = get_private_value(
+        scope,
+        animated,
+        SVG_ANIMATED_ENUMERATION_PROPERTY_INDEX_SLOT,
+    )?
+    .uint32_value(scope)?;
+    SVG_ANIMATED_ENUMERATION_PROPERTIES
+        .get(index as usize)
+        .copied()
+}
+
+pub(super) fn sync_svg_animated_enumeration_from_owner_attribute<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    animated: v8::Local<'s, v8::Object>,
+) {
+    let Some(property) = svg_animated_enumeration_property(scope, animated) else {
+        return;
+    };
+    let Some(owner) =
+        get_private_value(scope, animated, SVG_ANIMATED_ENUMERATION_OWNER_ELEMENT_SLOT)
+            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+    else {
+        return;
+    };
+    let value = svg_owner_attribute_value(scope, owner, property.attribute)
+        .as_deref()
+        .and_then(|raw| parse_svg_animated_enumeration(property.kind, raw))
+        .unwrap_or(property.initial_value);
+    set_svg_animated_enumeration_values(scope, animated, value);
+}
+
+pub(super) fn reflect_svg_animated_enumeration_to_owner_attribute<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    animated: v8::Local<'s, v8::Object>,
+) {
+    let Some(property) = svg_animated_enumeration_property(scope, animated) else {
+        return;
+    };
+    let Some(owner) =
+        get_private_value(scope, animated, SVG_ANIMATED_ENUMERATION_OWNER_ELEMENT_SLOT)
+            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+    else {
+        return;
+    };
+    let Some(value) =
+        svg_length_number_slot(scope, animated, SVG_ANIMATED_ENUMERATION_BASE_VAL_SLOT)
+            .map(|value| value as u32)
+            .and_then(|value| serialize_svg_animated_enumeration(property.kind, value))
+    else {
+        return;
+    };
+    let Ok((runtime_ptr, handle)) =
+        crate::native_bridge::node_runtime_and_handle_from_object(scope, owner)
+    else {
+        return;
+    };
+    let runtime = unsafe { &mut *runtime_ptr };
+    let _ = runtime.set_attribute(scope, runtime_ptr, handle, property.attribute, value);
+}
+
+pub(super) fn set_svg_animated_enumeration_values(
+    scope: &mut v8::PinScope<'_, '_>,
+    animated: v8::Local<'_, v8::Object>,
+    value: u32,
+) {
+    let value = v8::Integer::new_from_unsigned(scope, value);
+    set_private_value(
+        scope,
+        animated,
+        SVG_ANIMATED_ENUMERATION_BASE_VAL_SLOT,
+        value.into(),
+    );
+    set_private_value(
+        scope,
+        animated,
+        SVG_ANIMATED_ENUMERATION_ANIM_VAL_SLOT,
+        value.into(),
+    );
+}
+
+pub(super) fn parse_svg_animated_enumeration(
+    kind: SvgAnimatedEnumerationKind,
+    value: &str,
+) -> Option<u32> {
+    match (kind, value) {
+        (SvgAnimatedEnumerationKind::UnitType, "userSpaceOnUse") => {
+            Some(SVG_UNIT_TYPE_USER_SPACE_ON_USE)
+        }
+        (SvgAnimatedEnumerationKind::UnitType, "objectBoundingBox") => {
+            Some(SVG_UNIT_TYPE_OBJECT_BOUNDING_BOX)
+        }
+        (SvgAnimatedEnumerationKind::SpreadMethod, "pad") => Some(SVG_SPREAD_METHOD_PAD),
+        (SvgAnimatedEnumerationKind::SpreadMethod, "reflect") => Some(SVG_SPREAD_METHOD_REFLECT),
+        (SvgAnimatedEnumerationKind::SpreadMethod, "repeat") => Some(SVG_SPREAD_METHOD_REPEAT),
+        (SvgAnimatedEnumerationKind::LengthAdjust, "spacing") => Some(SVG_LENGTH_ADJUST_SPACING),
+        (SvgAnimatedEnumerationKind::LengthAdjust, "spacingAndGlyphs") => {
+            Some(SVG_LENGTH_ADJUST_SPACING_AND_GLYPHS)
+        }
+        _ => None,
+    }
+}
+
+pub(super) fn serialize_svg_animated_enumeration(
+    kind: SvgAnimatedEnumerationKind,
+    value: u32,
+) -> Option<&'static str> {
+    match (kind, value) {
+        (SvgAnimatedEnumerationKind::UnitType, SVG_UNIT_TYPE_USER_SPACE_ON_USE) => {
+            Some("userSpaceOnUse")
+        }
+        (SvgAnimatedEnumerationKind::UnitType, SVG_UNIT_TYPE_OBJECT_BOUNDING_BOX) => {
+            Some("objectBoundingBox")
+        }
+        (SvgAnimatedEnumerationKind::SpreadMethod, SVG_SPREAD_METHOD_PAD) => Some("pad"),
+        (SvgAnimatedEnumerationKind::SpreadMethod, SVG_SPREAD_METHOD_REFLECT) => Some("reflect"),
+        (SvgAnimatedEnumerationKind::SpreadMethod, SVG_SPREAD_METHOD_REPEAT) => Some("repeat"),
+        (SvgAnimatedEnumerationKind::LengthAdjust, SVG_LENGTH_ADJUST_SPACING) => Some("spacing"),
+        (SvgAnimatedEnumerationKind::LengthAdjust, SVG_LENGTH_ADJUST_SPACING_AND_GLYPHS) => {
+            Some("spacingAndGlyphs")
+        }
+        _ => None,
+    }
+}
+
 pub(super) fn build_svg_length_list<'s>(
     scope: &mut v8::PinScope<'s, '_>,
 ) -> v8::Local<'s, v8::Object> {
