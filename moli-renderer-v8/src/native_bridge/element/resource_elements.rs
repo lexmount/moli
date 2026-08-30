@@ -1291,11 +1291,11 @@ fn iframe_srcdoc_setter_function<'s>(
     else {
         return;
     };
-    let Some(value) = super::trusted_types::trusted_html_sink_string(
+    let Some(value) = trusted_html_sink_string(
         scope,
         runtime_ptr,
         args.get(0),
-        super::trusted_types::TrustedHtmlSink::IframeSrcdoc,
+        TrustedHtmlSink::IframeSrcdoc,
     ) else {
         return;
     };
