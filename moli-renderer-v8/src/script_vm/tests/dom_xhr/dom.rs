@@ -1765,6 +1765,35 @@ fn dom_parser_xml_errors_preserve_the_partial_document_root() {
 }
 
 #[test]
+fn dom_parser_rejects_public_doctype_without_system_literal() {
+    let mut vm = new_storage_test_vm("https://dom-parser-doctype.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const parser = new DOMParser();
+  const prefix = '<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN"';
+  const suffix = '><html><div id="test"/></html>';
+  const invalid = parser.parseFromString(prefix + suffix, 'application/xhtml+xml');
+  const emptySystemId = parser.parseFromString(prefix + ' ""' + suffix, 'application/xhtml+xml');
+  const quotedSystemId = parser.parseFromString(prefix + ' "x"' + suffix, 'application/xhtml+xml');
+
+  return [
+    invalid.getElementById('test') === null,
+    invalid.getElementsByTagName('parsererror').length === 1,
+    emptySystemId.getElementById('test') !== null,
+    quotedSystemId.getElementById('test') !== null
+  ].join('|');
+})()
+"#,
+        )
+        .expect("DOMParser doctype system ID validation should evaluate");
+
+    assert_eq!(result, "true|true|true|true");
+}
+
+#[test]
 fn xhtml_element_interface_survives_move_through_xml_document() {
     let mut vm = new_storage_test_vm("https://xhtml-xml-document-move.test/");
 
