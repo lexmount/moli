@@ -205,7 +205,10 @@ mod worker_host;
 mod worker_location_runtime;
 
 pub(super) use self::assets::ContextBootstrapAssets;
-use self::assets::{build_constructor_template, build_constructor_template_with_callback};
+use self::assets::{
+    build_constructor_template, build_constructor_template_for_profile,
+    build_constructor_template_with_callback,
+};
 pub(crate) use self::broadcast_channel::{
     dispatch_authorized_page_broadcast_channel_event, dispatch_broadcast_channel_events_for_channel,
 };
@@ -607,6 +610,20 @@ pub(in crate::context_bootstrap) fn build_profiled_exposed_interface_template<'s
         return Ok(template);
     }
     let template = match spec.interface.name() {
+        "DOMMatrixReadOnly" => build_constructor_template_with_callback(
+            scope,
+            spec,
+            0,
+            profile,
+            geometry_runtime::dom_matrix_readonly_worker_constructor_callback,
+        )?,
+        "DOMMatrix" => build_constructor_template_with_callback(
+            scope,
+            spec,
+            0,
+            profile,
+            geometry_runtime::dom_matrix_worker_constructor_callback,
+        )?,
         "StorageManager" => {
             let template = navigator_runtime::build_storage_manager_worker_template(scope);
             template.read_only_prototype();
@@ -640,9 +657,11 @@ pub(in crate::context_bootstrap) fn build_profiled_exposed_interface_template<'s
         "EventSource" => build_constructor_template_with_callback(
             scope,
             spec,
+            1,
+            profile,
             worker_unsupported_constructor_callback,
         )?,
-        _ => build_constructor_template(scope, spec)?,
+        _ => build_constructor_template_for_profile(scope, spec, profile)?,
     };
     if profile == exposed_interfaces::TemplateBuildProfile::DedicatedWorker
         && spec.interface.name() == "FileSystemFileHandle"

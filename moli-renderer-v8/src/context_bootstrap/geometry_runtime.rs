@@ -319,9 +319,6 @@ struct DomMatrixReadOnlyPrototypeMethodsDeclaration {
     #[webapi(method = "toJSON", enumerable, callback = dom_matrix_to_json_callback)]
     to_json: (),
 
-    #[webapi(method = "toString", callback = dom_matrix_to_string_callback)]
-    to_string: (),
-
     #[webapi(method = "toFloat32Array", callback = dom_matrix_to_float32_array_callback)]
     to_float32_array: (),
 
@@ -369,6 +366,13 @@ struct DomMatrixReadOnlyPrototypeMethodsDeclaration {
 
     #[webapi(method = "transformPoint", callback = dom_matrix_transform_point_callback)]
     transform_point: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::DOMMatrixReadOnly)]
+struct DomMatrixReadOnlyWindowPrototypeMethodsDeclaration {
+    #[webapi(method = "toString", callback = dom_matrix_to_string_callback)]
+    to_string: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -486,7 +490,11 @@ struct DomMatrixPrototypeMethodsDeclaration {
 
     #[webapi(method = "invertSelf", callback = dom_matrix_invert_self_callback)]
     invert_self: (),
+}
 
+#[derive(WebApiFunctionTemplate)]
+#[webapi(name = "DOMMatrix")]
+struct DomMatrixWindowPrototypeMethodsDeclaration {
     #[webapi(method = "setMatrixValue", callback = dom_matrix_set_matrix_value_callback)]
     set_matrix_value: (),
 }
@@ -679,6 +687,44 @@ pub(super) fn dom_matrix_readonly_constructor_callback<'s>(
     rv.set(args.this().into());
 }
 
+pub(super) fn dom_matrix_worker_constructor_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if args.is_construct_call() && dom_matrix_worker_string_argument(&args) {
+        throw_type_error(
+            scope,
+            "DOMMatrix string construction is not available in workers.",
+        );
+        return;
+    }
+    dom_matrix_constructor_callback(scope, args, rv);
+}
+
+pub(super) fn dom_matrix_readonly_worker_constructor_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if args.is_construct_call() && dom_matrix_worker_string_argument(&args) {
+        throw_type_error(
+            scope,
+            "DOMMatrixReadOnly string construction is not available in workers.",
+        );
+        return;
+    }
+    dom_matrix_readonly_constructor_callback(scope, args, rv);
+}
+
+fn dom_matrix_worker_string_argument(args: &v8::FunctionCallbackArguments<'_>) -> bool {
+    if args.length() == 0 {
+        return false;
+    }
+    let init = args.get(0);
+    init.is_string() || init.is_string_object()
+}
+
 pub(in crate::context_bootstrap) fn initialize_dom_point_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
@@ -749,8 +795,10 @@ pub(in crate::context_bootstrap) fn install_geometry_template_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
     interface_name: &str,
+    profile: super::exposed_interfaces::TemplateBuildProfile,
 ) {
     let prototype = template.prototype_template(scope);
+    let install_window_only = profile == super::exposed_interfaces::TemplateBuildProfile::Window;
     match interface_name {
         "DOMPointReadOnly" => {
             DomPointReadOnlyConstructorDeclaration::initialize_template(scope, template);
@@ -773,11 +821,21 @@ pub(in crate::context_bootstrap) fn install_geometry_template_bindings<'s>(
             DomMatrixReadOnlyPrototypeMethodsDeclaration::initialize_prototype_template(
                 scope, prototype,
             );
+            if install_window_only {
+                DomMatrixReadOnlyWindowPrototypeMethodsDeclaration::initialize_prototype_template(
+                    scope, prototype,
+                );
+            }
         }
         "DOMMatrix" => {
             DomMatrixConstructorDeclaration::initialize_template(scope, template);
             DomMatrixPrototypeAccessorsDeclaration::initialize_prototype_template(scope, prototype);
             DomMatrixPrototypeMethodsDeclaration::initialize_prototype_template(scope, prototype);
+            if install_window_only {
+                DomMatrixWindowPrototypeMethodsDeclaration::initialize_prototype_template(
+                    scope, prototype,
+                );
+            }
         }
         _ => {}
     }

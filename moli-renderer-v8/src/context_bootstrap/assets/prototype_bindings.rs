@@ -18,6 +18,7 @@ use super::super::{
     dom_rect::install_dom_rect_template_bindings,
     dom_rect_list::install_dom_rect_list_template_bindings,
     event_template::install_event_template_bindings,
+    exposed_interfaces::TemplateBuildProfile,
     file_api::install_file_api_template_bindings,
     geometry_runtime::install_geometry_template_bindings,
     idle_detection::install_idle_detector_template_bindings,
@@ -404,6 +405,7 @@ pub(super) fn install_constructor_template_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
     spec: ConstructorSpec,
+    profile: TemplateBuildProfile,
 ) {
     install_node_mixin_unscopables(scope, template, spec.interface.name());
     install_constructor_constant_template_bindings(scope, template, spec.interface.name());
@@ -417,7 +419,7 @@ pub(super) fn install_constructor_template_bindings<'s>(
     install_dom_implementation_template_bindings(scope, template, spec.interface.name());
     install_custom_element_registry_template_bindings(scope, template, spec.interface.name());
     install_text_codec_template_bindings(scope, template, spec.interface.name());
-    install_geometry_template_bindings(scope, template, spec.interface.name());
+    install_geometry_template_bindings(scope, template, spec.interface.name(), profile);
     if spec.interface.name() == "ImageData" {
         install_image_data_template_bindings(scope, template);
     }
