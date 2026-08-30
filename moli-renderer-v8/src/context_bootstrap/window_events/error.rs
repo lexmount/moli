@@ -132,6 +132,21 @@ pub(crate) fn dispatch_window_error_event_with_details<'s>(
     colno: u32,
     error_value: Option<v8::Local<'s, v8::Value>>,
 ) -> std::result::Result<(), String> {
+    let current_context = scope.get_current_context();
+    let reporting_owner = unsafe { &*host_ptr }
+        .window_execution_context_identity_for_v8_context(scope, current_context)
+        .map(|identity| identity.owner());
+    let _error_reporting_scope = if let Some(owner) = reporting_owner {
+        let Some(reporting_scope) =
+            (unsafe { &mut *host_ptr }).enter_window_error_reporting_scope(owner)
+        else {
+            return Ok(());
+        };
+        Some(reporting_scope)
+    } else {
+        None
+    };
+
     let global = scope.get_current_context().global(scope);
     ensure_window_reflecting_body_onerror_handler(scope);
     let error_value = error_value.unwrap_or_else(|| v8::null(scope).into());

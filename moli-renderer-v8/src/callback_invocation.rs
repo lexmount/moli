@@ -192,6 +192,60 @@ impl CallbackInvoker {
         callback_name: &str,
         invocation: CallbackInvocation<'s, '_>,
     ) -> CallbackInvocationOutcome {
+        Self::invoke_with_completion(
+            scope,
+            callback_kind,
+            log_label,
+            log_level,
+            callback_name,
+            invocation,
+            false,
+            |_scope, outcome| outcome,
+        )
+    }
+
+    pub(crate) fn invoke_event_and_then<'s, R>(
+        scope: &mut v8::PinScope<'s, '_>,
+        callback_kind: &str,
+        log_label: &str,
+        log_level: CallbackExceptionLogLevel,
+        callback_name: &str,
+        invocation: CallbackInvocation<'s, '_>,
+        complete: impl FnOnce(&mut v8::PinScope<'s, '_>, CallbackInvocationOutcome) -> R,
+    ) -> R {
+        let host_ptr = invocation.host_ptr;
+        let event_callback_scope = host_ptr
+            .map(|host_ptr| unsafe { &mut *host_ptr }.enter_event_callback_invocation_scope());
+        let defer_window_event_restore = event_callback_scope
+            .as_ref()
+            .is_some_and(|event_scope| event_scope.is_outermost())
+            && host_ptr
+                .is_some_and(|host_ptr| !unsafe { &*host_ptr }.explicit_event_dispatch_is_active());
+        let result = Self::invoke_with_completion(
+            scope,
+            callback_kind,
+            log_label,
+            log_level,
+            callback_name,
+            invocation,
+            defer_window_event_restore,
+            complete,
+        );
+        drop(event_callback_scope);
+        result
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn invoke_with_completion<'s, R>(
+        scope: &mut v8::PinScope<'s, '_>,
+        callback_kind: &str,
+        log_label: &str,
+        log_level: CallbackExceptionLogLevel,
+        callback_name: &str,
+        invocation: CallbackInvocation<'s, '_>,
+        defer_window_event_restore: bool,
+        complete: impl FnOnce(&mut v8::PinScope<'s, '_>, CallbackInvocationOutcome) -> R,
+    ) -> R {
         if let Some(host_ptr) = invocation.host_ptr {
             unsafe { &*host_ptr }.debug_assert_not_in_structural_mutation("callback invocation");
         }
@@ -199,10 +253,10 @@ impl CallbackInvoker {
             (invocation.host_ptr, invocation.relevant_identity)
             && !unsafe { &*host_ptr }.window_execution_context_identity_is_current(identity)
         {
-            return CallbackInvocationOutcome::Retired;
+            return complete(scope, CallbackInvocationOutcome::Retired);
         }
 
-        let result = with_webidl_callback_contexts(
+        with_webidl_callback_contexts(
             scope,
             invocation.relevant_context,
             invocation.incumbent_context,
@@ -255,18 +309,29 @@ impl CallbackInvoker {
                     },
                 );
 
-                if let Some(previous) = previous_window_event {
-                    let global = relevant_context.global(scope);
-                    let _ = global.set(scope, v8str(scope, WINDOW_EVENT_SLOT).into(), previous);
-                }
-                result
-            },
-        );
+                let outcome = match result {
+                    Ok(value) => CallbackInvocationOutcome::Returned(value),
+                    Err(report) => CallbackInvocationOutcome::Threw(report),
+                };
+                let completed = complete(scope, outcome);
 
-        match result {
-            Ok(value) => CallbackInvocationOutcome::Returned(value),
-            Err(report) => CallbackInvocationOutcome::Threw(report),
-        }
+                if let Some(previous) = previous_window_event {
+                    if defer_window_event_restore && let Some(host_ptr) = invocation.host_ptr {
+                        crate::context_bootstrap::enqueue_window_event_restore_after_microtask_checkpoint(
+                            scope,
+                            host_ptr,
+                            invocation.relevant_identity,
+                            relevant_context,
+                            previous,
+                        );
+                    } else {
+                        let global = relevant_context.global(scope);
+                        let _ = global.set(scope, v8str(scope, WINDOW_EVENT_SLOT).into(), previous);
+                    }
+                }
+                completed
+            },
+        )
     }
 }
 

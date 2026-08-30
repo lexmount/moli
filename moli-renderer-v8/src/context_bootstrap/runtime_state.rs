@@ -627,11 +627,11 @@ fn window_length_replaceable_getter<'s>(
 
 fn window_event_replaceable_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    _args: v8::FunctionCallbackArguments<'s>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
     rv.set(
-        global_hidden_value(scope, WINDOW_EVENT_SLOT)
+        window_event_value_for_receiver(scope, args.this())
             .unwrap_or_else(|| v8::undefined(scope).into()),
     );
 }

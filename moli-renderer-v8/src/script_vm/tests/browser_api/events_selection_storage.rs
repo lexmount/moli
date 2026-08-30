@@ -2175,6 +2175,192 @@ fn cross_realm_listener_throw_reports_listener_global_not_target_global() {
         r#"[["function",true,true],["function-window-event-restored",true],["object",true,true],["object-window-event-restored",true]]"#
     );
 }
+
+#[test]
+fn listener_exception_reporting_preserves_outer_realm_window_event() {
+    let mut vm = new_storage_test_vm("https://event-listener-nested-window-event.test/");
+
+    vm.eval(
+        r#"
+        (() => {
+          const host = document.body || document.documentElement || document;
+          const listenerFrame = document.createElement("iframe");
+          listenerFrame.srcdoc = `<script>
+            function listener() { throw new Error("listener failure"); }
+            function currentEventType() { return window.event?.type; }
+          <\/script>`;
+          const handlerFrame = document.createElement("iframe");
+          host.appendChild(listenerFrame);
+          host.appendChild(handlerFrame);
+          globalThis.__nestedEventFrames = [listenerFrame, handlerFrame];
+          return "ready";
+        })()
+        "#,
+    )
+    .expect("nested window.event frame setup should evaluate");
+    vm.drain_pending_child_frame_work_for_test();
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const [listenerFrame, handlerFrame] = globalThis.__nestedEventFrames;
+              const listenerWindow = listenerFrame.contentWindow;
+              const handlerWindow = handlerFrame.contentWindow;
+              listenerWindow.onerror = new handlerWindow.Function(`
+                parent.__nestedWindowEventState = [
+                  parent.__nestedEventFrames[0].contentWindow.currentEventType(),
+                  window.event?.type
+                ];
+                return true;
+              `);
+
+              const target = new EventTarget();
+              target.addEventListener("party", listenerWindow.listener);
+              target.dispatchEvent(new Event("party"));
+
+              return JSON.stringify({
+                during: globalThis.__nestedWindowEventState,
+                listenerAfter: listenerWindow.event,
+                handlerAfter: handlerWindow.event
+              });
+            })()
+            "#,
+        )
+        .expect("nested window.event exception reporting should evaluate");
+
+    assert_eq!(result, r#"{"during":["party","error"]}"#,);
+}
+
+#[test]
+fn cross_realm_window_event_getters_preserve_nested_handler_events() {
+    let mut vm = new_storage_test_vm("https://nested-handler-window-event.test/");
+
+    vm.eval(
+        r#"
+        (() => {
+          const host = document.body || document.documentElement || document;
+          const firstFrame = document.createElement("iframe");
+          const secondFrame = document.createElement("iframe");
+          host.appendChild(firstFrame);
+          host.appendChild(secondFrame);
+          globalThis.__handlerEventFrames = [firstFrame, secondFrame];
+          return "ready";
+        })()
+        "#,
+    )
+    .expect("nested handler frame setup should evaluate");
+    vm.drain_pending_child_frame_work_for_test();
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const [firstFrame, secondFrame] = globalThis.__handlerEventFrames;
+              firstFrame.contentWindow.onerror = new secondFrame.contentWindow.Function(`
+                top.__secondHandlerEvents = [
+                  top.event?.type,
+                  top.frames[0].event?.type,
+                  top.frames[1].event?.type,
+                  top.frames[1].event?.error?.name
+                ];
+                return true;
+              `);
+              window.onerror = new firstFrame.contentWindow.Function(`
+                top.__firstHandlerEvents = [
+                  top.event?.type,
+                  top.frames[0].event?.type,
+                  top.frames[1].event?.type ?? null
+                ];
+                missingNestedHandlerName;
+              `);
+              window.onload = loadEvent => {
+                const errorEvent = new ErrorEvent("error", {
+                  error: new Error("outer error")
+                });
+                window.dispatchEvent(errorEvent);
+              };
+
+              window.dispatchEvent(new Event("load"));
+              return JSON.stringify({
+                first: globalThis.__firstHandlerEvents,
+                second: globalThis.__secondHandlerEvents,
+                after: [window.event, frames[0].event, frames[1].event]
+              });
+            })()
+            "#,
+        )
+        .expect("nested cross-realm Window event handlers should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"first":["load","error",null],"second":["load","error","error","ReferenceError"],"after":[null,null,null]}"#,
+    );
+}
+
+#[test]
+fn same_realm_onerror_throw_does_not_reenter_error_reporting() {
+    let mut vm = new_storage_test_vm("https://onerror-recursion.test/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              let calls = 0;
+              window.onerror = () => {
+                calls++;
+                throw new Error("nested onerror failure");
+              };
+              window.reportError(new Error("initial failure"));
+              return String(calls);
+            })()
+            "#,
+        )
+        .expect("same-realm onerror recursion probe should evaluate");
+
+    assert_eq!(result, "1");
+}
+
+#[test]
+fn host_event_microtasks_observe_current_window_event_until_checkpoint_cleanup() {
+    let mut vm = new_storage_test_vm("https://host-event-microtasks.test/");
+
+    vm.eval(
+        r#"
+        (() => {
+          const frame = document.createElement("iframe");
+          frame.srcdoc = `<script>window.__finalSrcdocRealm = true;<\/script>`;
+          globalThis.__hostEventMicrotaskState = null;
+          frame.addEventListener("load", event => {
+            if (!frame.contentWindow.__finalSrcdocRealm) return;
+            Promise.resolve().then(() => {
+              globalThis.__hostEventMicrotaskState = [
+                window.event === event,
+                window.event?.type
+              ];
+            });
+          });
+          (document.body || document.documentElement || document).appendChild(frame);
+          return "ready";
+        })()
+        "#,
+    )
+    .expect("host-entered event microtask setup should evaluate");
+    vm.drain_pending_child_frame_work_for_test();
+    vm.perform_owner_lane_task_microtask_checkpoints()
+        .expect("host event task checkpoint should complete");
+
+    let result = vm
+        .eval(
+            r#"JSON.stringify({
+              during: globalThis.__hostEventMicrotaskState,
+              after: window.event ?? null
+            })"#,
+        )
+        .expect("host-entered event microtask state should evaluate");
+    assert_eq!(result, r#"{"during":[true,"load"],"after":null}"#);
+}
+
 #[test]
 fn event_timestamp_uses_performance_origin_and_safe_resolution() {
     let mut vm = new_storage_test_vm("https://event-timestamp.test/");

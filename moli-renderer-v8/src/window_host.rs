@@ -490,6 +490,8 @@ pub(super) fn event_target_dispatch_event_callback<'s>(
         return;
     }
 
+    let _explicit_dispatch_scope = host.enter_explicit_event_dispatch_scope();
+
     let event_type = event_type_string(scope, event);
     if let Some(handle) = child_window_target {
         let event_type = event_type.as_deref().unwrap_or_default();
