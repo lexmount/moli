@@ -131,11 +131,6 @@ pub(crate) enum InlineDirection {
 }
 
 /// Physical block-flow direction retained at the Stylo/Taffy boundary.
-///
-/// Taffy currently has no writing-mode input, so its numeric algorithms run
-/// in horizontal-tb coordinates. Keeping the full authored mode here lets the
-/// browser adapter physicalize the result without confusing `vertical-lr`
-/// and `vertical-rl`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum LayoutWritingMode {
     #[default]
@@ -155,6 +150,15 @@ impl LayoutWritingMode {
 
     pub(crate) const fn is_horizontal(self) -> bool {
         matches!(self, Self::HorizontalTb)
+    }
+
+    /// Project the inherited Stylo value into Taffy's logical constraint space.
+    pub(crate) const fn to_taffy(self) -> taffy::WritingMode {
+        match self {
+            Self::HorizontalTb => taffy::WritingMode::HorizontalTb,
+            Self::VerticalRl => taffy::WritingMode::VerticalRl,
+            Self::VerticalLr => taffy::WritingMode::VerticalLr,
+        }
     }
 
     /// Physical edge used as block-start by vertical normal flow.
@@ -1933,6 +1937,11 @@ impl ResolvedLayoutStyle {
 
     pub(crate) const fn vertical_block_start_is_right(&self) -> Option<bool> {
         self.writing_mode.vertical_block_start_is_right()
+    }
+
+    /// Returns the inherited writing mode used by the numeric layout tree.
+    pub(crate) const fn writing_mode(&self) -> taffy::WritingMode {
+        self.writing_mode.to_taffy()
     }
 
     pub(crate) fn text_leaf_from(parent: &Self) -> Self {

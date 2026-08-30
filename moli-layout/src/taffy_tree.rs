@@ -3,14 +3,14 @@ use std::{fmt::Debug, hash::Hash};
 use parley::{AlignmentOptions, PositionedLayoutItem, YieldData};
 use style::Atom;
 use taffy::{
-    AlignContent, AlignContentKeyword, AlignmentSafety, AvailableSpace, BlockContext,
-    BlockFormattingContext, BoxSizing, CacheTree, Clear, DetailedGridInfo, Dimension, Display,
-    FloatDirection, Layout, LayoutBlockContainer, LayoutFlexboxContainer, LayoutGridContainer,
-    LayoutInput, LayoutOutput, LayoutPartialTree, LeafLayoutContext, Line, MaybeMath, MaybeResolve,
-    NodeId, Point, ResolveOrZero, RoundTree, RunMode, Size, SizingMode, SizingPurpose, Style,
-    TraversePartialTree, TraverseTree, compute_block_layout, compute_cached_layout,
-    compute_flexbox_layout, compute_grid_layout, compute_hidden_layout,
-    compute_leaf_layout_with_context, compute_root_layout, round_layout,
+    AbsoluteAxis, AlignContent, AlignContentKeyword, AlignmentSafety, AutoSizeBehavior,
+    AvailableSpace, BlockContext, BlockFormattingContext, BoxSizing, CacheTree, Clear,
+    DetailedGridInfo, Dimension, Display, FloatDirection, Layout, LayoutBlockContainer,
+    LayoutFlexboxContainer, LayoutGridContainer, LayoutInput, LayoutOutput, LayoutPartialTree,
+    LeafLayoutContext, Line, MaybeMath, MaybeResolve, NodeId, Point, ResolveOrZero, RoundTree,
+    RunMode, Size, SizingMode, SizingPurpose, Style, TraversePartialTree, TraverseTree,
+    compute_block_layout, compute_cached_layout, compute_flexbox_layout, compute_grid_layout,
+    compute_hidden_layout, compute_leaf_layout_with_context, compute_root_layout, round_layout,
 };
 
 use crate::{
@@ -580,6 +580,7 @@ where
             continue;
         };
         let item_layout = world.boxes[item.index()].unrounded_layout;
+        let parent_writing_mode = world.boxes[item.index()].style.writing_mode();
         let parent_width = (item_layout.size.width
             - item_layout.border.left
             - item_layout.border.right
@@ -593,6 +594,7 @@ where
                 width: Some(parent_width),
                 height: None,
             },
+            parent_writing_mode,
             available_space: Size {
                 width: AvailableSpace::MaxContent,
                 height: AvailableSpace::MaxContent,
@@ -601,6 +603,7 @@ where
             sizing_purpose: SizingPurpose::Layout,
             run_mode: RunMode::PerformLayout,
             axis: taffy::RequestedAxis::Both,
+            block_auto_behavior: AutoSizeBehavior::FitContent,
             vertical_margins_are_collapsible: Line::FALSE,
         };
         let output = world.compute_child_layout(marker.to_taffy(), inputs);
@@ -665,6 +668,7 @@ where
             continue;
         };
         let control_layout = world.boxes[control.index()].unrounded_layout;
+        let parent_writing_mode = world.boxes[control.index()].style.writing_mode();
         let content_width = (control_layout.size.width
             - control_layout.border.left
             - control_layout.border.right
@@ -679,6 +683,7 @@ where
                 width: Some(content_width),
                 height: None,
             },
+            parent_writing_mode,
             available_space: Size {
                 width: AvailableSpace::Definite(content_width),
                 height: AvailableSpace::MaxContent,
@@ -687,6 +692,7 @@ where
             sizing_purpose: SizingPurpose::Layout,
             run_mode: RunMode::PerformLayout,
             axis: taffy::RequestedAxis::Both,
+            block_auto_behavior: AutoSizeBehavior::FitContent,
             vertical_margins_are_collapsible: Line::FALSE,
         };
         let output = world.compute_child_layout(content.to_taffy(), inputs);
@@ -850,6 +856,7 @@ struct PositionedContainingArea {
     origin: Point<f32>,
     size: Size<f32>,
     direction: taffy::Direction,
+    writing_mode: taffy::WritingMode,
     requires_inline_layout: bool,
 }
 
@@ -986,6 +993,7 @@ where
                 height: viewport.css_height as f32,
             },
             direction: world.boxes[world.root.index()].style.taffy.direction,
+            writing_mode: world.boxes[world.root.index()].style.writing_mode(),
             requires_inline_layout: false,
         };
     };
@@ -1007,6 +1015,7 @@ where
                 height: rect.height,
             },
             direction: containing_box.style.taffy.direction,
+            writing_mode: containing_box.style.writing_mode(),
             requires_inline_layout: true,
         };
     }
@@ -1024,6 +1033,7 @@ where
         },
         size: padding_box_size,
         direction: containing_box.style.taffy.direction,
+        writing_mode: containing_box.style.writing_mode(),
         requires_inline_layout: containing_box.inline_formatting_context,
     }
 }
@@ -1115,6 +1125,7 @@ fn layout_inline_absolute_child<N>(
 ) where
     N: Copy + Debug + Eq + Hash,
 {
+    let child_writing_mode = world.boxes[child.index()].style.writing_mode();
     let style = world.boxes[child.index()].style.taffy.clone();
     if style.display == Display::None || style.position != taffy::Position::Absolute {
         return;
@@ -1122,16 +1133,17 @@ fn layout_inline_absolute_child<N>(
 
     let area_width = area.size.width;
     let area_height = area.size.height;
+    let percentage_basis = area.writing_mode.to_logical(area.size).inline_size;
     let aspect_ratio = style.aspect_ratio;
     let margin = style
         .margin
-        .map(|value| value.maybe_resolve(area_width, resolve_stylo_calc_value));
+        .map(|value| value.maybe_resolve(percentage_basis, resolve_stylo_calc_value));
     let padding = style
         .padding
-        .resolve_or_zero(Some(area_width), resolve_stylo_calc_value);
+        .resolve_or_zero(Some(percentage_basis), resolve_stylo_calc_value);
     let border = style
         .border
-        .resolve_or_zero(Some(area_width), resolve_stylo_calc_value);
+        .resolve_or_zero(Some(percentage_basis), resolve_stylo_calc_value);
     let padding_border_sum = (padding + border).sum_axes();
     let box_sizing_adjustment = if style.box_sizing == BoxSizing::ContentBox {
         padding_border_sum
@@ -1154,6 +1166,15 @@ fn layout_inline_absolute_child<N>(
         .inset
         .bottom
         .maybe_resolve(area_height, resolve_stylo_calc_value);
+    let block_auto_behavior = match child_writing_mode.block_axis() {
+        AbsoluteAxis::Horizontal if left.is_some() && right.is_some() => {
+            AutoSizeBehavior::StretchExplicit
+        }
+        AbsoluteAxis::Vertical if top.is_some() && bottom.is_some() => {
+            AutoSizeBehavior::StretchExplicit
+        }
+        _ => AutoSizeBehavior::FitContent,
+    };
     let style_size = style
         .size
         .maybe_resolve(area.size, resolve_stylo_calc_value)
@@ -1215,11 +1236,13 @@ fn layout_inline_absolute_child<N>(
                 known_dimensions,
                 definite_dimensions: known_dimensions,
                 parent_size: area.size.map(Some),
+                parent_writing_mode: area.writing_mode,
                 available_space,
                 sizing_mode: SizingMode::ContentSize,
                 sizing_purpose: SizingPurpose::IntrinsicContribution,
                 run_mode: RunMode::ComputeSize,
                 axis: taffy::RequestedAxis::Horizontal,
+                block_auto_behavior,
                 vertical_margins_are_collapsible: Line::FALSE,
             },
             available_width,
@@ -1235,11 +1258,13 @@ fn layout_inline_absolute_child<N>(
                 known_dimensions,
                 definite_dimensions: known_dimensions,
                 parent_size: area.size.map(Some),
+                parent_writing_mode: area.writing_mode,
                 available_space,
                 sizing_mode: SizingMode::ContentSize,
                 sizing_purpose: SizingPurpose::Layout,
                 run_mode: RunMode::ComputeSize,
                 axis: taffy::RequestedAxis::Both,
+                block_auto_behavior,
                 vertical_margins_are_collapsible: Line::FALSE,
             },
         )
@@ -1253,11 +1278,13 @@ fn layout_inline_absolute_child<N>(
             known_dimensions: final_size.map(Some),
             definite_dimensions: known_dimensions,
             parent_size: area.size.map(Some),
+            parent_writing_mode: area.writing_mode,
             available_space,
             sizing_mode: SizingMode::ContentSize,
             sizing_purpose: SizingPurpose::Layout,
             run_mode: RunMode::PerformLayout,
             axis: taffy::RequestedAxis::Both,
+            block_auto_behavior,
             vertical_margins_are_collapsible: Line::FALSE,
         },
     );
@@ -1403,6 +1430,16 @@ where
             &self.boxes[LayoutBoxId::from_taffy(node_id).index()]
                 .style
                 .taffy
+        }
+    }
+
+    fn get_writing_mode(&self, node_id: NodeId) -> taffy::WritingMode {
+        if self.is_viewport_taffy_node(node_id) {
+            taffy::WritingMode::HorizontalTb
+        } else {
+            self.boxes[LayoutBoxId::from_taffy(node_id).index()]
+                .style
+                .writing_mode()
         }
     }
 
@@ -1780,6 +1817,7 @@ where
         let text = layout_box.text.clone();
         let font_size = layout_box.style.font_size();
         let line_height = layout_box.style.line_height();
+        let writing_mode = layout_box.style.writing_mode();
         let replaced_context = layout_box.replaced_context;
         let resolved_aspect_ratio = layout_box.resolved_aspect_ratio();
 
@@ -1801,19 +1839,11 @@ where
                 inputs.sizing_mode,
                 inputs.axis,
             );
-            return LayoutOutput {
-                size,
-                content_size: size,
-                first_baselines: Point::NONE,
-                last_baselines: Point::NONE,
-                top_margin: taffy::tree::CollapsibleMarginSet::ZERO,
-                bottom_margin: taffy::tree::CollapsibleMarginSet::ZERO,
-                margins_can_collapse_through: false,
-            };
+            return LayoutOutput::from_sizes(size, size);
         }
 
         let scrollbar_insets = self.get_scrollbar_insets(id.to_taffy());
-        let context = LeafLayoutContext::new(resolved_aspect_ratio, scrollbar_insets);
+        let context = LeafLayoutContext::new(writing_mode, resolved_aspect_ratio, scrollbar_insets);
         compute_leaf_layout_with_context(
             inputs,
             &style,
@@ -1846,6 +1876,7 @@ where
     ) -> LayoutOutput {
         let scrollbar_insets = self.get_scrollbar_insets(id.to_taffy());
         let style = self.boxes[id.index()].style.taffy.clone();
+        let writing_mode = self.boxes[id.index()].style.writing_mode();
         let resolved_aspect_ratio = self.boxes[id.index()].resolved_aspect_ratio();
         let is_floated = box_is_effectively_floated(self, id);
         // Both Taffy's block-float parent and Moli's IFC float parent
@@ -1883,7 +1914,7 @@ where
         }
         let mut content_widths = std::mem::take(&mut inline_context.content_widths);
         let mut measurement: Option<InlineMeasurement> = None;
-        let context = LeafLayoutContext::new(resolved_aspect_ratio, scrollbar_insets);
+        let context = LeafLayoutContext::new(writing_mode, resolved_aspect_ratio, scrollbar_insets);
         let mut output = compute_leaf_layout_with_context(
             leaf_inputs,
             &style,
@@ -2024,6 +2055,7 @@ where
         // output and retains the expensive shaping allocations.
         reset_inline_layout_for_probe(layout);
 
+        let parent_writing_mode = self.boxes[owner.index()].style.writing_mode();
         let child_inputs = LayoutInput {
             run_mode: inputs.run_mode,
             sizing_mode: SizingMode::InherentSize,
@@ -2032,7 +2064,9 @@ where
             known_dimensions: Size::NONE,
             definite_dimensions: Size::NONE,
             parent_size: available_space.into_options(),
+            parent_writing_mode,
             available_space,
+            block_auto_behavior: AutoSizeBehavior::FitContent,
             vertical_margins_are_collapsible: Line::FALSE,
         };
         // A float's max-content contribution is measured independently from

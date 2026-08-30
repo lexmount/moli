@@ -13,10 +13,11 @@ use std::{fmt::Debug, hash::Hash};
 
 use style::Atom;
 use taffy::{
-    AvailableSpace, DetailedGridInfo, Dimension, Display, GridAutoFlow, Layout,
-    LayoutGridContainer, LayoutInput, LayoutOutput, LayoutPartialTree, Line, MaybeMath,
-    MaybeResolve, NodeId, Point, Rect, ResolveOrZero, RunMode, Size, SizingMode, SizingPurpose,
-    Style, TraversePartialTree, TraverseTree, compute_grid_layout, style_helpers,
+    AutoSizeBehavior, AvailableSpace, CacheTree, DetailedGridInfo, Dimension, Display,
+    GridAutoFlow, IntrinsicSizeResult, Layout, LayoutGridContainer, LayoutInput, LayoutOutput,
+    LayoutPartialTree, Line, LogicalSize, MaybeResolve, NodeId, Point, Rect, RequestedAxis,
+    ResolveOrZero, RunMode, Size, SizingMode, SizingPurpose, Style, TraversePartialTree,
+    TraverseTree, WritingMode, compute_grid_layout, style_helpers,
 };
 
 use crate::{LayoutBoxId, LayoutBoxKind, LayoutWorld, style::resolve_stylo_calc_value};
@@ -27,8 +28,9 @@ mod columns;
 pub(crate) use collapsed_borders::CollapsedTableBorders;
 use collapsed_borders::{prepare_collapsed_table_borders, set_collapsed_border_geometry};
 use columns::{
-    TableCellInlineConstraint, TableCellSpanConstraint, TableColumnConstraint,
-    distribute_fixed_cell_spans, distribute_fixed_columns, fixed_grid_min_inline_size,
+    AutomaticTableSizingTarget, TableCellInlineConstraint, TableCellSpanConstraint,
+    TableColumnConstraint, TableLayoutMode, apply_cell_constraints, compute_grid_inline_min_max,
+    distribute_auto_columns, distribute_fixed_columns, fixed_grid_min_inline_size,
 };
 
 #[derive(Clone)]
@@ -127,8 +129,9 @@ struct TableContext {
     collapsed_borders: bool,
     column_count: usize,
     column_constraints: Vec<TableColumnConstraint>,
-    fixed_layout: bool,
+    layout_mode: TableLayoutMode,
     inline_border_spacing: f32,
+    writing_mode: WritingMode,
 }
 
 pub(crate) fn prepare_table_layout_trees<N>(world: &mut LayoutWorld<N>)
@@ -175,7 +178,8 @@ fn apply_parent_facing_table_inline_constraints<N>(world: &mut LayoutWorld<N>, r
 where
     N: Copy + Debug + Eq + Hash,
 {
-    let context = build_table_context(world, root);
+    let mut context = build_table_context(world, root);
+    context.collect_authored_fixed_cell_constraints(world);
     let Some(min_border_box_size) = context.fixed_grid_min_border_box_size() else {
         return;
     };
@@ -234,16 +238,18 @@ where
     N: Copy + Debug + Eq + Hash,
 {
     let mut context = build_table_context(world, root);
-    context.resolve_column_tracks(inputs);
+    context.collect_cell_inline_constraints(world);
+    let grid_inputs = context.resolve_column_tracks(inputs);
     let mut output = {
         let mut wrapper = TableTreeWrapper {
             world,
             context: &mut context,
         };
-        compute_grid_layout(&mut wrapper, NodeId::from(0usize), inputs)
+        compute_grid_layout(&mut wrapper, NodeId::from(0usize), grid_inputs)
     };
 
     if inputs.run_mode == RunMode::PerformLayout {
+        let caption_parent_writing_mode = world.boxes[root.index()].style.writing_mode();
         let top_captions = context
             .captions
             .iter()
@@ -256,13 +262,20 @@ where
             .copied()
             .filter(|caption| world.boxes[caption.index()].style.caption_is_bottom())
             .collect::<Vec<_>>();
-        let top_height = layout_captions(world, &top_captions, output.size.width, 0.0);
+        let top_height = layout_captions(
+            world,
+            &top_captions,
+            output.size.width,
+            0.0,
+            caption_parent_writing_mode,
+        );
         shift_grid_children(world, &context.cells, top_height);
         let bottom_height = layout_captions(
             world,
             &bottom_captions,
             output.size.width,
             top_height + output.size.height,
+            caption_parent_writing_mode,
         );
         apply_structural_layout(world, root, &context, top_height, output.size);
         if let Some(first_baseline) = &mut output.first_baselines.y {
@@ -303,8 +316,12 @@ where
     let mut columns = Vec::new();
     let mut max_columns = 0usize;
     let mut column_tracks = Vec::new();
-    let mut cell_span_constraints = Vec::new();
-    let fixed_layout = root_style.table_layout_is_fixed();
+    let layout_mode = if root_style.table_layout_is_fixed() {
+        TableLayoutMode::Fixed
+    } else {
+        TableLayoutMode::Automatic
+    };
+    let writing_mode = root_style.writing_mode();
     for column in grouped_children.columns.iter().copied() {
         collect_columns(world, column, None, &mut columns, &mut column_tracks);
     }
@@ -312,6 +329,8 @@ where
         collect_rows(world, section, None, &mut rows, &mut cells);
     }
     place_table_cells(&mut cells, &rows, &mut max_columns);
+    max_columns = max_columns.max(column_tracks.len()).max(1);
+    column_tracks.resize(max_columns, TableColumnConstraint::auto());
     for cell in &mut cells {
         cell.style.grid_column = Line {
             start: style_helpers::line((cell.column + 1).min(i16::MAX as usize) as i16),
@@ -321,44 +340,12 @@ where
             start: style_helpers::line((cell.row + 1).min(i16::MAX as usize) as i16),
             end: style_helpers::span(cell.row_span as u16),
         };
-        if cell.row == 0 {
-            let inline_constraint = table_cell_inline_constraint(&cell.style, fixed_layout);
-            if cell.column_span == 1 {
-                if cell.column >= column_tracks.len() {
-                    column_tracks.resize(cell.column + 1, TableColumnConstraint::auto());
-                }
-                column_tracks[cell.column].encompass_first_row_cell(inline_constraint);
-            } else if fixed_layout {
-                cell_span_constraints.push(TableCellSpanConstraint {
-                    start_column: cell.column,
-                    span: cell.column_span,
-                    cell: inline_constraint,
-                });
-            }
-        }
-        cell.style.size.width = Dimension::auto();
-        // CSS table-cell `height` is a minimum contribution, while the used
-        // border box still fills its row or rowspan. A definite grid-item
-        // height would leave a rowspan cell at one-row height instead.
-        if cell.style.min_size.height == Dimension::auto() {
-            cell.style.min_size.height = cell.style.size.height;
-        }
-        cell.style.size.height = Dimension::auto();
+        clear_table_cell_inline_sizing(&mut cell.style, writing_mode);
+        normalize_table_cell_block_sizing(&mut cell.style, writing_mode);
     }
-    max_columns = max_columns.max(column_tracks.len()).max(1);
-    column_tracks.resize(max_columns, TableColumnConstraint::auto());
-    if fixed_layout {
-        distribute_fixed_cell_spans(
-            &mut column_tracks,
-            &mut cell_span_constraints,
-            spacing.width,
-        );
-    }
-    style.grid_template_columns = column_tracks
-        .iter()
-        .copied()
-        .map(|track| track.intrinsic_grid_track().into())
-        .collect();
+    let placeholder_track: taffy::TrackSizingFunction = style_helpers::auto();
+    style.grid_template_columns =
+        std::iter::repeat_n(placeholder_track.into(), max_columns).collect();
     style.grid_template_rows = if rows.is_empty() {
         vec![style_helpers::auto()]
     } else {
@@ -389,35 +376,72 @@ where
         collapsed_borders: collapsed,
         column_count: max_columns,
         column_constraints: column_tracks,
-        fixed_layout,
+        layout_mode,
         inline_border_spacing: spacing.width,
+        writing_mode,
     }
 }
 
 impl TableContext {
-    /// Resolve table column semantics before invoking the numeric Grid backend.
-    /// Grid receives final lengths for a definite fixed-layout table and never
-    /// participates in the table free-space distribution algorithm.
-    fn resolve_column_tracks(&mut self, inputs: LayoutInput) {
-        let Some(assignable_inline_size) = self.fixed_assignable_inline_size(inputs) else {
+    /// Gather the fixed-layout first-row widths needed while exposing the
+    /// table's parent-facing minimum before an intrinsic measurement pass can
+    /// borrow the layout world mutably.
+    fn collect_authored_fixed_cell_constraints<N>(&mut self, world: &LayoutWorld<N>)
+    where
+        N: Copy + Debug + Eq + Hash,
+    {
+        if !self.layout_mode.is_fixed() {
             return;
-        };
-        self.style.grid_template_columns =
-            distribute_fixed_columns(assignable_inline_size, &self.column_constraints)
-                .into_iter()
-                .map(|size| {
-                    let track: taffy::TrackSizingFunction = style_helpers::length(size);
-                    track.into()
-                })
-                .collect();
+        }
+        let mut cell_constraints = vec![None; self.column_count];
+        let mut cell_spans = Vec::new();
+        for cell in self.cells.iter().filter(|cell| cell.row == 0) {
+            let constraint = authored_table_cell_inline_constraint(
+                &world.boxes[cell.id.index()].style.taffy,
+                self.writing_mode,
+                self.layout_mode,
+            );
+            collect_cell_constraint(cell, constraint, &mut cell_constraints, &mut cell_spans);
+        }
+        apply_cell_constraints(
+            &mut self.column_constraints,
+            &cell_constraints,
+            &mut cell_spans,
+            self.inline_border_spacing,
+            self.layout_mode,
+        );
     }
 
-    fn fixed_assignable_inline_size(&self, inputs: LayoutInput) -> Option<f32> {
-        if !self.fixed_layout {
-            return None;
+    /// Gather cell measures after the table tree is complete. Fixed layout
+    /// consumes the first visual row; automatic layout consumes every row.
+    fn collect_cell_inline_constraints<N>(&mut self, world: &mut LayoutWorld<N>)
+    where
+        N: Copy + Debug + Eq + Hash,
+    {
+        let mut cell_constraints = vec![None; self.column_count];
+        let mut cell_spans = Vec::new();
+        for cell in &self.cells {
+            if self.layout_mode.is_fixed() && cell.row != 0 {
+                continue;
+            }
+            let constraint =
+                table_cell_inline_constraint(world, cell.id, self.writing_mode, self.layout_mode);
+            collect_cell_constraint(cell, constraint, &mut cell_constraints, &mut cell_spans);
         }
+        apply_cell_constraints(
+            &mut self.column_constraints,
+            &cell_constraints,
+            &mut cell_spans,
+            self.inline_border_spacing,
+            self.layout_mode,
+        );
+    }
 
-        let percentage_basis = inputs.parent_size.width;
+    /// Resolve the CSS table's used border-box inline size, synchronize it
+    /// with column constraints, and hand only final lengths to Grid.
+    fn resolve_column_tracks(&mut self, inputs: LayoutInput) -> LayoutInput {
+        let space = inputs.constraint_space(self.writing_mode);
+        let percentage_basis = space.margin_padding_percentage_basis();
         let padding = self
             .style
             .padding
@@ -426,55 +450,140 @@ impl TableContext {
             .style
             .border
             .resolve_or_zero(percentage_basis, resolve_stylo_calc_value);
-        let inline_insets = padding.left + padding.right + border.left + border.right;
-        let to_border_box = |size: Option<f32>| {
-            size.map(|size| {
-                if self.style.box_sizing == taffy::BoxSizing::ContentBox {
-                    size + inline_insets
-                } else {
-                    size.max(inline_insets)
-                }
-            })
-        };
-        let (preferred, min_size, max_size) = if inputs.sizing_mode == SizingMode::InherentSize {
-            (
-                to_border_box(
-                    self.style
-                        .size
-                        .width
-                        .maybe_resolve(percentage_basis, resolve_stylo_calc_value),
-                ),
-                to_border_box(
-                    self.style
-                        .min_size
-                        .width
-                        .maybe_resolve(percentage_basis, resolve_stylo_calc_value),
-                ),
-                to_border_box(
-                    self.style
-                        .max_size
-                        .width
-                        .maybe_resolve(percentage_basis, resolve_stylo_calc_value),
-                ),
-            )
-        } else {
-            (None, None, None)
-        };
-        let synthesized_border_box_size = preferred
-            .maybe_clamp(min_size, max_size)
-            .maybe_max(Some(inline_insets));
-        let border_box_size = inputs
-            .known_dimensions
-            .width
-            .or(synthesized_border_box_size)?;
+        let inline_insets = physical_inline_sum(self.writing_mode, padding)
+            + physical_inline_sum(self.writing_mode, border);
         let internal_spacing =
             self.inline_border_spacing.max(0.0) * self.column_count.saturating_sub(1) as f32;
+        let undistributable_space = inline_insets + internal_spacing;
+        let grid_min_max = compute_grid_inline_min_max(
+            &self.column_constraints,
+            undistributable_space,
+            self.layout_mode,
+        );
+        let used_inline_size = self.resolve_used_inline_size(
+            inputs,
+            grid_min_max.min,
+            grid_min_max.max,
+            inline_insets,
+        );
+        let assignable_inline_size = (used_inline_size - undistributable_space).max(0.0);
+        let column_sizes = if self.layout_mode.is_fixed() {
+            distribute_fixed_columns(assignable_inline_size, &self.column_constraints)
+        } else {
+            distribute_auto_columns(
+                assignable_inline_size,
+                &self.column_constraints,
+                AutomaticTableSizingTarget::Constrained,
+            )
+        };
+        self.style.grid_template_columns = column_sizes
+            .into_iter()
+            .map(|size| {
+                let track: taffy::TrackSizingFunction = style_helpers::length(size);
+                track.into()
+            })
+            .collect();
 
-        Some((border_box_size - inline_insets - internal_spacing).max(0.0))
+        let numeric_inline_size = if self.style.box_sizing == taffy::BoxSizing::ContentBox {
+            (used_inline_size - inline_insets).max(0.0)
+        } else {
+            used_inline_size
+        };
+        set_physical_inline_dimension(
+            self.writing_mode,
+            &mut self.style.size,
+            style_helpers::length(numeric_inline_size),
+        );
+        set_physical_inline_dimension(
+            self.writing_mode,
+            &mut self.style.min_size,
+            Dimension::auto(),
+        );
+        set_physical_inline_dimension(
+            self.writing_mode,
+            &mut self.style.max_size,
+            Dimension::auto(),
+        );
+
+        let mut grid_space = space;
+        grid_space.known_size.inline_size = Some(used_inline_size);
+        grid_space.definite_size.inline_size = Some(used_inline_size);
+        grid_space.into_layout_input()
+    }
+
+    fn resolve_used_inline_size(
+        &self,
+        inputs: LayoutInput,
+        grid_min: f32,
+        grid_max: f32,
+        inline_insets: f32,
+    ) -> f32 {
+        let space = inputs.constraint_space(self.writing_mode);
+        let available = space.available_size.inline_size;
+        let fit_content = || match available {
+            AvailableSpace::Definite(value) => grid_min.max(value.max(0.0).min(grid_max)),
+            AvailableSpace::MinContent => grid_min,
+            AvailableSpace::MaxContent => grid_max,
+        };
+        let logical_size = self.writing_mode.to_logical(self.style.size);
+        let logical_min_size = self.writing_mode.to_logical(self.style.min_size);
+        let logical_max_size = self.writing_mode.to_logical(self.style.max_size);
+        let percentage_basis = space.percentage_resolution_size.inline_size;
+        let box_sizing_adjustment = if self.style.box_sizing == taffy::BoxSizing::ContentBox {
+            inline_insets
+        } else {
+            0.0
+        };
+        let resolve_dimension = |dimension: Dimension| {
+            if dimension.is_min_content() {
+                Some(grid_min)
+            } else if dimension.is_max_content() {
+                Some(grid_max)
+            } else if dimension.is_fit_content() {
+                Some(fit_content())
+            } else if dimension.is_stretch() {
+                match available {
+                    AvailableSpace::Definite(value) => Some(value.max(0.0)),
+                    AvailableSpace::MinContent => Some(grid_min),
+                    AvailableSpace::MaxContent => Some(grid_max),
+                }
+            } else {
+                dimension
+                    .maybe_resolve(percentage_basis, resolve_stylo_calc_value)
+                    .map(|size| size + box_sizing_adjustment)
+            }
+        };
+
+        let authored_sizes_apply = inputs.sizing_mode == SizingMode::InherentSize;
+        let preferred = authored_sizes_apply
+            .then(|| resolve_dimension(logical_size.inline_size))
+            .flatten();
+        let min_size = authored_sizes_apply
+            .then(|| resolve_dimension(logical_min_size.inline_size))
+            .flatten();
+        let max_size = authored_sizes_apply
+            .then(|| resolve_dimension(logical_max_size.inline_size))
+            .flatten();
+
+        let mut used = space
+            .known_size
+            .inline_size
+            .or(preferred)
+            .unwrap_or_else(fit_content);
+        if !self.layout_mode.is_fixed() {
+            used = used.max(grid_min);
+        }
+        if let Some(max_size) = max_size {
+            used = used.min(max_size);
+        }
+        if let Some(min_size) = min_size {
+            used = used.max(min_size);
+        }
+        used.max(inline_insets)
     }
 
     fn fixed_grid_min_border_box_size(&self) -> Option<f32> {
-        if !self.fixed_layout {
+        if !self.layout_mode.is_fixed() {
             return None;
         }
 
@@ -636,6 +745,30 @@ fn place_table_cells(cells: &mut [TableCell], rows: &[TableRow], max_columns: &m
     }
 }
 
+fn collect_cell_constraint(
+    cell: &TableCell,
+    constraint: TableCellInlineConstraint,
+    cell_constraints: &mut [Option<TableCellInlineConstraint>],
+    cell_spans: &mut Vec<TableCellSpanConstraint>,
+) {
+    if cell.column_span == 1 {
+        let Some(slot) = cell_constraints.get_mut(cell.column) else {
+            return;
+        };
+        if let Some(existing) = slot {
+            existing.encompass(constraint);
+        } else {
+            *slot = Some(constraint);
+        }
+    } else {
+        cell_spans.push(TableCellSpanConstraint {
+            start_column: cell.column,
+            span: cell.column_span,
+            cell: constraint,
+        });
+    }
+}
+
 fn table_data<N>(world: &LayoutWorld<N>, id: LayoutBoxId) -> crate::LayoutTableData
 where
     N: Copy + Debug + Eq + Hash,
@@ -669,34 +802,216 @@ fn minimum_dimension_track(dimension: Dimension) -> taffy::TrackSizingFunction {
     }
 }
 
-fn table_cell_inline_constraint(style: &Style<Atom>, fixed: bool) -> TableCellInlineConstraint {
-    match style.size.width.tag() {
-        taffy::CompactLength::LENGTH_TAG => {
-            let padding = style
-                .padding
-                .resolve_or_zero(None, resolve_stylo_calc_value);
-            let border = style.border.resolve_or_zero(None, resolve_stylo_calc_value);
-            let border_padding = padding.left + padding.right + border.left + border.right;
-            let outer_width = if style.box_sizing == taffy::BoxSizing::ContentBox {
-                style.size.width.value() + border_padding
-            } else {
-                style.size.width.value().max(border_padding)
-            };
-            TableCellInlineConstraint::length(outer_width)
+fn authored_table_cell_inline_constraint(
+    style: &Style<Atom>,
+    table_writing_mode: WritingMode,
+    mode: TableLayoutMode,
+) -> TableCellInlineConstraint {
+    let padding = style
+        .padding
+        .resolve_or_zero(None, resolve_stylo_calc_value);
+    let border = style.border.resolve_or_zero(None, resolve_stylo_calc_value);
+    let inline_insets = physical_inline_sum(table_writing_mode, padding)
+        + physical_inline_sum(table_writing_mode, border);
+    let logical_size = table_writing_mode.to_logical(style.size);
+    let preferred = outer_fixed_size(logical_size.inline_size, inline_insets, style.box_sizing);
+    let percent = (logical_size.inline_size.tag() == taffy::CompactLength::PERCENT_TAG)
+        .then(|| logical_size.inline_size.value().max(0.0));
+    let percent_border_padding =
+        if mode.is_fixed() && percent.is_some() && style.box_sizing == taffy::BoxSizing::ContentBox
+        {
+            inline_insets
+        } else {
+            0.0
+        };
+    TableCellInlineConstraint {
+        min_inline_size: 0.0,
+        max_inline_size: preferred.unwrap_or(percent_border_padding),
+        percent,
+        percent_border_padding,
+        is_constrained: preferred.is_some(),
+    }
+}
+
+fn table_cell_inline_constraint<N>(
+    world: &mut LayoutWorld<N>,
+    cell: LayoutBoxId,
+    table_writing_mode: WritingMode,
+    mode: TableLayoutMode,
+) -> TableCellInlineConstraint
+where
+    N: Copy + Debug + Eq + Hash,
+{
+    let style = world.boxes[cell.index()].style.taffy.clone();
+    let padding = style
+        .padding
+        .resolve_or_zero(None, resolve_stylo_calc_value);
+    let border = style.border.resolve_or_zero(None, resolve_stylo_calc_value);
+    let inline_insets = physical_inline_sum(table_writing_mode, padding)
+        + physical_inline_sum(table_writing_mode, border);
+    let logical_size = table_writing_mode.to_logical(style.size);
+    let logical_min_size = table_writing_mode.to_logical(style.min_size);
+    let logical_max_size = table_writing_mode.to_logical(style.max_size);
+    let preferred = outer_fixed_size(logical_size.inline_size, inline_insets, style.box_sizing);
+    let css_min = outer_fixed_size(
+        logical_min_size.inline_size,
+        inline_insets,
+        style.box_sizing,
+    );
+    let css_max = outer_fixed_size(
+        logical_max_size.inline_size,
+        inline_insets,
+        style.box_sizing,
+    );
+    let percent = (logical_size.inline_size.tag() == taffy::CompactLength::PERCENT_TAG)
+        .then(|| logical_size.inline_size.value().max(0.0));
+
+    let (content_min, content_max) = if mode.is_fixed() {
+        let max = if preferred.is_none() {
+            measure_table_cell_intrinsic_inline_size(
+                world,
+                cell,
+                table_writing_mode,
+                AvailableSpace::MaxContent,
+            )
+        } else {
+            0.0
+        };
+        (0.0, max)
+    } else {
+        (
+            measure_table_cell_intrinsic_inline_size(
+                world,
+                cell,
+                table_writing_mode,
+                AvailableSpace::MinContent,
+            ),
+            measure_table_cell_intrinsic_inline_size(
+                world,
+                cell,
+                table_writing_mode,
+                AvailableSpace::MaxContent,
+            ),
+        )
+    };
+
+    let mut min_inline_size = if mode.is_fixed() {
+        0.0
+    } else {
+        content_min.max(css_min.unwrap_or(0.0))
+    };
+    let mut content_max = preferred.unwrap_or(content_max);
+    if let Some(css_max) = css_max {
+        content_max = content_max.min(css_max);
+        min_inline_size = min_inline_size.min(css_max);
+    }
+    let max_inline_size = min_inline_size.max(content_max);
+    let percent_border_padding =
+        if mode.is_fixed() && percent.is_some() && style.box_sizing == taffy::BoxSizing::ContentBox
+        {
+            inline_insets
+        } else {
+            0.0
+        };
+
+    TableCellInlineConstraint {
+        min_inline_size,
+        max_inline_size,
+        percent,
+        percent_border_padding,
+        is_constrained: preferred.is_some(),
+    }
+}
+
+fn measure_table_cell_intrinsic_inline_size<N>(
+    world: &mut LayoutWorld<N>,
+    cell: LayoutBoxId,
+    table_writing_mode: WritingMode,
+    available_inline_size: AvailableSpace,
+) -> f32
+where
+    N: Copy + Debug + Eq + Hash,
+{
+    let available_space = table_writing_mode.to_physical(LogicalSize {
+        inline_size: available_inline_size,
+        block_size: AvailableSpace::MaxContent,
+    });
+    let intrinsic_inputs = LayoutInput {
+        known_dimensions: Size::NONE,
+        definite_dimensions: Size::NONE,
+        parent_size: Size::NONE,
+        parent_writing_mode: table_writing_mode,
+        available_space,
+        sizing_mode: SizingMode::ContentSize,
+        sizing_purpose: SizingPurpose::IntrinsicContribution,
+        run_mode: RunMode::ComputeSize,
+        axis: RequestedAxis::from(table_writing_mode.inline_axis()),
+        block_auto_behavior: AutoSizeBehavior::FitContent,
+        vertical_margins_are_collapsible: Line::FALSE,
+    };
+    table_writing_mode
+        .to_logical(
+            world
+                .compute_child_size(cell.to_taffy(), intrinsic_inputs)
+                .size,
+        )
+        .inline_size
+        .max(0.0)
+}
+
+fn outer_fixed_size(
+    dimension: Dimension,
+    inline_insets: f32,
+    box_sizing: taffy::BoxSizing,
+) -> Option<f32> {
+    (dimension.tag() == taffy::CompactLength::LENGTH_TAG).then(|| {
+        if box_sizing == taffy::BoxSizing::ContentBox {
+            dimension.value().max(0.0) + inline_insets
+        } else {
+            dimension.value().max(0.0).max(inline_insets)
         }
-        taffy::CompactLength::PERCENT_TAG if fixed => {
-            let border_padding = if style.box_sizing == taffy::BoxSizing::ContentBox {
-                let padding = style
-                    .padding
-                    .resolve_or_zero(None, resolve_stylo_calc_value);
-                let border = style.border.resolve_or_zero(None, resolve_stylo_calc_value);
-                padding.left + padding.right + border.left + border.right
-            } else {
-                0.0
-            };
-            TableCellInlineConstraint::percent(style.size.width.value(), border_padding)
+    })
+}
+
+fn physical_inline_sum(writing_mode: WritingMode, rect: Rect<f32>) -> f32 {
+    if writing_mode.is_horizontal() {
+        rect.left + rect.right
+    } else {
+        rect.top + rect.bottom
+    }
+}
+
+fn clear_table_cell_inline_sizing(style: &mut Style<Atom>, writing_mode: WritingMode) {
+    set_physical_inline_dimension(writing_mode, &mut style.size, Dimension::auto());
+    set_physical_inline_dimension(writing_mode, &mut style.min_size, Dimension::auto());
+    set_physical_inline_dimension(writing_mode, &mut style.max_size, Dimension::auto());
+}
+
+fn normalize_table_cell_block_sizing(style: &mut Style<Atom>, writing_mode: WritingMode) {
+    let size = writing_mode.to_logical(style.size).block_size;
+    let min_size = writing_mode.to_logical(style.min_size).block_size;
+    if writing_mode.is_horizontal() {
+        if min_size.is_auto() {
+            style.min_size.height = size;
         }
-        _ => TableCellInlineConstraint::auto(),
+        style.size.height = Dimension::auto();
+    } else {
+        if min_size.is_auto() {
+            style.min_size.width = size;
+        }
+        style.size.width = Dimension::auto();
+    }
+}
+
+fn set_physical_inline_dimension(
+    writing_mode: WritingMode,
+    size: &mut Size<Dimension>,
+    value: Dimension,
+) {
+    if writing_mode.is_horizontal() {
+        size.width = value;
+    } else {
+        size.height = value;
     }
 }
 
@@ -705,6 +1020,7 @@ fn layout_captions<N>(
     captions: &[LayoutBoxId],
     width: f32,
     mut y: f32,
+    parent_writing_mode: WritingMode,
 ) -> f32
 where
     N: Copy + Debug + Eq + Hash,
@@ -729,6 +1045,7 @@ where
                 width: Some(width),
                 height: None,
             },
+            parent_writing_mode,
             available_space: Size {
                 width: AvailableSpace::Definite(width),
                 height: AvailableSpace::MaxContent,
@@ -737,6 +1054,7 @@ where
             sizing_purpose: SizingPurpose::Layout,
             run_mode: RunMode::PerformLayout,
             axis: taffy::RequestedAxis::Both,
+            block_auto_behavior: AutoSizeBehavior::FitContent,
             vertical_margins_are_collapsible: Line::FALSE,
         };
         let output = world.compute_child_layout(caption.to_taffy(), inputs);
@@ -998,6 +1316,32 @@ where
     context: &'a mut TableContext,
 }
 
+impl<N> TableTreeWrapper<'_, N>
+where
+    N: Copy + Debug + Eq + Hash,
+{
+    /// Execute one Grid child query with the pass-local table-cell style.
+    /// Taffy's cache keys layout inputs rather than style identity, so clear
+    /// both sides of the swap to keep authored intrinsic measurements from
+    /// aliasing final Grid layout.
+    fn with_grid_cell_style<R>(
+        &mut self,
+        cell_index: usize,
+        operation: impl FnOnce(&mut LayoutWorld<N>, LayoutBoxId) -> R,
+    ) -> R {
+        let cell = self.context.cells[cell_index].id;
+        self.world.cache_clear(cell.to_taffy());
+        let authored_style = std::mem::replace(
+            &mut self.world.boxes[cell.index()].style.taffy,
+            self.context.cells[cell_index].style.clone(),
+        );
+        let result = operation(self.world, cell);
+        self.world.boxes[cell.index()].style.taffy = authored_style;
+        self.world.cache_clear(cell.to_taffy());
+        result
+    }
+}
+
 impl<N> TraversePartialTree for TableTreeWrapper<'_, N>
 where
     N: Copy + Debug + Eq + Hash,
@@ -1047,19 +1391,19 @@ where
 
     fn compute_child_layout(&mut self, node_id: NodeId, inputs: LayoutInput) -> LayoutOutput {
         let cell_index = usize::from(node_id);
-        let cell = self.context.cells[cell_index].id;
         // The virtual table grid owns the used grid-item style: margins are
-        // zero, column sizing has already consumed the applicable first-row
-        // width, and cell height is a minimum contribution. Measuring the
-        // subtree through the original box style would reintroduce widths from
-        // later rows and make auto tracks overflow the table content box.
-        let original = std::mem::replace(
-            &mut self.world.boxes[cell.index()].style.taffy,
-            self.context.cells[cell_index].style.clone(),
-        );
-        let output = self.world.compute_child_layout(cell.to_taffy(), inputs);
-        self.world.boxes[cell.index()].style.taffy = original;
-        output
+        // zero, column sizing has consumed every applicable inline constraint,
+        // and cell block size is a minimum contribution.
+        self.with_grid_cell_style(cell_index, |world, cell| {
+            world.compute_child_layout(cell.to_taffy(), inputs)
+        })
+    }
+
+    fn compute_child_size(&mut self, node_id: NodeId, inputs: LayoutInput) -> IntrinsicSizeResult {
+        let cell_index = usize::from(node_id);
+        self.with_grid_cell_style(cell_index, |world, cell| {
+            world.compute_child_size(cell.to_taffy(), inputs)
+        })
     }
 }
 

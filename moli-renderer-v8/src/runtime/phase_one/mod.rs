@@ -1039,6 +1039,158 @@ td{padding:0;border:0;height:10px}
     }
 
     #[test]
+    fn automatic_table_layout_collects_authored_widths_after_a_colspan_header() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}
+table{border-spacing:3px;background:rgb(10,11,12)}
+td{box-sizing:border-box;padding:0;border:0}
+.month{height:4px}
+.day{width:10px;height:10px}
+#first{background:rgb(21,31,41)}#second{background:rgb(22,32,42)}#third{background:rgb(23,33,43)}
+</style></head><body><table>
+<tr><td class=month colspan=3></td></tr>
+<tr><td id=first class=day></td><td id=second class=day></td><td id=third class=day></td></tr>
+</table></body></html>"#,
+            )
+            .await;
+
+            // GitHub's contribution calendar has the same shape: a leading
+            // month-label row spans columns, while the authored 10px day-cell
+            // widths only appear in later rows. Automatic layout must collect
+            // those later constraints; the 3px border spacing stays separate.
+            assert_paint_rect(
+                solid_paint_rect(&snapshot, rgb(10, 11, 12)),
+                moli_layout::PaintRect::new(0.0, 0.0, 42.0, 23.0),
+            );
+            for (color, x) in [
+                (rgb(21, 31, 41), 3.0),
+                (rgb(22, 32, 42), 16.0),
+                (rgb(23, 33, 43), 29.0),
+            ] {
+                assert_paint_rect(
+                    solid_paint_rect(&snapshot, color),
+                    moli_layout::PaintRect::new(x, 10.0, 10.0, 10.0),
+                );
+            }
+        }));
+    }
+
+    #[test]
+    fn automatic_table_layout_matches_chromium_distribution_phases_and_colspans() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}
+table{table-layout:auto;border-spacing:0}
+td{box-sizing:border-box;border:0;padding:0;height:10px}
+#mixed{width:400px}#mixed-auto>div{width:90px;height:10px}
+#mixed-percent{background:rgb(31,41,51)}#mixed-fixed{background:rgb(32,42,52)}#mixed-auto{background:rgb(33,43,53)}
+#fixed-only{width:300px}#fixed-small{background:rgb(41,51,61)}#fixed-large{background:rgb(42,52,62)}
+#percent-only{width:200px}#percent-left{background:rgb(51,61,71)}#percent-right{background:rgb(52,62,72)}
+#spans{width:220px;border-spacing:10px 0}#span-left>div{width:40px;height:10px}#span-right>div{width:60px;height:10px}
+#span-left{background:rgb(61,71,81)}#span-right{background:rgb(62,72,82)}
+#percent-span{width:300px}#percent-span-left{background:rgb(71,81,91)}#percent-span-right{background:rgb(72,82,92)}
+</style></head><body>
+<table id=mixed><col style="width:25%"><col style="width:60px"><col><tr><td id=mixed-percent></td><td id=mixed-fixed></td><td id=mixed-auto><div></div></td></tr></table>
+<table id=fixed-only><col style="width:50px"><col style="width:100px"><tr><td id=fixed-small></td><td id=fixed-large></td></tr></table>
+<table id=percent-only><col style="width:25%"><col style="width:25%"><tr><td id=percent-left></td><td id=percent-right></td></tr></table>
+<table id=spans><tr><td colspan=2 style="width:150px"></td></tr><tr><td id=span-left><div></div></td><td id=span-right><div></div></td></tr></table>
+<table id=percent-span><tr><td colspan=2 style="width:60%"></td></tr><tr><td id=percent-span-left></td><td id=percent-span-right></td></tr></table>
+</body></html>"#,
+            )
+            .await;
+
+            // Captured with Chromium 147. The cases exercise, in order:
+            // automatic-column priority above MAX, constrained-column growth,
+            // percentage-only fallback, constrained colspan distribution with
+            // separate border spacing, and percentage colspan projection.
+            for (color, expected) in [
+                (rgb(31, 41, 51), (0.0, 0.0, 100.0)),
+                (rgb(32, 42, 52), (100.0, 0.0, 60.0)),
+                (rgb(33, 43, 53), (160.0, 0.0, 240.0)),
+                (rgb(41, 51, 61), (0.0, 10.0, 100.0)),
+                (rgb(42, 52, 62), (100.0, 10.0, 200.0)),
+                (rgb(51, 61, 71), (0.0, 20.0, 100.0)),
+                (rgb(52, 62, 72), (100.0, 20.0, 100.0)),
+                (rgb(61, 71, 81), (10.0, 40.0, 76.0)),
+                (rgb(62, 72, 82), (96.0, 40.0, 114.0)),
+                (rgb(71, 81, 91), (0.0, 60.0, 150.0)),
+                (rgb(72, 82, 92), (150.0, 60.0, 150.0)),
+            ] {
+                assert_paint_rect(
+                    solid_paint_rect(&snapshot, color),
+                    moli_layout::PaintRect::new(expected.0, expected.1, expected.2, 10.0),
+                );
+            }
+        }));
+    }
+
+    #[test]
+    fn automatic_table_layout_preserves_chromium_constraint_collection_edges() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}
+table{table-layout:auto;border-spacing:0}
+td{box-sizing:border-box;border:0;padding:0;height:10px}
+#over{width:300px}#over-a{background:rgb(81,91,101)}#over-b{background:rgb(82,92,102)}
+#group{width:240px}#group-a{background:rgb(91,101,111)}#group-b{background:rgb(92,102,112)}#group-c{background:rgb(93,103,113)}
+#rtl{width:200px;direction:rtl}#rtl-a{background:rgb(101,111,121)}#rtl-b{background:rgb(102,112,122)}
+#padded{width:300px}#padded-a{box-sizing:content-box;width:50%;padding:0 10px;background:rgb(111,121,131)}#padded-b{background:rgb(112,122,132)}
+#conflict{width:300px}#conflict-a{width:120px;background:rgb(121,131,141)}#conflict-b{background:rgb(122,132,142)}
+</style></head><body>
+<table id=over><col style="width:70%"><col style="width:60%"><tr><td id=over-a></td><td id=over-b></td></tr></table>
+<table id=group><colgroup span=2 style="width:40px"></colgroup><col><tr><td id=group-a></td><td id=group-b></td><td id=group-c></td></tr></table>
+<table id=rtl><col style="width:50px"><col><tr><td id=rtl-a></td><td id=rtl-b></td></tr></table>
+<table id=padded><tr><td id=padded-a></td><td id=padded-b></td></tr></table>
+<table id=conflict><col style="width:80px"><col><tr><td id=conflict-a></td><td id=conflict-b></td></tr></table>
+</body></html>"#,
+            )
+            .await;
+
+            // Captured with Chromium 147. These cases cross the DOM/style
+            // collection boundary before exercising percentage clipping,
+            // colgroup expansion, logical RTL placement, table-cell sizing
+            // box semantics, and column/cell constraint precedence.
+            for (color, expected) in [
+                (rgb(81, 91, 101), (0.0, 0.0, 210.0)),
+                (rgb(82, 92, 102), (210.0, 0.0, 90.0)),
+                (rgb(91, 101, 111), (0.0, 10.0, 40.0)),
+                (rgb(92, 102, 112), (40.0, 10.0, 40.0)),
+                (rgb(93, 103, 113), (80.0, 10.0, 160.0)),
+                (rgb(101, 111, 121), (150.0, 20.0, 50.0)),
+                (rgb(102, 112, 122), (0.0, 20.0, 150.0)),
+                (rgb(111, 121, 131), (0.0, 30.0, 150.0)),
+                (rgb(112, 122, 132), (150.0, 30.0, 150.0)),
+                (rgb(121, 131, 141), (0.0, 40.0, 120.0)),
+                (rgb(122, 132, 142), (120.0, 40.0, 180.0)),
+            ] {
+                assert_paint_rect(
+                    solid_paint_rect(&snapshot, color),
+                    moli_layout::PaintRect::new(expected.0, expected.1, expected.2, 10.0),
+                );
+            }
+        }));
+    }
+
+    #[test]
     fn fixed_table_layout_distributes_first_row_colspan_constraints() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()

@@ -1,4 +1,25 @@
-use taffy::{TrackSizingFunction, style_helpers};
+mod auto;
+
+pub(super) use auto::{
+    AutomaticTableSizingTarget, compute_grid_inline_min_max, distribute_auto_columns,
+};
+
+/// Cell rows consulted while collecting authored table column constraints.
+///
+/// CSS fixed layout is defined by columns and the first visual row. Automatic
+/// layout instead combines cells from every row. Keeping that distinction as
+/// a type prevents a first-row shortcut from leaking into automatic tables.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum TableLayoutMode {
+    Fixed,
+    Automatic,
+}
+
+impl TableLayoutMode {
+    pub(super) const fn is_fixed(self) -> bool {
+        matches!(self, Self::Fixed)
+    }
+}
 
 /// A width constraint collected by the CSS table formatting context.
 ///
@@ -37,6 +58,7 @@ pub(super) struct TableCellInlineConstraint {
 }
 
 impl TableCellInlineConstraint {
+    #[cfg(test)]
     pub(super) const fn auto() -> Self {
         Self {
             min_inline_size: 0.0,
@@ -47,6 +69,7 @@ impl TableCellInlineConstraint {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn length(value: f32) -> Self {
         Self {
             max_inline_size: value.max(0.0),
@@ -55,12 +78,33 @@ impl TableCellInlineConstraint {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn percent(ratio: f32, border_padding: f32) -> Self {
         Self {
             max_inline_size: border_padding.max(0.0),
             percent: Some(ratio.max(0.0)),
             percent_border_padding: border_padding.max(0.0),
             ..Self::auto()
+        }
+    }
+
+    /// Merge another single-column cell before applying the aggregate to its
+    /// column. This follows Blink's `CellInlineConstraint::Encompass`: a
+    /// declared width constrains the column maximum, while an unconstrained
+    /// cell can still raise its intrinsic floor.
+    pub(super) fn encompass(&mut self, other: Self) {
+        self.min_inline_size = self.min_inline_size.max(other.min_inline_size);
+        self.max_inline_size = if self.is_constrained == other.is_constrained {
+            self.max_inline_size.max(other.max_inline_size)
+        } else if self.is_constrained {
+            self.max_inline_size.max(other.min_inline_size)
+        } else {
+            self.min_inline_size.max(other.max_inline_size)
+        };
+        self.is_constrained |= other.is_constrained;
+        if other.percent > self.percent {
+            self.percent = other.percent;
+            self.percent_border_padding = other.percent_border_padding;
         }
     }
 }
@@ -109,10 +153,16 @@ impl TableColumnConstraint {
         }
     }
 
-    /// Apply a single-column first-row cell while preserving the precedence of
-    /// an authored `<col>`/`<colgroup>` measure.
-    pub(super) fn encompass_first_row_cell(&mut self, cell: TableCellInlineConstraint) {
-        if self.is_constrained {
+    /// Apply an aggregated single-column cell constraint.
+    ///
+    /// Authored `<col>`/`<colgroup>` measures win in fixed layout. Automatic
+    /// layout combines them with cell measures from every row.
+    pub(super) fn encompass_cell(
+        &mut self,
+        cell: TableCellInlineConstraint,
+        mode: TableLayoutMode,
+    ) {
+        if self.is_constrained && mode.is_fixed() {
             return;
         }
 
@@ -121,11 +171,20 @@ impl TableColumnConstraint {
                 .unwrap_or(cell.min_inline_size)
                 .max(cell.min_inline_size),
         );
-        self.max_inline_size = Some(
-            self.max_inline_size
-                .unwrap_or(0.0)
-                .max(cell.max_inline_size),
-        );
+        self.max_inline_size = Some(match self.max_inline_size {
+            Some(max_inline_size) if self.is_constrained => {
+                max_inline_size.max(if cell.is_constrained {
+                    cell.max_inline_size
+                } else {
+                    cell.min_inline_size
+                })
+            }
+            Some(max_inline_size) => max_inline_size.max(cell.max_inline_size),
+            None => cell.max_inline_size,
+        });
+        if let Some(max_inline_size) = &mut self.max_inline_size {
+            *max_inline_size = (*max_inline_size).max(self.min_inline_size.unwrap_or(0.0));
+        }
         if cell.percent > self.percent {
             self.percent = cell.percent;
             self.percent_border_padding = cell.percent_border_padding;
@@ -133,20 +192,7 @@ impl TableColumnConstraint {
         self.is_constrained |= cell.is_constrained;
     }
 
-    /// Track used while the table has no definite assignable inline size, or
-    /// by automatic table layout. It is deliberately never used to perform
-    /// fixed-table free-space distribution.
-    pub(super) fn intrinsic_grid_track(self) -> TrackSizingFunction {
-        if let Some(percent) = self.percent {
-            style_helpers::percent(percent)
-        } else if self.is_constrained {
-            style_helpers::length(self.max_inline_size.unwrap_or(0.0))
-        } else {
-            style_helpers::auto()
-        }
-    }
-
-    fn resolved_percent(self, assignable_inline_size: f32) -> Option<f32> {
+    pub(super) fn resolved_percent(self, assignable_inline_size: f32) -> Option<f32> {
         self.percent.map(|ratio| {
             self.min_inline_size
                 .unwrap_or(0.0)
@@ -154,7 +200,7 @@ impl TableColumnConstraint {
         })
     }
 
-    fn fixed_inline_size(self) -> Option<f32> {
+    pub(super) fn fixed_inline_size(self) -> Option<f32> {
         (self.is_constrained && self.percent.is_none())
             .then_some(self.max_inline_size.unwrap_or(0.0))
     }
@@ -173,6 +219,54 @@ impl TableColumnConstraint {
             min_inline_size.max(fixed)
         } else {
             min_inline_size.max(self.percent_border_padding)
+        }
+    }
+
+    pub(super) fn min_inline_size_or_zero(self) -> f32 {
+        self.min_inline_size.unwrap_or(0.0)
+    }
+}
+
+/// Merge cell measures into column measures, resolve spanning cells in
+/// shortest-span order, and normalize percentage constraints.
+pub(super) fn apply_cell_constraints(
+    column_constraints: &mut Vec<TableColumnConstraint>,
+    cell_constraints: &[Option<TableCellInlineConstraint>],
+    cell_spans: &mut [TableCellSpanConstraint],
+    inline_border_spacing: f32,
+    mode: TableLayoutMode,
+) {
+    if column_constraints.len() < cell_constraints.len() {
+        column_constraints.resize(cell_constraints.len(), TableColumnConstraint::auto());
+    }
+    for (column, cell) in column_constraints.iter_mut().zip(cell_constraints) {
+        if let Some(cell) = cell {
+            column.encompass_cell(*cell, mode);
+        }
+    }
+
+    if mode.is_fixed() {
+        distribute_fixed_cell_spans(column_constraints, cell_spans, inline_border_spacing);
+    } else {
+        auto::distribute_auto_cell_spans(column_constraints, cell_spans, inline_border_spacing);
+    }
+
+    let mut total_percent = 0.0f32;
+    for column in column_constraints.iter_mut() {
+        if let Some(percent) = &mut column.percent {
+            if !mode.is_fixed() {
+                *percent = (*percent).min((1.0 - total_percent).max(0.0));
+            }
+            total_percent += *percent;
+        }
+        let max_inline_size = column.max_inline_size.get_or_insert(0.0);
+        *max_inline_size = (*max_inline_size).max(column.min_inline_size.unwrap_or(0.0));
+    }
+    if mode.is_fixed() && total_percent > 1.0 {
+        for column in column_constraints {
+            if let Some(percent) = &mut column.percent {
+                *percent /= total_percent;
+            }
         }
     }
 }
@@ -602,5 +696,55 @@ mod tests {
             ]),
             100.0,
         );
+    }
+
+    #[test]
+    fn automatic_percentages_are_clipped_to_the_remaining_grid_fraction() {
+        let mut columns = vec![
+            TableColumnConstraint::percent(0.7, 0.0),
+            TableColumnConstraint::percent(0.6, 0.0),
+            TableColumnConstraint::percent(0.2, 0.0),
+        ];
+        let mut spans = [];
+
+        apply_cell_constraints(
+            &mut columns,
+            &[],
+            &mut spans,
+            0.0,
+            TableLayoutMode::Automatic,
+        );
+
+        assert_eq!(columns[0].percent, Some(0.7));
+        assert!((columns[1].percent.unwrap_or(0.0) - 0.3).abs() < 0.001);
+        assert_eq!(columns[2].percent, Some(0.0));
+    }
+
+    #[test]
+    fn automatic_cells_preserve_constrained_and_intrinsic_column_roles() {
+        let mut columns = vec![TableColumnConstraint::auto(); 2];
+        let cells = [
+            Some(TableCellInlineConstraint::length(75.0)),
+            Some(TableCellInlineConstraint {
+                min_inline_size: 20.0,
+                max_inline_size: 50.0,
+                ..TableCellInlineConstraint::auto()
+            }),
+        ];
+        let mut spans = [];
+
+        apply_cell_constraints(
+            &mut columns,
+            &cells,
+            &mut spans,
+            0.0,
+            TableLayoutMode::Automatic,
+        );
+
+        assert!(columns[0].is_constrained);
+        assert_eq!(columns[0].max_inline_size, Some(75.0));
+        assert!(!columns[1].is_constrained);
+        assert_eq!(columns[1].min_inline_size, Some(20.0));
+        assert_eq!(columns[1].max_inline_size, Some(50.0));
     }
 }

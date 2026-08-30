@@ -490,13 +490,16 @@ fn table_sections_use_visual_header_body_footer_order() {
         .insert(13, sized(LayoutDisplay::TableCell, 25.0, 10.0, header_b));
 
     let snapshot = render(&source, &mut styles, 200, 100);
+    // Chromium combines all three rows into 75px/80px specified guesses,
+    // distributes the table's 100px used width to 48.375px/51.625px, then
+    // snaps the shared paint edge to 48px at device scale 1.
     for (color, expected) in [
-        (header_a, (0.0, 0.0, 75.0)),
-        (header_b, (75.0, 0.0, 25.0)),
-        (body_a, (0.0, 10.0, 75.0)),
-        (body_b, (75.0, 10.0, 25.0)),
-        (footer_a, (0.0, 20.0, 75.0)),
-        (footer_b, (75.0, 20.0, 25.0)),
+        (header_a, (0.0, 0.0, 48.0)),
+        (header_b, (48.0, 0.0, 52.0)),
+        (body_a, (0.0, 10.0, 48.0)),
+        (body_b, (48.0, 10.0, 52.0)),
+        (footer_a, (0.0, 20.0, 48.0)),
+        (footer_b, (48.0, 20.0, 52.0)),
     ] {
         let actual = rect(&snapshot, color);
         assert_close(actual.x, expected.0);

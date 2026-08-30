@@ -209,7 +209,11 @@ fn apply_aspect_ratio_to_content_size(
     padding_border: Size<f32>,
 ) -> Size<Option<f32>> {
     size.maybe_add(padding_border)
-        .maybe_apply_resolved_aspect_ratio(aspect_ratio, padding_border)
+        .maybe_apply_aspect_ratio_with_box_sizing(
+            aspect_ratio,
+            BoxSizing::BorderBox,
+            padding_border,
+        )
         .maybe_sub(padding_border)
         .maybe_max(Size::ZERO)
 }
