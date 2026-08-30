@@ -3139,10 +3139,15 @@ css/geometry/DOMMatrix-stringifier.html
 css/geometry/DOMMatrixInit-validate-fixup.html
 css/geometry/DOMPoint-001.html
 css/geometry/DOMPoint-002.html
+css/geometry/DOMQuad-001.html
+css/geometry/DOMQuad-002.html
+css/geometry/DOMQuad-nan.html
 css/geometry/DOMRect-001.html
 css/geometry/DOMRect-002.html
 css/geometry/DOMRect-nan.html
 css/geometry/WebKitCSSMatrix.html
+css/geometry/historical.html
+css/geometry/spec-examples.html
 css/mediaqueries/aspect-ratio-serialization.html
 css/mediaqueries/display-mode.html
 css/mediaqueries/dynamic-range.html

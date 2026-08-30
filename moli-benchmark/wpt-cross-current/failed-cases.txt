@@ -2483,12 +2483,7 @@ css/cssom/getComputedStyle-layout-dependent-replaced-into-ib-split.html
 css/cssom/idlharness.html
 css/cssom/style-sheet-interfaces-001.html
 css/geometry/DOMMatrix2DInit-validate-fixup.html
-css/geometry/DOMQuad-001.html
-css/geometry/DOMQuad-002.html
-css/geometry/DOMQuad-nan.html
 css/geometry/DOMRectList.html
-css/geometry/historical.html
-css/geometry/spec-examples.html
 css/geometry/structured-serialization.html
 css/mediaqueries/at-custom-media-cssom.html
 css/mediaqueries/at-custom-media-parsing.html
