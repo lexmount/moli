@@ -4,12 +4,13 @@ use super::super::property_string_value;
 use super::declaration::{
     StyleMode, cssom_style_property_affected_names_with_pdb,
     expand_unresolved_box_shorthand_entries_for_mutation, is_style_intrinsic_name,
-    parse_style_property_entries_for_cssom_fallback_write, resolve_style_property_name,
-    set_inline_style_property_with_pdb_storage, set_style_entries_if_changed_with_inline_base_url,
-    shorthand_longhands, style_base_url, style_entries_for_style_object,
-    style_property_count_with_context, style_property_index_exists_with_context,
-    style_property_name_at_with_context, style_property_value_for_pseudo_with_context,
-    style_property_value_with_context, style_runtime_and_handle_from_object,
+    parse_style_property_entries_for_cssom_fallback_write, resolve_known_style_property_name,
+    resolve_style_property_name, set_inline_style_property_with_pdb_storage,
+    set_style_entries_if_changed_with_inline_base_url, shorthand_longhands, style_base_url,
+    style_entries_for_style_object, style_property_count_with_context,
+    style_property_index_exists_with_context, style_property_name_at_with_context,
+    style_property_value_for_pseudo_with_context, style_property_value_with_context,
+    style_runtime_and_handle_from_object,
 };
 use super::{
     style_object_computation_context, style_object_forces_empty_computed,
@@ -99,10 +100,10 @@ fn live_style_named_property_value_for_handle<'s>(
     if is_style_intrinsic_name(raw_key) {
         return None;
     }
-    let property = resolve_style_property_name(runtime, handle, mode, raw_key)?;
     if forces_empty {
-        return Some(String::new());
+        return resolve_known_style_property_name(raw_key).map(|_| String::new());
     }
+    let property = resolve_style_property_name(runtime, handle, mode, raw_key)?;
     let context = style_object_computation_context(scope, style);
     Some(
         if let Some(pseudo) = style_object_pseudo_element(scope, style, mode) {

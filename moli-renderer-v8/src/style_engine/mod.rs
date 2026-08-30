@@ -209,10 +209,19 @@ impl MoliStyleEngine {
             .map(|document| self.world_for_document(document))
     }
 
+    pub(in crate::style_engine) fn active_owner_document_world(
+        &self,
+        host: &DomHost,
+        handle: DomHandle,
+    ) -> Option<Rc<DocumentStyleWorld>> {
+        host.owner_document_handle(handle)
+            .and_then(|document| self.document_worlds.active_world(document))
+    }
+
     pub(crate) fn computed_cache_generation_for_document(&self, document: DomHandle) -> u64 {
-        self.world_for_document(document)
-            .document_state
-            .computed_cache_generation()
+        self.document_worlds
+            .generation_snapshot_for_document(document)
+            .computed_cache_generation
     }
 
     pub(crate) fn computed_style_observation_generations(
@@ -226,7 +235,8 @@ impl MoliStyleEngine {
         &self,
         document: DomHandle,
     ) -> Option<StylesheetResourceSnapshot> {
-        self.world_for_document(document)
+        self.document_worlds
+            .active_world(document)?
             .document_state
             .stylesheet_resource_snapshot(document)
     }
@@ -240,7 +250,7 @@ impl MoliStyleEngine {
         &self,
         document: DomHandle,
     ) -> Option<Rc<FullStyleWorldSnapshot>> {
-        let world = self.world_for_document(document);
+        let world = self.document_worlds.active_world(document)?;
         world
             .document_state
             .try_with_retained_style_system(|retained| {
@@ -353,9 +363,9 @@ impl MoliStyleEngine {
     }
 
     pub(crate) fn target_context_epoch_for_document(&self, document: DomHandle) -> u64 {
-        self.world_for_document(document)
-            .document_state
-            .target_context_epoch()
+        self.document_worlds
+            .generation_snapshot_for_document(document)
+            .target_context_epoch
     }
 
     #[cfg(test)]
@@ -374,7 +384,9 @@ impl MoliStyleEngine {
         &self,
         document: DomHandle,
     ) -> usize {
-        self.world_for_document(document).pseudo_style_cache.len()
+        self.document_worlds
+            .active_world(document)
+            .map_or(0, |world| world.pseudo_style_cache.len())
     }
 
     #[cfg(test)]
@@ -660,6 +672,30 @@ impl MoliStyleEngine {
             .clear_shadow_cascade_data_for_document(document);
         self.document_worlds
             .clear_for_document_replacement(document);
+    }
+
+    /// Retires all style state owned by a Document that left its browsing
+    /// context. Unlike `clear_for_document_replacement`, this removes the world
+    /// itself because child/popup navigation installs a different Document.
+    /// Same-handle `document.open()` replacement continues to use `clear`.
+    pub(crate) fn retire_document_style_world(&mut self, document: DomHandle) -> bool {
+        self.clear_owner_document_indexes_for_document(document);
+        self.dom_adapter.clear_element_data_for_document(document);
+        self.dom_adapter
+            .clear_inline_style_attributes_for_document(document);
+        self.dom_adapter
+            .clear_shadow_cascade_data_for_document(document);
+        self.document_worlds.retire_document(document)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn active_document_style_world_count_for_test(&self) -> usize {
+        self.document_worlds.active_world_count()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn document_style_world_is_active_for_test(&self, document: DomHandle) -> bool {
+        self.document_worlds.contains_active_world(document)
     }
 
     /// Drops the exact target's canonical style and cached pseudo values after

@@ -1626,6 +1626,18 @@ impl JsContextHost {
     }
 
     #[cfg(test)]
+    pub(crate) fn active_document_style_world_count_for_test(&self) -> usize {
+        self.style_engine
+            .active_document_style_world_count_for_test()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn document_style_world_is_active_for_test(&self, document: DomHandle) -> bool {
+        self.style_engine
+            .document_style_world_is_active_for_test(document)
+    }
+
+    #[cfg(test)]
     pub(crate) fn retained_style_system_rebuild_count_for_document_for_test(
         &self,
         document: DomHandle,

@@ -6021,6 +6021,9 @@ fn removed_iframe_clears_child_document_computed_style_cache() {
         .expect("child frame computed style setup should evaluate");
 
     assert_eq!(initial, "rgb(0, 128, 0)");
+    let retired_child_document =
+        child_document_handle_for_frame_id(&vm, "style-cache-reattach-frame");
+    assert!(vm.document_style_world_is_active_for_test(retired_child_document));
     assert!(vm.computed_style_cache_entry_count_for_document_for_test(document) > 0);
 
     let removed = vm
@@ -6035,6 +6038,7 @@ fn removed_iframe_clears_child_document_computed_style_cache() {
         .expect("child frame removal should evaluate");
 
     assert_eq!(removed, "true");
+    assert!(!vm.document_style_world_is_active_for_test(retired_child_document));
     assert_eq!(
         vm.computed_style_cache_entry_count_for_document_for_test(document),
         0
@@ -6187,6 +6191,102 @@ fn held_child_frame_computed_style_is_empty_after_srcdoc_navigation() {
         1
     );
 }
+
+#[test]
+fn repeated_iframe_navigation_retires_each_previous_document_style_world() {
+    let mut vm = new_storage_test_vm("https://child-style-world-retirement.test/");
+    let main_document = vm.document_handle_for_test();
+
+    vm.eval(
+        r#"
+(() => {
+  const frame = document.createElement('iframe');
+  frame.id = 'style-world-churn-frame';
+  frame.srcdoc = '<style>body { color: rgb(0, 128, 0); }</style><body data-generation="0">first</body>';
+  (document.body || document.documentElement || document).appendChild(frame);
+  getComputedStyle(document.documentElement).display;
+})()
+"#,
+    )
+    .expect("initial child style-world navigation should queue");
+    assert!(
+        vm.run_next_child_navigation_commit_body_for_test()
+            .expect("initial child navigation-commit body should succeed")
+            .is_some()
+    );
+    assert_eq!(
+        vm.eval(
+            r#"
+(() => {
+  const frame = document.getElementById('style-world-churn-frame');
+  globalThis.__heldChurnStyle = frame.contentWindow.getComputedStyle(frame.contentDocument.body);
+  return globalThis.__heldChurnStyle.color;
+})()
+"#,
+        )
+        .expect("initial child style should compute"),
+        "rgb(0, 128, 0)"
+    );
+
+    let mut previous_document = child_document_handle_for_frame_id(&vm, "style-world-churn-frame");
+    assert!(vm.document_style_world_is_active_for_test(main_document));
+    assert!(vm.document_style_world_is_active_for_test(previous_document));
+    let steady_active_worlds = vm.active_document_style_world_count_for_test();
+    assert_eq!(steady_active_worlds, 2);
+
+    for generation in 1..=8 {
+        let navigation = format!(
+            r#"
+(() => {{
+  const frame = document.getElementById('style-world-churn-frame');
+  globalThis.__heldChurnStyle = frame.contentWindow.getComputedStyle(frame.contentDocument.body);
+  frame.srcdoc = '<body data-generation="{generation}">next</body>';
+}})()
+"#
+        );
+        vm.eval(&navigation)
+            .expect("replacement child style-world navigation should queue");
+        assert!(
+            vm.run_next_child_navigation_commit_body_for_test()
+                .expect("replacement child navigation-commit body should succeed")
+                .is_some()
+        );
+
+        let current_document = child_document_handle_for_frame_id(&vm, "style-world-churn-frame");
+        assert_ne!(current_document, previous_document);
+        assert!(
+            !vm.document_style_world_is_active_for_test(previous_document),
+            "the previous child Document must leave the active style-world map at commit"
+        );
+        assert_eq!(
+            vm.eval(
+                r#"
+(() => {
+  const frame = document.getElementById('style-world-churn-frame');
+  const held = globalThis.__heldChurnStyle;
+  const stale = `${held.length}:${held.color}`;
+  const fresh = frame.contentWindow.getComputedStyle(frame.contentDocument.body).display;
+  return `${stale}|${fresh}|${frame.contentDocument.body.dataset.generation}`;
+})()
+"#,
+            )
+            .expect("stale and current child styles should remain distinguishable"),
+            format!("0:|block|{generation}")
+        );
+        assert!(
+            !vm.document_style_world_is_active_for_test(previous_document),
+            "reading a held stale declaration must not recreate its retired style world"
+        );
+        assert!(vm.document_style_world_is_active_for_test(current_document));
+        assert_eq!(
+            vm.active_document_style_world_count_for_test(),
+            steady_active_worlds,
+            "iframe navigation churn must keep heavyweight style worlds bounded"
+        );
+        previous_document = current_document;
+    }
+}
+
 #[test]
 fn computed_style_custom_property_names_use_iframe_viewport() {
     let mut vm = new_storage_test_vm("https://child-custom-property-names.test/");
@@ -8433,6 +8533,7 @@ fn popup_held_computed_style_wrapper_is_empty_after_about_blank_navigation() {
 
   popup.location.href = 'about:blank?next';
   const replacement = popup.document.createElement('div');
+  replacement.id = 'popup-held-computed-replacement';
   replacement.style.cssText = 'color: rgb(44, 55, 66);';
   popup.document.body.appendChild(replacement);
 
@@ -8453,6 +8554,13 @@ fn popup_held_computed_style_wrapper_is_empty_after_about_blank_navigation() {
         result,
         "rgb(11, 22, 33):true|about:blank?next|true||0|rgb(44, 55, 66)"
     );
+    let retired_popup_document =
+        owner_document_handle_for_element_id(&vm, "popup-held-computed-target");
+    let current_popup_document =
+        owner_document_handle_for_element_id(&vm, "popup-held-computed-replacement");
+    assert_ne!(retired_popup_document, current_popup_document);
+    assert!(!vm.document_style_world_is_active_for_test(retired_popup_document));
+    assert!(vm.document_style_world_is_active_for_test(current_popup_document));
 }
 
 #[tokio::test]

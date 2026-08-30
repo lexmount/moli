@@ -1,4 +1,8 @@
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashMap,
+    rc::Rc,
+};
 
 use crate::document_runtime::DomHandle;
 
@@ -12,7 +16,7 @@ use super::{
         linked::LinkedStylesheetSources,
     },
     source_owner_text::OwnerStyleSheetSources,
-    state::StyleDocumentState,
+    state::{StyleDocumentGenerationSnapshot, StyleDocumentState},
 };
 
 pub(super) struct DocumentStyleWorld {
@@ -30,6 +34,10 @@ pub(super) struct DocumentStyleWorld {
 
 pub(super) struct DocumentStyleWorlds {
     worlds: RefCell<HashMap<DomHandle, Rc<DocumentStyleWorld>>>,
+    /// Monotonic lower bound used when no active world exists. This keeps stale
+    /// computed-style wrappers distinguishable from later worlds without an
+    /// O(navigations) tombstone map keyed by every retired Document.
+    lifecycle_generation_floor: Cell<u64>,
 }
 
 impl DocumentStyleWorld {
@@ -68,16 +76,68 @@ impl DocumentStyleWorlds {
     pub(super) fn new() -> Self {
         Self {
             worlds: RefCell::new(HashMap::new()),
+            lifecycle_generation_floor: Cell::new(0),
         }
     }
 
     pub(super) fn for_document(&self, document: DomHandle) -> Rc<DocumentStyleWorld> {
-        if let Some(world) = self.worlds.borrow().get(&document) {
-            return Rc::clone(world);
+        if let Some(world) = self.active_world(document) {
+            return world;
         }
         let world = Rc::new(DocumentStyleWorld::new(document));
         self.worlds.borrow_mut().insert(document, Rc::clone(&world));
         world
+    }
+
+    pub(super) fn active_world(&self, document: DomHandle) -> Option<Rc<DocumentStyleWorld>> {
+        self.worlds.borrow().get(&document).map(Rc::clone)
+    }
+
+    /// Removes one Document's heavyweight style state without making a lookup
+    /// create it first.
+    ///
+    /// The lifecycle generation floor replaces per-Document tombstones. A
+    /// retired child/popup handle is terminal; same-handle `document.open()`
+    /// remains active and uses `clear_for_document_replacement` instead.
+    pub(super) fn retire_document(&self, document: DomHandle) -> bool {
+        let world = self.worlds.borrow_mut().remove(&document);
+        let Some(world) = world else {
+            return false;
+        };
+        // Clear before dropping the map's Rc so a short-lived borrower cannot
+        // keep the retired Stylist or stylesheet sources alive past this
+        // lifecycle boundary.
+        world.clear_for_document_replacement();
+        self.raise_lifecycle_generation_floor(world.document_state.generation_snapshot());
+        true
+    }
+
+    pub(super) fn generation_snapshot_for_document(
+        &self,
+        document: DomHandle,
+    ) -> StyleDocumentGenerationSnapshot {
+        if let Some(generations) = self
+            .worlds
+            .borrow()
+            .get(&document)
+            .map(|world| world.document_state.generation_snapshot())
+        {
+            return generations;
+        }
+        self.lifecycle_generation_snapshot()
+    }
+
+    fn lifecycle_generation_snapshot(&self) -> StyleDocumentGenerationSnapshot {
+        lifecycle_generation_snapshot(self.lifecycle_generation_floor.get())
+    }
+
+    fn raise_lifecycle_generation_floor(&self, generations: StyleDocumentGenerationSnapshot) {
+        self.lifecycle_generation_floor.set(
+            self.lifecycle_generation_floor
+                .get()
+                .max(generations.computed_cache_generation)
+                .max(generations.target_context_epoch),
+        );
     }
 
     pub(super) fn clear_for_document_replacement(&self, document: DomHandle) {
@@ -129,5 +189,24 @@ impl DocumentStyleWorlds {
                 )
             })
             .collect()
+    }
+
+    #[cfg(test)]
+    pub(super) fn active_world_count(&self) -> usize {
+        self.worlds.borrow().len()
+    }
+
+    #[cfg(test)]
+    pub(super) fn contains_active_world(&self, document: DomHandle) -> bool {
+        self.worlds.borrow().contains_key(&document)
+    }
+}
+
+fn lifecycle_generation_snapshot(generation: u64) -> StyleDocumentGenerationSnapshot {
+    StyleDocumentGenerationSnapshot {
+        source_set_generation: 0,
+        computed_cache_generation: generation,
+        retained_style_system_generation: 0,
+        target_context_epoch: generation,
     }
 }

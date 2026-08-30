@@ -36,8 +36,9 @@ pub(super) use parse::{
 pub(super) use properties::{
     all_shorthand_applies_to, animation_shorthand_longhands, css_wide_keyword,
     font_variant_longhands, is_style_intrinsic_name, known_style_property,
-    resolve_style_property_name, shorthand_longhands, supported_declared_property,
-    text_decoration_shorthand_longhands, transition_shorthand_longhands,
+    resolve_known_style_property_name, resolve_style_property_name, shorthand_longhands,
+    supported_declared_property, text_decoration_shorthand_longhands,
+    transition_shorthand_longhands,
 };
 pub(in crate::native_bridge::element) use style_world::style_base_url;
 pub(crate) use values::{

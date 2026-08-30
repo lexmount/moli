@@ -232,12 +232,7 @@ fn style_property_exists(
             && !computed_style_default_value(runtime, handle, property).is_empty())
 }
 
-pub(in crate::native_bridge::element::styles) fn resolve_style_property_name(
-    runtime: &JsContextHost,
-    handle: DomHandle,
-    mode: StyleMode,
-    raw_key: &str,
-) -> Option<String> {
+fn canonical_property_name_for_named_lookup(raw_key: &str) -> Option<String> {
     if raw_key.is_empty() || is_style_intrinsic_name(raw_key) {
         return None;
     }
@@ -245,8 +240,7 @@ pub(in crate::native_bridge::element::styles) fn resolve_style_property_name(
         return Some("float".to_owned());
     }
     if raw_key.starts_with('-') {
-        let property = canonical_style_property_name(raw_key);
-        return style_property_exists(runtime, handle, mode, &property).then_some(property);
+        return Some(canonical_style_property_name(raw_key));
     }
     for prefix in ["moz", "ms", "o"] {
         if let Some(suffix) = raw_key.strip_prefix(prefix)
@@ -258,7 +252,23 @@ pub(in crate::native_bridge::element::styles) fn resolve_style_property_name(
             return None;
         }
     }
-    let property = canonical_style_property_identifier(raw_key);
+    Some(canonical_style_property_identifier(raw_key))
+}
+
+pub(in crate::native_bridge::element::styles) fn resolve_known_style_property_name(
+    raw_key: &str,
+) -> Option<String> {
+    let property = canonical_property_name_for_named_lookup(raw_key)?;
+    known_style_property(&property).then_some(property)
+}
+
+pub(in crate::native_bridge::element::styles) fn resolve_style_property_name(
+    runtime: &JsContextHost,
+    handle: DomHandle,
+    mode: StyleMode,
+    raw_key: &str,
+) -> Option<String> {
+    let property = canonical_property_name_for_named_lookup(raw_key)?;
     style_property_exists(runtime, handle, mode, &property).then_some(property)
 }
 

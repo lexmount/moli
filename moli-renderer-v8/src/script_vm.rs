@@ -2914,6 +2914,20 @@ impl ScriptVm {
     }
 
     #[cfg(test)]
+    pub(crate) fn active_document_style_world_count_for_test(&self) -> usize {
+        self._context_host
+            .borrow()
+            .active_document_style_world_count_for_test()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn document_style_world_is_active_for_test(&self, document: DomHandle) -> bool {
+        self._context_host
+            .borrow()
+            .document_style_world_is_active_for_test(document)
+    }
+
+    #[cfg(test)]
     pub(crate) fn computed_style_cache_generation_for_document_for_test(
         &self,
         document: DomHandle,

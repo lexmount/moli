@@ -785,7 +785,10 @@ impl MoliStyleEngine {
         host: &DomHost,
         handle: DomHandle,
     ) -> super::InlineStyleCspState {
-        self.owner_document_world(host, handle)
+        // This is a metadata lookup performed while resolving CSSOM property
+        // names. In particular, a held declaration from a retired iframe may
+        // reach it; a read must not recreate that Document's heavyweight world.
+        self.active_owner_document_world(host, handle)
             .map(|world| world.inline_style_metadata.csp_state(handle))
             .unwrap_or_default()
     }

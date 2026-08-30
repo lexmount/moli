@@ -58,6 +58,12 @@ impl JsContextHost {
         self.note_style_subtree_context_change(document_handle);
         self.dom_host_mut()
             .mark_subtree_disconnected_preserving_owner_document(document_handle);
+        // The retired child realm exposes no further rendered style surface.
+        // Drop its heavyweight Stylist/source state after disconnecting the DOM;
+        // the global retirement-generation barrier keeps stale
+        // CSSStyleDeclaration wrappers invalid without retaining the world.
+        self.style_engine
+            .retire_document_style_world(document_handle);
     }
 
     fn remove_child_browsing_context_current_document_storage(
@@ -82,6 +88,8 @@ impl JsContextHost {
         self.note_style_subtree_context_change(document_handle);
         self.dom_host_mut()
             .mark_subtree_disconnected_preserving_owner_document(document_handle);
+        self.style_engine
+            .retire_document_style_world(document_handle);
         Some(document_handle)
     }
 

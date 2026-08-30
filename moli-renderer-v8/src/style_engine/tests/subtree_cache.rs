@@ -7472,6 +7472,73 @@ fn document_replacement_cleanup_preserves_unreplaced_document_world_and_shared_s
 }
 
 #[test]
+fn retired_document_world_releases_heavy_state_without_losing_its_generation_barrier() {
+    let mut host = test_host();
+    let document = host.create_detached_html_document();
+    let target = host.create_element("div");
+    assert!(host.append_child(document, target));
+
+    let mut engine = MoliStyleEngine::new();
+    let document_url = url::Url::parse("https://example.test/").unwrap();
+    let inputs = FullStyleWorldSnapshot::default();
+    assert!(
+        engine
+            .computed_style_property_value(
+                &host,
+                &document_url,
+                target,
+                "display",
+                None,
+                &inputs,
+                None,
+            )
+            .is_some()
+    );
+    assert!(engine.dom_adapter.has_element_data(target));
+    assert!(engine.document_style_world_is_active_for_test(document));
+    assert_eq!(engine.active_document_style_world_count_for_test(), 1);
+    let weak_world = std::rc::Rc::downgrade(&engine.world_for_document(document));
+    let published_generation = engine.computed_cache_generation_for_document_for_test(document);
+
+    assert!(engine.retire_document_style_world(document));
+    assert!(
+        weak_world.upgrade().is_none(),
+        "retirement must release the world allocation, not merely remove its contents"
+    );
+    assert!(!engine.document_style_world_is_active_for_test(document));
+    assert_eq!(engine.active_document_style_world_count_for_test(), 0);
+    assert!(!engine.dom_adapter.has_element_data(target));
+
+    let retired_generation = engine.computed_cache_generation_for_document_for_test(document);
+    assert!(
+        retired_generation > published_generation,
+        "retirement must invalidate wrappers published by the old world"
+    );
+    assert_eq!(
+        engine.active_document_style_world_count_for_test(),
+        0,
+        "a stale wrapper generation read must not resurrect the retired world"
+    );
+    assert!(
+        engine
+            .stylesheet_resource_snapshot_for_document(document)
+            .is_none()
+    );
+    assert!(
+        engine
+            .retained_stylesheet_query_snapshot_for_document(document)
+            .is_none()
+    );
+    assert_eq!(engine.active_document_style_world_count_for_test(), 0);
+
+    assert_eq!(
+        engine.computed_cache_generation_for_document_for_test(document),
+        retired_generation
+    );
+    assert!(!engine.document_style_world_is_active_for_test(document));
+}
+
+#[test]
 fn detached_retained_rebuild_preserves_active_document_adapter_element_data() {
     let mut host = test_host();
     let document = host.document_handle();
