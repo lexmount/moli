@@ -669,7 +669,7 @@ fn detached_interaction_brand_checks_accept_standard_prototype_methods() {
     rootSame: root === host.shadowRoot,
     rectType: Object.prototype.toString.call(rect),
     rectWidthType: typeof rect.width,
-    rectsArray: Array.isArray(rects),
+    rectsType: Object.prototype.toString.call(rects),
     activeAfterFocus,
     activeAfterBlur,
     events: events.join(","),
@@ -691,7 +691,7 @@ fn detached_interaction_brand_checks_accept_standard_prototype_methods() {
 
     assert_eq!(
         result,
-        r#"{"rootType":"[object ShadowRoot]","rootSame":true,"rectType":"[object DOMRect]","rectWidthType":"number","rectsArray":true,"activeAfterFocus":true,"activeAfterBlur":true,"events":"focus,click,blur","attachOwn":false,"boundingOwn":false,"rectsOwn":false,"focusOwn":false,"blurOwn":false,"clickOwn":false,"elementOwners":"Element,Element,Element,Element,Element,Element,Element,Element","elementShapes":"true:function:1:true:true:true|true:function:0:true:true:true|true:function:0:true:true:true|true:function:1:true:true:true|true:function:1:true:true:true|true:function:1:true:true:true|true:function:2:true:true:true|true:function:1:true:true:true","actionOwners":"HTMLElement,HTMLElement,HTMLElement","actionShapes":"true:function:0:true:true:true|true:function:0:true:true:true|true:function:0:true:true:true"}"#
+        r#"{"rootType":"[object ShadowRoot]","rootSame":true,"rectType":"[object DOMRect]","rectWidthType":"number","rectsType":"[object DOMRectList]","activeAfterFocus":true,"activeAfterBlur":true,"events":"focus,click,blur","attachOwn":false,"boundingOwn":false,"rectsOwn":false,"focusOwn":false,"blurOwn":false,"clickOwn":false,"elementOwners":"Element,Element,Element,Element,Element,Element,Element,Element","elementShapes":"true:function:1:true:true:true|true:function:0:true:true:true|true:function:0:true:true:true|true:function:1:true:true:true|true:function:1:true:true:true|true:function:1:true:true:true|true:function:2:true:true:true|true:function:1:true:true:true","actionOwners":"HTMLElement,HTMLElement,HTMLElement","actionShapes":"true:function:0:true:true:true|true:function:0:true:true:true|true:function:0:true:true:true"}"#
     );
 }
 

@@ -1611,7 +1611,7 @@ fn child_content_document_created_elements_expose_geometry_methods() {
     assert_eq!(result, "function|function|0|true");
 }
 #[test]
-fn geometry_rect_objects_expose_domrect_to_json() {
+fn geometry_rect_objects_and_lists_expose_their_webidl_shapes() {
     let mut vm = new_parsed_test_vm(
         "https://geometry-domrect-shape.test/",
         "<!doctype html><body><div id='node'>text</div></body>",
@@ -1642,12 +1642,16 @@ fn geometry_rect_objects_expose_domrect_to_json() {
     [
       'x', 'y', 'width', 'height', 'top', 'right', 'bottom', 'left'
     ].every(name => json[name] === rect[name]),
+    rects instanceof DOMRectList,
     Array.isArray(rects),
+    Object.prototype.toString.call(rects),
     rects.length,
     rects[0] instanceof DOMRect,
+    rects.item(0) === rects[0],
     typeof rects[0].toJSON,
     rangeRect instanceof DOMRect,
     typeof rangeRect.toJSON,
+    rangeRects instanceof DOMRectList,
     rangeRects[0] instanceof DOMRect,
     contentRect instanceof DOMRect,
     typeof contentRect.toJSON,
@@ -1661,7 +1665,81 @@ fn geometry_rect_objects_expose_domrect_to_json() {
 
     assert_eq!(
         result,
-        "true|true||function|x,y,width,height,top,right,bottom,left|true|true|1|true|function|true|function|true|true|function|true|false"
+        concat!(
+            "true|true||function|x,y,width,height,top,right,bottom,left|true|",
+            "true|false|[object DOMRectList]|1|true|true|function|true|function|",
+            "true|true|true|function|true|false"
+        )
+    );
+}
+
+#[test]
+fn dom_rect_list_has_readonly_indexed_semantics_and_rejects_structured_clone() {
+    let mut vm = new_parsed_test_vm(
+        "https://domrect-list.test/",
+        "<!doctype html><body><div id='node'>text</div></body>",
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const probe = callback => {
+    try {
+      callback();
+      return "ok";
+    } catch (error) {
+      return error.name;
+    }
+  };
+  const node = document.getElementById("node");
+  const list = node.getClientRects();
+  const range = document.createRange();
+  range.selectNodeContents(node);
+  const rangeList = range.getClientRects();
+  const indexDescriptor = Object.getOwnPropertyDescriptor(list, "0");
+  const lengthDescriptor = Object.getOwnPropertyDescriptor(
+    DOMRectList.prototype,
+    "length"
+  );
+  const itemDescriptor = Object.getOwnPropertyDescriptor(
+    DOMRectList.prototype,
+    "item"
+  );
+  const fake = Object.create(DOMRectList.prototype);
+  return JSON.stringify({
+    constructor: [typeof DOMRectList, DOMRectList.length,
+      probe(() => DOMRectList()), probe(() => new DOMRectList())].join("|"),
+    instance: [list instanceof DOMRectList, list instanceof Array,
+      Object.getPrototypeOf(list) === DOMRectList.prototype,
+      Object.prototype.toString.call(list), list.constructor === DOMRectList].join("|"),
+    values: [list.length, list[-1], list[1], list.item(-1), list.item(1),
+      list.item(0) === list[0], list[0] instanceof DOMRect,
+      Object.keys(list).join(",")].join("|"),
+    indexDescriptor: [indexDescriptor.value === list[0], indexDescriptor.writable,
+      indexDescriptor.enumerable, indexDescriptor.configurable].join("|"),
+    prototypeDescriptors: [typeof lengthDescriptor.get, lengthDescriptor.get.name,
+      lengthDescriptor.get.length, lengthDescriptor.set === undefined,
+      lengthDescriptor.enumerable, lengthDescriptor.configurable,
+      itemDescriptor.value.name, itemDescriptor.value.length,
+      itemDescriptor.enumerable, itemDescriptor.writable,
+      itemDescriptor.configurable].join("|"),
+    brands: [probe(() => lengthDescriptor.get.call(fake)),
+      probe(() => itemDescriptor.value.call(fake, 0))].join("|"),
+    range: [rangeList instanceof DOMRectList,
+      Object.prototype.toString.call(rangeList), rangeList.item(0) === rangeList[0]].join("|"),
+    clone: probe(() => structuredClone(list)),
+    visibleSlots: Object.getOwnPropertyNames(list)
+      .filter(name => name.startsWith("__moliDomRectList")).join(",")
+  });
+})()
+"#,
+        )
+        .expect("DOMRectList WebIDL probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"constructor":"function|0|TypeError|TypeError","instance":"true|false|true|[object DOMRectList]|true","values":"1|||||true|true|0","indexDescriptor":"true|false|true|true","prototypeDescriptors":"function|get length|0|true|true|true|item|1|true|true|true","brands":"TypeError|TypeError","range":"true|[object DOMRectList]|true","clone":"DataCloneError","visibleSlots":""}"#
     );
 }
 
