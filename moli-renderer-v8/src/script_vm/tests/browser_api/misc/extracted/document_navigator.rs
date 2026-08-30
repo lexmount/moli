@@ -1061,3 +1061,63 @@ fn dom_point_matrix_transform_validates_matrix_init_and_returns_in_the_function_
         "0|true|false|30,52,12,10|TypeError|TypeError|no throw|no throw"
     );
 }
+
+#[test]
+fn geometry_exposes_legacy_window_aliases_without_replacing_native_svg_rect() {
+    let mut vm = new_storage_test_vm("https://geometry-legacy-window-aliases.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const interfaces = ["SVGPoint", "SVGRect", "SVGMatrix", "WebKitCSSMatrix"];
+  const descriptorShape = name => {
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, name);
+    return [
+      descriptor.value === globalThis[name],
+      descriptor.writable,
+      descriptor.enumerable,
+      descriptor.configurable
+    ].join(",");
+  };
+  const point = new SVGPoint(1, 2);
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  const rect = svg.createSVGRect();
+  rect.x = 3;
+  rect.y = 4;
+  rect.width = 5;
+  rect.height = 6;
+  const matrix = svg.createSVGMatrix();
+  matrix.a = 2;
+  return JSON.stringify({
+    identities: [
+      SVGPoint === DOMPoint,
+      SVGRect === DOMRect,
+      SVGMatrix === DOMMatrix,
+      WebKitCSSMatrix === DOMMatrix
+    ].join(","),
+    point: [point instanceof DOMPoint, point.x, point.y, String(point)].join(","),
+    rect: [rect instanceof SVGRect, rect instanceof DOMRect, rect.x, rect.height, String(rect)].join(","),
+    matrix: [
+      matrix instanceof DOMMatrix,
+      matrix instanceof SVGMatrix,
+      DOMMatrix.prototype.isPrototypeOf(matrix),
+      matrix.a,
+      Object.prototype.toString.call(matrix)
+    ].join(","),
+    descriptors: interfaces.map(descriptorShape).join("|")
+  });
+})()
+"#,
+        )
+        .expect("Geometry legacy Window aliases should evaluate");
+
+    assert_eq!(
+        result,
+        concat!(
+            r#"{"identities":"true,false,true,true","point":"true,1,2,[object DOMPoint]","rect":"true,false,3,6,[object SVGRect]","matrix":"true,true,true,2,[object SVGMatrix]","descriptors":""#,
+            "true,true,false,true|true,true,false,true|",
+            "true,true,false,true|true,true,false,true\"}"
+        )
+    );
+}
