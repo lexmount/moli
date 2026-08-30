@@ -73,6 +73,58 @@ fn contenteditable_state_from_attr(value: &str) -> Option<bool> {
     }
 }
 
+fn html_area_has_associated_image_map(runtime: &JsContextHost, handle: DomHandle) -> bool {
+    let dom = runtime.dom_host();
+    let Some(area) = dom.node(handle).and_then(Node::as_element) else {
+        return false;
+    };
+    if area.namespace() != document::XHTML_NS
+        || area.local_name() != "area"
+        || !area.has_attribute("href")
+    {
+        return false;
+    }
+
+    let mut ancestor = dom.parent_node(handle);
+    let map_name = loop {
+        let Some(candidate) = ancestor else {
+            return false;
+        };
+        let Some(element) = dom.node(candidate).and_then(Node::as_element) else {
+            ancestor = dom.parent_node(candidate);
+            continue;
+        };
+        if element.namespace() == document::XHTML_NS && element.local_name() == "map" {
+            let Some(name) = element.attribute("name").filter(|name| !name.is_empty()) else {
+                return false;
+            };
+            break name.to_owned();
+        }
+        ancestor = dom.parent_node(candidate);
+    };
+
+    let mut stack = dom
+        .child_handles(runtime.document_handle())
+        .collect::<Vec<_>>();
+    while let Some(candidate) = stack.pop() {
+        let Some(element) = dom.node(candidate).and_then(Node::as_element) else {
+            stack.extend(dom.child_handles(candidate));
+            continue;
+        };
+        if element.namespace() == document::XHTML_NS
+            && matches!(element.local_name(), "img" | "object")
+            && element
+                .attribute("usemap")
+                .and_then(|value| value.strip_prefix('#'))
+                .is_some_and(|name| name == map_name)
+        {
+            return true;
+        }
+        stack.extend(dom.child_handles(candidate));
+    }
+    false
+}
+
 pub(super) fn is_focusable(runtime: &JsContextHost, handle: DomHandle) -> bool {
     let Some(element) = runtime.dom_host().node(handle).and_then(Node::as_element) else {
         return false;
@@ -84,6 +136,9 @@ pub(super) fn is_focusable(runtime: &JsContextHost, handle: DomHandle) -> bool {
         || is_disabled_form_control(runtime, handle)
     {
         return false;
+    }
+    if element.namespace() == document::XHTML_NS && element.local_name() == "area" {
+        return html_area_has_associated_image_map(runtime, handle);
     }
     matches!(
         element.local_name(),

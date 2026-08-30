@@ -1015,6 +1015,85 @@ fn htmlelement_standard_accessors_live_on_owner_prototypes() {
 }
 
 #[test]
+fn tab_index_getter_uses_the_spec_default_element_set() {
+    let mut vm = new_parsed_test_vm(
+        "https://tab-index-defaults.test/",
+        "<!doctype html><html><head></head><body></body></html>",
+    );
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const assert = (condition, message) => {
+                if (!condition) throw new Error(message);
+              };
+              const svg = "http://www.w3.org/2000/svg";
+              const mathml = "http://www.w3.org/1998/Math/MathML";
+              const other = "https://tab-index-defaults.test/namespace";
+              const exercise = ownerDocument => {
+                for (const name of [
+                  "a", "area", "button", "frame", "iframe", "input", "object", "select", "textarea"
+                ]) {
+                  const element = ownerDocument.createElement(name);
+                  assert(element.tabIndex === 0, `${name} default`);
+                }
+
+                const div = ownerDocument.createElement("div");
+                assert(div.tabIndex === -1, "ordinary HTML element default");
+
+                const svgAnchor = ownerDocument.createElementNS(svg, "a");
+                const svgGroup = ownerDocument.createElementNS(svg, "g");
+                const mathAnchor = ownerDocument.createElementNS(mathml, "a");
+                const mathRow = ownerDocument.createElementNS(mathml, "mrow");
+                const foreignAnchor = ownerDocument.createElementNS(other, "a");
+                assert(svgAnchor.tabIndex === 0, "SVG a default");
+                assert(svgGroup.tabIndex === -1, "other SVG element default");
+                assert(mathAnchor.tabIndex === 0, "MathML a default");
+                assert(mathRow.tabIndex === -1, "other MathML element default");
+                assert(foreignAnchor.tabIndex === undefined, "unrelated namespace has no mixin");
+
+                const details = ownerDocument.createElement("details");
+                const nonSummary = ownerDocument.createElement("span");
+                const firstSummary = ownerDocument.createElement("summary");
+                const secondSummary = ownerDocument.createElement("summary");
+                details.append(nonSummary, firstSummary, secondSummary);
+                assert(firstSummary.tabIndex === 0, "first summary child default");
+                assert(secondSummary.tabIndex === -1, "later summary child default");
+                assert(ownerDocument.createElement("summary").tabIndex === -1,
+                  "orphan summary default");
+
+                firstSummary.remove();
+                assert(secondSummary.tabIndex === 0, "summary default follows tree mutation");
+                details.append(firstSummary);
+                assert(secondSummary.tabIndex === 0 && firstSummary.tabIndex === -1,
+                  "first summary is based on current child order");
+
+                const wrapper = ownerDocument.createElement("div");
+                const nestedSummary = ownerDocument.createElement("summary");
+                wrapper.append(nestedSummary);
+                details.prepend(wrapper);
+                assert(nestedSummary.tabIndex === -1, "nested summary is not a details summary");
+
+                secondSummary.setAttribute("tabindex", "-7");
+                assert(secondSummary.tabIndex === -7, "explicit valid tabindex wins");
+                secondSummary.setAttribute("tabindex", "invalid");
+                assert(secondSummary.tabIndex === 0, "invalid tabindex uses element default");
+                div.setAttribute("tabindex", "invalid");
+                assert(div.tabIndex === -1, "invalid tabindex uses ordinary default");
+              };
+
+              exercise(document);
+              return "ok";
+            })()
+            "#,
+        )
+        .expect("tabIndex default getter behavior should evaluate");
+
+    assert_eq!(result, "ok");
+}
+
+#[test]
 fn inner_and_outer_text_setters_build_rendered_fragments_and_merge_text_endpoints() {
     let mut vm = new_parsed_test_vm(
         "https://rendered-text-setters.test/",
