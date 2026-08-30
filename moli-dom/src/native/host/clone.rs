@@ -723,6 +723,68 @@ mod tests {
     }
 
     #[test]
+    fn template_adoption_retargets_nested_contents_to_the_shared_inert_document() {
+        let mut host = test_host();
+        let target_document = host.create_detached_html_document();
+        let template = host.create_element("template");
+        let contents = host
+            .node(template)
+            .and_then(Node::as_element)
+            .and_then(Element::template_contents)
+            .expect("template contents");
+        let source_contents_document = host
+            .node(contents)
+            .and_then(Node::owner_document)
+            .expect("source contents document");
+        let nested_template = host.create_element("template");
+        let nested_contents = host
+            .node(nested_template)
+            .and_then(Node::as_element)
+            .and_then(Element::template_contents)
+            .expect("nested template contents");
+
+        assert!(host.append_child(contents, nested_template));
+        assert_eq!(
+            host.node(nested_template).and_then(Node::owner_document),
+            Some(source_contents_document)
+        );
+        assert_eq!(
+            host.node(nested_contents).and_then(Node::owner_document),
+            Some(source_contents_document)
+        );
+
+        assert_eq!(host.adopt_node(target_document, template), Some(template));
+        let target_contents_document = host
+            .node(contents)
+            .and_then(Node::owner_document)
+            .expect("target contents document");
+        assert_ne!(target_contents_document, source_contents_document);
+        assert_ne!(target_contents_document, target_document);
+        assert_eq!(
+            host.node(nested_template).and_then(Node::owner_document),
+            Some(target_contents_document)
+        );
+        assert_eq!(
+            host.node(nested_contents).and_then(Node::owner_document),
+            Some(target_contents_document)
+        );
+
+        let sibling_template = host.create_element("template");
+        assert_eq!(
+            host.adopt_node(target_document, sibling_template),
+            Some(sibling_template)
+        );
+        let sibling_contents_document = host
+            .node(sibling_template)
+            .and_then(Node::as_element)
+            .and_then(Element::template_contents)
+            .and_then(|contents| host.node(contents))
+            .and_then(Node::owner_document)
+            .expect("sibling contents document");
+        assert_eq!(sibling_contents_document, target_contents_document);
+    }
+
+    #[test]
     fn deep_normalize_walks_iteratively() {
         let mut host = test_host();
         let (root, leaf) = append_deep_element_chain(&mut host, DEEP_TREE_DEPTH);
