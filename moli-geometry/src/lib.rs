@@ -82,6 +82,25 @@ mod tests {
     }
 
     #[test]
+    fn dom_matrix_text_uses_ecmascript_number_serialization() {
+        for (value, expected) in [
+            (1.0 / 300_000_000.0, "3.3333333333333334e-9"),
+            (f64::MAX, "1.7976931348623157e+308"),
+            (f64::MIN_POSITIVE * f64::EPSILON, "5e-324"),
+        ] {
+            let matrix = DomMatrixComponents {
+                m42: value,
+                ..DomMatrixComponents::identity()
+            };
+
+            assert_eq!(
+                matrix.dom_matrix_text_with_dimension(true).unwrap(),
+                format!("matrix(1, 0, 0, 1, 0, {expected})")
+            );
+        }
+    }
+
+    #[test]
     fn inverse_handles_invertible_3d_matrix() {
         let matrix = DomMatrixComponents::identity()
             .translated(4.0, 5.0, 6.0)
