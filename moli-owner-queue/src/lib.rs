@@ -9,7 +9,7 @@ mod owner_task_source;
 mod owner_wake_queue;
 
 pub use owner_ready_task_source::{
-    OwnerReadyTaskRoute, OwnerReadyTaskSource, OwnerTaskReadySignal,
+    OwnerReadyTaskRoute, OwnerReadyTaskRouteClosed, OwnerReadyTaskSource, OwnerTaskReadySignal,
 };
 pub use owner_task_source::OwnerTaskSource;
 pub use owner_wake_queue::OwnerWakeQueue;

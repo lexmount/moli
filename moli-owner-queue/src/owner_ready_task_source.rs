@@ -1,12 +1,28 @@
-use std::{collections::VecDeque, sync::Arc};
+use std::{collections::VecDeque, fmt, sync::Arc};
 
 use parking_lot::{Mutex, MutexGuard};
 
-use crate::OwnerTaskSource;
-
-#[derive(Debug, Default)]
-struct OwnerTaskReadinessState {
+#[derive(Debug)]
+struct OwnerReadyTaskState<T> {
+    incoming: VecDeque<T>,
     ready: bool,
+    source_open: bool,
+}
+
+impl<T> Default for OwnerReadyTaskState<T> {
+    fn default() -> Self {
+        Self {
+            incoming: VecDeque::new(),
+            ready: false,
+            source_open: true,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct OwnerReadyTaskShared<T, S> {
+    state: Mutex<OwnerReadyTaskState<T>>,
+    signal: S,
 }
 
 /// Fixed notification capability for one owner-ready task source.
@@ -19,6 +35,18 @@ pub trait OwnerTaskReadySignal: Send + Sync + 'static {
     fn signal_ready(&self);
 }
 
+/// Send error returned when an owner-ready source has already closed.
+#[derive(Debug, Eq, PartialEq)]
+pub struct OwnerReadyTaskRouteClosed<T>(pub T);
+
+impl<T> fmt::Display for OwnerReadyTaskRouteClosed<T> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("owner-ready task source is closed")
+    }
+}
+
+impl<T: fmt::Debug> std::error::Error for OwnerReadyTaskRouteClosed<T> {}
+
 /// Cloneable producer route for an owner task source with edge-triggered wakeups.
 ///
 /// The payload enqueue and the empty-to-nonempty wake are serialized with the
@@ -27,17 +55,13 @@ pub trait OwnerTaskReadySignal: Send + Sync + 'static {
 /// publish the wake.
 #[derive(Debug)]
 pub struct OwnerReadyTaskRoute<T, S> {
-    sender: tokio::sync::mpsc::UnboundedSender<T>,
-    readiness: Arc<Mutex<OwnerTaskReadinessState>>,
-    signal: Arc<S>,
+    shared: Arc<OwnerReadyTaskShared<T, S>>,
 }
 
 impl<T, S> Clone for OwnerReadyTaskRoute<T, S> {
     fn clone(&self) -> Self {
         Self {
-            sender: self.sender.clone(),
-            readiness: self.readiness.clone(),
-            signal: self.signal.clone(),
+            shared: self.shared.clone(),
         }
     }
 }
@@ -47,12 +71,15 @@ impl<T, S: OwnerTaskReadySignal> OwnerReadyTaskRoute<T, S> {
     pub fn send_and_signal_if_newly_ready(
         &self,
         task: T,
-    ) -> Result<(), tokio::sync::mpsc::error::SendError<T>> {
-        let mut readiness = lock_readiness(&self.readiness);
-        self.sender.send(task)?;
-        if !readiness.ready {
-            readiness.ready = true;
-            self.signal.signal_ready();
+    ) -> Result<(), OwnerReadyTaskRouteClosed<T>> {
+        let mut state = lock_state(&self.shared.state);
+        if !state.source_open {
+            return Err(OwnerReadyTaskRouteClosed(task));
+        }
+        state.incoming.push_back(task);
+        if !state.ready {
+            state.ready = true;
+            self.shared.signal.signal_ready();
         }
         Ok(())
     }
@@ -65,39 +92,38 @@ impl<T, S: OwnerTaskReadySignal> OwnerReadyTaskRoute<T, S> {
     pub fn send_all_and_signal_if_newly_ready(
         &self,
         tasks: impl IntoIterator<Item = T>,
-    ) -> Result<usize, tokio::sync::mpsc::error::SendError<T>> {
+    ) -> Result<usize, OwnerReadyTaskRouteClosed<T>> {
         // Materialize user-provided iterator code before taking the readiness
-        // lock. Only channel sends and the documented notification callback
+        // lock. Only queue mutation and the documented notification callback
         // may run inside the critical section.
         let mut tasks = tasks.into_iter().collect::<Vec<_>>().into_iter();
-        let mut readiness = lock_readiness(&self.readiness);
-        let mut enqueued = 0;
-        for task in tasks.by_ref() {
-            match self.sender.send(task) {
-                Ok(()) => enqueued += 1,
-                Err(error) => {
-                    // Drop arbitrary remaining payloads outside the readiness
-                    // lock; their destructors are not part of queue state and
-                    // must be free to call producer code without deadlocking.
-                    drop(readiness);
-                    drop(tasks);
-                    return Err(error);
-                }
-            }
+        let enqueued = tasks.len();
+        if enqueued == 0 {
+            return Ok(0);
         }
-        if enqueued != 0 && !readiness.ready {
-            readiness.ready = true;
-            self.signal.signal_ready();
+        let mut state = lock_state(&self.shared.state);
+        if !state.source_open {
+            let first = tasks.next().expect("nonempty producer batch");
+            // Drop arbitrary remaining payloads outside the shared-state lock;
+            // their destructors may call producer code for this source.
+            drop(state);
+            drop(tasks);
+            return Err(OwnerReadyTaskRouteClosed(first));
+        }
+        state.incoming.extend(tasks);
+        if !state.ready {
+            state.ready = true;
+            self.shared.signal.signal_ready();
         }
         Ok(enqueued)
     }
 
     pub fn same_source_as(&self, source: &OwnerReadyTaskSource<T, S>) -> bool {
-        self.sender.same_channel(&source.source.sender())
+        Arc::ptr_eq(&self.shared, &source.shared)
     }
 
     pub fn same_route_as(&self, other: &Self) -> bool {
-        self.sender.same_channel(&other.sender)
+        Arc::ptr_eq(&self.shared, &other.shared)
     }
 }
 
@@ -109,9 +135,8 @@ impl<T, S: OwnerTaskReadySignal> OwnerReadyTaskRoute<T, S> {
 /// cleared.
 #[derive(Debug)]
 pub struct OwnerReadyTaskSource<T, S> {
-    source: OwnerTaskSource<T>,
-    readiness: Arc<Mutex<OwnerTaskReadinessState>>,
-    signal: Arc<S>,
+    tasks: VecDeque<T>,
+    shared: Arc<OwnerReadyTaskShared<T, S>>,
 }
 
 impl<T, S> Default for OwnerReadyTaskSource<T, S>
@@ -126,17 +151,17 @@ where
 impl<T, S: OwnerTaskReadySignal> OwnerReadyTaskSource<T, S> {
     pub fn new(signal: S) -> Self {
         Self {
-            source: OwnerTaskSource::new(),
-            readiness: Arc::new(Mutex::new(OwnerTaskReadinessState::default())),
-            signal: Arc::new(signal),
+            tasks: VecDeque::new(),
+            shared: Arc::new(OwnerReadyTaskShared {
+                state: Mutex::new(OwnerReadyTaskState::default()),
+                signal,
+            }),
         }
     }
 
     pub fn route(&self) -> OwnerReadyTaskRoute<T, S> {
         OwnerReadyTaskRoute {
-            sender: self.source.sender(),
-            readiness: self.readiness.clone(),
-            signal: self.signal.clone(),
+            shared: self.shared.clone(),
         }
     }
 
@@ -145,41 +170,36 @@ impl<T, S: OwnerTaskReadySignal> OwnerReadyTaskSource<T, S> {
     /// This marks the source ready but deliberately publishes no wake. External
     /// producers must use [`OwnerReadyTaskRoute`] instead.
     pub fn enqueue_local(&mut self, task: T) {
-        let Self {
-            source, readiness, ..
-        } = self;
-        let mut readiness = lock_readiness(readiness);
-        source.enqueue_local(task);
-        readiness.ready = true;
+        let Self { tasks, shared } = self;
+        let mut state = lock_state(&shared.state);
+        tasks.push_back(task);
+        state.ready = true;
     }
 
     pub fn front(&mut self) -> Option<&T> {
-        let Self {
-            source, readiness, ..
-        } = self;
-        let mut readiness = lock_readiness(readiness);
-        let task = source.front();
-        readiness.ready = task.is_some();
+        let Self { tasks, shared } = self;
+        let mut state = lock_state(&shared.state);
+        tasks.append(&mut state.incoming);
+        let task = tasks.front();
+        state.ready = task.is_some();
         task
     }
 
     pub fn pop_front(&mut self) -> Option<T> {
-        let Self {
-            source, readiness, ..
-        } = self;
-        let mut readiness = lock_readiness(readiness);
-        let task = source.pop_front();
-        readiness.ready = !source.is_empty_local_only();
+        let Self { tasks, shared } = self;
+        let mut state = lock_state(&shared.state);
+        tasks.append(&mut state.incoming);
+        let task = tasks.pop_front();
+        state.ready = !tasks.is_empty();
         task
     }
 
     pub fn is_empty(&mut self) -> bool {
-        let Self {
-            source, readiness, ..
-        } = self;
-        let mut readiness = lock_readiness(readiness);
-        let is_empty = source.is_empty();
-        readiness.ready = !is_empty;
+        let Self { tasks, shared } = self;
+        let mut state = lock_state(&shared.state);
+        tasks.append(&mut state.incoming);
+        let is_empty = tasks.is_empty();
+        state.ready = !is_empty;
         is_empty
     }
 
@@ -187,13 +207,11 @@ impl<T, S: OwnerTaskReadySignal> OwnerReadyTaskSource<T, S> {
     /// dequeue/rearm. The predicate must be non-reentrant and must not call a
     /// producer route for this source.
     pub fn has_matching_task(&mut self, mut predicate: impl FnMut(&T) -> bool) -> bool {
-        let Self {
-            source, readiness, ..
-        } = self;
-        let mut readiness = lock_readiness(readiness);
-        let (has_match, is_empty) =
-            source.with_tasks_mut(|tasks| (tasks.iter().any(&mut predicate), tasks.is_empty()));
-        readiness.ready = !is_empty;
+        let Self { tasks, shared } = self;
+        let mut state = lock_state(&shared.state);
+        tasks.append(&mut state.incoming);
+        let has_match = tasks.iter().any(&mut predicate);
+        state.ready = !tasks.is_empty();
         has_match
     }
 
@@ -203,39 +221,48 @@ impl<T, S: OwnerTaskReadySignal> OwnerReadyTaskSource<T, S> {
     /// The callback runs under the source readiness lock and must not invoke a
     /// producer route for this source.
     pub fn with_tasks_mut<R>(&mut self, operation: impl FnOnce(&mut VecDeque<T>) -> R) -> R {
-        let Self {
-            source, readiness, ..
-        } = self;
-        let mut readiness = lock_readiness(readiness);
-        source.with_tasks_mut(|tasks| {
-            let result = operation(tasks);
-            readiness.ready = !tasks.is_empty();
-            result
-        })
+        let Self { tasks, shared } = self;
+        let mut state = lock_state(&shared.state);
+        tasks.append(&mut state.incoming);
+        let result = operation(tasks);
+        state.ready = !tasks.is_empty();
+        result
     }
 
-    /// Inspect only payloads already accepted by the owner. Producer-channel
+    /// Inspect only payloads already accepted by the owner. Pending producer
     /// arrivals are deliberately excluded so derived-index assertions do not
     /// mutate source state.
     pub fn with_local_tasks<R>(&self, operation: impl FnOnce(&VecDeque<T>) -> R) -> R {
-        self.source.with_local_tasks(operation)
+        operation(&self.tasks)
     }
 
     /// Drop every accepted task and rearm the producer readiness edge.
     pub fn clear_local(&mut self) {
-        let Self {
-            source, readiness, ..
-        } = self;
-        let mut readiness = lock_readiness(readiness);
-        source.clear_local();
-        readiness.ready = false;
+        let Self { tasks, shared } = self;
+        let mut discarded = std::mem::take(tasks);
+        {
+            let mut state = lock_state(&shared.state);
+            discarded.append(&mut state.incoming);
+            state.ready = false;
+        }
+        drop(discarded);
     }
 }
 
-fn lock_readiness(
-    readiness: &Mutex<OwnerTaskReadinessState>,
-) -> MutexGuard<'_, OwnerTaskReadinessState> {
-    readiness.lock()
+impl<T, S> Drop for OwnerReadyTaskSource<T, S> {
+    fn drop(&mut self) {
+        let incoming = {
+            let mut state = lock_state(&self.shared.state);
+            state.source_open = false;
+            state.ready = false;
+            std::mem::take(&mut state.incoming)
+        };
+        drop(incoming);
+    }
+}
+
+fn lock_state<T>(state: &Mutex<OwnerReadyTaskState<T>>) -> MutexGuard<'_, OwnerReadyTaskState<T>> {
+    state.lock()
 }
 
 #[cfg(test)]
@@ -371,6 +398,53 @@ mod tests {
 
         assert!(route.send_and_signal_if_newly_ready(1).is_err());
         assert_eq!(wakes.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn a_closed_source_rejects_a_batch_at_its_first_payload() {
+        let (source, wakes) = counting_source();
+        let route = source.route();
+        drop(source);
+
+        let error = route
+            .send_all_and_signal_if_newly_ready([1, 2, 3])
+            .expect_err("closed source must reject a nonempty batch");
+        assert_eq!(error.0, 1);
+        assert_eq!(
+            route.send_all_and_signal_if_newly_ready([]).unwrap(),
+            0,
+            "an empty batch remains a no-op after source closure"
+        );
+        assert_eq!(wakes.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn route_identity_uses_the_shared_source() {
+        let (source, _wakes) = counting_source::<usize>();
+        let first = source.route();
+        let clone = first.clone();
+        let (other_source, _other_wakes) = counting_source::<usize>();
+        let other = other_source.route();
+
+        assert!(first.same_source_as(&source));
+        assert!(first.same_route_as(&clone));
+        assert!(!first.same_source_as(&other_source));
+        assert!(!first.same_route_as(&other));
+    }
+
+    #[test]
+    fn local_inspection_excludes_unaccepted_producer_arrivals() {
+        let (mut source, _wakes) = counting_source();
+        let route = source.route();
+        source.enqueue_local(1);
+        route.send_and_signal_if_newly_ready(2).unwrap();
+
+        assert_eq!(
+            source.with_local_tasks(|tasks| tasks.iter().copied().collect::<Vec<_>>()),
+            vec![1]
+        );
+        assert_eq!(source.pop_front(), Some(1));
+        assert_eq!(source.pop_front(), Some(2));
     }
 
     #[test]
