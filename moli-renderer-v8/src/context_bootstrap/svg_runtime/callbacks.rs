@@ -340,23 +340,30 @@ pub(super) fn svg_text_content_text_length_getter<'s>(
     rv.set(value.into());
 }
 
-pub(super) fn svg_text_content_length_adjust_getter<'s>(
+pub(super) fn svg_element_animated_enumeration_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    let Some(property) = callback_data_item(
+        scope,
+        &args,
+        SVG_ANIMATED_ENUMERATION_PROPERTIES,
+        "SVG animated enumeration properties",
+    ) else {
+        rv.set_undefined();
+        return;
+    };
     let holder = args.this();
-    if let Some(value) = get_private_value(scope, holder, SVG_TEXT_CONTENT_LENGTH_ADJUST_SLOT) {
+    if let Some(value) = get_private_value(scope, holder, property.cache_slot) {
+        if let Ok(animated) = v8::Local::<v8::Object>::try_from(value) {
+            sync_svg_animated_enumeration_from_owner_attribute(scope, animated);
+        }
         rv.set(value);
         return;
     }
-    let value = build_svg_animated_enumeration(scope, SVG_LENGTH_ADJUST_SPACING);
-    set_private_value(
-        scope,
-        holder,
-        SVG_TEXT_CONTENT_LENGTH_ADJUST_SLOT,
-        value.into(),
-    );
+    let value = build_svg_animated_enumeration_for_property(scope, holder, property);
+    set_private_value(scope, holder, property.cache_slot, value.into());
     rv.set(value.into());
 }
 
@@ -765,8 +772,11 @@ pub(super) fn svg_animated_enumeration_getter<'s>(
             return;
         }
     };
-    let value = svg_length_number_slot(scope, args.this(), slot)
-        .unwrap_or(SVG_LENGTH_ADJUST_SPACING as f64);
+    sync_svg_animated_enumeration_from_owner_attribute(scope, args.this());
+    let initial_value = svg_animated_enumeration_property(scope, args.this())
+        .map(|property| property.initial_value)
+        .unwrap_or(SVG_LENGTH_ADJUST_SPACING);
+    let value = svg_length_number_slot(scope, args.this(), slot).unwrap_or(initial_value as f64);
     rv.set(v8::Integer::new_from_unsigned(scope, value as u32).into());
 }
 
@@ -803,19 +813,20 @@ pub(super) fn svg_animated_enumeration_setter<'s>(
             return;
         }
     };
-    let value = v8::Integer::new_from_unsigned(scope, value.into());
-    set_private_value(
-        scope,
-        args.this(),
-        SVG_ANIMATED_ENUMERATION_BASE_VAL_SLOT,
-        value.into(),
-    );
-    set_private_value(
-        scope,
-        args.this(),
-        SVG_ANIMATED_ENUMERATION_ANIM_VAL_SLOT,
-        value.into(),
-    );
+    let value = u32::from(value);
+    let Some(property) = svg_animated_enumeration_property(scope, args.this()) else {
+        webidl::throw_type_error(
+            scope,
+            "SVGAnimatedEnumeration has no enumeration definition.",
+        );
+        return;
+    };
+    if serialize_svg_animated_enumeration(property.kind, value).is_none() {
+        webidl::throw_type_error(scope, "Invalid SVGAnimatedEnumeration value.");
+        return;
+    }
+    set_svg_animated_enumeration_values(scope, args.this(), value);
+    reflect_svg_animated_enumeration_to_owner_attribute(scope, args.this());
 }
 
 pub(super) fn svg_animated_number_setter<'s>(

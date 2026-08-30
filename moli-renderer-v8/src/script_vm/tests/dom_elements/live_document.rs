@@ -1519,6 +1519,97 @@ fn svg_owner_svg_element_tracks_the_nearest_svg_fragment_root() {
 }
 
 #[test]
+fn svg_animated_enumerations_reflect_typed_content_attributes() {
+    let mut vm = new_parsed_test_vm(
+        "https://svg-animated-enumerations.test/",
+        "<!doctype html><html><body></body></html>",
+    );
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const assert = (condition, message) => {
+                if (!condition) throw new Error(message);
+              };
+              const ns = "http://www.w3.org/2000/svg";
+              const unitUser = SVGUnitTypes.SVG_UNIT_TYPE_USERSPACEONUSE;
+              const unitBox = SVGUnitTypes.SVG_UNIT_TYPE_OBJECTBOUNDINGBOX;
+              const cases = [
+                ["clipPath", "SVGClipPathElement", "clipPathUnits", unitUser, unitBox, "objectBoundingBox", 3],
+                ["filter", "SVGFilterElement", "filterUnits", unitBox, unitUser, "userSpaceOnUse", 3],
+                ["filter", "SVGFilterElement", "primitiveUnits", unitUser, unitBox, "objectBoundingBox", 3],
+                ["linearGradient", "SVGGradientElement", "gradientUnits", unitBox, unitUser, "userSpaceOnUse", 3],
+                ["linearGradient", "SVGGradientElement", "spreadMethod", SVGGradientElement.SVG_SPREADMETHOD_PAD, SVGGradientElement.SVG_SPREADMETHOD_REPEAT, "repeat", 4],
+                ["mask", "SVGMaskElement", "maskUnits", unitBox, unitUser, "userSpaceOnUse", 3],
+                ["mask", "SVGMaskElement", "maskContentUnits", unitUser, unitBox, "objectBoundingBox", 3],
+                ["pattern", "SVGPatternElement", "patternUnits", unitBox, unitUser, "userSpaceOnUse", 3],
+                ["pattern", "SVGPatternElement", "patternContentUnits", unitUser, unitBox, "objectBoundingBox", 3],
+                ["text", "SVGTextContentElement", "lengthAdjust", SVGTextContentElement.LENGTHADJUST_SPACING, SVGTextContentElement.LENGTHADJUST_SPACINGANDGLYPHS, "spacingAndGlyphs", 3],
+              ];
+
+              assert(typeof SVGUnitTypes === "function", "SVGUnitTypes interface");
+              for (const [name, value] of [
+                ["SVG_UNIT_TYPE_UNKNOWN", 0],
+                ["SVG_UNIT_TYPE_USERSPACEONUSE", 1],
+                ["SVG_UNIT_TYPE_OBJECTBOUNDINGBOX", 2],
+              ]) {
+                assert(SVGUnitTypes[name] === value, `SVGUnitTypes.${name}`);
+                assert(SVGUnitTypes.prototype[name] === value, `SVGUnitTypes.prototype.${name}`);
+              }
+              let illegalConstructor = false;
+              try {
+                new SVGUnitTypes();
+              } catch (error) {
+                illegalConstructor = error instanceof TypeError;
+              }
+              assert(illegalConstructor, "SVGUnitTypes illegal constructor");
+
+              for (const [tag, interfaceName, property, initial, alternate, serialized, invalid] of cases) {
+                const element = document.createElementNS(ns, tag);
+                const animated = element[property];
+                assert(animated instanceof SVGAnimatedEnumeration, `${property} interface`);
+                assert(element[property] === animated, `${property} SameObject`);
+                assert(animated.baseVal === initial && animated.animVal === initial,
+                  `${property} initial value`);
+
+                element.setAttribute(property, serialized);
+                assert(animated.baseVal === alternate && animated.animVal === alternate,
+                  `${property} content attribute update`);
+                element.setAttribute(property, "invalid");
+                assert(animated.baseVal === initial, `${property} invalid content attribute`);
+                element.removeAttribute(property);
+                assert(animated.baseVal === initial, `${property} removed content attribute`);
+
+                animated.baseVal = alternate;
+                assert(element.getAttribute(property) === serialized, `${property} reflected value`);
+                assert(animated.baseVal === alternate && animated.animVal === alternate,
+                  `${property} reflected enumeration`);
+                let rejected = false;
+                try {
+                  animated.baseVal = invalid;
+                } catch (error) {
+                  rejected = error instanceof TypeError;
+                }
+                assert(rejected, `${property} invalid IDL value`);
+                assert(animated.baseVal === alternate, `${property} preserved after rejection`);
+
+                const owner = globalThis[interfaceName].prototype;
+                const descriptor = Object.getOwnPropertyDescriptor(owner, property);
+                assert(typeof descriptor.get === "function", `${interfaceName}.${property} getter`);
+                assert(descriptor.enumerable && descriptor.configurable,
+                  `${interfaceName}.${property} flags`);
+              }
+              return "ok";
+            })()
+            "#,
+        )
+        .expect("SVG animated enumeration probe should evaluate");
+
+    assert_eq!(result, "ok");
+}
+
+#[test]
 fn svg_geometry_queries_use_computed_paths_live_tree_and_kurbo_bounds() {
     let mut vm = new_parsed_test_vm(
         "https://svg-geometry-wiring.test/",
