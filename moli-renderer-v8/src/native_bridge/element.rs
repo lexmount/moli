@@ -5459,12 +5459,12 @@ struct HtmlObjectElementPrototypeDeclaration {
     height: (),
     #[webapi(
         accessor_property,
-        getter = object_content_document_getter_function
+        getter = frame_owner_content_document_getter_function
     )]
     content_document: (),
     #[webapi(
         accessor_property,
-        getter = object_content_window_getter_function
+        getter = frame_owner_content_window_getter_function
     )]
     content_window: (),
     #[webapi(
