@@ -12,6 +12,7 @@ use super::super::{
     css_fontface_runtime::font_face_constructor_callback,
     css_runtime::{css_keyword_value_constructor_callback, css_unit_value_constructor_callback},
     css_stylesheet_runtime::css_style_sheet_constructor_callback,
+    dom_quad::dom_quad_constructor_callback,
     events::{
         EventSubclassKind, ValueEventKind, build_event_subclass_template,
         build_value_event_template, event_constructor_callback,
@@ -554,6 +555,14 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
                 web_api_interfaces::DOMPoint,
                 dom_point_constructor_callback
+            ))
+            .length(0)
+            .build(scope)
+        }
+        ConstructorKind::DomQuad => {
+            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
+                web_api_interfaces::DOMQuad,
+                dom_quad_constructor_callback
             ))
             .length(0)
             .build(scope)
