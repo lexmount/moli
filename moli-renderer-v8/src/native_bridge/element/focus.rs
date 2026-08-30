@@ -177,10 +177,70 @@ pub(crate) fn initial_contenteditable_caret(
     (target, 0)
 }
 
+fn html_area_has_associated_image_map(runtime: &PageScriptHost, handle: DomHandle) -> bool {
+    let dom = runtime.dom_host();
+    let Some(area) = dom.node(handle).and_then(Node::as_element) else {
+        return false;
+    };
+    if area.namespace() != document::XHTML_NS
+        || area.local_name() != "area"
+        || !area.has_attribute("href")
+    {
+        return false;
+    }
+
+    let mut ancestor = dom.parent_node(handle);
+    let map_name = loop {
+        let Some(candidate) = ancestor else {
+            return false;
+        };
+        let Some(element) = dom.node(candidate).and_then(Node::as_element) else {
+            ancestor = dom.parent_node(candidate);
+            continue;
+        };
+        if element.namespace() == document::XHTML_NS && element.local_name() == "map" {
+            let Some(name) = element.attribute("name").filter(|name| !name.is_empty()) else {
+                return false;
+            };
+            break name.to_owned();
+        }
+        ancestor = dom.parent_node(candidate);
+    };
+
+    let mut stack = dom
+        .child_handles(runtime.document_handle())
+        .collect::<Vec<_>>();
+    while let Some(candidate) = stack.pop() {
+        let Some(element) = dom.node(candidate).and_then(Node::as_element) else {
+            stack.extend(dom.child_handles(candidate));
+            continue;
+        };
+        if element.namespace() == document::XHTML_NS
+            && matches!(element.local_name(), "img" | "object")
+            && element
+                .attribute("usemap")
+                .and_then(|value| value.strip_prefix('#'))
+                .is_some_and(|name| name == map_name)
+        {
+            return true;
+        }
+        stack.extend(dom.child_handles(candidate));
+    }
+    false
+}
+
 pub(super) fn is_focusable(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     let dom = runtime.dom_host().dom();
     if !dom.node(handle).is_some_and(Node::is_connected)
         || is_disabled_form_control(runtime, handle)
+    {
+        return false;
+    }
+    if dom
+        .node(handle)
+        .and_then(Node::as_element)
+        .is_some_and(|element| element.is_html_element("area"))
+        && !html_area_has_associated_image_map(runtime, handle)
     {
         return false;
     }
@@ -354,33 +414,6 @@ pub(crate) fn process_post_parse_autofocus(
         update_focus(scope, runtime_ptr, Some(candidate));
     }
     true
-}
-
-fn focused_chain_requires_async_blur(runtime: &PageScriptHost, active: DomHandle) -> bool {
-    let mut current = Some(active);
-    while let Some(handle) = current {
-        if element_has_attribute(runtime, handle, "inert")
-            || element_has_attribute(runtime, handle, "hidden")
-        {
-            return true;
-        }
-        if style_property_value(runtime, handle, StyleMode::Computed, "display")
-            .eq_ignore_ascii_case("none")
-        {
-            return true;
-        }
-        current = runtime
-            .dom_host()
-            .node(handle)
-            .and_then(Node::parent_node)
-            .or_else(|| {
-                runtime
-                    .dom_host()
-                    .containing_shadow_root(handle)
-                    .and_then(|root| runtime.dom_host().shadow_root_host(root))
-            });
-    }
-    false
 }
 
 fn blur_if_focused_chain_is_display_none_callback(
@@ -1526,4 +1559,31 @@ pub(in crate::native_bridge) fn node_blur_callback<'s>(
         update_focus(scope, runtime_ptr, None);
     }
     rv.set_undefined();
+}
+
+fn focused_chain_requires_async_blur(runtime: &PageScriptHost, active: DomHandle) -> bool {
+    let mut current = Some(active);
+    while let Some(handle) = current {
+        if super::element_has_attribute(runtime, handle, "inert")
+            || super::element_has_attribute(runtime, handle, "hidden")
+        {
+            return true;
+        }
+        if style_property_value(runtime, handle, StyleMode::Computed, "display")
+            .eq_ignore_ascii_case("none")
+        {
+            return true;
+        }
+        current = runtime
+            .dom_host()
+            .node(handle)
+            .and_then(Node::parent_node)
+            .or_else(|| {
+                runtime
+                    .dom_host()
+                    .containing_shadow_root(handle)
+                    .and_then(|root| runtime.dom_host().shadow_root_host(root))
+            });
+    }
+    false
 }
