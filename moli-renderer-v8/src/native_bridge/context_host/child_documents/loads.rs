@@ -14,8 +14,11 @@ use crate::{
     content_security_policy::{
         ContentSecurityPolicyViolationEventFields, send_content_security_policy_reports,
     },
+    context_bootstrap::{construct_original_event, mark_event_trusted},
     document_response_decoder::decode_document_response,
-    document_runtime::{DocumentNavigationEmbeddingContext, DocumentPolicyContainer, DomHandle},
+    document_runtime::{
+        DocumentNavigationEmbeddingContext, DocumentPolicyContainer, DomHandle, EventTargetHandle,
+    },
     document_script_scheduler::FrameDocumentClassicScriptSchedulerWork,
     frame_owner_model::{
         ChildDocumentNavigationFetchTarget, DocumentCreationKind,
@@ -201,6 +204,7 @@ impl PageScriptHost {
                 reserved_service_worker_client_id: service_worker_client_id,
                 document_credentialless,
                 credentialless_storage_nonce,
+                initiator,
                 frame_owner_resource_timing,
                 paused_fetch: None,
             },
@@ -453,6 +457,9 @@ impl PageScriptHost {
         );
         self.finish_pending_child_document_navigation_owner_request(&pending);
         let handle = target.child_handle();
+        let object_attribute_navigation = pending.initiator
+            == ChildDocumentNavigationInitiator::FrameOwnerElement
+            && self.child_browsing_context_host_is_object_element(handle);
         self.clear_child_browsing_context_pending_document_load_if_matches(
             handle,
             target.load_id(),
@@ -523,7 +530,7 @@ impl PageScriptHost {
                         &violation.report_to_endpoints,
                     );
                 }
-                if let Some(violation) = enforced_violation {
+                if let Some(violation) = enforced_violation.into_iter().next() {
                     Err(format!(
                         "child document response blocked by Content Security Policy `{}` for `{}`",
                         violation.effective_directive, violation.blocked_uri
@@ -533,6 +540,33 @@ impl PageScriptHost {
                 }
             }
             result => result,
+        };
+        let (result, object_fallback_required) = if object_attribute_navigation {
+            match result {
+                Ok(redirect @ ChildDocumentLoadOutcome::Redirect(_)) => (Ok(redirect), false),
+                Ok(ChildDocumentLoadOutcome::Loaded(loaded)) => {
+                    let failed_status = loaded
+                        .document_network
+                        .as_ref()
+                        .map(|network| network.status)
+                        .filter(|status| !(200..300).contains(status));
+                    if let Some(status) = failed_status {
+                        (
+                            Err(format!("object resource returned HTTP status {status}")),
+                            true,
+                        )
+                    } else {
+                        (Ok(ChildDocumentLoadOutcome::Loaded(loaded)), false)
+                    }
+                }
+                Ok(ChildDocumentLoadOutcome::IgnoredNavigation) => (
+                    Err("object resource cannot be represented as a nested document".to_owned()),
+                    true,
+                ),
+                Err(error) => (Err(error), true),
+            }
+        } else {
+            (result, false)
         };
         let document_credentialless = pending.document_credentialless;
         let credentialless_storage_nonce = pending.credentialless_storage_nonce;
@@ -748,6 +782,26 @@ impl PageScriptHost {
                     handle,
                     target.navigation_load(),
                 );
+                if object_fallback_required {
+                    self.enter_object_fallback_state(scope, handle);
+                    if let Some(event) = construct_original_event(scope, "error") {
+                        mark_event_trusted(scope, event);
+                        let host_ptr: *mut PageScriptHost = self;
+                        let runtime = unsafe { &mut *self.document_runtime };
+                        let _ = runtime.dispatch_public_event_best_effort(
+                            scope,
+                            host_ptr,
+                            EventTargetHandle::Node(handle),
+                            event,
+                            "object resource error event",
+                        );
+                        body_activity = ChildDocumentLoadBodyActivity::PageCodeOrEventDispatch;
+                    }
+                    return ChildDocumentLoadApplication::Applied {
+                        followup: None,
+                        body_activity,
+                    };
+                }
                 None
             }
         };
@@ -783,7 +837,7 @@ impl PageScriptHost {
                 Some(pending.resource_loader.clone()),
             ) else {
                 if let Some(network) = completed_document_network {
-                    self.record_child_document_load_network(&network_attribution, network);
+                    self.record_child_document_network_activity(&network_attribution, network);
                 }
                 return ChildDocumentLoadApplication::Applied {
                     followup: None,

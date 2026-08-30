@@ -1514,6 +1514,65 @@ async fn spawn_gated_media_resource_server(
     )
 }
 
+async fn spawn_gated_child_document_resource_server(
+    status: u16,
+) -> (
+    String,
+    tokio::sync::oneshot::Receiver<String>,
+    tokio::sync::oneshot::Sender<()>,
+    tokio::task::JoinHandle<()>,
+) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind gated child document resource server");
+    let addr = listener
+        .local_addr()
+        .expect("gated child document resource server addr");
+    let (request_tx, request_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let (mut stream, _) = listener
+            .accept()
+            .await
+            .expect("accept gated child document resource request");
+        let mut request = Vec::new();
+        let mut buffer = [0_u8; 1024];
+        loop {
+            let read = stream
+                .read(&mut buffer)
+                .await
+                .expect("read gated child document resource request");
+            if read == 0 {
+                break;
+            }
+            request.extend_from_slice(&buffer[..read]);
+            if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                break;
+            }
+        }
+        let _ = request_tx.send(String::from_utf8_lossy(&request).into_owned());
+        let _ = release_rx.await;
+        let (status_text, body) = if status == 200 {
+            ("OK", "<!doctype html><p>child document</p>")
+        } else {
+            ("Not Found", "<!doctype html><p>missing child document</p>")
+        };
+        let response = format!(
+            "HTTP/1.1 {status} {status_text}\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let _ = stream.write_all(response.as_bytes()).await;
+    });
+    (
+        format!("http://{addr}/child.html"),
+        request_rx,
+        release_tx,
+        server,
+    )
+}
+
 async fn spawn_gated_image_resource_server(
     status: u16,
 ) -> (
@@ -2395,7 +2454,6 @@ mod webidl_fetch;
 
 mod idb_object_store_native_receivers;
 
-mod exception_constructor_strings;
 mod webidl_receivers;
 mod webidl_trusted_types;
 mod websocket;
@@ -2465,7 +2523,6 @@ mod streams_sync_protocol;
 
 mod performance_user_timing;
 
-mod rtc_encoded_frames;
 mod xml_serializer_receivers;
 
 mod hyperlink_audit_owner;
@@ -2481,3 +2538,22 @@ mod svg_legacy_rectangle_contracts;
 mod indexed_db_prototype_handlers;
 
 mod beacon_receiver_owner;
+mod frame_owner_origin_access;
+
+async fn drain_content_security_policy_violation_tasks_for_test(
+    vm: &mut crate::runtime::PageVmTaskExecutorTestHarness,
+    loader: &ResourceRequestClient,
+) -> usize {
+    let mut count = 0;
+    while vm
+        .run_one_exact_selected_page_task_executor_turn(
+            crate::runtime::PageSelectedTaskTestSelector::MiscPlatformApi,
+            loader,
+        )
+        .await
+        .expect("focused CSP fixture should run the selected native task")
+    {
+        count += 1;
+    }
+    count
+}

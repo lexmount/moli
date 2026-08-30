@@ -905,6 +905,10 @@ pub(crate) struct PageScriptHost {
     observers: ObserverStore,
     // Key order is browsing-context insertion order and therefore frame-tree sibling order.
     child_browsing_contexts: IndexMap<DomHandle, ChildBrowsingContextEntry>,
+    // A failed `data` attribute load keeps an object in fallback until that
+    // resource selection is invalidated; ordinary context discovery must not
+    // recreate its nested browsing context in the meantime.
+    object_fallback_bootstraps: HashMap<DomHandle, ChildBrowsingContextBootstrap>,
     frame_owner_store: FrameOwnerStore,
     inert_document_execution_contexts:
         Option<Box<document_execution_context::InertDocumentExecutionContexts>>,
