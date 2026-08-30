@@ -1448,6 +1448,77 @@ fn svg_historical_interfaces_keep_current_element_constructors_only() {
 }
 
 #[test]
+fn svg_owner_svg_element_tracks_the_nearest_svg_fragment_root() {
+    let mut vm = new_parsed_test_vm(
+        "https://svg-owner-element.test/",
+        r#"<!doctype html><html><body><div id="container">
+          <svg id="outer">
+            <g><circle id="circle"></circle><svg id="inner"><rect id="rect"></rect></svg></g>
+            <foreignObject><svg id="foreign-svg"><svg id="foreign-inner"></svg></svg></foreignObject>
+          </svg>
+        </div></body></html>"#,
+    );
+
+    let result = vm
+        .eval(
+            r##"
+            (() => {
+              const assert = (condition, message) => {
+                if (!condition) throw new Error(message);
+              };
+              const ns = "http://www.w3.org/2000/svg";
+              const outer = document.querySelector("#outer");
+              const circle = document.querySelector("#circle");
+              const inner = document.querySelector("#inner");
+              const rect = document.querySelector("#rect");
+              const foreignSvg = document.querySelector("#foreign-svg");
+              const foreignInner = document.querySelector("#foreign-inner");
+
+              assert(outer.ownerSVGElement === null, "outer SVG");
+              assert(circle.ownerSVGElement === outer, "descendant of outer SVG");
+              assert(inner.ownerSVGElement === outer, "nested SVG");
+              assert(rect.ownerSVGElement === inner, "descendant of nested SVG");
+              assert(foreignSvg.ownerSVGElement === null, "foreignObject starts a new SVG fragment");
+              assert(foreignInner.ownerSVGElement === foreignSvg, "nested foreignObject SVG");
+
+              document.querySelector("#container").remove();
+              assert(circle.ownerSVGElement === outer, "detached outer SVG descendant");
+              assert(inner.ownerSVGElement === outer, "detached nested SVG");
+              assert(rect.ownerSVGElement === inner, "detached nested SVG descendant");
+
+              const standalone = document.createElementNS(ns, "ellipse");
+              assert(standalone.ownerSVGElement === null, "standalone SVG element");
+
+              const svgDocument = document.implementation.createDocument(ns, "svg", null);
+              const documentRoot = svgDocument.documentElement;
+              const documentRect = svgDocument.createElementNS(ns, "rect");
+              documentRoot.append(documentRect);
+              assert(documentRoot.ownerSVGElement === null, "SVG document root");
+              assert(documentRect.ownerSVGElement === documentRoot, "SVG document child");
+
+              const descriptor = Object.getOwnPropertyDescriptor(
+                SVGElement.prototype,
+                "ownerSVGElement",
+              );
+              assert(typeof descriptor.get === "function", "prototype getter");
+              assert(descriptor.enumerable && descriptor.configurable, "getter flags");
+              let incompatibleReceiver = false;
+              try {
+                descriptor.get.call(document.body);
+              } catch (error) {
+                incompatibleReceiver = error instanceof TypeError;
+              }
+              assert(incompatibleReceiver, "incompatible receiver");
+              return "ok";
+            })()
+            "##,
+        )
+        .expect("SVG ownerSVGElement probe should evaluate");
+
+    assert_eq!(result, "ok");
+}
+
+#[test]
 fn svg_geometry_queries_use_computed_paths_live_tree_and_kurbo_bounds() {
     let mut vm = new_parsed_test_vm(
         "https://svg-geometry-wiring.test/",

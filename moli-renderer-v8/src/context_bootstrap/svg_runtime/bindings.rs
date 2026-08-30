@@ -904,6 +904,12 @@ struct SvgElementPrototypeAccessorsDeclaration {
         getter = svg_element_class_name_getter
     )]
     class_name: (),
+
+    #[webapi(
+        accessor_property = "ownerSVGElement",
+        getter = svg_element_owner_svg_element_getter
+    )]
+    owner_svg_element: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
