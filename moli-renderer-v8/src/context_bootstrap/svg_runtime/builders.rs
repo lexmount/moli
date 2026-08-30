@@ -416,6 +416,8 @@ pub(super) fn build_svg_matrix<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     components: SvgMatrixComponents,
 ) -> v8::Local<'s, v8::Object> {
+    super::super::ensure_intrinsic_interface_prototype(scope, "SVGMatrix")
+        .expect("SVGMatrix compatibility prototype should materialize");
     SvgMatrixObjectDeclaration::new(
         components.a,
         components.b,
