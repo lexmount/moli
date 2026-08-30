@@ -142,10 +142,35 @@ pub(in crate::context_bootstrap) fn window_event_getter<'s>(
     if !require_window_receiver(scope, &args) {
         return;
     }
-    match global_hidden_value(scope, WINDOW_EVENT_SLOT) {
+    match window_event_value_for_receiver(scope, args.this()) {
         Some(value) => rv.set(value),
         None => rv.set(v8::undefined(scope).into()),
     }
+}
+
+pub(in crate::context_bootstrap) fn window_event_value_for_receiver<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Value>> {
+    let target_event = context_host_ptr_from_window_object(scope, receiver)
+        .or_else(|| context_host_ptr_from_global_bridge(scope))
+        .and_then(|host_ptr| {
+            let dispatch_scope = if let Some(popup_id) =
+                crate::native_bridge::lightweight_popup_id_from_window(scope, receiver)
+            {
+                crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id)
+            } else if let Some(handle) = window_child_context_handle(scope, receiver) {
+                crate::native_bridge::OwnerDispatchScope::Child(handle)
+            } else {
+                crate::native_bridge::OwnerDispatchScope::Top
+            };
+            let host = unsafe { &*host_ptr };
+            let owner = host.current_window_execution_context_owner(dispatch_scope)?;
+            let (_, context) = host.window_execution_context(scope, owner, dispatch_scope)?;
+            let global = context.global(scope);
+            object_own_hidden_value(scope, global, WINDOW_EVENT_SLOT)
+        });
+    target_event.or_else(|| global_hidden_value(scope, WINDOW_EVENT_SLOT))
 }
 
 pub(in crate::context_bootstrap) fn window_event_setter<'s>(

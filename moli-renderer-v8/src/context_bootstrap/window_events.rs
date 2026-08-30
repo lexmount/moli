@@ -158,9 +158,10 @@ pub(crate) const BODY_OR_FRAMESET_WINDOW_EVENT_HANDLER_PROPERTIES: &[&str] = &[
 
 pub(super) use accessors::{
     window_console_getter, window_event_getter, window_event_setter,
-    window_onerror_getter_function, window_onerror_setter_function,
-    window_onrejectionhandled_getter_function, window_onrejectionhandled_setter_function,
-    window_onunhandledrejection_getter_function, window_onunhandledrejection_setter_function,
+    window_event_value_for_receiver, window_onerror_getter_function,
+    window_onerror_setter_function, window_onrejectionhandled_getter_function,
+    window_onrejectionhandled_setter_function, window_onunhandledrejection_getter_function,
+    window_onunhandledrejection_setter_function,
 };
 pub(super) use console::{
     console_assert_callback, console_debug_callback, console_error_callback,

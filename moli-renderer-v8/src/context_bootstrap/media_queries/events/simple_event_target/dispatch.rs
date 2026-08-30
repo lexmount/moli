@@ -307,43 +307,44 @@ fn invoke_simple_event_callback_with_invocation<'s>(
         let target_name = simple_event_target_interface_name(scope, callback_target);
         host.schedule_dom_debugger_event_listener_pause_for_interface(event_type, &target_name)
     });
-    match CallbackInvoker::invoke(
+    CallbackInvoker::invoke_event_and_then(
         scope,
         "event listener",
         "simple event listener threw",
         CallbackExceptionLogLevel::Debug,
         callback_name,
         invocation,
-    ) {
-        CallbackInvocationOutcome::Returned(value) => SimpleEventCallbackResult {
-            invoked: true,
-            value: Some(value),
-        },
-        CallbackInvocationOutcome::Threw(report) => {
-            if let Some(errors) = callback_errors {
-                errors.push(*report);
-            } else if let Some(host_ptr) = host_ptr {
-                report_event_callback_exception(
-                    scope,
-                    host_ptr,
-                    event_type,
-                    relevant_identity,
-                    None,
-                    &report,
-                );
-            } else {
-                let _ = crate::worker::dispatch_current_worker_callback_exception(scope, *report);
-            }
-            SimpleEventCallbackResult {
+        |scope, outcome| match outcome {
+            CallbackInvocationOutcome::Returned(value) => SimpleEventCallbackResult {
                 invoked: true,
-                value: None,
+                value: Some(value),
+            },
+            CallbackInvocationOutcome::Threw(report) => {
+                if let Some(errors) = callback_errors {
+                    errors.push(*report);
+                } else if let Some(host_ptr) = host_ptr {
+                    report_event_callback_exception(
+                        scope,
+                        host_ptr,
+                        event_type,
+                        relevant_identity,
+                        None,
+                        &report,
+                    );
+                } else {
+                    let _ = crate::worker::dispatch_current_worker_callback_exception(scope, *report);
+                }
+                SimpleEventCallbackResult {
+                    invoked: true,
+                    value: None,
+                }
             }
-        }
-        CallbackInvocationOutcome::Retired => SimpleEventCallbackResult {
-            invoked: false,
-            value: None,
+            CallbackInvocationOutcome::Retired => SimpleEventCallbackResult {
+                invoked: false,
+                value: None,
+            },
         },
-    }
+    )
 }
 
 fn apply_handler_return_value<'s>(
