@@ -3413,6 +3413,14 @@ pub(super) fn svg_svg_element_create_point_callback<'s>(
     }
 }
 
+pub(super) fn svg_svg_element_create_angle_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    _args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    rv.set(build_svg_angle(scope).into());
+}
+
 pub(super) fn svg_svg_element_deselect_all_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -3838,6 +3846,46 @@ pub(super) fn svg_angle_new_value_specified_units_callback<'s>(
     rv.set_undefined();
 }
 
+pub(super) fn svg_angle_new_value_specified_units_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if !require_svg_receiver(
+        scope,
+        args.this(),
+        SVG_ANGLE_UNIT_TYPE_SLOT,
+        "SVGAngle",
+        "newValueSpecifiedUnits",
+    ) {
+        return;
+    }
+    if svg_angle_is_read_only(scope, args.this()) {
+        throw_dom_exception(
+            scope,
+            "NoModificationAllowedError",
+            7,
+            "The SVG angle is read-only.",
+        );
+        return;
+    }
+    let Some(parsed) = webidl::parse_args::<SvgAngleNewValueSpecifiedUnitsArgs>(scope, &args)
+    else {
+        return;
+    };
+    if !set_svg_angle_new_value(scope, args.this(), parsed.unit_type as u32, parsed.value) {
+        throw_dom_exception(
+            scope,
+            "NotSupportedError",
+            9,
+            "The SVG angle unit type is not supported.",
+        );
+        return;
+    }
+    reflect_svg_angle_to_owner_attribute(scope, args.this());
+    rv.set_undefined();
+}
+
 pub(super) fn svg_length_convert_to_specified_units_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -3887,6 +3935,47 @@ pub(super) fn svg_angle_convert_to_specified_units_callback<'s>(
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     if !require_svg_receiver(scope, args.this(), "SVGAngle", "convertToSpecifiedUnits") {
+        return;
+    }
+    if svg_angle_is_read_only(scope, args.this()) {
+        throw_dom_exception(
+            scope,
+            "NoModificationAllowedError",
+            7,
+            "The SVG angle is read-only.",
+        );
+        return;
+    }
+    sync_svg_angle_from_owner_attribute(scope, args.this());
+    let Some(parsed) = webidl::parse_args::<SvgAngleConvertToSpecifiedUnitsArgs>(scope, &args)
+    else {
+        return;
+    };
+    if !convert_svg_angle_to_unit(scope, args.this(), parsed.unit_type as u32) {
+        throw_dom_exception(
+            scope,
+            "NotSupportedError",
+            9,
+            "The SVG angle unit type is not supported.",
+        );
+        return;
+    }
+    reflect_svg_angle_to_owner_attribute(scope, args.this());
+    rv.set_undefined();
+}
+
+pub(super) fn svg_angle_convert_to_specified_units_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if !require_svg_receiver(
+        scope,
+        args.this(),
+        SVG_ANGLE_UNIT_TYPE_SLOT,
+        "SVGAngle",
+        "convertToSpecifiedUnits",
+    ) {
         return;
     }
     if svg_angle_is_read_only(scope, args.this()) {

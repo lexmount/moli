@@ -238,6 +238,8 @@ enum SvgAnimatedEnumerationKind {
     UnitType,
     SpreadMethod,
     LengthAdjust,
+    MarkerUnits,
+    MarkerOrient,
 }
 
 #[derive(Clone, Copy)]
@@ -1295,6 +1297,20 @@ const SVG_ANIMATED_INTEGER_PROPERTIES: &[SvgAnimatedIntegerProperty] = &[
         cache_slot: SVG_FE_TURBULENCE_NUM_OCTAVES_SLOT,
         initial_value: 1,
         component: SvgAnimatedIntegerComponent::Scalar,
+    },
+    SvgAnimatedEnumerationProperty {
+        index: 10,
+        attribute: "markerUnits",
+        cache_slot: SVG_MARKER_UNITS_SLOT,
+        initial_value: SVG_MARKER_UNITS_STROKE_WIDTH,
+        kind: SvgAnimatedEnumerationKind::MarkerUnits,
+    },
+    SvgAnimatedEnumerationProperty {
+        index: 11,
+        attribute: "orient",
+        cache_slot: SVG_MARKER_ORIENT_TYPE_SLOT,
+        initial_value: SVG_MARKER_ORIENT_ANGLE,
+        kind: SvgAnimatedEnumerationKind::MarkerOrient,
     },
 ];
 
