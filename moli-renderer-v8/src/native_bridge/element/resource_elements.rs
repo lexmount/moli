@@ -2054,8 +2054,8 @@ pub(super) struct HtmlIFrameElementPrototypeDeclaration {
     referrer_policy: (),
     #[webapi(
         accessor_property,
-        getter = node_sandbox_getter_function,
-        setter = node_sandbox_setter_function
+        getter = iframe_sandbox_getter_function,
+        setter = iframe_sandbox_setter_function
     )]
     sandbox: (),
     #[webapi(
@@ -2201,6 +2201,12 @@ pub(super) struct HtmlLinkElementUrlPrototypeDeclaration {
         setter_data = DomStringReflection::LinkHreflang
     )]
     hreflang: (),
+    #[webapi(
+        accessor_property,
+        getter = link_sizes_getter_function,
+        setter = link_sizes_setter_function
+    )]
+    sizes: (),
     #[webapi(
         accessor_property,
         getter = html_charset_getter_function,
