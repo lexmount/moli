@@ -376,6 +376,10 @@ interfaces! {
     SVGCircleElement: SVGGeometryElement;
     SVGDefsElement: SVGGraphicsElement;
     SVGDescElement: SVGElement;
+    SVGClipPathElement: SVGElement;
+    SVGFilterElement: SVGElement;
+    SVGMaskElement: SVGElement;
+    SVGViewElement: SVGElement;
     SVGElement: Element;
     SVGEllipseElement: SVGGeometryElement;
     SVGForeignObjectElement: SVGGraphicsElement;
