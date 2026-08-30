@@ -912,7 +912,7 @@ impl LiveStylesheet {
             return None;
         };
         let ancestor_path_len = rule_path.len().saturating_sub(1);
-        Some(LiveStylesheetRuleMutation::new(
+        Some(Self::rule_mutation_for_cascade(
             rule,
             self.css_rule_ancestors_at_path(&rule_path[..ancestor_path_len])?,
             change_kind,
@@ -925,11 +925,34 @@ impl LiveStylesheet {
         parent_path: &[usize],
         change_kind: RuleChangeKind,
     ) -> Option<LiveStylesheetRuleMutation> {
-        Some(LiveStylesheetRuleMutation::new(
+        Some(Self::rule_mutation_for_cascade(
             rule,
             self.css_rule_ancestors_at_path(parent_path)?,
             change_kind,
         ))
+    }
+
+    fn rule_mutation_for_cascade(
+        rule: CssRule,
+        ancestors: Vec<CssRule>,
+        change_kind: RuleChangeKind,
+    ) -> LiveStylesheetRuleMutation {
+        if matches!(&rule, CssRule::NestedDeclarations(_))
+            && let Some(style_index) = ancestors
+                .iter()
+                .rposition(|ancestor| matches!(ancestor, CssRule::Style(_)))
+        {
+            // Nested declarations inherit their selector from the nearest
+            // enclosing style rule. Stylo therefore does not collect ordinary
+            // element invalidations from the declaration rule itself. Report
+            // the effective declaration change on that selector-bearing rule.
+            return LiveStylesheetRuleMutation::new(
+                ancestors[style_index].clone(),
+                ancestors[..style_index].to_vec(),
+                RuleChangeKind::StyleRuleDeclarations,
+            );
+        }
+        LiveStylesheetRuleMutation::new(rule, ancestors, change_kind)
     }
 
     fn css_rule_ancestors_at_path(&self, path: &[usize]) -> Option<Vec<CssRule>> {
