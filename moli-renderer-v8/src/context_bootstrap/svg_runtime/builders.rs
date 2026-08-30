@@ -216,6 +216,13 @@ struct SvgNumberListObjectDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
+#[webapi(interface = web_api_interfaces::SVGStringList, own_to_string_tag = "SVGStringList")]
+struct SvgStringListObjectDeclaration<'scope> {
+    #[webapi(slot = SVG_STRING_LIST_ITEMS_SLOT)]
+    items: Vec<v8::Local<'scope, v8::Value>>,
+}
+
+#[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::SVGTransformList, own_to_string_tag = "SVGTransformList")]
 struct SvgTransformListObjectDeclaration<'scope> {
     #[webapi(slot = SVG_TRANSFORM_LIST_ITEMS_SLOT)]
@@ -666,6 +673,182 @@ pub(super) fn build_svg_number_list<'s>(
     SvgNumberListObjectDeclaration::new(Vec::new())
         .bind(scope)
         .expect("SVGNumberList declaration should bind")
+}
+
+pub(super) fn build_svg_string_list_for_attribute<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+    attribute: &str,
+) -> v8::Local<'s, v8::Object> {
+    let template = v8::ObjectTemplate::new(scope);
+    configure_svg_string_list_indexed_property_handler(template);
+    let object = template
+        .new_instance(scope)
+        .expect("SVGStringList object template should instantiate");
+    SvgStringListObjectDeclaration::new(Vec::new())
+        .bind_into(scope, object)
+        .expect("SVGStringList declaration should bind");
+    set_private_value(
+        scope,
+        object,
+        SVG_STRING_LIST_OWNER_ELEMENT_SLOT,
+        owner.into(),
+    );
+    set_private_value(
+        scope,
+        object,
+        SVG_STRING_LIST_OWNER_ATTRIBUTE_SLOT,
+        v8_string(scope, attribute)
+            .unwrap_or_else(|| v8str(scope, ""))
+            .into(),
+    );
+    sync_svg_string_list_from_owner_attribute(scope, object);
+    object
+}
+
+pub(super) fn svg_string_list_items<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    list: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Array>> {
+    get_private_value(scope, list, SVG_STRING_LIST_ITEMS_SLOT)
+        .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok())
+}
+
+pub(super) fn set_svg_string_list_items<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    list: v8::Local<'s, v8::Object>,
+    items: v8::Local<'s, v8::Array>,
+) {
+    set_private_value(scope, list, SVG_STRING_LIST_ITEMS_SLOT, items.into());
+}
+
+pub(super) fn sync_svg_string_list_from_owner_attribute<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    list: v8::Local<'s, v8::Object>,
+) {
+    let Some((owner, attribute)) = svg_string_list_owner_attribute(scope, list) else {
+        return;
+    };
+    let raw = svg_owner_attribute_value(scope, owner, &attribute);
+    let synced_value = get_private_value(scope, list, SVG_STRING_LIST_SYNCED_ATTRIBUTE_VALUE_SLOT)
+        .and_then(|value| value.to_string(scope))
+        .map(|value| value.to_rust_string_lossy(scope));
+    let synced_present =
+        get_private_value(scope, list, SVG_STRING_LIST_SYNCED_ATTRIBUTE_PRESENT_SLOT)
+            .map(|value| value.is_true());
+    if synced_present == Some(raw.is_some())
+        && synced_value.as_deref() == Some(raw.as_deref().unwrap_or_default())
+    {
+        return;
+    }
+
+    let values = parse_svg_string_list_attribute(&attribute, raw.as_deref());
+    let length = i32::try_from(values.len()).unwrap_or(i32::MAX);
+    let items = v8::Array::new(scope, length);
+    for (index, value) in values.into_iter().enumerate() {
+        let Ok(index) = u32::try_from(index) else {
+            break;
+        };
+        if let Some(value) = v8_string(scope, &value) {
+            let _ = items.set_index(scope, index, value.into());
+        }
+    }
+    set_svg_string_list_items(scope, list, items);
+    set_svg_string_list_synced_attribute(scope, list, raw.as_deref());
+}
+
+pub(super) fn reflect_svg_string_list_to_owner_attribute<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    list: v8::Local<'s, v8::Object>,
+) {
+    let Some((owner, attribute)) = svg_string_list_owner_attribute(scope, list) else {
+        return;
+    };
+    let value = serialize_svg_string_list(scope, list, &attribute);
+    let Ok((runtime_ptr, handle)) =
+        crate::native_bridge::node_runtime_and_handle_from_object(scope, owner)
+    else {
+        return;
+    };
+    let runtime = unsafe { &mut *runtime_ptr };
+    let _ = runtime.set_attribute(scope, runtime_ptr, handle, &attribute, &value);
+    set_svg_string_list_synced_attribute(scope, list, Some(&value));
+}
+
+fn svg_string_list_owner_attribute<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    list: v8::Local<'s, v8::Object>,
+) -> Option<(v8::Local<'s, v8::Object>, String)> {
+    let owner = get_private_value(scope, list, SVG_STRING_LIST_OWNER_ELEMENT_SLOT)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?;
+    let attribute = get_private_value(scope, list, SVG_STRING_LIST_OWNER_ATTRIBUTE_SLOT)?
+        .to_string(scope)?
+        .to_rust_string_lossy(scope);
+    (!attribute.is_empty()).then_some((owner, attribute))
+}
+
+fn set_svg_string_list_synced_attribute<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    list: v8::Local<'s, v8::Object>,
+    raw: Option<&str>,
+) {
+    set_private_value(
+        scope,
+        list,
+        SVG_STRING_LIST_SYNCED_ATTRIBUTE_VALUE_SLOT,
+        v8_string(scope, raw.unwrap_or_default())
+            .unwrap_or_else(|| v8str(scope, ""))
+            .into(),
+    );
+    set_private_value(
+        scope,
+        list,
+        SVG_STRING_LIST_SYNCED_ATTRIBUTE_PRESENT_SLOT,
+        v8::Boolean::new(scope, raw.is_some()).into(),
+    );
+}
+
+fn parse_svg_string_list_attribute(attribute: &str, raw: Option<&str>) -> Vec<String> {
+    let Some(raw) = raw else {
+        return Vec::new();
+    };
+    if attribute == "systemLanguage" {
+        return raw
+            .split(',')
+            .map(|token| token.trim_matches(is_html_ascii_whitespace).to_owned())
+            .collect();
+    }
+    raw.split(is_html_ascii_whitespace)
+        .filter(|token| !token.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+fn serialize_svg_string_list<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    list: v8::Local<'s, v8::Object>,
+    attribute: &str,
+) -> String {
+    let Some(items) = svg_string_list_items(scope, list) else {
+        return String::new();
+    };
+    let values = (0..items.length())
+        .filter_map(|index| items.get_index(scope, index))
+        .filter_map(|value| value.to_string(scope))
+        .map(|value| value.to_rust_string_lossy(scope))
+        .collect::<Vec<_>>();
+    values.join(if attribute == "systemLanguage" {
+        ","
+    } else {
+        " "
+    })
+}
+
+fn is_html_ascii_whitespace(character: char) -> bool {
+    matches!(
+        character,
+        '\u{0009}' | '\u{000A}' | '\u{000C}' | '\u{000D}' | '\u{0020}'
+    )
 }
 
 pub(super) fn build_svg_transform_list<'s>(
