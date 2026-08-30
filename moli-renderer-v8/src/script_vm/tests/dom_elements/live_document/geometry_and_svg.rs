@@ -522,3 +522,312 @@ fn element_methods_and_dataset_live_on_owner_prototypes() {
 
     assert_eq!(result, "ok");
 }
+
+#[test]
+fn svg_string_lists_reflect_conditional_processing_attributes() {
+    let mut vm = new_parsed_test_vm(
+        "https://svg-string-list.test/",
+        "<!doctype html><html><body></body></html>",
+    );
+
+    let result = vm
+        .eval(
+            r##"
+            (() => {
+              const assert = (condition, message) => {
+                if (!condition) throw new Error(message);
+              };
+              const ns = "http://www.w3.org/2000/svg";
+              const text = document.createElementNS(ns, "text");
+
+              assert(typeof SVGStringList === "function", "SVGStringList constructor");
+              let illegalConstructor = false;
+              try {
+                new SVGStringList();
+              } catch (error) {
+                illegalConstructor = error instanceof TypeError;
+              }
+              assert(illegalConstructor, "SVGStringList illegal constructor");
+
+              for (const name of ["requiredExtensions", "systemLanguage"]) {
+                const descriptor = Object.getOwnPropertyDescriptor(
+                  SVGGraphicsElement.prototype,
+                  name,
+                );
+                assert(typeof descriptor.get === "function" && descriptor.set === undefined,
+                  `${name} readonly descriptor`);
+                assert(descriptor.enumerable && descriptor.configurable, `${name} flags`);
+              }
+              for (const name of ["length", "numberOfItems"]) {
+                const descriptor = Object.getOwnPropertyDescriptor(SVGStringList.prototype, name);
+                assert(typeof descriptor.get === "function" && descriptor.set === undefined,
+                  `${name} descriptor`);
+                assert(descriptor.enumerable && descriptor.configurable, `${name} flags`);
+              }
+              const methodLengths = {
+                clear: 0,
+                initialize: 1,
+                getItem: 1,
+                insertItemBefore: 2,
+                replaceItem: 2,
+                removeItem: 1,
+                appendItem: 1,
+              };
+              for (const [name, length] of Object.entries(methodLengths)) {
+                const descriptor = Object.getOwnPropertyDescriptor(SVGStringList.prototype, name);
+                assert(typeof descriptor.value === "function", `${name} method`);
+                assert(descriptor.value.length === length, `${name} arity`);
+                assert(descriptor.enumerable && descriptor.configurable && descriptor.writable,
+                  `${name} flags`);
+              }
+
+              const languages = text.systemLanguage;
+              assert(languages instanceof SVGStringList, "systemLanguage interface");
+              assert(Object.prototype.toString.call(languages) === "[object SVGStringList]",
+                "SVGStringList tag");
+              assert(text.systemLanguage === languages, "systemLanguage SameObject");
+              assert(languages.length === 0 && languages.numberOfItems === 0,
+                "absent attribute empty list");
+              assert(!text.hasAttribute("systemLanguage"), "getter does not create attribute");
+
+              const parsingCases = [
+                ["en,fr,de", ["en", "fr", "de"]],
+                ["en, fr, de", ["en", "fr", "de"]],
+                ["en ,fr ,de", ["en", "fr", "de"]],
+                ["en , fr , de", ["en", "fr", "de"]],
+                ["  en, fr  ", ["en", "fr"]],
+                [" \t\nen, fr\t\n ", ["en", "fr"]],
+                ["en", ["en"]],
+                ["en-US, zh-Hans, pt-BR", ["en-US", "zh-Hans", "pt-BR"]],
+                ["en,,fr", ["en", "", "fr"]],
+                ["", [""]],
+                [",", ["", ""]],
+                ["123, 456", ["123", "456"]],
+                ["not-a-lang, ???, @#$", ["not-a-lang", "???", "@#$"]],
+              ];
+              for (const [raw, expected] of parsingCases) {
+                text.setAttribute("systemLanguage", raw);
+                assert(text.systemLanguage === languages, `SameObject after ${raw}`);
+                assert(languages.length === expected.length, `length for ${raw}`);
+                assert(languages.numberOfItems === expected.length,
+                  `numberOfItems for ${raw}`);
+                assert(Object.keys(languages).join() === expected.map((_, index) => index).join(),
+                  `supported indices for ${raw}`);
+                for (let index = 0; index < expected.length; index++) {
+                  assert(languages.getItem(index) === expected[index],
+                    `getItem ${index} for ${raw}`);
+                  assert(languages[index] === expected[index], `index ${index} for ${raw}`);
+                }
+              }
+
+              text.removeAttribute("systemLanguage");
+              assert(languages.length === 0, "removed attribute empty list");
+              const extensions = text.requiredExtensions;
+              assert(text.requiredExtensions === extensions, "requiredExtensions SameObject");
+              text.setAttribute("requiredExtensions", "  one\t two\nthree  ");
+              assert(extensions.length === 3 && extensions[0] === "one" &&
+                extensions[1] === "two" && extensions[2] === "three",
+                "requiredExtensions space-separated parsing");
+
+              assert(languages.initialize("en") === "en", "initialize return");
+              assert(text.getAttribute("systemLanguage") === "en", "initialize reflection");
+              assert(languages.appendItem("fr") === "fr", "append return");
+              assert(text.getAttribute("systemLanguage") === "en,fr", "append reflection");
+              assert(languages.insertItemBefore("de", 1) === "de", "insert return");
+              assert(text.getAttribute("systemLanguage") === "en,de,fr", "insert reflection");
+              assert(languages.insertItemBefore("it", 99) === "it", "clamped insert return");
+              assert(text.getAttribute("systemLanguage") === "en,de,fr,it",
+                "clamped insert reflection");
+              assert(languages.replaceItem("zh", 1) === "zh", "replace return");
+              assert(text.getAttribute("systemLanguage") === "en,zh,fr,it",
+                "replace reflection");
+              languages[2] = "pt-BR";
+              assert(text.getAttribute("systemLanguage") === "en,zh,pt-BR,it",
+                "indexed setter reflection");
+              Object.defineProperty(languages, "0", {value: "es"});
+              assert(text.getAttribute("systemLanguage") === "es,zh,pt-BR,it",
+                "indexed definer reflection");
+              const indexDescriptor = Object.getOwnPropertyDescriptor(languages, "0");
+              assert(indexDescriptor.value === "es" && indexDescriptor.writable &&
+                indexDescriptor.enumerable && indexDescriptor.configurable,
+                "indexed property descriptor");
+              assert(delete languages[0] === false, "supported index cannot be deleted");
+              assert(languages.removeItem(1) === "zh", "remove return");
+              assert(text.getAttribute("systemLanguage") === "es,pt-BR,it",
+                "remove reflection");
+              languages.clear();
+              assert(text.getAttribute("systemLanguage") === "" && languages.length === 0,
+                "clear reflection");
+
+              extensions.initialize("alpha");
+              extensions.appendItem("beta");
+              assert(text.getAttribute("requiredExtensions") === "alpha beta",
+                "requiredExtensions space serialization");
+              assert(extensions.appendItem(null) === "null", "DOMString conversion");
+              assert(text.getAttribute("requiredExtensions") === "alpha beta null",
+                "converted string reflection");
+
+              text.setAttribute("systemLanguage", "en,fr");
+              for (const operation of [
+                () => languages.getItem(9),
+                () => languages.replaceItem("x", 9),
+                () => languages.removeItem(9),
+                () => { languages[9] = "x"; },
+              ]) {
+                let indexError = false;
+                try {
+                  operation();
+                } catch (error) {
+                  indexError = error instanceof DOMException && error.name === "IndexSizeError";
+                }
+                assert(indexError, "out-of-range operation");
+              }
+
+              let incompatibleListReceiver = false;
+              try {
+                SVGStringList.prototype.getItem.call({}, 0);
+              } catch (error) {
+                incompatibleListReceiver = error instanceof TypeError;
+              }
+              assert(incompatibleListReceiver, "SVGStringList receiver brand");
+
+              const systemLanguageGetter = Object.getOwnPropertyDescriptor(
+                SVGGraphicsElement.prototype,
+                "systemLanguage",
+              ).get;
+              let incompatibleElementReceiver = false;
+              try {
+                systemLanguageGetter.call(document.createElementNS(ns, "filter"));
+              } catch (error) {
+                incompatibleElementReceiver = error instanceof TypeError;
+              }
+              assert(incompatibleElementReceiver, "SVGGraphicsElement receiver brand");
+              return "ok";
+            })()
+            "##,
+        )
+        .expect("SVG string list probe should evaluate");
+
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn svg_string_lists_use_native_identity_in_windowless_and_child_documents() {
+    let mut vm = new_parsed_test_vm(
+        "https://svg-string-list-identity.test/",
+        "<!doctype html><html><body><iframe></iframe></body></html>",
+    );
+    assert_eq!(vm.eval(r#"(() => {
+      const ns = 'http://www.w3.org/2000/svg';
+      const child = document.querySelector('iframe').contentWindow;
+      const check = (ok, label) => { if (!ok) throw Error(label); };
+      for (const realm of [window, child]) {
+        for (const doc of [realm.document, realm.document.implementation.createHTMLDocument('')]) {
+          const rect = doc.createElementNS(ns, 'rect');
+          const getter = Object.getOwnPropertyDescriptor(window.SVGGraphicsElement.prototype, 'systemLanguage').get;
+          const list = getter.call(rect);
+          check(list instanceof realm.SVGStringList, 'producer realm');
+          check(list === rect.systemLanguage && list.length === 0, 'retained native identity');
+          rect.setAttribute('systemLanguage', 'en, fr');
+          check(list.length === 2 && list[0] === 'en' && list[1] === 'fr', 'attribute synchronization');
+          list.appendItem('ja');
+          check(rect.getAttribute('systemLanguage') === 'en,fr,ja', 'windowless native reflection');
+          rect.removeAttribute('systemLanguage');
+          check(list.length === 0, 'removed attribute default');
+          const extensions = rect.requiredExtensions;
+          extensions.appendItem('urn:test');
+          check(rect.getAttribute('requiredExtensions') === 'urn:test', 'extension reflection');
+        }
+      }
+      return true;
+    })()"#).unwrap(), "true");
+}
+
+#[test]
+fn svg_string_list_conversion_precedes_state_reads_and_preserves_argument_order() {
+    let mut vm = new_parsed_test_vm(
+        "https://svg-string-list-conversion.test/",
+        "<!doctype html><html><body><iframe></iframe></body></html>",
+    );
+    assert_eq!(vm.eval(r#"(() => {
+      const ns = 'http://www.w3.org/2000/svg';
+      const child = document.querySelector('iframe').contentWindow;
+      const check = (ok, label) => { if (!ok) throw Error(label); };
+      const error = f => { try { f(); } catch (e) { return e; } };
+      for (const realm of [window, child]) {
+        const rect = realm.document.createElementNS(ns, 'rect');
+        const list = rect.systemLanguage;
+        for (const method of ['replaceItem', 'insertItemBefore']) {
+          rect.setAttribute('systemLanguage', 'en,fr');
+          const calls = [];
+          list[method]({toString() { calls.push('item'); return 'ja'; }},
+            {valueOf() { calls.push('index'); return 0; }});
+          check(calls.join() === 'item,index', 'DOMString precedes index conversion');
+          const sentinel = new realm.Error('conversion');
+          check(error(() => list[method]({toString() { throw sentinel; }},
+            {valueOf() { calls.push('bad index'); return 0; }})) === sentinel, 'conversion exception');
+          check(!calls.includes('bad index'), 'throwing item prevents index conversion');
+        }
+        rect.setAttribute('systemLanguage', 'en');
+        check(list.getItem({valueOf() { rect.setAttribute('systemLanguage', 'ja,de'); return 1; }}) === 'de', 'getItem reads after index conversion');
+        check(list.removeItem({valueOf() { rect.setAttribute('systemLanguage', 'fr,it'); return 1; }}) === 'it', 'removeItem reads after index conversion');
+        check(rect.getAttribute('systemLanguage') === 'fr', 'remove conversion reflection');
+        list.appendItem({toString() { rect.setAttribute('systemLanguage', 'ja,de'); return 'es'; }});
+        check(rect.getAttribute('systemLanguage') === 'ja,de,es', 'append reads after string conversion');
+        list.replaceItem({toString() { rect.setAttribute('systemLanguage', 'fr,it'); return 'en'; }}, 1);
+        check(rect.getAttribute('systemLanguage') === 'fr,en', 'replace reads after string conversion');
+        list[0] = {toString() { rect.setAttribute('systemLanguage', 'ja,de'); return 'fr'; }};
+        check(rect.getAttribute('systemLanguage') === 'fr,de', 'indexed setter reads after string conversion');
+        let conversions = 0;
+        const item = {toString() { conversions++; return 'es'; }};
+        const index = {valueOf() { conversions++; return 0; }};
+        for (const receiver of [{}, Object.create(list), new Proxy(list, {})]) {
+          check(error(() => realm.SVGStringList.prototype.replaceItem.call(receiver, item, index)) instanceof realm.TypeError, 'invalid receiver');
+        }
+        check(conversions === 0, 'brand validation precedes conversion');
+      }
+      return true;
+    })()"#).unwrap(), "true");
+}
+
+#[test]
+fn svg_string_lists_do_not_observe_array_prototype_accessors() {
+    let mut vm = new_parsed_test_vm(
+        "https://svg-string-list-storage.test/",
+        "<!doctype html><html><body><iframe></iframe></body></html>",
+    );
+    assert_eq!(vm.eval(r#"(() => {
+      const ns = 'http://www.w3.org/2000/svg';
+      const child = document.querySelector('iframe').contentWindow;
+      const check = (ok, label) => { if (!ok) throw Error(label); };
+      for (const realm of [window, child]) {
+        const rect = realm.document.createElementNS(ns, 'rect');
+        const list = rect.systemLanguage;
+        const prototype = realm.Array.prototype;
+        const previous = Object.getOwnPropertyDescriptor(prototype, '0');
+        let accesses = 0;
+        Object.defineProperty(prototype, '0', {
+          configurable: true,
+          get() { accesses++; return 'polluted'; },
+          set(value) { accesses++; },
+        });
+        try {
+          check(list.initialize('en') === 'en' && list[0] === 'en', 'initialize');
+          check(list.appendItem('fr') === 'fr', 'append');
+          check(list.insertItemBefore('ja', 0) === 'ja' && list[0] === 'ja', 'insert');
+          check(list.removeItem(0) === 'ja' && list[0] === 'en', 'remove');
+          check(rect.getAttribute('systemLanguage') === 'en,fr', 'mutation reflection');
+          list.clear();
+          list.appendItem('de');
+          check(list.length === 1 && list[0] === 'de', 'append to empty list');
+          rect.setAttribute('systemLanguage', 'es,it');
+          check(list.length === 2 && list[0] === 'es' && list[1] === 'it', 'attribute synchronization');
+          check(accesses === 0, 'private list storage must not invoke author accessors');
+        } finally {
+          if (previous) Object.defineProperty(prototype, '0', previous);
+          else delete prototype[0];
+        }
+      }
+      return true;
+    })()"#).unwrap(), "true");
+}
