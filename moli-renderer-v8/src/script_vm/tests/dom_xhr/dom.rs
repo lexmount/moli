@@ -6555,6 +6555,39 @@ fn detached_html_template_content_uses_separate_owner_document() {
 }
 
 #[test]
+fn detached_templates_share_their_inert_owner_document() {
+    let mut vm = new_storage_test_vm("https://detached-template-shared-owner.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const doc = document.implementation.createHTMLDocument('');
+  const first = doc.createElement('template');
+  const second = doc.createElement('template');
+  const owner = first.content.ownerDocument;
+  const nested = owner.createElement('template');
+  first.content.append(nested);
+  return [
+    owner !== doc,
+    owner.defaultView === null,
+    Object.prototype.toString.call(owner) === '[object Document]',
+    owner instanceof Document,
+    !(owner instanceof HTMLDocument),
+    second.content.ownerDocument === owner,
+    nested.ownerDocument === owner,
+    nested.content.ownerDocument === owner,
+    nested.content.ownerDocument.defaultView === null
+  ].join('|');
+})()
+"#,
+        )
+        .expect("detached templates should share one inert owner document");
+
+    assert_eq!(result, "true|true|true|true|true|true|true|true|true");
+}
+
+#[test]
 fn detached_html_image_decode_uses_prototype_method() {
     let mut vm = new_storage_test_vm("https://detached-image-decode-surface.test/");
 
