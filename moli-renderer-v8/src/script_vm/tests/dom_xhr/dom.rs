@@ -8950,6 +8950,162 @@ fn dom_parser_prototype_parse_from_string_is_declared_operation() {
 }
 
 #[test]
+fn dom_parser_uses_its_constructor_realm_associated_document() {
+    let mut vm = new_storage_test_vm("https://dom-parser-realm.test/top.html");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const frame = document.createElement('iframe');
+  (document.body || document.documentElement || document).appendChild(frame);
+  const child = frame.contentWindow;
+  child.history.replaceState(null, '', '/child-v1.html');
+
+  const topParser = new DOMParser();
+  const childParser = new child.DOMParser();
+  const childParserWithTopNewTarget = Reflect.construct(
+    child.DOMParser,
+    [],
+    DOMParser
+  );
+  const topParserWithChildNewTarget = Reflect.construct(
+    DOMParser,
+    [],
+    child.DOMParser
+  );
+  const parseUrl = parser =>
+    DOMParser.prototype.parseFromString.call(
+      parser,
+      '<html></html>',
+      'text/html'
+    ).URL;
+  const beforeSameDocumentUpdate = parseUrl(childParser);
+  child.history.replaceState(null, '', '/child-v2.html');
+
+  let invalidReceiver;
+  try {
+    DOMParser.prototype.parseFromString.call({}, '<html></html>', 'text/html');
+    invalidReceiver = 'no-throw';
+  } catch (error) {
+    invalidReceiver = error.name;
+  }
+
+  return JSON.stringify({
+    top: parseUrl(topParser),
+    child: parseUrl(childParser),
+    childWithTopNewTarget: parseUrl(childParserWithTopNewTarget),
+    topWithChildNewTarget: child.DOMParser.prototype.parseFromString.call(
+      topParserWithChildNewTarget,
+      '<html></html>',
+      'text/html'
+    ).URL,
+    beforeSameDocumentUpdate,
+    invalidReceiver
+  });
+})()
+"#,
+        )
+        .expect("DOMParser relevant realm probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"top":"https://dom-parser-realm.test/top.html","child":"https://dom-parser-realm.test/child-v2.html","childWithTopNewTarget":"https://dom-parser-realm.test/child-v2.html","topWithChildNewTarget":"https://dom-parser-realm.test/top.html","beforeSameDocumentUpdate":"https://dom-parser-realm.test/child-v1.html","invalidReceiver":"TypeError"}"#
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn dom_parser_retained_across_child_navigation_uses_original_document() {
+    const HOST: &str = "dom-parser-retained.test";
+
+    let server = StaticHttpServer::spawn(2).await;
+    let top_url = server.url_for_host(HOST, "/top.html");
+    let loader = static_http_loader([server.resolve_entry(HOST)]);
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(top_url.as_str(), &loader);
+
+    vm.eval(
+        r#"
+(() => {
+  const frame = document.createElement('iframe');
+  globalThis.__domParserRetainedLoadCount = 0;
+  frame.onload = () => { globalThis.__domParserRetainedLoadCount += 1; };
+  frame.src = '/child.html?1';
+  (document.body || document.documentElement || document).appendChild(frame);
+  globalThis.__domParserRetainedFrame = frame;
+})()
+"#,
+    )
+    .expect("retained DOMParser initial navigation should evaluate");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(globalThis.__domParserRetainedLoadCount)",
+        "1",
+        "initial same-origin DOMParser child should load",
+    )
+    .await;
+
+    vm.eval(
+        r#"
+(() => {
+  const frame = globalThis.__domParserRetainedFrame;
+  const child = frame.contentWindow;
+  const parser = new child.DOMParser();
+  globalThis.__domParserRetainedParser = parser;
+  globalThis.__domParserRetainedMethod = child.DOMParser.prototype.parseFromString;
+  globalThis.__domParserRetainedBoundMethod = parser.parseFromString.bind(parser);
+  globalThis.__domParserRetainedUrlBeforeNavigation = child.document.URL;
+  frame.src = '/child.html?2';
+})()
+"#,
+    )
+    .expect("retained DOMParser navigation setup should evaluate");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(globalThis.__domParserRetainedLoadCount)",
+        "2",
+        "replacement same-origin DOMParser child should load",
+    )
+    .await;
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const probe = callback => {
+    try {
+      return callback();
+    } catch (error) {
+      return `error:${error.name}:${error.message}`;
+    }
+  };
+  const parser = globalThis.__domParserRetainedParser;
+  const source = '<html></html>';
+  const oldUrl = globalThis.__domParserRetainedUrlBeforeNavigation;
+  return JSON.stringify({
+    property: probe(() => typeof parser.parseFromString),
+    topCallUsesOldUrl: probe(() => DOMParser.prototype.parseFromString.call(parser, source, 'text/html').URL === oldUrl),
+    savedCallUsesOldUrl: probe(() => __domParserRetainedMethod.call(parser, source, 'text/html').URL === oldUrl),
+    boundCallUsesOldUrl: probe(() => __domParserRetainedBoundMethod(source, 'text/html').URL === oldUrl),
+    usesReplacementPrototype: probe(() => Object.getPrototypeOf(parser) === DOMParser.prototype)
+  });
+})()
+"#,
+        )
+        .expect("retained DOMParser probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"property":"function","topCallUsesOldUrl":true,"savedCallUsesOldUrl":true,"boundCallUsesOldUrl":true,"usesReplacementPrototype":false}"#
+    );
+    assert_eq!(
+        server.finish_targets().await,
+        vec!["/child.html?1", "/child.html?2"]
+    );
+}
+
+#[test]
 fn dom_parser_xml_text_content_excludes_processing_instruction_descendants() {
     let mut vm = new_storage_test_vm("https://dom-parser-xml-text-content.test/");
 
