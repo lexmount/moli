@@ -152,6 +152,9 @@ pub(super) enum DomTokenListKind {
     Class,
     Part,
     Rel,
+    HtmlFor,
+    Sandbox,
+    Sizes,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

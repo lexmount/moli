@@ -72,18 +72,46 @@ const LINK_REL_LIST_SUPPORTED_TOKENS: &[&str] = &[
 
 const NAVIGATION_REL_LIST_SUPPORTED_TOKENS: &[&str] = &["noreferrer", "noopener", "opener"];
 
+const SANDBOX_SUPPORTED_TOKENS: &[&str] = &[
+    "allow-downloads",
+    "allow-forms",
+    "allow-modals",
+    "allow-orientation-lock",
+    "allow-pointer-lock",
+    "allow-popups",
+    "allow-popups-to-escape-sandbox",
+    "allow-presentation",
+    "allow-same-origin",
+    "allow-scripts",
+    "allow-storage-access-by-user-activation",
+    "allow-top-navigation",
+    "allow-top-navigation-by-user-activation",
+    "allow-top-navigation-to-custom-protocols",
+];
+
 fn rel_list_supports_token(runtime: &JsContextHost, handle: DomHandle, token: &str) -> bool {
     let supported_tokens = if runtime.dom_host().is_html_element_named(handle, "link") {
         LINK_REL_LIST_SUPPORTED_TOKENS
     } else if ["a", "area", "form"]
         .into_iter()
         .any(|name| runtime.dom_host().is_html_element_named(handle, name))
+        || runtime
+            .dom_host()
+            .node(handle)
+            .and_then(|node| node.as_element())
+            .is_some_and(|element| element.is_svg_element("a"))
     {
         NAVIGATION_REL_LIST_SUPPORTED_TOKENS
     } else {
         return false;
     };
     supported_tokens
+        .iter()
+        .any(|supported| token.eq_ignore_ascii_case(supported))
+}
+
+fn sandbox_supports_token(token: &str) -> bool {
+    SANDBOX_SUPPORTED_TOKENS
         .iter()
         .any(|supported| token.eq_ignore_ascii_case(supported))
 }
@@ -314,11 +342,18 @@ pub(super) fn class_list_supports_callback<'s>(
         return;
     };
     match kind {
-        DomTokenListKind::Class | DomTokenListKind::Part => {
+        DomTokenListKind::Class
+        | DomTokenListKind::Part
+        | DomTokenListKind::HtmlFor
+        | DomTokenListKind::Sizes => {
             throw_type_error(scope, "DOMTokenList has no supported tokens.");
             return;
         }
         DomTokenListKind::Rel => {}
+        DomTokenListKind::Sandbox => {
+            rv.set_bool(sandbox_supports_token(&parsed.token));
+            return;
+        }
     }
     rv.set_bool(rel_list_supports_token(
         unsafe { &*runtime_ptr },
