@@ -122,6 +122,7 @@ where
             '"' => out.push_str("&quot;"),
             '<' => out.push_str("&lt;"),
             '>' => out.push_str("&gt;"),
+            '\u{00A0}' => out.push_str("&nbsp;"),
             _ => out.push(ch),
         }
     }
