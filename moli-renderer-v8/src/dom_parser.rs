@@ -4,20 +4,28 @@ use moli_webapi_declare::WebApiFunctionTemplate;
 use url::Url;
 
 use crate::{
+    document_runtime::DomHandle,
     dom::native::{DomHost, NativeDom, NativeNodeId},
     parser::{HtmlParser, XmlParser},
     webidl,
 };
 
 use super::{
-    native_bridge::document::{
-        build_detached_document_object_from_dom_host,
-        build_detached_document_object_from_dom_host_with_content_type,
+    native_bridge::{
+        OwnerDispatchScope,
+        document::{
+            build_detached_document_object_from_dom_host,
+            build_detached_document_object_from_dom_host_with_content_type,
+        },
     },
-    util::{context_host_ptr_from_global_bridge, get_private_object, throw_type_error},
+    util::{
+        context_host_ptr_from_global_bridge, get_private_object, get_private_value,
+        set_private_value, throw_type_error,
+    },
 };
 
 pub(crate) const DOM_PARSER_FOREIGN_NODE_SLOT: &str = "__moliDomParserForeignNode";
+const DOM_PARSER_DOCUMENT_HANDLE_SLOT: &str = "__moliDomParserDocumentHandle";
 const HTML_NAMESPACE: &str = "http://www.w3.org/1999/xhtml";
 const PARSER_ERROR_STYLE: &str = "display: block; white-space: pre; border: 2px solid #c77; padding: 0 1em 0 1em; margin: 1em; background-color: #fdd; color: black";
 const PARSER_ERROR_DETAIL_STYLE: &str = "font-family:monospace;font-size:12px";
@@ -118,7 +126,21 @@ pub(super) fn dom_parser_constructor_callback(
         throw_type_error(scope, "DOMParser constructor must be called with new");
         return;
     }
-    rv.set(args.this().into());
+    let parser = args.this();
+    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+        throw_type_error(scope, "DOMParser constructor has no associated Document");
+        return;
+    };
+    let runtime = unsafe { &*host_ptr };
+    let document_handle = dom_parser_constructor_document_handle(scope, runtime);
+    let handle_value = v8::BigInt::new_from_u64(scope, document_handle.index() as u64);
+    set_private_value(
+        scope,
+        parser,
+        DOM_PARSER_DOCUMENT_HANDLE_SLOT,
+        handle_value.into(),
+    );
+    rv.set(parser.into());
 }
 
 pub(super) fn dom_parser_parse_from_string_callback<'s>(
@@ -126,6 +148,13 @@ pub(super) fn dom_parser_parse_from_string_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    let Some(document_handle) = dom_parser_document_handle(scope, args.this()) else {
+        throw_type_error(
+            scope,
+            "Failed to execute 'parseFromString' on 'DOMParser': Illegal invocation.",
+        );
+        return;
+    };
     let Some(parsed) = webidl::parse_args::<DomParserParseFromStringArgs>(scope, &args) else {
         return;
     };
@@ -150,12 +179,51 @@ pub(super) fn dom_parser_parse_from_string_callback<'s>(
             source
         }
     };
-    let Some(obj) = parse_detached_document_from_string(scope, &source, parsed.mime.as_mime())
-    else {
+    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+        rv.set(v8::null(scope).into());
+        return;
+    };
+    let document_url = unsafe { &*host_ptr }.document_url_for_handle(document_handle);
+    let Some(obj) = parse_detached_document_from_string_with_url(
+        scope,
+        document_url,
+        &source,
+        parsed.mime.as_mime(),
+    ) else {
         rv.set(v8::null(scope).into());
         return;
     };
     rv.set(obj.into());
+}
+
+fn dom_parser_constructor_document_handle(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime: &super::native_bridge::JsContextHost,
+) -> DomHandle {
+    let context = scope.get_current_context();
+    let Some(identity) = runtime.window_execution_context_identity_for_v8_context(scope, context)
+    else {
+        return runtime.document_handle();
+    };
+    match identity.dispatch_scope() {
+        OwnerDispatchScope::Top => runtime.document_handle(),
+        OwnerDispatchScope::Child(handle) => runtime
+            .child_browsing_context_document_handle(handle)
+            .unwrap_or_else(|| runtime.document_handle()),
+        OwnerDispatchScope::LightweightPopup(popup_id) => runtime
+            .lightweight_popup_document_handle(popup_id)
+            .unwrap_or_else(|| runtime.document_handle()),
+    }
+}
+
+fn dom_parser_document_handle<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    parser: v8::Local<'s, v8::Object>,
+) -> Option<DomHandle> {
+    let value = get_private_value(scope, parser, DOM_PARSER_DOCUMENT_HANDLE_SLOT)?;
+    let value = v8::Local::<v8::BigInt>::try_from(value).ok()?;
+    let (index, lossless) = value.u64_value();
+    lossless.then(|| DomHandle::new(index as usize))
 }
 
 pub(crate) fn install_dom_parser_template_bindings<'s>(
@@ -185,16 +253,32 @@ pub(super) fn parse_detached_document_from_string<'s>(
 
     let host_ptr = context_host_ptr_from_global_bridge(scope)?;
     let runtime = unsafe { &*host_ptr };
+    parse_detached_document_from_string_with_url(
+        scope,
+        runtime.document_url().clone(),
+        source,
+        mime,
+    )
+}
+
+fn parse_detached_document_from_string_with_url<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    document_url: Url,
+    source: &str,
+    mime: &str,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let is_html = is_html_document_mime(mime);
+    let is_xml = is_dom_parser_xml_mime(mime);
+    if !is_html && !is_xml {
+        return None;
+    }
+
     if is_html {
-        return parse_detached_html_document_from_source(
-            scope,
-            runtime.document_url().clone(),
-            source,
-        );
+        return parse_detached_html_document_from_source(scope, document_url, source);
     }
 
     let parser = XmlParser;
-    let parsed = parser.parse(runtime.document_url().clone(), source.to_owned());
+    let parsed = parser.parse(document_url, source.to_owned());
     let parsed = if parsed.parse_errors().is_empty() && native_document_has_element_child(&parsed) {
         parsed
     } else {
