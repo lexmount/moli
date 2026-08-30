@@ -363,7 +363,7 @@ struct SvgTransformTemplateMethodsDeclaration {
     #[webapi(constant = "SVG_TRANSFORM_SKEWY", value = SVG_TRANSFORM_TYPE_SKEWY)]
     transform_skew_y: (),
 
-    #[webapi(method = "setMatrix", length = 1, callback = svg_transform_set_matrix_callback)]
+    #[webapi(method = "setMatrix", length = 0, callback = svg_transform_set_matrix_callback)]
     set_matrix: (),
 
     #[webapi(
