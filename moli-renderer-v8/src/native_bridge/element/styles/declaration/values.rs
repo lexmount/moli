@@ -2397,6 +2397,9 @@ fn computed_style_property_value_after_style_update(
     if property == "font-variant" {
         return computed_font_variant_shorthand_value(runtime, handle, resolution);
     }
+    if property == "mask" {
+        return computed_mask_shorthand_value(runtime, handle, resolution);
+    }
     if property == "border" {
         return computed_border_shorthand_value(runtime, handle, context);
     }
@@ -2663,6 +2666,36 @@ fn computed_font_variant_shorthand_value(
         .map(|property| resolution.computed_property(runtime, handle, property))
         .collect::<Vec<_>>();
     serialize_font_variant_shorthand_values(&values).unwrap_or_default()
+}
+
+fn computed_mask_shorthand_value(
+    runtime: &JsContextHost,
+    handle: DomHandle,
+    resolution: StyleResolutionContext<'_>,
+) -> String {
+    const LONGHANDS: [&str; 9] = [
+        "mask-mode",
+        "mask-repeat",
+        "mask-clip",
+        "mask-origin",
+        "mask-composite",
+        "mask-position-x",
+        "mask-position-y",
+        "mask-size",
+        "mask-image",
+    ];
+
+    let mut block = moli_css_parse::CssDeclarationBlock::default();
+    for property in LONGHANDS {
+        let value = resolution.computed_property(runtime, handle, property);
+        if value.is_empty()
+            || block.set_property(property, &value, false)
+                == moli_css_parse::CssSetResult::ParseError
+        {
+            return String::new();
+        }
+    }
+    block.property_value("mask").unwrap_or_default()
 }
 
 fn computed_webkit_text_stroke_shorthand_value(
