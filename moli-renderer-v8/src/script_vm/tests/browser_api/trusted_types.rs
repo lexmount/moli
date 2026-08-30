@@ -835,6 +835,36 @@ fn inline_module_csp_hashes_use_prepared_source_without_duplicate_url_checks() {
 }
 
 #[test]
+fn iframe_srcdoc_property_applies_trusted_html_conversion() {
+    let mut vm = new_storage_test_vm("https://iframe-srcdoc-trusted-types.test/");
+    vm.set_response_content_security_policies(&["require-trusted-types-for 'script'".to_owned()]);
+    let result = vm.eval(
+        r#"
+        (() => {
+            const frame = document.createElement("iframe");
+            let rejected;
+            try { frame.srcdoc = "<p>plain</p>"; } catch (error) { rejected = error.name; }
+            const afterReject = frame.getAttribute("srcdoc");
+            const policy = trustedTypes.createPolicy("frame", { createHTML: value => value });
+            frame.srcdoc = policy.createHTML("<p>trusted</p>");
+            const trusted = frame.getAttribute("srcdoc");
+            let calls = [];
+            trustedTypes.createPolicy("default", { createHTML(value, type, sink) {
+                calls.push([value, type, sink]);
+                return "<p>default</p>";
+            }});
+            frame.srcdoc = "plain";
+            return JSON.stringify([rejected, afterReject, trusted, frame.getAttribute("srcdoc"), calls]);
+        })();
+        "#,
+    ).unwrap();
+    assert_eq!(
+        result,
+        r#"["TypeError",null,"<p>trusted</p>","<p>default</p>",[["plain","TrustedHTML","HTMLIFrameElement srcdoc"]]]"#
+    );
+}
+
+#[test]
 fn script_src_enforces_trusted_script_url_and_applies_the_default_policy() {
     let mut vm = new_storage_test_vm("https://script-src-trusted-types.test/base/");
     vm.set_response_content_security_policies(&["require-trusted-types-for 'script'".to_owned()]);
