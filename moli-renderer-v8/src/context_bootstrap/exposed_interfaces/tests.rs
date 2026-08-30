@@ -394,6 +394,37 @@ fn worker_geometry_interfaces_use_worker_specific_matrix_surface() {
               return error.name;
             }
           };
+          const operationSets = [
+            [DOMPointReadOnly, ["fromPoint"]],
+            [DOMPointReadOnly.prototype, ["matrixTransform"]],
+            [DOMPoint, ["fromPoint"]],
+            [DOMRectReadOnly, ["fromRect"]],
+            [DOMRect, ["fromRect"]],
+            [DOMQuad, ["fromRect", "fromQuad"]],
+            [DOMMatrixReadOnly, [
+              "fromMatrix", "fromFloat32Array", "fromFloat64Array"
+            ]],
+            [DOMMatrixReadOnly.prototype, [
+              "translate", "scale", "scaleNonUniform", "scale3d", "rotate",
+              "rotateFromVector", "rotateAxisAngle", "skewX", "skewY",
+              "multiply", "flipX", "flipY", "inverse", "transformPoint",
+              "toFloat32Array", "toFloat64Array"
+            ]],
+            [DOMMatrix, [
+              "fromMatrix", "fromFloat32Array", "fromFloat64Array"
+            ]],
+            [DOMMatrix.prototype, [
+              "multiplySelf", "preMultiplySelf", "translateSelf", "scaleSelf",
+              "scale3dSelf", "rotateSelf", "rotateFromVectorSelf",
+              "rotateAxisAngleSelf", "skewXSelf", "skewYSelf", "invertSelf"
+            ]]
+          ];
+          const hasWebIdlOperationDescriptor = (owner, name) => {
+            const descriptor = Object.getOwnPropertyDescriptor(owner, name);
+            return descriptor !== undefined &&
+              typeof descriptor.value === "function" &&
+              descriptor.enumerable && descriptor.writable && descriptor.configurable;
+          };
           return JSON.stringify({
             constructors: names.map(name => typeof globalThis[name]).join(","),
             strings: [
@@ -410,6 +441,9 @@ fn worker_geometry_interfaces_use_worker_specific_matrix_surface() {
               "setMatrixValue" in DOMMatrix.prototype,
               "WebKitCSSMatrix" in globalThis
             ].join(","),
+            operations: operationSets.every(([owner, operationNames]) =>
+              operationNames.every(name => hasWebIdlOperationDescriptor(owner, name))
+            ),
             lengths: [DOMMatrix.length, DOMMatrixReadOnly.length].join(",")
           });
         })()
@@ -424,6 +458,6 @@ fn worker_geometry_interfaces_use_worker_specific_matrix_surface() {
 
     assert_eq!(
         result,
-        r#"{"constructors":"function,function,function,function,function,function,function","strings":"TypeError,TypeError","tags":"[object DOMMatrix],[object DOMMatrixReadOnly],[object DOMMatrix]","windowOnly":"false,false,false","lengths":"0,0"}"#
+        r#"{"constructors":"function,function,function,function,function,function,function","strings":"TypeError,TypeError","tags":"[object DOMMatrix],[object DOMMatrixReadOnly],[object DOMMatrix]","windowOnly":"false,false,false","operations":true,"lengths":"0,0"}"#
     );
 }

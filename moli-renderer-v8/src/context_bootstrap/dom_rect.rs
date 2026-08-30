@@ -136,7 +136,7 @@ struct DomRectPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::DOMRectReadOnly)]
+#[webapi(interface = web_api_interfaces::DOMRectReadOnly, enumerable)]
 struct DomRectReadOnlyConstructorDeclaration {
     #[webapi(
         static_method = "fromRect",
@@ -147,7 +147,7 @@ struct DomRectReadOnlyConstructorDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::DOMRect)]
+#[webapi(interface = web_api_interfaces::DOMRect, enumerable)]
 struct DomRectConstructorDeclaration {
     #[webapi(
         static_method = "fromRect",

@@ -5552,6 +5552,39 @@ fn dom_matrix_exposes_webkit_css_matrix_alias() {
 }
 
 #[test]
+fn dom_matrix_window_operations_use_webidl_descriptors() {
+    let mut vm = new_storage_test_vm("https://dommatrix-operation-descriptors.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const descriptorShape = (owner, name) => {
+    const descriptor = Object.getOwnPropertyDescriptor(owner, name);
+    return [
+      typeof descriptor.value,
+      descriptor.value.length,
+      descriptor.enumerable,
+      descriptor.writable,
+      descriptor.configurable
+    ].join(",");
+  };
+  return [
+    descriptorShape(DOMMatrixReadOnly.prototype, "toString"),
+    descriptorShape(DOMMatrix.prototype, "setMatrixValue")
+  ].join("|");
+})()
+"#,
+        )
+        .expect("DOMMatrix Window operation descriptors should evaluate");
+
+    assert_eq!(
+        result,
+        "function,0,true,true,true|function,1,true,true,true"
+    );
+}
+
+#[test]
 fn dom_matrix_objects_keep_declared_brand_and_own_slots() {
     let mut vm = new_storage_test_vm("https://dommatrix-declared-slots.test/");
 
