@@ -18,10 +18,7 @@ use moli_svg::{
     SvgLength, SvgLengthUnit, SvgMatrixComponents, SvgTransform, SvgTransformKind,
 };
 use moli_webapi::svg_values::constants::*;
-use moli_webapi::svg_values::matrix::{
-    SvgMatrixArg, cloned_svg_matrix_value_or_throw, install_svg_matrix_bindings,
-    svg_matrix_components,
-};
+use moli_webapi::svg_values::matrix::{install_svg_matrix_bindings, svg_matrix_components};
 use moli_webapi::svg_values::{
     SVG_ANGLE_READ_ONLY_SLOT, SVG_ANGLE_UNIT_TYPE_SLOT, SVG_ANGLE_VALUE_AS_STRING_SLOT,
     SVG_ANGLE_VALUE_IN_SPECIFIED_UNITS_SLOT, SVG_ANGLE_VALUE_SLOT,

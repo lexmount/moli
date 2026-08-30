@@ -124,7 +124,7 @@ struct SvgTransformListObjectDeclaration<'scope> {
     #[webapi(
         method = "createSVGTransformFromMatrix",
         callback = svg_transform_list_create_transform_from_matrix_callback,
-        length = 1
+        length = 0
     )]
     create_svg_transform_from_matrix: (),
     #[webapi(method, callback = svg_transform_list_consolidate_callback, length = 0)]
@@ -140,7 +140,7 @@ struct SvgTransformObjectDeclaration<'scope> {
     angle: f64,
     #[webapi(slot = SVG_TRANSFORM_MATRIX_SLOT)]
     matrix: v8::Local<'scope, v8::Object>,
-    #[webapi(method, callback = svg_transform_set_matrix_callback, length = 1)]
+    #[webapi(method, callback = svg_transform_set_matrix_callback, length = 0)]
     set_matrix: (),
     #[webapi(method, callback = svg_transform_set_translate_callback, length = 2)]
     set_translate: (),
