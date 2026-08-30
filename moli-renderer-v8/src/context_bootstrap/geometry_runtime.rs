@@ -238,6 +238,17 @@ struct DomPointConstructorDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::DOMPointReadOnly)]
+struct DomPointReadOnlyConstructorDeclaration {
+    #[webapi(
+        static_method = "fromPoint",
+        length = 0,
+        callback = dom_point_readonly_from_point_callback
+    )]
+    from_point: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::DOMMatrixReadOnly)]
 struct DomMatrixReadOnlyPrototypeAccessorsDeclaration {
     #[webapi(accessor_property, getter = dom_matrix_getter_callback, data = callback_data_index_value(scope, 0), enumerable)]
@@ -628,6 +639,18 @@ pub(in crate::context_bootstrap) fn build_dom_point_object<'s>(
         .expect("DOMPoint declaration should bind")
 }
 
+fn build_dom_point_readonly_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    x: f64,
+    y: f64,
+    z: f64,
+    w: f64,
+) -> v8::Local<'s, v8::Object> {
+    DomPointReadOnlyObjectDeclaration::new(x, y, z, w)
+        .bind(scope)
+        .expect("DOMPointReadOnly declaration should bind")
+}
+
 pub(in crate::context_bootstrap) fn build_dom_matrix_identity_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
 ) -> v8::Local<'s, v8::Object> {
@@ -652,6 +675,7 @@ pub(in crate::context_bootstrap) fn install_geometry_template_bindings<'s>(
     let prototype = template.prototype_template(scope);
     match interface_name {
         "DOMPointReadOnly" => {
+            DomPointReadOnlyConstructorDeclaration::initialize_template(scope, template);
             DomPointReadOnlyPrototypeAccessorsDeclaration::initialize_prototype_template(
                 scope, prototype,
             );
@@ -797,6 +821,18 @@ fn dom_point_from_point_callback<'s>(
         return;
     };
     rv.set(build_dom_point_object(scope, init.x, init.y, init.z, init.w).into());
+}
+
+fn dom_point_readonly_from_point_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some(init) = optional_dom_point_init_arg(scope, &args, 0, "DOMPointReadOnly.fromPoint")
+    else {
+        return;
+    };
+    rv.set(build_dom_point_readonly_object(scope, init.x, init.y, init.z, init.w).into());
 }
 
 fn dom_matrix_from_matrix_callback<'s>(
