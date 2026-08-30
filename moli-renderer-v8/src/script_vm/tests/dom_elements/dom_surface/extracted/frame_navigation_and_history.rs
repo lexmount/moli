@@ -3728,3 +3728,25 @@ fn constructed_documents_share_legacy_unforgeable_location_accessors() {
         r#"{"firstValue":null,"secondValue":null,"own":true,"getType":"function","setType":"function","getName":"get location","getLength":0,"setName":"set location","setLength":1,"getSame":true,"setSame":true,"enumerable":true,"configurable":false,"assign":"TypeError","badGet":"TypeError","badSet":"TypeError"}"#
     );
 }
+
+#[test]
+fn embedded_resource_selection_skips_non_fetchable_script_scheme() {
+    let mut vm = new_storage_html_test_vm("https://embedded-resource.test/");
+    let result = vm
+        .eval(
+            r#"(() => {
+                const object = document.createElement('object');
+                object.type = 'text/html';
+                object.data = 'javascript:';
+                const embed = document.createElement('embed');
+                embed.type = 'text/html';
+                embed.src = 'javascript:';
+                const frame = document.createElement('iframe');
+                document.body.append(object, embed, frame);
+                return [window.length, object.contentWindow === null,
+                    object.contentDocument === null, frame.contentDocument !== null].join('|');
+            })()"#,
+        )
+        .expect("embedded resource selection probe should evaluate");
+    assert_eq!(result, "1|true|true|true");
+}
