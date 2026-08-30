@@ -1385,8 +1385,9 @@ fn hyperlink_metadata_accessors_use_owner_prototypes() {
   accessor(HTMLAnchorElement.prototype, "hreflang");
   accessor(HTMLAreaElement.prototype, "download");
   accessor(HTMLAreaElement.prototype, "ping");
-  accessor(HTMLAreaElement.prototype, "hreflang");
   accessor(HTMLLinkElement.prototype, "hreflang");
+  assert(!own(HTMLAreaElement.prototype, "hreflang"), "area hreflang should be removed");
+  assert(!own(HTMLAreaElement.prototype, "type"), "area type should be removed");
   for (const name of ["download", "ping", "hreflang"]) {
     assert(!own(HTMLElement.prototype, name), `HTMLElement should not own ${name}`);
   }
@@ -1403,11 +1404,15 @@ fn hyperlink_metadata_accessors_use_owner_prototypes() {
   );
   const cases = [
     [document.createElement("a"), parsed.querySelector("a"), ["download", "ping", "hreflang"], "anchor"],
-    [document.createElement("area"), parsed.querySelector("area"), ["download", "ping", "hreflang"], "area"],
+    [document.createElement("area"), parsed.querySelector("area"), ["download", "ping"], "area"],
     [document.createElement("link"), parsed.querySelector("link"), ["hreflang"], "link"]
   ];
   for (const [live, detached, names, label] of cases) {
     for (const element of [live, detached]) {
+      if (label === "area") {
+        assert(!("hreflang" in element), "area instance should not expose hreflang");
+        assert(!("type" in element), "area instance should not expose type");
+      }
       for (const name of names) {
         assert(!own(element, name), `${label}.${name} should not be own before set`);
       }
