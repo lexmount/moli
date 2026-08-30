@@ -3,8 +3,8 @@ use super::super::super::node::{
     throw_incompatible_method_receiver,
 };
 use super::{ClientRect, observable_bounding_client_rect, observable_client_rects};
-use crate::context_bootstrap::build_dom_rect_object;
-use crate::util::{serialize_v8_array, v8_string};
+use crate::context_bootstrap::{build_dom_rect_list_object, build_dom_rect_object};
+use crate::util::v8_string;
 
 pub(crate) fn client_rect_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -22,12 +22,12 @@ pub(crate) fn client_rect_object<'s>(
 fn client_rect_list<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     rects: impl IntoIterator<Item = ClientRect>,
-) -> Option<v8::Local<'s, v8::Array>> {
+) -> v8::Local<'s, v8::Object> {
     let rects = rects
         .into_iter()
         .filter_map(|rect| client_rect_object(scope, rect))
         .collect::<Vec<_>>();
-    serialize_v8_array(scope, rects)
+    build_dom_rect_list_object(scope, &rects)
 }
 
 fn throw_layout_error(scope: &mut v8::PinScope<'_, '_>, error: moli_layout::LayoutError) {
@@ -83,7 +83,6 @@ pub(in crate::native_bridge) fn node_get_client_rects_callback(
     let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_args_or_detached(scope, &args)
     else {
         throw_incompatible_method_receiver(scope, "Element", "getClientRects");
-        rv.set(v8::Array::new(scope, 0).into());
         return;
     };
     if !require_element_method_receiver(scope, unsafe { &*runtime_ptr }, handle, "getClientRects") {
@@ -97,12 +96,8 @@ pub(in crate::native_bridge) fn node_get_client_rects_callback(
         Ok(rects) => rects,
         Err(error) => {
             throw_layout_error(scope, error);
-            rv.set(v8::Array::new(scope, 0).into());
             return;
         }
     };
-    let value = client_rect_list(scope, rects)
-        .map(Into::into)
-        .unwrap_or_else(|| v8::Array::new(scope, 0).into());
-    rv.set(value);
+    rv.set(client_rect_list(scope, rects).into());
 }
