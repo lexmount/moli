@@ -1,7 +1,7 @@
 use std::{collections::HashMap, fmt::Debug, hash::Hash, sync::Arc};
 
 use style::Atom;
-use taffy::{Cache, Layout, Point, Style};
+use taffy::{Cache, Layout, Point, Size, Style};
 
 use crate::{
     LayoutCssImageReference, LayoutElementSemantics, LayoutError, LayoutPoint, LayoutPseudo,
@@ -270,6 +270,12 @@ pub struct LayoutBox<N> {
 #[derive(Debug)]
 pub(crate) struct ViewportLayoutState {
     pub(crate) children: Vec<LayoutBoxId>,
+    /// Physical content-box size of the initial containing block.
+    ///
+    /// This is browser-owned layout-view state. Orthogonal child constraint
+    /// spaces use it only when their immediate containing block has no
+    /// definite size along the child's inline axis.
+    pub(crate) initial_containing_block_size: Size<f32>,
     pub(crate) style: Style<Atom>,
     pub(crate) cache: Cache,
     pub(crate) unrounded_layout: Layout,
@@ -472,6 +478,7 @@ impl Default for ViewportLayoutState {
     fn default() -> Self {
         Self {
             children: Vec::new(),
+            initial_containing_block_size: Size::ZERO,
             style: Style::default(),
             cache: Cache::new(),
             unrounded_layout: Layout::with_order(0),

@@ -163,6 +163,12 @@ where
     N: Copy + Debug + Eq + Hash,
 {
     let viewport_scrollbar_insets = world.viewport_scroll_policy.scrollbar_layout_insets();
+    world.viewport_layout.initial_containing_block_size = Size {
+        width: (viewport.css_width as f32 - viewport_scrollbar_insets.horizontal_axis_sum())
+            .max(0.0),
+        height: (viewport.css_height as f32 - viewport_scrollbar_insets.vertical_axis_sum())
+            .max(0.0),
+    };
     world.viewport_layout.style = Style {
         display: Display::Block,
         box_sizing: BoxSizing::BorderBox,
@@ -191,6 +197,57 @@ where
         },
         ..Style::default()
     };
+}
+
+/// Complete the child inline constraint at an orthogonal writing-mode
+/// boundary.
+///
+/// CSS Writing Modes uses the immediate containing block when it is definite
+/// and otherwise falls back to the initial containing block. The latter is a
+/// browser/LayoutView policy, so Moli applies it before Taffy's intrinsic
+/// resolver and cache observe the input. Explicit min/max-content probes stay
+/// intrinsic; only normal indefinite available space receives the fallback.
+fn prepare_orthogonal_child_constraint(
+    mut inputs: LayoutInput,
+    child_writing_mode: taffy::WritingMode,
+    initial_containing_block_size: Size<f32>,
+) -> LayoutInput {
+    if !child_writing_mode.is_orthogonal_to(inputs.parent_writing_mode) {
+        return inputs;
+    }
+
+    let child_inline_axis = child_writing_mode.inline_axis();
+    let immediate_size = inputs.parent_size.get_abs(child_inline_axis);
+    let fallback_size =
+        immediate_size.unwrap_or_else(|| initial_containing_block_size.get_abs(child_inline_axis));
+
+    if immediate_size.is_none() {
+        match child_inline_axis {
+            AbsoluteAxis::Horizontal => inputs.parent_size.width = Some(fallback_size),
+            AbsoluteAxis::Vertical => inputs.parent_size.height = Some(fallback_size),
+        }
+    }
+
+    let available_inline_size = inputs.available_space.get_abs(child_inline_axis);
+    let is_explicit_intrinsic_probe = inputs.sizing_purpose == SizingPurpose::IntrinsicContribution
+        && inputs.axis.contains(child_inline_axis)
+        && matches!(
+            available_inline_size,
+            AvailableSpace::MinContent | AvailableSpace::MaxContent
+        );
+    if !matches!(available_inline_size, AvailableSpace::Definite(_)) && !is_explicit_intrinsic_probe
+    {
+        match child_inline_axis {
+            AbsoluteAxis::Horizontal => {
+                inputs.available_space.width = AvailableSpace::Definite(fallback_size)
+            }
+            AbsoluteAxis::Vertical => {
+                inputs.available_space.height = AvailableSpace::Definite(fallback_size)
+            }
+        }
+    }
+
+    inputs
 }
 
 /// Computes one numeric scrollbar-feedback iteration over the prepared tree.
@@ -1486,6 +1543,11 @@ where
     }
 
     fn compute_child_layout(&mut self, node_id: NodeId, inputs: LayoutInput) -> LayoutOutput {
+        let inputs = prepare_orthogonal_child_constraint(
+            inputs,
+            self.get_writing_mode(node_id),
+            self.viewport_layout.initial_containing_block_size,
+        );
         // Float parents own horizontal margin subtraction in both the Taffy
         // block path and Moli's Parley IFC path. The generic intrinsic
         // resolver follows Taffy's ordinary child-input contract and subtracts
@@ -1603,6 +1665,11 @@ where
         inputs: LayoutInput,
         block_context: Option<&mut BlockContext<'_>>,
     ) -> LayoutOutput {
+        let inputs = prepare_orthogonal_child_constraint(
+            inputs,
+            self.get_writing_mode(node_id),
+            self.viewport_layout.initial_containing_block_size,
+        );
         if self.should_hide(node_id, inputs) {
             return compute_hidden_layout(self, node_id);
         }
@@ -2674,7 +2741,9 @@ fn inline_percentage_basis(
 
 #[cfg(test)]
 mod tests {
-    use super::{inline_percentage_basis, round_layout_to_css_subpixels};
+    use super::{
+        inline_percentage_basis, prepare_orthogonal_child_constraint, round_layout_to_css_subpixels,
+    };
     use crate::{LayoutBoxKind, LayoutDisplay, LayoutWorld, PaintColor, ResolvedLayoutStyle};
     use style::Atom;
     use taffy::{
@@ -2857,6 +2926,88 @@ mod tests {
             second.margins_can_collapse_through,
             first.margins_can_collapse_through
         );
+    }
+
+    #[test]
+    fn orthogonal_child_constraints_use_immediate_size_then_layout_view_fallback() {
+        let input = LayoutInput {
+            run_mode: RunMode::PerformLayout,
+            sizing_purpose: SizingPurpose::Layout,
+            axis: RequestedAxis::Both,
+            parent_size: Size {
+                width: Some(100.0),
+                height: None,
+            },
+            parent_writing_mode: WritingMode::HorizontalTb,
+            available_space: Size {
+                width: AvailableSpace::Definite(100.0),
+                height: AvailableSpace::MaxContent,
+            },
+            ..LayoutInput::HIDDEN
+        };
+        let initial_containing_block_size = Size {
+            width: 800.0,
+            height: 600.0,
+        };
+
+        let fallback = prepare_orthogonal_child_constraint(
+            input,
+            WritingMode::VerticalLr,
+            initial_containing_block_size,
+        );
+        assert_eq!(fallback.parent_size.height, Some(600.0));
+        assert_eq!(
+            fallback.available_space.height,
+            AvailableSpace::Definite(600.0)
+        );
+
+        let immediate = prepare_orthogonal_child_constraint(
+            LayoutInput {
+                parent_size: Size {
+                    width: Some(100.0),
+                    height: Some(236.0),
+                },
+                ..input
+            },
+            WritingMode::VerticalLr,
+            initial_containing_block_size,
+        );
+        assert_eq!(immediate.parent_size.height, Some(236.0));
+        assert_eq!(
+            immediate.available_space.height,
+            AvailableSpace::Definite(236.0)
+        );
+    }
+
+    #[test]
+    fn orthogonal_layout_view_fallback_does_not_replace_intrinsic_probes() {
+        let input = LayoutInput {
+            run_mode: RunMode::ComputeSize,
+            sizing_purpose: SizingPurpose::IntrinsicContribution,
+            axis: RequestedAxis::Vertical,
+            parent_size: Size {
+                width: Some(100.0),
+                height: None,
+            },
+            parent_writing_mode: WritingMode::HorizontalTb,
+            available_space: Size {
+                width: AvailableSpace::Definite(100.0),
+                height: AvailableSpace::MinContent,
+            },
+            ..LayoutInput::HIDDEN
+        };
+
+        let adjusted = prepare_orthogonal_child_constraint(
+            input,
+            WritingMode::VerticalRl,
+            Size {
+                width: 800.0,
+                height: 600.0,
+            },
+        );
+
+        assert_eq!(adjusted.parent_size.height, Some(600.0));
+        assert_eq!(adjusted.available_space.height, AvailableSpace::MinContent);
     }
 }
 
