@@ -910,6 +910,47 @@ fn html_list_metadata_and_marker_style_produce_inside_and_outside_glyph_geometry
 }
 
 #[test]
+fn outside_marker_only_flex_item_has_valid_empty_intrinsic_widths() {
+    let source = Source(vec![
+        Node::element(
+            "list",
+            "ul",
+            LayoutElementCategory::List(LayoutListRole::Container),
+            None,
+            vec![1],
+        ),
+        Node::element(
+            "empty-item",
+            "li",
+            LayoutElementCategory::List(LayoutListRole::Item),
+            None,
+            Vec::new(),
+        ),
+    ]);
+    let mut styles = Styles::default();
+    styles.primary.insert(
+        0,
+        sized(LayoutDisplay::Flex, 240.0, 100.0, PaintColor::TRANSPARENT),
+    );
+    styles.primary.insert(
+        1,
+        style(LayoutDisplay::BlockListItem, RED).with_list_marker(
+            LayoutListMarkerType::Disc,
+            LayoutListMarkerPosition::Outside,
+        ),
+    );
+    styles.pseudo.insert(
+        (1, LayoutPseudo::Marker),
+        style(LayoutDisplay::Inline, PaintColor::TRANSPARENT).with_normal_generated_content(),
+    );
+
+    let snapshot = render(&source, &mut styles, 240, 100);
+    assert!(snapshot.fragments.iter().any(|fragment| {
+        matches!(fragment, PaintFragment::GlyphRun(run) if !run.glyphs_in_surface().is_empty())
+    }));
+}
+
+#[test]
 fn degenerate_css_ratio_falls_back_to_the_replaced_intrinsic_ratio() {
     let source = Source(vec![
         Node::element("root", "div", LayoutElementCategory::Generic, None, vec![1]),
