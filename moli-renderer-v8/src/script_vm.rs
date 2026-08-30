@@ -4663,7 +4663,6 @@ impl ScriptVm {
     pub(crate) fn create_and_construct_parser_custom_element_direct_in_default_context(
         &mut self,
         document_handle: DomHandle,
-        document_has_body: bool,
         local_name: &str,
         namespace: &str,
         prefix: Option<&str>,
@@ -4688,7 +4687,6 @@ impl ScriptVm {
                         scope,
                         host_ptr,
                         document_handle,
-                        document_has_body,
                         local_name,
                         namespace,
                         prefix,
