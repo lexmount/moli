@@ -816,6 +816,72 @@ html,body{margin:0;padding:0}
     }
 
     #[test]
+    fn grid_flexible_tracks_rerun_against_the_final_used_content_box() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}
+.grid{display:inline-grid;position:absolute}
+.item,.probe{grid-area:1/1}.probe{z-index:1}
+#both{left:0;top:0;grid-template:minmax(0,.5fr)/minmax(0,.5fr);background:rgb(101,102,103)}
+#both .item{width:200px;height:200px}#both .probe{background:rgb(201,202,203)}
+#row{left:0;top:110px;grid-template:minmax(0,.5fr)/50px;background:rgb(111,112,113)}
+#row .item{width:50px;height:200px}#row .probe{background:rgb(211,212,213)}
+#minimum{left:100px;top:110px;min-width:200px;grid-template:10px/minmax(0,.5fr);background:rgb(121,122,123)}
+#minimum .item{width:100px;height:10px}#minimum .probe{background:rgb(221,222,223)}
+#maximum{left:350px;top:110px;max-width:80px;grid-template:10px/minmax(0,.5fr);background:rgb(131,132,133)}
+#maximum .item{width:200px;height:10px}#maximum .probe{background:rgb(231,232,233)}
+#insets{box-sizing:border-box;left:450px;top:110px;min-width:230px;padding:0 10px;border:solid transparent;border-width:0 5px;grid-template:10px/minmax(0,.5fr);background:rgb(141,142,143)}
+#insets .item{width:100px;height:10px}#insets .probe{background:rgb(241,242,243)}
+#row-maximum{left:700px;top:0;max-height:80px;grid-template:minmax(0,.5fr)/10px;background:rgb(151,152,153)}
+#row-maximum .item{width:10px;height:200px}#row-maximum .probe{background:rgb(251,252,253)}
+#gapped{left:700px;top:100px;min-width:210px;column-gap:10px;grid-template:10px/minmax(0,.25fr) minmax(0,.75fr)}
+#gapped .first{grid-area:1/1;background:rgb(161,162,163)}#gapped .second{grid-area:1/2;background:rgb(171,172,173)}
+</style></head><body>
+<div id=both class=grid><div class=item></div><div class=probe></div></div>
+<div id=row class=grid><div class=item></div><div class=probe></div></div>
+<div id=minimum class=grid><div class=item></div><div class=probe></div></div>
+<div id=maximum class=grid><div class=item></div><div class=probe></div></div>
+<div id=insets class=grid><div class=item></div><div class=probe></div></div>
+<div id=row-maximum class=grid><div class=item></div><div class=probe></div></div>
+<div id=gapped class=grid><div class=first></div><div class=second></div></div>
+</body></html>"#,
+            )
+            .await;
+
+            // Captured with Chromium 147. This covers both physical axes,
+            // min/max clamping, the content-box basis inside insets, and
+            // multi-track fr distribution after subtracting a grid gap.
+            for (color, expected) in [
+                (rgb(101, 102, 103), (0.0, 0.0, 100.0, 100.0)),
+                (rgb(201, 202, 203), (0.0, 0.0, 50.0, 50.0)),
+                (rgb(111, 112, 113), (0.0, 110.0, 50.0, 100.0)),
+                (rgb(211, 212, 213), (0.0, 110.0, 50.0, 50.0)),
+                (rgb(121, 122, 123), (100.0, 110.0, 200.0, 10.0)),
+                (rgb(221, 222, 223), (100.0, 110.0, 100.0, 10.0)),
+                (rgb(131, 132, 133), (350.0, 110.0, 80.0, 10.0)),
+                (rgb(231, 232, 233), (350.0, 110.0, 40.0, 10.0)),
+                (rgb(141, 142, 143), (450.0, 110.0, 230.0, 10.0)),
+                (rgb(241, 242, 243), (465.0, 110.0, 100.0, 10.0)),
+                (rgb(151, 152, 153), (700.0, 0.0, 10.0, 80.0)),
+                (rgb(251, 252, 253), (700.0, 0.0, 10.0, 40.0)),
+                (rgb(161, 162, 163), (700.0, 100.0, 50.0, 10.0)),
+                (rgb(171, 172, 173), (760.0, 100.0, 150.0, 10.0)),
+            ] {
+                assert_paint_rect(
+                    solid_paint_rect(&snapshot, color),
+                    moli_layout::PaintRect::new(expected.0, expected.1, expected.2, expected.3),
+                );
+            }
+        }));
+    }
+
+    #[test]
     fn layout_renderer_projects_static_position_and_flex_order_from_stylo() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
