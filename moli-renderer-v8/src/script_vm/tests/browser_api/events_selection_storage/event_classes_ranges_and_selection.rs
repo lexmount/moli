@@ -1766,3 +1766,72 @@ fn window_error_handler_only_boolean_true_cancels() {
         "[[false,true],[true,false],[true,false],[true,false]]"
     );
 }
+
+#[test]
+fn pop_state_event_constructor_converts_visual_transition_and_state_members() {
+    let mut vm = new_storage_test_vm("https://pop-state-event-constructor.test/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const reads = [];
+              const state = { marker: true };
+              const initialized = new PopStateEvent("popstate", {
+                get state() {
+                  reads.push("state");
+                  return state;
+                },
+                get hasUAVisualTransition() {
+                  reads.push("hasUAVisualTransition");
+                  return 1;
+                }
+              });
+              let dispatchedState = null;
+              let dispatchedTransition = false;
+              addEventListener("popstate", event => {
+                dispatchedState = event.state;
+                dispatchedTransition = event.hasUAVisualTransition;
+              }, { once: true });
+              dispatchEvent(initialized);
+
+              let getterError = "none";
+              try {
+                new PopStateEvent("popstate", {
+                  get hasUAVisualTransition() {
+                    throw new RangeError("sentinel");
+                  }
+                });
+              } catch (error) {
+                getterError = `${error.name}:${error.message}`;
+              }
+
+              return JSON.stringify({
+                defaults: [
+                  new PopStateEvent("popstate").state,
+                  new PopStateEvent("popstate").hasUAVisualTransition
+                ],
+                initialized: [
+                  initialized.state === state,
+                  initialized.hasUAVisualTransition,
+                  reads.join(",")
+                ],
+                explicitFalse: new PopStateEvent("popstate", {
+                  hasUAVisualTransition: 0
+                }).hasUAVisualTransition,
+                dispatched: [
+                  dispatchedState === state,
+                  dispatchedTransition
+                ],
+                getterError
+              });
+            })()
+            "#,
+        )
+        .expect("PopStateEvent constructor dictionary probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"defaults":[null,false],"initialized":[true,true,"hasUAVisualTransition,state"],"explicitFalse":false,"dispatched":[true,true],"getterError":"RangeError:sentinel"}"#
+    );
+}

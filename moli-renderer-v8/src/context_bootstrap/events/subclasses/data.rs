@@ -189,6 +189,15 @@ struct PopStateEventInitDeclaration<'scope> {
     has_ua_visual_transition: bool,
 }
 
+#[derive(Default, webidl::WebIdlDictionary)]
+#[webidl(prefix = "PopStateEventInit")]
+struct PopStateEventInitMembers<'s> {
+    #[webidl(name = "hasUAVisualTransition", default = false)]
+    has_ua_visual_transition: bool,
+    #[webidl(converter = "raw")]
+    state: Option<v8::Local<'s, v8::Value>>,
+}
+
 #[derive(WebApiObject)]
 #[webapi(plain, data_properties, enumerable)]
 struct HashChangeEventInitDeclaration {
@@ -459,11 +468,24 @@ pub(in crate::context_bootstrap::events::subclasses) fn initialize_pop_state_eve
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,
     init: Option<v8::Local<'s, v8::Object>>,
-) {
-    let state = init_value_property(scope, init, "state").unwrap_or_else(|| v8::null(scope).into());
-    PopStateEventInitDeclaration::new(state, false)
+) -> bool {
+    let parsed = match init {
+        Some(init) => {
+            match webidl::parse_dictionary_object::<PopStateEventInitMembers>(scope, init) {
+                Ok(parsed) => parsed,
+                Err(error) => {
+                    webidl::throw_error(scope, &error);
+                    return false;
+                }
+            }
+        }
+        None => PopStateEventInitMembers::default(),
+    };
+    let state = parsed.state.unwrap_or_else(|| v8::null(scope).into());
+    PopStateEventInitDeclaration::new(state, parsed.has_ua_visual_transition)
         .initialize(scope, event)
         .expect("PopStateEvent init declaration should initialize");
+    true
 }
 
 pub(in crate::context_bootstrap::events::subclasses) fn initialize_hash_change_event<'s>(
