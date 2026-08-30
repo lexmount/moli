@@ -1485,6 +1485,56 @@ pub(super) fn svg_svg_element_create_matrix_callback<'s>(
     rv.set(super::super::geometry_runtime::build_dom_matrix_identity_object(scope).into());
 }
 
+pub(super) fn svg_svg_element_deselect_all_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Ok((runtime_ptr, handle)) =
+        crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, args.this())
+    else {
+        webidl::throw_type_error(
+            scope,
+            "SVGSVGElement.deselectAll called on incompatible receiver.",
+        );
+        return;
+    };
+    let (is_svg_root, owner_document) = {
+        let runtime = unsafe { &*runtime_ptr };
+        let is_svg_root = runtime
+            .dom_host()
+            .node(handle)
+            .and_then(|node| node.as_element())
+            .is_some_and(|element| element.is_svg_element("svg"));
+        let owner_document = runtime.dom_host().owner_document_handle(handle);
+        (is_svg_root, owner_document)
+    };
+    if !is_svg_root {
+        webidl::throw_type_error(
+            scope,
+            "SVGSVGElement.deselectAll called on incompatible receiver.",
+        );
+        return;
+    }
+    let Some(owner_document) = owner_document else {
+        return;
+    };
+    let Some(window) = crate::native_bridge::document::document_associated_window_for_handle(
+        scope,
+        runtime_ptr,
+        owner_document,
+    ) else {
+        return;
+    };
+    let Some(selection) = selection_value_for_window(scope, window) else {
+        return;
+    };
+    if selection_has_range(scope, selection) {
+        selection_clear(scope, selection);
+        selection_dispatch_change(scope);
+    }
+}
+
 pub(super) fn svg_svg_element_create_transform_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     _args: v8::FunctionCallbackArguments<'s>,

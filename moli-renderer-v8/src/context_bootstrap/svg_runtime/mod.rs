@@ -1,4 +1,8 @@
-use super::{build_dom_point_object, build_dom_rect_object, optional_dom_point_init_arg};
+use super::{
+    build_dom_point_object, build_dom_rect_object, optional_dom_point_init_arg,
+    selection::{selection_clear, selection_dispatch_change, selection_has_range},
+    selection_value_for_window,
+};
 use crate::{
     native_bridge::throw_dom_exception,
     util::{callback_data_item, get_private_value, set_private_value, v8_string, v8str},
