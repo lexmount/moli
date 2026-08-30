@@ -253,6 +253,13 @@ fn trusted_type_factory_introspection_reuses_current_sink_classification() {
       type("ſcript", "src"),
       type("script", "ſrc")
     ],
+    iframeAttributes: [
+      type("iframe", "srcdoc"),
+      type("IFRAME", "SRCDOC", HTML, null),
+      type("iframe", "srcdoc", HTML, ""),
+      type("iframe", "srcdoc", HTML, OTHER),
+      type("div", "srcdoc")
+    ],
     urls: [
       type("embed", "src"),
       type("object", "data"),
@@ -298,7 +305,7 @@ fn trusted_type_factory_introspection_reuses_current_sink_classification() {
 
     assert_eq!(
         result,
-        r#"{"interface":[["function","getAttributeType",2,true,true],["function","getPropertyType",2,true,true],false,false],"htmlDefaults":["TrustedScriptURL","TrustedScriptURL","TrustedScriptURL","TrustedScriptURL","TrustedScriptURL",null,null],"urls":[null,null,null,null,"TrustedScriptURL","TrustedScriptURL",null,null],"properties":["TrustedScript","TrustedScriptURL",null,"TrustedHTML","TrustedHTML",null,null,null,null],"handlers":["TrustedScript","TrustedScript","TrustedScript",null,null,null],"errors":["TypeError","TypeError","TypeError","TypeError","TypeError","TypeError"]}"#
+        r#"{"interface":[["function","getAttributeType",2,true,true],["function","getPropertyType",2,true,true],false,false],"htmlDefaults":["TrustedScriptURL","TrustedScriptURL","TrustedScriptURL","TrustedScriptURL","TrustedScriptURL",null,null],"iframeAttributes":["TrustedHTML","TrustedHTML","TrustedHTML",null,null],"urls":[null,null,null,null,"TrustedScriptURL","TrustedScriptURL",null,null],"properties":["TrustedScript","TrustedScriptURL",null,"TrustedHTML","TrustedHTML",null,null,null,null],"handlers":["TrustedScript","TrustedScript","TrustedScript",null,null,null],"errors":["TypeError","TypeError","TypeError","TypeError","TypeError","TypeError"]}"#
     );
 }
 
@@ -1484,6 +1491,91 @@ fn event_handler_attribute_writes_enforce_trusted_script_at_the_attribute_bounda
     assert_eq!(
         result,
         r#"{"runs":["trusted","trusted-ns","default"],"unsuitableRejected":true,"unsuitableAttribute":null,"plainRejected":true,"plainAttribute":null,"plainNsRejected":true,"plainNsAttribute":null,"ordinary":["plain-data","plain-unknown","plain-namespaced","plain-uppercase"],"elementSpecificRejected":[true,true,true,true],"defaultedAttribute":"globalThis.__eventHandlerAttributeRuns.push('default')","defaultCalls":[["default-input","TrustedScript","Element onclick"]]}"#
+    );
+}
+
+#[test]
+fn iframe_srcdoc_writes_enforce_trusted_html_for_property_and_attribute_sinks() {
+    let mut vm = new_storage_test_vm("https://iframe-srcdoc-trusted-types.test/");
+    vm.set_response_content_security_policies(&["require-trusted-types-for 'script'".to_owned()]);
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const explicit = trustedTypes.createPolicy("iframe-srcdoc", {
+    createHTML: value => value,
+    createScript: value => value
+  });
+  const trustedProperty = document.createElement("iframe");
+  trustedProperty.srcdoc = explicit.createHTML("trusted-property");
+  const trustedAttribute = document.createElement("iframe");
+  trustedAttribute.setAttribute("srcdoc", explicit.createHTML("trusted-attribute"));
+  const trustedAttributeNs = document.createElement("iframe");
+  trustedAttributeNs.setAttributeNS(
+    null,
+    "srcdoc",
+    explicit.createHTML("trusted-attribute-ns")
+  );
+
+  const rejected = [
+    [document.createElement("iframe"), (element, value) => { element.srcdoc = value; }],
+    [document.createElement("iframe"), (element, value) => element.setAttribute("srcdoc", value)],
+    [document.createElement("iframe"), (element, value) => element.setAttributeNS(null, "srcdoc", value)]
+  ].flatMap(([element, setter]) => ["plain", explicit.createScript("wrong")].map(value => {
+    try {
+      setter(element, value);
+      return false;
+    } catch (error) {
+      return error instanceof TypeError;
+    }
+  }));
+
+  const ordinaryNamespace = document.createElement("iframe");
+  ordinaryNamespace.setAttributeNS("urn:test", "srcdoc", "namespaced");
+  const ordinaryElement = document.createElement("div");
+  ordinaryElement.setAttribute("srcdoc", "plain-div");
+
+  const defaultCalls = [];
+  trustedTypes.createPolicy("default", {
+    createHTML: (value, type, sink) => {
+      defaultCalls.push([value, type, sink]);
+      return `safe-${value}`;
+    }
+  });
+  const defaultProperty = document.createElement("iframe");
+  defaultProperty.srcdoc = "default-property";
+  const defaultAttribute = document.createElement("iframe");
+  defaultAttribute.setAttribute("srcdoc", "default-attribute");
+  const defaultAttributeNs = document.createElement("iframe");
+  defaultAttributeNs.setAttributeNS(null, "srcdoc", "default-attribute-ns");
+
+  return JSON.stringify({
+    trusted: [
+      trustedProperty.srcdoc,
+      trustedAttribute.getAttribute("srcdoc"),
+      trustedAttributeNs.getAttribute("srcdoc")
+    ],
+    rejected,
+    ordinary: [
+      ordinaryNamespace.getAttributeNS("urn:test", "srcdoc"),
+      ordinaryElement.getAttribute("srcdoc")
+    ],
+    defaulted: [
+      defaultProperty.srcdoc,
+      defaultAttribute.getAttribute("srcdoc"),
+      defaultAttributeNs.getAttribute("srcdoc")
+    ],
+    defaultCalls
+  });
+})()
+"#,
+        )
+        .expect("iframe srcdoc TrustedHTML sink probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"trusted":["trusted-property","trusted-attribute","trusted-attribute-ns"],"rejected":[true,true,true,true,true,true],"ordinary":["namespaced","plain-div"],"defaulted":["safe-default-property","safe-default-attribute","safe-default-attribute-ns"],"defaultCalls":[["default-property","TrustedHTML","HTMLIFrameElement srcdoc"],["default-attribute","TrustedHTML","HTMLIFrameElement srcdoc"],["default-attribute-ns","TrustedHTML","HTMLIFrameElement srcdoc"]]}"#
     );
 }
 
