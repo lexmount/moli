@@ -2482,12 +2482,9 @@ css/cssom/getComputedStyle-insets-sticky.html
 css/cssom/getComputedStyle-layout-dependent-replaced-into-ib-split.html
 css/cssom/idlharness.html
 css/cssom/style-sheet-interfaces-001.html
-css/geometry/DOMMatrix-001.html
 css/geometry/DOMMatrix-003.html
-css/geometry/DOMMatrix-attributes.html
 css/geometry/DOMMatrix-stringifier.html
 css/geometry/DOMMatrix2DInit-validate-fixup.html
-css/geometry/DOMMatrixInit-validate-fixup.html
 css/geometry/DOMQuad-001.html
 css/geometry/DOMQuad-002.html
 css/geometry/DOMQuad-nan.html

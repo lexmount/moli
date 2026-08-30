@@ -5530,6 +5530,83 @@ fn dom_matrix_objects_keep_declared_brand_and_own_slots() {
 }
 
 #[test]
+fn dom_matrix_tracks_explicit_dimension_and_validates_init() {
+    let mut vm = new_storage_test_vm("https://dommatrix-dimension.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const identity3d = [
+    1, 0, 0, 0,
+    0, 1, 0, 0,
+    0, 0, 1, 0,
+    0, 0, 0, 1
+  ];
+  const outcome = callback => {
+    try {
+      callback();
+      return "no throw";
+    } catch (error) {
+      return error.name;
+    }
+  };
+
+  const sequence = new DOMMatrix(identity3d);
+  const typed = DOMMatrixReadOnly.fromFloat64Array(new Float64Array(identity3d));
+  const explicit = DOMMatrix.fromMatrix({is2D: false});
+  const copied = new DOMMatrix(explicit);
+  const multiplied = new DOMMatrix().multiply({is2D: false});
+  const preMultiplied = new DOMMatrix().preMultiplySelf({is2D: false});
+
+  const sticky = new DOMMatrix();
+  sticky.m13 = 2;
+  sticky.m13 = 0;
+
+  const reset = new DOMMatrix(identity3d);
+  reset.setMatrixValue("");
+
+  const origin3d = new DOMMatrix().scaleSelf(1, 1, 1, 0, 0, 2);
+  const axis3d = new DOMMatrix().rotateAxisAngleSelf(1, 0, 0, 0);
+  const negativeZero2d = new DOMMatrix().translateSelf(0, 0, -0);
+  const parsed3d = new DOMMatrix(
+    "matrix3d(1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1)"
+  );
+
+  return [
+    sequence.is2D,
+    typed.is2D,
+    explicit.is2D,
+    copied.is2D,
+    multiplied.is2D,
+    preMultiplied.is2D,
+    sticky.is2D,
+    reset.is2D,
+    origin3d.is2D,
+    axis3d.is2D,
+    negativeZero2d.is2D,
+    parsed3d.is2D,
+    String(explicit),
+    outcome(() => DOMMatrix.fromMatrix({a: 1, m11: 2})),
+    outcome(() => DOMMatrix.fromMatrix({is2D: true, m13: 1})),
+    outcome(() => new DOMMatrix(" "))
+  ].join("|");
+})()
+"#,
+        )
+        .expect("DOMMatrix dimension probe should evaluate");
+
+    assert_eq!(
+        result,
+        concat!(
+            "false|false|false|false|false|false|false|true|false|false|true|false|",
+            "matrix3d(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1)|",
+            "TypeError|TypeError|SyntaxError"
+        )
+    );
+}
+
+#[test]
 fn element_animate_autoplays_and_settles_finished_promise() {
     let mut vm = new_parsed_test_vm("https://animations.test/", "<!doctype html><body></body>");
 
