@@ -2536,7 +2536,6 @@ fn html_rel_accessors_live_on_owner_prototypes() {
                 assert(descriptor.enumerable === true, `${name} enumerable`);
                 assert(descriptor.configurable === true, `${name} configurable`);
               };
-
               const cases = [
                 [HTMLAnchorElement.prototype, document.createElement("a"), "anchor"],
                 [HTMLAreaElement.prototype, document.createElement("area"), "area"],
