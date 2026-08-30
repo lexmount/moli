@@ -684,6 +684,93 @@ pub(super) fn css_color_value_property_requires_stylo_parser(name: &str) -> bool
     )
 }
 
+fn canonical_color_number_or_percentage(
+    component: &ColorComponent<NumberOrPercentageComponent>,
+    percentage_basis: f32,
+    minimum: f32,
+    maximum: Option<f32>,
+) -> ColorComponent<NumberOrPercentageComponent> {
+    let number = match component {
+        ColorComponent::Value(NumberOrPercentageComponent::Number(value)) => Some(*value),
+        ColorComponent::Value(NumberOrPercentageComponent::Percentage(value)) => {
+            Some(*value * percentage_basis)
+        }
+        _ => None,
+    };
+    let Some(number) = number else {
+        return component.clone();
+    };
+    let number = maximum.map_or(number.max(minimum), |maximum| {
+        number.clamp(minimum, maximum)
+    });
+    ColorComponent::Value(NumberOrPercentageComponent::Number(number))
+}
+
+fn canonical_color_number_or_angle(
+    component: &ColorComponent<NumberOrAngleComponent>,
+) -> ColorComponent<NumberOrAngleComponent> {
+    match component {
+        ColorComponent::Value(NumberOrAngleComponent::Angle(degrees)) => {
+            ColorComponent::Value(NumberOrAngleComponent::Number(*degrees))
+        }
+        _ => component.clone(),
+    }
+}
+
+pub(super) fn canonical_unresolved_legacy_color_function(value: &str) -> Option<String> {
+    let lower = value.trim_start().to_ascii_lowercase();
+    if !["rgb(", "rgba(", "hsl(", "hsla(", "hwb("]
+        .iter()
+        .any(|prefix| lower.starts_with(prefix))
+    {
+        return None;
+    }
+
+    let mut declarations = parse_style_property_with_stylo("color", value, None)?;
+    let declaration = declarations.drain().declarations.next()?;
+    let PropertyDeclaration::Color(ColorPropertyValue(SpecifiedColor::ColorFunction(function))) =
+        declaration
+    else {
+        return None;
+    };
+
+    let canonical = match function.as_ref() {
+        ColorFunction::Rgb(origin, red, green, blue, alpha) if origin.as_ref().is_none() => {
+            ColorFunction::Rgb(
+                origin.clone(),
+                canonical_color_number_or_percentage(red, 255.0, 0.0, Some(255.0)),
+                canonical_color_number_or_percentage(green, 255.0, 0.0, Some(255.0)),
+                canonical_color_number_or_percentage(blue, 255.0, 0.0, Some(255.0)),
+                canonical_color_number_or_percentage(alpha, 1.0, 0.0, Some(1.0)),
+            )
+        }
+        ColorFunction::Hsl(origin, hue, saturation, lightness, alpha)
+            if origin.as_ref().is_none() =>
+        {
+            ColorFunction::Hsl(
+                origin.clone(),
+                canonical_color_number_or_angle(hue),
+                canonical_color_number_or_percentage(saturation, 100.0, 0.0, None),
+                canonical_color_number_or_percentage(lightness, 100.0, 0.0, None),
+                canonical_color_number_or_percentage(alpha, 1.0, 0.0, Some(1.0)),
+            )
+        }
+        ColorFunction::Hwb(origin, hue, whiteness, blackness, alpha)
+            if origin.as_ref().is_none() =>
+        {
+            ColorFunction::Hwb(
+                origin.clone(),
+                canonical_color_number_or_angle(hue),
+                canonical_color_number_or_percentage(whiteness, 100.0, 0.0, None),
+                canonical_color_number_or_percentage(blackness, 100.0, 0.0, None),
+                canonical_color_number_or_percentage(alpha, 1.0, 0.0, Some(1.0)),
+            )
+        }
+        _ => return None,
+    };
+    Some(canonical.to_css_string())
+}
+
 pub(super) fn background_image_value_requires_stylo_parser(value: &str) -> bool {
     let lower = value.trim_start().to_ascii_lowercase();
     lower.starts_with("image-set(") || lower.starts_with("-webkit-image-set(")
