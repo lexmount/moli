@@ -1896,6 +1896,59 @@ fn cross_document_unload_lifecycle_orders_pagehide_before_unload_without_timer()
         "pagehide is part of the unload step and must not create an independent timer task"
     );
 }
+
+#[test]
+fn before_unload_handler_coerces_its_result_while_window_event_is_current() {
+    let mut vm = new_storage_test_vm("https://example.com/base");
+
+    let result = vm
+        .eval(
+            r##"
+            (() => {
+              let customCurrent = false;
+              onbeforeunload = event => ({
+                toString() {
+                  customCurrent = window.event === event;
+                  return "custom";
+                }
+              });
+              const custom = new CustomEvent("beforeunload", { cancelable: true });
+              const customDispatchResult = dispatchEvent(custom);
+
+              let realEvent;
+              const realSteps = [];
+              onbeforeunload = event => {
+                realEvent = event;
+                realSteps.push([
+                  event instanceof BeforeUnloadEvent,
+                  event.cancelable,
+                  event.returnValue,
+                  window.event === event
+                ]);
+                return {
+                  toString() {
+                    realSteps.push(["coerce", window.event === event]);
+                    return "leave";
+                  }
+                };
+              };
+              navigation.navigate("/next-document");
+
+              return JSON.stringify({
+                custom: [customCurrent, custom.defaultPrevented, customDispatchResult],
+                realSteps,
+                real: [realEvent.defaultPrevented, realEvent.returnValue]
+              });
+            })()
+            "##,
+        )
+        .expect("beforeunload handler return processing should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"custom":[true,false,true],"realSteps":[[true,true,"",true],["coerce",true]],"real":[true,"leave"]}"#
+    );
+}
 #[test]
 fn navigate_event_intercept_option_stringification_preserves_thrown_exception() {
     let mut vm = new_storage_test_vm("https://example.com/base");
