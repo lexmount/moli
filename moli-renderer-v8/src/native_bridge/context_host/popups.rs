@@ -176,6 +176,12 @@ pub(super) struct PendingLightweightPopupDocumentLoad {
     history_traversal: bool,
 }
 
+#[derive(Clone, Copy)]
+enum LightweightPopupParserStep {
+    Script(DomHandle),
+    WindowEventHandlers(DomHandle),
+}
+
 struct LightweightPopupClassicScriptContinuation {
     task: LightweightPopupNavigationTaskToken,
     document_handle: DomHandle,
@@ -657,8 +663,7 @@ impl PageScriptHost {
         creator_policy_container: DocumentPolicyContainer,
         update_existing_opener: bool,
     ) -> Option<OpenedLightweightPopup<'s>> {
-        if opener.is_some()
-            && let Some(name) = trackable_lightweight_popup_window_name(target_name)
+        if let Some(name) = trackable_lightweight_popup_window_name(target_name)
             && let Some(popup_id) =
                 self.lightweight_popup_browsing_contexts
                     .iter()
@@ -3117,16 +3122,31 @@ impl PageScriptHost {
                 PopupDocumentLoadBodyActivity::NoPageCodeOrEventDispatch,
             );
         };
-        if !scripting_enabled {
-            return LightweightPopupClassicScriptAdvance::Completed(
-                PopupDocumentLoadBodyActivity::NoPageCodeOrEventDispatch,
-            );
-        }
         let Some(document) = self.lightweight_popup_document_record(task.popup_id()) else {
             return LightweightPopupClassicScriptAdvance::Completed(
                 PopupDocumentLoadBodyActivity::NoPageCodeOrEventDispatch,
             );
         };
+        // Register body/frameset handlers when execution reaches the element,
+        // after head scripts and before scripts within its subtree. Keeping
+        // these steps in the continuation also preserves listener order across
+        // a parser-blocking external script load.
+        let mut parser_steps = Vec::new();
+        let mut stack = vec![document_handle];
+        while let Some(handle) = stack.pop() {
+            let Some(node) = self.dom_host().node(handle) else {
+                continue;
+            };
+            if node.is_script_element() && scripting_enabled {
+                parser_steps.push(LightweightPopupParserStep::Script(handle));
+            } else if node.is_html_element_named("body") || node.is_html_element_named("frameset") {
+                parser_steps.push(LightweightPopupParserStep::WindowEventHandlers(handle));
+            }
+            stack.extend(self.dom_host().child_handles_reversed(handle));
+            if let Some(shadow_root) = self.dom_host().shadow_root_handle(handle) {
+                stack.push(shadow_root);
+            }
+        }
         let continuation = LightweightPopupClassicScriptContinuation {
             task,
             document_handle,
@@ -3154,11 +3174,20 @@ impl PageScriptHost {
     ) -> LightweightPopupClassicScriptAdvance {
         let task = continuation.task;
         let popup_id = task.popup_id();
-        while let Some(&script) = continuation.scripts.get(continuation.next_script_index) {
-            continuation.next_script_index += 1;
+        while let Some(&step) = continuation.parser_steps.get(continuation.next_step_index) {
+            continuation.next_step_index += 1;
             if !self.lightweight_popup_committed_navigation_task_is_current(task) {
                 return LightweightPopupClassicScriptAdvance::Completed(body_activity);
             }
+            let script = match step {
+                LightweightPopupParserStep::Script(script) => script,
+                LightweightPopupParserStep::WindowEventHandlers(handle) => {
+                    crate::native_bridge::element::initialize_parser_inserted_body_window_event_handlers(
+                        scope, self as *mut PageScriptHost, handle,
+                    );
+                    continue;
+                }
+            };
             let script_type = self
                 .child_document_native_script_attribute(script, "type")
                 .unwrap_or_default();
@@ -4799,20 +4828,6 @@ fn set_lightweight_popup_script_global(
     } else {
         set_object_slot(scope, window, name, value);
     }
-}
-
-fn clear_lightweight_popup_window_document_event_state<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    window: v8::Local<'s, v8::Object>,
-) {
-    let registry = new_null_prototype_object(scope);
-    set_private_value(
-        scope,
-        window,
-        SIMPLE_EVENT_TARGET_LISTENERS_SLOT,
-        registry.into(),
-    );
-    clear_simple_window_event_handler_values(scope, window);
 }
 
 fn lightweight_popup_effective_navigation_kind(
