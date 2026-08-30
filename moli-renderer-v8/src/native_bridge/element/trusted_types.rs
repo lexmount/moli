@@ -344,6 +344,21 @@ pub(in crate::native_bridge) fn trusted_attribute_string_value<'s>(
     )
 }
 
+fn svg_animated_string_attribute_namespace(
+    runtime: &JsContextHost,
+    handle: DomHandle,
+    attribute: &str,
+) -> Option<&'static str> {
+    (attribute == "href"
+        && !runtime.dom_host().has_attribute_ns(handle, None, attribute)
+        && runtime.dom_host().has_attribute_ns(
+            handle,
+            Some(crate::native_bridge::document::XLINK_NS),
+            attribute,
+        ))
+    .then_some(crate::native_bridge::document::XLINK_NS)
+}
+
 pub(crate) fn set_svg_animated_string_base_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
@@ -351,17 +366,43 @@ pub(crate) fn set_svg_animated_string_base_value<'s>(
     value: v8::Local<'s, v8::Value>,
 ) -> Option<String> {
     let (runtime_ptr, handle) =
-        crate::native_bridge::node_runtime_and_handle_from_object(scope, owner).ok()?;
+        crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, owner).ok()?;
+    let namespace =
+        svg_animated_string_attribute_namespace(unsafe { &*runtime_ptr }, handle, attribute);
     let value = trusted_attribute_value_string(
         scope,
         Some((runtime_ptr, handle)),
-        None,
+        namespace,
         attribute,
         value,
         TrustedAttributeSetter::SvgAnimatedStringBaseVal,
     )?;
-    let _ =
-        unsafe { &mut *runtime_ptr }.set_attribute(scope, runtime_ptr, handle, attribute, &value);
+    let namespace =
+        svg_animated_string_attribute_namespace(unsafe { &*runtime_ptr }, handle, attribute);
+    if attribute == "href" {
+        let _ = unsafe { &mut *runtime_ptr }.set_attribute_ns(
+            scope,
+            runtime_ptr,
+            handle,
+            namespace,
+            namespace.map(|_| "xlink"),
+            attribute,
+            if namespace.is_some() {
+                "xlink:href"
+            } else {
+                attribute
+            },
+            &value,
+        );
+    } else {
+        let _ = unsafe { &mut *runtime_ptr }.set_attribute(
+            scope,
+            runtime_ptr,
+            handle,
+            attribute,
+            &value,
+        );
+    }
     Some(value)
 }
 
