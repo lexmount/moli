@@ -1,4 +1,5 @@
 use super::*;
+use moli_webapi::events::subclasses::BEFORE_UNLOAD_EVENT_RETURN_VALUE_SLOT;
 use crate::util::{get_private_value, v8_string, v8str};
 pub(crate) use moli_webapi::events::subclasses::construct_original_page_transition_event;
 use moli_webapi_declare::WebApiObject;
@@ -232,7 +233,10 @@ pub(super) use base::{
 };
 pub(in crate::context_bootstrap) use init::{EventInit, parse_event_dictionary};
 pub(super) use kind::EventSubclassKind;
-pub(crate) use methods::{EventHandlerType, apply_event_handler_return_value};
+pub(crate) use methods::{
+    EventHandlerType, apply_before_unload_event_handler_return_value,
+    apply_event_handler_return_value,
+};
 pub(super) use methods::{
     event_cancel_bubble_getter_function, event_cancel_bubble_setter_function,
     event_composed_path_callback, event_prevent_default_callback,
@@ -333,3 +337,47 @@ mod ui_properties;
 pub(in crate::context_bootstrap) use ui_properties::ui_event_which_getter_function;
 
 pub(crate) use self::base::event_trusted;
+
+pub(crate) fn construct_original_before_unload_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let event = new_uninitialized_before_unload_event(scope)?;
+    let backing = event_backing(scope, event);
+    base::initialize_event_object(scope, backing, "beforeunload", false, true);
+    Some(event)
+}
+
+fn before_unload_event_return_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::String>> {
+    event_private_value(scope, event, BEFORE_UNLOAD_EVENT_RETURN_VALUE_SLOT)
+        .and_then(|value| v8::Local::<v8::String>::try_from(value).ok())
+}
+
+pub(crate) fn event_is_before_unload_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event: v8::Local<'s, v8::Object>,
+) -> bool {
+    before_unload_event_return_value(scope, event).is_some()
+}
+
+pub(crate) fn set_before_unload_event_return_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event: v8::Local<'s, v8::Object>,
+    value: v8::Local<'s, v8::String>,
+) {
+    set_event_private_value(
+        scope,
+        event,
+        BEFORE_UNLOAD_EVENT_RETURN_VALUE_SLOT,
+        value.into(),
+    );
+}
+
+pub(crate) fn before_unload_event_return_value_is_empty<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event: v8::Local<'s, v8::Object>,
+) -> bool {
+    before_unload_event_return_value(scope, event).is_some_and(|value| value.length() == 0)
+}

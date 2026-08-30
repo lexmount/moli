@@ -70,7 +70,7 @@ const CLIPBOARD_EVENT_CLIPBOARD_DATA_SLOT: &str = "__moliClipboardEventClipboard
 const CLIPBOARD_CHANGE_EVENT_TYPES_SLOT: &str = "__moliClipboardChangeEventTypes";
 const CLIPBOARD_CHANGE_EVENT_CHANGE_ID_SLOT: &str = "__moliClipboardChangeEventChangeId";
 pub const EVENT_SUBCLASS_KIND_SLOT: &str = "__moliEventSubclassKind";
-const BEFORE_UNLOAD_EVENT_RETURN_VALUE_SLOT: &str = "__moliBeforeUnloadEventReturnValue";
+pub const BEFORE_UNLOAD_EVENT_RETURN_VALUE_SLOT: &str = "__moliBeforeUnloadEventReturnValue";
 pub const FONT_FACE_SET_LOAD_EVENT_FONTFACES_SLOT: &str = "__moliFontFaceSetLoadEventFontfaces";
 
 enum SubclassInit<'s> {
