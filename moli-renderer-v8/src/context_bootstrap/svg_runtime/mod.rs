@@ -19,6 +19,8 @@ mod callbacks;
 mod rect;
 
 const SVG_GRAPHICS_TRANSFORM_SLOT: &str = "__moliSvgGraphicsTransform";
+const SVG_GRAPHICS_REQUIRED_EXTENSIONS_SLOT: &str = "__moliSvgGraphicsRequiredExtensions";
+const SVG_GRAPHICS_SYSTEM_LANGUAGE_SLOT: &str = "__moliSvgGraphicsSystemLanguage";
 const SVG_PATTERN_TRANSFORM_SLOT: &str = "__moliSvgPatternTransform";
 const SVG_GRADIENT_TRANSFORM_SLOT: &str = "__moliSvgGradientTransform";
 const SVG_GEOMETRY_PATH_LENGTH_SLOT: &str = "__moliSvgGeometryPathLength";
@@ -52,6 +54,12 @@ const SVG_ANIMATED_NUMBER_ANIM_VAL_SLOT: &str = "__moliSvgAnimatedNumberAnimVal"
 const SVG_ANIMATED_NUMBER_LIST_BASE_VAL_SLOT: &str = "__moliSvgAnimatedNumberListBaseVal";
 const SVG_ANIMATED_NUMBER_LIST_ANIM_VAL_SLOT: &str = "__moliSvgAnimatedNumberListAnimVal";
 const SVG_NUMBER_LIST_ITEMS_SLOT: &str = "__moliSvgNumberListItems";
+const SVG_STRING_LIST_ITEMS_SLOT: &str = "__moliSvgStringListItems";
+const SVG_STRING_LIST_OWNER_ELEMENT_SLOT: &str = "__moliSvgStringListOwnerElement";
+const SVG_STRING_LIST_OWNER_ATTRIBUTE_SLOT: &str = "__moliSvgStringListOwnerAttribute";
+const SVG_STRING_LIST_SYNCED_ATTRIBUTE_VALUE_SLOT: &str = "__moliSvgStringListSyncedAttributeValue";
+const SVG_STRING_LIST_SYNCED_ATTRIBUTE_PRESENT_SLOT: &str =
+    "__moliSvgStringListSyncedAttributePresent";
 const SVG_VALUE_LIST_OWNER_ELEMENT_SLOT: &str = "__moliSvgValueListOwnerElement";
 const SVG_VALUE_LIST_OWNER_ATTRIBUTE_SLOT: &str = "__moliSvgValueListOwnerAttribute";
 const SVG_VALUE_LIST_ITEM_OWNER_LIST_SLOT: &str = "__moliSvgValueListItemOwnerList";
@@ -95,6 +103,11 @@ const SVG_TEXT_POSITIONING_Y_SLOT: &str = "__moliSvgTextPositioningY";
 const SVG_TEXT_POSITIONING_DX_SLOT: &str = "__moliSvgTextPositioningDx";
 const SVG_TEXT_POSITIONING_DY_SLOT: &str = "__moliSvgTextPositioningDy";
 const SVG_TEXT_POSITIONING_ROTATE_SLOT: &str = "__moliSvgTextPositioningRotate";
+
+const SVG_TEST_STRING_LIST_ATTRIBUTES: &[(&str, &str)] = &[
+    ("requiredExtensions", SVG_GRAPHICS_REQUIRED_EXTENSIONS_SLOT),
+    ("systemLanguage", SVG_GRAPHICS_SYSTEM_LANGUAGE_SLOT),
+];
 
 #[derive(Clone, Copy)]
 enum SvgListKind {
@@ -382,6 +395,7 @@ pub(in crate::context_bootstrap) fn install_svg_template_bindings<'s>(
         }
         "SVGAnimatedNumber" => bindings::install_svg_animated_number_bindings(scope, template),
         "SVGNumberList" => bindings::install_svg_number_list_bindings(scope, template),
+        "SVGStringList" => bindings::install_svg_string_list_bindings(scope, template),
         "SVGAnimatedNumberList" => {
             bindings::install_svg_animated_number_list_bindings(scope, template)
         }

@@ -1803,6 +1803,194 @@ fn svg_animated_boolean_reflects_preserve_alpha() {
 }
 
 #[test]
+fn svg_string_lists_reflect_conditional_processing_attributes() {
+    let mut vm = new_parsed_test_vm(
+        "https://svg-string-list.test/",
+        "<!doctype html><html><body></body></html>",
+    );
+
+    let result = vm
+        .eval(
+            r##"
+            (() => {
+              const assert = (condition, message) => {
+                if (!condition) throw new Error(message);
+              };
+              const ns = "http://www.w3.org/2000/svg";
+              const text = document.createElementNS(ns, "text");
+
+              assert(typeof SVGStringList === "function", "SVGStringList constructor");
+              let illegalConstructor = false;
+              try {
+                new SVGStringList();
+              } catch (error) {
+                illegalConstructor = error instanceof TypeError;
+              }
+              assert(illegalConstructor, "SVGStringList illegal constructor");
+
+              for (const name of ["requiredExtensions", "systemLanguage"]) {
+                const descriptor = Object.getOwnPropertyDescriptor(
+                  SVGGraphicsElement.prototype,
+                  name,
+                );
+                assert(typeof descriptor.get === "function" && descriptor.set === undefined,
+                  `${name} readonly descriptor`);
+                assert(descriptor.enumerable && descriptor.configurable, `${name} flags`);
+              }
+              for (const name of ["length", "numberOfItems"]) {
+                const descriptor = Object.getOwnPropertyDescriptor(SVGStringList.prototype, name);
+                assert(typeof descriptor.get === "function" && descriptor.set === undefined,
+                  `${name} descriptor`);
+                assert(descriptor.enumerable && descriptor.configurable, `${name} flags`);
+              }
+              const methodLengths = {
+                clear: 0,
+                initialize: 1,
+                getItem: 1,
+                insertItemBefore: 2,
+                replaceItem: 2,
+                removeItem: 1,
+                appendItem: 1,
+              };
+              for (const [name, length] of Object.entries(methodLengths)) {
+                const descriptor = Object.getOwnPropertyDescriptor(SVGStringList.prototype, name);
+                assert(typeof descriptor.value === "function", `${name} method`);
+                assert(descriptor.value.length === length, `${name} arity`);
+                assert(descriptor.enumerable && descriptor.configurable && descriptor.writable,
+                  `${name} flags`);
+              }
+
+              const languages = text.systemLanguage;
+              assert(languages instanceof SVGStringList, "systemLanguage interface");
+              assert(Object.prototype.toString.call(languages) === "[object SVGStringList]",
+                "SVGStringList tag");
+              assert(text.systemLanguage === languages, "systemLanguage SameObject");
+              assert(languages.length === 0 && languages.numberOfItems === 0,
+                "absent attribute empty list");
+              assert(!text.hasAttribute("systemLanguage"), "getter does not create attribute");
+
+              const parsingCases = [
+                ["en,fr,de", ["en", "fr", "de"]],
+                ["en, fr, de", ["en", "fr", "de"]],
+                ["en ,fr ,de", ["en", "fr", "de"]],
+                ["en , fr , de", ["en", "fr", "de"]],
+                ["  en, fr  ", ["en", "fr"]],
+                [" \t\nen, fr\t\n ", ["en", "fr"]],
+                ["en", ["en"]],
+                ["en-US, zh-Hans, pt-BR", ["en-US", "zh-Hans", "pt-BR"]],
+                ["en,,fr", ["en", "", "fr"]],
+                ["", [""]],
+                [",", ["", ""]],
+                ["123, 456", ["123", "456"]],
+                ["not-a-lang, ???, @#$", ["not-a-lang", "???", "@#$"]],
+              ];
+              for (const [raw, expected] of parsingCases) {
+                text.setAttribute("systemLanguage", raw);
+                assert(text.systemLanguage === languages, `SameObject after ${raw}`);
+                assert(languages.length === expected.length, `length for ${raw}`);
+                assert(languages.numberOfItems === expected.length,
+                  `numberOfItems for ${raw}`);
+                assert(Object.keys(languages).join() === expected.map((_, index) => index).join(),
+                  `supported indices for ${raw}`);
+                for (let index = 0; index < expected.length; index++) {
+                  assert(languages.getItem(index) === expected[index],
+                    `getItem ${index} for ${raw}`);
+                  assert(languages[index] === expected[index], `index ${index} for ${raw}`);
+                }
+              }
+
+              text.removeAttribute("systemLanguage");
+              assert(languages.length === 0, "removed attribute empty list");
+              const extensions = text.requiredExtensions;
+              assert(text.requiredExtensions === extensions, "requiredExtensions SameObject");
+              text.setAttribute("requiredExtensions", "  one\t two\nthree  ");
+              assert(extensions.length === 3 && extensions[0] === "one" &&
+                extensions[1] === "two" && extensions[2] === "three",
+                "requiredExtensions space-separated parsing");
+
+              assert(languages.initialize("en") === "en", "initialize return");
+              assert(text.getAttribute("systemLanguage") === "en", "initialize reflection");
+              assert(languages.appendItem("fr") === "fr", "append return");
+              assert(text.getAttribute("systemLanguage") === "en,fr", "append reflection");
+              assert(languages.insertItemBefore("de", 1) === "de", "insert return");
+              assert(text.getAttribute("systemLanguage") === "en,de,fr", "insert reflection");
+              assert(languages.insertItemBefore("it", 99) === "it", "clamped insert return");
+              assert(text.getAttribute("systemLanguage") === "en,de,fr,it",
+                "clamped insert reflection");
+              assert(languages.replaceItem("zh", 1) === "zh", "replace return");
+              assert(text.getAttribute("systemLanguage") === "en,zh,fr,it",
+                "replace reflection");
+              languages[2] = "pt-BR";
+              assert(text.getAttribute("systemLanguage") === "en,zh,pt-BR,it",
+                "indexed setter reflection");
+              Object.defineProperty(languages, "0", {value: "es"});
+              assert(text.getAttribute("systemLanguage") === "es,zh,pt-BR,it",
+                "indexed definer reflection");
+              const indexDescriptor = Object.getOwnPropertyDescriptor(languages, "0");
+              assert(indexDescriptor.value === "es" && indexDescriptor.writable &&
+                indexDescriptor.enumerable && indexDescriptor.configurable,
+                "indexed property descriptor");
+              assert(delete languages[0] === false, "supported index cannot be deleted");
+              assert(languages.removeItem(1) === "zh", "remove return");
+              assert(text.getAttribute("systemLanguage") === "es,pt-BR,it",
+                "remove reflection");
+              languages.clear();
+              assert(text.getAttribute("systemLanguage") === "" && languages.length === 0,
+                "clear reflection");
+
+              extensions.initialize("alpha");
+              extensions.appendItem("beta");
+              assert(text.getAttribute("requiredExtensions") === "alpha beta",
+                "requiredExtensions space serialization");
+              assert(extensions.appendItem(null) === "null", "DOMString conversion");
+              assert(text.getAttribute("requiredExtensions") === "alpha beta null",
+                "converted string reflection");
+
+              text.setAttribute("systemLanguage", "en,fr");
+              for (const operation of [
+                () => languages.getItem(9),
+                () => languages.replaceItem("x", 9),
+                () => languages.removeItem(9),
+                () => { languages[9] = "x"; },
+              ]) {
+                let indexError = false;
+                try {
+                  operation();
+                } catch (error) {
+                  indexError = error instanceof DOMException && error.name === "IndexSizeError";
+                }
+                assert(indexError, "out-of-range operation");
+              }
+
+              let incompatibleListReceiver = false;
+              try {
+                SVGStringList.prototype.getItem.call({}, 0);
+              } catch (error) {
+                incompatibleListReceiver = error instanceof TypeError;
+              }
+              assert(incompatibleListReceiver, "SVGStringList receiver brand");
+
+              const systemLanguageGetter = Object.getOwnPropertyDescriptor(
+                SVGGraphicsElement.prototype,
+                "systemLanguage",
+              ).get;
+              let incompatibleElementReceiver = false;
+              try {
+                systemLanguageGetter.call(document.createElementNS(ns, "filter"));
+              } catch (error) {
+                incompatibleElementReceiver = error instanceof TypeError;
+              }
+              assert(incompatibleElementReceiver, "SVGGraphicsElement receiver brand");
+              return "ok";
+            })()
+            "##,
+        )
+        .expect("SVG string list probe should evaluate");
+
+    assert_eq!(result, "ok");
+}
+
+#[test]
 fn svg_geometry_queries_use_computed_paths_live_tree_and_kurbo_bounds() {
     let mut vm = new_parsed_test_vm(
         "https://svg-geometry-wiring.test/",
