@@ -203,7 +203,8 @@ impl PageScriptHost {
 
         let url = self.resolve_child_frame_owner_attribute_url(handle, raw_url);
         if !kind.always_hosts_document()
-            && (self.embedded_content_is_inside_media_element(handle)
+            && (url.scheme() == "javascript"
+                || self.embedded_content_is_inside_media_element(handle)
                 || !self.embedded_content_selects_nested_document(handle, raw_url, &url))
         {
             return None;
