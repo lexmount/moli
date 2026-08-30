@@ -1751,6 +1751,78 @@ document.body.innerHTML = `<div id=stage>
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn absolute_content_based_block_constraints_match_chromium_across_formatting_contexts() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/absolute-content-block-sizing.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0;padding:0}
+.stage{position:relative;width:300px;height:200px}
+#block{display:block}
+#flex{display:flex}
+#grid{display:grid}
+.probe{position:absolute;width:100px}
+.content{width:40px;height:80px}
+.preferred{height:max-content}
+.minimum{height:0;min-height:max-content}
+.maximum{height:160px;max-height:min-content}
+.stretch{top:10px;bottom:10px;max-height:max-content}
+.ratio{aspect-ratio:2}
+</style>`;
+const cases = `
+  <div id=preferred class="probe preferred"><div class=content></div></div>
+  <div id=minimum class="probe minimum"><div class=content></div></div>
+  <div id=maximum class="probe maximum"><div class=content></div></div>
+  <div id=stretch class="probe stretch"><div class=content></div></div>
+  <div id=ratio class="probe ratio"><div class=content></div></div>`;
+document.body.innerHTML = ['block','flex','grid']
+  .map(display => `<div id=${display} class=stage>${cases.replaceAll('id=', `id=${display}-`)}</div>`)
+  .join('');
+'installed'
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(300, 600, 1.0))?
+            .expect("absolute block sizing fixture should have a document element");
+
+        let ids = ["block", "flex", "grid"].into_iter().flat_map(|display| {
+            ["preferred", "minimum", "maximum", "stretch", "ratio"]
+                .map(|case| format!("{display}-{case}"))
+        });
+        let ids = ids.collect::<Vec<_>>();
+        let geometry = page_vm.vm_mut().eval(&format!(
+            "JSON.stringify(Object.fromEntries({ids:?}.map(id=>{{const r=document.getElementById(id).getBoundingClientRect();return [id,[r.width,r.height]]}})))"
+        ))?;
+        let geometry: serde_json::Value = serde_json::from_str(&geometry)?;
+        for id in ids {
+            let actual = geometry[&id]
+                .as_array()
+                .unwrap_or_else(|| panic!("missing geometry for {id}: {geometry}"));
+            for (axis, expected) in [("width", 100.0), ("height", 80.0)] {
+                let index = usize::from(axis == "height");
+                let actual = actual[index].as_f64().expect("numeric geometry") as f32;
+                assert!(
+                    (actual - expected).abs() <= 0.05,
+                    "{id} {axis}: expected {expected}, got {actual}; geometry={geometry}"
+                );
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("absolute content-based block sizing fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn floated_auto_width_inline_formatting_contexts_shrink_to_fit() {
     run_page_vm_async_test(async move {
         let loader =
