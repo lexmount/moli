@@ -2,7 +2,10 @@ use super::storage::{form_data_entries, form_data_is_object, push_form_data_entr
 use super::*;
 use crate::custom_elements::is_form_associated_custom_element_handle;
 use crate::dom::{
-    forms::{InputType, OptionDisabledAncestorStep, apply_textarea_wrapping_transformation, option_disabled_ancestor_step},
+    forms::{
+        InputType, OptionDisabledAncestorStep, apply_textarea_wrapping_transformation,
+        option_disabled_ancestor_step,
+    },
     native::Node,
 };
 use crate::native_bridge::{
