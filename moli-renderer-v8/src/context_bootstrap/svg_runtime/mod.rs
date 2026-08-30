@@ -38,6 +38,18 @@ const SVG_ANIMATED_BOOLEAN_INITIAL_VALUE_SLOT: &str = "__moliSvgAnimatedBooleanI
 const SVG_FE_CONVOLVE_MATRIX_PRESERVE_ALPHA_SLOT: &str = "__moliSvgFeConvolveMatrixPreserveAlpha";
 const SVG_ANIMATED_LENGTH_BASE_VAL_SLOT: &str = "__moliSvgAnimatedLengthBaseVal";
 const SVG_ANIMATED_LENGTH_ANIM_VAL_SLOT: &str = "__moliSvgAnimatedLengthAnimVal";
+const SVG_MARKER_ORIENT_ANGLE_SLOT: &str = "__moliSvgMarkerOrientAngle";
+const SVG_MARKER_UNITS_SLOT: &str = "__moliSvgMarkerUnits";
+const SVG_MARKER_ORIENT_TYPE_SLOT: &str = "__moliSvgMarkerOrientType";
+const SVG_ANIMATED_ANGLE_BASE_VAL_SLOT: &str = "__moliSvgAnimatedAngleBaseVal";
+const SVG_ANIMATED_ANGLE_ANIM_VAL_SLOT: &str = "__moliSvgAnimatedAngleAnimVal";
+const SVG_ANGLE_OWNER_ELEMENT_SLOT: &str = "__moliSvgAngleOwnerElement";
+const SVG_ANGLE_OWNER_ATTRIBUTE_SLOT: &str = "__moliSvgAngleOwnerAttribute";
+const SVG_ANGLE_UNIT_TYPE_SLOT: &str = "__moliSvgAngleUnitType";
+const SVG_ANGLE_VALUE_SLOT: &str = "__moliSvgAngleValue";
+const SVG_ANGLE_VALUE_IN_SPECIFIED_UNITS_SLOT: &str = "__moliSvgAngleValueInSpecifiedUnits";
+const SVG_ANGLE_VALUE_AS_STRING_SLOT: &str = "__moliSvgAngleValueAsString";
+const SVG_ANGLE_READ_ONLY_SLOT: &str = "__moliSvgAngleReadOnly";
 const SVG_ANIMATED_LENGTH_LIST_BASE_VAL_SLOT: &str = "__moliSvgAnimatedLengthListBaseVal";
 const SVG_ANIMATED_LENGTH_LIST_ANIM_VAL_SLOT: &str = "__moliSvgAnimatedLengthListAnimVal";
 const SVG_LENGTH_LIST_ITEMS_SLOT: &str = "__moliSvgLengthListItems";
@@ -120,6 +132,8 @@ enum SvgAnimatedEnumerationKind {
     UnitType,
     SpreadMethod,
     LengthAdjust,
+    MarkerUnits,
+    MarkerOrient,
 }
 
 #[derive(Clone, Copy)]
@@ -248,6 +262,22 @@ struct SvgLengthConvertToSpecifiedUnitsArgs {
 }
 
 #[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "SVG angle newValueSpecifiedUnits")]
+struct SvgAngleNewValueSpecifiedUnitsArgs {
+    #[webidl(required, converter = "unsigned_short")]
+    unit_type: u16,
+    #[webidl(required, converter = "double")]
+    value: f64,
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "SVG angle convertToSpecifiedUnits")]
+struct SvgAngleConvertToSpecifiedUnitsArgs {
+    #[webidl(required, converter = "unsigned_short")]
+    unit_type: u16,
+}
+
+#[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "SVGGeometryElement.getPointAtLength")]
 struct SvgGeometryPointAtLengthArgs {
     #[webidl(required, converter = "double")]
@@ -281,6 +311,21 @@ const SVG_LENGTH_TYPE_MM: u32 = 7;
 const SVG_LENGTH_TYPE_IN: u32 = 8;
 const SVG_LENGTH_TYPE_PT: u32 = 9;
 const SVG_LENGTH_TYPE_PC: u32 = 10;
+
+const SVG_ANGLE_TYPE_UNKNOWN: u32 = 0;
+const SVG_ANGLE_TYPE_UNSPECIFIED: u32 = 1;
+const SVG_ANGLE_TYPE_DEG: u32 = 2;
+const SVG_ANGLE_TYPE_RAD: u32 = 3;
+const SVG_ANGLE_TYPE_GRAD: u32 = 4;
+
+const SVG_MARKER_UNITS_UNKNOWN: u32 = 0;
+const SVG_MARKER_UNITS_USER_SPACE_ON_USE: u32 = 1;
+const SVG_MARKER_UNITS_STROKE_WIDTH: u32 = 2;
+
+const SVG_MARKER_ORIENT_UNKNOWN: u32 = 0;
+const SVG_MARKER_ORIENT_AUTO: u32 = 1;
+const SVG_MARKER_ORIENT_ANGLE: u32 = 2;
+const SVG_MARKER_ORIENT_AUTO_START_REVERSE: u32 = 3;
 
 const SVG_TRANSFORM_TYPE_UNKNOWN: u32 = 0;
 const SVG_TRANSFORM_TYPE_MATRIX: u32 = 1;
@@ -374,6 +419,20 @@ const SVG_ANIMATED_ENUMERATION_PROPERTIES: &[SvgAnimatedEnumerationProperty] = &
         initial_value: SVG_LENGTH_ADJUST_SPACING,
         kind: SvgAnimatedEnumerationKind::LengthAdjust,
     },
+    SvgAnimatedEnumerationProperty {
+        index: 10,
+        attribute: "markerUnits",
+        cache_slot: SVG_MARKER_UNITS_SLOT,
+        initial_value: SVG_MARKER_UNITS_STROKE_WIDTH,
+        kind: SvgAnimatedEnumerationKind::MarkerUnits,
+    },
+    SvgAnimatedEnumerationProperty {
+        index: 11,
+        attribute: "orient",
+        cache_slot: SVG_MARKER_ORIENT_TYPE_SLOT,
+        initial_value: SVG_MARKER_ORIENT_ANGLE,
+        kind: SvgAnimatedEnumerationKind::MarkerOrient,
+    },
 ];
 
 pub(in crate::context_bootstrap) fn install_svg_template_bindings<'s>(
@@ -384,11 +443,13 @@ pub(in crate::context_bootstrap) fn install_svg_template_bindings<'s>(
     bindings::install_svg_element_accessor_bindings(scope, template, name);
     match name {
         "SVGLength" => bindings::install_svg_length_bindings(scope, template),
+        "SVGAngle" => bindings::install_svg_angle_bindings(scope, template),
         "SVGNumber" => bindings::install_svg_number_bindings(scope, template),
         "SVGRect" => rect::install_bindings(scope, template),
         "SVGAnimatedString" => bindings::install_svg_animated_string_bindings(scope, template),
         "SVGAnimatedBoolean" => bindings::install_svg_animated_boolean_bindings(scope, template),
         "SVGAnimatedLength" => bindings::install_svg_animated_length_bindings(scope, template),
+        "SVGAnimatedAngle" => bindings::install_svg_animated_angle_bindings(scope, template),
         "SVGLengthList" => bindings::install_svg_length_list_bindings(scope, template),
         "SVGAnimatedLengthList" => {
             bindings::install_svg_animated_length_list_bindings(scope, template)
@@ -415,6 +476,7 @@ pub(in crate::context_bootstrap) fn install_svg_template_bindings<'s>(
             bindings::install_svg_text_content_element_bindings(scope, template)
         }
         "SVGGradientElement" => bindings::install_svg_gradient_element_bindings(scope, template),
+        "SVGMarkerElement" => bindings::install_svg_marker_element_bindings(scope, template),
         "SVGSVGElement" => bindings::install_svg_svg_element_bindings(scope, template),
         _ => {}
     }
