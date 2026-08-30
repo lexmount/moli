@@ -2,11 +2,18 @@ use super::{PageScriptHost, WindowExecutionContextIdentity, WindowExecutionConte
 use moli_webidl_callback::{PreparedWebIdlCallbackInterface, WebIdlCallbackInterface};
 use std::collections::{HashMap, HashSet};
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EventCallbackKind {
+    Listener,
+    Handler,
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct EventCallbackId(u64);
 
 struct EventCallbackRecord {
     callback: WebIdlCallbackInterface,
+    kind: EventCallbackKind,
     resource_initiator: Option<crate::resource_initiator::CallbackInitiator>,
     relevant_identity: Option<WindowExecutionContextIdentity>,
     #[cfg(test)]
@@ -15,8 +22,58 @@ struct EventCallbackRecord {
 
 pub(crate) struct PreparedEventCallback {
     callback: PreparedWebIdlCallbackInterface,
+    kind: EventCallbackKind,
     resource_initiator: Option<crate::resource_initiator::CallbackInitiator>,
     relevant_identity: Option<WindowExecutionContextIdentity>,
+}
+
+pub(crate) struct WindowErrorReportingScope {
+    host_ptr: *mut PageScriptHost,
+    owner: WindowExecutionContextOwner,
+}
+
+pub(crate) struct ExplicitEventDispatchScope {
+    host_ptr: *mut PageScriptHost,
+}
+
+pub(crate) struct EventCallbackInvocationScope {
+    host_ptr: *mut PageScriptHost,
+    outermost: bool,
+}
+
+impl EventCallbackInvocationScope {
+    pub(crate) fn is_outermost(&self) -> bool {
+        self.outermost
+    }
+}
+
+impl Drop for EventCallbackInvocationScope {
+    fn drop(&mut self) {
+        let host = unsafe { &mut *self.host_ptr };
+        host.event_callback_invocation_depth = host
+            .event_callback_invocation_depth
+            .checked_sub(1)
+            .expect("event callback invocation scope must be active");
+    }
+}
+
+impl Drop for ExplicitEventDispatchScope {
+    fn drop(&mut self) {
+        let host = unsafe { &mut *self.host_ptr };
+        host.explicit_event_dispatch_depth = host
+            .explicit_event_dispatch_depth
+            .checked_sub(1)
+            .expect("explicit EventTarget dispatch scope must be active");
+    }
+}
+
+impl Drop for WindowErrorReportingScope {
+    fn drop(&mut self) {
+        let removed = unsafe { &mut *self.host_ptr }
+            .active_window_error_report_owners
+            .remove(&self.owner);
+        debug_assert!(removed, "Window error reporting scope must be active");
+    }
 }
 
 impl PreparedEventCallback {
@@ -88,6 +145,36 @@ impl EventCallbackRegistry {
 }
 
 impl PageScriptHost {
+    pub(crate) fn enter_event_callback_invocation_scope(&mut self) -> EventCallbackInvocationScope {
+        let outermost = self.event_callback_invocation_depth == 0;
+        self.event_callback_invocation_depth += 1;
+        EventCallbackInvocationScope {
+            host_ptr: self,
+            outermost,
+        }
+    }
+
+    pub(crate) fn enter_explicit_event_dispatch_scope(&mut self) -> ExplicitEventDispatchScope {
+        self.explicit_event_dispatch_depth += 1;
+        ExplicitEventDispatchScope { host_ptr: self }
+    }
+
+    pub(crate) fn explicit_event_dispatch_is_active(&self) -> bool {
+        self.explicit_event_dispatch_depth != 0
+    }
+
+    pub(crate) fn enter_window_error_reporting_scope(
+        &mut self,
+        owner: WindowExecutionContextOwner,
+    ) -> Option<WindowErrorReportingScope> {
+        self.active_window_error_report_owners
+            .insert(owner)
+            .then(|| WindowErrorReportingScope {
+                host_ptr: self,
+                owner,
+            })
+    }
+
     pub(crate) fn register_target_event_listener<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
@@ -203,12 +290,12 @@ impl PageScriptHost {
         scope: &mut v8::PinScope<'s, '_>,
         target: crate::document_runtime::EventTargetHandle,
         event_type: &str,
-        handler: Option<v8::Local<'s, v8::Function>>,
+        handler: Option<v8::Local<'s, v8::Object>>,
     ) {
         let resource_initiator =
             handler.map(|_| crate::resource_initiator::CallbackInitiator::capture(scope));
         let relevant_context = handler
-            .and_then(|handler| v8::Local::<v8::Object>::from(handler).get_creation_context(scope))
+            .and_then(|handler| handler.get_creation_context(scope))
             .unwrap_or_else(|| scope.get_current_context());
         let incumbent_context = scope
             .get_incumbent_context()
@@ -232,15 +319,19 @@ impl PageScriptHost {
         handler: Option<v8::Local<'s, v8::Function>>,
         target_context: v8::Local<'s, v8::Context>,
     ) {
-        self.set_registered_event_handler_property_with_contexts(
-            scope,
-            target,
-            event_type,
-            handler,
-            target_context,
-            target_context,
-            None,
-        );
+        let callback_id = handler.map(|handler| {
+            self.register_event_handler_callback(
+                scope,
+                handler.into(),
+                target_context,
+                target_context,
+            )
+        });
+        if let Some(previous) =
+            self.set_compiled_event_handler_property(target, event_type, callback_id)
+        {
+            self.release_event_callback(previous);
+        }
     }
 
     fn set_registered_event_handler_property_with_contexts<'s>(
@@ -248,13 +339,18 @@ impl PageScriptHost {
         scope: &mut v8::PinScope<'s, '_>,
         target: crate::document_runtime::EventTargetHandle,
         event_type: &str,
-        handler: Option<v8::Local<'s, v8::Function>>,
+        handler: Option<v8::Local<'s, v8::Object>>,
         relevant_context: v8::Local<'s, v8::Context>,
         incumbent_context: v8::Local<'s, v8::Context>,
         resource_initiator: Option<crate::resource_initiator::CallbackInitiator>,
     ) {
         let callback_id = handler.map(|handler| {
-            self.register_event_callback(scope, handler.into(), relevant_context, incumbent_context)
+            self.register_event_handler_callback(
+                scope,
+                handler,
+                relevant_context,
+                incumbent_context,
+            )
         });
         if let Some(id) = callback_id
             && let Some(record) = self.event_callbacks.records.get_mut(&id)
@@ -301,6 +397,27 @@ impl PageScriptHost {
         scope: &mut v8::PinScope<'_, '_>,
         callback: WebIdlCallbackInterface,
     ) -> EventCallbackId {
+        self.register_event_callback_with_kind(scope, callback, EventCallbackKind::Listener)
+    }
+
+    pub(crate) fn register_event_handler_callback<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        callback: v8::Local<'s, v8::Object>,
+        relevant_context: v8::Local<'s, v8::Context>,
+        incumbent_context: v8::Local<'s, v8::Context>,
+    ) -> EventCallbackId {
+        let callback =
+            WebIdlCallbackInterface::new(scope, callback, relevant_context, incumbent_context);
+        self.register_event_callback_with_kind(scope, callback, EventCallbackKind::Handler)
+    }
+
+    fn register_event_callback_with_kind(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        callback: WebIdlCallbackInterface,
+        kind: EventCallbackKind,
+    ) -> EventCallbackId {
         let relevant_context = callback.relevant_context(scope);
         let relevant_identity =
             self.window_execution_context_identity_for_v8_context(scope, relevant_context);
@@ -314,6 +431,7 @@ impl PageScriptHost {
             id,
             EventCallbackRecord {
                 callback,
+                kind,
                 resource_initiator: None,
                 relevant_identity,
                 #[cfg(test)]
@@ -419,6 +537,7 @@ impl PageScriptHost {
         }
         Some(PreparedEventCallback {
             callback: record.callback.prepare(scope),
+            kind: record.kind,
             resource_initiator: record.resource_initiator.clone(),
             relevant_identity: record.relevant_identity,
         })

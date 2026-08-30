@@ -428,28 +428,29 @@ fn invoke_prepared_event_callback_with_receiver<'s>(
     } else {
         invocation
     };
-    match CallbackInvoker::invoke(
+    CallbackInvoker::invoke_event_and_then(
         scope,
         "event listener",
         "host event listener threw",
         crate::exception_reporting::CallbackExceptionLogLevel::Debug,
         callback_name,
         invocation,
-    ) {
-        CallbackInvocationOutcome::Returned(value) => Some(value),
-        CallbackInvocationOutcome::Threw(report) => {
-            report_event_callback_exception(
-                scope,
-                host_ptr,
-                event_type,
-                relevant_identity,
-                None,
-                &report,
-            );
-            None
-        }
-        CallbackInvocationOutcome::Retired => None,
-    }
+        |scope, outcome| match outcome {
+            CallbackInvocationOutcome::Returned(value) => Some(value),
+            CallbackInvocationOutcome::Threw(report) => {
+                report_event_callback_exception(
+                    scope,
+                    host_ptr,
+                    event_type,
+                    relevant_identity,
+                    None,
+                    &report,
+                );
+                None
+            }
+            CallbackInvocationOutcome::Retired => None,
+        },
+    )
 }
 
 fn invoke_event_handler_property<'s>(
@@ -583,10 +584,6 @@ pub(crate) fn report_event_callback_exception<'s>(
     child_handle: Option<DomHandle>,
     report: &V8ExceptionReport,
 ) {
-    if event_type == "error" {
-        return;
-    }
-
     let child_handle = child_handle.or_else(|| {
         relevant_identity.and_then(|identity| match identity.dispatch_scope() {
             crate::native_bridge::OwnerDispatchScope::Child(handle) => Some(handle),
@@ -594,12 +591,38 @@ pub(crate) fn report_event_callback_exception<'s>(
             | crate::native_bridge::OwnerDispatchScope::LightweightPopup(_) => None,
         })
     });
-    let child_event = child_handle.and_then(|handle| {
-        let host = unsafe { &mut *host_ptr };
-        let window = host.child_browsing_context_window_wrapper(scope, handle)?;
-        event_listener_error_event_from_report(scope, window, report).map(|event| (handle, event))
-    });
-    dispatch_window_callback_exception(scope, host_ptr, child_event, report);
+    if let Some(handle) = child_handle {
+        let reporting_owner = relevant_identity
+            .map(|identity| identity.owner())
+            .or_else(|| {
+                unsafe { &*host_ptr }.current_window_execution_context_owner(
+                    crate::native_bridge::OwnerDispatchScope::Child(handle),
+                )
+            });
+        let _error_reporting_scope = if let Some(owner) = reporting_owner {
+            let Some(reporting_scope) =
+                (unsafe { &mut *host_ptr }).enter_window_error_reporting_scope(owner)
+            else {
+                return;
+            };
+            Some(reporting_scope)
+        } else if event_type == "error" {
+            return;
+        } else {
+            None
+        };
+        let event = {
+            let host = unsafe { &mut *host_ptr };
+            host.child_browsing_context_window_wrapper(scope, handle)
+                .and_then(|window| event_listener_error_event_from_report(scope, window, report))
+        };
+        if let Some(event) = event {
+            dispatch_window_callback_exception(scope, host_ptr, Some((handle, event)), report);
+            return;
+        }
+    }
+
+    dispatch_window_callback_exception(scope, host_ptr, None, report);
 }
 
 fn callback_error_window_handle<'s>(
