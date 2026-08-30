@@ -1,3 +1,4 @@
+use super::super::ChildBrowsingContextNavigationRequest;
 use super::*;
 use crate::dom::native::Node;
 
@@ -212,7 +213,19 @@ impl JsContextHost {
         {
             return None;
         }
-        let bootstrap = ChildBrowsingContextBootstrap::Url(url);
+        let bootstrap = if !kind.always_hosts_document() && url.scheme() == "javascript" {
+            // embed/object setup fetches its attribute resource. Preserve that
+            // distinction from iframe/frame navigation so Fetch rejects the
+            // javascript scheme instead of executing it in the child realm.
+            ChildBrowsingContextBootstrap::Request(ChildBrowsingContextNavigationRequest {
+                url,
+                method: "GET".to_owned(),
+                body: None,
+                request_headers: Vec::new(),
+            })
+        } else {
+            ChildBrowsingContextBootstrap::Url(url)
+        };
         if kind == ChildFrameOwnerElementKind::Object
             && self.object_fallback_bootstraps.get(&handle) == Some(&bootstrap)
         {

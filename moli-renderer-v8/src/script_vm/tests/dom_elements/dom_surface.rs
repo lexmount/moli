@@ -10221,6 +10221,78 @@ fn document_open_with_three_arguments_uses_associated_window() {
 
     assert_eq!(result, "true|true|true|InvalidAccessError:15");
 }
+
+#[tokio::test]
+async fn embed_and_object_javascript_attributes_use_resource_fetch_not_script_navigation() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://embedded-javascript-attribute.test/",
+        &loader,
+    );
+
+    vm.eval(
+        r#"
+(() => {
+  globalThis.__embeddedJavascriptAttributeEvents = [];
+  const root = document.body || document.documentElement || document;
+  for (const [tag, attribute] of [["embed", "src"], ["object", "data"]]) {
+    const element = document.createElement(tag);
+    element[attribute] =
+      `javascript:parent.__embeddedJavascriptAttributeEvents.push("executed-${tag}")`;
+    element.onload = () => {
+      __embeddedJavascriptAttributeEvents.push(`load-${tag}`);
+    };
+    if (tag === "object") {
+      element.onerror = event => {
+        __embeddedJavascriptAttributeEvents.push(
+          `error-object:${event.isTrusted}:${element.contentDocument === null}`
+        );
+      };
+    }
+    root.appendChild(element);
+  }
+})()
+"#,
+    )
+    .expect("embedded javascript attribute setup should evaluate");
+
+    for element in ["embed", "object"] {
+        expect_page_child_frame_task_source_after_realm_prerequisite(
+            &mut vm,
+            &loader,
+            ChildFrameSemanticTurnKind::NavigationCommit,
+            &format!("{element} javascript attribute should enter its navigation commit turn"),
+        )
+        .await;
+    }
+    assert!(
+        vm._context_host.borrow().has_pending_child_document_loads(),
+        "embed and object javascript attributes should start resource fetches"
+    );
+    assert!(
+        !vm.has_pending_child_frame_realm_materialization(),
+        "resource attributes must not schedule javascript execution in child realms"
+    );
+    for element in ["embed", "object"] {
+        wait_for_one_page_resource_completion_selected_task_executor_test_turn(
+            &mut vm,
+            &loader,
+            &format!("{element} javascript attribute fetch failure"),
+        )
+        .await;
+    }
+    assert!(
+        !vm._context_host.borrow().has_pending_child_document_loads(),
+        "both embedded resource fetch failures should settle"
+    );
+    assert_eq!(
+        vm.eval("JSON.stringify(__embeddedJavascriptAttributeEvents)")
+            .expect("embedded javascript attribute events should evaluate"),
+        r#"["error-object:true:true"]"#,
+        "resource failures must not execute javascript or load, and object must enter fallback"
+    );
+}
+
 #[tokio::test]
 async fn iframe_javascript_url_string_completion_replaces_child_document() {
     let mut vm = new_storage_test_vm("https://iframe-javascript-url.test/");
