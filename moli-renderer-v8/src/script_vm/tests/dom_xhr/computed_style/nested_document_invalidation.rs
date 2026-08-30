@@ -1914,3 +1914,70 @@ fn indeterminate_state_change_invalidates_held_computed_style() {
 
     assert_eq!(result, "rgb(0, 128, 0)|rgb(255, 0, 0)");
 }
+
+#[test]
+fn nested_declaration_mutations_invalidate_their_ancestor_style_selector() {
+    let mut vm = new_storage_test_vm("https://nested-declaration-invalidation.test/");
+
+    assert_eq!(
+        vm.eval(
+            r#"
+const style = document.createElement('style');
+style.textContent = 'div { z-index: 1; &.test { } }';
+(document.head || document.documentElement || document).appendChild(style);
+const target = document.createElement('div');
+target.className = 'test';
+(document.body || document.documentElement || document).appendChild(target);
+globalThis.__nestedDeclarationRule = style.sheet.cssRules[0];
+globalThis.__nestedDeclarationTarget = target;
+getComputedStyle(target).zIndex;
+"#,
+        )
+        .expect("nested declaration invalidation setup should evaluate"),
+        "1"
+    );
+    crate::style_engine::reset_live_stylesheet_update_counts_for_test();
+
+    assert_eq!(
+        vm.eval(
+            r#"
+const rule = globalThis.__nestedDeclarationRule;
+const mutationTarget = globalThis.__nestedDeclarationTarget;
+const states = [];
+
+rule.insertRule('z-index: 3;', 0);
+const declarations = rule.cssRules[0];
+states.push(declarations instanceof CSSNestedDeclarations);
+states.push(getComputedStyle(mutationTarget).zIndex);
+
+declarations.style.zIndex = '4';
+states.push(getComputedStyle(mutationTarget).zIndex);
+
+rule.deleteRule(0);
+states.push(getComputedStyle(mutationTarget).zIndex);
+
+rule.insertRule('@media all { a { } }', 1);
+const media = rule.cssRules[1];
+media.insertRule('z-index: 5;', 0);
+states.push(media.cssRules[0] instanceof CSSNestedDeclarations);
+states.push(getComputedStyle(mutationTarget).zIndex);
+
+media.deleteRule(0);
+states.push(getComputedStyle(mutationTarget).zIndex);
+states.join('|');
+"#,
+        )
+        .expect("nested declaration mutations should invalidate ancestor selectors"),
+        "true|3|4|1|true|5|1"
+    );
+    assert_eq!(
+        crate::style_engine::exact_rule_change_notification_count_for_test(),
+        6,
+        "nested declaration changes should remain exact journal updates",
+    );
+    assert_eq!(
+        crate::style_engine::full_cascade_update_fallback_count_for_test(),
+        0,
+        "nested declaration changes must not rebuild an entire stylesheet",
+    );
+}
