@@ -48,6 +48,19 @@ const SVG_VALUE_LIST_ITEM_OWNER_LIST_SLOT: &str = "__moliSvgValueListItemOwnerLi
 const SVG_VALUE_LIST_SYNCED_ATTRIBUTE_VALUE_SLOT: &str = "__moliSvgValueListSyncedAttributeValue";
 const SVG_ANIMATED_ENUMERATION_BASE_VAL_SLOT: &str = "__moliSvgAnimatedEnumerationBaseVal";
 const SVG_ANIMATED_ENUMERATION_ANIM_VAL_SLOT: &str = "__moliSvgAnimatedEnumerationAnimVal";
+const SVG_ANIMATED_ENUMERATION_OWNER_ELEMENT_SLOT: &str =
+    "__moliSvgAnimatedEnumerationOwnerElement";
+const SVG_ANIMATED_ENUMERATION_PROPERTY_INDEX_SLOT: &str =
+    "__moliSvgAnimatedEnumerationPropertyIndex";
+const SVG_CLIP_PATH_UNITS_SLOT: &str = "__moliSvgClipPathUnits";
+const SVG_FILTER_UNITS_SLOT: &str = "__moliSvgFilterUnits";
+const SVG_PRIMITIVE_UNITS_SLOT: &str = "__moliSvgPrimitiveUnits";
+const SVG_GRADIENT_UNITS_SLOT: &str = "__moliSvgGradientUnits";
+const SVG_GRADIENT_SPREAD_METHOD_SLOT: &str = "__moliSvgGradientSpreadMethod";
+const SVG_MASK_UNITS_SLOT: &str = "__moliSvgMaskUnits";
+const SVG_MASK_CONTENT_UNITS_SLOT: &str = "__moliSvgMaskContentUnits";
+const SVG_PATTERN_UNITS_SLOT: &str = "__moliSvgPatternUnits";
+const SVG_PATTERN_CONTENT_UNITS_SLOT: &str = "__moliSvgPatternContentUnits";
 const SVG_ANIMATED_TRANSFORM_LIST_BASE_VAL_SLOT: &str = "__moliSvgAnimatedTransformListBaseVal";
 const SVG_ANIMATED_TRANSFORM_LIST_ANIM_VAL_SLOT: &str = "__moliSvgAnimatedTransformListAnimVal";
 const SVG_TRANSFORM_LIST_ITEMS_SLOT: &str = "__moliSvgTransformListItems";
@@ -77,6 +90,22 @@ const SVG_TEXT_POSITIONING_ROTATE_SLOT: &str = "__moliSvgTextPositioningRotate";
 enum SvgListKind {
     Length,
     Number,
+}
+
+#[derive(Clone, Copy)]
+enum SvgAnimatedEnumerationKind {
+    UnitType,
+    SpreadMethod,
+    LengthAdjust,
+}
+
+#[derive(Clone, Copy)]
+struct SvgAnimatedEnumerationProperty {
+    index: usize,
+    attribute: &'static str,
+    cache_slot: &'static str,
+    initial_value: u32,
+    kind: SvgAnimatedEnumerationKind,
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -242,6 +271,88 @@ const SVG_LENGTH_ADJUST_UNKNOWN: u32 = 0;
 const SVG_LENGTH_ADJUST_SPACING: u32 = 1;
 const SVG_LENGTH_ADJUST_SPACING_AND_GLYPHS: u32 = 2;
 
+const SVG_UNIT_TYPE_UNKNOWN: u32 = 0;
+const SVG_UNIT_TYPE_USER_SPACE_ON_USE: u32 = 1;
+const SVG_UNIT_TYPE_OBJECT_BOUNDING_BOX: u32 = 2;
+
+const SVG_SPREAD_METHOD_UNKNOWN: u32 = 0;
+const SVG_SPREAD_METHOD_PAD: u32 = 1;
+const SVG_SPREAD_METHOD_REFLECT: u32 = 2;
+const SVG_SPREAD_METHOD_REPEAT: u32 = 3;
+
+const SVG_ANIMATED_ENUMERATION_PROPERTIES: &[SvgAnimatedEnumerationProperty] = &[
+    SvgAnimatedEnumerationProperty {
+        index: 0,
+        attribute: "clipPathUnits",
+        cache_slot: SVG_CLIP_PATH_UNITS_SLOT,
+        initial_value: SVG_UNIT_TYPE_USER_SPACE_ON_USE,
+        kind: SvgAnimatedEnumerationKind::UnitType,
+    },
+    SvgAnimatedEnumerationProperty {
+        index: 1,
+        attribute: "filterUnits",
+        cache_slot: SVG_FILTER_UNITS_SLOT,
+        initial_value: SVG_UNIT_TYPE_OBJECT_BOUNDING_BOX,
+        kind: SvgAnimatedEnumerationKind::UnitType,
+    },
+    SvgAnimatedEnumerationProperty {
+        index: 2,
+        attribute: "primitiveUnits",
+        cache_slot: SVG_PRIMITIVE_UNITS_SLOT,
+        initial_value: SVG_UNIT_TYPE_USER_SPACE_ON_USE,
+        kind: SvgAnimatedEnumerationKind::UnitType,
+    },
+    SvgAnimatedEnumerationProperty {
+        index: 3,
+        attribute: "gradientUnits",
+        cache_slot: SVG_GRADIENT_UNITS_SLOT,
+        initial_value: SVG_UNIT_TYPE_OBJECT_BOUNDING_BOX,
+        kind: SvgAnimatedEnumerationKind::UnitType,
+    },
+    SvgAnimatedEnumerationProperty {
+        index: 4,
+        attribute: "spreadMethod",
+        cache_slot: SVG_GRADIENT_SPREAD_METHOD_SLOT,
+        initial_value: SVG_SPREAD_METHOD_PAD,
+        kind: SvgAnimatedEnumerationKind::SpreadMethod,
+    },
+    SvgAnimatedEnumerationProperty {
+        index: 5,
+        attribute: "maskUnits",
+        cache_slot: SVG_MASK_UNITS_SLOT,
+        initial_value: SVG_UNIT_TYPE_OBJECT_BOUNDING_BOX,
+        kind: SvgAnimatedEnumerationKind::UnitType,
+    },
+    SvgAnimatedEnumerationProperty {
+        index: 6,
+        attribute: "maskContentUnits",
+        cache_slot: SVG_MASK_CONTENT_UNITS_SLOT,
+        initial_value: SVG_UNIT_TYPE_USER_SPACE_ON_USE,
+        kind: SvgAnimatedEnumerationKind::UnitType,
+    },
+    SvgAnimatedEnumerationProperty {
+        index: 7,
+        attribute: "patternUnits",
+        cache_slot: SVG_PATTERN_UNITS_SLOT,
+        initial_value: SVG_UNIT_TYPE_OBJECT_BOUNDING_BOX,
+        kind: SvgAnimatedEnumerationKind::UnitType,
+    },
+    SvgAnimatedEnumerationProperty {
+        index: 8,
+        attribute: "patternContentUnits",
+        cache_slot: SVG_PATTERN_CONTENT_UNITS_SLOT,
+        initial_value: SVG_UNIT_TYPE_USER_SPACE_ON_USE,
+        kind: SvgAnimatedEnumerationKind::UnitType,
+    },
+    SvgAnimatedEnumerationProperty {
+        index: 9,
+        attribute: "lengthAdjust",
+        cache_slot: SVG_TEXT_CONTENT_LENGTH_ADJUST_SLOT,
+        initial_value: SVG_LENGTH_ADJUST_SPACING,
+        kind: SvgAnimatedEnumerationKind::LengthAdjust,
+    },
+];
+
 pub(in crate::context_bootstrap) fn install_svg_template_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
@@ -266,6 +377,7 @@ pub(in crate::context_bootstrap) fn install_svg_template_bindings<'s>(
         "SVGAnimatedEnumeration" => {
             bindings::install_svg_animated_enumeration_bindings(scope, template)
         }
+        "SVGUnitTypes" => bindings::install_svg_unit_types_bindings(scope, template),
         "SVGAnimatedTransformList" => {
             bindings::install_svg_animated_transform_list_bindings(scope, template)
         }
@@ -277,6 +389,7 @@ pub(in crate::context_bootstrap) fn install_svg_template_bindings<'s>(
         "SVGTextContentElement" => {
             bindings::install_svg_text_content_element_bindings(scope, template)
         }
+        "SVGGradientElement" => bindings::install_svg_gradient_element_bindings(scope, template),
         "SVGSVGElement" => bindings::install_svg_svg_element_bindings(scope, template),
         _ => {}
     }
