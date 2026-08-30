@@ -240,7 +240,9 @@ pub(crate) use canvas::{
 pub(crate) use class_list::install_dom_token_list_prototype_bindings;
 pub(super) use class_list::{
     build_dom_token_list_wrapper_template, html_rel_list_getter_function,
-    html_rel_list_setter_function,
+    html_rel_list_setter_function, iframe_sandbox_getter_function, iframe_sandbox_setter_function,
+    link_sizes_getter_function, link_sizes_setter_function, output_html_for_getter_function,
+    output_html_for_setter_function, svg_rel_list_setter_function,
 };
 pub(super) use content::{
     node_direct_text_content, node_get_html_callback, node_inner_html_getter_function,
@@ -479,10 +481,9 @@ pub(super) use global_attributes::{
     node_hidden_setter_function, node_inert_getter_function, node_inert_setter_function,
     node_input_mode_getter_function, node_input_mode_setter_function,
     node_is_content_editable_getter_function, node_lang_getter_function, node_lang_setter_function,
-    node_sandbox_getter_function, node_sandbox_setter_function, node_spellcheck_getter_function,
-    node_spellcheck_setter_function, node_tab_index_getter_function,
-    node_tab_index_setter_function, node_title_getter_function, node_title_setter_function,
-    node_translate_getter_function, node_translate_setter_function,
+    node_spellcheck_getter_function, node_spellcheck_setter_function,
+    node_tab_index_getter_function, node_tab_index_setter_function, node_title_getter_function,
+    node_title_setter_function, node_translate_getter_function, node_translate_setter_function,
     node_writing_suggestions_getter_function, node_writing_suggestions_setter_function,
     null_to_empty_dom_string_reflection_getter_function,
     null_to_empty_dom_string_reflection_setter_function, object_archive_getter_function,
@@ -1592,6 +1593,7 @@ pub(crate) fn install_element_template_bindings<'s>(
         "HTMLScriptElement" => install!(HtmlScriptElementPrototypeDeclaration),
         "SVGScriptElement" => install!(SvgScriptElementPrototypeDeclaration),
         "SVGImageElement" => install!(SvgImageElementPrototypeDeclaration),
+        "SVGAElement" => install!(SvgAElementRelListPrototypeDeclaration),
         "HTMLStyleElement" => install!(HtmlStyleElementPrototypeDeclaration),
         "SVGStyleElement" => install!(SvgStyleElementPrototypeDeclaration),
         "HTMLTableElement" => install!(HtmlTableElementPrototypeDeclaration),
