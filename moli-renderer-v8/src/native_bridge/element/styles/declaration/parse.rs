@@ -25,13 +25,20 @@ use super::values::{
     parse_transition_shorthand_entries,
 };
 use style::{
+    color::{
+        ColorFunction,
+        component::ColorComponent,
+        parsing::{NumberOrAngleComponent, NumberOrPercentageComponent},
+    },
     context::QuirksMode,
     properties::{
-        PropertyDeclarationId, PropertyId, SourcePropertyDeclaration, parse_one_declaration_into,
+        PropertyDeclaration, PropertyDeclarationId, PropertyId, SourcePropertyDeclaration,
+        parse_one_declaration_into,
     },
     stylesheets::{CssRuleType, Origin, UrlExtraData},
+    values::specified::{Color as SpecifiedColor, ColorPropertyValue},
 };
-use style_traits::{CssString, ParsingMode};
+use style_traits::{CssString, ParsingMode, ToCss};
 
 pub(in crate::native_bridge::element::styles) struct StyleObjectEntries {
     pub(in crate::native_bridge::element::styles) entries: Vec<StyleEntry>,
@@ -1305,12 +1312,17 @@ pub(crate) fn pdb_property_value_for_cssom_query_with_side_entries(
     if !pdb_property_is_declared_for_cssom_query(block, property) {
         return None;
     }
-    let value = block.property_value(property)?;
+    let mut value = block.property_value(property)?;
     if value.is_empty() && moli_css_parse::is_cssom_custom_property_name(property) {
         return Some(" ".to_owned());
     }
     if value.is_empty() && !moli_css_parse::is_cssom_custom_property_name(property) {
         return None;
+    }
+    if css_color_value_property_requires_stylo_parser(property)
+        && let Some(canonical) = canonical_unresolved_legacy_color_function(&value)
+    {
+        value = canonical;
     }
     Some(value)
 }
@@ -2292,6 +2304,9 @@ fn stylo_pdb_entries_for_property(
     if projection.set_result == moli_css_parse::CssSetResult::ParseError {
         return None;
     }
+    let canonical_unresolved_color = css_color_value_property_requires_stylo_parser(name)
+        .then(|| canonical_unresolved_legacy_color_function(value))
+        .flatten();
     let mut accepted_names = projection.stored_names.clone();
     append_unique_name(&mut accepted_names, name);
     let affected_names = projection.affected_names.clone();
@@ -2311,12 +2326,13 @@ fn stylo_pdb_entries_for_property(
     let mut entries = Vec::new();
     for entry in block_entries {
         let entry_name = canonical_style_property_name(&entry.name);
-        let is_declared_empty_custom_property = entry.value.is_empty()
+        let mut entry_value = entry.value;
+        let is_declared_empty_custom_property = entry_value.is_empty()
             && !value.is_empty()
             && moli_css_parse::is_cssom_custom_property_name(&entry_name)
             && block.property_is_declared(&entry_name);
         if entry_name.is_empty()
-            || entry.value.is_empty() && !is_declared_empty_custom_property
+            || entry_value.is_empty() && !is_declared_empty_custom_property
             || entry.priority != priority
             || !accepted_names
                 .iter()
@@ -2324,9 +2340,14 @@ fn stylo_pdb_entries_for_property(
         {
             return None;
         }
+        if entry_name == name
+            && let Some(canonical) = canonical_unresolved_color.as_ref()
+        {
+            entry_value.clone_from(canonical);
+        }
         entries.push(StyleEntry {
             name: entry_name,
-            value: entry.value,
+            value: entry_value,
             priority: entry.priority,
         });
     }
@@ -3241,6 +3262,93 @@ fn css_color_value_property_requires_stylo_parser(name: &str) -> bool {
         name,
         "accent-color" | "background-color" | "caret-color" | "color"
     )
+}
+
+fn canonical_color_number_or_percentage(
+    component: &ColorComponent<NumberOrPercentageComponent>,
+    percentage_basis: f32,
+    minimum: f32,
+    maximum: Option<f32>,
+) -> ColorComponent<NumberOrPercentageComponent> {
+    let number = match component {
+        ColorComponent::Value(NumberOrPercentageComponent::Number(value)) => Some(*value),
+        ColorComponent::Value(NumberOrPercentageComponent::Percentage(value)) => {
+            Some(*value * percentage_basis)
+        }
+        _ => None,
+    };
+    let Some(number) = number else {
+        return component.clone();
+    };
+    let number = maximum.map_or(number.max(minimum), |maximum| {
+        number.clamp(minimum, maximum)
+    });
+    ColorComponent::Value(NumberOrPercentageComponent::Number(number))
+}
+
+fn canonical_color_number_or_angle(
+    component: &ColorComponent<NumberOrAngleComponent>,
+) -> ColorComponent<NumberOrAngleComponent> {
+    match component {
+        ColorComponent::Value(NumberOrAngleComponent::Angle(degrees)) => {
+            ColorComponent::Value(NumberOrAngleComponent::Number(*degrees))
+        }
+        _ => component.clone(),
+    }
+}
+
+fn canonical_unresolved_legacy_color_function(value: &str) -> Option<String> {
+    let lower = value.trim_start().to_ascii_lowercase();
+    if !["rgb(", "rgba(", "hsl(", "hsla(", "hwb("]
+        .iter()
+        .any(|prefix| lower.starts_with(prefix))
+    {
+        return None;
+    }
+
+    let mut declarations = parse_style_property_with_stylo("color", value, None)?;
+    let declaration = declarations.drain().declarations.next()?;
+    let PropertyDeclaration::Color(ColorPropertyValue(SpecifiedColor::ColorFunction(function))) =
+        declaration
+    else {
+        return None;
+    };
+
+    let canonical = match function.as_ref() {
+        ColorFunction::Rgb(origin, red, green, blue, alpha) if origin.as_ref().is_none() => {
+            ColorFunction::Rgb(
+                origin.clone(),
+                canonical_color_number_or_percentage(red, 255.0, 0.0, Some(255.0)),
+                canonical_color_number_or_percentage(green, 255.0, 0.0, Some(255.0)),
+                canonical_color_number_or_percentage(blue, 255.0, 0.0, Some(255.0)),
+                canonical_color_number_or_percentage(alpha, 1.0, 0.0, Some(1.0)),
+            )
+        }
+        ColorFunction::Hsl(origin, hue, saturation, lightness, alpha)
+            if origin.as_ref().is_none() =>
+        {
+            ColorFunction::Hsl(
+                origin.clone(),
+                canonical_color_number_or_angle(hue),
+                canonical_color_number_or_percentage(saturation, 100.0, 0.0, None),
+                canonical_color_number_or_percentage(lightness, 100.0, 0.0, None),
+                canonical_color_number_or_percentage(alpha, 1.0, 0.0, Some(1.0)),
+            )
+        }
+        ColorFunction::Hwb(origin, hue, whiteness, blackness, alpha)
+            if origin.as_ref().is_none() =>
+        {
+            ColorFunction::Hwb(
+                origin.clone(),
+                canonical_color_number_or_angle(hue),
+                canonical_color_number_or_percentage(whiteness, 100.0, 0.0, None),
+                canonical_color_number_or_percentage(blackness, 100.0, 0.0, None),
+                canonical_color_number_or_percentage(alpha, 1.0, 0.0, Some(1.0)),
+            )
+        }
+        _ => return None,
+    };
+    Some(canonical.to_css_string())
 }
 
 fn background_image_value_requires_stylo_parser(value: &str) -> bool {
@@ -4419,6 +4527,44 @@ mod tests {
             assert!(parsed.entries[0].priority);
             assert!(parse_style_property_entries_with_pdb(property, value, true).is_some());
             assert!(style_entry_is_pdb_safe(&parsed.entries[0]));
+        }
+    }
+
+    #[test]
+    fn unresolved_legacy_color_functions_use_canonical_component_units() {
+        for (input, expected) in [
+            (
+                "rgba(calc(50 + (sign(1em - 10px) * 10)) 400% -400% / 50%)",
+                "rgb(calc(50 + (10 * sign(1em - 10px))) 255 0 / 0.5)",
+            ),
+            (
+                "hsla(calc(50deg + (sign(1em - 10px) * 10deg)) -100% 300% / 50%)",
+                "hsl(calc(50deg + (10deg * sign(1em - 10px))) 0 300 / 0.5)",
+            ),
+            (
+                "hwb(calc(110deg + (sign(1em - 10px) * 10deg)) 30% 50% / 50%)",
+                "hwb(calc(110deg + (10deg * sign(1em - 10px))) 30 50 / 0.5)",
+            ),
+            (
+                "hwb(120deg 30% 50% / calc(50% + (sign(1em - 10px) * 10%)))",
+                "hwb(120 30 50 / calc(50% + (10% * sign(1em - 10px))))",
+            ),
+        ] {
+            let parsed = parse_style_property_entries_for_cssom_write("color", input, false, None)
+                .unwrap_or_else(|| panic!("color should accept {input}"));
+            assert_eq!(parsed.entries.len(), 1);
+            assert_eq!(parsed.entries[0].value, expected);
+
+            let mut block = moli_css_parse::CssDeclarationBlock::default();
+            assert_ne!(
+                block.set_property("color", input, false),
+                moli_css_parse::CssSetResult::ParseError
+            );
+            assert_eq!(
+                pdb_property_value_for_cssom_query_with_side_entries(&block, "color", &[])
+                    .as_deref(),
+                Some(expected)
+            );
         }
     }
 
