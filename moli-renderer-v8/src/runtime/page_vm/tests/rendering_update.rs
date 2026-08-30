@@ -2132,6 +2132,106 @@ document.body.innerHTML = `
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn intrinsic_flex_basis_functions_reach_layout_across_adapter_edges() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/intrinsic-flex-basis.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0;padding:0}.fixture{display:flex;width:75px;height:75px}.column{flex-direction:column}.row-reverse{flex-direction:row-reverse}.wide{width:100px}.item{flex-grow:0;flex-shrink:0;min-width:0;min-height:0;font-size:0;background:rgb(1,2,3)}.vertical{writing-mode:vertical-lr}.piece{display:inline-block;width:50px;height:50px}.margined{margin-left:10px;margin-right:20px}.decorated{padding-left:10px;padding-right:10px;border-left:5px solid;border-right:5px solid}
+</style>`;
+const content='<span class=piece></span> <span class=piece></span>';
+const item=(id,style='',classes='')=>`<div class="item ${classes}" id="${id}" style="${style}">${content}</div>`;
+document.body.innerHTML = `
+<div class=fixture>${item('row-min','flex-basis:min-content')}</div>
+<div class=fixture>${item('row-max','flex-basis:max-content')}</div>
+<div class=fixture>${item('row-fit','flex-basis:fit-content')}</div>
+<div class="fixture column">${item('column-min','flex-basis:min-content')}</div>
+<div class="fixture column">${item('column-max','flex-basis:max-content')}</div>
+<div class="fixture column">${item('column-fit','flex-basis:fit-content')}</div>
+<div class=fixture>${item('orthogonal-row-min','flex-basis:min-content','vertical')}</div>
+<div class=fixture>${item('orthogonal-row-max','width:300px;flex-basis:max-content','vertical')}</div>
+<div class=fixture>${item('orthogonal-row-fit','flex-basis:fit-content','vertical')}</div>
+<div class="fixture column">${item('orthogonal-column-max','flex-basis:max-content','vertical')}</div>
+<div class="fixture row-reverse">${item('row-reverse-max','flex-basis:max-content')}</div>
+<div class=fixture>${item('authored-row','width:300px;flex-basis:max-content')}</div>
+<div class="fixture column">${item('authored-column','height:300px;flex-basis:max-content','vertical')}</div>
+<div class=fixture>${item('auto-row-min','width:min-content;flex-basis:auto')}</div>
+<div class="fixture wide">${item('margin-fit','flex-basis:fit-content','margined')}</div>
+<div class="fixture wide">${item('content-box-min','box-sizing:content-box;flex-basis:min-content','decorated')}</div>
+<div class="fixture wide">${item('border-box-max','box-sizing:border-box;flex-basis:max-content','decorated')}</div>
+<div class="fixture wide">${item('border-box-fit','box-sizing:border-box;flex-basis:fit-content','decorated')}</div>
+<div class="fixture wide">${item('minimum-clamp','flex-basis:min-content;min-width:80px')}</div>
+<div class="fixture wide">${item('maximum-clamp','flex-basis:max-content;max-width:90px')}</div>`;
+'installed'
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+
+        let supports = page_vm.vm_mut().eval(
+            r#"JSON.stringify(['min-content','max-content','fit-content'].map(value=>CSS.supports('flex-basis',value)))"#,
+        )?;
+        assert_eq!(supports, "[true,true,true]");
+
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(320, 1900, 1.0))?
+            .expect("intrinsic flex-basis fixture must retain a root");
+
+        let expected = [
+            ("row-min", [50.0, 75.0]),
+            ("row-max", [100.0, 75.0]),
+            ("row-fit", [75.0, 75.0]),
+            ("column-min", [75.0, 100.0]),
+            ("column-max", [75.0, 100.0]),
+            ("column-fit", [75.0, 100.0]),
+            ("orthogonal-row-min", [100.0, 75.0]),
+            ("orthogonal-row-max", [100.0, 75.0]),
+            ("orthogonal-row-fit", [100.0, 75.0]),
+            ("orthogonal-column-max", [75.0, 100.0]),
+            ("row-reverse-max", [100.0, 75.0]),
+            ("authored-row", [100.0, 75.0]),
+            ("authored-column", [75.0, 100.0]),
+            ("auto-row-min", [50.0, 75.0]),
+            ("margin-fit", [70.0, 75.0]),
+            ("content-box-min", [80.0, 75.0]),
+            ("border-box-max", [130.0, 75.0]),
+            ("border-box-fit", [100.0, 75.0]),
+            ("minimum-clamp", [80.0, 75.0]),
+            ("maximum-clamp", [90.0, 75.0]),
+        ];
+        let ids = expected.iter().map(|(id, _)| *id).collect::<Vec<_>>();
+        let geometry = page_vm.vm_mut().eval(&format!(
+            "JSON.stringify(Object.fromEntries({ids:?}.map(id=>{{const r=document.getElementById(id).getBoundingClientRect();return [id,[r.width,r.height]]}})))"
+        ))?;
+        let geometry: serde_json::Value = serde_json::from_str(&geometry)?;
+        for (id, expected) in expected {
+            let actual = geometry[id]
+                .as_array()
+                .unwrap_or_else(|| panic!("missing geometry for {id}: {geometry}"));
+            for (index, (axis, expected)) in ["width", "height"].into_iter().zip(expected).enumerate() {
+                let actual = actual[index]
+                    .as_f64()
+                    .expect("numeric geometry") as f32;
+                assert!(
+                    (actual - expected).abs() <= 0.05,
+                    "{id} {axis}: expected {expected}, got {actual}; geometry={geometry}"
+                );
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("intrinsic flex-basis fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn screenshot_resolves_collapsed_table_borders_with_chromium_geometry_and_pixels() {
     run_page_vm_async_test(async move {
         let loader =

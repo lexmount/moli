@@ -829,13 +829,14 @@ impl ResolvedLayoutStyle {
         // infinite and NaN ratios as degenerate, so normalize them at the
         // Stylo/Taffy seam instead of relying only on replaced measurement.
         taffy.aspect_ratio = preferred_aspect_ratio.numeric_ratio();
-        if matches!(position_style.flex_basis, GenericFlexBasis::Content) {
-            // Blitz's fixed stylo_taffy revision predates Taffy's typed
-            // `content` flex-basis. Preserve the Stylo distinction here so
-            // Taffy ignores the preferred main size and follows the content
-            // flex-base-size algorithm instead of treating it as `auto`.
-            taffy.flex_basis = taffy::Dimension::content();
-        }
+        // Blitz's fixed stylo_taffy revision predates Taffy's typed flex-basis
+        // sizing functions. Preserve the complete Stylo value at this seam so
+        // Taffy can resolve content and intrinsic keywords in the flex-basis
+        // constraint space instead of collapsing them to `auto`.
+        taffy.flex_basis = match &position_style.flex_basis {
+            GenericFlexBasis::Content => taffy::Dimension::content(),
+            GenericFlexBasis::Size(size) => taffy_size_dimension(size, taffy.flex_basis),
+        };
         taffy.item_is_table = matches!(display, LayoutDisplay::Table | LayoutDisplay::InlineTable);
         let sticky_inset = taffy.inset;
         let establishes_transform_containing_block =
