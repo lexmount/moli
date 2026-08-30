@@ -3127,6 +3127,7 @@ css/fill-stroke/inheritance.html
 css/fill-stroke/webkit-text-stroke-computed.html
 css/geometry/DOMMatrix-001.html
 css/geometry/DOMMatrix-002.html
+css/geometry/DOMMatrix-003.html
 css/geometry/DOMMatrix-a-f-alias.html
 css/geometry/DOMMatrix-attributes.html
 css/geometry/DOMMatrix-invert-invertible.html
