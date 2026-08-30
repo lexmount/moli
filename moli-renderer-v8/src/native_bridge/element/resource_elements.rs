@@ -1272,8 +1272,12 @@ fn iframe_srcdoc_setter_function<'s>(
     else {
         return;
     };
-    let Some(value) = property_dom_string_value(scope, args.get(0), "HTMLIFrameElement", "srcdoc")
-    else {
+    let Some(value) = trusted_html_sink_string(
+        scope,
+        runtime_ptr,
+        args.get(0),
+        TrustedHtmlSink::IframeSrcdoc,
+    ) else {
         return;
     };
     set_reflected_attribute(scope, runtime_ptr, handle, "srcdoc", &value);
