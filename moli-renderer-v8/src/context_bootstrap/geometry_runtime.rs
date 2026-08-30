@@ -1156,6 +1156,18 @@ fn dom_point_slot<'s>(
         .unwrap_or(default)
 }
 
+pub(super) fn dom_point_init_from_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> DomPointInit {
+    DomPointInit {
+        x: dom_point_slot(scope, object, DOM_POINT_X_SLOT, 0.0),
+        y: dom_point_slot(scope, object, DOM_POINT_Y_SLOT, 0.0),
+        z: dom_point_slot(scope, object, DOM_POINT_Z_SLOT, 0.0),
+        w: dom_point_slot(scope, object, DOM_POINT_W_SLOT, 1.0),
+    }
+}
+
 fn dom_point_receiver_branded<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
