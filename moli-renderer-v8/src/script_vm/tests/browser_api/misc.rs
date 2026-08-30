@@ -5284,6 +5284,51 @@ fn dom_point_readonly_constructor_uses_readonly_instances_and_shared_methods() {
 }
 
 #[test]
+fn dom_point_readonly_from_point_uses_dictionary_conversion_and_function_realm() {
+    let mut vm = new_storage_test_vm("https://dompoint-readonly-from-point.test/");
+
+    vm.eval(
+        r#"
+(() => {
+  const root = document.documentElement ||
+    document.appendChild(document.createElement("html"));
+  const body = document.body || root.appendChild(document.createElement("body"));
+  const frame = document.createElement("iframe");
+  frame.id = "dompoint-from-point-realm";
+  body.appendChild(frame);
+})()
+"#,
+    )
+    .expect("DOMPointReadOnly factory child frame should be created");
+    materialize_single_child_default_realm_for_test(
+        &mut vm,
+        "DOMPointReadOnly factory child Realm",
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const other = document.getElementById("dompoint-from-point-realm").contentWindow;
+  const point = other.DOMPointReadOnly.fromPoint({x: "1", z: 3, w: 4});
+  const empty = other.DOMPointReadOnly.fromPoint(null);
+  return [
+    other.DOMPointReadOnly.fromPoint.length,
+    point instanceof other.DOMPointReadOnly,
+    point instanceof other.DOMPoint,
+    point instanceof DOMPointReadOnly,
+    [point.x, point.y, point.z, point.w].join(","),
+    [empty.x, empty.y, empty.z, empty.w].join(",")
+  ].join("|");
+})()
+"#,
+        )
+        .expect("DOMPointReadOnly.fromPoint should evaluate");
+
+    assert_eq!(result, "0|true|false|false|1,0,3,4|0,0,0,1");
+}
+
+#[test]
 fn dom_matrix_objects_keep_declared_brand_and_own_slots() {
     let mut vm = new_storage_test_vm("https://dommatrix-declared-slots.test/");
 
