@@ -13,6 +13,7 @@ use moli_svg::{
     SvgLength, SvgLengthUnit, SvgMatrixComponents, SvgTransform, SvgTransformKind,
 };
 
+mod angle;
 mod bindings;
 mod builders;
 mod callbacks;
@@ -255,7 +256,11 @@ pub(in crate::context_bootstrap) fn install_svg_template_bindings<'s>(
     name: &str,
 ) {
     bindings::install_svg_element_accessor_bindings(scope, template, name);
+    if name == "SVGSVGElement" {
+        angle::install_factory(scope, template);
+    }
     match name {
+        "SVGAngle" => angle::install_bindings(scope, template),
         "SVGLength" => bindings::install_svg_length_bindings(scope, template),
         "SVGNumber" => bindings::install_svg_number_bindings(scope, template),
         "SVGRect" => rect::install_bindings(scope, template),
