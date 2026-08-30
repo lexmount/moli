@@ -1258,6 +1258,39 @@ mod tests {
                 .unwrap(),
             None
         );
+        for selector in [
+            "::slotted(*)::checkmark",
+            "::slotted(*)::picker-icon",
+            "::slotted(*)::picker(select)",
+        ] {
+            assert_eq!(
+                engine.query_selector_host(&host, selector).unwrap(),
+                None,
+                "valid pseudo-element selector `{selector}` should return no element"
+            );
+        }
+        for selector in [
+            "::slotted()",
+            "::slotted(",
+            "::slotted(0)",
+            ":slotted(foo)",
+            "::slotted(foo) + ::slotted(bar)",
+            "::slotted(foo):hover",
+            "::slotted(foo):focus",
+            "::slotted(foo):lang(en)",
+            "::slotted(foo):dir(ltr)",
+            ":part()",
+            "::part(",
+            ":part(0)",
+            ":part('foo')",
+            ":part([foo])",
+            "::part(foo) + ::part(bar)",
+        ] {
+            assert!(
+                engine.query_selector_host(&host, selector).is_err(),
+                "invalid pseudo-element selector `{selector}` should be rejected"
+            );
+        }
         assert!(
             engine
                 .query_selector_host(&host, "::part(label):first-child")
