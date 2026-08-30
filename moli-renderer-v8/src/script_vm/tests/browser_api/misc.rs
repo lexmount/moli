@@ -5389,6 +5389,32 @@ fn dom_point_matrix_transform_validates_matrix_init_and_returns_in_the_function_
 }
 
 #[test]
+fn dom_matrix_exposes_webkit_css_matrix_alias() {
+    let mut vm = new_storage_test_vm("https://dommatrix-webkit-alias.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const webkitDescriptor = Object.getOwnPropertyDescriptor(globalThis, "WebKitCSSMatrix");
+  const matrix = new WebKitCSSMatrix();
+  return [
+    WebKitCSSMatrix === DOMMatrix,
+    WebKitCSSMatrix.prototype === DOMMatrix.prototype,
+    WebKitCSSMatrix.name,
+    matrix instanceof DOMMatrix,
+    matrix instanceof DOMMatrixReadOnly,
+    [webkitDescriptor.writable, webkitDescriptor.enumerable, webkitDescriptor.configurable].join(",")
+  ].join("|");
+})()
+"#,
+        )
+        .expect("DOMMatrix legacy Window aliases should evaluate");
+
+    assert_eq!(result, "true|true|DOMMatrix|true|true|true,false,true");
+}
+
+#[test]
 fn dom_matrix_objects_keep_declared_brand_and_own_slots() {
     let mut vm = new_storage_test_vm("https://dommatrix-declared-slots.test/");
 
