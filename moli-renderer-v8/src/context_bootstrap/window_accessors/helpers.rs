@@ -94,6 +94,33 @@ pub(in crate::context_bootstrap) fn window_child_context_handle<'s>(
     }
 }
 
+pub(super) fn window_owner_dispatch_scope<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+) -> Option<crate::native_bridge::OwnerDispatchScope> {
+    super::super::navigation_window::runtime_window_dispatch_scope(scope, receiver).or_else(|| {
+        receiver
+            .strict_equals(scope.get_current_context().global(scope).into())
+            .then_some(crate::native_bridge::OwnerDispatchScope::Top)
+    })
+}
+
+pub(super) fn window_document_handle<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+    host: &JsContextHost,
+) -> Option<crate::document_runtime::DomHandle> {
+    match window_owner_dispatch_scope(scope, receiver)? {
+        crate::native_bridge::OwnerDispatchScope::Top => Some(host.document_handle()),
+        crate::native_bridge::OwnerDispatchScope::Child(handle) => {
+            host.child_browsing_context_document_handle(handle)
+        }
+        crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id) => {
+            host.lightweight_popup_document_handle(popup_id)
+        }
+    }
+}
+
 pub(super) fn window_host_ptr(
     scope: &mut v8::PinScope<'_, '_>,
     receiver: v8::Local<'_, v8::Object>,
