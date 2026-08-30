@@ -476,7 +476,7 @@ interfaces! {
     SVGLengthList;
     SVGLineElement: SVGGeometryElement;
     SVGLinearGradientElement: SVGGradientElement;
-    SVGMatrix;
+    SVGMatrix: DOMMatrix;
     SVGMetadataElement: SVGElement;
     SVGMPathElement: SVGElement;
     SVGNumber;
