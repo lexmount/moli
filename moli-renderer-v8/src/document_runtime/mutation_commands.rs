@@ -863,6 +863,7 @@ impl DocumentRuntime {
             return false;
         }
         let runtime = unsafe { &mut *host_ptr };
+        runtime.clear_object_fallback_for_attribute_change(handle, name);
         let is_navigation_attribute =
             runtime.frame_owner_navigation_attribute_matches(handle, name);
         if is_srcdoc {
