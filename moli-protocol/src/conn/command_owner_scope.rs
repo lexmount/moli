@@ -14,9 +14,10 @@ impl CommandOwnerScope {
                 conn.none_session_owner_route_override().or_else(|| {
                     let browser_context = conn.browser_context.as_ref()?;
                     let target_id = browser_context.active_target_id_owned()?;
-                    Some(CdpSessionRoute::ActiveTarget {
+                    Some(CdpSessionRoute::PageTarget {
                         browser_context_id: browser_context.id.clone(),
-                        target_id: Some(target_id),
+                        target_id,
+                        is_attached_session: false,
                     })
                 })
             })

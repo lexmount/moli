@@ -39,13 +39,14 @@ impl PopupTargetNavigationOwnerAction {
         let route = conn.target_session_route_for_target_id(target_id)?;
         (route.browser_context_id() == Some(browser_context_id)).then(|| Self {
             // Activation has an independent owner action. Unlike a frozen
-            // PageTargetHost route, AuxiliaryTarget keeps this exact target
-            // addressable if that action changes its residence first.
+            // Stable PageTarget route keeps this exact target addressable if
+            // the independent activation action changes its residence first.
             owner_scope: CommandOwnerScope::from_session_and_owner_route(
                 None,
-                Some(CdpSessionRoute::AuxiliaryTarget {
+                Some(CdpSessionRoute::PageTarget {
                     browser_context_id: browser_context_id.to_owned(),
                     target_id: target_id.to_owned(),
+                    is_attached_session: false,
                 }),
             ),
             browser_context_id: browser_context_id.to_owned(),

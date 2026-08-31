@@ -2886,12 +2886,9 @@ impl CdpConnection {
     ) -> Option<TargetPageResidenceIdentity> {
         let (browser_context_id, routed_target_id) =
             self.target_owner_identity_for_route(session_id, owner_route)?;
-        // `None` in a `CdpSessionRoute::ActiveTarget` is a routing shorthand:
-        // it means "whichever target is currently active". A Page residence
-        // identity must never retain that mutable shorthand. Freeze the
-        // concrete target now, otherwise a later `browsingContext.create`
-        // can make output from the old Page resolve through the new active
-        // target while preserving the same browser-context id and residence.
+        // Context-scoped work may not carry a Page id. Freeze its concrete
+        // active target before an async boundary so later foreground changes
+        // cannot redirect output from the old Page.
         let target_id = routed_target_id.or_else(|| {
             self.browser_context_by_id(&browser_context_id)
                 .and_then(|browser_context| browser_context.active_target_id())

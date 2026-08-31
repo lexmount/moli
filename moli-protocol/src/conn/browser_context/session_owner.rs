@@ -84,70 +84,31 @@ impl CdpConnection {
                     })
                     .unwrap_or(TargetSessionOwner::NoLoadedBrowserContext),
             ),
-            CdpSessionRoute::ActiveTarget {
+            CdpSessionRoute::BrowserContext { browser_context_id } => Some(
+                self.browser_context_by_id(&browser_context_id)
+                    .filter(|browser_context| browser_context.has_active_target())
+                    .map(|_| TargetSessionOwner::ActiveTarget {
+                        browser_context_id,
+                        is_auxiliary_target_session: false,
+                    })
+                    .unwrap_or(TargetSessionOwner::NoLoadedBrowserContext),
+            ),
+            CdpSessionRoute::PageTarget {
                 browser_context_id,
                 target_id,
+                is_attached_session,
             } => {
                 let browser_context = self.browser_context_by_id(&browser_context_id)?;
-                match target_id {
-                    Some(target_id) if browser_context.is_active_target(&target_id) => {
-                        Some(TargetSessionOwner::ActiveTarget {
-                            browser_context_id,
-                            is_auxiliary_target_session: false,
-                        })
-                    }
-                    Some(target_id) if browser_context.page_target(&target_id).is_some() => {
-                        Some(TargetSessionOwner::PageTargetHost {
-                            browser_context_id,
-                            target_id,
-                            is_auxiliary_target_session: false,
-                        })
-                    }
-                    None if browser_context.has_active_target() => {
-                        Some(TargetSessionOwner::ActiveTarget {
-                            browser_context_id,
-                            is_auxiliary_target_session: false,
-                        })
-                    }
-                    _ => Some(TargetSessionOwner::NoLoadedBrowserContext),
-                }
-            }
-            CdpSessionRoute::AuxiliaryTarget {
-                browser_context_id,
-                target_id,
-            } => {
-                let is_background_target = self
-                    .browser_context_by_id(&browser_context_id)?
-                    .background_target(&target_id)
-                    .is_some();
-                if is_background_target {
-                    Some(TargetSessionOwner::PageTargetHost {
-                        browser_context_id,
-                        target_id,
-                        is_auxiliary_target_session: true,
-                    })
-                } else if self
-                    .browser_context_by_id(&browser_context_id)?
-                    .is_active_target(&target_id)
-                {
+                if browser_context.is_active_target(&target_id) {
                     Some(TargetSessionOwner::ActiveTarget {
                         browser_context_id,
-                        is_auxiliary_target_session: true,
+                        is_auxiliary_target_session: is_attached_session,
                     })
-                } else {
-                    Some(TargetSessionOwner::NoLoadedBrowserContext)
-                }
-            }
-            CdpSessionRoute::PageTargetHost {
-                browser_context_id,
-                target_id,
-            } => {
-                let browser_context = self.browser_context_by_id(&browser_context_id)?;
-                if browser_context.page_target(&target_id).is_some() {
+                } else if browser_context.page_target(&target_id).is_some() {
                     Some(TargetSessionOwner::PageTargetHost {
                         browser_context_id,
                         target_id,
-                        is_auxiliary_target_session: false,
+                        is_auxiliary_target_session: is_attached_session,
                     })
                 } else {
                     Some(TargetSessionOwner::NoLoadedBrowserContext)

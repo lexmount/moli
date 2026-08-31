@@ -11337,9 +11337,10 @@ mod protocol_neutral_tests {
         let previous_route = Some(CdpSessionRoute::Browser);
         conn.replace_none_session_owner_route_override(previous_route.clone());
 
-        let target_route = CdpSessionRoute::ActiveTarget {
+        let target_route = CdpSessionRoute::PageTarget {
             browser_context_id: "BID-active".to_owned(),
-            target_id: Some("TID-active".to_owned()),
+            target_id: "TID-active".to_owned(),
+            is_attached_session: false,
         };
         {
             let mut scope = RuntimeProbeCompletionScope::enter(&mut conn, target_route.clone());
@@ -11358,9 +11359,10 @@ mod protocol_neutral_tests {
         let previous_route = Some(CdpSessionRoute::Browser);
         conn.replace_none_session_owner_route_override(previous_route.clone());
 
-        let target_route = CdpSessionRoute::ActiveTarget {
+        let target_route = CdpSessionRoute::PageTarget {
             browser_context_id: "BID-active".to_owned(),
-            target_id: Some("TID-active".to_owned()),
+            target_id: "TID-active".to_owned(),
+            is_attached_session: false,
         };
         {
             let mut scope = conn.scoped_none_session_owner_route_override(target_route.clone());

@@ -1018,7 +1018,10 @@ async fn detach_browser_target_session_cascades_owned_target_sessions() {
     ctx.expect_event("Target.attachedToTarget", None);
     assert!(matches!(
         ctx.conn.session_route(Some(&page_session_id)),
-        Some(CdpSessionRoute::AuxiliaryTarget { .. })
+        Some(CdpSessionRoute::PageTarget {
+            is_attached_session: true,
+            ..
+        })
     ));
 
     ctx.process_async(json!({
@@ -1165,7 +1168,10 @@ async fn root_frontend_release_preserves_private_browser_owned_page_session() {
     );
     assert!(matches!(
         ctx.conn.session_route(Some(&private_page_session_id)),
-        Some(CdpSessionRoute::AuxiliaryTarget { .. })
+        Some(CdpSessionRoute::PageTarget {
+            is_attached_session: true,
+            ..
+        })
     ));
     assert!(ctx.conn.target_discovery_filter_for_owner(None).is_none());
     assert!(
@@ -1298,23 +1304,26 @@ async fn session_route_finds_browser_active_auxiliary_background_and_inactive_se
     );
     assert_eq!(
         ctx.conn.session_route(Some("SID-active")),
-        Some(CdpSessionRoute::ActiveTarget {
+        Some(CdpSessionRoute::PageTarget {
             browser_context_id: "BID-A".to_owned(),
-            target_id: Some("TID-000000000A".to_owned()),
+            target_id: "TID-000000000A".to_owned(),
+            is_attached_session: false,
         })
     );
     assert_eq!(
         ctx.conn.session_route(Some("SID-auxiliary")),
-        Some(CdpSessionRoute::AuxiliaryTarget {
+        Some(CdpSessionRoute::PageTarget {
             browser_context_id: "BID-A".to_owned(),
             target_id: "TID-000000000A".to_owned(),
+            is_attached_session: true,
         })
     );
     assert_eq!(
         ctx.conn.session_route(Some("SID-background")),
-        Some(CdpSessionRoute::PageTargetHost {
+        Some(CdpSessionRoute::PageTarget {
             browser_context_id: "BID-A".to_owned(),
             target_id: "TID-000000000B".to_owned(),
+            is_attached_session: false,
         })
     );
     assert_eq!(
@@ -1326,9 +1335,10 @@ async fn session_route_finds_browser_active_auxiliary_background_and_inactive_se
     );
     assert_eq!(
         ctx.conn.session_route(Some("SID-inactive")),
-        Some(CdpSessionRoute::ActiveTarget {
+        Some(CdpSessionRoute::PageTarget {
             browser_context_id: "BID-B".to_owned(),
-            target_id: Some("TID-000000000C".to_owned()),
+            target_id: "TID-000000000C".to_owned(),
+            is_attached_session: false,
         })
     );
     assert_eq!(ctx.conn.session_route(Some("SID-missing")), None);
@@ -1348,9 +1358,10 @@ async fn session_route_finds_browser_active_auxiliary_background_and_inactive_se
     );
     assert_eq!(
         ctx.conn.session_route(Some("SID-inactive-aux-background")),
-        Some(CdpSessionRoute::AuxiliaryTarget {
+        Some(CdpSessionRoute::PageTarget {
             browser_context_id: "BID-B".to_owned(),
             target_id: "TID-000000000D".to_owned(),
+            is_attached_session: true,
         })
     );
     assert_eq!(
@@ -2838,8 +2849,9 @@ async fn set_auto_attach_true_attaches_existing_page_target_for_each_owner() {
     assert_ne!(owner_page_session_id, browser_session_id);
     assert!(matches!(
         ctx.conn.session_route(Some(&owner_page_session_id)),
-        Some(CdpSessionRoute::AuxiliaryTarget {
+        Some(CdpSessionRoute::PageTarget {
             target_id,
+            is_attached_session: true,
             ..
         }) if target_id == "TID-page"
     ));

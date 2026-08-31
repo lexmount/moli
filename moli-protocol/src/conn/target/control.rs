@@ -477,6 +477,14 @@ impl TargetControlPlane {
         self.sessions.attached_sessions_for_target(target_id)
     }
 
+    pub(crate) fn attached_session_route(&self, session_id: &str) -> Option<&CdpSessionRoute> {
+        self.sessions.attached_session_route(session_id)
+    }
+
+    pub(crate) fn browser_session_count(&self) -> usize {
+        self.sessions.browser_session_count()
+    }
+
     pub(crate) fn target_has_waiting_for_debugger_session(&self, target_id: &str) -> bool {
         self.sessions
             .target_has_waiting_for_debugger_session(target_id)
@@ -647,9 +655,10 @@ mod tests {
     #[test]
     fn commit_auto_attached_session_event_records_committed_session_plan() {
         let mut control = TargetControlPlane::default();
-        let route = CdpSessionRoute::ActiveTarget {
+        let route = CdpSessionRoute::PageTarget {
             browser_context_id: "BID-1".to_owned(),
-            target_id: Some("TID-page".to_owned()),
+            target_id: "TID-page".to_owned(),
+            is_attached_session: false,
         };
 
         control.ensure_owner(Some("SID-tab"));
@@ -688,9 +697,10 @@ mod tests {
     #[test]
     fn detach_attached_session_event_plan_records_detached_session() {
         let mut control = TargetControlPlane::default();
-        let route = CdpSessionRoute::ActiveTarget {
+        let route = CdpSessionRoute::PageTarget {
             browser_context_id: "BID-1".to_owned(),
-            target_id: Some("TID-page".to_owned()),
+            target_id: "TID-page".to_owned(),
+            is_attached_session: false,
         };
         control.commit_attached_session_event(
             "SID-page".to_owned(),
@@ -737,9 +747,10 @@ mod tests {
                 session_id.to_owned(),
                 None,
                 "TID-page",
-                Some(CdpSessionRoute::ActiveTarget {
+                Some(CdpSessionRoute::PageTarget {
                     browser_context_id: "BID-1".to_owned(),
-                    target_id: Some("TID-page".to_owned()),
+                    target_id: "TID-page".to_owned(),
+                    is_attached_session: false,
                 }),
                 false,
                 false,
@@ -772,9 +783,10 @@ mod tests {
                 session_id.to_owned(),
                 None,
                 "TID-page",
-                Some(CdpSessionRoute::ActiveTarget {
+                Some(CdpSessionRoute::PageTarget {
                     browser_context_id: "BID-1".to_owned(),
-                    target_id: Some("TID-page".to_owned()),
+                    target_id: "TID-page".to_owned(),
+                    is_attached_session: false,
                 }),
                 false,
                 false,
@@ -810,9 +822,10 @@ mod tests {
             "SID-page".to_owned(),
             Some("SID-tab"),
             "TID-page",
-            Some(CdpSessionRoute::ActiveTarget {
+            Some(CdpSessionRoute::PageTarget {
                 browser_context_id: "BID-1".to_owned(),
-                target_id: Some("TID-page".to_owned()),
+                target_id: "TID-page".to_owned(),
+                is_attached_session: true,
             }),
             true,
             false,

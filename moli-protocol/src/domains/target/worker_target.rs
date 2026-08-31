@@ -6856,9 +6856,10 @@ mod tests {
         assert_eq!(conn.session_route(Some(&attached_session_id)), None);
         assert_eq!(
             conn.session_route(Some("SID-page")),
-            Some(crate::conn::CdpSessionRoute::ActiveTarget {
+            Some(crate::conn::CdpSessionRoute::PageTarget {
                 browser_context_id: "BID-1".to_owned(),
-                target_id: Some("TID-page".to_owned())
+                target_id: "TID-page".to_owned(),
+                is_attached_session: false,
             }),
             "dropping late shared worker output must not disturb or reuse the active page session"
         );

@@ -1304,13 +1304,15 @@ impl CdpConnection {
         if let Some(route) = self.session_route(session_id) {
             return Some(route);
         }
-        self.target_owner_identity_for_session(session_id)
-            .map(
-                |(browser_context_id, target_id)| CdpSessionRoute::ActiveTarget {
+        self.target_owner_identity_for_session(session_id).and_then(
+            |(browser_context_id, target_id)| {
+                target_id.map(|target_id| CdpSessionRoute::PageTarget {
                     browser_context_id,
                     target_id,
-                },
-            )
+                    is_attached_session: false,
+                })
+            },
+        )
     }
 
     pub(crate) fn next_internal_runtime_command_id(&mut self) -> u64 {
@@ -4382,15 +4384,10 @@ impl CdpConnection {
                     .browser_context
                     .as_ref()
                     .and_then(|bc| bc.active_target_id_owned()),
-                CdpSessionRoute::ActiveTarget {
-                    browser_context_id,
-                    target_id,
-                } => target_id.or_else(|| {
-                    self.browser_context_by_id(&browser_context_id)?
-                        .active_target_id_owned()
-                }),
-                CdpSessionRoute::AuxiliaryTarget { target_id, .. }
-                | CdpSessionRoute::PageTargetHost { target_id, .. } => Some(target_id),
+                CdpSessionRoute::BrowserContext { browser_context_id } => self
+                    .browser_context_by_id(&browser_context_id)
+                    .and_then(|bc| bc.active_target_id_owned()),
+                CdpSessionRoute::PageTarget { target_id, .. } => Some(target_id),
                 CdpSessionRoute::TabTarget { .. }
                 | CdpSessionRoute::SharedWorkerTarget { .. }
                 | CdpSessionRoute::DedicatedWorkerTarget { .. }

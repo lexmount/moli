@@ -1932,31 +1932,14 @@ fn start_timezone_update_for_current_route(
 }
 
 fn pending_emulation_target_for_route(
-    conn: &CdpConnection,
+    _conn: &CdpConnection,
     route: &CdpSessionRoute,
 ) -> Result<PendingEmulationPageTarget, DevToolsError> {
     match route {
-        CdpSessionRoute::ActiveTarget {
+        CdpSessionRoute::PageTarget {
             browser_context_id,
             target_id,
-        } => {
-            let target_id = target_id
-                .clone()
-                .or_else(|| {
-                    conn.browser_context_by_id(browser_context_id)
-                        .and_then(BrowserContext::active_target_id_owned)
-                })
-                .ok_or_else(|| {
-                    DevToolsError::new(DevToolsErrorKind::NoSuchTarget, "NoSuchTarget")
-                })?;
-            Ok(PendingEmulationPageTarget::BrowserContextTarget {
-                browser_context_id: browser_context_id.clone(),
-                target_id,
-            })
-        }
-        CdpSessionRoute::PageTargetHost {
-            browser_context_id,
-            target_id,
+            ..
         } => Ok(PendingEmulationPageTarget::BrowserContextTarget {
             browser_context_id: browser_context_id.clone(),
             target_id: target_id.clone(),
@@ -2044,16 +2027,11 @@ fn top_level_target_routes_for_browser_contexts(
         {
             continue;
         }
-        if browser_context.active_target_id().is_some() {
-            routes.push(CdpSessionRoute::ActiveTarget {
-                browser_context_id: browser_context.id.clone(),
-                target_id: None,
-            });
-        }
-        routes.extend(browser_context.background_targets().map(|target| {
-            CdpSessionRoute::PageTargetHost {
+        routes.extend(browser_context.page_targets.iter().map(|target| {
+            CdpSessionRoute::PageTarget {
                 browser_context_id: browser_context.id.clone(),
                 target_id: target.target_id().to_owned(),
+                is_attached_session: false,
             }
         }));
     }

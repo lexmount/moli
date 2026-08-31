@@ -1064,11 +1064,10 @@ async fn detach_from_target_inner_async(
 
 fn detach_session_route_target_id(route: &crate::conn::CdpSessionRoute) -> Option<&str> {
     match route {
-        crate::conn::CdpSessionRoute::Browser => None,
+        crate::conn::CdpSessionRoute::Browser
+        | crate::conn::CdpSessionRoute::BrowserContext { .. } => None,
         crate::conn::CdpSessionRoute::TabTarget { tab_target_id, .. } => Some(tab_target_id),
-        crate::conn::CdpSessionRoute::ActiveTarget { target_id, .. } => target_id.as_deref(),
-        crate::conn::CdpSessionRoute::AuxiliaryTarget { target_id, .. }
-        | crate::conn::CdpSessionRoute::PageTargetHost { target_id, .. }
+        crate::conn::CdpSessionRoute::PageTarget { target_id, .. }
         | crate::conn::CdpSessionRoute::SharedWorkerTarget { target_id, .. }
         | crate::conn::CdpSessionRoute::DedicatedWorkerTarget { target_id, .. }
         | crate::conn::CdpSessionRoute::ServiceWorkerTarget { target_id, .. } => Some(target_id),

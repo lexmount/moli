@@ -49,14 +49,11 @@ impl CdpConnection {
                 .browser_context
                 .as_mut()
                 .ok_or((-31998, "BrowserContextNotLoaded")),
+            CdpSessionRoute::BrowserContext { browser_context_id } => self
+                .browser_context_by_id_mut(&browser_context_id)
+                .ok_or((-31998, "UnknownBrowserContextId")),
             CdpSessionRoute::TabTarget { .. } => Err((-31998, "DirectSessionRouteRequired")),
-            CdpSessionRoute::ActiveTarget {
-                browser_context_id, ..
-            }
-            | CdpSessionRoute::AuxiliaryTarget {
-                browser_context_id, ..
-            }
-            | CdpSessionRoute::PageTargetHost {
+            CdpSessionRoute::PageTarget {
                 browser_context_id, ..
             }
             | CdpSessionRoute::SharedWorkerTarget {

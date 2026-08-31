@@ -220,9 +220,10 @@ mod tests {
     #[test]
     fn implicit_page_owner_reenters_its_frozen_route_and_restores_the_caller() {
         let mut conn = connection_with_page_session();
-        let owner_route = crate::conn::CdpSessionRoute::ActiveTarget {
+        let owner_route = crate::conn::CdpSessionRoute::PageTarget {
             browser_context_id: "BID-owner".to_owned(),
-            target_id: Some("TID-owner".to_owned()),
+            target_id: "TID-owner".to_owned(),
+            is_attached_session: false,
         };
         let owner = {
             let mut scope = conn.scoped_none_session_owner_route_override(owner_route.clone());

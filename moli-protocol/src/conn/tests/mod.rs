@@ -489,13 +489,15 @@ fn navigation_gate_resolves_websocket_events_to_their_session_target() {
 #[test]
 fn none_session_owner_route_override_scope_restores_previous_route_on_drop() {
     let mut conn = CdpConnection::new();
-    let previous_route = CdpSessionRoute::ActiveTarget {
+    let previous_route = CdpSessionRoute::PageTarget {
         browser_context_id: "BID-active".to_owned(),
-        target_id: Some("TID-active".to_owned()),
+        target_id: "TID-active".to_owned(),
+        is_attached_session: false,
     };
-    let scoped_route = CdpSessionRoute::PageTargetHost {
+    let scoped_route = CdpSessionRoute::PageTarget {
         browser_context_id: "BID-background".to_owned(),
         target_id: "TID-background".to_owned(),
+        is_attached_session: false,
     };
 
     conn.replace_none_session_owner_route_override(Some(previous_route.clone()));

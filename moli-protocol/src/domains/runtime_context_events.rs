@@ -276,10 +276,9 @@ fn qualify_worker_runtime_context_event_for_session_owner(
             }
         }
         CdpSessionRoute::Browser
+        | CdpSessionRoute::BrowserContext { .. }
         | CdpSessionRoute::TabTarget { .. }
-        | CdpSessionRoute::ActiveTarget { .. }
-        | CdpSessionRoute::AuxiliaryTarget { .. }
-        | CdpSessionRoute::PageTargetHost { .. } => {}
+        | CdpSessionRoute::PageTarget { .. } => {}
     }
 }
 

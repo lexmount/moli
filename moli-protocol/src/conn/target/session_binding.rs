@@ -40,20 +40,23 @@ impl CdpConnection {
         let Some(session_id) = session_id else {
             return false;
         };
-        self.browser_session_ids.contains(session_id)
+        self.target_control.attached_session_route(session_id) == Some(&CdpSessionRoute::Browser)
     }
 
     #[cfg(test)]
     pub(crate) fn register_browser_session(&mut self, session_id: String) {
-        self.browser_session_ids.insert(session_id);
-    }
-
-    pub(crate) fn remove_browser_session(&mut self, session_id: &str) -> bool {
-        self.browser_session_ids.remove(session_id)
+        self.target_control.commit_attached_session(
+            session_id,
+            None,
+            "browser",
+            Some(CdpSessionRoute::Browser),
+            false,
+            false,
+        );
     }
 
     fn clear_browser_session_owner_state(&mut self, session_id: &str) -> bool {
-        if !self.remove_browser_session(session_id) {
+        if !self.is_browser_session_id(Some(session_id)) {
             return false;
         }
         self.download_behavior
@@ -488,7 +491,6 @@ impl CdpConnection {
         target_id: &str,
         target_info: DevToolsTargetInfo,
     ) -> TargetEventPlan {
-        self.browser_session_ids.insert(session_id.clone());
         self.target_control.commit_attached_session_event(
             session_id,
             owner_session_id,
@@ -602,11 +604,14 @@ impl CdpConnection {
         if let Some(cleanup_plan) = rollback_plan.cleanup_plan() {
             if matches!(
                 cleanup_plan.action(),
-                TargetBindingCleanupAction::ActiveTargetPrimaryAutoAttached
+                TargetBindingCleanupAction::PageTarget {
+                    is_attached_session: false,
+                    ..
+                }
             ) {
                 debug_assert!(
                     false,
-                    "active target rollback requires async binding cleanup"
+                    "primary Page target rollback requires async binding cleanup"
                 );
             } else {
                 self.execute_target_binding_cleanup_without_event_sync(cleanup_plan);
@@ -620,14 +625,10 @@ impl CdpConnection {
         cleanup_plan: &TargetBindingCleanupPlan,
     ) {
         match cleanup_plan.action() {
-            TargetBindingCleanupAction::BackgroundTargetPrimaryAutoAttached { .. } => {
-                if let Some(bc) = self.browser_context.as_mut() {
-                    let _ = bc.clear_background_target_primary_auto_attached_session(
-                        cleanup_plan.session_id(),
-                    );
-                }
-            }
-            TargetBindingCleanupAction::AuxiliaryTarget { .. } => {
+            TargetBindingCleanupAction::PageTarget {
+                is_attached_session: true,
+                ..
+            } => {
                 if let Some(bc) = self.browser_context.as_mut() {
                     let _ = bc.remove_auxiliary_session(cleanup_plan.session_id());
                 }
@@ -651,7 +652,10 @@ impl CdpConnection {
                 }
             }
             TargetBindingCleanupAction::None
-            | TargetBindingCleanupAction::ActiveTargetPrimaryAutoAttached => {}
+            | TargetBindingCleanupAction::PageTarget {
+                is_attached_session: false,
+                ..
+            } => {}
         }
     }
 
@@ -702,21 +706,26 @@ impl CdpConnection {
         )
         .await;
         match cleanup_plan.action() {
-            TargetBindingCleanupAction::ActiveTargetPrimaryAutoAttached => {
+            TargetBindingCleanupAction::PageTarget {
+                target_id,
+                is_attached_session: false,
+            } => {
                 if let Some(bc) = self.browser_context.as_mut() {
-                    let _ = bc
-                        .clear_active_target_primary_auto_attached_session_async()
-                        .await;
+                    if bc.is_active_target(target_id) {
+                        let _ = bc
+                            .clear_active_target_primary_auto_attached_session_async()
+                            .await;
+                    } else {
+                        let _ = bc.clear_background_target_primary_auto_attached_session(
+                            cleanup_plan.session_id(),
+                        );
+                    }
                 }
             }
-            TargetBindingCleanupAction::BackgroundTargetPrimaryAutoAttached { .. } => {
-                if let Some(bc) = self.browser_context.as_mut() {
-                    let _ = bc.clear_background_target_primary_auto_attached_session(
-                        cleanup_plan.session_id(),
-                    );
-                }
-            }
-            TargetBindingCleanupAction::AuxiliaryTarget { .. } => {
+            TargetBindingCleanupAction::PageTarget {
+                is_attached_session: true,
+                ..
+            } => {
                 if let Some(bc) = self.browser_context.as_mut() {
                     let _ = bc.remove_auxiliary_session(cleanup_plan.session_id());
                 }

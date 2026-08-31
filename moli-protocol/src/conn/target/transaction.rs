@@ -318,26 +318,34 @@ impl TargetBindingCleanupPlan {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum TargetBindingCleanupAction {
     None,
-    ActiveTargetPrimaryAutoAttached,
-    BackgroundTargetPrimaryAutoAttached { target_id: String },
-    AuxiliaryTarget { target_id: String },
-    TabTarget { tab_target_id: String },
-    SharedWorkerTarget { target_id: String },
-    DedicatedWorkerTarget { target_id: String },
-    ServiceWorkerTarget { target_id: String },
+    PageTarget {
+        target_id: String,
+        is_attached_session: bool,
+    },
+    TabTarget {
+        tab_target_id: String,
+    },
+    SharedWorkerTarget {
+        target_id: String,
+    },
+    DedicatedWorkerTarget {
+        target_id: String,
+    },
+    ServiceWorkerTarget {
+        target_id: String,
+    },
 }
 
 impl TargetBindingCleanupAction {
     fn from_route(route: &CdpSessionRoute) -> Self {
         match route {
-            CdpSessionRoute::ActiveTarget { .. } => Self::ActiveTargetPrimaryAutoAttached,
-            CdpSessionRoute::PageTargetHost { target_id, .. } => {
-                Self::BackgroundTargetPrimaryAutoAttached {
-                    target_id: target_id.clone(),
-                }
-            }
-            CdpSessionRoute::AuxiliaryTarget { target_id, .. } => Self::AuxiliaryTarget {
+            CdpSessionRoute::PageTarget {
+                target_id,
+                is_attached_session,
+                ..
+            } => Self::PageTarget {
                 target_id: target_id.clone(),
+                is_attached_session: *is_attached_session,
             },
             CdpSessionRoute::TabTarget { tab_target_id, .. } => Self::TabTarget {
                 tab_target_id: tab_target_id.clone(),
@@ -353,7 +361,7 @@ impl TargetBindingCleanupAction {
             CdpSessionRoute::ServiceWorkerTarget { target_id, .. } => Self::ServiceWorkerTarget {
                 target_id: target_id.clone(),
             },
-            CdpSessionRoute::Browser => Self::None,
+            CdpSessionRoute::Browser | CdpSessionRoute::BrowserContext { .. } => Self::None,
         }
     }
 }
@@ -560,26 +568,32 @@ mod tests {
         assert_eq!(
             TargetBindingCleanupPlan::from_route(
                 "SID-active",
-                &CdpSessionRoute::ActiveTarget {
+                &CdpSessionRoute::PageTarget {
                     browser_context_id: "BID-1".to_owned(),
-                    target_id: Some("TID-active".to_owned()),
+                    target_id: "TID-active".to_owned(),
+                    is_attached_session: false,
                 },
             )
             .action(),
-            &TargetBindingCleanupAction::ActiveTargetPrimaryAutoAttached,
+            &TargetBindingCleanupAction::PageTarget {
+                target_id: "TID-active".to_owned(),
+                is_attached_session: false,
+            },
         );
 
         assert_eq!(
             TargetBindingCleanupPlan::from_route(
                 "SID-bg",
-                &CdpSessionRoute::PageTargetHost {
+                &CdpSessionRoute::PageTarget {
                     browser_context_id: "BID-1".to_owned(),
                     target_id: "TID-bg".to_owned(),
+                    is_attached_session: false,
                 },
             )
             .action(),
-            &TargetBindingCleanupAction::BackgroundTargetPrimaryAutoAttached {
-                target_id: "TID-bg".to_owned()
+            &TargetBindingCleanupAction::PageTarget {
+                target_id: "TID-bg".to_owned(),
+                is_attached_session: false,
             },
         );
 

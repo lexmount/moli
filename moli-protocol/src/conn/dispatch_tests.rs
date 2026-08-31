@@ -311,7 +311,7 @@ async fn assert_bidi_fetch_action_consumes_background_request(
     let mut conn = connection_with_background_pending_fetch_action(request_id);
     assert!(matches!(
         conn.pending_fetch_request_session_route(request_id),
-        Some(CdpSessionRoute::PageTargetHost { target_id, .. }) if target_id == "TID-background"
+        Some(CdpSessionRoute::PageTarget { target_id, .. }) if target_id == "TID-background"
     ));
 
     let (result, events, protocol_events, renderer_output_predecessor) = conn
@@ -731,7 +731,7 @@ async fn bidi_fetch_control_resolves_background_request_owner() {
 
     assert!(matches!(
         conn.pending_fetch_request_session_route("FETCH-background"),
-        Some(CdpSessionRoute::PageTargetHost { target_id, .. }) if target_id == "TID-background"
+        Some(CdpSessionRoute::PageTarget { target_id, .. }) if target_id == "TID-background"
     ));
 
     let context = DevToolsCommandContext {

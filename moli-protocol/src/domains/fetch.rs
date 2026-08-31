@@ -236,13 +236,10 @@ impl PendingFetchCommandDispatch {
         // BrowserContext becomes active before the completion is processed.
         let session_owner_route =
             match session_id.and_then(|session_id| conn.session_route(Some(session_id))) {
-                Some(
-                    route @ (CdpSessionRoute::ActiveTarget { .. }
-                    | CdpSessionRoute::AuxiliaryTarget { .. }
-                    | CdpSessionRoute::PageTargetHost { .. }),
-                ) => Some(route),
+                Some(route @ CdpSessionRoute::PageTarget { .. }) => Some(route),
                 Some(
                     CdpSessionRoute::Browser
+                    | CdpSessionRoute::BrowserContext { .. }
                     | CdpSessionRoute::TabTarget { .. }
                     | CdpSessionRoute::SharedWorkerTarget { .. }
                     | CdpSessionRoute::DedicatedWorkerTarget { .. }

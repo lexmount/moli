@@ -710,15 +710,12 @@ fn effective_storage_browser_context_id(
     }
     if let Some(session_id) = session_id {
         return match conn.session_route(Some(session_id)) {
-            Some(crate::conn::CdpSessionRoute::ActiveTarget {
+            Some(crate::conn::CdpSessionRoute::PageTarget {
                 browser_context_id, ..
             })
-            | Some(crate::conn::CdpSessionRoute::AuxiliaryTarget {
-                browser_context_id, ..
-            })
-            | Some(crate::conn::CdpSessionRoute::PageTargetHost {
-                browser_context_id, ..
-            }) => Ok(browser_context_id),
+            | Some(crate::conn::CdpSessionRoute::BrowserContext { browser_context_id }) => {
+                Ok(browser_context_id)
+            }
             Some(crate::conn::CdpSessionRoute::Browser) => conn
                 .browser_context
                 .as_ref()

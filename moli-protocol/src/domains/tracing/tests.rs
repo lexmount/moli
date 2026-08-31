@@ -698,9 +698,10 @@ fn tracing_owner_scope_distinguishes_flattened_sessions() {
     let ctx = context_with_page_sessions();
     assert_eq!(
         ctx.conn.session_route(Some("SID-peer")),
-        Some(CdpSessionRoute::AuxiliaryTarget {
+        Some(CdpSessionRoute::PageTarget {
             browser_context_id: "BID-tracing".to_owned(),
             target_id: "TID-tracing".to_owned(),
+            is_attached_session: true,
         })
     );
     assert_ne!(

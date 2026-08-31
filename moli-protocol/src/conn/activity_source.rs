@@ -4,7 +4,7 @@ use moli_core::{
 };
 use std::time::Instant;
 
-use super::{BrowserContext, CdpConnection, CdpSessionRoute, TargetRuntimeSlot};
+use super::{CdpConnection, CdpSessionRoute, TargetRuntimeSlot};
 
 pub(crate) struct PendingChildFrameLifecycleWork {
     session_id: Option<String>,
@@ -42,29 +42,21 @@ impl CdpConnection {
                 .unwrap_or(CdpSessionRoute::Browser),
         };
         let (browser_context_id, target_id) = match &route {
-            CdpSessionRoute::ActiveTarget {
+            CdpSessionRoute::PageTarget {
                 browser_context_id,
                 target_id,
-            } => (
-                browser_context_id.clone(),
-                target_id.clone().or_else(|| {
-                    self.browser_context_by_id(browser_context_id)
-                        .and_then(BrowserContext::active_target_id)
-                        .map(str::to_owned)
-                })?,
-            ),
-            CdpSessionRoute::AuxiliaryTarget {
-                browser_context_id,
-                target_id,
-            }
-            | CdpSessionRoute::PageTargetHost {
-                browser_context_id,
-                target_id,
+                ..
             } => (browser_context_id.clone(), target_id.clone()),
             CdpSessionRoute::Browser => {
                 let context = self.browser_context.as_ref()?;
                 (context.id.clone(), context.active_target_id()?.to_owned())
             }
+            CdpSessionRoute::BrowserContext { browser_context_id } => (
+                browser_context_id.clone(),
+                self.browser_context_by_id(browser_context_id)?
+                    .active_target_id()?
+                    .to_owned(),
+            ),
             CdpSessionRoute::TabTarget { .. }
             | CdpSessionRoute::SharedWorkerTarget { .. }
             | CdpSessionRoute::DedicatedWorkerTarget { .. }

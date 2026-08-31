@@ -345,9 +345,15 @@ impl TargetSessionRegistry {
         }
     }
 
-    #[cfg(test)]
     pub(crate) fn attached_session_route(&self, session_id: &str) -> Option<&CdpSessionRoute> {
         self.attached_sessions.get(session_id)?.route.as_ref()
+    }
+
+    pub(crate) fn browser_session_count(&self) -> usize {
+        self.attached_sessions
+            .values()
+            .filter(|session| session.route == Some(CdpSessionRoute::Browser))
+            .count()
     }
 
     pub(crate) fn attached_sessions_for_target(&self, target_id: &str) -> Vec<String> {
@@ -644,9 +650,10 @@ mod tests {
                 session_id.to_owned(),
                 owner_session_id,
                 target_id,
-                Some(CdpSessionRoute::ActiveTarget {
+                Some(CdpSessionRoute::PageTarget {
                     browser_context_id: "BID-1".to_owned(),
-                    target_id: Some(target_id.to_owned()),
+                    target_id: target_id.to_owned(),
+                    is_attached_session: auto_attached,
                 }),
                 auto_attached,
                 false,
@@ -740,9 +747,10 @@ mod tests {
             "SID-page".to_owned(),
             Some("SID-tab"),
             "TID-page",
-            Some(CdpSessionRoute::ActiveTarget {
+            Some(CdpSessionRoute::PageTarget {
                 browser_context_id: "BID-1".to_owned(),
-                target_id: Some("TID-page".to_owned()),
+                target_id: "TID-page".to_owned(),
+                is_attached_session: false,
             }),
             true,
             true,

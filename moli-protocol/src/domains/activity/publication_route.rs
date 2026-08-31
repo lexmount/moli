@@ -53,7 +53,7 @@ pub(crate) enum RendererPublicationProjection {
 impl RendererPublicationRoute {
     fn for_target(
         browser_context_id: String,
-        target_id: Option<String>,
+        target_id: String,
         session_id: Option<String>,
         projection: RendererPublicationProjection,
     ) -> Self {
@@ -63,15 +63,10 @@ impl RendererPublicationRoute {
                 projection,
             };
         }
-        let owner_route = match target_id {
-            Some(target_id) => CdpSessionRoute::PageTargetHost {
-                browser_context_id,
-                target_id,
-            },
-            None => CdpSessionRoute::ActiveTarget {
-                browser_context_id,
-                target_id: None,
-            },
+        let owner_route = CdpSessionRoute::PageTarget {
+            browser_context_id,
+            target_id,
+            is_attached_session: false,
         };
         Self::UnattachedOwner {
             owner_route,
@@ -129,9 +124,10 @@ impl RendererPublicationOwner {
                     .chain(conn.inactive_browser_contexts.iter())
                     .find(|browser_context| browser_context.id == *browser_context_id)?;
                 Some(RendererPublicationRoute::UnattachedOwner {
-                    owner_route: CdpSessionRoute::ActiveTarget {
+                    owner_route: CdpSessionRoute::PageTarget {
                         browser_context_id: browser_context.id.clone(),
-                        target_id: None,
+                        target_id: browser_context.active_target_id()?.to_owned(),
+                        is_attached_session: false,
                     },
                     projection: RendererPublicationProjection::CurrentPage,
                 })
@@ -165,7 +161,7 @@ impl RendererPublicationOwner {
                     };
                     let route_for =
                         |runtime_slot: &crate::conn::TargetRuntimeSlot,
-                         route_target_id: Option<String>,
+                         route_target_id: String,
                          session_id: Option<String>| {
                             projection_for(runtime_slot).map(|projection| {
                                 RendererPublicationRoute::for_target(
@@ -190,12 +186,9 @@ impl RendererPublicationOwner {
                                 .flatten()
                         });
                     let frozen_route = frozen_target.and_then(|target| {
-                        let route_target_id = (!browser_context
-                            .is_active_target(target.target_id()))
-                        .then(|| target.target_id().to_owned());
                         route_for(
                             target.runtime_slot(),
-                            route_target_id,
+                            target.target_id().to_owned(),
                             target.session_id().map(str::to_owned),
                         )
                     });
@@ -208,12 +201,9 @@ impl RendererPublicationOwner {
                     // attachment id remain stable across that rename, so use
                     // those identities to recover the current concrete route.
                     browser_context.page_targets.iter().find_map(|target| {
-                        let route_target_id = (!browser_context
-                            .is_active_target(target.target_id()))
-                        .then(|| target.target_id().to_owned());
                         route_for(
                             target.runtime_slot(),
-                            route_target_id,
+                            target.target_id().to_owned(),
                             target.session_id().map(str::to_owned),
                         )
                     })

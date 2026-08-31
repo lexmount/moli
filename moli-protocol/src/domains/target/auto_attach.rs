@@ -178,21 +178,7 @@ fn owner_already_auto_attached_to_page_target(
     conn.auto_attached_sessions_for_owner(owner_session_id)
         .into_iter()
         .any(|session_id| match conn.session_route(Some(&session_id)) {
-            Some(crate::conn::CdpSessionRoute::ActiveTarget {
-                browser_context_id,
-                target_id: route_target_id,
-            }) => {
-                route_target_id.as_deref() == Some(target_id)
-                    || conn
-                        .browser_context_by_id(&browser_context_id)
-                        .and_then(BrowserContext::active_target_id)
-                        == Some(target_id)
-            }
-            Some(crate::conn::CdpSessionRoute::PageTargetHost {
-                target_id: route_target_id,
-                ..
-            })
-            | Some(crate::conn::CdpSessionRoute::AuxiliaryTarget {
+            Some(crate::conn::CdpSessionRoute::PageTarget {
                 target_id: route_target_id,
                 ..
             }) => route_target_id == target_id,
@@ -265,21 +251,7 @@ fn page_session_route_matches_target(
     target_id: &str,
 ) -> bool {
     match conn.session_route(Some(session_id)) {
-        Some(crate::conn::CdpSessionRoute::ActiveTarget {
-            browser_context_id,
-            target_id: route_target_id,
-        }) => {
-            route_target_id.as_deref() == Some(target_id)
-                || conn
-                    .browser_context_by_id(&browser_context_id)
-                    .and_then(BrowserContext::active_target_id)
-                    == Some(target_id)
-        }
-        Some(crate::conn::CdpSessionRoute::PageTargetHost {
-            target_id: route_target_id,
-            ..
-        })
-        | Some(crate::conn::CdpSessionRoute::AuxiliaryTarget {
+        Some(crate::conn::CdpSessionRoute::PageTarget {
             target_id: route_target_id,
             ..
         }) => route_target_id == target_id,
@@ -1063,12 +1035,10 @@ pub(super) async fn release_attached_sessions_for_root_frontend_async(
         let detach_plan = conn.auto_attached_session_detach_plan(&session_id);
         let preserves_other_frontends = matches!(
             detach_plan.cleanup_plan().map(|plan| plan.action()),
-            Some(
-                crate::conn::TargetBindingCleanupAction::ActiveTargetPrimaryAutoAttached
-                    | crate::conn::TargetBindingCleanupAction::BackgroundTargetPrimaryAutoAttached {
-                        ..
-                    }
-            )
+            Some(crate::conn::TargetBindingCleanupAction::PageTarget {
+                is_attached_session: false,
+                ..
+            })
         );
         if !preserves_other_frontends {
             detach_attached_session_for_owner_async(conn, out, &session_id, command_context).await;
@@ -1139,19 +1109,10 @@ async fn detach_attached_session_for_owner_async(
         return;
     };
     match cleanup_plan.action().clone() {
-        crate::conn::TargetBindingCleanupAction::ActiveTargetPrimaryAutoAttached => {
-            let target_id = conn
-                .browser_context
-                .as_ref()
-                .and_then(BrowserContext::active_target_identity)
-                .and_then(|(target_id, current_session_id)| {
-                    (current_session_id.as_deref() == Some(session_id))
-                        .then(|| target_id.to_owned())
-                });
-            let Some(target_id) = target_id else {
-                conn.rollback_auto_attached_session_detach_plan_without_event(&detach_plan);
-                return;
-            };
+        crate::conn::TargetBindingCleanupAction::PageTarget {
+            target_id,
+            is_attached_session,
+        } => {
             // A parent-session detach cascade bypasses the direct
             // Target.detachFromTarget path. Release the renderer inspector
             // here before resetting protocol state so the replacement primary
@@ -1165,61 +1126,29 @@ async fn detach_attached_session_for_owner_async(
             let _ = conn
                 .detach_runtime_inspector_session_for_session_owner_async(Some(session_id))
                 .await;
-            events::fail_pending_fetch_state_for_target_background_events_async(
-                conn,
-                out.background_events_mut(),
-                Some(session_id),
-                "Target detached",
-            )
-            .await;
-            let event_plan = conn
-                .detach_session_with_binding_cleanup_event_plan_async(
-                    crate::conn::TargetSessionDetachCleanupPlan::new(
-                        target_id, session_id, None, None,
-                    ),
+            if is_attached_session {
+                clear_detached_session_target_overrides_best_effort(conn, session_id).await;
+                super::clear_detached_target_fetch_state_background_events_async(
+                    conn,
+                    out.background_events_mut(),
+                    session_id,
                 )
                 .await;
-            out.extend_background_events(event_plan);
-        }
-        crate::conn::TargetBindingCleanupAction::AuxiliaryTarget { target_id } => {
-            conn.fail_pending_inspector_awaits_for_session_owner_background_events_into(
-                out.background_events_mut(),
-                command_context.protocol_events_mut(),
-                Some(session_id),
-                "Target detached",
-            );
-            let _ = conn
-                .detach_runtime_inspector_session_for_session_owner_async(Some(session_id))
-                .await;
-            clear_detached_session_target_overrides_best_effort(conn, session_id).await;
-            super::clear_detached_target_fetch_state_background_events_async(
-                conn,
-                out.background_events_mut(),
-                session_id,
-            )
-            .await;
-            let event_plan = conn
-                .detach_session_with_binding_cleanup_event_plan_async(
-                    crate::conn::TargetSessionDetachCleanupPlan::new(
-                        target_id, session_id, None, None,
-                    ),
+            } else if conn
+                .browser_context
+                .as_ref()
+                .is_some_and(|browser_context| browser_context.is_active_target(&target_id))
+            {
+                events::fail_pending_fetch_state_for_target_background_events_async(
+                    conn,
+                    out.background_events_mut(),
+                    Some(session_id),
+                    "Target detached",
                 )
                 .await;
-            out.extend_background_events(event_plan);
-        }
-        crate::conn::TargetBindingCleanupAction::BackgroundTargetPrimaryAutoAttached {
-            target_id,
-        } => {
-            conn.fail_pending_inspector_awaits_for_session_owner_background_events_into(
-                out.background_events_mut(),
-                command_context.protocol_events_mut(),
-                Some(session_id),
-                "Target detached",
-            );
-            let _ = conn
-                .detach_runtime_inspector_session_for_session_owner_async(Some(session_id))
-                .await;
-            clear_detached_session_target_overrides_best_effort(conn, session_id).await;
+            } else {
+                clear_detached_session_target_overrides_best_effort(conn, session_id).await;
+            }
             let event_plan = conn
                 .detach_session_with_binding_cleanup_event_plan_async(
                     crate::conn::TargetSessionDetachCleanupPlan::new(

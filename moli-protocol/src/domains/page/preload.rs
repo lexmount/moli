@@ -461,15 +461,17 @@ async fn execute_devtools_browser_context_add_preload_script_command(
             .record_default_document_start_script_with_identifier(identifier.clone(), &script);
     }
     for browser_context_id in &browser_context_ids {
-        let has_active_target = conn
+        let active_target_id = conn
             .browser_context_by_id(browser_context_id)
-            .is_some_and(|browser_context| browser_context.active_target_id().is_some());
-        if !has_active_target {
+            .and_then(BrowserContext::active_target_id)
+            .map(str::to_owned);
+        let Some(active_target_id) = active_target_id else {
             continue;
-        }
-        let route = CdpSessionRoute::ActiveTarget {
+        };
+        let route = CdpSessionRoute::PageTarget {
             browser_context_id: browser_context_id.clone(),
-            target_id: None,
+            target_id: active_target_id,
+            is_attached_session: false,
         };
         let mut route_scope = conn.scoped_none_session_owner_route_override(route);
         append_loaded_page_document_start_script_for_session_async(
@@ -670,15 +672,17 @@ async fn execute_devtools_bidi_browser_context_remove_preload_script_command(
         }
     }
     for (browser_context_id, registry_key) in &removed_contexts {
-        let has_active_target = conn
+        let active_target_id = conn
             .browser_context_by_id(browser_context_id)
-            .is_some_and(|browser_context| browser_context.active_target_id().is_some());
-        if !has_active_target {
+            .and_then(BrowserContext::active_target_id)
+            .map(str::to_owned);
+        let Some(active_target_id) = active_target_id else {
             continue;
-        }
-        let route = CdpSessionRoute::ActiveTarget {
+        };
+        let route = CdpSessionRoute::PageTarget {
             browser_context_id: browser_context_id.clone(),
-            target_id: None,
+            target_id: active_target_id,
+            is_attached_session: false,
         };
         let mut route_scope = conn.scoped_none_session_owner_route_override(route);
         remove_loaded_page_document_start_script_for_session_async(
@@ -887,9 +891,8 @@ fn default_add_preload_command_route(
         .browser_context
         .as_ref()
         .ok_or_else(|| DevToolsError::new(DevToolsErrorKind::NoSuchTarget, "NoSuchTarget"))?;
-    Ok(CdpSessionRoute::ActiveTarget {
+    Ok(CdpSessionRoute::BrowserContext {
         browser_context_id: browser_context.id.clone(),
-        target_id: None,
     })
 }
 
@@ -947,9 +950,8 @@ fn find_default_preload_script_route(
 ) -> Option<CdpSessionRoute> {
     conn.browser_contexts()
         .find(|browser_context| browser_context.has_default_document_start_script(script_id))
-        .map(|browser_context| CdpSessionRoute::ActiveTarget {
+        .map(|browser_context| CdpSessionRoute::BrowserContext {
             browser_context_id: browser_context.id.clone(),
-            target_id: None,
         })
 }
 

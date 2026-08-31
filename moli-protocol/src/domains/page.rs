@@ -1395,9 +1395,7 @@ async fn bring_session_route_to_front_async(
 ) -> Result<Vec<BackgroundProtocolEvent>, String> {
     let (browser_context_id, target_id) = match route {
         CdpSessionRoute::Browser => return Ok(Vec::new()),
-        CdpSessionRoute::ActiveTarget {
-            browser_context_id, ..
-        } => {
+        CdpSessionRoute::BrowserContext { browser_context_id } => {
             if !conn
                 .activate_browser_context_by_id_async(&browser_context_id)
                 .await
@@ -1406,13 +1404,10 @@ async fn bring_session_route_to_front_async(
             }
             return Ok(Vec::new());
         }
-        CdpSessionRoute::AuxiliaryTarget {
+        CdpSessionRoute::PageTarget {
             browser_context_id,
             target_id,
-        }
-        | CdpSessionRoute::PageTargetHost {
-            browser_context_id,
-            target_id,
+            ..
         } => (browser_context_id, target_id),
         CdpSessionRoute::TabTarget { .. }
         | CdpSessionRoute::SharedWorkerTarget { .. }

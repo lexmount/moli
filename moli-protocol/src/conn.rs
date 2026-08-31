@@ -1150,7 +1150,6 @@ pub struct CdpConnection {
     // Browser/session routing state.
     pub browser_context: Option<BrowserContext>,
     pub inactive_browser_contexts: Vec<BrowserContext>,
-    browser_session_ids: HashSet<String>,
     /// When true, every newly-created target is immediately auto-attached.
     pub auto_attach: bool,
     /// Root/browser owner Target discovery mirror for diagnostics and
@@ -1474,7 +1473,6 @@ impl CdpConnection {
         Self {
             browser_context: None,
             inactive_browser_contexts: Vec::new(),
-            browser_session_ids: HashSet::new(),
             auto_attach: false,
             target_discovery_enabled: false,
             target_info_change_events_enabled: false,
@@ -2675,31 +2673,21 @@ impl CdpConnection {
             return;
         };
         let page_owner = match route {
-            CdpSessionRoute::PageTargetHost {
+            CdpSessionRoute::PageTarget {
                 browser_context_id,
                 target_id,
-            }
-            | CdpSessionRoute::ActiveTarget {
-                browser_context_id,
-                target_id: Some(target_id),
-            }
-            | CdpSessionRoute::AuxiliaryTarget {
-                browser_context_id,
-                target_id,
+                ..
             } => Some((browser_context_id, target_id)),
-            CdpSessionRoute::ActiveTarget {
-                browser_context_id,
-                target_id: None,
-            } => self
-                .browser_context_by_id(&browser_context_id)
-                .and_then(|browser_context| browser_context.active_target_id())
-                .map(str::to_owned)
-                .map(|target_id| (browser_context_id, target_id)),
             CdpSessionRoute::Browser
             | CdpSessionRoute::TabTarget { .. }
             | CdpSessionRoute::SharedWorkerTarget { .. }
             | CdpSessionRoute::DedicatedWorkerTarget { .. }
             | CdpSessionRoute::ServiceWorkerTarget { .. } => None,
+            CdpSessionRoute::BrowserContext { browser_context_id } => self
+                .browser_context_by_id(&browser_context_id)
+                .and_then(|browser_context| browser_context.active_target_id())
+                .map(str::to_owned)
+                .map(|target_id| (browser_context_id, target_id)),
         };
         if let Some((browser_context_id, target_id)) = page_owner {
             self.install_page_navigation_engine(&browser_context_id, &target_id, engine)
@@ -3198,7 +3186,7 @@ impl CdpConnection {
             "connection": {
                 "hasActiveBrowserContext": self.browser_context.is_some(),
                 "inactiveBrowserContextCount": self.inactive_browser_contexts.len(),
-                "browserSessionIdCount": self.browser_session_ids.len(),
+                "browserSessionIdCount": self.target_control.browser_session_count(),
                 "globalIoStreamCount": self.global_io_streams.len(),
                 "tracing": self.tracing_state.diagnostics(),
                 "permissionOverrideCount": self.permission_overrides.len(),

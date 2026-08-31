@@ -2852,7 +2852,7 @@ async fn tab_session_auto_attach_catchall_attaches_child_page() {
         .expect("page session id");
     assert!(matches!(
         ctx.conn.session_route(Some(page_session_id)),
-        Some(crate::conn::CdpSessionRoute::ActiveTarget { .. })
+        Some(crate::conn::CdpSessionRoute::PageTarget { .. })
     ));
 }
 

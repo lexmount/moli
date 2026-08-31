@@ -474,12 +474,7 @@ pub(crate) fn schedule_initial_document_target_url_navigation_after_debugger_bar
     let Some(route) = conn.target_session_route_for_target_id(target_id) else {
         return false;
     };
-    if !matches!(
-        &route,
-        crate::conn::CdpSessionRoute::ActiveTarget { .. }
-            | crate::conn::CdpSessionRoute::AuxiliaryTarget { .. }
-            | crate::conn::CdpSessionRoute::PageTargetHost { .. }
-    ) {
+    if !matches!(&route, crate::conn::CdpSessionRoute::PageTarget { .. }) {
         return false;
     }
     let Some(browser_context_id) = route.browser_context_id().map(str::to_owned) else {

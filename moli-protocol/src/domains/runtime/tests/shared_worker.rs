@@ -3640,9 +3640,10 @@ async fn shared_worker_discard_console_entries_is_target_local() {
     );
     assert_eq!(
         ctx.conn.session_route(Some("SID-page")),
-        Some(crate::conn::CdpSessionRoute::ActiveTarget {
+        Some(crate::conn::CdpSessionRoute::PageTarget {
             browser_context_id: "BID-shared".to_owned(),
-            target_id: Some("TID-page".to_owned())
+            target_id: "TID-page".to_owned(),
+            is_attached_session: false,
         }),
         "shared worker Runtime.discardConsoleEntries must not consume or rewrite the page session route"
     );

@@ -339,26 +339,16 @@ impl CdpConnection {
 
     fn target_fetch_config_for_target(&self, target_id: &str) -> Option<TargetFetchConfig> {
         match self.target_session_route_for_target_id(target_id)? {
-            CdpSessionRoute::ActiveTarget {
-                browser_context_id, ..
-            } => self
-                .browser_context_by_id(&browser_context_id)
-                .map(|browser_context| browser_context.active_target.fetch_owner.config_snapshot()),
-            CdpSessionRoute::PageTargetHost {
+            CdpSessionRoute::PageTarget {
                 browser_context_id,
                 target_id,
+                ..
             } => self
                 .browser_context_by_id(&browser_context_id)?
-                .background_target(&target_id)
-                .map(|target| target.fetch_owner.config_snapshot()),
-            CdpSessionRoute::AuxiliaryTarget {
-                browser_context_id,
-                target_id,
-            } => self
-                .browser_context_by_id(&browser_context_id)?
-                .background_target(&target_id)
+                .page_target(&target_id)
                 .map(|target| target.fetch_owner.config_snapshot()),
             CdpSessionRoute::Browser
+            | CdpSessionRoute::BrowserContext { .. }
             | CdpSessionRoute::TabTarget { .. }
             | CdpSessionRoute::SharedWorkerTarget { .. }
             | CdpSessionRoute::DedicatedWorkerTarget { .. }
@@ -1202,9 +1192,10 @@ fn pending_fetch_request_route(
         .fetch_owner
         .contains_pending_request(request_id)
     {
-        return Some(CdpSessionRoute::ActiveTarget {
+        return Some(CdpSessionRoute::PageTarget {
             browser_context_id: browser_context.id.clone(),
-            target_id: browser_context.active_target_id_owned(),
+            target_id: browser_context.active_target_id_owned()?,
+            is_attached_session: false,
         });
     }
 
@@ -1212,9 +1203,10 @@ fn pending_fetch_request_route(
         target
             .fetch_owner
             .contains_pending_request(request_id)
-            .then(|| CdpSessionRoute::PageTargetHost {
+            .then(|| CdpSessionRoute::PageTarget {
                 browser_context_id: browser_context.id.clone(),
                 target_id: target.target_id().to_owned(),
+                is_attached_session: false,
             })
     })
 }
