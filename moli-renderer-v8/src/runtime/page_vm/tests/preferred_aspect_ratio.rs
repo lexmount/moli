@@ -122,6 +122,59 @@ document.body.innerHTML = `
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn screenshot_preserves_parent_resolved_grid_sizes_across_ratio_constraints() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/grid-ratio-known-size.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0}
+.grid{display:grid;width:100px;aspect-ratio:2;max-width:50px;align-content:center}
+.item{width:100px;height:100px}
+#authored-max{max-height:20px}
+#explicit-min{min-height:0}
+</style>`;
+document.body.innerHTML = `
+<div class=grid id=automatic><div class=item></div></div>
+<div class=grid id=authored-max><div class=item></div></div>
+<div class=grid id=explicit-min><div class=item></div></div>`;
+'installed'
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(640, 480, 1.0))?
+            .expect("grid ratio fixture must retain a layout root");
+
+        let geometry = page_vm.vm_mut().eval(
+            r#"JSON.stringify(Object.fromEntries([...document.querySelectorAll('.grid')].map(grid=>{const item=grid.firstElementChild,g=grid.getBoundingClientRect(),i=item.getBoundingClientRect();return [grid.id,[g.width,g.height,i.x-g.x,i.y-g.y,i.width,i.height]]})))"#,
+        )?;
+        let geometry: serde_json::Value = serde_json::from_str(&geometry)?;
+        for (id, expected) in [
+            ("automatic", serde_json::json!([50, 100, 0, 0, 100, 100])),
+            ("authored-max", serde_json::json!([50, 20, 0, -40, 100, 100])),
+            ("explicit-min", serde_json::json!([50, 25, 0, -37.5, 100, 100])),
+        ] {
+            assert_eq!(
+                geometry[id],
+                expected,
+                "Chromium-calibrated grid ratio geometry mismatch for {id}: {geometry}"
+            );
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("grid ratio known-size fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn screenshot_resolves_intrinsic_keywords_from_ratio_dependent_content_contributions() {
     run_page_vm_async_test(async move {
         let loader =
