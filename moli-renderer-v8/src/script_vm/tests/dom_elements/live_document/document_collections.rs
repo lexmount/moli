@@ -373,6 +373,84 @@ fn live_document_named_properties_follow_html_candidate_and_liveness_rules() {
 }
 
 #[test]
+fn live_document_enumerates_supported_property_names_in_document_order() {
+    let mut vm = new_parsed_test_vm(
+        "https://example.com/",
+        r#"<!doctype html><html><body>
+          <embed name="embedName">
+          <form id="formId" name="formName"></form>
+          <iframe id="frameId" name="frameName"></iframe>
+          <img name="42">
+          <img name="imageName">
+          <object id="objectId" name="objectName">
+            <object id="nestedObjectId" name="nestedObjectName"></object>
+          </object>
+          <img id="imageId" name="imageWithIdName">
+          <img id="imageIdOnly">
+          <img name="duplicateName">
+          <form name="duplicateName"></form>
+          <img name="0">
+          <template id="templateId"><img name="templateImage"></template>
+        </body></html>"#,
+    );
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const supported = [
+                "embedName", "formName", "frameName", "42", "imageName",
+                "objectId", "objectName", "nestedObjectId", "nestedObjectName",
+                "imageId", "imageWithIdName", "duplicateName", "0"
+              ];
+              const ownNames = Object.getOwnPropertyNames(document);
+              const supportedNames = keys => keys.filter(name => supported.includes(name));
+              const initial = {
+                order: supportedNames(ownNames),
+                reflectOrder: supportedNames(Reflect.ownKeys(document)).join("|") === supported.join("|"),
+                enumerableOrder: supportedNames(Object.keys(document)).join("|") === supported.join("|"),
+                duplicateCount: ownNames.filter(name => name === "duplicateName").length,
+                numericNamesResolve:
+                  document[42] === document.querySelector('[name="42"]') &&
+                  document[0] === document.querySelector('[name="0"]') &&
+                  Object.getOwnPropertyDescriptor(document, "42").value === document[42],
+                excludedNamesAbsent: [
+                  "formId", "frameId", "imageIdOnly", "templateId", "templateImage"
+                ].every(name => !ownNames.includes(name))
+              };
+
+              const image = document.querySelector('[name="imageName"]');
+              image.id = "dynamicImageId";
+              image.name = "dynamicImageName";
+              const changedNames = Object.getOwnPropertyNames(document);
+              const changed = [
+                !changedNames.includes("imageName"),
+                changedNames.includes("dynamicImageId"),
+                changedNames.includes("dynamicImageName")
+              ];
+              image.remove();
+              const removedNames = Object.getOwnPropertyNames(document);
+              const removed = [
+                !removedNames.includes("dynamicImageId"),
+                !removedNames.includes("dynamicImageName")
+              ];
+              const numericImage = document[42];
+              document.body.append(numericImage);
+              const reordered = supportedNames(Object.getOwnPropertyNames(document)).at(-1) === "42"
+                && document[42] === numericImage;
+              return JSON.stringify({ initial, changed, removed, reordered });
+            })()
+            "#,
+        )
+        .expect("Document supported-property-name enumeration should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"initial":{"order":["embedName","formName","frameName","42","imageName","objectId","objectName","nestedObjectId","nestedObjectName","imageId","imageWithIdName","duplicateName","0"],"reflectOrder":true,"enumerableOrder":true,"duplicateCount":1,"numericNamesResolve":true,"excludedNamesAbsent":true},"changed":[true,true,true],"removed":[true,true],"reordered":true}"#
+    );
+}
+
+#[test]
 fn live_document_named_iframe_singletons_return_child_windows() {
     let mut vm = new_parsed_test_vm(
         "https://example.com/",
