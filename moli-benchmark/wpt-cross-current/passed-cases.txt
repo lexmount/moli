@@ -3608,6 +3608,7 @@ dom/traversal/TreeWalker.html
 dom/window-extends-event-target.html
 dom/xpath-result-single-node-value-nullable.html
 domparsing/DOMParser-parseFromString-encoding.html
+domparsing/DOMParser-parseFromString-html.html
 domparsing/DOMParser-parseFromString-stylesheets.html
 domparsing/createContextualFragment.html
 domparsing/domparser-spurious-attributes.html

@@ -1106,6 +1106,25 @@ impl DomHost {
         true
     }
 
+    pub fn set_document_quirks_mode_for_handle(
+        &mut self,
+        document_handle: DomHandle,
+        quirks_mode: selectors::matching::QuirksMode,
+    ) -> bool {
+        let Some(document) = self
+            .node_mut(document_handle)
+            .and_then(|node| node.data_mut().as_document_mut())
+        else {
+            return false;
+        };
+        if document.quirks_mode() == quirks_mode {
+            return false;
+        }
+        document.set_quirks_mode(quirks_mode);
+        self.record_mutation(MutationScope::QueryState);
+        true
+    }
+
     pub fn set_document_default_language_for_handle(
         &mut self,
         document_handle: DomHandle,

@@ -2730,7 +2730,6 @@ dom/ranges/tentative/OpaqueRange-range-updates.html
 dom/ranges/tentative/OpaqueRange-supported-elements.html
 dom/ranges/tentative/OpaqueRange-unsupported-elements.html
 dom/ranges/tentative/OpaqueRange-validation.html
-domparsing/DOMParser-parseFromString-html.html
 domparsing/DOMParser-parseFromString-url-base-pushstate.html
 domparsing/DOMParser-parseFromString-url-base.html
 domparsing/DOMParser-parseFromString-url-moretests.html

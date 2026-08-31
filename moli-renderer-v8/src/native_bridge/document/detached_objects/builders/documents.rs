@@ -195,8 +195,19 @@ pub(crate) fn build_detached_document_object_from_dom_host_with_content_type<'s>
     character_set: Option<&str>,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let url = detached_document_url(&parsed);
+    let quirks_mode = parsed.dom().document()?.quirks_mode();
+    let compat_mode = if quirks_mode == selectors::matching::QuirksMode::Quirks {
+        "BackCompat"
+    } else {
+        "CSS1Compat"
+    };
     let document = new_detached_document_shell(scope, kind, url)?;
     if let Some(state) = detached_state_object(scope, document) {
+        let _ = state.set(
+            scope,
+            v8str(scope, "compatMode").into(),
+            v8_string(scope, compat_mode)?.into(),
+        );
         if let Some(content_type) = content_type {
             let _ = state.set(
                 scope,
@@ -211,6 +222,13 @@ pub(crate) fn build_detached_document_object_from_dom_host_with_content_type<'s>
                 v8_string(scope, character_set)?.into(),
             );
         }
+    }
+    if let Some(document_handle) = detached_native_handle(scope, document)
+        && let Some(runtime_ptr) = context_host_ptr_from_global_bridge(scope)
+    {
+        let _ = unsafe { &mut *runtime_ptr }
+            .dom_host_mut()
+            .set_document_quirks_mode_for_handle(document_handle, quirks_mode);
     }
     import_detached_document_children_from_host(scope, document, &parsed)?;
     Some(document)
