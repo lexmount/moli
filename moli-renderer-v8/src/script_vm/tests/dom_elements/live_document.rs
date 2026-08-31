@@ -6531,6 +6531,74 @@ fn live_document_named_properties_follow_html_candidate_and_liveness_rules() {
 }
 
 #[test]
+fn live_document_enumerates_supported_property_names_in_document_order() {
+    let mut vm = new_parsed_test_vm(
+        "https://example.com/",
+        r#"<!doctype html><html><body>
+          <embed name="embedName">
+          <form id="formId" name="formName"></form>
+          <iframe id="frameId" name="frameName"></iframe>
+          <img name="imageName">
+          <object id="objectId" name="objectName">
+            <object id="nestedObjectId" name="nestedObjectName"></object>
+          </object>
+          <img id="imageId" name="imageWithIdName">
+          <img id="imageIdOnly">
+          <img name="duplicateName">
+          <form name="duplicateName"></form>
+          <img name="42">
+          <template id="templateId"><img name="templateImage"></template>
+        </body></html>"#,
+    );
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const supported = [
+                "embedName", "formName", "frameName", "imageName",
+                "objectId", "objectName", "nestedObjectId", "nestedObjectName",
+                "imageId", "imageWithIdName", "duplicateName", "42"
+              ];
+              const ownNames = Object.getOwnPropertyNames(document);
+              const initial = {
+                includesEverySupportedName: supported.every(name => ownNames.includes(name)),
+                nonIndexOrder: ownNames.filter(name => supported.includes(name) && name !== "42"),
+                duplicateCount: ownNames.filter(name => name === "duplicateName").length,
+                numericNamePresent: ownNames.includes("42"),
+                excludedNamesAbsent: [
+                  "formId", "frameId", "imageIdOnly", "templateId", "templateImage"
+                ].every(name => !ownNames.includes(name))
+              };
+
+              const image = document.querySelector('[name="imageName"]');
+              image.id = "dynamicImageId";
+              image.name = "dynamicImageName";
+              const changedNames = Object.getOwnPropertyNames(document);
+              const changed = [
+                !changedNames.includes("imageName"),
+                changedNames.includes("dynamicImageId"),
+                changedNames.includes("dynamicImageName")
+              ];
+              image.remove();
+              const removedNames = Object.getOwnPropertyNames(document);
+              const removed = [
+                !removedNames.includes("dynamicImageId"),
+                !removedNames.includes("dynamicImageName")
+              ];
+              return JSON.stringify({ initial, changed, removed });
+            })()
+            "#,
+        )
+        .expect("Document supported-property-name enumeration should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"initial":{"includesEverySupportedName":true,"nonIndexOrder":["embedName","formName","frameName","imageName","objectId","objectName","nestedObjectId","nestedObjectName","imageId","imageWithIdName","duplicateName"],"duplicateCount":1,"numericNamePresent":true,"excludedNamesAbsent":true},"changed":[true,true,true],"removed":[true,true]}"#
+    );
+}
+
+#[test]
 fn live_document_named_iframe_singletons_return_child_windows() {
     let mut vm = new_parsed_test_vm(
         "https://example.com/",
