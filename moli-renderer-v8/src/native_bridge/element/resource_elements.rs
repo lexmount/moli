@@ -1405,24 +1405,8 @@ fn frame_owner_content_window_getter_function<'s>(
         }
         return;
     }
-    let runtime = unsafe { &mut *runtime_ptr };
-    runtime.refresh_child_browsing_context(scope, handle);
-    let exposes_same_origin_wrapper =
-        runtime.child_browsing_context_is_same_origin_with_top(handle);
-    let window = runtime.child_browsing_context_window_proxy_for_top(scope, handle);
-    if window.is_some() {
-        runtime.mark_child_browsing_context_window_wrapper_exposed_to_top(handle);
-    }
-    if exposes_same_origin_wrapper && window.is_some() {
-        runtime.request_child_frame_realm_materialization(handle);
-    }
-    match window {
-        Some(window) => {
-            if runtime.child_browsing_context_is_same_origin_with_top(handle) {
-                runtime.set_cached_detached_iframe_content_window(scope, handle, window);
-            }
-            rv.set(window.into());
-        }
+    match live_frame_owner_content_window_for_handle(scope, runtime_ptr, handle) {
+        Some(window) => rv.set(window.into()),
         None => rv.set_null(),
     }
 }
