@@ -5,10 +5,14 @@ use crate::webidl;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 const FILE_LIST_LENGTH_SLOT: &str = "__lmFileListLength";
+const FILE_LIST_BRAND_SLOT: &str = "__lmFileListBrand";
 
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::FileList, require_prototype)]
 struct FileListObjectDeclaration {
+    #[webapi(slot = FILE_LIST_BRAND_SLOT, init = true)]
+    brand: (),
+
     #[webapi(slot = FILE_LIST_LENGTH_SLOT)]
     length: f64,
 }
@@ -39,22 +43,6 @@ pub(super) fn install_file_list_template_bindings<'s>(
         scope,
         template.prototype_template(scope),
     );
-}
-
-pub(in crate::context_bootstrap) fn file_list_constructor_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    if !args.is_construct_call() {
-        throw_type_error(
-            scope,
-            "Failed to construct 'FileList': Please use the 'new' operator.",
-        );
-        return;
-    }
-    initialize_file_list_object(scope, args.this(), args.get(0));
-    rv.set(args.this().into());
 }
 
 pub(crate) fn build_file_list_object<'s>(
@@ -94,6 +82,10 @@ pub(in crate::context_bootstrap) fn file_list_item_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if !file_list_receiver_branded(scope, args.this()) {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    }
     let Some(parsed) = webidl::parse_args::<FileListItemArgs>(scope, &args) else {
         return;
     };
@@ -113,6 +105,10 @@ fn file_list_length_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if !file_list_receiver_branded(scope, args.this()) {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    }
     let length = file_list_length_from_object(scope, args.this())
         .filter(|value| value.is_finite() && *value >= 0.0)
         .unwrap_or(0.0);
@@ -127,28 +123,10 @@ fn file_list_length_from_object<'s>(
         .and_then(|value| value.number_value(scope))
 }
 
-fn initialize_file_list_object<'s>(
+fn file_list_receiver_branded<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-    files_value: v8::Local<'s, v8::Value>,
-) {
-    let files = if files_value.is_null_or_undefined() {
-        None
-    } else {
-        files_value.to_object(scope)
-    };
-    let length = files
-        .and_then(|value| value.get(scope, v8str(scope, "length").into()))
-        .and_then(|value| value.number_value(scope))
-        .filter(|value| value.is_finite() && *value >= 0.0)
-        .map(|value| value as u32)
-        .unwrap_or(0);
-    for index in 0..length {
-        if let Some(file) = files.and_then(|files| files.get_index(scope, index)) {
-            let _ = object.set_index(scope, index, file);
-        }
-    }
-    FileListObjectDeclaration::new(length as f64)
-        .initialize(scope, object)
-        .expect("FileList declaration should initialize object");
+    receiver: v8::Local<'s, v8::Object>,
+) -> bool {
+    get_private_value(scope, receiver, FILE_LIST_BRAND_SLOT)
+        .is_some_and(|value| value.boolean_value(scope))
 }

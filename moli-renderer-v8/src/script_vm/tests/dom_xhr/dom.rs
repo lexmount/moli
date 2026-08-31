@@ -3907,6 +3907,14 @@ fn file_constructor_preserves_declared_metadata_slots() {
     __lmFileLastModified: 99
   };
   const fakeFileList = { __lmFileListLength: 99 };
+  const throwsTypeError = callback => {
+    try {
+      callback();
+      return false;
+    } catch (error) {
+      return error instanceof TypeError;
+    }
+  };
   return JSON.stringify({
     fileDescriptors: [
       descriptorReport(File.prototype, "name"),
@@ -3928,9 +3936,11 @@ fn file_constructor_preserves_declared_metadata_slots() {
     tag: Object.prototype.toString.call(explicitFile),
     ctor: explicitFile instanceof File,
     weirdLastModifiedFinite: Number.isFinite(weirdFile.lastModified),
-    fakeName: nameDescriptor.get.call(fakeFile),
-    fakeLastModifiedFinite: Number.isFinite(lastModifiedDescriptor.get.call(fakeFile)),
-    fakeLength: lengthDescriptor.get.call(fakeFileList)
+    constructFileListThrows: throwsTypeError(() => new FileList()),
+    fakeNameThrows: throwsTypeError(() => nameDescriptor.get.call(fakeFile)),
+    fakeLastModifiedThrows: throwsTypeError(() => lastModifiedDescriptor.get.call(fakeFile)),
+    fakeLengthThrows: throwsTypeError(() => lengthDescriptor.get.call(fakeFileList)),
+    fakeItemThrows: throwsTypeError(() => FileList.prototype.item.call(fakeFileList, 0))
   });
 })()
 "#,
@@ -3939,7 +3949,7 @@ fn file_constructor_preserves_declared_metadata_slots() {
 
     assert_eq!(
         result,
-        r#"{"fileDescriptors":["name:function:get name:0:undefined:true:true","lastModified:function:get lastModified:0:undefined:true:true"],"fileListDescriptors":["length:function:get length:0:undefined:true:true"],"fileInternalNames":[],"fileListInternalNames":[],"defaultName":"default.txt","defaultLastModifiedFinite":true,"explicitName":"note.txt","explicitLastModified":7,"explicitType":"text/plain","roundTripName":"note.txt","roundTripLastModified":7,"roundTripType":"text/plain","tag":"[object File]","ctor":true,"weirdLastModifiedFinite":true,"fakeName":"","fakeLastModifiedFinite":true,"fakeLength":0}"#
+        r#"{"fileDescriptors":["name:function:get name:0:undefined:true:true","lastModified:function:get lastModified:0:undefined:true:true"],"fileListDescriptors":["length:function:get length:0:undefined:true:true"],"fileInternalNames":[],"fileListInternalNames":[],"defaultName":"default.txt","defaultLastModifiedFinite":true,"explicitName":"note.txt","explicitLastModified":7,"explicitType":"text/plain","roundTripName":"note.txt","roundTripLastModified":7,"roundTripType":"text/plain","tag":"[object File]","ctor":true,"weirdLastModifiedFinite":true,"constructFileListThrows":true,"fakeNameThrows":true,"fakeLastModifiedThrows":true,"fakeLengthThrows":true,"fakeItemThrows":true}"#
     );
 }
 #[test]

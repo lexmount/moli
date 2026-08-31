@@ -126,6 +126,10 @@ pub(in crate::context_bootstrap) fn file_reader_abort_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if !file_reader_receiver_branded(scope, args.this()) {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    }
     if file_reader_ready_state(scope, args.this()) != 1.0 {
         rv.set_undefined();
         return;
@@ -177,6 +181,10 @@ fn ensure_file_reader_can_start_read<'s>(
     reader: v8::Local<'s, v8::Object>,
     rv: &mut v8::ReturnValue<'_, v8::Value>,
 ) -> bool {
+    if !file_reader_receiver_branded(scope, reader) {
+        throw_type_error(scope, "Illegal invocation");
+        return false;
+    }
     if file_reader_ready_state(scope, reader) != 1.0 {
         return true;
     }
