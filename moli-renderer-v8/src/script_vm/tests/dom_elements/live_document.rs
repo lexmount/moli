@@ -1,6 +1,58 @@
 use super::*;
 
 #[test]
+fn input_show_picker_enforces_brand_without_rejecting_inherited_child_origin() {
+    let mut vm = new_storage_test_vm("https://show-picker-origin.test/");
+
+    vm.eval(
+        r#"
+(() => {
+  const frame = document.createElement("iframe");
+  frame.id = "show-picker-origin-child";
+  (document.body || document.documentElement || document).appendChild(frame);
+})()
+"#,
+    )
+    .expect("showPicker child Realm should be created");
+    materialize_single_child_default_realm_for_test(
+        &mut vm,
+        "showPicker inherited-origin child Realm",
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const child = document.getElementById("show-picker-origin-child").contentWindow;
+  const childInput = child.document.createElement("input");
+  const outcome = callback => {
+    try {
+      callback();
+      return "ok";
+    } catch (error) {
+      return error.name;
+    }
+  };
+  const childOutcome = outcome(() => childInput.showPicker());
+  return JSON.stringify({
+    inheritedOriginPassedSecurityCheck:
+      childOutcome === "ok" || childOutcome === "NotAllowedError",
+    elementBrand: outcome(() =>
+      HTMLInputElement.prototype.showPicker.call(document.createElement("div"))),
+    objectBrand: outcome(() => HTMLInputElement.prototype.showPicker.call({}))
+  });
+})()
+"#,
+        )
+        .expect("showPicker receiver and inherited origin checks should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"inheritedOriginPassedSecurityCheck":true,"elementBrand":"TypeError","objectBrand":"TypeError"}"#
+    );
+}
+
+#[test]
 fn cross_realm_dom_bindings_reject_incompatible_receivers_in_their_own_realm() {
     let mut vm = new_storage_test_vm("https://cross-realm-dom-receivers.test/");
 
