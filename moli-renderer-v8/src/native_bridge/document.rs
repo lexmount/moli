@@ -1591,9 +1591,6 @@ pub(crate) fn document_associated_window_for_handle<'s>(
     runtime_ptr: *mut JsContextHost,
     handle: DomHandle,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    if !node_is_document(unsafe { &*runtime_ptr }, handle) {
-        return None;
-    }
     let document = unsafe { &mut *runtime_ptr }
         .native_bridge_mut()
         .wrap_handle(scope, runtime_ptr, handle)?;
