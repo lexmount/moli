@@ -2603,19 +2603,23 @@ async fn worker_filelist_interface_object_is_available() {
     ensure_v8();
     let mut handle = spawn_worker(
         r#"
-        const file = new File(["hello"], "note.txt", { type: "text/plain" });
-        const list = new FileList([file]);
+        let constructError = null;
+        try {
+            new FileList();
+        } catch (error) {
+            constructError = error && error.name;
+        }
         postMessage({
             ctorOwn: Object.prototype.hasOwnProperty.call(self, "FileList"),
             ctorType: typeof FileList,
-            ctorName: list.constructor && list.constructor.name,
-            tag: Object.prototype.toString.call(list),
-            instanceofFileList: list instanceof FileList,
-            length: list.length,
-            firstName: list.item(0) && list.item(0).name,
-            indexName: list[0] && list[0].name,
-            iterType: typeof list[Symbol.iterator],
-            iterName: Array.from(list).map(file => file.name).join(","),
+            ctorName: FileList.name,
+            constructError,
+            itemType: typeof FileList.prototype.item,
+            lengthGetterType: typeof Object.getOwnPropertyDescriptor(
+                FileList.prototype,
+                "length",
+            ).get,
+            iterType: typeof FileList.prototype[Symbol.iterator],
         });
         close();
         "#
@@ -2629,7 +2633,7 @@ async fn worker_filelist_interface_object_is_available() {
         .expect("channel closed");
     assert_eq!(
         expect_post_json(msg),
-        r#"{"ctorOwn":true,"ctorType":"function","ctorName":"FileList","tag":"[object FileList]","instanceofFileList":true,"length":1,"firstName":"note.txt","indexName":"note.txt","iterType":"function","iterName":"note.txt"}"#
+        r#"{"ctorOwn":true,"ctorType":"function","ctorName":"FileList","constructError":"TypeError","itemType":"function","lengthGetterType":"function","iterType":"function"}"#
     );
 }
 
