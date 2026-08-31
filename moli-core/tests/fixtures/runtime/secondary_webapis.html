@@ -34,7 +34,9 @@ document.body.setAttribute("data-file-type", file.type);
 document.body.setAttribute("data-file-last-modified", String(file.lastModified));
 document.body.setAttribute("data-file-size", String(file.size));
 
-const list = new FileList([file]);
+const transfer = new DataTransfer();
+transfer.items.add(file);
+const list = transfer.files;
 document.body.setAttribute("data-file-list-tag", Object.prototype.toString.call(list));
 document.body.setAttribute("data-file-list-length", String(list.length));
 document.body.setAttribute("data-file-list-item-same", String(list.item(0) === file));
