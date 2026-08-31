@@ -3701,8 +3701,57 @@ fn webidl_attribute_setters_preserve_undefined_and_replaceable_semantics() {
 
     assert_eq!(
         result,
-        r#"{"animation":"undefined,TypeError","document":"TypeError,false","eventHandler":"TypeError,","replaceableShape":true,"replacements":",,foo","failures":"TypeError,TypeError"}"#
+        r#"{"animation":"undefined,TypeError","document":"TypeError,false","eventHandler":"return,","replaceableShape":true,"replacements":",,foo","failures":"TypeError,TypeError"}"#
     );
+}
+
+#[test]
+fn legacy_lenient_this_event_handlers_ignore_incompatible_receivers() {
+    let mut vm = new_storage_test_vm("https://legacy-lenient-this.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const text = document.createTextNode("text");
+  const invalidReceivers = [undefined, null, 1, {}, text];
+  const lenientDescriptors = [
+    Object.getOwnPropertyDescriptor(HTMLElement.prototype, "onmouseenter"),
+    Object.getOwnPropertyDescriptor(HTMLElement.prototype, "onmouseleave"),
+    Object.getOwnPropertyDescriptor(Document.prototype, "onreadystatechange")
+  ];
+  const lenient = lenientDescriptors.every(descriptor =>
+    invalidReceivers.every(receiver =>
+      descriptor.get.call(receiver) === undefined &&
+      descriptor.set.call(receiver) === undefined &&
+      descriptor.set.call(receiver, undefined) === undefined &&
+      descriptor.set.call(receiver, "ignored") === undefined
+    )
+  );
+
+  const strict = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "onclick");
+  const outcome = callback => {
+    try {
+      callback();
+      return "return";
+    } catch (error) {
+      return error && error.name;
+    }
+  };
+
+  return [
+    lenient,
+    outcome(() => strict.get.call({})),
+    outcome(() => strict.set.call({})),
+    outcome(() => strict.get.call(text)),
+    outcome(() => strict.set.call(text))
+  ].join("|");
+})()
+"#,
+        )
+        .expect("LegacyLenientThis event handler probe should evaluate");
+
+    assert_eq!(result, "true|TypeError|TypeError|TypeError|TypeError");
 }
 
 #[test]

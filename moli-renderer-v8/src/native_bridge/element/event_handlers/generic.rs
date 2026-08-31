@@ -278,14 +278,18 @@ fn document_event_handler_getter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
+    let Some(handler_name) = event_handler_name_from_data(scope, args.data()) else {
+        rv.set_undefined();
+        return;
+    };
     let Ok((runtime_ptr, handle)) =
         node_runtime_and_handle_from_object_or_detached(scope, args.this())
     else {
-        throw_type_error(scope, "Illegal invocation");
+        handle_invalid_event_handler_receiver(scope, &mut rv, &handler_name);
         return;
     };
     if !node_is_document(unsafe { &*runtime_ptr }, handle) {
-        throw_type_error(scope, "Illegal invocation");
+        handle_invalid_event_handler_receiver(scope, &mut rv, &handler_name);
         return;
     }
     rv.set(event_handler_property_value_for_target(
@@ -301,14 +305,18 @@ fn document_event_handler_setter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
+    let Some(handler_name) = event_handler_name_from_data(scope, args.data()) else {
+        rv.set_undefined();
+        return;
+    };
     let Ok((runtime_ptr, handle)) =
         node_runtime_and_handle_from_object_or_detached(scope, args.this())
     else {
-        throw_type_error(scope, "Illegal invocation");
+        handle_invalid_event_handler_receiver(scope, &mut rv, &handler_name);
         return;
     };
     if !node_is_document(unsafe { &*runtime_ptr }, handle) {
-        throw_type_error(scope, "Illegal invocation");
+        handle_invalid_event_handler_receiver(scope, &mut rv, &handler_name);
         return;
     }
     set_event_handler_property_for_target(
@@ -333,7 +341,11 @@ pub(crate) fn node_event_handler_getter_function<'s>(
     let object = args.this();
     let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object_or_detached(scope, object)
     else {
-        throw_type_error(scope, "Illegal invocation");
+        handle_invalid_event_handler_receiver(scope, &mut rv, &handler_name);
+        return;
+    };
+    if !node_event_handler_receiver_is_supported(unsafe { &*runtime_ptr }, handle) {
+        handle_invalid_event_handler_receiver(scope, &mut rv, &handler_name);
         return;
     };
     if let Some(event_type) = event_handler_event_type(&handler_name)
@@ -347,8 +359,7 @@ pub(crate) fn node_event_handler_getter_function<'s>(
         rv.set(current);
         return;
     }
-    if !node_is_element(unsafe { &*runtime_ptr }, handle)
-        || !handler_name.starts_with("on")
+    if !handler_name.starts_with("on")
         || !is_element_event_handler_content_attribute_name(&handler_name)
     {
         rv.set_null();
@@ -503,14 +514,16 @@ pub(crate) fn node_event_handler_setter_function<'s>(
     };
     let object = args.this();
     let value = args.get(0);
-    let runtime_and_handle = node_runtime_and_handle_from_object_or_detached(scope, object).ok();
-    if runtime_and_handle.is_none() {
-        throw_type_error(scope, "Illegal invocation");
+    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object_or_detached(scope, object)
+    else {
+        handle_invalid_event_handler_receiver(scope, &mut rv, &handler_name);
+        return;
+    };
+    if !node_event_handler_receiver_is_supported(unsafe { &*runtime_ptr }, handle) {
+        handle_invalid_event_handler_receiver(scope, &mut rv, &handler_name);
         return;
     }
-    if let Some(event_type) = event_handler_event_type(&handler_name)
-        && let Some((_runtime_ptr, handle)) = runtime_and_handle
-    {
+    if let Some(event_type) = event_handler_event_type(&handler_name) {
         let handler = v8::Local::<v8::Function>::try_from(value).ok();
         if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
             unsafe { &mut *host_ptr }.set_registered_event_handler_property(
@@ -522,7 +535,6 @@ pub(crate) fn node_event_handler_setter_function<'s>(
         }
     }
     if matches!(handler_name.as_str(), "onload" | "onerror")
-        && let Some((runtime_ptr, handle)) = runtime_and_handle
         && unsafe { &*runtime_ptr }
             .dom_host()
             .is_html_element_named(handle, "track")
@@ -545,6 +557,29 @@ fn event_handler_event_type(name: &str) -> Option<&str> {
     name.strip_prefix("on")
         .filter(|event_type| !event_type.is_empty())
         .map(canonical_event_handler_event_type)
+}
+
+fn legacy_lenient_this_event_handler(name: &str) -> bool {
+    matches!(name, "onmouseenter" | "onmouseleave" | "onreadystatechange")
+}
+
+fn node_event_handler_receiver_is_supported(
+    runtime: &super::super::super::JsContextHost,
+    handle: crate::document_runtime::DomHandle,
+) -> bool {
+    node_is_element(runtime, handle) || runtime.dom_host().is_shadow_root(handle)
+}
+
+fn handle_invalid_event_handler_receiver<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    rv: &mut v8::ReturnValue<'s, v8::Value>,
+    handler_name: &str,
+) {
+    if legacy_lenient_this_event_handler(handler_name) {
+        rv.set_undefined();
+    } else {
+        throw_type_error(scope, "Illegal invocation");
+    }
 }
 
 pub(crate) fn canonical_event_handler_event_type(event_type: &str) -> &str {
