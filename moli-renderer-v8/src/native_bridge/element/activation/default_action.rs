@@ -24,15 +24,15 @@ use super::super::super::JsContextHost;
 use super::super::forms::{FormAssociatedResetCallbackTiming, reset_form_default_action};
 use super::super::{
     NodePublicEventDispatchOutcome, cache_input_files_from_selected_files,
-    construct_click_event_with_detail_and_modifiers, construct_command_event,
-    construct_simple_event, contenteditable_editing_host, dispatch_popover_toggle_events,
-    dispatch_public_event, element_attribute, element_has_attribute, form_associated_form_owner,
-    is_disabled_form_control, is_focusable, is_valid_submit_button,
-    label_activation_control_handle, observable_bounding_client_rect,
+    closed_details_ancestors_to_reveal, construct_click_event_with_detail_and_modifiers,
+    construct_command_event, construct_simple_event, contenteditable_editing_host,
+    dispatch_popover_toggle_events, dispatch_public_event, element_attribute,
+    element_has_attribute, form_associated_form_owner, is_disabled_form_control, is_focusable,
+    is_valid_submit_button, label_activation_control_handle, observable_bounding_client_rect,
     perform_popover_invoker_default_action, perform_summary_click_default_action,
     replace_text_control_selection, resolve_url_like_attribute,
     resolved_reflected_element_attribute_handle, scroll_node_into_view_at_start,
-    submit_form_with_submit_event, update_focus,
+    set_reflected_boolean_attribute, submit_form_with_submit_event, update_focus,
 };
 use super::targets::{
     SpecialBrowsingContextTarget, named_iframe_target_handle_for_navigation,
@@ -1843,7 +1843,7 @@ fn anchor_click_default_action(
         && let Ok(url) = url::Url::parse(&resolved)
         && same_document_fragment_target(runtime.host_document().url(), &url)
     {
-        if let Err(error) = scroll_to_document_fragment_target(scope, runtime_ptr, runtime, &url) {
+        if let Err(error) = scroll_to_document_fragment_target(scope, runtime_ptr, &url) {
             throw_activation_layout_error(scope, "scrolling to fragment", error);
             return None;
         }
@@ -2061,7 +2061,6 @@ pub(crate) fn scroll_to_url_fragment_or_top(
     runtime_ptr: *mut JsContextHost,
     target_url: &str,
 ) -> Result<(), moli_layout::LayoutError> {
-    let runtime = unsafe { &*runtime_ptr };
     let Ok(target_url) = url::Url::parse(target_url) else {
         return Ok(());
     };
@@ -2069,7 +2068,7 @@ pub(crate) fn scroll_to_url_fragment_or_top(
         crate::window_host::scroll_window_to(scope, runtime_ptr, 0.0, 0.0);
         return Ok(());
     }
-    if !scroll_to_document_fragment_target(scope, runtime_ptr, runtime, &target_url)? {
+    if !scroll_to_document_fragment_target(scope, runtime_ptr, &target_url)? {
         crate::window_host::scroll_window_to(scope, runtime_ptr, 0.0, 0.0);
     }
     Ok(())
@@ -2078,7 +2077,6 @@ pub(crate) fn scroll_to_url_fragment_or_top(
 fn scroll_to_document_fragment_target(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
-    runtime: &JsContextHost,
     target_url: &url::Url,
 ) -> Result<bool, moli_layout::LayoutError> {
     let Some(fragment) = target_url.fragment() else {
@@ -2087,11 +2085,29 @@ fn scroll_to_document_fragment_target(
     let fragment = percent_encoding::percent_decode_str(fragment)
         .decode_utf8_lossy()
         .into_owned();
-    let Some(target) = document_tree_fragment_target(runtime, &fragment) else {
+    let Some(target) = document_tree_fragment_target(unsafe { &*runtime_ptr }, &fragment) else {
         return Ok(false);
     };
+    reveal_details_ancestors_for_fragment_target(scope, runtime_ptr, target);
     let _ = scroll_node_into_view_at_start(scope, runtime_ptr, target)?;
     Ok(true)
+}
+
+fn reveal_details_ancestors_for_fragment_target(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    target: DomHandle,
+) {
+    let ancestors = closed_details_ancestors_to_reveal(unsafe { &*runtime_ptr }, target);
+    for details in ancestors {
+        let runtime = unsafe { &*runtime_ptr };
+        if !runtime.dom_host().is_connected(details)
+            || element_has_attribute(runtime, details, "open")
+        {
+            return;
+        }
+        set_reflected_boolean_attribute(scope, runtime_ptr, details, "open", true);
+    }
 }
 
 fn document_tree_fragment_target(runtime: &JsContextHost, fragment: &str) -> Option<DomHandle> {
