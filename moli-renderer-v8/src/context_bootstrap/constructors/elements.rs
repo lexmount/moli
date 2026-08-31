@@ -84,6 +84,7 @@ pub(in crate::context_bootstrap) fn image_constructor_callback<'s>(
         let value = v8::Integer::new_from_unsigned(scope, height);
         let _ = image.set(scope, v8str(scope, "height").into(), value.into());
     }
+    apply_legacy_factory_new_target_prototype(scope, &args, image, "HTMLImageElement");
     rv.set(image.into());
 }
 
@@ -153,6 +154,7 @@ pub(in crate::context_bootstrap) fn audio_constructor_callback<'s>(
             );
         }
     }
+    apply_legacy_factory_new_target_prototype(scope, &args, audio, "HTMLAudioElement");
     rv.set(audio.into());
 }
 
@@ -243,7 +245,26 @@ pub(in crate::context_bootstrap) fn option_constructor_callback<'s>(
             false,
         );
     }
+    apply_legacy_factory_new_target_prototype(scope, &args, option, "HTMLOptionElement");
     rv.set(option.into());
+}
+
+fn apply_legacy_factory_new_target_prototype<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: &v8::FunctionCallbackArguments<'s>,
+    result: v8::Local<'s, v8::Object>,
+    default_constructor_name: &str,
+) {
+    let receiver = args.this();
+    crate::util::apply_webidl_constructor_prototype_fallback(
+        scope,
+        receiver,
+        args.new_target(),
+        default_constructor_name,
+    );
+    if let Some(prototype) = receiver.get_prototype(scope) {
+        let _ = result.set_prototype(scope, prototype);
+    }
 }
 
 pub(crate) fn html_element_constructor_callback<'s>(
