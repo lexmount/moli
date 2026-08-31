@@ -1,5 +1,6 @@
 use super::document_runtime::DomHandle;
 use super::native_bridge::PageScriptHost;
+pub(crate) use moli_v8_util::apply_webidl_constructor_prototype_fallback;
 pub(crate) use moli_v8_util::v8_string_from_utf16_units;
 pub use moli_v8_util::{
     array_contains_strict, array_push_value, call_object_method, callback_data_index_value,

@@ -19,8 +19,8 @@ use super::{
         },
     },
     util::{
-        context_host_ptr_from_global_bridge, get_private_object, get_private_value,
-        set_private_value, throw_type_error,
+        apply_webidl_constructor_prototype_fallback, context_host_ptr_from_global_bridge,
+        get_private_object, get_private_value, set_private_value, throw_type_error,
     },
 };
 
@@ -102,6 +102,7 @@ pub(super) fn dom_parser_constructor_callback<'s>(
     }
     let parser = args.this();
     moli_webapi::dom_parser_values::initialize_dom_parser_object(scope, parser);
+    apply_webidl_constructor_prototype_fallback(scope, parser, args.new_target(), "DOMParser");
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         throw_type_error(scope, "DOMParser constructor has no associated Document");
         return;
