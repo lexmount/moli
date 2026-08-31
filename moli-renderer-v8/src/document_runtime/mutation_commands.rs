@@ -1885,6 +1885,7 @@ impl DocumentRuntime {
 
 pub(crate) struct RuntimeMutationApplyResult {
     changed: bool,
+    document_followups_deferred_to_parser_owner: bool,
     meta_refresh_candidates: Vec<MetaRefreshNavigation>,
     devtools_dom_mutations: Vec<super::devtools_mutations::DevToolsDomMutationFact>,
     runtime_script_start_candidates: Vec<crate::mutation_coordinator::RuntimeScriptStartCandidate>,
@@ -1928,6 +1929,7 @@ pub(super) fn finish_runtime_mutation_effects(
 ) -> bool {
     let RuntimeMutationApplyResult {
         changed,
+        document_followups_deferred_to_parser_owner,
         meta_refresh_candidates,
         devtools_dom_mutations,
         runtime_script_start_candidates,
@@ -1941,7 +1943,9 @@ pub(super) fn finish_runtime_mutation_effects(
 
     runtime.queue_devtools_dom_mutations(devtools_dom_mutations);
 
-    if let Some(scheduled) = runtime.note_top_level_meta_refresh_candidates(meta_refresh_candidates)
+    if !document_followups_deferred_to_parser_owner
+        && let Some(scheduled) =
+            runtime.note_top_level_meta_refresh_candidates(meta_refresh_candidates)
     {
         let delay_ms = scheduled.navigation.delay_ms;
         let url = scheduled.navigation.url.clone();
@@ -1972,17 +1976,19 @@ pub(super) fn finish_runtime_mutation_effects(
     }
     unsafe { &mut *host_ptr }.queue_slotchange_events(scope, &changed_slots);
 
-    if changed {
-        runtime.apply_style_csp_mutation_followups(
-            scope,
-            host_ptr,
-            &inline_style_attribute_csp_mutations,
-            &connected_style_csp_roots,
-            &stylesheet_owner_changes,
-        );
+    if !document_followups_deferred_to_parser_owner {
+        if changed {
+            runtime.apply_style_csp_mutation_followups(
+                scope,
+                host_ptr,
+                &inline_style_attribute_csp_mutations,
+                &connected_style_csp_roots,
+                &stylesheet_owner_changes,
+            );
+        }
+        runtime.apply_pending_stylesheet_source_css_projections(scope, host_ptr);
     }
-    runtime.apply_pending_stylesheet_source_css_projections(scope, host_ptr);
-    if changed {
+    if changed && !document_followups_deferred_to_parser_owner {
         let mut prime_result = ConnectedStyleLoadPrimeResult::default();
         let prepared_owner_changes =
             runtime.prepare_stylesheet_owner_runtime_changes(&stylesheet_owner_changes);
@@ -2227,12 +2233,22 @@ pub(super) fn prepare_runtime_mutation_effects(
     effects: &DomMutationEffects,
     options: RuntimeMutationOptions,
 ) -> RuntimeMutationApplyResult {
-    let stylesheet_owner_changes = effects.stylesheet_owners().changes().to_vec();
-    let meta_refresh_candidates = super::meta_refresh::meta_refresh_navigations_from_mutation(
-        dom_host,
-        effects,
-        document_url,
-    );
+    let document_followups_deferred_to_parser_owner =
+        options.defer_document_followups_to_parser_owner;
+    let stylesheet_owner_changes = if document_followups_deferred_to_parser_owner {
+        Vec::new()
+    } else {
+        effects.stylesheet_owners().changes().to_vec()
+    };
+    let meta_refresh_candidates = if document_followups_deferred_to_parser_owner {
+        Vec::new()
+    } else {
+        super::meta_refresh::meta_refresh_navigations_from_mutation(
+            dom_host,
+            effects,
+            document_url,
+        )
+    };
     let inline_style_attribute_csp_mutations = if options.check_inline_style_csp {
         effects
             .style()
@@ -2270,7 +2286,9 @@ pub(super) fn prepare_runtime_mutation_effects(
     };
     let devtools_dom_mutations =
         super::devtools_mutations::capture_devtools_dom_mutation_facts(dom_host, effects);
-    let mut font_face_use_roots = effects.tree().connected_roots().to_vec();
+    let mut font_face_use_roots = Vec::new();
+    if !document_followups_deferred_to_parser_owner {
+        font_face_use_roots = effects.tree().connected_roots().to_vec();
     for mutation in effects.style().attribute_mutations() {
         if mutation.namespace().is_none()
             && mutation.local_name().eq_ignore_ascii_case("style")
@@ -2279,8 +2297,10 @@ pub(super) fn prepare_runtime_mutation_effects(
             font_face_use_roots.push(mutation.target());
         }
     }
+    }
     RuntimeMutationApplyResult {
         changed: effects.did_change(),
+        document_followups_deferred_to_parser_owner,
         meta_refresh_candidates,
         devtools_dom_mutations,
         runtime_script_start_candidates: Vec::new(),
