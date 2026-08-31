@@ -52,7 +52,10 @@ fn child_frame_security_identity_matches_chromium_cdp_url_projection() {
 #[test]
 fn page_owner_state_commands_complete_through_command_dispatch() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-PAGE-COMPLETE".into()));
+    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test(
+        "BID-PAGE-COMPLETE",
+        "TID-PAGE-COMPLETE",
+    ));
 
     for (id, method, params) in [
         (
@@ -3488,7 +3491,9 @@ async fn close_command_background_events_keep_target_detached_sidecar() {
 #[tokio::test(flavor = "multi_thread")]
 async fn set_bypass_csp_accepts_valid_params_and_returns_empty_result() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-PAGE".into()));
+    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test(
+        "BID-PAGE", "TID-PAGE",
+    ));
     ctx.process_async(json!({
         "id": 2,
         "method": "Page.setBypassCSP",
@@ -3516,7 +3521,9 @@ async fn set_bypass_csp_rejects_invalid_params() {
 #[tokio::test(flavor = "multi_thread")]
 async fn set_font_families_accepts_object_params_and_returns_empty_result() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-PAGE".into()));
+    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test(
+        "BID-PAGE", "TID-PAGE",
+    ));
     ctx.process_async(json!({
         "id": 4,
         "method": "Page.setFontFamilies",
@@ -3566,7 +3573,9 @@ async fn set_font_families_rejects_invalid_params() {
 #[tokio::test(flavor = "multi_thread")]
 async fn set_intercept_file_chooser_dialog_accepts_valid_params_and_returns_empty_result() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-PAGE".into()));
+    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test(
+        "BID-PAGE", "TID-PAGE",
+    ));
     ctx.process_async(json!({
         "id": 51,
         "method": "Page.setInterceptFileChooserDialog",

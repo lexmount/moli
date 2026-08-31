@@ -66,6 +66,17 @@ mod termination;
 #[cfg(test)]
 mod tests;
 
+fn missing_page_target_error_message(
+    conn: &CdpConnection,
+    session_id: Option<&str>,
+) -> &'static str {
+    if session_id.is_none() && conn.browser_context.is_some() {
+        "TargetNotLoaded"
+    } else {
+        "BrowserContextNotLoaded"
+    }
+}
+
 /// Builds a letter-sized raster PDF using the same defaults as
 /// `Page.printToPDF`.
 pub fn build_default_raster_pdf(
@@ -3792,8 +3803,8 @@ mod producer_tests {
     async fn browser_initiated_child_frame_completion_omits_renderer_request_events() {
         let mut conn = CdpConnection::default();
         let mut bc = BrowserContext::new("BID-1".into());
-        bc.set_target_url("https://example.test/page".to_owned());
         bc.set_active_target_id("TID-1");
+        bc.set_target_url("https://example.test/page".to_owned());
         bc.attach_active_session("SID-1");
         bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
@@ -3873,8 +3884,8 @@ mod producer_tests {
     async fn child_frame_activity_emits_navigation_before_init_before_lifecycle_terminal() {
         let mut conn = CdpConnection::default();
         let mut bc = BrowserContext::new("BID-1".into());
-        bc.set_target_url("https://example.test/page".to_owned());
         bc.set_active_target_id("TID-1");
+        bc.set_target_url("https://example.test/page".to_owned());
         bc.attach_active_session("SID-1");
         bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
@@ -3944,8 +3955,8 @@ mod producer_tests {
     async fn child_frame_activity_fans_out_page_events_to_enabled_auxiliary_session() {
         let mut conn = CdpConnection::default();
         let mut bc = BrowserContext::new("BID-child-page-fanout".into());
-        bc.set_target_url("https://example.test/page".to_owned());
         bc.set_active_target_id("TID-child-page-fanout");
+        bc.set_target_url("https://example.test/page".to_owned());
         bc.attach_active_session("SID-primary");
         assert!(bc.assign_auxiliary_session_to_target(
             "TID-child-page-fanout",
@@ -4009,8 +4020,8 @@ mod producer_tests {
     async fn child_frame_activity_projects_sandboxed_about_blank_from_document_url() {
         let mut conn = CdpConnection::default();
         let mut bc = BrowserContext::new("BID-1".into());
-        bc.set_target_url("https://top.example/page".to_owned());
         bc.set_active_target_id("TID-1");
+        bc.set_target_url("https://top.example/page".to_owned());
         bc.attach_active_session("SID-1");
         bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
@@ -4073,8 +4084,8 @@ mod producer_tests {
     async fn child_frame_activity_emits_document_network_events_from_prepared_load() {
         let mut conn = CdpConnection::default();
         let mut bc = BrowserContext::new("BID-1".into());
-        bc.set_target_url("https://example.test/page".to_owned());
         bc.set_active_target_id("TID-1");
+        bc.set_target_url("https://example.test/page".to_owned());
         bc.attach_active_session("SID-1");
         assert!(bc.assign_auxiliary_session_to_target("TID-1", "SID-AUXILIARY".to_owned(),));
         conn.browser_context = Some(bc);
@@ -4216,8 +4227,8 @@ mod producer_tests {
     async fn stale_child_document_response_emits_network_without_navigation_or_lifecycle() {
         let mut conn = CdpConnection::default();
         let mut bc = BrowserContext::new("BID-1".into());
-        bc.set_target_url("https://example.test/page".to_owned());
         bc.set_active_target_id("TID-1");
+        bc.set_target_url("https://example.test/page".to_owned());
         bc.attach_active_session("SID-1");
         bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
@@ -4394,8 +4405,8 @@ mod producer_tests {
     async fn child_frame_activity_drain_preserves_prepared_attachment_only_token() {
         let mut conn = CdpConnection::default();
         let mut bc = BrowserContext::new("BID-1".into());
-        bc.set_target_url("https://example.test/page".to_owned());
         bc.set_active_target_id("TID-1");
+        bc.set_target_url("https://example.test/page".to_owned());
         bc.attach_active_session("SID-1");
         bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
@@ -4484,8 +4495,8 @@ mod producer_tests {
     async fn prepared_child_frame_activity_does_not_follow_replacement_page_residence() {
         let mut conn = CdpConnection::default();
         let mut browser_context = BrowserContext::new("BID-child-page-owner".into());
-        browser_context.set_target_url("https://example.test/page".to_owned());
         browser_context.set_active_target_id("TID-child-page-owner");
+        browser_context.set_target_url("https://example.test/page".to_owned());
         browser_context.attach_active_session("SID-child-page-owner");
         conn.browser_context = Some(browser_context);
         let source_document = renderer_document_identity_for_test(1, 1);
@@ -4521,8 +4532,8 @@ mod producer_tests {
     async fn prepared_child_frame_activity_does_not_follow_root_document_open_replacement() {
         let mut conn = CdpConnection::default();
         let mut browser_context = BrowserContext::new("BID-child-root-document".into());
-        browser_context.set_target_url("https://example.test/page".to_owned());
         browser_context.set_active_target_id("TID-child-root-document");
+        browser_context.set_target_url("https://example.test/page".to_owned());
         browser_context.attach_active_session("SID-child-root-document");
         conn.browser_context = Some(browser_context);
         let source_document = renderer_document_identity_for_test(1, 1);
@@ -4561,8 +4572,8 @@ mod producer_tests {
     async fn prepared_child_frame_activity_keeps_root_document_route_until_delivery() {
         let mut conn = CdpConnection::default();
         let mut browser_context = BrowserContext::new("BID-child-delivery-route".into());
-        browser_context.set_target_url("https://example.test/page".to_owned());
         browser_context.set_active_target_id("TID-child-delivery-route");
+        browser_context.set_target_url("https://example.test/page".to_owned());
         browser_context.attach_active_session("SID-child-delivery-route");
         browser_context.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
@@ -4611,8 +4622,8 @@ mod producer_tests {
     async fn prepared_child_frame_activity_does_not_follow_detached_protocol_session() {
         let mut conn = CdpConnection::default();
         let mut browser_context = BrowserContext::new("BID-child-session".into());
-        browser_context.set_target_url("https://example.test/page".to_owned());
         browser_context.set_active_target_id("TID-child-session");
+        browser_context.set_target_url("https://example.test/page".to_owned());
         browser_context.attach_active_session("SID-child-session");
         conn.browser_context = Some(browser_context);
         let source_document = renderer_document_identity_for_test(1, 1);
@@ -4653,8 +4664,8 @@ mod producer_tests {
     fn child_frame_tree_emission_deduplicates_attach_and_removes_owner_state_on_detach() {
         let mut conn = CdpConnection::default();
         let mut bc = BrowserContext::new("BID-1".into());
-        bc.set_target_url("about:blank".to_owned());
         bc.set_active_target_id("TID-1");
+        bc.set_target_url("about:blank".to_owned());
         bc.attach_active_session("SID-1");
         bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
@@ -4714,8 +4725,8 @@ mod producer_tests {
     async fn child_frame_activity_drain_requires_prepared_output() {
         let mut conn = CdpConnection::default();
         let mut bc = BrowserContext::new("BID-1".into());
-        bc.set_target_url("https://example.test/page".to_owned());
         bc.set_active_target_id("TID-1");
+        bc.set_target_url("https://example.test/page".to_owned());
         bc.attach_active_session("SID-1");
         conn.browser_context = Some(bc);
         let mut command_context = crate::conn::CommandDispatchContext::default();

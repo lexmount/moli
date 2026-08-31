@@ -441,7 +441,7 @@ async fn clear_browser_cache_requires_browser_context() {
 #[tokio::test(flavor = "multi_thread")]
 async fn clear_browser_cache_clears_response_body_and_stream_artifacts() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
     bc.record_captured_response_body("REQ-1".to_owned(), "body".to_owned(), [None]);
     bc.insert_io_stream("STREAM-1".to_owned(), b"payload".to_vec(), 0);
     ctx.conn.browser_context = Some(bc);
@@ -544,12 +544,13 @@ async fn clear_browser_cache_targets_command_session_browser_context() {
     fs::write(inactive_entry_dir.join("body.test.bin"), b"inactive")
         .expect("inactive cache body fixture should be written");
 
-    let mut active = BrowserContext::new("BID-cache-active".into());
+    let mut active = BrowserContext::new_with_page_for_test("BID-cache-active", "TID-cache-active");
     active.attach_active_session("SID-cache-active");
     active.http_cache_root = Some(active_cache_dir.clone());
     active.record_captured_response_body("REQ-active".to_owned(), "active".to_owned(), [None]);
 
-    let mut inactive = BrowserContext::new("BID-cache-inactive".into());
+    let mut inactive =
+        BrowserContext::new_with_page_for_test("BID-cache-inactive", "TID-cache-inactive");
     inactive.attach_active_session("SID-cache-inactive");
     inactive.http_cache_root = Some(inactive_cache_dir.clone());
     inactive.record_captured_response_body(
@@ -636,7 +637,7 @@ fn new_browser_context_inherits_effective_http_cache_owner() {
 #[tokio::test(flavor = "multi_thread")]
 async fn clear_browser_cache_keeps_pending_response_navigation_transfer() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
     let url = Url::parse("https://example.test/document").unwrap();
     bc.register_pending_fetch_response_navigation(
         "INT-1".to_owned(),
@@ -709,7 +710,7 @@ async fn set_cache_disabled_requires_browser_context() {
 #[tokio::test(flavor = "multi_thread")]
 async fn set_cache_disabled_rejects_invalid_params() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
 
     ctx.process_async(json!({
         "id": 21,
@@ -722,7 +723,7 @@ async fn set_cache_disabled_rejects_invalid_params() {
 #[tokio::test(flavor = "multi_thread")]
 async fn set_cache_disabled_updates_browser_context_state() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
 
     ctx.process_async(json!({
         "id": 219,
@@ -870,7 +871,7 @@ async fn devtools_set_cache_behavior_contexts_only_updates_requested_targets() {
 #[tokio::test(flavor = "multi_thread")]
 async fn devtools_set_cache_behavior_rejects_unknown_context() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
 
     let error = ctx
         .conn
@@ -958,7 +959,7 @@ async fn set_bypass_service_worker_rejects_invalid_params() {
 #[tokio::test(flavor = "multi_thread")]
 async fn set_bypass_service_worker_updates_browser_context_state() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
 
     ctx.process_async(json!({
         "id": 239,

@@ -405,7 +405,7 @@ mod tests {
     #[tokio::test]
     async fn read_supports_offsets_and_eof() {
         let mut ctx = TestContext::new();
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
         bc.insert_io_stream("STREAM-1".into(), b"abcdef".to_vec(), 0);
         ctx.conn.browser_context = Some(bc);
 
@@ -437,7 +437,7 @@ mod tests {
     #[tokio::test]
     async fn close_removes_stream_handle() {
         let mut ctx = TestContext::new();
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
         bc.insert_io_stream("STREAM-1".into(), b"abcdef".to_vec(), 0);
         ctx.conn.browser_context = Some(bc);
 
@@ -482,7 +482,7 @@ mod tests {
     #[tokio::test]
     async fn read_large_stream_handle_uses_captured_body_backing() {
         let mut ctx = TestContext::new();
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
         bc.insert_io_stream("STREAM-2".into(), vec![b'x'; 1024 * 1024 + 8], 0);
         ctx.conn.browser_context = Some(bc);
 
@@ -515,7 +515,7 @@ mod tests {
     #[tokio::test]
     async fn read_command_dispatch_handles_buffered_stream_without_fallback() {
         let mut ctx = TestContext::new();
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
         bc.insert_io_stream("STREAM-DISPATCH".into(), b"dispatch".to_vec(), 0);
         ctx.conn.browser_context = Some(bc);
 

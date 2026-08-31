@@ -23,7 +23,7 @@ async fn set_blocked_urls_requires_browser_context() {
 #[tokio::test(flavor = "multi_thread")]
 async fn set_blocked_urls_rejects_invalid_params() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
     ctx.process_async(json!({
         "id": 2801,
         "method": "Network.setBlockedURLs",
@@ -35,7 +35,7 @@ async fn set_blocked_urls_rejects_invalid_params() {
 #[tokio::test(flavor = "multi_thread")]
 async fn set_blocked_urls_updates_browser_context_state() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
     enable_network_domain(&mut ctx, 28_020, None).await;
 
     ctx.process_async(json!({
@@ -79,7 +79,7 @@ async fn set_blocked_urls_updates_browser_context_state() {
 #[tokio::test(flavor = "multi_thread")]
 async fn set_blocked_urls_contribution_activates_with_network_handler() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
 
     ctx.process_async(json!({
         "id": 28_021,
@@ -1283,7 +1283,7 @@ async fn emulate_network_conditions_requires_browser_context() {
 #[tokio::test(flavor = "multi_thread")]
 async fn emulate_network_conditions_rejects_invalid_params() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
     ctx.process_async(json!({
         "id": 29,
         "method": "Network.emulateNetworkConditions",
@@ -1295,7 +1295,7 @@ async fn emulate_network_conditions_rejects_invalid_params() {
 #[tokio::test(flavor = "multi_thread")]
 async fn emulate_network_conditions_updates_browser_context_state() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
 
     ctx.process_async(json!({
         "id": 30,

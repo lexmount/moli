@@ -2196,7 +2196,7 @@ mod producer_tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn file_chooser_opened_preserves_typed_automation_sidecar() {
         let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-typed".into());
+        let mut bc = BrowserContext::new_with_page_for_test("BID-typed", "TID-typed");
         bc.attach_active_session("SID-typed");
         bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
@@ -2463,7 +2463,7 @@ mod producer_tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn file_chooser_drain_consumes_prepared_activations_without_page_readback() {
         let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
         bc.attach_active_session("SID-1");
         bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
@@ -2510,7 +2510,7 @@ mod producer_tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn file_chooser_activity_background_events_keep_typed_sidecar() {
         let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-context".into());
+        let mut bc = BrowserContext::new_with_page_for_test("BID-context", "TID-context");
         bc.attach_active_session("SID-context");
         bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state

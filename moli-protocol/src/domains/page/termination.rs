@@ -459,7 +459,7 @@ pub(super) async fn complete_crash_command_dispatch(
     let Some((_, target_id)) = conn.target_owner_identity_for_session(session_id) else {
         return PageCommandTaskStep::Complete(CommandOutputPlan::error_without_session(
             -31998,
-            "BrowserContextNotLoaded",
+            super::missing_page_target_error_message(conn, session_id),
         ));
     };
     let Some(target_id) = target_id else {
@@ -588,7 +588,7 @@ pub(super) async fn complete_close_command_dispatch(
     let Some((_, target_id)) = conn.target_owner_identity_for_session(session_id) else {
         return PageCommandTaskStep::Complete(CommandOutputPlan::error_without_session(
             -31998,
-            "BrowserContextNotLoaded",
+            super::missing_page_target_error_message(conn, session_id),
         ));
     };
     if target_id.is_none() {

@@ -158,8 +158,8 @@ mod tests {
 
     async fn load_document(ctx: &mut TestContext, html: &str) {
         let mut bc = BrowserContext::new("BID-1".into());
-        bc.set_target_url("data:text/html,console-test".to_owned());
         bc.set_active_target_id("TID-1".to_owned());
+        bc.set_target_url("data:text/html,console-test".to_owned());
         bc.attach_active_session("SID-1".to_owned());
         ctx.conn.browser_context = Some(bc);
         ctx.install_navigation_fixture_for_session_owner(

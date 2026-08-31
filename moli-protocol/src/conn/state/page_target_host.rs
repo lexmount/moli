@@ -238,6 +238,10 @@ pub(crate) struct PageTargetRegistry {
 }
 
 impl PageTargetRegistry {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.hosts.is_empty()
+    }
+
     pub(crate) fn active_target_id(&self) -> Option<&str> {
         self.active_target_id.as_deref()
     }

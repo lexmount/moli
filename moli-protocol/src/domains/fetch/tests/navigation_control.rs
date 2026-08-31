@@ -519,8 +519,8 @@ async fn document_url_pattern_only_pauses_matching_main_document() {
     ctx.conn.browser_context = Some(BrowserContext::new("BID-1".into()));
     {
         let bc = ctx.conn.browser_context.as_mut().unwrap();
-        bc.attach_active_session("SID-1");
         bc.set_active_target_id("TID-1");
+        bc.attach_active_session("SID-1");
     }
 
     ctx.process_async(json!({

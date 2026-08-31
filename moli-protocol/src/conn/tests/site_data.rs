@@ -212,7 +212,10 @@ fn browser_context_preview_clear_cookie_store_defaults_to_all_scope() {
 async fn connection_preview_clear_cookie_store_with_persistent_scope_does_not_invalidate_live_document_cookie_cache()
  {
     let mut conn = CdpConnection::new();
-    conn.browser_context = Some(BrowserContext::new("BID-store-clear-preview-live".into()));
+    conn.browser_context = Some(BrowserContext::new_with_page_for_test(
+        "BID-store-clear-preview-live",
+        "TID-store-clear-preview-live",
+    ));
     let url = Url::parse("https://app.example.com/app").unwrap();
 
     let navigation = conn
@@ -301,7 +304,10 @@ fn browser_context_preview_clear_cookie_storage_with_site_target_projects_target
 async fn connection_clear_cookie_store_with_session_scope_invalidates_live_document_cookie_cache_but_preserves_persistent_cookie()
  {
     let mut conn = CdpConnection::new();
-    conn.browser_context = Some(BrowserContext::new("BID-store-clear-session-live".into()));
+    conn.browser_context = Some(BrowserContext::new_with_page_for_test(
+        "BID-store-clear-session-live",
+        "TID-store-clear-session-live",
+    ));
     let url = Url::parse("https://app.example.com/app").unwrap();
 
     let navigation = conn
@@ -513,7 +519,10 @@ fn browser_context_cookie_storage_state_snapshot_for_sites_filters_views() {
 #[tokio::test]
 async fn connection_cookie_site_clear_invalidates_live_document_cookie_cache() {
     let mut conn = CdpConnection::new();
-    conn.browser_context = Some(BrowserContext::new("BID-live-sites".into()));
+    conn.browser_context = Some(BrowserContext::new_with_page_for_test(
+        "BID-live-sites",
+        "TID-live-sites",
+    ));
     let url = Url::parse("https://app.example.com/app").unwrap();
 
     let navigation = conn
@@ -590,7 +599,10 @@ fn connection_clear_cookies_for_sites_report_projects_targeted_state() {
 async fn connection_preview_clear_cookies_for_sites_does_not_invalidate_live_document_cookie_cache()
 {
     let mut conn = CdpConnection::new();
-    conn.browser_context = Some(BrowserContext::new("BID-live-site-clear-preview".into()));
+    conn.browser_context = Some(BrowserContext::new_with_page_for_test(
+        "BID-live-site-clear-preview",
+        "TID-live-site-clear-preview",
+    ));
     let url = Url::parse("https://app.example.com/app").unwrap();
 
     let navigation = conn

@@ -153,7 +153,7 @@ fn current_navigation_initiator_url_uses_loaded_browser_context_url_when_availab
     let mut conn = CdpConnection::new();
     assert!(conn.current_navigation_initiator_url().is_none());
 
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
     bc.set_target_url("about:blank".into());
     conn.browser_context = Some(bc);
     assert!(conn.current_navigation_initiator_url().is_none());
@@ -567,7 +567,7 @@ fn connection_profile_backed_cookie_snapshot_is_none_without_profile_backed_cont
 async fn build_loaded_navigation_from_buffered_response_updates_request_cookie_access_time() {
     let mut conn = CdpConnection::new();
     let requested_url = Url::parse("https://example.com/app/index.html").unwrap();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
     bc.set_target_url("https://example.com/origin".into());
     bc.store_response_cookie_headers_for_test(
         &requested_url,
@@ -620,7 +620,7 @@ async fn build_loaded_navigation_from_buffered_response_updates_request_cookie_a
 async fn rebuild_buffered_response_preserving_request_report_avoids_second_access_touch() {
     let mut conn = CdpConnection::new();
     let requested_url = Url::parse("https://example.com/app/index.html").unwrap();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
     bc.set_target_url("https://example.com/origin".into());
     bc.store_response_cookie_headers_for_test(
         &requested_url,
@@ -688,7 +688,7 @@ async fn rebuild_buffered_response_preserving_request_report_avoids_second_acces
 #[tokio::test]
 async fn reset_resource_runtime_clears_loaded_page_cookie_backend() {
     let mut conn = CdpConnection::new();
-    conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+    conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
     let url = Url::parse("https://example.com/app").unwrap();
 
     let navigation = conn
@@ -769,7 +769,7 @@ async fn reset_resource_runtime_clears_loaded_page_cookie_backend() {
 #[tokio::test]
 async fn same_target_navigations_reuse_local_and_session_storage() {
     let mut conn = CdpConnection::new();
-    conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+    conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
     let first_url = Url::parse("https://storage.example/app/one").unwrap();
     let second_url = Url::parse("https://storage.example/app/two").unwrap();
 
@@ -818,7 +818,7 @@ async fn same_target_navigations_reuse_local_and_session_storage() {
 #[tokio::test]
 async fn browser_context_storage_does_not_cross_context_switches() {
     let mut conn = CdpConnection::new();
-    conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+    conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
     conn.inactive_browser_contexts
         .push(BrowserContext::new("BID-2".into()));
     let url = Url::parse("https://context-storage.example/app").unwrap();
@@ -953,7 +953,7 @@ async fn browser_context_storage_buckets_reuse_within_context_and_isolate_betwee
 #[tokio::test]
 async fn user_agent_override_rebinds_live_document_after_engine_runtime_invalidation() {
     let mut conn = CdpConnection::new();
-    conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+    conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
     let url = Url::parse("https://example.com/app").unwrap();
 
     let navigation = conn
@@ -998,7 +998,7 @@ async fn user_agent_override_rebinds_live_document_after_engine_runtime_invalida
 #[tokio::test]
 async fn tls_and_proxy_overrides_rebind_live_document_after_engine_runtime_invalidation() {
     let mut conn = CdpConnection::new();
-    conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+    conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
     let url = Url::parse("https://example.com/app").unwrap();
 
     let navigation = conn
@@ -1095,13 +1095,13 @@ fn build_loaded_navigation_from_buffered_response_works_inside_current_thread_ru
 #[tokio::test]
 async fn loader_uses_active_browser_context_user_agent_override() {
     let mut conn = CdpConnection::new();
-    let mut first = BrowserContext::new("BID-1".into());
+    let mut first = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
     first
         .network_policy
         .set_user_agent_override("Moli/Context-A".into());
     conn.browser_context = Some(first);
 
-    let mut second = BrowserContext::new("BID-2".into());
+    let mut second = BrowserContext::new_with_page_for_test("BID-2", "TID-2");
     second
         .network_policy
         .set_user_agent_override("Moli/Context-B".into());
@@ -1126,11 +1126,11 @@ async fn loader_uses_active_browser_context_user_agent_override() {
 #[tokio::test]
 async fn loader_uses_active_browser_context_http_proxy_override() {
     let mut conn = CdpConnection::new();
-    let mut first = BrowserContext::new("BID-1".into());
+    let mut first = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
     first.http_proxy_override = Some("http://proxy-a.test:8080".into());
     conn.browser_context = Some(first);
 
-    let mut second = BrowserContext::new("BID-2".into());
+    let mut second = BrowserContext::new_with_page_for_test("BID-2", "TID-2");
     second.http_proxy_override = Some("http://proxy-b.test:8080".into());
     conn.inactive_browser_contexts.push(second);
 
@@ -1153,11 +1153,11 @@ async fn loader_uses_active_browser_context_http_proxy_override() {
 #[tokio::test]
 async fn loader_uses_active_browser_context_http_no_proxy_override() {
     let mut conn = CdpConnection::new();
-    let mut first = BrowserContext::new("BID-1".into());
+    let mut first = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
     first.http_no_proxy_override = Some("localhost,127.0.0.1".into());
     conn.browser_context = Some(first);
 
-    let mut second = BrowserContext::new("BID-2".into());
+    let mut second = BrowserContext::new_with_page_for_test("BID-2", "TID-2");
     second.http_no_proxy_override = Some("::1,.example.com".into());
     conn.inactive_browser_contexts.push(second);
 
@@ -1180,11 +1180,11 @@ async fn loader_uses_active_browser_context_http_no_proxy_override() {
 #[tokio::test]
 async fn loader_uses_active_browser_context_tls_verify_host_override() {
     let mut conn = CdpConnection::new();
-    let mut first = BrowserContext::new("BID-1".into());
+    let mut first = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
     first.tls_verify_host_override = Some(false);
     conn.browser_context = Some(first);
 
-    let mut second = BrowserContext::new("BID-2".into());
+    let mut second = BrowserContext::new_with_page_for_test("BID-2", "TID-2");
     second.tls_verify_host_override = Some(true);
     conn.inactive_browser_contexts.push(second);
 
@@ -1207,19 +1207,19 @@ async fn loader_uses_active_browser_context_tls_verify_host_override() {
 async fn removing_an_inactive_browser_context_keeps_the_previously_active_context() {
     let mut conn = CdpConnection::new();
 
-    let mut first = BrowserContext::new("BID-A".into());
+    let mut first = BrowserContext::new_with_page_for_test("BID-A", "TID-A");
     first
         .network_policy
         .set_user_agent_override("Moli/Context-A".into());
     conn.browser_context = Some(first);
 
-    let mut second = BrowserContext::new("BID-B".into());
+    let mut second = BrowserContext::new_with_page_for_test("BID-B", "TID-B");
     second
         .network_policy
         .set_user_agent_override("Moli/Context-B".into());
     conn.inactive_browser_contexts.push(second);
 
-    let mut third = BrowserContext::new("BID-C".into());
+    let mut third = BrowserContext::new_with_page_for_test("BID-C", "TID-C");
     third
         .network_policy
         .set_user_agent_override("Moli/Context-C".into());
@@ -1257,13 +1257,13 @@ async fn removing_an_inactive_browser_context_keeps_the_previously_active_contex
 async fn manual_browser_context_restore_reselects_original_context_after_switch() {
     let mut conn = CdpConnection::new();
 
-    let mut first = BrowserContext::new("BID-A".into());
+    let mut first = BrowserContext::new_with_page_for_test("BID-A", "TID-A");
     first
         .network_policy
         .set_user_agent_override("Moli/Context-A".into());
     conn.browser_context = Some(first);
 
-    let mut second = BrowserContext::new("BID-B".into());
+    let mut second = BrowserContext::new_with_page_for_test("BID-B", "TID-B");
     second
         .network_policy
         .set_user_agent_override("Moli/Context-B".into());
@@ -1305,10 +1305,10 @@ async fn manual_browser_context_restore_reselects_original_context_after_switch(
 async fn session_scoped_process_message_restores_previously_active_context_after_dispatch() {
     let mut conn = CdpConnection::new();
 
-    let first = BrowserContext::new("BID-A".into());
+    let first = BrowserContext::new_with_page_for_test("BID-A", "TID-A");
     conn.browser_context = Some(first);
 
-    let mut second = BrowserContext::new("BID-B".into());
+    let mut second = BrowserContext::new_with_page_for_test("BID-B", "TID-B");
     second.attach_active_session("SID-B");
     conn.inactive_browser_contexts.push(second);
 
@@ -1344,10 +1344,10 @@ async fn session_scoped_process_message_restores_previously_active_context_after
 async fn session_scoped_process_message_async_restores_previously_active_context_after_dispatch() {
     let mut conn = CdpConnection::new();
 
-    let first = BrowserContext::new("BID-A".into());
+    let first = BrowserContext::new_with_page_for_test("BID-A", "TID-A");
     conn.browser_context = Some(first);
 
-    let mut second = BrowserContext::new("BID-B".into());
+    let mut second = BrowserContext::new_with_page_for_test("BID-B", "TID-B");
     second.attach_active_session("SID-B");
     conn.inactive_browser_contexts.push(second);
 
@@ -2961,9 +2961,8 @@ async fn direct_log_enable_routes_to_inactive_active_owner_without_promoting_slo
         )
         .await
         .expect("test page should load");
-    let mut inactive = BrowserContext::new("BID-B".into());
+    let mut inactive = BrowserContext::new_with_page_for_test("BID-B", "TID-B");
     inactive.set_target_url("data:text/html,log-direct-test".to_owned());
-    inactive.set_active_target_id("TID-B".to_owned());
     inactive.attach_active_session("SID-B");
     inactive.replace_loaded_page(Some(page));
     conn.inactive_browser_contexts.push(inactive);

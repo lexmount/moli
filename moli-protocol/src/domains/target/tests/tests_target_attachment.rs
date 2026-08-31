@@ -969,7 +969,7 @@ async fn attach_to_browser_target_emits_browser_attached_event() {
 #[tokio::test(flavor = "multi_thread")]
 async fn attach_to_browser_target_does_not_reuse_page_session() {
     let mut ctx = TestContext::new();
-    load_bc(&mut ctx, "BID-9");
+    load_bc_with_target(&mut ctx, "BID-9", "TID-7");
     ctx.conn
         .browser_context
         .as_mut()

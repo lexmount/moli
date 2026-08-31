@@ -248,8 +248,8 @@ async fn runtime_fetch_post_body_is_available_by_network_request_id() {
     let page_url = format!("http://{addr}/page");
     let mut ctx = TestContext::new();
     let mut bc = BrowserContext::new("BID-1".into());
-    bc.attach_active_session("SID-1".to_owned());
     bc.set_active_target_id("TID-1".to_owned());
+    bc.attach_active_session("SID-1".to_owned());
     ctx.conn.browser_context = Some(bc);
     ctx.install_navigation_fixture_for_session_owner(&page_url, Some("SID-1"))
         .await;
@@ -337,8 +337,8 @@ async fn runtime_form_post_navigation_body_is_available_by_network_request_id() 
     let page_url = format!("http://{addr}/page");
     let mut ctx = TestContext::new();
     let mut bc = BrowserContext::new("BID-1".into());
-    bc.attach_active_session("SID-1".to_owned());
     bc.set_active_target_id("TID-1".to_owned());
+    bc.attach_active_session("SID-1".to_owned());
     ctx.conn.browser_context = Some(bc);
     ctx.install_navigation_fixture_for_session_owner(&page_url, Some("SID-1"))
         .await;
@@ -422,8 +422,8 @@ async fn websocket_runtime_activity_emits_cdp_websocket_events_without_payload()
     let socket_literal = serde_json::to_string(&socket_url).unwrap();
     let mut ctx = TestContext::new();
     let mut bc = BrowserContext::new("BID-1".into());
-    bc.attach_active_session("SID-1".to_owned());
     bc.set_active_target_id("TID-1".to_owned());
+    bc.attach_active_session("SID-1".to_owned());
     ctx.conn.insert_browser_context(bc);
     ctx.install_navigation_fixture_for_session_owner(&page_url, Some("SID-1"))
         .await;
@@ -567,8 +567,8 @@ async fn rejected_websocket_handshake_emits_frame_error_then_closed() {
     let socket_literal = serde_json::to_string(&socket_url).unwrap();
     let mut ctx = TestContext::new();
     let mut bc = BrowserContext::new("BID-1".into());
-    bc.attach_active_session("SID-1".to_owned());
     bc.set_active_target_id("TID-1".to_owned());
+    bc.attach_active_session("SID-1".to_owned());
     ctx.conn.browser_context = Some(bc);
     ctx.install_navigation_fixture_for_session_owner(&page_url, Some("SID-1"))
         .await;

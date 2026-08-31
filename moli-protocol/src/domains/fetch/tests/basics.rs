@@ -129,7 +129,7 @@ async fn enable_without_browser_context_errors() {
 #[tokio::test]
 async fn enable_sets_fetch_flags_for_supported_patterns() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
 
     ctx.process_async(json!({
         "id": 2,
@@ -650,7 +650,7 @@ async fn disable_targets_loaded_background_owner_without_promotion() {
 #[tokio::test]
 async fn enable_without_params_enables_default_fetch_interception() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
 
     ctx.process_async(json!({
         "id": 12,
@@ -667,7 +667,7 @@ async fn enable_without_params_enables_default_fetch_interception() {
 #[tokio::test]
 async fn enable_with_invalid_request_stage_errors_and_keeps_fetch_disabled() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
 
     ctx.process_async(json!({
         "id": 3,
@@ -689,7 +689,7 @@ async fn enable_with_invalid_request_stage_errors_and_keeps_fetch_disabled() {
 #[tokio::test]
 async fn enable_with_specific_url_pattern_sets_pattern() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
 
     ctx.process_async(json!({
         "id": 18,
@@ -730,7 +730,7 @@ fn url_pattern_matches_supports_wildcards_and_escapes() {
 #[tokio::test]
 async fn enable_with_document_resource_type_filter_sets_document_filter() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
 
     ctx.process_async(json!({
             "id": 14,
@@ -756,7 +756,7 @@ async fn enable_with_document_resource_type_filter_sets_document_filter() {
 #[tokio::test]
 async fn enable_with_script_resource_type_filter_sets_script_filter() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
 
     ctx.process_async(json!({
         "id": 15,
@@ -782,7 +782,7 @@ async fn enable_with_script_resource_type_filter_sets_script_filter() {
 #[tokio::test]
 async fn enable_with_fetch_resource_type_filter_sets_fetch_filter() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
 
     ctx.process_async(json!({
         "id": 15,
@@ -808,7 +808,7 @@ async fn enable_with_fetch_resource_type_filter_sets_fetch_filter() {
 #[tokio::test]
 async fn enable_with_xhr_resource_type_filter_sets_xhr_filter() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
 
     ctx.process_async(json!({
         "id": 16,
@@ -834,7 +834,7 @@ async fn enable_with_xhr_resource_type_filter_sets_xhr_filter() {
 #[tokio::test]
 async fn enable_with_ping_resource_type_filter_sets_ping_filter() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
 
     ctx.process_async(json!({
         "id": 18,
@@ -860,7 +860,7 @@ async fn enable_with_ping_resource_type_filter_sets_ping_filter() {
 #[tokio::test]
 async fn enable_with_csp_violation_report_resource_type_filter_sets_csp_report_filter() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
 
     ctx.process_async(json!({
         "id": 19,
@@ -890,7 +890,7 @@ async fn enable_with_csp_violation_report_resource_type_filter_sets_csp_report_f
 #[tokio::test]
 async fn enable_with_websocket_resource_type_filter_sets_websocket_filter() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
 
     ctx.process_async(json!({
         "id": 20,
@@ -916,7 +916,7 @@ async fn enable_with_websocket_resource_type_filter_sets_websocket_filter() {
 #[tokio::test]
 async fn enable_with_other_resource_type_filter_sets_other_filter() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
 
     ctx.process_async(json!({
         "id": 21,
@@ -943,7 +943,10 @@ async fn enable_with_other_resource_type_filter_sets_other_filter() {
 async fn enable_rejects_unimplemented_parser_discovered_resource_type_filters() {
     for resource_type in ["Stylesheet", "Media", "TextTrack"] {
         let mut ctx = TestContext::new();
-        ctx.conn.browser_context = Some(BrowserContext::new(format!("BID-{resource_type}")));
+        ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test(
+            format!("BID-{resource_type}"),
+            "TID-1",
+        ));
 
         ctx.process_async(json!({
             "id": 20,
@@ -963,7 +966,7 @@ async fn enable_rejects_unimplemented_parser_discovered_resource_type_filters() 
 #[tokio::test]
 async fn enable_accepts_image_resource_type_filter() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-Image".into()));
+    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-Image", "TID-1"));
 
     ctx.process_async(json!({
         "id": 22,
@@ -989,7 +992,7 @@ async fn enable_accepts_image_resource_type_filter() {
 #[tokio::test]
 async fn enable_with_response_stage_pattern_sets_response_stage() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
 
     ctx.process_async(json!({
         "id": 17,
@@ -1011,7 +1014,7 @@ async fn enable_with_response_stage_pattern_sets_response_stage() {
 #[tokio::test]
 async fn enable_with_multiple_supported_patterns_enables_fetch_interception() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
 
     ctx.process_async(json!({
         "id": 13,
@@ -1053,7 +1056,7 @@ async fn disable_without_browser_context_errors() {
 #[tokio::test]
 async fn disable_clears_fetch_state() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
     bc.active_target
         .fetch_owner
         .configure(None, true, Vec::new());
@@ -1157,7 +1160,7 @@ async fn disable_clears_fetch_state() {
 #[tokio::test]
 async fn disable_after_enable_resets_pending_requests() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
     bc.active_target
         .fetch_owner
         .configure(None, false, Vec::new());
@@ -1185,7 +1188,7 @@ async fn disable_after_enable_resets_pending_requests() {
 #[tokio::test]
 async fn continue_request_validates_request_id_and_pending_state() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
 
     ctx.process_async(json!({
         "id": 6,
@@ -1207,7 +1210,7 @@ async fn continue_request_validates_request_id_and_pending_state() {
 #[tokio::test]
 async fn continue_request_with_intercept_response_still_validates_request_id() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
 
     ctx.process_async(json!({
         "id": 60,
@@ -1224,7 +1227,7 @@ async fn continue_request_with_intercept_response_still_validates_request_id() {
 #[tokio::test]
 async fn continue_response_and_take_response_body_as_stream_validate_like_fetch_actions() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
     bc.active_target
         .fetch_owner
         .register_pending_fetch_request_id_for_test("INT-42".to_owned());
@@ -1261,7 +1264,7 @@ async fn continue_response_and_take_response_body_as_stream_validate_like_fetch_
 #[tokio::test]
 async fn pending_fetch_request_can_be_consumed_once() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
     bc.active_target
         .fetch_owner
         .register_pending_fetch_request_id_for_test("INT-7".to_owned());
@@ -1287,7 +1290,7 @@ async fn pending_fetch_request_can_be_consumed_once() {
 #[tokio::test]
 async fn continue_with_auth_and_get_response_body_share_request_validation() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
 
     ctx.process_async(json!({
         "id": 10,

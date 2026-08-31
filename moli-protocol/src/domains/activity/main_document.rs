@@ -1132,7 +1132,7 @@ mod tests {
     #[test]
     fn navigation_activity_error_drains_progress_before_error_response() {
         let mut conn = CdpConnection::new();
-        let mut browser_context = BrowserContext::new("BID-1".to_owned());
+        let mut browser_context = BrowserContext::new_with_page_for_test("BID-1", "TID-page");
         browser_context.attach_active_session("SID-page");
         browser_context
             .active_target

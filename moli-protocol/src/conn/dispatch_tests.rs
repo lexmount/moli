@@ -637,7 +637,10 @@ async fn devtools_script_navigation_exact_cursor_rejects_replaced_page_owner_act
 #[tokio::test]
 async fn devtools_fetch_control_command_routes_through_fetch_owner() {
     let mut conn = CdpConnection::new();
-    conn.browser_context = Some(BrowserContext::new("BID-fetch-control".to_owned()));
+    conn.browser_context = Some(BrowserContext::new_with_page_for_test(
+        "BID-fetch-control",
+        "TID-fetch-control",
+    ));
     let context = DevToolsCommandContext {
         protocol: DevToolsProtocol::WebDriverBidi,
         session_id: Some(DevToolsSessionId::from("bidi-session-1")),
@@ -7044,7 +7047,10 @@ async fn command_dispatch_completes_target_startup_commands_without_legacy_fallb
 #[test]
 fn command_dispatch_completes_network_sync_settings() {
     let mut conn = CdpConnection::new();
-    conn.browser_context = Some(BrowserContext::new("BID-network".to_owned()));
+    conn.browser_context = Some(BrowserContext::new_with_page_for_test(
+        "BID-network",
+        "TID-network",
+    ));
 
     for (id, method, params) in [
         (30, "Network.enable", json!({})),
@@ -8993,7 +8999,10 @@ fn command_dispatch_completes_additional_sync_domains_without_legacy_fallback() 
 #[test]
 fn command_dispatch_completes_input_owner_commands_without_legacy_fallback() {
     let mut conn = crate::testing::real_layout_test_connection();
-    conn.browser_context = Some(BrowserContext::new("BID-input".to_owned()));
+    conn.browser_context = Some(BrowserContext::new_with_page_for_test(
+        "BID-input",
+        "TID-input",
+    ));
 
     let raw = serde_json::to_string(&json!({
         "id": 1001,

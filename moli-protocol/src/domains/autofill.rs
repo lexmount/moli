@@ -167,8 +167,8 @@ mod tests {
 
     async fn load_document(ctx: &mut TestContext, html: &str) {
         let mut browser_context = BrowserContext::new("BID-1".into());
-        browser_context.set_target_url("data:text/html,autofill-test".to_owned());
         browser_context.set_active_target_id("TID-1".to_owned());
+        browser_context.set_target_url("data:text/html,autofill-test".to_owned());
         browser_context.attach_active_session("SID-1".to_owned());
         ctx.conn.browser_context = Some(browser_context);
         ctx.install_navigation_fixture_for_session_owner(

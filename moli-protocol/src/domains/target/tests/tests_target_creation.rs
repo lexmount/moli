@@ -23,7 +23,7 @@ fn stored_cookie(name: &str, value: &str) -> moli_cookie_jar::StoredCookie {
 #[tokio::test(flavor = "multi_thread")]
 async fn create_target_clears_stale_crash_state() {
     let mut ctx = TestContext::new();
-    load_bc(&mut ctx, "BID-9");
+    load_bc_with_target(&mut ctx, "BID-9", "TID-stale");
     ctx.conn
         .browser_context
         .as_mut()

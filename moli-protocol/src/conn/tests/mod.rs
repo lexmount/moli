@@ -785,7 +785,6 @@ async fn memory_diagnostics_reports_page_vm_document_isolate_model() {
 #[tokio::test]
 async fn replacing_or_retiring_a_loaded_page_changes_its_attachment_identity() {
     let mut conn = CdpConnection::new();
-    conn.browser_context = Some(BrowserContext::new("BID-page-attachment".to_owned()));
     let first_page = conn
         .load_page_via_runtime_async("data:text/html,<body>first</body>")
         .await
@@ -794,6 +793,10 @@ async fn replacing_or_retiring_a_loaded_page_changes_its_attachment_identity() {
         .load_page_via_runtime_async("data:text/html,<body>second</body>")
         .await
         .expect("second Page");
+    conn.browser_context = Some(BrowserContext::new_with_page_for_test(
+        "BID-page-attachment",
+        "TID-page-attachment",
+    ));
     let context = conn.browser_context.as_mut().unwrap();
     assert_eq!(
         context.active_target.runtime_slot.page_attachment_id(),

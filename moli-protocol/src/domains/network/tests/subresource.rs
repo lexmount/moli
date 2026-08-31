@@ -20,8 +20,8 @@ async fn worker_websocket_runtime_activity_emits_cdp_websocket_events_without_pa
     let socket_literal = serde_json::to_string(&socket_url).unwrap();
     let mut ctx = TestContext::new();
     let mut bc = BrowserContext::new("BID-1".into());
-    bc.attach_active_session("SID-1".to_owned());
     bc.set_active_target_id("TID-1".to_owned());
+    bc.attach_active_session("SID-1".to_owned());
     ctx.conn.insert_browser_context(bc);
     ctx.install_navigation_fixture_for_session_owner(&page_url, Some("SID-1"))
         .await;

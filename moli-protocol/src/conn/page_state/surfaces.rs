@@ -114,13 +114,17 @@ impl BrowserContext {
             &mut super::super::cookie_manager_surface::BrowserContextCookieManagerSurface,
         ) -> bool,
     ) -> bool {
-        let state = self.active_page_state_mut();
-        if !mutate(&mut state.document_cookie_manager_surface) {
+        if let Some(host) = self.page_targets.active_mut() {
+            let state = host.state_mut();
+            if !mutate(&mut state.document_cookie_manager_surface) {
+                return false;
+            }
+            let surface = state.document_cookie_manager_surface.clone();
+            if let Some(page) = state.runtime_slot.loaded_page_mut() {
+                surface.apply_to_page_async(page).await;
+            }
+        } else if !mutate(&mut self.default_document_cookie_manager_surface) {
             return false;
-        }
-        let surface = state.document_cookie_manager_surface.clone();
-        if let Some(page) = state.runtime_slot.loaded_page_mut() {
-            surface.apply_to_page_async(page).await;
         }
         true
     }
@@ -131,7 +135,7 @@ impl BrowserContext {
         self.page_targets
             .active()
             .map(|host| host.document_cookie_manager_surface.snapshot())
-            .unwrap_or_default()
+            .unwrap_or_else(|| self.default_document_cookie_manager_surface.snapshot())
     }
 
     pub fn document_start_script_descriptors(&self) -> Vec<DocumentStartScript> {

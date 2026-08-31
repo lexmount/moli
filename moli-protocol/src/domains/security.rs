@@ -141,9 +141,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn set_ignore_certificate_errors_is_scoped_to_active_browser_context() {
         let mut ctx = TestContext::new();
-        let mut first = BrowserContext::new("BID-1".into());
+        let mut first = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
         first.attach_active_session("SID-1");
-        let mut second = BrowserContext::new("BID-2".into());
+        let mut second = BrowserContext::new_with_page_for_test("BID-2", "TID-2");
         second.attach_active_session("SID-2");
         ctx.conn.insert_browser_context(first);
         ctx.conn.insert_browser_context(second);

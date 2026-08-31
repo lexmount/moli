@@ -2,7 +2,7 @@ use super::*;
 #[test]
 fn browser_context_document_cookie_facade_snapshot_keeps_backend_available_after_lock_holder_panic()
 {
-    let mut bc = BrowserContext::new("BID-cookie-facade".into());
+    let mut bc = BrowserContext::new_with_page_for_test("BID-cookie-facade", "TID-cookie-facade");
     bc.set_target_url("https://example.com/app".into());
 
     let cookie_store = bc.cookie_store_for_test().clone();

@@ -2,7 +2,10 @@ use super::*;
 #[tokio::test]
 async fn browser_context_document_cookie_snapshots_reflect_live_page_state() {
     let mut conn = CdpConnection::new();
-    conn.browser_context = Some(BrowserContext::new("BID-cookie-facade".into()));
+    conn.browser_context = Some(BrowserContext::new_with_page_for_test(
+        "BID-cookie-facade",
+        "TID-cookie-facade",
+    ));
     let navigation = conn
         .build_loaded_navigation_from_buffered_response_async(
             Url::parse("https://example.com/app").unwrap(),
@@ -121,7 +124,7 @@ async fn browser_context_document_cookie_snapshots_reflect_live_page_state() {
 async fn browser_context_document_cookie_facade_snapshot_projects_probe_telemetry_into_owner_view()
 {
     let mut conn = CdpConnection::new();
-    let mut bc = BrowserContext::new("BID-cookie-facade".into());
+    let mut bc = BrowserContext::new_with_page_for_test("BID-cookie-facade", "TID-cookie-facade");
     bc.set_target_url("https://example.com/app".into());
     conn.browser_context = Some(bc);
 

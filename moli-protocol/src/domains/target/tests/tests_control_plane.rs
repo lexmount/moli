@@ -637,7 +637,7 @@ async fn activate_target_then_attach_can_navigate_on_promoted_target_without_loa
 async fn get_target_info_for_inactive_target_keeps_previously_active_context() {
     let mut ctx = TestContext::new();
     load_bc_with_target(&mut ctx, "BID-A", "TID-A");
-    let mut inactive = BrowserContext::new("BID-B".into());
+    let mut inactive = BrowserContext::new_with_page_for_test("BID-B", "TID-B");
     inactive.set_active_target_id("TID-B");
     ctx.conn.inactive_browser_contexts.push(inactive);
 
@@ -670,10 +670,10 @@ async fn get_target_info_for_inactive_target_keeps_previously_active_context() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn send_message_to_target_error_restores_previously_active_context() {
+async fn send_message_to_target_restores_previously_active_context() {
     let mut ctx = TestContext::new();
     load_bc_with_target(&mut ctx, "BID-A", "TID-A");
-    let mut inactive = BrowserContext::new("BID-B".into());
+    let mut inactive = BrowserContext::new_with_page_for_test("BID-B", "TID-B");
     inactive.attach_active_session("SID-B");
     ctx.conn.inactive_browser_contexts.push(inactive);
 
@@ -687,11 +687,14 @@ async fn send_message_to_target_error_restores_previously_active_context() {
     }))
     .await;
 
-    ctx.expect_error(1501, -31998, "TargetNotLoaded");
+    ctx.expect_result(1501, json!({}), None);
+    let event = ctx.take_one();
+    assert_eq!(event["method"], "Target.receivedMessageFromTarget");
+    assert_eq!(event["params"]["sessionId"], "SID-B");
     assert_eq!(
         ctx.conn.browser_context.as_ref().map(|bc| bc.id.as_str()),
         Some("BID-A"),
-        "failing sendMessageToTarget for another context must not leave that context selected"
+        "sendMessageToTarget for another context must restore the original active context"
     );
 }
 

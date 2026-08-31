@@ -1788,7 +1788,7 @@ async fn storage_set_cookies_reports_structured_name_value_facade_rejections() {
 #[tokio::test(flavor = "multi_thread")]
 async fn storage_set_cookies_uses_browser_context_default_cookie_url_when_missing() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-DEF".into());
+    let mut bc = BrowserContext::new_with_page_for_test("BID-DEF", "TID-DEF");
     bc.set_target_url("https://example.com/app".into());
     ctx.conn.browser_context = Some(bc);
 
@@ -1843,8 +1843,11 @@ async fn storage_set_cookies_uses_browser_context_default_cookie_url_when_missin
 #[tokio::test(flavor = "multi_thread")]
 async fn storage_cookie_methods_accept_inactive_browser_context_ids() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-ACTIVE".into()));
-    let mut inactive = BrowserContext::new("BID-INACTIVE".into());
+    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test(
+        "BID-ACTIVE",
+        "TID-ACTIVE",
+    ));
+    let mut inactive = BrowserContext::new_with_page_for_test("BID-INACTIVE", "TID-INACTIVE");
     inactive.set_target_url("https://inactive.example/app".into());
     ctx.conn.inactive_browser_contexts.push(inactive);
 
@@ -2285,7 +2288,10 @@ async fn storage_clear_data_for_partitioned_storage_key_clears_exact_partition_o
 #[tokio::test(flavor = "multi_thread")]
 async fn storage_get_usage_and_quota_reports_local_storage_usage_for_origin() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-usage-local".into()));
+    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test(
+        "BID-usage-local",
+        "TID-usage-local",
+    ));
 
     let origin = Url::parse("https://usage.example/app")
         .unwrap()
@@ -2594,14 +2600,15 @@ async fn storage_get_usage_and_quota_targets_command_session_browser_context() {
         .ascii_serialization();
     let storage_key = first_party_storage_key_for_origin(&origin);
 
-    let mut active = BrowserContext::new("BID-usage-active".into());
+    let mut active = BrowserContext::new_with_page_for_test("BID-usage-active", "TID-usage-active");
     active.attach_active_session("SID-usage-active");
     {
         let mut store = active.web_storage_store_for_test().lock();
         assert!(store.set_item(&storage_key, "local", "aa"));
     }
 
-    let mut inactive = BrowserContext::new("BID-usage-inactive".into());
+    let mut inactive =
+        BrowserContext::new_with_page_for_test("BID-usage-inactive", "TID-usage-inactive");
     inactive.attach_active_session("SID-usage-inactive");
     {
         let mut store = inactive.web_storage_store_for_test().lock();
@@ -2690,9 +2697,10 @@ async fn storage_override_quota_for_origin_affects_get_usage_and_quota() {
 async fn storage_override_quota_for_origin_targets_command_session_browser_context() {
     let mut ctx = TestContext::new();
 
-    let mut active = BrowserContext::new("BID-quota-active".into());
+    let mut active = BrowserContext::new_with_page_for_test("BID-quota-active", "TID-quota-active");
     active.attach_active_session("SID-quota-active");
-    let mut inactive = BrowserContext::new("BID-quota-inactive".into());
+    let mut inactive =
+        BrowserContext::new_with_page_for_test("BID-quota-inactive", "TID-quota-inactive");
     inactive.attach_active_session("SID-quota-inactive");
 
     ctx.conn.browser_context = Some(active);
@@ -2830,14 +2838,20 @@ async fn storage_clear_data_for_origin_targets_command_session_browser_context()
         .ascii_serialization();
     let storage_key = first_party_storage_key_for_origin(&origin);
 
-    let mut active = BrowserContext::new("BID-session-clear-active".into());
+    let mut active = BrowserContext::new_with_page_for_test(
+        "BID-session-clear-active",
+        "TID-session-clear-active",
+    );
     active.attach_active_session("SID-session-clear-active");
     {
         let mut store = active.web_storage_store_for_test().lock();
         assert!(store.set_item(&storage_key, "local", "active"));
     }
 
-    let mut inactive = BrowserContext::new("BID-session-clear-inactive".into());
+    let mut inactive = BrowserContext::new_with_page_for_test(
+        "BID-session-clear-inactive",
+        "TID-session-clear-inactive",
+    );
     inactive.attach_active_session("SID-session-clear-inactive");
     {
         let mut store = inactive.web_storage_store_for_test().lock();

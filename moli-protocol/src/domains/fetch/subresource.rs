@@ -691,7 +691,7 @@ mod tests {
     #[test]
     fn prepared_subresource_fetch_pause_pairs_emit_network_then_fetch_per_item() {
         let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new("BID-1".to_owned());
+        let mut browser_context = BrowserContext::new_with_page_for_test("BID-1", "TID-active");
         browser_context
             .active_target
             .runtime_slot
@@ -769,7 +769,7 @@ mod tests {
     #[test]
     fn fetch_pause_does_not_synthesize_cookie_extra_info() {
         let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new("BID-1".to_owned());
+        let mut browser_context = BrowserContext::new_with_page_for_test("BID-1", "TID-active");
         browser_context
             .active_target
             .runtime_slot
@@ -813,7 +813,7 @@ mod tests {
     #[test]
     fn prepared_subresource_fetch_pause_does_not_emit_after_page_replacement() {
         let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new("BID-1".to_owned());
+        let mut browser_context = BrowserContext::new_with_page_for_test("BID-1", "TID-active");
         browser_context
             .active_target
             .runtime_slot
@@ -862,7 +862,7 @@ mod tests {
     #[test]
     fn prepared_subresource_fetch_pause_can_emit_for_background_owner() {
         let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-1".to_owned());
+        let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-active");
         let target = PageTargetHost::with_url(
             "TID-background".to_owned(),
             Some("SID-background".to_owned()),

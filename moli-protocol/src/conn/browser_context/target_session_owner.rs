@@ -3677,7 +3677,7 @@ mod tests {
 
     #[test]
     fn target_session_owner_mut_mutates_active_and_parked_owner_state() {
-        let mut active = BrowserContext::new("BID-active".to_owned());
+        let mut active = BrowserContext::new_with_page_for_test("BID-active", "TID-active");
         {
             let mut owner = TargetSessionOwnerMut::ActiveTarget {
                 browser_context: &mut active,
@@ -3820,7 +3820,7 @@ mod tests {
 
     #[test]
     fn target_session_owner_mut_mutates_active_and_parked_fetch_state() {
-        let mut active = BrowserContext::new("BID-active".to_owned());
+        let mut active = BrowserContext::new_with_page_for_test("BID-active", "TID-active");
         {
             let mut owner = TargetSessionOwnerMut::ActiveTarget {
                 browser_context: &mut active,
@@ -3875,7 +3875,7 @@ mod tests {
             request_stage: FetchRequestStage::Request,
         }];
 
-        let mut active = BrowserContext::new("BID-active".to_owned());
+        let mut active = BrowserContext::new_with_page_for_test("BID-active", "TID-active");
         {
             let mut owner = TargetSessionOwnerMut::ActiveTarget {
                 browser_context: &mut active,
@@ -3956,7 +3956,7 @@ mod tests {
 
     #[test]
     fn target_session_owner_mut_snapshots_active_and_parked_navigation_history() {
-        let mut active = BrowserContext::new("BID-active".to_owned());
+        let mut active = BrowserContext::new_with_page_for_test("BID-active", "TID-active");
         active
             .active_target
             .owner_state
@@ -4007,7 +4007,7 @@ mod tests {
 
     #[test]
     fn target_session_owner_mut_prepares_active_navigation_request_preflight() {
-        let mut active = BrowserContext::new("BID-active".to_owned());
+        let mut active = BrowserContext::new_with_page_for_test("BID-active", "FRAME-0");
         active
             .active_target
             .runtime_slot
@@ -4068,7 +4068,7 @@ mod tests {
 
     #[test]
     fn target_session_owner_mut_observes_active_data_url_navigation_with_network_listener() {
-        let mut active = BrowserContext::new("BID-active".to_owned());
+        let mut active = BrowserContext::new_with_page_for_test("BID-active", "FRAME-0");
         active
             .active_target
             .runtime_slot
@@ -4107,7 +4107,7 @@ mod tests {
 
     #[test]
     fn target_session_owner_mut_prepares_background_navigation_request_preflight() {
-        let mut parked = BrowserContext::new("BID-parked".to_owned());
+        let mut parked = BrowserContext::new_with_page_for_test("BID-parked", "TID-active");
         parked.locale_override = Some("zh-CN".to_owned());
         parked
             .network_policy
@@ -4266,7 +4266,7 @@ mod tests {
 
     #[test]
     fn target_session_owner_ref_snapshots_background_navigation_load_inputs() {
-        let mut parked = BrowserContext::new("BID-parked".to_owned());
+        let mut parked = BrowserContext::new_with_page_for_test("BID-parked", "TID-active");
         parked.locale_override = Some("zh-CN".to_owned());
         parked.insert_page_target_host(crate::conn::PageTargetHost::with_url(
             "TID-parked".to_owned(),
@@ -4895,7 +4895,7 @@ mod tests {
     #[test]
     fn connection_runtime_slot_reference_reads_and_mutates_active_background_and_auxiliary_slots() {
         let mut conn = CdpConnection::default();
-        let mut active = BrowserContext::new("BID-active".to_owned());
+        let mut active = BrowserContext::new_with_page_for_test("BID-active", "TID-active");
         active.set_active_target_id("TID-active".to_owned());
         active.set_target_url("https://active.example/".to_owned());
         active.attach_active_session("SID-active".to_owned());

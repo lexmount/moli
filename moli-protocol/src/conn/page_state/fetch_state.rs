@@ -59,6 +59,10 @@ impl BrowserContext {
     }
 
     pub(crate) fn insert_page_target_host(&mut self, mut host: PageTargetHost) -> bool {
+        if self.page_targets.is_empty() {
+            host.state_mut().document_cookie_manager_surface =
+                self.default_document_cookie_manager_surface.clone();
+        }
         host.set_base_cache_disabled(self.global_cache_disabled);
         if let Some(config) = self.page_navigation_runtime_config.clone() {
             let engine = self.new_page_navigation_engine(config);
@@ -479,7 +483,7 @@ mod tests {
 
     #[test]
     fn active_target_pending_fetch_take_clears_in_flight_subresources() {
-        let mut bc = BrowserContext::new("BID-1".to_owned());
+        let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
         bc.register_in_flight_subresource_fetch_request(
             Some("INT-SUB-1".to_owned()),
             pending_subresource_fetch(1),
@@ -500,7 +504,7 @@ mod tests {
 
     #[test]
     fn subresource_fetch_pending_lifecycle_uses_owner_bookkeeping() {
-        let mut bc = BrowserContext::new("BID-1".to_owned());
+        let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
         bc.register_pending_subresource_fetch_request(
             "INT-SUB-9".to_owned(),
             pending_subresource_fetch(9),
@@ -535,7 +539,7 @@ mod tests {
 
     #[test]
     fn fetch_response_body_stream_workflow_buffers_reusable_response_body() {
-        let mut bc = BrowserContext::new("BID-1".to_owned());
+        let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
         let url = Url::parse("https://example.test/page").unwrap();
         bc.register_pending_fetch_response_navigation(
             "INT-1".to_owned(),
@@ -572,7 +576,7 @@ mod tests {
 
     #[tokio::test]
     async fn clearing_session_scoped_state_clears_in_flight_subresources() {
-        let mut bc = BrowserContext::new("BID-1".to_owned());
+        let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
         bc.register_in_flight_subresource_fetch_request(
             Some("INT-SUB-2".to_owned()),
             pending_subresource_fetch(2),
@@ -590,7 +594,7 @@ mod tests {
 
     #[test]
     fn network_and_io_stream_ids_cross_u32_max_without_reuse() {
-        let mut bc = BrowserContext::new("BID-1".to_owned());
+        let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
 
         bc.set_next_network_request_sequence_for_test(u32::MAX as u64);
         assert_eq!(
@@ -606,7 +610,7 @@ mod tests {
 
     #[test]
     fn network_and_io_stream_id_allocators_fail_at_u64_exhaustion() {
-        let mut bc = BrowserContext::new("BID-1".to_owned());
+        let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
         bc.set_next_network_request_sequence_for_test(u64::MAX);
         assert!(
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -616,7 +620,7 @@ mod tests {
             "network request ids must not silently wrap after u64::MAX"
         );
 
-        let mut bc = BrowserContext::new("BID-2".to_owned());
+        let mut bc = BrowserContext::new_with_page_for_test("BID-2", "TID-2");
         bc.set_next_io_stream_sequence_for_test(u64::MAX);
         assert!(
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

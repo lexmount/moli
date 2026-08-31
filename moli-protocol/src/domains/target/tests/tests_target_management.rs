@@ -1594,14 +1594,9 @@ async fn send_message_to_target_preserves_nested_scheduler_events() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn send_message_to_target_without_target_errors() {
+async fn send_message_to_target_without_session_errors() {
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-9");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .attach_active_session("SID-9");
 
     ctx.process_async(json!({
         "id": 15,
@@ -1613,5 +1608,5 @@ async fn send_message_to_target_without_target_errors() {
     }))
     .await;
 
-    ctx.expect_error(15, -31998, "TargetNotLoaded");
+    ctx.expect_error(15, -31998, "InvalidSessionId");
 }

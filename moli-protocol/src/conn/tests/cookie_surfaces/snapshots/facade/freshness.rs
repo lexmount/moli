@@ -2,7 +2,7 @@ use super::*;
 #[test]
 fn browser_context_document_cookie_facade_snapshot_tracks_shared_cookie_store_generation() {
     let mut conn = CdpConnection::new();
-    let mut bc = BrowserContext::new("BID-cookie-facade".into());
+    let mut bc = BrowserContext::new_with_page_for_test("BID-cookie-facade", "TID-cookie-facade");
     bc.set_target_url("https://example.com/app".into());
     conn.browser_context = Some(bc);
 
@@ -62,7 +62,7 @@ fn browser_context_document_cookie_facade_snapshot_tracks_shared_cookie_store_ge
 #[tokio::test]
 async fn browser_context_document_cookie_facade_snapshot_projects_cookie_get_freshness_state() {
     let mut conn = CdpConnection::new();
-    let mut bc = BrowserContext::new("BID-cookie-facade".into());
+    let mut bc = BrowserContext::new_with_page_for_test("BID-cookie-facade", "TID-cookie-facade");
     bc.set_target_url("https://example.com/app".into());
     conn.browser_context = Some(bc);
 

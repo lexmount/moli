@@ -1029,7 +1029,7 @@ mod tests {
         let mut font_families = serde_json::Map::new();
         font_families.insert("standard".to_owned(), serde_json::json!("Inter"));
 
-        let mut active = BrowserContext::new("BID-active".to_owned());
+        let mut active = BrowserContext::new_with_page_for_test("BID-active", "TID-active");
         active_session_state_mut(&mut active).set_console_enabled(true);
         active_session_state_mut(&mut active).set_log_enabled(true);
         active_session_state_mut(&mut active).set_page_file_chooser_opened_event_enabled(true);
@@ -1144,7 +1144,7 @@ mod tests {
     fn page_domain_dialog_handler_tracks_the_session_owner_browser_context() {
         let mut conn = CdpConnection::default();
 
-        let mut active = BrowserContext::new("BID-active".to_owned());
+        let mut active = BrowserContext::new_with_page_for_test("BID-active", "TID-active");
         active.set_active_target_id("TID-active".to_owned());
         let active_runtime = active.renderer_runtime();
 

@@ -115,7 +115,7 @@ async fn get_response_body_requires_calling_session_network_listener() {
 #[tokio::test(flavor = "multi_thread")]
 async fn get_response_body_reports_pending_body_as_existing_without_data() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
     bc.active_target
         .runtime_slot
         .enable_primary_network_events();
@@ -137,7 +137,7 @@ async fn get_response_body_reports_pending_body_as_existing_without_data() {
 #[tokio::test(flavor = "multi_thread")]
 async fn get_response_body_ready_body_replaces_pending_body() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
     bc.active_target
         .runtime_slot
         .enable_primary_network_events();
@@ -167,7 +167,7 @@ async fn get_response_body_rejects_bodies_over_materialization_limit() {
     config.set_connection_limits(None, None, Some(4));
     let mut ctx = TestContext::new();
     ctx.conn = CdpConnection::new_with_fetch_config(config);
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
     bc.active_target
         .runtime_slot
         .enable_primary_network_events();
@@ -190,7 +190,7 @@ async fn get_response_body_rejects_bodies_over_materialization_limit() {
 #[tokio::test(flavor = "multi_thread")]
 async fn get_response_body_reports_default_single_resource_budget_eviction() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
     bc.active_target
         .runtime_slot
         .enable_primary_network_events();
@@ -217,7 +217,7 @@ async fn get_response_body_reports_default_single_resource_budget_eviction() {
 #[tokio::test(flavor = "multi_thread")]
 async fn get_response_body_base64_encodes_non_utf8_captured_bytes() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
     bc.active_target
         .runtime_slot
         .enable_primary_network_events();
@@ -244,7 +244,7 @@ async fn get_response_body_base64_encodes_non_utf8_captured_bytes() {
 #[tokio::test(flavor = "multi_thread")]
 async fn get_request_post_data_matches_chromium_errors_and_binary_encoding() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
     bc.active_target
         .runtime_slot
         .enable_primary_network_events();
@@ -1887,7 +1887,7 @@ async fn network_data_collector_gated_body_without_match_is_not_readable() {
 #[tokio::test(flavor = "multi_thread")]
 async fn get_network_data_reports_unimplemented_or_missing_data_with_bidi_errors() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
     bc.record_pending_response_body("REQ-pending".to_owned(), [None::<String>]);
     ctx.conn.browser_context = Some(bc);
 

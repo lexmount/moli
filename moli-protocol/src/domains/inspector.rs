@@ -76,7 +76,7 @@ mod tests {
     #[tokio::test]
     async fn inspector_enable_and_disable_toggle_browser_context_state() {
         let mut ctx = TestContext::new();
-        ctx.conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+        ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
 
         ctx.process_async(json!({"id": 1, "method": "Inspector.enable"}))
             .await;
@@ -108,7 +108,7 @@ mod tests {
     #[tokio::test]
     async fn inspector_enable_replays_target_crashed_for_crashed_target() {
         let mut ctx = TestContext::new();
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
         bc.attach_active_session("SID-1");
         bc.active_target
             .owner_state
@@ -256,9 +256,8 @@ mod tests {
     #[tokio::test]
     async fn inspector_enable_and_disable_stage_background_target_session_state() {
         let mut ctx = TestContext::new();
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-A");
         bc.attach_active_session("SID-active");
-        bc.set_active_target_id("TID-A");
         bc.insert_page_target_host(crate::conn::PageTargetHost::new(
             "TID-B".into(),
             Some("SID-B".into()),

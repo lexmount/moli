@@ -31,7 +31,7 @@ async fn enable_no_bc_error() {
 #[tokio::test(flavor = "multi_thread")]
 async fn enable_with_bc_succeeds() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
     ctx.process_async(json!({"id": 1, "method": "Network.enable"}))
         .await;
     ctx.expect_result(1, json!({}), None);
@@ -257,7 +257,7 @@ async fn commit_configuration_resolves_the_exact_target_network_runtime() {
 #[tokio::test(flavor = "multi_thread")]
 async fn auxiliary_network_enable_does_not_enable_primary_session() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
     bc.set_active_target_id("TID-1".to_owned());
     bc.attach_active_session("SID-primary".to_owned());
     assert!(bc.assign_auxiliary_session_to_target("TID-1", "SID-aux".to_owned()));
@@ -288,7 +288,7 @@ async fn auxiliary_network_enable_does_not_enable_primary_session() {
 #[tokio::test(flavor = "multi_thread")]
 async fn page_network_policy_aggregates_enabled_sessions_like_chromium_handlers() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
     bc.set_active_target_id("TID-1".to_owned());
     bc.attach_active_session("SID-primary".to_owned());
     assert!(bc.assign_auxiliary_session_to_target("TID-1", "SID-aux".to_owned()));
@@ -466,7 +466,7 @@ async fn enable_after_page_load_does_not_replay_historical_subresource_events() 
     let page_url = format!("http://{addr}/page");
     let script_url = format!("http://{addr}/before-enable.js");
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.browser_context = Some(bc);
@@ -554,7 +554,7 @@ async fn auxiliary_enable_after_pending_subresource_does_not_replay_history_to_n
     let page_url = format!("http://{addr}/page");
     let script_url = format!("http://{addr}/pending-before-aux.js");
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-primary");
     assert!(bc.assign_auxiliary_session_to_target("TID-1", "SID-aux".into()));
@@ -659,7 +659,7 @@ async fn websocket_runtime_activity_broadcasts_to_auxiliary_network_session() {
     let socket_url = format!("ws://{addr}/socket");
     let socket_literal = serde_json::to_string(&socket_url).unwrap();
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
     bc.active_target
         .runtime_slot
         .enable_primary_network_events();
@@ -765,11 +765,11 @@ async fn auxiliary_network_enable_after_websocket_activity_does_not_replay_histo
     let socket_literal = serde_json::to_string(&socket_url).unwrap();
     let mut ctx = TestContext::new();
     let mut bc = BrowserContext::new("BID-1".into());
+    bc.set_active_target_id("TID-1".to_owned());
     bc.active_target
         .runtime_slot
         .enable_primary_network_events();
     bc.attach_active_session("SID-primary".to_owned());
-    bc.set_active_target_id("TID-1".to_owned());
     assert!(bc.assign_auxiliary_session_to_target("TID-1", "SID-aux".to_owned()));
     ctx.conn.browser_context = Some(bc);
     ctx.install_navigation_fixture_for_session_owner(&page_url, Some("SID-primary"))
@@ -870,11 +870,11 @@ async fn fetch_runtime_activity_broadcasts_to_auxiliary_network_session() {
     let page_url = format!("http://{addr}/page");
     let mut ctx = TestContext::new();
     let mut bc = BrowserContext::new("BID-1".into());
+    bc.set_active_target_id("TID-1".to_owned());
     bc.active_target
         .runtime_slot
         .enable_primary_network_events();
     bc.attach_active_session("SID-primary".to_owned());
-    bc.set_active_target_id("TID-1".to_owned());
     assert!(bc.assign_auxiliary_session_to_target("TID-1", "SID-aux".to_owned()));
     bc.enable_auxiliary_network_events("SID-aux");
     ctx.conn.browser_context = Some(bc);
@@ -1090,11 +1090,11 @@ async fn main_document_navigation_broadcasts_to_auxiliary_network_session() {
     let next_url = format!("http://{addr}/next");
     let mut ctx = TestContext::new();
     let mut bc = BrowserContext::new("BID-1".into());
+    bc.set_active_target_id("TID-1".to_owned());
     bc.active_target
         .runtime_slot
         .enable_primary_network_events();
     bc.attach_active_session("SID-primary".to_owned());
-    bc.set_active_target_id("TID-1".to_owned());
     assert!(bc.assign_auxiliary_session_to_target("TID-1", "SID-aux".to_owned()));
     bc.enable_auxiliary_network_events("SID-aux");
     ctx.conn.browser_context = Some(bc);
@@ -1282,7 +1282,7 @@ async fn network_disable_removes_session_response_body_visibility() {
 #[tokio::test(flavor = "multi_thread")]
 async fn disable_clears_enabled_flag_and_captured_bodies() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
     bc.active_target
         .runtime_slot
         .enable_primary_network_events();

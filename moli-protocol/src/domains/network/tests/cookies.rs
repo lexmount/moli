@@ -64,7 +64,7 @@ async fn network_get_all_cookies_returns_unfiltered_browser_context_cookies() {
 #[tokio::test(flavor = "multi_thread")]
 async fn set_extra_http_headers_replaces_previous_headers() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("NID-A".into()));
+    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("NID-A", "TID-A"));
 
     ctx.process_async(json!({"id": 2, "method": "Network.enable"}))
         .await;
@@ -637,7 +637,7 @@ async fn network_set_cookie_reports_structured_name_value_rejections_without_pro
 #[tokio::test(flavor = "multi_thread")]
 async fn network_set_cookie_uses_browser_context_default_cookie_url_when_missing() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-N6".into());
+    let mut bc = BrowserContext::new_with_page_for_test("BID-N6", "TID-N6");
     bc.set_target_url("https://example.com/path".into());
     ctx.conn.browser_context = Some(bc);
 

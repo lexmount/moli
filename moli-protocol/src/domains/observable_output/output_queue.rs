@@ -1105,7 +1105,7 @@ mod tests {
 
     #[test]
     fn observable_source_queue_materializes_runtime_items_from_owner_cursor() {
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
         let mut runtime_slot = TargetRuntimeSlot::default();
         runtime_slot.set_page_attachment_id_for_test(43);
         let source_snapshot = renderer_source_snapshot(
@@ -1186,7 +1186,7 @@ mod tests {
 
     #[test]
     fn observable_source_queue_advances_contextless_lifecycle_source_items() {
-        let bc = BrowserContext::new("BID-1".into());
+        let bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
         let mut runtime_slot = TargetRuntimeSlot::default();
         runtime_slot.set_page_attachment_id_for_test(44);
         let source_snapshot = renderer_source_snapshot(
@@ -1226,7 +1226,7 @@ mod tests {
 
     #[test]
     fn observable_source_queue_materializes_renderer_producer_source_items() {
-        let bc = BrowserContext::new("BID-1".into());
+        let bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
         let mut runtime_slot = TargetRuntimeSlot::default();
         runtime_slot.set_page_attachment_id_for_test(46);
         let source = RendererRuntimeObservableSourceSummary::from_source_items(
@@ -1270,7 +1270,7 @@ mod tests {
 
     #[test]
     fn observable_source_queue_materializes_latest_appended_runtime_source_item() {
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
         let mut runtime_slot = TargetRuntimeSlot::default();
         runtime_slot.set_page_attachment_id_for_test(47);
         let first_snapshot = renderer_source_snapshot(
@@ -1360,7 +1360,7 @@ mod tests {
             .load_page_via_runtime_async("data:text/html,<!doctype html><body></body>")
             .await
             .expect("test page should load");
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
         let mut runtime_slot = TargetRuntimeSlot::default();
         runtime_slot.set_loaded_page_for_test(page);
         runtime_slot.set_page_attachment_id_for_test(45);
@@ -1604,7 +1604,7 @@ mod tests {
 
     #[test]
     fn observable_backlog_queue_reports_console_and_log_ranges_from_owner_cursors() {
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
         bc.set_target_url("http://example.test/observable".to_owned());
         bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .console_output_session_state
@@ -1675,7 +1675,7 @@ mod tests {
 
     #[test]
     fn observable_backlog_queue_filters_single_raw_queue_by_kind_cursor() {
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
         bc.set_target_url("http://example.test/observable".to_owned());
         bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .console_output_session_state

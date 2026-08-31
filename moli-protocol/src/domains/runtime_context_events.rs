@@ -734,7 +734,10 @@ mod tests {
     #[test]
     fn runtime_context_destroyed_clears_matching_remote_object_realm() {
         let mut conn = CdpConnection::new();
-        conn.browser_context = Some(BrowserContext::new("BID-runtime-context".to_owned()));
+        conn.browser_context = Some(BrowserContext::new_with_page_for_test(
+            "BID-runtime-context",
+            "TID-runtime-context",
+        ));
         conn.register_runtime_remote_object_ids_for_session_owner_with_realm(
             None,
             vec!["object-realm-1".to_owned()],

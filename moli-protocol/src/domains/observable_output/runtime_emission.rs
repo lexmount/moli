@@ -218,7 +218,7 @@ mod tests {
             "source presence should require a browser context"
         );
 
-        conn.browser_context = Some(BrowserContext::new("BID-1".to_owned()));
+        conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
         assert!(
             retain_unemitted_runtime_observable_prepared_source(&conn, prepared_source()).is_none(),
             "source presence should require Runtime.enable"
@@ -261,7 +261,7 @@ mod tests {
     #[tokio::test]
     async fn runtime_observable_cursor_advance_uses_stored_source_queue_without_page_readback() {
         let mut conn = crate::conn::CdpConnection::default();
-        conn.browser_context = Some(BrowserContext::new("BID-1".to_owned()));
+        conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
         let source_snapshot = RendererPageDiagnosticsSnapshot::from_runtime_observable_source(
             RendererRuntimeObservableSourceSummary::from_source_messages(
                 Some(7),

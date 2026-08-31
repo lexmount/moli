@@ -21,6 +21,8 @@ use moli_core::storage::{
 use moli_shared_worker::SharedWorkerInstanceId;
 use serde_json::{Value, json};
 
+use crate::conn::cookie_manager_surface::BrowserContextCookieManagerSurface;
+
 use super::{
     DevToolsSessionState,
     dedicated_worker_target::DedicatedWorkerTargetState,
@@ -36,13 +38,13 @@ use super::{
     shared_worker_target::SharedWorkerTargetState,
 };
 
-#[cfg(test)]
-const TEST_FIXTURE_PAGE_TARGET_ID: &str = "__moli_test_fixture_page__";
-
 pub struct BrowserContext {
     pub id: String,
     storage_partition: BrowserContextStoragePartition,
     pub(crate) page_targets: PageTargetRegistry,
+    /// Policy retained while the context has no page target yet. The first
+    /// target inherits it; once targets exist, each target owns its surface.
+    pub(crate) default_document_cookie_manager_surface: BrowserContextCookieManagerSurface,
     pub auxiliary_target_sessions: HashMap<String, String>,
     // Chromium exposes the live creator target, immutable creator frame, and
     // window.opener access as three independent TargetInfo properties.
@@ -422,18 +424,16 @@ impl BrowserContext {
     }
 
     pub fn new(id: String) -> Self {
-        let context = Self::new_with_initial_cookies(id, Vec::new());
-        #[cfg(test)]
-        let context = {
-            let mut context = context;
-            let inserted = context.page_targets.insert(PageTargetHost::empty(
-                TEST_FIXTURE_PAGE_TARGET_ID.to_owned(),
-            ));
-            debug_assert!(inserted);
-            let selected = context.page_targets.select(TEST_FIXTURE_PAGE_TARGET_ID);
-            debug_assert!(selected);
-            context
-        };
+        Self::new_with_initial_cookies(id, Vec::new())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_with_page_for_test(
+        id: impl Into<String>,
+        target_id: impl Into<String>,
+    ) -> Self {
+        let mut context = Self::new(id.into());
+        context.set_active_target_id(target_id);
         context
     }
 
@@ -520,6 +520,7 @@ impl BrowserContext {
             id,
             storage_partition,
             page_targets: PageTargetRegistry::default(),
+            default_document_cookie_manager_surface: BrowserContextCookieManagerSurface::default(),
             auxiliary_target_sessions: HashMap::new(),
             target_opener_ids: HashMap::new(),
             target_opener_frame_ids: HashMap::new(),
@@ -1625,12 +1626,7 @@ impl BrowserContext {
     }
 
     pub(crate) fn active_target_id(&self) -> Option<&str> {
-        let target_id = self.page_targets.active_target_id()?;
-        #[cfg(test)]
-        if target_id == TEST_FIXTURE_PAGE_TARGET_ID {
-            return None;
-        }
-        Some(target_id)
+        self.page_targets.active_target_id()
     }
 
     pub(crate) fn active_target_id_owned(&self) -> Option<String> {
@@ -1789,12 +1785,6 @@ impl BrowserContext {
 
     pub(crate) fn set_active_target_id(&mut self, target_id: impl Into<String>) {
         let target_id = target_id.into();
-        #[cfg(test)]
-        if self.page_targets.active_target_id() == Some(TEST_FIXTURE_PAGE_TARGET_ID) {
-            let rekeyed = self.page_targets.rekey_active(target_id.clone());
-            debug_assert!(rekeyed, "test fixture page target id must be replaceable");
-            return;
-        }
         if self.page_targets.get(&target_id).is_none() {
             let inserted = self.insert_page_target_host(PageTargetHost::empty(target_id.clone()));
             debug_assert!(inserted, "new page target id must be unique");

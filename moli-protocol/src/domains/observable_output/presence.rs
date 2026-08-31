@@ -603,7 +603,7 @@ mod tests {
     #[test]
     fn observable_source_outputs_own_runtime_observable_presence() {
         let mut conn = crate::conn::CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
         bc.active_target
             .runtime_slot
             .set_page_attachment_id_for_test(1);
@@ -650,7 +650,7 @@ mod tests {
     #[test]
     fn observable_source_sync_is_independent_from_runtime_emission() {
         let mut conn = crate::conn::CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
         bc.set_target_url("data:text/html,console-only-source".to_owned());
         bc.active_target
             .runtime_slot
@@ -702,7 +702,7 @@ mod tests {
     #[test]
     fn observable_source_outputs_require_concrete_runtime_prepared_items() {
         let mut conn = crate::conn::CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
         bc.active_target
             .runtime_slot
             .set_page_attachment_id_for_test(1);
@@ -731,8 +731,8 @@ mod tests {
     async fn observable_prepared_outputs_keep_console_api_out_of_log_backlog() {
         let mut ctx = TestContext::new();
         let mut bc = BrowserContext::new("BID-1".into());
-        bc.set_target_url("data:text/html,observable-backlog-test".to_owned());
         bc.set_active_target_id("TID-1".to_owned());
+        bc.set_target_url("data:text/html,observable-backlog-test".to_owned());
         bc.attach_active_session("SID-1".to_owned());
         let page = ctx
             .conn

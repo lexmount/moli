@@ -395,8 +395,8 @@ mod tests {
     async fn observable_emission_plan_prepares_console_log_payloads_and_advances_cursors() {
         let mut ctx = TestContext::new();
         let mut bc = BrowserContext::new("BID-1".into());
-        bc.set_target_url("data:text/html,observable-emission-plan-test".to_owned());
         bc.set_active_target_id("TID-1".to_owned());
+        bc.set_target_url("data:text/html,observable-emission-plan-test".to_owned());
         bc.attach_active_session("SID-1".to_owned());
         let page = ctx
             .conn
@@ -531,8 +531,8 @@ mod tests {
     async fn observable_projection_context_carries_captured_slots_to_emitter() {
         let mut ctx = TestContext::new();
         let mut bc = BrowserContext::new("BID-1".into());
-        bc.set_target_url("data:text/html,observable-projection-context-test".to_owned());
         bc.set_active_target_id("TID-1".to_owned());
+        bc.set_target_url("data:text/html,observable-projection-context-test".to_owned());
         bc.attach_active_session("SID-1".to_owned());
         let page = ctx
             .conn
@@ -593,8 +593,8 @@ mod tests {
     async fn prepared_console_backlog_range_is_bounded_by_prepare_time_watermark() {
         let mut ctx = TestContext::new();
         let mut bc = BrowserContext::new("BID-1".into());
-        bc.set_target_url("data:text/html,observable-prepared-range-test".to_owned());
         bc.set_active_target_id("TID-1".to_owned());
+        bc.set_target_url("data:text/html,observable-prepared-range-test".to_owned());
         bc.attach_active_session("SID-1".to_owned());
         let page = ctx
             .conn
@@ -657,8 +657,8 @@ mod tests {
         let mut ctx = TestContext::new();
         let page_url = "data:text/html,observable-prepared-attachment-test";
         let mut bc = BrowserContext::new("BID-1".into());
-        bc.set_target_url(page_url.to_owned());
         bc.set_active_target_id("TID-1".to_owned());
+        bc.set_target_url(page_url.to_owned());
         bc.attach_active_session("SID-1".to_owned());
         let first_page = ctx
             .conn
@@ -733,8 +733,8 @@ mod tests {
             .expect("background test page should load");
 
         let mut bc = BrowserContext::new("BID-1".into());
-        bc.set_target_url("data:text/html,active-owner".to_owned());
         bc.set_active_target_id("TID-active".to_owned());
+        bc.set_target_url("data:text/html,active-owner".to_owned());
         bc.attach_active_session("SID-active".to_owned());
         let _ = bc.replace_loaded_page(Some(active_page));
         bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
@@ -821,8 +821,8 @@ mod tests {
             .expect("promoted test page should load");
 
         let mut bc = BrowserContext::new("BID-1".into());
-        bc.set_target_url("data:text/html,old-active-owner".to_owned());
         bc.set_active_target_id("TID-active".to_owned());
+        bc.set_target_url("data:text/html,old-active-owner".to_owned());
         bc.attach_active_session("SID-active".to_owned());
         let _ = bc.replace_loaded_page(Some(active_page));
         bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
@@ -936,8 +936,8 @@ mod tests {
     async fn prepared_runtime_observable_range_is_bounded_by_source_summary() {
         let mut ctx = TestContext::new();
         let mut bc = BrowserContext::new("BID-1".into());
-        bc.set_target_url("data:text/html,observable-runtime-prepared-range-test".to_owned());
         bc.set_active_target_id("TID-1".to_owned());
+        bc.set_target_url("data:text/html,observable-runtime-prepared-range-test".to_owned());
         bc.attach_active_session("SID-1".to_owned());
         let page = ctx
             .conn
@@ -994,8 +994,8 @@ mod tests {
     async fn prepared_runtime_observable_uses_source_payload_without_page_readback() {
         let mut ctx = TestContext::new();
         let mut bc = BrowserContext::new("BID-1".into());
-        bc.set_target_url("data:text/html,observable-runtime-source-payload-test".to_owned());
         bc.set_active_target_id("TID-1".to_owned());
+        bc.set_target_url("data:text/html,observable-runtime-source-payload-test".to_owned());
         bc.attach_active_session("SID-1".to_owned());
         let page = ctx
             .conn
@@ -1049,8 +1049,8 @@ mod tests {
     async fn prepared_runtime_observable_uses_stored_source_queue_payload() {
         let mut ctx = TestContext::new();
         let mut bc = BrowserContext::new("BID-1".into());
-        bc.set_target_url("data:text/html,observable-runtime-stored-source-test".to_owned());
         bc.set_active_target_id("TID-1".to_owned());
+        bc.set_target_url("data:text/html,observable-runtime-stored-source-test".to_owned());
         bc.attach_active_session("SID-1".to_owned());
         let page = ctx
             .conn
@@ -1103,8 +1103,8 @@ mod tests {
     async fn renderer_runtime_agent_ownership_suppresses_runtime_console_source_fallback() {
         let mut ctx = TestContext::new();
         let mut bc = BrowserContext::new("BID-1".into());
-        bc.set_target_url("data:text/html,observable-runtime-agent-owner-test".to_owned());
         bc.set_active_target_id("TID-1".to_owned());
+        bc.set_target_url("data:text/html,observable-runtime-agent-owner-test".to_owned());
         bc.attach_active_session("SID-1".to_owned());
         let page = ctx
             .conn
@@ -1177,8 +1177,8 @@ mod tests {
     async fn runtime_observable_drain_requires_prepared_source_payload() {
         let mut ctx = TestContext::new();
         let mut bc = BrowserContext::new("BID-1".into());
-        bc.set_target_url("data:text/html,observable-runtime-no-source-test".to_owned());
         bc.set_active_target_id("TID-1".to_owned());
+        bc.set_target_url("data:text/html,observable-runtime-no-source-test".to_owned());
         bc.attach_active_session("SID-1".to_owned());
         let page = ctx
             .conn
@@ -1215,8 +1215,8 @@ mod tests {
         let mut ctx = TestContext::new();
         let page_url = "data:text/html,observable-runtime-source-payload-attachment-test";
         let mut bc = BrowserContext::new("BID-1".into());
-        bc.set_target_url(page_url.to_owned());
         bc.set_active_target_id("TID-1".to_owned());
+        bc.set_target_url(page_url.to_owned());
         bc.attach_active_session("SID-1".to_owned());
         let first_page = ctx
             .conn
@@ -1275,8 +1275,8 @@ mod tests {
         let mut ctx = TestContext::new();
         let page_url = "data:text/html,observable-runtime-attachment-test";
         let mut bc = BrowserContext::new("BID-1".into());
-        bc.set_target_url(page_url.to_owned());
         bc.set_active_target_id("TID-1".to_owned());
+        bc.set_target_url(page_url.to_owned());
         bc.attach_active_session("SID-1".to_owned());
         let first_page = ctx
             .conn
@@ -1346,7 +1346,7 @@ mod tests {
     #[tokio::test]
     async fn observable_emission_plan_prepares_runtime_payloads_and_advances_cursors() {
         let mut conn = crate::conn::CdpConnection::default();
-        conn.browser_context = Some(BrowserContext::new("BID-1".to_owned()));
+        conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
         let runtime_plan = ObservableActivityEmissionPlan::from_runtime_prepared_items(
             ObservableRuntimePreparedItems::for_test(
                 vec![
@@ -1417,7 +1417,7 @@ mod tests {
     #[tokio::test]
     async fn observable_runtime_plan_advances_lifecycle_cursor_without_emittable_items() {
         let mut conn = crate::conn::CdpConnection::default();
-        conn.browser_context = Some(BrowserContext::new("BID-1".to_owned()));
+        conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
         let runtime_plan = ObservableActivityEmissionPlan::from_runtime_prepared_items(
             ObservableRuntimePreparedItems::for_test(
                 Vec::new(),

@@ -1205,7 +1205,9 @@ mod tests {
     #[tokio::test]
     async fn css_enable_and_disable_toggle_browser_context_state() {
         let mut ctx = TestContext::new();
-        ctx.conn.browser_context = Some(crate::conn::BrowserContext::new("BID-1".into()));
+        ctx.conn.browser_context = Some(crate::conn::BrowserContext::new_with_page_for_test(
+            "BID-1", "TID-1",
+        ));
 
         ctx.process_async(json!({"id": 101, "method": "CSS.enable"}))
             .await;

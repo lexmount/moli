@@ -1305,7 +1305,7 @@ mod tests {
 
     #[test]
     fn target_session_state_mut_applies_active_and_parked_network_fields() {
-        let mut active = BrowserContext::new("BID-active".to_owned());
+        let mut active = BrowserContext::new_with_page_for_test("BID-active", "TID-active");
         {
             let network = &mut active.devtools_sessions.primary_mut().network_session_state;
             network.network_enabled = true;

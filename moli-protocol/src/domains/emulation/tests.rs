@@ -1219,7 +1219,7 @@ async fn multi_session_browser_identity_uses_attachment_order_and_field_contribu
 #[tokio::test(flavor = "multi_thread")]
 async fn async_emulation_device_state_updates_browser_context() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
 
     ctx.process_async(json!({
         "id": 501,

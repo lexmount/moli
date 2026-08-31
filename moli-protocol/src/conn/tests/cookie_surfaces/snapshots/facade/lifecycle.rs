@@ -2,7 +2,10 @@ use super::*;
 #[tokio::test]
 async fn browser_context_page_attachment_id_tracks_attach_and_detach() {
     let mut conn = CdpConnection::new();
-    conn.browser_context = Some(BrowserContext::new("BID-cookie-facade".into()));
+    conn.browser_context = Some(BrowserContext::new_with_page_for_test(
+        "BID-cookie-facade",
+        "TID-cookie-facade",
+    ));
 
     let before = conn
         .browser_context

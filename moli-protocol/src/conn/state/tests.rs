@@ -971,7 +971,8 @@ fn unscoped_fetch_owned_auth_navigation_allows_routed_action_session() {
 
 #[test]
 fn active_target_state_groups_runtime_fetch_and_owner_state() {
-    let mut context = BrowserContext::new("BID-active-owner".to_owned());
+    let mut context =
+        BrowserContext::new_with_page_for_test("BID-active-owner", "TID-active-owner");
 
     assert!(!context.active_target.runtime_slot.has_loaded_page());
     assert!(!context.active_target.fetch_owner.is_enabled());

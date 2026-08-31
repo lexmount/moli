@@ -1620,7 +1620,7 @@ pub(super) fn try_start_reload_command_dispatch(
     let Some((_, target_id)) = conn.target_owner_identity_for_session(cmd.session_id) else {
         return PageCommandTaskStep::Complete(CommandOutputPlan::error(
             -31998,
-            "BrowserContextNotLoaded",
+            super::missing_page_target_error_message(conn, cmd.session_id),
         ));
     };
     let Some(target_id) = target_id else {

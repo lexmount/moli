@@ -2,7 +2,10 @@ use super::*;
 #[tokio::test]
 async fn browser_context_document_cookie_facade_overrides_apply_to_new_loaded_page() {
     let mut conn = CdpConnection::new();
-    conn.browser_context = Some(BrowserContext::new("BID-cookie-facade".into()));
+    conn.browser_context = Some(BrowserContext::new_with_page_for_test(
+        "BID-cookie-facade",
+        "TID-cookie-facade",
+    ));
     conn.browser_context
         .as_mut()
         .unwrap()
@@ -59,7 +62,10 @@ async fn browser_context_document_cookie_facade_overrides_apply_to_new_loaded_pa
 #[tokio::test]
 async fn browser_context_document_cookie_facade_overrides_update_live_page() {
     let mut conn = CdpConnection::new();
-    conn.browser_context = Some(BrowserContext::new("BID-cookie-facade".into()));
+    conn.browser_context = Some(BrowserContext::new_with_page_for_test(
+        "BID-cookie-facade",
+        "TID-cookie-facade",
+    ));
     let navigation = conn
         .build_loaded_navigation_from_buffered_response_async(
             Url::parse("https://example.com/app").unwrap(),
@@ -125,7 +131,10 @@ async fn browser_context_document_cookie_facade_overrides_update_live_page() {
 #[tokio::test]
 async fn browser_context_document_cookie_browser_context_overrides_update_live_page() {
     let mut conn = CdpConnection::new();
-    conn.browser_context = Some(BrowserContext::new("BID-cookie-context-overrides".into()));
+    conn.browser_context = Some(BrowserContext::new_with_page_for_test(
+        "BID-cookie-context-overrides",
+        "TID-cookie-context-overrides",
+    ));
     let navigation = conn
         .build_loaded_navigation_from_buffered_response_async(
             Url::parse("https://example.com/app").unwrap(),
@@ -304,7 +313,10 @@ async fn browser_context_cookie_manager_surface_tracks_policy_without_a_live_pag
 async fn browser_context_document_cookie_capability_and_freshness_snapshots_project_owner_surfaces()
 {
     let mut conn = CdpConnection::new();
-    conn.browser_context = Some(BrowserContext::new("BID-cookie-capability-surface".into()));
+    conn.browser_context = Some(BrowserContext::new_with_page_for_test(
+        "BID-cookie-capability-surface",
+        "TID-cookie-capability-surface",
+    ));
     let navigation = conn
         .build_loaded_navigation_from_buffered_response_async(
             Url::parse("https://example.com/app").unwrap(),
@@ -720,7 +732,10 @@ async fn browser_context_document_cookie_capability_and_freshness_snapshots_proj
 #[tokio::test]
 async fn browser_context_cookie_manager_surface_projects_document_capability_and_activity() {
     let mut conn = CdpConnection::new();
-    conn.browser_context = Some(BrowserContext::new("BID-cookie-manager-projection".into()));
+    conn.browser_context = Some(BrowserContext::new_with_page_for_test(
+        "BID-cookie-manager-projection",
+        "TID-cookie-manager-projection",
+    ));
     let navigation = conn
         .build_loaded_navigation_from_buffered_response_async(
             Url::parse("https://example.com/app").unwrap(),

@@ -1,7 +1,7 @@
 use super::*;
 #[tokio::test]
 async fn browser_context_document_cookie_facade_snapshot_projects_default_cookie_write_url_owner() {
-    let mut bc = BrowserContext::new("BID-cookie-facade".into());
+    let mut bc = BrowserContext::new_with_page_for_test("BID-cookie-facade", "TID-cookie-facade");
     bc.set_target_url("https://example.com/app".into());
 
     let before_load = bc.document_cookie_facade_snapshot();

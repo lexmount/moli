@@ -2,7 +2,10 @@ use super::*;
 #[tokio::test]
 async fn browser_context_cookie_manager_surface_projects_live_effective_browser_context() {
     let mut conn = CdpConnection::new();
-    conn.browser_context = Some(BrowserContext::new("BID-cookie-manager-context".into()));
+    conn.browser_context = Some(BrowserContext::new_with_page_for_test(
+        "BID-cookie-manager-context",
+        "TID-cookie-manager-context",
+    ));
     let navigation = conn
         .build_loaded_navigation_from_buffered_response_async(
             Url::parse("https://child.example/app").unwrap(),
@@ -160,8 +163,9 @@ async fn browser_context_cookie_manager_surface_projects_live_effective_browser_
 #[tokio::test]
 async fn browser_context_cookie_manager_surface_tracks_schemeful_site_relationships() {
     let mut conn = CdpConnection::new();
-    conn.browser_context = Some(BrowserContext::new(
-        "BID-cookie-manager-schemeful-context".into(),
+    conn.browser_context = Some(BrowserContext::new_with_page_for_test(
+        "BID-cookie-manager-schemeful-context",
+        "TID-cookie-manager-schemeful-context",
     ));
     let navigation = conn
         .build_loaded_navigation_from_buffered_response_async(
@@ -269,8 +273,9 @@ async fn browser_context_cookie_manager_surface_tracks_schemeful_site_relationsh
 #[tokio::test]
 async fn browser_context_cookie_manager_surface_tracks_redirected_navigation_transition() {
     let mut conn = CdpConnection::new();
-    conn.browser_context = Some(BrowserContext::new(
-        "BID-cookie-manager-redirected-navigation".into(),
+    conn.browser_context = Some(BrowserContext::new_with_page_for_test(
+        "BID-cookie-manager-redirected-navigation",
+        "TID-cookie-manager-redirected-navigation",
     ));
     let requested_url = Url::parse("https://origin.example/start").unwrap();
     let final_url = Url::parse("https://redirected.example/final").unwrap();
@@ -353,8 +358,9 @@ async fn browser_context_cookie_manager_surface_tracks_redirected_navigation_tra
 async fn browser_context_cookie_manager_surface_distinguishes_same_document_url_updates_from_redirects()
  {
     let mut conn = CdpConnection::new();
-    conn.browser_context = Some(BrowserContext::new(
-        "BID-cookie-manager-same-document-transition".into(),
+    conn.browser_context = Some(BrowserContext::new_with_page_for_test(
+        "BID-cookie-manager-same-document-transition",
+        "TID-cookie-manager-same-document-transition",
     ));
     let navigation = conn
         .build_loaded_navigation_from_buffered_response_async(
@@ -430,8 +436,9 @@ async fn browser_context_cookie_manager_surface_distinguishes_same_document_url_
 #[tokio::test]
 async fn browser_context_cookie_manager_surface_projects_navigation_initiator_relationships() {
     let mut conn = CdpConnection::new();
-    conn.browser_context = Some(BrowserContext::new(
-        "BID-cookie-manager-navigation-initiator".into(),
+    conn.browser_context = Some(BrowserContext::new_with_page_for_test(
+        "BID-cookie-manager-navigation-initiator",
+        "TID-cookie-manager-navigation-initiator",
     ));
 
     let initial_navigation = conn

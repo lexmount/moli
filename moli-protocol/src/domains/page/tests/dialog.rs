@@ -611,7 +611,10 @@ async fn javascript_dialog_pending_state_is_session_local_for_active_auxiliary_s
 #[tokio::test(flavor = "multi_thread")]
 async fn handle_javascript_dialog_rejects_dialog_without_current_page_residence() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-dialog-missing-frame".to_owned()));
+    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test(
+        "BID-dialog-missing-frame",
+        "TID-dialog-missing-frame",
+    ));
     ctx.conn
         .with_target_devtools_session_state_for_session_mut(None, |state| {
             state
