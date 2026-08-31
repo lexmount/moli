@@ -4157,7 +4157,8 @@ fn legacy_lenient_this_event_handlers_ignore_incompatible_receivers() {
     Object.getOwnPropertyDescriptor(HTMLElement.prototype, "onmouseenter"),
     Object.getOwnPropertyDescriptor(HTMLElement.prototype, "onmouseleave"),
     Object.getOwnPropertyDescriptor(Document.prototype, "onmouseenter"),
-    Object.getOwnPropertyDescriptor(Document.prototype, "onmouseleave")
+    Object.getOwnPropertyDescriptor(Document.prototype, "onmouseleave"),
+    Object.getOwnPropertyDescriptor(Document.prototype, "onreadystatechange")
   ];
   const lenient = lenientDescriptors.every(descriptor =>
     invalidReceivers.every(receiver =>
