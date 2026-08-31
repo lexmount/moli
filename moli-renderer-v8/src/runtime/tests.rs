@@ -427,6 +427,61 @@ async fn capture_screenshot_uses_current_root_computed_background_and_viewport()
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn print_capture_produces_font_and_glyph_text_layer() {
+    let runtime = initialize_layout_test_runtime();
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default())
+        .expect("default resource request client");
+    let url = url::Url::parse("https://example.test/print-text-layer").unwrap();
+    let page = create_test_html_page(
+        &runtime,
+        &loader,
+        url,
+        "<!doctype html><html><body><h1>Font Text 123</h1></body></html>",
+    )
+    .await;
+    let request = super::RendererCaptureScreenshotRequest {
+        purpose: super::RendererScreenshotPurpose::Print {
+            print_background: false,
+        },
+        format: super::RendererScreenshotFormat::Jpeg,
+        quality: 90,
+        region: super::RendererScreenshotRegion::FullDocument,
+        optimize_for_speed: false,
+        max_width: None,
+        max_height: None,
+    };
+    let (reply, _) = page
+        .run_async_command(RendererPageCommand::CaptureScreenshot(request))
+        .await
+        .expect("print capture should complete");
+    let image = match reply {
+        RendererPageReply::CaptureScreenshot(RendererCaptureScreenshotReply::Captured(image)) => {
+            image
+        }
+        _ => panic!("expected captured print image"),
+    };
+    assert_eq!(image.mime_type, "image/jpeg");
+    let text_layer = image
+        .text_layer
+        .expect("print capture should carry a text layer");
+    assert!(text_layer.css_width > 0.0);
+    assert!(text_layer.css_height > 0.0);
+    assert!(!text_layer.fonts.is_empty());
+    assert!(!text_layer.runs.is_empty());
+    assert!(text_layer.fonts.iter().all(|font| !font.data.is_empty()));
+    assert!(
+        text_layer
+            .runs
+            .iter()
+            .flat_map(|run| run.glyphs.iter())
+            .any(|glyph| glyph.id != 0)
+    );
+    for run in &text_layer.runs {
+        assert!(run.font < text_layer.fonts.len());
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn capture_screenshot_paints_downloaded_raster_image_pixels() {
     let runtime = initialize_layout_test_runtime();
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default())

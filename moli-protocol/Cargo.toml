@@ -32,6 +32,7 @@ moli-v8-platform = { path = "../moli-v8-platform" }
 moli-web-mime = { path = "../moli-web-mime" }
 parking_lot = "0.12"
 percent-encoding = "2.3"
+read-fonts = "0.41.0"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 serde_path_to_error = "0.1"

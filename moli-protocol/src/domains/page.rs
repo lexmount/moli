@@ -57,6 +57,7 @@ mod main_document_commit;
 mod navigation;
 mod navigation_commit;
 mod pdf;
+mod pdf_font;
 mod popup;
 mod preload;
 mod prepared_navigation;
@@ -72,12 +73,14 @@ pub fn build_default_raster_pdf(
     jpeg: &[u8],
     image_width: u32,
     image_height: u32,
+    text_layer: Option<&moli_core::page::RendererPdfTextLayer>,
 ) -> anyhow::Result<Vec<u8>> {
     pdf::build_raster_pdf(
         jpeg,
         image_width,
         image_height,
         &pdf::RasterPdfOptions::default(),
+        text_layer,
     )
     .map_err(|error| anyhow::anyhow!(error.message().to_owned()))
 }
@@ -7886,6 +7889,7 @@ async fn complete_pending_page_command_inner(
                 image.width,
                 image.height,
                 &options,
+                image.text_layer.as_ref(),
             ) {
                 Ok(pdf) => pdf,
                 Err(error) => {

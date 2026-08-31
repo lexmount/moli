@@ -342,6 +342,7 @@ pub use self::page_surface::{
     RendererPageCommandPostResponseContinuation, RendererPageCookieFacadeSnapshotReply,
     RendererPageCreationDiagnostics, RendererPageDiagnosticsSnapshot, RendererPageDumpFormat,
     RendererPageDumpOptions, RendererPageDumpStripOptions, RendererPageReply, RendererPageView,
+    RendererPdfFont, RendererPdfGlyph, RendererPdfTextLayer, RendererPdfTextRun,
     RendererPendingDownloadActivation, RendererPendingDownloadResponse,
     RendererPendingFileChooserActivation, RendererPendingJavaScriptDialog,
     RendererPendingPopupActivation, RendererPendingSameDocumentNavigation,

@@ -20,6 +20,22 @@ def assert_pdf_envelope(data: bytes, label: str) -> None:
         raise SmokeError(f"{label} did not end with a PDF EOF marker")
 
 
+def assert_moli_pdf_text_layer(data: bytes, label: str) -> None:
+    assert_pdf_envelope(data, label)
+    for marker in (
+        b"/Subtype /Type0",
+        b"/Encoding /Identity-H",
+        b"/CIDToGIDMap /Identity",
+        b"/ToUnicode",
+        b"beginbfchar",
+        b"3 Tr",
+    ):
+        if marker not in data:
+            raise SmokeError(f"{label} did not contain the {marker!r} text-layer marker")
+    if b"/FontFile2" not in data and b"/FontFile3" not in data:
+        raise SmokeError(f"{label} did not embed a font program")
+
+
 def inspect_moli_pdf(data: bytes, label: str) -> MoliPdfInfo:
     assert_pdf_envelope(data, label)
     if b"\xff\xd8" not in data or b"\xff\xd9" not in data:

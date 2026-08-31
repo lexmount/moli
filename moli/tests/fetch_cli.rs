@@ -978,6 +978,36 @@ fn cli_dump_pdf_writes_pdf_bytes() -> Result<()> {
 }
 
 #[test]
+fn cli_dump_pdf_embeds_fonts_and_text_layer() -> Result<()> {
+    let runtime = tokio::runtime::Runtime::new()?;
+    let server = runtime.block_on(FixtureServer::spawn())?;
+    let output = run_fetch_cli_with_dump_and_args(&server.url("/static"), "pdf", &["--layout"])?;
+    runtime.block_on(server.shutdown());
+    assert!(
+        output.status.success(),
+        "moli fetch failed: stdout_bytes={}\nstderr={}",
+        output.stdout.len(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let pdf = output.stdout;
+    assert!(pdf.starts_with(b"%PDF-1.7\n"));
+    assert!(pdf.ends_with(b"%%EOF\n"));
+    let text = String::from_utf8_lossy(&pdf);
+    assert!(
+        text.contains("/Subtype /Type0"),
+        "expected a CID font, got {text}"
+    );
+    assert!(
+        text.contains("/FontFile2") || text.contains("/FontFile3"),
+        "expected an embedded font program"
+    );
+    assert!(text.contains("/ToUnicode"));
+    assert!(text.contains("beginbfchar"));
+    assert!(text.contains("3 Tr"));
+    Ok(())
+}
+
+#[test]
 fn binary_dump_modes_require_layout() -> Result<()> {
     for dump in ["screenshot", "screenshot_full", "pdf"] {
         let output = run_fetch_cli_with_dump_and_args("about:blank", dump, &[])?;

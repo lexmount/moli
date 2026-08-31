@@ -2731,6 +2731,7 @@ dependencies = [
  "moli-web-mime",
  "parking_lot",
  "percent-encoding",
+ "read-fonts",
  "sanitize-filename",
  "serde",
  "serde_json",

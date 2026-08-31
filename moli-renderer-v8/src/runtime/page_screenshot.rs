@@ -7,6 +7,7 @@ use std::time::Instant;
 use super::{
     PageVm, RendererCaptureScreencastFrameReply, RendererCaptureScreenshotReply,
     RendererCapturedScreencastFrame, RendererCapturedScreenshot, RendererDocumentLifecycleIdentity,
+    RendererPdfFont, RendererPdfGlyph, RendererPdfTextLayer, RendererPdfTextRun,
 };
 
 #[derive(Default)]
@@ -201,11 +202,13 @@ impl PageVm {
         } else {
             None
         };
+        let include_text_layer = matches!(request.purpose, RendererScreenshotPurpose::Print { .. });
         let result = self.capture_image(
             request.format,
             request.quality,
             request.optimize_for_speed,
             paint_capture,
+            include_text_layer,
             moli_layout::LayoutFlushReason::Screenshot,
         );
         if let Some(previous) = restore_media {
@@ -269,6 +272,7 @@ impl PageVm {
             request.quality,
             request.optimize_for_speed,
             paint_capture,
+            false,
             moli_layout::LayoutFlushReason::Screencast,
         )? {
             RendererImageCaptureOutcome::Captured(image) => image,
@@ -298,6 +302,7 @@ impl PageVm {
         quality: u8,
         optimize_for_speed: bool,
         paint_capture: PaintCaptureRequest,
+        include_text_layer: bool,
         reason: moli_layout::LayoutFlushReason,
     ) -> anyhow::Result<RendererImageCaptureOutcome> {
         let profile_enabled = moli_trace::cpu_profile_enabled();
@@ -381,12 +386,18 @@ impl PageVm {
                 total_us = started.elapsed().as_micros(),
             );
         }
+        let text_layer = if include_text_layer {
+            build_pdf_text_layer(&snapshot)
+        } else {
+            None
+        };
         Ok(RendererImageCaptureOutcome::Captured(
             RendererCapturedScreenshot {
                 mime_type: mime_type.to_owned(),
                 width,
                 height,
                 bytes: bytes.into(),
+                text_layer,
             },
         ))
     }
@@ -422,6 +433,51 @@ fn visual_state_for_captured_screencast_frame(
     } else {
         before
     }
+}
+
+/// Projects positioned glyph runs out of a paint snapshot for the print text
+/// layer, deduplicating font programs across runs.
+fn build_pdf_text_layer(snapshot: &moli_layout::PaintSnapshot) -> Option<RendererPdfTextLayer> {
+    let mut fonts: Vec<RendererPdfFont> = Vec::new();
+    let mut font_indices = std::collections::HashMap::new();
+    let mut runs = Vec::new();
+    for fragment in &snapshot.fragments {
+        let moli_layout::PaintFragment::GlyphRun(run) = fragment else {
+            continue;
+        };
+        let Some(resource) = snapshot.font(run.font) else {
+            continue;
+        };
+        let font_index = *font_indices.entry(run.font.index()).or_insert_with(|| {
+            fonts.push(RendererPdfFont {
+                data: Arc::from(resource.font.data.data()),
+                collection_index: resource.font.index,
+            });
+            fonts.len() - 1
+        });
+        runs.push(RendererPdfTextRun {
+            font: font_index,
+            font_size: run.font_size,
+            glyphs: run
+                .glyphs_in_surface()
+                .into_iter()
+                .map(|glyph| RendererPdfGlyph {
+                    id: glyph.id,
+                    x: glyph.x,
+                    y: glyph.y,
+                })
+                .collect(),
+        });
+    }
+    if runs.is_empty() {
+        return None;
+    }
+    Some(RendererPdfTextLayer {
+        css_width: snapshot.surface.css_width,
+        css_height: snapshot.surface.css_height,
+        fonts,
+        runs,
+    })
 }
 
 impl RendererCaptureScreenshotRequest {

@@ -5,7 +5,7 @@ import base64
 from typing import Any
 
 from ..assertions import SmokeError, assert_equal, record
-from ..pdf_document import assert_pdf_envelope, inspect_moli_pdf
+from ..pdf_document import assert_moli_pdf_text_layer, assert_pdf_envelope, inspect_moli_pdf
 from ..raw_cdp import RawCdpClient, connect_raw_cdp, discover_websocket_url
 
 
@@ -240,6 +240,9 @@ async def run_pdf_group(
             "pageRangeValidation": True,
         }
         if is_moli:
+            assert_moli_pdf_text_layer(base64_pdf, "base64 printToPDF")
+            assert_moli_pdf_text_layer(stream_pdf, "stream printToPDF")
+            assert_moli_pdf_text_layer(landscape_pdf, "landscape printToPDF")
             base64_info = inspect_moli_pdf(base64_pdf, "base64 printToPDF")
             stream_info = inspect_moli_pdf(stream_pdf, "stream printToPDF")
             landscape_info = inspect_moli_pdf(landscape_pdf, "landscape printToPDF")

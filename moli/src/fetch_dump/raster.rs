@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, bail};
 use moli_core::page::{
-    Page, RendererCaptureScreenshotReply, RendererCaptureScreenshotRequest,
+    Page, RendererCaptureScreenshotReply, RendererCaptureScreenshotRequest, RendererPdfTextLayer,
     RendererScreenshotFormat, RendererScreenshotPurpose, RendererScreenshotRegion,
 };
 
@@ -9,6 +9,7 @@ struct CapturedRaster {
     width: u32,
     height: u32,
     bytes: Vec<u8>,
+    text_layer: Option<RendererPdfTextLayer>,
 }
 
 pub(super) async fn render_screenshot(
@@ -51,8 +52,13 @@ pub(super) async fn render_pdf(page: &mut Page) -> Result<Vec<u8>> {
             image.mime_type
         );
     }
-    moli_protocol::build_default_raster_pdf(&image.bytes, image.width, image.height)
-        .context("failed to encode PDF output")
+    moli_protocol::build_default_raster_pdf(
+        &image.bytes,
+        image.width,
+        image.height,
+        image.text_layer.as_ref(),
+    )
+    .context("failed to encode PDF output")
 }
 
 async fn capture_page_raster(
@@ -73,6 +79,7 @@ async fn capture_page_raster(
             width: image.width,
             height: image.height,
             bytes: image.bytes.to_vec(),
+            text_layer: image.text_layer,
         }),
         RendererCaptureScreenshotReply::LayoutDisabled => {
             bail!("--dump {dump_mode} requires --layout or MOLI_LAYOUT=true")

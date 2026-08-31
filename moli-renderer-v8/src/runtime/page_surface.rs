@@ -5980,12 +5980,92 @@ impl RendererRuntimeEvaluationResult {
     }
 }
 
+/// One font program embedded for a print text layer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RendererPdfFont {
+    /// Raw sfnt bytes of the font program.
+    pub data: Arc<[u8]>,
+    /// Collection index inside `data` (0 for a single font).
+    pub collection_index: u32,
+}
+
+/// One positioned glyph in capture-surface CSS pixels.
+#[derive(Clone, Copy, Debug)]
+pub struct RendererPdfGlyph {
+    /// Font-specific glyph identifier.
+    pub id: u32,
+    /// Horizontal baseline position in capture-surface CSS pixels.
+    pub x: f32,
+    /// Vertical baseline position in capture-surface CSS pixels.
+    pub y: f32,
+}
+
+impl PartialEq for RendererPdfGlyph {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self.x.to_bits() == other.x.to_bits()
+            && self.y.to_bits() == other.y.to_bits()
+    }
+}
+
+impl Eq for RendererPdfGlyph {}
+
+/// One shaped run of positioned glyphs in capture-surface CSS pixels.
+#[derive(Clone, Debug)]
+pub struct RendererPdfTextRun {
+    /// Index into the enclosing text layer's font table.
+    pub font: usize,
+    /// Font size in capture-surface CSS pixels.
+    pub font_size: f32,
+    /// Glyphs positioned on their baseline in capture-surface CSS pixels.
+    pub glyphs: Vec<RendererPdfGlyph>,
+}
+
+impl PartialEq for RendererPdfTextRun {
+    fn eq(&self, other: &Self) -> bool {
+        self.font == other.font
+            && self.font_size.to_bits() == other.font_size.to_bits()
+            && self.glyphs == other.glyphs
+    }
+}
+
+impl Eq for RendererPdfTextRun {}
+
+/// Text-layer data captured from the same paint pass as the print raster.
+///
+/// Coordinates are capture-surface CSS pixels, so the PDF builder converts
+/// them with the same scale it derives for the raster slice.
+#[derive(Clone, Debug)]
+pub struct RendererPdfTextLayer {
+    /// Capture-surface CSS width of the raster source.
+    pub css_width: f32,
+    /// Capture-surface CSS height of the raster source.
+    pub css_height: f32,
+    /// Deduplicated font programs referenced by the runs.
+    pub fonts: Vec<RendererPdfFont>,
+    /// Glyph runs in paint order.
+    pub runs: Vec<RendererPdfTextRun>,
+}
+
+impl PartialEq for RendererPdfTextLayer {
+    fn eq(&self, other: &Self) -> bool {
+        self.css_width.to_bits() == other.css_width.to_bits()
+            && self.css_height.to_bits() == other.css_height.to_bits()
+            && self.fonts == other.fonts
+            && self.runs == other.runs
+    }
+}
+
+impl Eq for RendererPdfTextLayer {}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RendererCapturedScreenshot {
     pub mime_type: String,
     pub width: u32,
     pub height: u32,
     pub bytes: Arc<[u8]>,
+    /// Text-layer data for a print capture, or `None` for image captures.
+    pub text_layer: Option<RendererPdfTextLayer>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
