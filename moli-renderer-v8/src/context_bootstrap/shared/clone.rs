@@ -301,8 +301,17 @@ pub(crate) fn structured_clone_value_with_options<'s>(
     value: v8::Local<'s, v8::Value>,
     options: v8::Local<'s, v8::Value>,
 ) -> Option<v8::Local<'s, v8::Value>> {
+    let payload = structured_serialize_value_with_options(scope, value, options)?;
+    structured_deserialize_value(scope, &payload)
+}
+
+pub(crate) fn structured_serialize_value_with_options<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
+    options: v8::Local<'s, v8::Value>,
+) -> Option<V8StructuredClonePayload> {
     let transfers = parse_structured_clone_options_transfer_list(scope, options)?;
-    let payload = serialize_for_wire_for_runtime_with_transfers(
+    serialize_for_wire_for_runtime_with_transfers(
         scope,
         value,
         &transfers.array_buffers,
@@ -310,8 +319,7 @@ pub(crate) fn structured_clone_value_with_options<'s>(
         &transfers.readable_streams,
         &transfers.writable_streams,
         &transfers.transform_streams,
-    )?;
-    structured_deserialize_value(scope, &payload)
+    )
 }
 
 pub(crate) fn structured_clone_value_for_storage<'s>(

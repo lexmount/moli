@@ -1,6 +1,83 @@
 use super::*;
 
 #[test]
+fn structured_clone_deserializes_in_the_receiver_realm() {
+    let mut vm = new_storage_test_vm("https://structured-clone-receiver-realm.test/");
+
+    vm.eval(
+        r#"
+        (() => {
+          const frame = document.createElement("iframe");
+          (document.body || document.documentElement || document).appendChild(frame);
+          globalThis.__structuredCloneRealmFrame = frame;
+          return "ready";
+        })()
+        "#,
+    )
+    .expect("structuredClone receiver Realm setup should evaluate");
+    vm.drain_pending_child_frame_work_for_test();
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const frame = globalThis.__structuredCloneRealmFrame;
+              const child = frame.contentWindow;
+              const constructors = ["Object", "Array", "Date", "RegExp"];
+              const intoTop = constructors.map(name => {
+                const clone = child.structuredClone.call(window, new child[name]);
+                return Object.getPrototypeOf(clone) === window[name].prototype;
+              });
+              const intoChild = constructors.map(name => {
+                const clone = window.structuredClone.call(child, new window[name]);
+                return Object.getPrototypeOf(clone) === child[name].prototype;
+              });
+
+              const buffer = new child.ArrayBuffer(8);
+              const transferred = child.structuredClone.call(window, buffer, {
+                transfer: [buffer]
+              });
+
+              const exceptionRealm = callback => {
+                try {
+                  callback();
+                  return "missing";
+                } catch (error) {
+                  return error instanceof child.TypeError ? "child" : "other";
+                }
+              };
+              const illegalInvocation = exceptionRealm(() =>
+                child.structuredClone.call({}, 1));
+              const missingArgument = exceptionRealm(() =>
+                child.structuredClone.call(window));
+
+              frame.remove();
+              const detached = child.structuredClone("detached") === undefined;
+
+              return JSON.stringify({
+                intoTop,
+                intoChild,
+                transfer: [
+                  buffer.byteLength,
+                  transferred.byteLength,
+                  transferred instanceof window.ArrayBuffer
+                ],
+                illegalInvocation,
+                missingArgument,
+                detached
+              });
+            })()
+            "#,
+        )
+        .expect("cross-Realm structuredClone probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"intoTop":[true,true,true,true],"intoChild":[true,true,true,true],"transfer":[0,8,true],"illegalInvocation":"child","missingArgument":"child","detached":true}"#,
+    );
+}
+
+#[test]
 fn structured_clone_preserves_webassembly_module() {
     let mut vm = new_storage_test_vm("https://example.com/wasm-clone");
 
