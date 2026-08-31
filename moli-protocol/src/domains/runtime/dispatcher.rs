@@ -1006,11 +1006,7 @@ fn start_main_runtime_inspector_command(
     } else {
         None
     };
-    let session_owner_route = if await_promise {
-        conn.runtime_await_owner_route_for_session(cmd.session_id)
-    } else {
-        None
-    };
+    let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
     let pre_registered_await = match pre_register_runtime_await_if_needed(
         conn,
         await_promise,
@@ -1046,10 +1042,7 @@ fn start_main_runtime_inspector_command(
     RuntimeCommandTaskStep::Pending(Box::new(PendingRuntimeCommandDispatch {
         command_id: cmd.id,
         action: action_label,
-        owner_scope: CommandOwnerScope::from_session_and_owner_route(
-            cmd.session_id,
-            session_owner_route,
-        ),
+        owner_scope,
         object_group,
         release_object_ids,
         release_object_group,
@@ -1632,11 +1625,7 @@ fn try_start_pending_runtime_enable_command(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,
 ) -> Option<RuntimeCommandTaskStep> {
-    let session_owner_route = if cmd.session_id.is_none() {
-        conn.none_session_owner_route_override()
-    } else {
-        None
-    };
+    let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
     let has_loaded_page = match conn.runtime_session_owner_slot(cmd.session_id) {
         Ok(slot) => slot.has_loaded_page(),
         Err(_) if cmd.session_id.is_some() => {
@@ -1684,7 +1673,7 @@ fn try_start_pending_runtime_enable_command(
         conn,
         cmd.id,
         cmd.session_id,
-        session_owner_route,
+        owner_scope,
     ))
 }
 
@@ -1692,16 +1681,13 @@ fn start_pending_runtime_enable_events_phase(
     conn: &mut CdpConnection,
     command_id: Option<u64>,
     session_id: Option<&str>,
-    session_owner_route: Option<CdpSessionRoute>,
+    owner_scope: CommandOwnerScope,
 ) -> RuntimeCommandTaskStep {
     match conn.start_runtime_enable_events_for_session_owner(session_id) {
         Ok(pending) => RuntimeCommandTaskStep::Pending(Box::new(PendingRuntimeCommandDispatch {
             command_id,
             action: "enable",
-            owner_scope: CommandOwnerScope::from_session_and_owner_route(
-                session_id,
-                session_owner_route,
-            ),
+            owner_scope,
             object_group: None,
             release_object_ids: Vec::new(),
             release_object_group: None,
@@ -1729,11 +1715,7 @@ fn try_start_pending_runtime_binding_command(
     cmd: &Cmd<'_>,
     action: RuntimeBindingCommand,
 ) -> Option<RuntimeCommandTaskStep> {
-    let session_owner_route = if cmd.session_id.is_none() {
-        conn.none_session_owner_route_override()
-    } else {
-        None
-    };
+    let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
     let (name, execution_context_name, execution_context_id) = match action {
         RuntimeBindingCommand::Add => {
             let params = match cmd.get_params::<AddBindingParams>() {
@@ -1805,10 +1787,7 @@ fn try_start_pending_runtime_binding_command(
         let meta = RuntimeCommandCompletionMeta {
             command_id: cmd.id,
             action: task.action.label(),
-            owner_scope: CommandOwnerScope::from_session_and_owner_route(
-                cmd.session_id,
-                session_owner_route.clone(),
-            ),
+            owner_scope: owner_scope.clone(),
             object_group: None,
             release_object_ids: Vec::new(),
             release_object_group: None,
@@ -1824,7 +1803,7 @@ fn try_start_pending_runtime_binding_command(
             cmd.session_id,
             task,
             execution_context_id,
-            session_owner_route,
+            owner_scope,
         );
     }
     if matches!(task.action, RuntimeBindingCommand::Add)
@@ -1860,10 +1839,7 @@ fn try_start_pending_runtime_binding_command(
         PendingRuntimeCommandDispatch {
             command_id: cmd.id,
             action: action_label,
-            owner_scope: CommandOwnerScope::from_session_and_owner_route(
-                cmd.session_id,
-                session_owner_route,
-            ),
+            owner_scope,
             object_group: None,
             release_object_ids: Vec::new(),
             release_object_group: None,
@@ -2122,11 +2098,7 @@ fn start_devtools_runtime_command(
         }
     };
     let object_group = runtime_object_group_for_command_result(conn, cmd, action);
-    let session_owner_route = if await_promise {
-        conn.runtime_await_owner_route_for_session(cmd.session_id)
-    } else {
-        None
-    };
+    let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
     let pre_registered_await = match pre_register_runtime_await_if_needed(
         conn,
         await_promise,
@@ -2159,10 +2131,7 @@ fn start_devtools_runtime_command(
     RuntimeCommandTaskStep::Pending(Box::new(PendingRuntimeCommandDispatch {
         command_id: cmd.id,
         action: action_label,
-        owner_scope: CommandOwnerScope::from_session_and_owner_route(
-            cmd.session_id,
-            session_owner_route,
-        ),
+        owner_scope,
         object_group,
         release_object_ids: Vec::new(),
         release_object_group: None,
@@ -7651,7 +7620,7 @@ fn start_pending_runtime_binding_context_lookup_phase(
     session_id: Option<&str>,
     task: RuntimeBindingCommandTask,
     execution_context_id: i64,
-    session_owner_route: Option<CdpSessionRoute>,
+    owner_scope: CommandOwnerScope,
 ) -> Option<RuntimeCommandTaskStep> {
     let pending = conn
         .start_child_default_execution_context_lookup_for_session_owner(
@@ -7663,10 +7632,7 @@ fn start_pending_runtime_binding_context_lookup_phase(
         PendingRuntimeCommandDispatch {
             command_id,
             action: task.action.label(),
-            owner_scope: CommandOwnerScope::from_session_and_owner_route(
-                session_id,
-                session_owner_route,
-            ),
+            owner_scope,
             object_group: None,
             release_object_ids: Vec::new(),
             release_object_group: None,
@@ -8497,7 +8463,9 @@ async fn complete_pending_runtime_inspector_command(
                 object_group,
             );
         }
-        if completed.action == "runIfWaitingForDebugger" {
+        if completed.action == "runIfWaitingForDebugger"
+            && conn.release_waiting_for_debugger_session(completed.session_id())
+        {
             crate::domains::target::schedule_initial_document_target_url_navigation_after_debugger_resume(
                 conn,
                 completed.session_id(),

@@ -414,7 +414,22 @@ impl CdpConnection {
         session_id: Option<&str>,
         body: CapturedBody,
     ) -> Result<String, String> {
-        let Some(mut owner) = self.target_session_owner_mut(session_id) else {
+        let none_session_owner_route = self.none_session_owner_route_override();
+        self.open_io_stream_body_source_for_route(
+            session_id,
+            none_session_owner_route.as_ref(),
+            body,
+        )
+    }
+
+    pub(crate) fn open_io_stream_body_source_for_route(
+        &mut self,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
+        body: CapturedBody,
+    ) -> Result<String, String> {
+        let Some(mut owner) = self.target_session_owner_mut_for_route(session_id, owner_route)
+        else {
             return Err("NoDocumentLoaded".to_owned());
         };
         owner.open_scoped_io_stream_body_source(body)

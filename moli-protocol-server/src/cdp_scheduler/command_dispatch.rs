@@ -16,22 +16,11 @@ pub(crate) struct CommandTurnOutput {
     output_release_permit: Option<CommandOutputReleasePermit>,
 }
 
-pub(crate) enum CommandDispatchStepOutput {
-    Emit(ProtocolOutputSequence),
-}
-
 impl CommandDispatchState {
     pub(crate) fn pending_command() -> Self {
         Self {
             replies: ProtocolOutputSequence::empty(),
         }
-    }
-
-    pub(crate) fn route_pending_background_event(
-        &mut self,
-        event: BackgroundProtocolEvent,
-    ) -> CommandDispatchStepOutput {
-        CommandDispatchStepOutput::Emit(ProtocolOutputSequence::from_background_event(event))
     }
 
     pub(crate) fn complete_with_turn_output(
@@ -56,14 +45,6 @@ impl CommandDispatchState {
         )
         .with_renderer_output_boundary(renderer_output_boundary, post_renderer_output)
         .with_renderer_output_predecessor(renderer_output_predecessor)
-    }
-
-    pub(crate) fn complete_protocol_output(
-        mut self,
-        output: ProtocolOutputSequence,
-    ) -> ProtocolOutputSequence {
-        self.replies = output;
-        self.replies
     }
 }
 

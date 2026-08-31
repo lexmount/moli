@@ -26,6 +26,41 @@ async fn initial_navigator_materializes_from_the_committed_document_authority_se
     );
 }
 
+#[test]
+fn replacing_document_transport_keeps_wire_and_navigator_identities_distinct() {
+    const WIRE_USER_AGENT: &str = "Moli-Wire-Identity/1.0";
+    const NAVIGATOR_USER_AGENT: &str = "Moli-Navigator-Identity/1.0";
+
+    let mut vm = new_storage_test_vm("https://navigator-transport-split.test/");
+    let mut fetch_config = moli_fetch::FetchConfig::default();
+    fetch_config.set_user_agent(WIRE_USER_AGENT);
+    let loader = ResourceRequestClient::new(&fetch_config).expect("loader");
+    let navigator_identity =
+        moli_browser_profile::BrowserIdentityProfile::new(NAVIGATOR_USER_AGENT, "fr-FR");
+
+    let document_loader =
+        vm.replace_document_resource_runtime_with_navigator_identity(&loader, &navigator_identity);
+
+    assert_eq!(
+        document_loader
+            .request_client()
+            .browser_identity()
+            .user_agent(),
+        WIRE_USER_AGENT,
+        "the replacement transport must keep the browser-side request identity"
+    );
+    assert_eq!(
+        vm.eval("navigator.userAgent")
+            .expect("Navigator should expose the renderer identity"),
+        NAVIGATOR_USER_AGENT
+    );
+    assert_eq!(
+        vm.eval("navigator.language")
+            .expect("Navigator language should expose the renderer identity"),
+        "fr-FR"
+    );
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn navigator_identity_seed_keeps_window_metadata_and_network_profile_coherent() {
     const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.1.2.3 Safari/537.36";

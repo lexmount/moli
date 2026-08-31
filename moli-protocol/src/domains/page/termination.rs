@@ -135,7 +135,8 @@ pub(crate) async fn fail_pending_fetch_state_background_events_async(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
     session_id: Option<&str>,
-    error_text: &str,
+    navigation_error_text: &str,
+    subresource_error_text: &str,
     pending_navigations: Vec<PendingFetchNavigation>,
     pending_auth_navigations: Vec<crate::conn::PendingFetchAuthNavigation>,
     pending_response_navigations: Vec<crate::conn::PausedDocumentTransfer>,
@@ -146,6 +147,10 @@ pub(crate) async fn fail_pending_fetch_state_background_events_async(
         crate::conn::PendingSubresourceFetchResponseRequest,
     )>,
 ) -> Option<RendererOutputFence> {
+    // A protocol navigation waiter may expose an operation-specific failure,
+    // while Network.loadingFailed must retain the underlying net error. For
+    // Page.stopLoading Chromium reports ERR_ABORTED/canceled=true even though
+    // Moli's pending navigation reply remains "Navigation stopped".
     let mut renderer_output_predecessor = None;
     for pending in pending_navigations {
         let token = pending.document_navigation_token;
@@ -153,7 +158,7 @@ pub(crate) async fn fail_pending_fetch_state_background_events_async(
         let navigation = network::materialize_navigation_failure_preserving_committed_document(
             conn,
             &navigation_state,
-            error_text.to_owned(),
+            navigation_error_text.to_owned(),
         );
         let predecessor = complete_tokened_materialized_navigation_background_events_async(
             conn,
@@ -171,7 +176,7 @@ pub(crate) async fn fail_pending_fetch_state_background_events_async(
         let navigation = network::materialize_navigation_failure_preserving_committed_document(
             conn,
             &navigation_state,
-            error_text.to_owned(),
+            navigation_error_text.to_owned(),
         );
         let predecessor = complete_tokened_materialized_navigation_background_events_async(
             conn,
@@ -184,11 +189,11 @@ pub(crate) async fn fail_pending_fetch_state_background_events_async(
         merge_renderer_output_predecessor(&mut renderer_output_predecessor, predecessor);
     }
     for pending in pending_response_navigations {
-        let (token, navigation, _) = pending.fail(error_text.to_owned());
+        let (token, navigation, _) = pending.fail(navigation_error_text.to_owned());
         let result = network::materialize_navigation_failure_preserving_committed_document(
             conn,
             &navigation,
-            error_text.to_owned(),
+            navigation_error_text.to_owned(),
         );
         let predecessor = complete_tokened_materialized_navigation_background_events_async(
             conn, out, token, navigation, result,
@@ -204,7 +209,7 @@ pub(crate) async fn fail_pending_fetch_state_background_events_async(
             .fail_pending_subresource_fetch_for_session_owner_async(
                 session_id,
                 pending.internal_id,
-                error_text.to_owned(),
+                subresource_error_text.to_owned(),
             )
             .await
         {
@@ -229,7 +234,7 @@ pub(crate) async fn fail_pending_fetch_state_background_events_async(
             .fail_pending_subresource_auth_for_session_owner_async(
                 session_id,
                 pending.internal_id,
-                error_text.to_owned(),
+                subresource_error_text.to_owned(),
             )
             .await
         {
@@ -254,7 +259,7 @@ pub(crate) async fn fail_pending_fetch_state_background_events_async(
             .fail_pending_subresource_response_for_session_owner_async(
                 session_id,
                 pending.internal_id,
-                error_text.to_owned(),
+                subresource_error_text.to_owned(),
             )
             .await
         {
@@ -387,6 +392,7 @@ pub(super) async fn complete_stop_loading_command_dispatch(
         &mut out,
         session_id,
         "Navigation stopped",
+        moli_fetch::NET_ERR_ABORTED_ERROR_TEXT,
         pending_navigations,
         pending_auth_navigations,
         pending_response_navigations,
@@ -504,6 +510,7 @@ pub(super) async fn complete_crash_command_dispatch(
         &mut out,
         fail_session_id,
         "Page crashed",
+        "Page crashed",
         pending_navigations,
         pending_auth_navigations,
         pending_response_navigations,
@@ -616,6 +623,7 @@ pub(super) async fn complete_close_command_dispatch(
         conn,
         &mut out,
         fail_session_id,
+        "Page closed",
         "Page closed",
         pending_navigations,
         pending_auth_navigations,

@@ -248,7 +248,9 @@ impl PendingFetchCommandDispatch {
                     | CdpSessionRoute::DedicatedWorkerTarget { .. }
                     | CdpSessionRoute::ServiceWorkerTarget { .. },
                 ) => None,
-                None if session_id.is_none() => conn.none_session_owner_route_override(),
+                None if session_id.is_none() => CommandOwnerScope::capture(conn, None)
+                    .session_owner_route()
+                    .cloned(),
                 None => None,
             };
         Self {

@@ -9,7 +9,8 @@ use super::*;
 use crate::{
     RendererDocumentLifecycleEventKind, RendererDocumentLifecycleIdentity,
     RendererDocumentLifecycleMilestone, RendererDocumentLifecycleWaitOutcome,
-    RendererDocumentTerminationReason, RendererLifecycleStartReason, RendererPageState,
+    RendererDocumentTerminationReason, RendererLifecycleStartReason, RendererPageReply,
+    RendererPageState,
     page_task_queue::PostParseLifecycleWork,
     runtime::document_lifecycle_turn::DocumentLifecycleNavigationTiming,
     script_vm::{
@@ -1405,6 +1406,116 @@ fn main_document_lifecycle_coordinator_preserves_applied_callback_facts() {
             })
             .await
             .expect("typed main lifecycle effect should reconcile");
+    });
+}
+
+#[test]
+fn stop_loading_completes_readiness_without_dispatching_window_load() {
+    run_page_vm_local_runtime_async_test("page-vm-stop-loading-lifecycle", || async move {
+        let mut page_vm = test_page_vm();
+        let local_executor = page_vm.local_executor.clone();
+
+        local_executor
+            .run(async move {
+                let _initial = page_vm.take_page_creation_artifacts();
+                page_vm.vm_mut().eval(
+                    r#"
+globalThis.__stopLoadingLifecycleEvents = [];
+document.addEventListener("readystatechange", () => {
+  __stopLoadingLifecycleEvents.push(`readystatechange:${document.readyState}`);
+  queueMicrotask(() => {
+    __stopLoadingLifecycleEvents.push(`microtask:${document.readyState}`);
+  });
+});
+window.addEventListener("load", () => {
+  __stopLoadingLifecycleEvents.push("load");
+});
+window.addEventListener("pageshow", () => {
+  __stopLoadingLifecycleEvents.push("pageshow");
+});
+"installed"
+"#,
+                )?;
+
+                let owner = page_vm
+                    .vm()
+                    .current_main_document_task_owner()
+                    .expect("stop-loading fixture requires a current Document owner");
+                let interactive = page_vm
+                    .vm_mut()
+                    .finish_current_main_document_parsing(owner)
+                    .expect("parser completion should prepare interactive work");
+                execute_main_document_lifecycle_on_owner_local_task(
+                    &mut page_vm,
+                    MainDocumentLifecycleBody::Interactive(interactive),
+                )
+                .await?;
+                execute_main_document_lifecycle_on_owner_local_task(
+                    &mut page_vm,
+                    MainDocumentLifecycleBody::DomContentLoaded { owner },
+                )
+                .await?;
+                page_vm
+                    .vm_mut()
+                    .eval("__stopLoadingLifecycleEvents.length = 0; 'cleared'")?;
+
+                let reply = page_vm
+                    .dispatch_renderer_page_command_async(
+                        RendererPageCommand::StopDocumentLifecycle,
+                    )
+                    .await?;
+                assert!(matches!(reply, RendererPageReply::Unit));
+                assert_eq!(
+                    page_vm.vm_mut().eval(
+                        "`${document.readyState}|${__stopLoadingLifecycleEvents.join(',')}`",
+                    )?,
+                    "complete|readystatechange:complete,microtask:complete",
+                    "stopLoading must synchronously complete readiness and its task checkpoint",
+                );
+
+                let snapshot = page_vm.document_lifecycle.current_snapshot();
+                assert!(snapshot.dom_content_loaded.is_some());
+                assert!(snapshot.load.is_none());
+                assert!(matches!(
+                    snapshot.terminated,
+                    Some(crate::RendererLifecycleTerminationStamp {
+                        reason: RendererDocumentTerminationReason::Stopped,
+                        ..
+                    })
+                ));
+                assert_eq!(
+                    page_vm.vm().current_main_document_task_owner(),
+                    Some(owner),
+                    "stopping loading must not replace the current Document owner",
+                );
+
+                let run = execute_main_document_lifecycle_on_owner_local_task(
+                    &mut page_vm,
+                    MainDocumentLifecycleBody::WindowLoad { owner },
+                )
+                .await?;
+                assert!(matches!(
+                    run.completion.target(),
+                    MainDocumentLifecycleTargetEffect::NotApplied {
+                        reason: MainDocumentLifecycleTargetRejection::TransitionRejected,
+                        current_owner: Some(current_owner),
+                    } if current_owner == owner
+                ));
+                assert_eq!(
+                    run.completion.callback(),
+                    MainDocumentLifecycleCallbackEffect::NotEntered,
+                );
+                assert_eq!(
+                    page_vm
+                        .vm_mut()
+                        .eval("__stopLoadingLifecycleEvents.join(',')")?,
+                    "readystatechange:complete,microtask:complete",
+                    "retired lifecycle work must not dispatch load or pageshow",
+                );
+                Ok::<_, anyhow::Error>(())
+            })
+            .await
+            .expect("stop-loading lifecycle should reconcile");
     });
 }
 

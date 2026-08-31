@@ -7687,7 +7687,8 @@ async fn stop_loading_aborts_paused_runtime_fetch_subresource() {
         .cloned()
         .expect("network loadingFailed event");
     assert_eq!(failed["params"]["type"], "Fetch");
-    assert_eq!(failed["params"]["errorText"], "Navigation stopped");
+    assert_eq!(failed["params"]["errorText"], "net::ERR_ABORTED");
+    assert_eq!(failed["params"]["canceled"], true);
 
     ctx.process_async(json!({
         "id": 785,

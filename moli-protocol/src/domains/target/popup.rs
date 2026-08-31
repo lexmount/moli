@@ -436,7 +436,7 @@ pub(crate) async fn start_initial_document_target_url_navigation_if_needed_backg
     out: &mut Vec<BackgroundProtocolEvent>,
     session_id: Option<&str>,
 ) -> bool {
-    if !conn.runtime_session_owner_should_start_initial_document_navigation(session_id) {
+    if !conn.runtime_session_owner_can_start_initial_document_navigation(session_id) {
         return false;
     }
     let Some(target_url) = conn.runtime_session_owner_target_url(session_id) else {
@@ -456,21 +456,51 @@ pub(crate) fn schedule_initial_document_target_url_navigation_after_debugger_res
     conn: &mut CdpConnection,
     session_id: Option<&str>,
 ) -> bool {
-    if !conn.runtime_session_owner_should_start_initial_document_navigation(session_id) {
-        return false;
-    }
-    let Some(target_url) = conn.runtime_session_owner_target_url(session_id) else {
+    let Some((_, Some(target_id))) = conn.target_owner_identity_for_session(session_id) else {
         return false;
     };
-    let Some((browser_context_id, Some(target_id))) =
-        conn.target_owner_identity_for_session(session_id)
+    schedule_initial_document_target_url_navigation_after_debugger_barrier_release_for_target(
+        conn, &target_id,
+    )
+}
+
+pub(crate) fn schedule_initial_document_target_url_navigation_after_debugger_barrier_release_for_target(
+    conn: &mut CdpConnection,
+    target_id: &str,
+) -> bool {
+    if conn.target_has_waiting_for_debugger_session(target_id) {
+        return false;
+    }
+    let Some(route) = conn.target_session_route_for_target_id(target_id) else {
+        return false;
+    };
+    if !matches!(
+        &route,
+        crate::conn::CdpSessionRoute::ActiveTarget { .. }
+            | crate::conn::CdpSessionRoute::AuxiliaryTarget { .. }
+            | crate::conn::CdpSessionRoute::PageTargetHost { .. }
+    ) {
+        return false;
+    }
+    let Some(browser_context_id) = route.browser_context_id().map(str::to_owned) else {
+        return false;
+    };
+    let Some(browser_context) = conn.browser_context_by_id(&browser_context_id) else {
+        return false;
+    };
+    if !browser_context.target_needs_initial_document_navigation(target_id) {
+        return false;
+    }
+    let Some(target_url) = browser_context
+        .devtools_target_info(target_id)
+        .map(|target_info| target_info.url)
     else {
         return false;
     };
     let Some(action) = PopupTargetNavigationOwnerAction::capture(
         conn,
         &browser_context_id,
-        &target_id,
+        target_id,
         target_url,
         PopupTargetNavigationKind::InitialDocumentAfterDebuggerResume,
     ) else {
@@ -527,7 +557,11 @@ pub(crate) async fn complete_popup_target_navigation_owner_action_async(
     match kind {
         PopupTargetNavigationKind::InitialDocument
         | PopupTargetNavigationKind::InitialDocumentAfterDebuggerResume => {
-            if !conn.runtime_session_owner_should_start_initial_document_navigation(None) {
+            // Revalidate the barrier when the queued owner action actually
+            // runs. Another inspector session can attach after this action is
+            // scheduled; that new session must be able to pause the initial
+            // document before any target-URL request starts.
+            if !conn.runtime_session_owner_can_start_initial_document_navigation(None) {
                 return crate::conn::CdpTurnOutcome::new_with_protocol_events(
                     Vec::new(),
                     conn.take_scheduler_events(),

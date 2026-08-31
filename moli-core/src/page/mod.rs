@@ -188,6 +188,11 @@ pub use crate::renderer::{
 
 pub struct Page {
     page_state: PageStateCache,
+    // Chromium owns this on RenderFrameHostImpl::IdleManager. Keep it on the
+    // current document handle instead of deriving browser-side navigation
+    // policy from whichever renderer snapshot the protocol actor consumed
+    // most recently.
+    idle_override: Option<EmulatedIdleOverride>,
     handle: RendererPageHandle,
     renderer_agent_attachment_id: Option<RendererAgentAttachmentId>,
     renderer_devtools_command_session_id: Option<String>,
@@ -211,8 +216,10 @@ impl Page {
         handle: RendererPageHandle,
         page_state: Arc<RendererPageState>,
     ) -> Self {
+        let idle_override = page_state.idle_override();
         Self {
             page_state: PageStateCache::new(page_state),
+            idle_override,
             handle,
             renderer_agent_attachment_id: None,
             renderer_devtools_command_session_id: None,
@@ -225,8 +232,10 @@ impl Page {
         page_state: Arc<RendererPageState>,
         page_creation_artifacts: RendererPageCreationArtifacts,
     ) -> Self {
+        let idle_override = page_state.idle_override();
         Self {
             page_state: PageStateCache::new(page_state),
+            idle_override,
             handle,
             renderer_agent_attachment_id: None,
             renderer_devtools_command_session_id: None,

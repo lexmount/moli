@@ -228,6 +228,11 @@ impl CdpConnection {
         session_id: Option<&str>,
     ) -> Result<Option<PendingPageCommand>, String> {
         let load_inputs = self.navigation_load_inputs_for_session_owner(session_id);
+        let navigator_identity = load_inputs
+            .navigator_identity_override
+            .clone()
+            .or_else(|| self.global_browser_identity_override.clone())
+            .unwrap_or_else(|| self.base_browser_identity.clone());
         let storage = load_inputs.resource_storage_handles();
         let request_client = self
             .configured_navigation_engine_for_load_inputs_mut(&load_inputs)
@@ -239,9 +244,12 @@ impl CdpConnection {
         let Some(page) = self.resource_runtime_apply_page_for_session_owner(session_id) else {
             return Ok(None);
         };
-        page.start_replace_browser_resource_runtime(&request_client.browser_resource_runtime())
-            .map(Some)
-            .map_err(|error| format!("failed to update page resource runtime: {error}"))
+        page.start_replace_browser_resource_runtime_with_navigator_identity(
+            &request_client.browser_resource_runtime(),
+            navigator_identity,
+        )
+        .map(Some)
+        .map_err(|error| format!("failed to update page resource runtime: {error}"))
     }
 
     pub(crate) fn finish_rebuild_resource_runtime_for_session_owner(
@@ -249,11 +257,10 @@ impl CdpConnection {
         session_id: Option<&str>,
         completion: CompletedPageCommand,
     ) -> Result<(), String> {
-        let Some(page) = self.resource_runtime_apply_page_for_session_owner(session_id) else {
-            return Ok(());
-        };
-        page.finish_replace_browser_resource_runtime(completion)
-            .map_err(|error| format!("failed to update page resource runtime: {error}"))
+        finish_resource_runtime_update_on_current_attachment(
+            self.resource_runtime_apply_page_for_session_owner(session_id),
+            completion,
+        )
     }
 
     pub(crate) fn finish_rebuild_resource_runtime_for_route(
@@ -262,11 +269,10 @@ impl CdpConnection {
         owner_route: Option<&super::CdpSessionRoute>,
         completion: CompletedPageCommand,
     ) -> Result<(), String> {
-        let Some(page) = self.resource_runtime_apply_page_for_route(session_id, owner_route) else {
-            return Ok(());
-        };
-        page.finish_replace_browser_resource_runtime(completion)
-            .map_err(|error| format!("failed to update page resource runtime: {error}"))
+        finish_resource_runtime_update_on_current_attachment(
+            self.resource_runtime_apply_page_for_route(session_id, owner_route),
+            completion,
+        )
     }
 
     fn resource_runtime_apply_page_for_session_owner(
@@ -282,7 +288,8 @@ impl CdpConnection {
                 .as_mut()
                 .and_then(|bc| bc.active_target.runtime_slot.loaded_page_mut());
         }
-        self.loaded_page_mut_for_protocol_access(session_id).ok()
+        self.loaded_page_mut_for_target_configuration(session_id)
+            .ok()
     }
 
     fn resource_runtime_apply_page_for_route(
@@ -299,7 +306,28 @@ impl CdpConnection {
                 .as_mut()
                 .and_then(|bc| bc.active_target.runtime_slot.loaded_page_mut());
         }
-        self.loaded_page_mut_for_protocol_access_for_route(session_id, owner_route)
+        self.loaded_page_mut_for_target_configuration_for_route(session_id, owner_route)
             .ok()
     }
+}
+
+fn finish_resource_runtime_update_on_current_attachment(
+    page: Option<&mut moli_core::page::Page>,
+    completion: CompletedPageCommand,
+) -> Result<(), String> {
+    let completion_attachment = completion.renderer_agent_attachment_id();
+    if let Some(page) = page
+        && page.renderer_agent_attachment_id() == completion_attachment
+    {
+        return page
+            .finish_replace_browser_resource_runtime(completion)
+            .map_err(|error| format!("failed to update page resource runtime: {error}"));
+    }
+
+    completion
+        .into_unit_page_command_turn()
+        .map(drop)
+        .map_err(|error| {
+            format!("stale resource-runtime update returned an unexpected reply: {error}")
+        })
 }

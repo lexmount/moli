@@ -336,6 +336,14 @@ impl JsContextHost {
             .current_main_document_complete_transition_is_ready(owner)
     }
 
+    pub(crate) fn stop_current_main_document_loading(
+        &mut self,
+        owner: FrameDocumentTaskOwner,
+    ) -> Option<bool> {
+        self.frame_owner_store
+            .stop_current_main_document_loading(owner)
+    }
+
     pub(crate) fn apply_current_main_document_complete_transition(
         &mut self,
         action: MainDocumentCompleteLifecycleAction,

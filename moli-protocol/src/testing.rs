@@ -864,11 +864,17 @@ impl TestContext {
                     return false;
                 }
                 CdpCommandTaskStep::Pending(pending) => {
-                    let completed = pending.wait().await;
-                    step = self
-                        .conn
-                        .complete_pending_command_dispatch_with_context(completed, command_context)
-                        .await;
+                    // Keep the test scheduler's pending-command boundary shaped
+                    // like production. Some domain completions carry a complete
+                    // renderer Page build, so composing both futures inline can
+                    // exceed Rust's default test-thread stack before the owner
+                    // turn gets a chance to yield.
+                    let completed = Box::pin(pending.wait()).await;
+                    step = Box::pin(self.conn.complete_pending_command_dispatch_with_context(
+                        completed,
+                        command_context,
+                    ))
+                    .await;
                 }
             }
         }

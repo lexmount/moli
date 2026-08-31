@@ -183,6 +183,44 @@ async fn deferred_fetch_command_keeps_its_exact_page_for_implicit_work() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn deferred_sessionless_fetch_command_freezes_the_active_page_at_admission() {
+    let mut ctx = TestContext::new();
+    let mut browser_context = BrowserContext::new("BID-sessionless".to_owned());
+    browser_context.set_active_target_id("TID-original".to_owned());
+    browser_context.insert_page_target_host(PageTargetHost::with_url(
+        "TID-next".to_owned(),
+        None,
+        "https://example.test/next".to_owned(),
+    ));
+    ctx.conn.browser_context = Some(browser_context);
+
+    let completed = PendingFetchCommandDispatch::new(
+        &ctx.conn,
+        Some(71),
+        None,
+        PendingFetchCommandKind::GetResponseBody,
+        PendingFetchCommandOperation::Ready,
+    )
+    .wait()
+    .await;
+    ctx.conn
+        .browser_context
+        .as_mut()
+        .expect("browser context")
+        .set_active_target_id("TID-next");
+    let mut scope = completed.owner_scope.enter(&mut ctx.conn);
+
+    assert_eq!(
+        scope.conn_mut().target_owner_identity_for_session(None),
+        Some((
+            "BID-sessionless".to_owned(),
+            Some("TID-original".to_owned())
+        )),
+        "a deferred root Fetch command must not follow a later foreground selection"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn continue_request_registers_correlation_before_renderer_completion() {
     let mut ctx = context_with_loaded_fetch_page().await;
     let page_owner = ctx

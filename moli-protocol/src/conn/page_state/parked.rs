@@ -374,6 +374,8 @@ impl BrowserContext {
         let previous_bypass = state.network_policy.bypass_service_worker();
         let previous_cache_disabled = state.network_policy.cache_disabled();
         let previous_browser_identity = state.network_policy.browser_identity_override_owned();
+        let previous_renderer_browser_identity =
+            state.effective_renderer_browser_identity_override_owned();
         let previous_locale = state.locale_override.clone();
         let previous_timezone = state.timezone_override.clone();
         let routed_session_id = is_auxiliary.then_some(session_id);
@@ -386,6 +388,10 @@ impl BrowserContext {
             previous_cache_disabled != state.network_policy.cache_disabled();
         let browser_identity_changed =
             previous_browser_identity != state.network_policy.browser_identity_override_owned();
+        let renderer_browser_identity_changed = previous_renderer_browser_identity
+            != state.effective_renderer_browser_identity_override_owned();
+        let any_browser_identity_changed =
+            browser_identity_changed || renderer_browser_identity_changed;
         let locale_changed = previous_locale != state.locale_override;
         let timezone_changed = previous_timezone != state.timezone_override;
 
@@ -395,7 +401,7 @@ impl BrowserContext {
             && !locale_changed
             && !timezone_changed
         {
-            return Ok(browser_identity_changed);
+            return Ok(any_browser_identity_changed);
         }
 
         let (
@@ -433,7 +439,7 @@ impl BrowserContext {
                 .and_then(|target| target.runtime_slot.loaded_page_mut())
         };
         let Some(page) = page else {
-            return Ok(browser_identity_changed);
+            return Ok(any_browser_identity_changed);
         };
         if extra_headers_changed || bypass_service_worker_changed || cache_disabled_changed {
             page.set_network_request_policy_async(
@@ -456,7 +462,7 @@ impl BrowserContext {
                 .await
                 .map_err(|error| format!("failed to restore detached session timezone: {error}"))?;
         }
-        Ok(browser_identity_changed)
+        Ok(any_browser_identity_changed)
     }
 
     pub(crate) fn remove_auxiliary_sessions_for_target(&mut self, target_id: &str) -> Vec<String> {

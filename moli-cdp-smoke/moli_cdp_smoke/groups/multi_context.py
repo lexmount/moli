@@ -5,6 +5,9 @@ import os
 import sys
 from typing import Any, Awaitable
 
+from playwright.async_api import Error as PlaywrightError
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+
 from ..assertions import SmokeError, assert_equal, record, wait_until
 from ..helpers import attach_cdp_event_collector
 
@@ -1453,8 +1456,52 @@ async def _enable_response_stage_fetch(cdp: Any) -> None:
 
 
 async def _open_popup(page: Any, url: str) -> Any:
-    async with page.expect_popup(timeout=5_000) as popup_info:
-        await page.evaluate("(url) => window.open(url, '_blank')", url)
+    opened: bool | None = None
+    try:
+        async with page.expect_popup(timeout=5_000) as popup_info:
+            opened = await page.evaluate(
+                "(url) => Boolean(window.open(url, '_blank'))", url
+            )
+    except PlaywrightTimeoutError as error:
+        observed = []
+        for candidate in page.context.pages:
+            try:
+                opener = await candidate.opener()
+                observed.append(
+                    {
+                        "url": candidate.url,
+                        "opener": opener.url if opener is not None else None,
+                        "isExpectedOpener": opener is page,
+                    }
+                )
+            except PlaywrightError as diagnostic_error:
+                observed.append(
+                    {
+                        "url": candidate.url,
+                        "diagnosticError": repr(diagnostic_error),
+                    }
+                )
+        target_infos: Any = None
+        browser_session: Any | None = None
+        try:
+            browser = page.context.browser
+            if browser is not None:
+                browser_session = await browser.new_browser_cdp_session()
+                target_infos = await browser_session.send("Target.getTargets")
+        except PlaywrightError as diagnostic_error:
+            target_infos = {"diagnosticError": repr(diagnostic_error)}
+        finally:
+            if browser_session is not None:
+                try:
+                    await browser_session.detach()
+                except PlaywrightError:
+                    pass
+        raise SmokeError(
+            f"popup event failed for {url}: {error}; "
+            f"windowOpenReturned={opened!r}; pages={observed!r}; "
+            f"targets={target_infos!r}"
+        ) from error
+    assert_equal(opened, True, "window.open returned a WindowProxy")
     popup = await popup_info.value
     await wait_until(lambda: popup.url == url, "popup URL")
     await popup.wait_for_load_state("load", timeout=10_000)

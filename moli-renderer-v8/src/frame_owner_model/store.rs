@@ -1481,6 +1481,25 @@ impl FrameOwnerStore {
         })
     }
 
+    /// Stop the exact current main Document while keeping its Window and
+    /// Document identities live.
+    ///
+    /// The returned boolean reports whether the observable ready state still
+    /// needs to transition to `complete`.  `None` means the supplied owner is
+    /// stale or no longer owns lifecycle state.
+    pub(crate) fn stop_current_main_document_loading(
+        &mut self,
+        owner: FrameDocumentTaskOwner,
+    ) -> Option<bool> {
+        if !self.main_document_task_owner_is_current(owner) {
+            return None;
+        }
+        self.documents
+            .get_mut(&owner.document_id)?
+            .lifecycle_progress
+            .stop_loading_without_load_event()
+    }
+
     pub(crate) fn apply_current_main_document_complete_transition(
         &mut self,
         action: MainDocumentCompleteLifecycleAction,

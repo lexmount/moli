@@ -4,7 +4,7 @@ use serde_json::{Map, Value, json};
 use url::Url;
 
 use crate::{
-    conn::{CapturedBody, CdpConnection, Cmd},
+    conn::{CapturedBody, CdpConnection, Cmd, CommandOwnerScope},
     domains::command_output::CommandOutputPlan,
 };
 
@@ -51,6 +51,7 @@ pub(super) fn start_load_network_resource_command(
             "Parameter frameId must be provided for frame targets",
         ));
     };
+    let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
     let pending = match conn.loaded_page_mut_for_protocol_access(cmd.session_id) {
         Ok(page) => page.start_prepare_network_resource_load(
             frame_id,
@@ -71,9 +72,9 @@ pub(super) fn start_load_network_resource_command(
     match pending {
         Ok(pending) => NetworkCommandTaskStep::Pending(PendingNetworkCommandDispatch {
             command_id: cmd.id,
-            session_id: cmd.session_id.map(str::to_owned),
+            owner_scope,
             kind: PendingNetworkCommandKind::PrepareNetworkResourceLoad,
-            pending: PendingNetworkCommandWork::Page(pending),
+            pending: PendingNetworkCommandWork::page(pending),
         }),
         Err(error) => {
             NetworkCommandTaskStep::Complete(CommandOutputPlan::error(-32000, error.to_string()))
@@ -85,9 +86,16 @@ pub(super) fn complete_network_resource_preparation(
     conn: &mut CdpConnection,
     completed: CompletedNetworkCommandDispatch,
 ) -> NetworkCommandTaskStep {
+    let owner_scope = completed.owner_scope.clone();
     let completion = match completed.completed {
-        CompletedNetworkCommandWork::Page(Ok(completion)) => *completion,
-        CompletedNetworkCommandWork::Page(Err(error)) => {
+        CompletedNetworkCommandWork::Page {
+            completed: Ok(completion),
+            ..
+        } => *completion,
+        CompletedNetworkCommandWork::Page {
+            completed: Err(error),
+            ..
+        } => {
             return NetworkCommandTaskStep::Complete(CommandOutputPlan::error(-32000, error));
         }
         CompletedNetworkCommandWork::Resource(_) => {
@@ -95,8 +103,14 @@ pub(super) fn complete_network_resource_preparation(
         }
     };
     let preparation = match conn
-        .loaded_page_mut_for_protocol_access(completed.session_id.as_deref())
+        .loaded_page_mut_for_protocol_access_for_route(
+            owner_scope.session_id(),
+            owner_scope.session_owner_route(),
+        )
         .and_then(|page| {
+            if page.renderer_agent_attachment_id() != completion.renderer_agent_attachment_id() {
+                return Err("Document changed while preparing the network resource load".to_owned());
+            }
             page.finish_prepare_network_resource_load(completion)
                 .map_err(|error| error.to_string())
         }) {
@@ -109,7 +123,7 @@ pub(super) fn complete_network_resource_preparation(
         moli_core::page::RendererNetworkResourceLoadPreparation::Ready(pending) => {
             NetworkCommandTaskStep::Pending(PendingNetworkCommandDispatch {
                 command_id: completed.command_id,
-                session_id: completed.session_id,
+                owner_scope,
                 kind: PendingNetworkCommandKind::FetchNetworkResource,
                 pending: PendingNetworkCommandWork::Resource(pending),
             })
@@ -133,9 +147,10 @@ pub(super) fn complete_network_resource_fetch(
     conn: &mut CdpConnection,
     completed: CompletedNetworkCommandDispatch,
 ) -> CommandOutputPlan {
+    let owner_scope = completed.owner_scope.clone();
     let outcome = match completed.completed {
         CompletedNetworkCommandWork::Resource(outcome) => outcome,
-        CompletedNetworkCommandWork::Page(_) => {
+        CompletedNetworkCommandWork::Page { .. } => {
             return invalid_completion_plan();
         }
     };
@@ -162,8 +177,9 @@ pub(super) fn complete_network_resource_fetch(
                     Some(headers),
                 );
             }
-            let stream = match conn.open_io_stream_body_source_for_session_owner(
-                completed.session_id.as_deref(),
+            let stream = match conn.open_io_stream_body_source_for_route(
+                owner_scope.session_id(),
+                owner_scope.session_owner_route(),
                 CapturedBody::from_bytes_spooled(response.body),
             ) {
                 Ok(stream) => stream,

@@ -1026,6 +1026,7 @@ async fn detach_from_target_inner_async(
         out.background_events_mut(),
         Some(&current_session_id),
         "Target detached",
+        "Target detached",
         pending_navigations,
         pending_auth_navigations,
         pending_response_navigations,

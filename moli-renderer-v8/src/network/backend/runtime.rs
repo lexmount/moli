@@ -187,6 +187,10 @@ impl BrowserResourceRuntime {
         self.inner.client.cookie_store()
     }
 
+    pub fn browser_identity(&self) -> &moli_browser_profile::BrowserIdentityProfile {
+        self.inner.client.browser_identity()
+    }
+
     pub fn matches_fetch_config(&self, config: &FetchConfig) -> bool {
         self.inner.client.matches_config(config)
     }

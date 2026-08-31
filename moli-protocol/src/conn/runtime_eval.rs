@@ -3083,6 +3083,44 @@ impl CdpConnection {
         dispatched_attachment_id: RendererAgentAttachmentId,
         messages: &mut Vec<RendererRuntimeInspectorMessage>,
     ) {
+        self.restore_frontend_command_ids_in_devtools_session_output_with_projection(
+            session_id,
+            dispatched_attachment_id,
+            messages,
+            true,
+        );
+    }
+
+    /// Resolves a terminal response which won its renderer response lease
+    /// before navigation, but whose old Page journal reached protocol ingress
+    /// after the replacement attachment committed.
+    ///
+    /// The exact `(session, renderer call, attachment)` correlation remains
+    /// the terminal authority in this race.  Notifications and V8 state from
+    /// the retired attachment are discarded by the caller, and remote-object
+    /// ownership is intentionally not projected onto the replacement
+    /// document.
+    pub(crate) fn restore_frontend_command_ids_in_retired_devtools_session_output(
+        &mut self,
+        session_id: Option<&str>,
+        dispatched_attachment_id: RendererAgentAttachmentId,
+        messages: &mut Vec<RendererRuntimeInspectorMessage>,
+    ) {
+        self.restore_frontend_command_ids_in_devtools_session_output_with_projection(
+            session_id,
+            dispatched_attachment_id,
+            messages,
+            false,
+        );
+    }
+
+    fn restore_frontend_command_ids_in_devtools_session_output_with_projection(
+        &mut self,
+        session_id: Option<&str>,
+        dispatched_attachment_id: RendererAgentAttachmentId,
+        messages: &mut Vec<RendererRuntimeInspectorMessage>,
+        project_runtime_object_ownership: bool,
+    ) {
         messages.retain_mut(|message| {
             let RendererRuntimeInspectorMessage::Protocol(message) = message else {
                 return true;
@@ -3117,7 +3155,7 @@ impl CdpConnection {
                 return false;
             };
             message.value_mut()["id"] = json!(correlation.frontend_command_id().get());
-            if message.value().get("result").is_some() {
+            if project_runtime_object_ownership && message.value().get("result").is_some() {
                 if let Some(object_group) = result_object_group.as_deref() {
                     self.register_runtime_remote_object_ids_from_value_for_session_owner_with_group(
                         session_id,

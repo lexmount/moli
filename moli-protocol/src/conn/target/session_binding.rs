@@ -545,9 +545,19 @@ impl CdpConnection {
             reason,
             parent_session_id,
         );
+        let released_debugger_barrier = plan
+            .detached_sessions()
+            .iter()
+            .any(|session| session.target_id() == target_id && session.was_waiting_for_debugger());
         self.clear_detached_target_session_owner_state(session_id);
         if let Some(attached_state_delta_plan) = attached_state_delta_plan {
             plan.extend(attached_state_delta_plan);
+        }
+        if released_debugger_barrier && !self.target_has_waiting_for_debugger_session(target_id) {
+            crate::domains::target::schedule_initial_document_target_url_navigation_after_debugger_barrier_release_for_target(
+                self,
+                target_id,
+            );
         }
         plan
     }
@@ -1074,6 +1084,16 @@ impl CdpConnection {
     pub(crate) fn target_has_waiting_for_debugger_session(&self, target_id: &str) -> bool {
         self.target_control
             .target_has_waiting_for_debugger_session(target_id)
+    }
+
+    pub(crate) fn release_waiting_for_debugger_session(
+        &mut self,
+        session_id: Option<&str>,
+    ) -> bool {
+        session_id.is_some_and(|session_id| {
+            self.target_control
+                .release_waiting_for_debugger_session(session_id)
+        })
     }
 
     pub(crate) fn auto_attached_sessions_for_owner(

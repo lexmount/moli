@@ -6,6 +6,9 @@ from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
+from playwright.async_api import Error as PlaywrightError
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+
 from ..assertions import SmokeError, assert_equal, record, wait_until
 from ..helpers import attach_cdp_event_collector, run_worker_command
 from .multi_page_contracts import run_multi_page_contracts
@@ -1026,11 +1029,37 @@ async def _context_teardown_with_pending_commands(
 
 
 async def _open_popup(page: Any, url: str, name: str) -> Any:
-    async with page.expect_popup(timeout=5_000) as popup_info:
-        opened = await page.evaluate(
-            "({url, name}) => Boolean(window.open(url, name))",
-            {"url": url, "name": name},
-        )
+    opened: bool | None = None
+    try:
+        async with page.expect_popup(timeout=5_000) as popup_info:
+            opened = await page.evaluate(
+                "({url, name}) => Boolean(window.open(url, name))",
+                {"url": url, "name": name},
+            )
+    except PlaywrightTimeoutError as error:
+        pages = page.context.pages
+        observed = []
+        for candidate in pages:
+            try:
+                opener = await candidate.opener()
+                observed.append(
+                    {
+                        "url": candidate.url,
+                        "opener": opener.url if opener is not None else None,
+                        "isExpectedOpener": opener is page,
+                    }
+                )
+            except PlaywrightError as diagnostic_error:
+                observed.append(
+                    {
+                        "url": candidate.url,
+                        "diagnosticError": repr(diagnostic_error),
+                    }
+                )
+        raise SmokeError(
+            f"popup event for {name} failed: {error}; "
+            f"windowOpenReturned={opened!r}; pages={observed!r}"
+        ) from error
     assert_equal(opened, True, f"window.open returned a WindowProxy for {name}")
     popup = await popup_info.value
     await popup.wait_for_load_state("load", timeout=10_000)

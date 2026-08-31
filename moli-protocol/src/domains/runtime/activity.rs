@@ -44,15 +44,7 @@ struct RuntimeBindingCallBatch {
 
 #[derive(Clone, Debug, PartialEq)]
 struct RuntimeInspectorMessageBatch {
-    /// Exact Page and protocol attachment that owned these messages when the
-    /// renderer snapshot was captured.
-    ///
-    /// `RuntimeInspectorMessageBatch` may contain command responses as well as
-    /// notifications. A projection-time session fallback would therefore be
-    /// able to deliver an old response to a replacement Page. The attachment
-    /// is captured before the output can cross an async or scheduler boundary
-    /// and is revalidated immediately before delivery.
-    attachment: crate::conn::TargetPageProtocolAttachmentIdentity,
+    authority: RuntimeInspectorMessageAuthority,
     messages: Vec<RuntimeInspectorMessage>,
     /// Contexts created by this exact Inspector batch.
     ///
@@ -61,6 +53,55 @@ struct RuntimeInspectorMessageBatch {
     /// that fact prevents child-frame activity from rescanning the live realm
     /// inventory and becoming a second lifecycle producer.
     created_execution_context_ids: Vec<i64>,
+}
+
+/// Projection authority for one prepared Inspector batch.
+///
+/// Ordinary observations remain tied to the exact Page attachment that
+/// produced them. A retired terminal response is a distinct state rather than
+/// an absent attachment: its exact renderer correlation was already consumed
+/// at ingress, and no notification or renderer state can inhabit this variant.
+#[derive(Clone, Debug, PartialEq)]
+enum RuntimeInspectorMessageAuthority {
+    CurrentPage(crate::conn::TargetPageProtocolAttachmentIdentity),
+    AuthorizedRetiredTerminal {
+        browser_context_id: String,
+        target_id: Option<String>,
+        session_id: Option<String>,
+    },
+}
+
+impl RuntimeInspectorMessageAuthority {
+    fn session_id(&self) -> Option<&str> {
+        match self {
+            Self::CurrentPage(attachment) => attachment.session_id(),
+            Self::AuthorizedRetiredTerminal { session_id, .. } => session_id.as_deref(),
+        }
+    }
+
+    fn permits_projection(&self, conn: &CdpConnection) -> bool {
+        match self {
+            Self::CurrentPage(attachment) => {
+                conn.target_page_protocol_attachment_identity_is_current(attachment)
+            }
+            Self::AuthorizedRetiredTerminal {
+                browser_context_id,
+                target_id,
+                session_id,
+            } => {
+                let Some((current_browser_context_id, current_target_id)) =
+                    conn.target_owner_identity_for_session(session_id.as_deref())
+                else {
+                    return false;
+                };
+                let current_target_id = current_target_id.or_else(|| {
+                    conn.browser_context_by_id(&current_browser_context_id)
+                        .and_then(|context| context.active_target_id_owned())
+                });
+                current_browser_context_id == *browser_context_id && current_target_id == *target_id
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -150,12 +191,10 @@ impl RuntimeOutputProjectionStep {
                     })
                 {
                     for batch in batches {
-                        if !conn
-                            .target_page_protocol_attachment_identity_is_current(&batch.attachment)
-                        {
+                        if !batch.authority.permits_projection(conn) {
                             continue;
                         }
-                        let session_id = batch.attachment.session_id().map(str::to_owned);
+                        let session_id = batch.authority.session_id().map(str::to_owned);
                         push_runtime_inspector_messages_for_session(
                             conn,
                             context.command.protocol_events_mut(),
@@ -278,9 +317,95 @@ impl RuntimePreparedOutputs {
                 }
             }
             let prepared = RuntimeInspectorMessageBatch {
-                attachment,
+                authority: RuntimeInspectorMessageAuthority::CurrentPage(attachment),
                 messages,
                 created_execution_context_ids,
+            };
+            match batch.command_response_order() {
+                RendererRuntimeInspectorMessageResponseOrder::BeforeCommandResponse => {
+                    outputs.inspector_message_batches.push(prepared);
+                }
+                RendererRuntimeInspectorMessageResponseOrder::AfterCommandResponse => outputs
+                    .post_response_inspector_message_batches
+                    .push(prepared),
+            }
+        }
+        outputs
+    }
+
+    /// Preserves only terminal session responses from an attachment that was
+    /// current when the response lease was claimed but retired before its Page
+    /// journal crossed protocol ingress.
+    ///
+    /// The exact renderer correlation is consumed here.  This makes the
+    /// resulting response an already-authorized session fact, while all
+    /// notifications, context events, V8 state, and remote-object projection
+    /// from the retired document are discarded.
+    pub(crate) fn from_retired_renderer_runtime_inspector_session_responses(
+        conn: &mut CdpConnection,
+        source_session_id: Option<&str>,
+        batches: &[RendererRuntimeInspectorMessageBatch],
+    ) -> Self {
+        let mut outputs = Self::default();
+        for batch in batches {
+            let Some(renderer_agent_attachment_id) = batch.renderer_agent_attachment_id() else {
+                continue;
+            };
+            let Some(protocol_attachment) = conn
+                .target_page_protocol_attachment_identity_for_renderer_inspector_route(
+                    source_session_id,
+                    batch.session.wire_session_id(),
+                )
+            else {
+                continue;
+            };
+            let session_id = protocol_attachment.session_id().map(str::to_owned);
+            if conn.renderer_agent_attachment_is_current_for_session_owner(
+                session_id.as_deref(),
+                renderer_agent_attachment_id,
+            ) {
+                continue;
+            }
+
+            let mut responses = batch
+                .messages
+                .iter()
+                .filter(|message| {
+                    matches!(
+                        message,
+                        RendererRuntimeInspectorMessage::Protocol(message)
+                            if message.renderer_call_id().is_some()
+                    )
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            conn.restore_frontend_command_ids_in_retired_devtools_session_output(
+                session_id.as_deref(),
+                renderer_agent_attachment_id,
+                &mut responses,
+            );
+            if responses.is_empty() {
+                continue;
+            }
+            let target_id = protocol_attachment.page_owner().target_id();
+            let messages = responses
+                .into_iter()
+                .map(|message| RuntimeInspectorMessage::from_renderer_message(message, target_id))
+                .collect();
+            let prepared = RuntimeInspectorMessageBatch {
+                authority: RuntimeInspectorMessageAuthority::AuthorizedRetiredTerminal {
+                    browser_context_id: protocol_attachment
+                        .page_owner()
+                        .browser_context_id()
+                        .to_owned(),
+                    target_id: protocol_attachment
+                        .page_owner()
+                        .target_id()
+                        .map(str::to_owned),
+                    session_id,
+                },
+                messages,
+                created_execution_context_ids: Vec::new(),
             };
             match batch.command_response_order() {
                 RendererRuntimeInspectorMessageResponseOrder::BeforeCommandResponse => {
@@ -406,15 +531,15 @@ pub(in crate::domains) fn push_routed_renderer_runtime_inspector_message_batch_b
         .into_iter()
         .chain(prepared.post_response_inspector_message_batches)
     {
-        if !conn.target_page_protocol_attachment_identity_is_current(&batch.attachment) {
+        if !batch.authority.permits_projection(conn) {
             continue;
         }
-        let effective_session_id = batch.attachment.session_id().map(str::to_owned);
+        let session_id = batch.authority.session_id().map(str::to_owned);
         push_runtime_inspector_messages_for_session(
             conn,
             out,
             batch.messages,
-            effective_session_id.as_deref(),
+            session_id.as_deref(),
         );
     }
 }
@@ -422,9 +547,10 @@ pub(in crate::domains) fn push_routed_renderer_runtime_inspector_message_batch_b
 #[cfg(test)]
 mod tests {
     use moli_core::page::{
-        DevToolsSessionKey, RendererDevToolsAgentToken, RendererRuntimeInspectorMessage,
-        RendererRuntimeInspectorMessageBatch,
+        DevToolsSessionKey, RendererAgentAttachmentId, RendererDevToolsAgentToken,
+        RendererRuntimeInspectorMessage, RendererRuntimeInspectorMessageBatch,
     };
+    use moli_page_types::RendererInspectorResponseDelivery;
     use serde_json::Value;
     use serde_json::json;
 
@@ -608,6 +734,103 @@ mod tests {
             .await;
         }
         command_context.take_protocol_events()
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn retired_attachment_keeps_only_the_exact_terminal_session_response() {
+        let mut ctx = TestContext::new();
+        load_document(&mut ctx, "<!doctype html><main>replacement</main>").await;
+        let current = ctx
+            .conn
+            .runtime_session_owner_slot(Some("SID-1"))
+            .expect("loaded target runtime")
+            .current_renderer_attachment()
+            .expect("current renderer attachment");
+        let retired_attachment = RendererAgentAttachmentId::allocate();
+        assert_ne!(retired_attachment, current.id());
+
+        let frontend = crate::conn::ParsedCdpCommand::parse_str(
+            r#"{"id":901001,"method":"Runtime.evaluate","sessionId":"SID-1","params":{"expression":"({ stale: true })"}}"#,
+        )
+        .expect("frontend Runtime command");
+        let prepared = ctx
+            .conn
+            .try_register_renderer_call_for_session_owner(
+                Some("SID-1"),
+                901_001,
+                Some(retired_attachment),
+                crate::conn::RendererCommandDescriptor::from_frontend_policy(
+                    frontend.json().to_owned(),
+                    frontend.renderer_policy(),
+                    RendererInspectorResponseDelivery::DevToolsSession,
+                ),
+            )
+            .expect("retired renderer call correlation");
+        let correlation = prepared.correlation();
+        drop(prepared);
+
+        let mut batch = RendererRuntimeInspectorMessageBatch::new(
+            current.agent_token(),
+            DevToolsSessionKey::Primary,
+            renderer_messages(vec![
+                json!({
+                    "method": "Runtime.consoleAPICalled",
+                    "params": {"type": "log", "args": [], "executionContextId": 1},
+                }),
+                json!({
+                    "id": correlation.renderer_call_id().get(),
+                    "result": {
+                        "result": {"type": "object", "objectId": "retired-object"}
+                    },
+                }),
+            ]),
+        );
+        batch.bind_renderer_agent_attachment(retired_attachment);
+
+        let outputs =
+            RuntimePreparedOutputs::from_retired_renderer_runtime_inspector_session_responses(
+                &mut ctx.conn,
+                Some("SID-1"),
+                &[batch],
+            );
+        let outputs_after_detach = outputs.clone();
+        let events = drain_runtime_inspector_outputs(&mut ctx.conn, outputs, None)
+            .await
+            .into_iter()
+            .map(crate::conn::BackgroundProtocolEvent::into_protocol_message)
+            .collect::<Vec<_>>();
+
+        assert_eq!(events.len(), 1, "retired notifications must be discarded");
+        assert_eq!(events[0]["id"], json!(901_001));
+        assert_eq!(events[0]["sessionId"], json!("SID-1"));
+        assert!(
+            ctx.conn
+                .renderer_runtime_command_cause_for_frontend(Some("SID-1"), 901_001)
+                .is_none(),
+            "the accepted terminal response must consume its exact correlation"
+        );
+        assert_eq!(
+            ctx.conn
+                .runtime_remote_object_group_for_session_owner(Some("SID-1"), "retired-object",),
+            None,
+            "a retired document response must not register objects on the replacement document"
+        );
+
+        assert_eq!(
+            ctx.conn
+                .browser_context
+                .as_mut()
+                .expect("browser context")
+                .detach_active_session()
+                .as_deref(),
+            Some("SID-1"),
+        );
+        assert!(
+            drain_runtime_inspector_outputs(&mut ctx.conn, outputs_after_detach, None)
+                .await
+                .is_empty(),
+            "terminal authority may outlive its Page, but not its protocol session binding",
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]

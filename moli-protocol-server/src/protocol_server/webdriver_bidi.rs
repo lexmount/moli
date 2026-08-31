@@ -176,7 +176,7 @@ async fn handle_bidi_session_socket_local(
         navigation_runtime_config,
     );
     actor.install_runtime_response_ready_sender(&mut scheduler);
-    let mut adapter_scheduler = ProtocolAdapterScheduler::<()>::default();
+    let mut adapter_scheduler = ProtocolAdapterScheduler::default();
     loop {
         let page_javascript_blocked = scheduler.has_pending_javascript_dialog();
         adapter_scheduler.schedule_turn_if_needed(&scheduler, page_javascript_blocked);
@@ -362,7 +362,7 @@ impl BidiSocketActor {
     /// contract.
     pub(in crate::protocol_server) async fn recv_attached_input(
         &mut self,
-        adapter_scheduler: &mut ProtocolAdapterScheduler<()>,
+        adapter_scheduler: &mut ProtocolAdapterScheduler,
         page_javascript_blocked: bool,
     ) -> BidiSocketActorInput {
         tokio::select! {
@@ -425,7 +425,7 @@ impl BidiSocketActor {
 
     pub(in crate::protocol_server) async fn handle_renderer_publication(
         &mut self,
-        adapter_scheduler: &mut ProtocolAdapterScheduler<()>,
+        adapter_scheduler: &mut ProtocolAdapterScheduler,
         scheduler: &mut CdpScheduler,
         receivers: &mut CdpSchedulerEventReceivers,
         publication: RendererOutputTransportMessage,
@@ -465,15 +465,12 @@ impl BidiSocketActor {
 
     pub(in crate::protocol_server) async fn handle_adapter_scheduler_input(
         &mut self,
-        adapter_scheduler: &mut ProtocolAdapterScheduler<()>,
+        adapter_scheduler: &mut ProtocolAdapterScheduler,
         scheduler: &mut CdpScheduler,
         receivers: &mut CdpSchedulerEventReceivers,
         input: ProtocolAdapterSchedulerInput,
     ) -> bool {
-        let output = match adapter_scheduler
-            .advance_input(scheduler, input, || ())
-            .await
-        {
+        let output = match adapter_scheduler.advance_input(scheduler, input).await {
             ProtocolAdapterSchedulerAdvance::ProtocolResidenceCompleted(output)
             | ProtocolAdapterSchedulerAdvance::DeferredLoadCompleted { output, .. } => output,
             ProtocolAdapterSchedulerAdvance::Idle

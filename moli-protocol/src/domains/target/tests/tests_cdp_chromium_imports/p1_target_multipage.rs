@@ -865,8 +865,46 @@ async fn run_waiting_popup_initial_document_after_resume(
     ctx.expect_result(260_218, json!({}), Some(popup_session_id));
     ctx.sent.clear();
 
+    // Playwright sends this command in the same initialization burst as
+    // Runtime.runIfWaitingForDebugger.  It must operate on the materialized
+    // initial document without independently starting the target URL: only
+    // the debugger-resume response owns that transition.
     ctx.process_async(json!({
         "id": 260_219,
+        "method": "Page.createIsolatedWorld",
+        "sessionId": popup_session_id,
+        "params": {
+            "frameId": popup_target_id,
+            "worldName": "__playwright_pre_resume_utility_world",
+            "grantUniveralAccess": true
+        }
+    }))
+    .await;
+    let initial_world = take_response_by_id(ctx, 260_219);
+    assert!(
+        initial_world["result"]["executionContextId"]
+            .as_i64()
+            .is_some(),
+        "createIsolatedWorld should resolve against the paused initial document: {initial_world:?}"
+    );
+    assert!(
+        !ctx.conn
+            .has_pending_document_navigation_for_session_owner(Some(popup_session_id)),
+        "createIsolatedWorld must not claim the debugger-gated initial navigation"
+    );
+    assert!(
+        !ctx.sent.iter().any(|message| {
+            message["method"] == json!("Fetch.requestPaused")
+                || (message["method"] == json!("Network.requestWillBeSent")
+                    && message["params"]["request"]["url"] == json!(popup_url))
+        }),
+        "createIsolatedWorld must leave the real popup URL gated: {:?}",
+        ctx.sent
+    );
+    ctx.sent.clear();
+
+    ctx.process_async(json!({
+        "id": 260_220,
         "method": "Runtime.runIfWaitingForDebugger",
         "sessionId": popup_session_id
     }))
@@ -880,7 +918,7 @@ async fn run_waiting_popup_initial_document_after_resume(
     let response_index = ctx
         .sent
         .iter()
-        .position(|message| message["id"] == json!(260_219))
+        .position(|message| message["id"] == json!(260_220))
         .expect("runIfWaitingForDebugger terminal response");
     let request_index = ctx
         .sent
@@ -892,7 +930,7 @@ async fn run_waiting_popup_initial_document_after_resume(
         "the debugger-resume response must cross the frontend before its initial navigation can replace about:blank: {:?}",
         ctx.sent
     );
-    take_response_by_id(ctx, 260_219);
+    take_response_by_id(ctx, 260_220);
     let paused = ctx
         .sent
         .iter()
@@ -923,7 +961,7 @@ async fn run_waiting_popup_initial_document_after_resume(
     ctx.sent.clear();
 
     ctx.process_async(json!({
-        "id": 260_220,
+        "id": 260_221,
         "method": "Page.createIsolatedWorld",
         "sessionId": popup_session_id,
         "params": {
@@ -933,7 +971,7 @@ async fn run_waiting_popup_initial_document_after_resume(
         }
     }))
     .await;
-    let isolated = take_response_by_id(ctx, 260_220);
+    let isolated = take_response_by_id(ctx, 260_221);
     assert!(
         isolated["result"]["executionContextId"].as_i64().is_some(),
         "createIsolatedWorld should resolve while popup initial document is paused: {isolated:?}"
@@ -947,7 +985,7 @@ async fn run_waiting_popup_initial_document_after_resume(
     );
 
     ctx.process_async(json!({
-        "id": 260_221,
+        "id": 260_222,
         "method": "Fetch.fulfillRequest",
         "sessionId": popup_session_id,
         "params": {
@@ -960,7 +998,7 @@ async fn run_waiting_popup_initial_document_after_resume(
         }
     }))
     .await;
-    ctx.expect_result(260_221, json!({}), Some(popup_session_id));
+    ctx.expect_result(260_222, json!({}), Some(popup_session_id));
     crate::testing::wait_until_scheduler_message(ctx, "resumed popup load lifecycle", |message| {
         message["method"] == json!("Page.loadEventFired")
             && message["sessionId"] == json!(popup_session_id)
@@ -977,7 +1015,7 @@ async fn run_waiting_popup_initial_document_after_resume(
     );
 
     ctx.process_async(json!({
-        "id": 260_222,
+        "id": 260_223,
         "method": "Runtime.evaluate",
         "sessionId": popup_session_id,
         "params": {
@@ -987,7 +1025,7 @@ async fn run_waiting_popup_initial_document_after_resume(
     }))
     .await;
     assert_eq!(
-        take_response_by_id(ctx, 260_222)["result"]["result"]["value"],
+        take_response_by_id(ctx, 260_223)["result"]["result"]["value"],
         "routed-popup"
     );
 }

@@ -919,7 +919,17 @@ impl RendererOwnerLocalStore {
                 request.emulated_media = configuration.emulated_media;
                 request.idle_override = configuration.idle_override;
                 request.viewport_surface = configuration.viewport_surface;
+                request
+                    .loader
+                    .replace_browser_resource_runtime(configuration.browser_resource_runtime);
+                request.navigator_identity = configuration.navigator_identity;
                 request.network_offline = configuration.network_offline;
+                request
+                    .loader
+                    .set_bypass_service_worker(configuration.bypass_service_worker);
+                request
+                    .loader
+                    .set_cache_disabled(configuration.cache_disabled);
                 request.blocked_url_patterns = configuration.blocked_url_patterns;
                 request.fetch_subresource_interception_enabled =
                     configuration.fetch_subresource_interception_enabled;

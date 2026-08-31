@@ -219,6 +219,7 @@ impl PageVm {
     pub(crate) fn replace_browser_resource_runtime(
         &mut self,
         resource_runtime: &crate::network::BrowserResourceRuntime,
+        navigator_identity: &moli_browser_profile::BrowserIdentityProfile,
     ) {
         // Replacing a browser/network backend must not replace the live
         // target's Page policy. Pair the new backend with the exact policy
@@ -230,8 +231,12 @@ impl PageVm {
             );
         let document_loader = self
             .vm_mut()
-            .replace_document_resource_runtime(&page_loader);
+            .replace_document_resource_runtime_with_navigator_identity(
+                &page_loader,
+                navigator_identity,
+            );
         self.request_client = document_loader.request_client().clone();
+        self.navigator_identity = navigator_identity.clone();
     }
 
     pub(crate) fn retire_document_resource_authorities(&mut self) {

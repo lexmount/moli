@@ -1,5 +1,24 @@
 use super::*;
 
+async fn install_network_session_page(ctx: &mut TestContext, url: &str) {
+    let mut browser_context = BrowserContext::new("BID-navigation".into());
+    browser_context.set_active_target_id("TID-navigation");
+    browser_context.attach_active_session("SID-navigation");
+    ctx.conn.browser_context = Some(browser_context);
+    let page = ctx
+        .conn
+        .load_page_via_runtime_async(url)
+        .await
+        .expect("the target should have a committed document");
+    ctx.conn
+        .browser_context
+        .as_mut()
+        .unwrap()
+        .active_target
+        .runtime_slot
+        .set_loaded_page_for_test(page);
+}
+
 /// Network.enable without a browser context fails.
 #[tokio::test(flavor = "multi_thread")]
 async fn enable_no_bc_error() {
@@ -26,6 +45,215 @@ async fn enable_with_bc_succeeds() {
             .primary_network_events_enabled()
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn network_configuration_commands_succeed_while_the_target_is_changing_documents() {
+    let mut ctx = TestContext::new();
+    install_network_session_page(&mut ctx, "data:text/html,committed").await;
+    ctx.conn
+        .start_document_navigation_for_session_owner(
+            Some("SID-navigation"),
+            "LID-pending".to_owned(),
+        )
+        .expect("the replacement navigation should start");
+
+    ctx.process_async(json!({
+        "id": 2,
+        "method": "Network.enable",
+        "sessionId": "SID-navigation",
+    }))
+    .await;
+
+    ctx.expect_result(2, json!({}), Some("SID-navigation"));
+
+    for (id, method, params) in [
+        (
+            3,
+            "Network.setCacheDisabled",
+            json!({ "cacheDisabled": true }),
+        ),
+        (
+            4,
+            "Network.setBypassServiceWorker",
+            json!({ "bypass": true }),
+        ),
+        (
+            5,
+            "Network.setExtraHTTPHeaders",
+            json!({ "headers": { "X-During-Navigation": "current" } }),
+        ),
+        (
+            6,
+            "Network.setBlockedURLs",
+            json!({ "urls": ["*://blocked.example/*"] }),
+        ),
+        (
+            7,
+            "Network.emulateNetworkConditions",
+            json!({
+                "offline": true,
+                "latency": 0,
+                "downloadThroughput": -1,
+                "uploadThroughput": -1,
+            }),
+        ),
+        (
+            8,
+            "Network.setUserAgentOverride",
+            json!({ "userAgent": "Moli/During-Navigation" }),
+        ),
+    ] {
+        ctx.process_async(json!({
+            "id": id,
+            "method": method,
+            "sessionId": "SID-navigation",
+            "params": params,
+        }))
+        .await;
+        ctx.expect_result(id, json!({}), Some("SID-navigation"));
+    }
+
+    assert!(
+        ctx.conn
+            .browser_context
+            .as_ref()
+            .unwrap()
+            .active_target
+            .runtime_slot
+            .primary_network_events_enabled()
+    );
+    let configuration = ctx
+        .conn
+        .prepared_document_commit_configuration_for_session_owner(
+            Some("SID-navigation"),
+            &url::Url::parse("data:text/html,committed").unwrap(),
+        )
+        .expect("commit configuration should resolve the target resource runtime");
+    assert!(configuration.cache_disabled);
+    assert!(configuration.bypass_service_worker);
+    assert!(configuration.network_offline);
+    assert_eq!(
+        configuration.extra_http_headers,
+        [("X-During-Navigation".to_owned(), "current".to_owned())]
+    );
+    assert_eq!(
+        configuration.blocked_url_patterns,
+        ["*://blocked.example/*".to_owned()]
+    );
+    assert_eq!(
+        moli_core::network::ResourceRequestClient::from_browser_resource_runtime(
+            configuration.browser_resource_runtime,
+        )
+        .user_agent(),
+        "Moli/During-Navigation",
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn network_configuration_completion_does_not_restore_a_replaced_document() {
+    let mut ctx = TestContext::new();
+    install_network_session_page(&mut ctx, "data:text/html,<body id=outgoing>outgoing</body>")
+        .await;
+
+    let raw = json!({
+        "id": 20,
+        "method": "Network.setExtraHTTPHeaders",
+        "sessionId": "SID-navigation",
+        "params": { "headers": { "X-Replacement-Race": "configured" } },
+    })
+    .to_string();
+    let crate::conn::CdpCommandTaskStep::Pending(pending) = ctx.conn.start_command_dispatch(&raw)
+    else {
+        panic!("the loaded Page should receive the Network configuration command");
+    };
+    let completed = pending.wait().await;
+
+    ctx.process_async(json!({
+        "id": 21,
+        "method": "Page.navigate",
+        "sessionId": "SID-navigation",
+        "params": {
+            "url": "data:text/html,<body id=replacement>replacement</body>"
+        },
+    }))
+    .await;
+    let navigate = ctx.take_response_by_id(21);
+    assert!(navigate["result"]["loaderId"].is_string());
+
+    let crate::conn::CdpCommandTaskStep::Complete(outcome) =
+        ctx.conn.complete_pending_command_dispatch(completed).await
+    else {
+        panic!("the settled Network command should complete in one protocol phase");
+    };
+    assert!(outcome.into_parts().0.iter().any(|message| {
+        message["id"] == json!(20)
+            && message["sessionId"] == json!("SID-navigation")
+            && message["result"] == json!({})
+    }));
+
+    let html = ctx
+        .conn
+        .browser_context
+        .as_mut()
+        .unwrap()
+        .active_target
+        .runtime_slot
+        .loaded_page_mut()
+        .expect("the replacement Page should remain installed")
+        .serialize_html_async()
+        .await
+        .expect("the replacement Page should remain usable");
+    assert!(html.contains("id=\"replacement\""));
+    assert!(!html.contains("id=\"outgoing\""));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn commit_configuration_resolves_the_exact_target_network_runtime() {
+    let mut ctx = TestContext::new();
+    let mut browser_context = BrowserContext::new("BID-runtime".into());
+    browser_context.set_active_target_id("TID-a");
+    browser_context.attach_active_session("SID-a");
+    browser_context.insert_page_target_host(PageTargetHost::with_url(
+        "TID-b".to_owned(),
+        Some("SID-b".to_owned()),
+        "about:blank".to_owned(),
+    ));
+    ctx.conn.browser_context = Some(browser_context);
+
+    for (id, session_id, user_agent) in [
+        (30, "SID-a", "Moli/Target-A"),
+        (31, "SID-b", "Moli/Target-B"),
+    ] {
+        ctx.process_async(json!({
+            "id": id,
+            "method": "Network.setUserAgentOverride",
+            "sessionId": session_id,
+            "params": { "userAgent": user_agent },
+        }))
+        .await;
+        ctx.expect_result(id, json!({}), Some(session_id));
+    }
+
+    for (session_id, expected_user_agent) in [
+        ("SID-b", "Moli/Target-B"),
+        ("SID-a", "Moli/Target-A"),
+        ("SID-b", "Moli/Target-B"),
+    ] {
+        let configuration = ctx
+            .conn
+            .prepared_document_commit_configuration_for_session_owner(
+                Some(session_id),
+                &url::Url::parse("about:blank").unwrap(),
+            )
+            .expect("the target-specific resource runtime should resolve");
+        let request_client =
+            moli_core::network::ResourceRequestClient::from_browser_resource_runtime(
+                configuration.browser_resource_runtime,
+            );
+        assert_eq!(request_client.user_agent(), expected_user_agent);
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn auxiliary_network_enable_does_not_enable_primary_session() {
     let mut ctx = TestContext::new();

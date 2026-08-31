@@ -210,7 +210,11 @@ pub struct PreparedDocumentPageCommitConfiguration {
     pub emulated_media: EmulatedMediaOverrides,
     pub idle_override: Option<crate::page::EmulatedIdleOverride>,
     pub viewport_surface: Option<ViewportSurface>,
+    pub browser_resource_runtime: BrowserResourceRuntime,
+    pub navigator_identity: moli_browser_profile::BrowserIdentityProfile,
     pub network_offline: bool,
+    pub bypass_service_worker: bool,
+    pub cache_disabled: bool,
     pub blocked_url_patterns: Vec<String>,
     pub fetch_subresource_interception: (bool, Option<SubresourceResourceType>),
 }
@@ -268,7 +272,11 @@ impl PreparedDocumentPage {
                     emulated_media: configuration.emulated_media,
                     idle_override: configuration.idle_override,
                     viewport_surface: configuration.viewport_surface,
+                    browser_resource_runtime: configuration.browser_resource_runtime,
+                    navigator_identity: configuration.navigator_identity,
                     network_offline: configuration.network_offline,
+                    bypass_service_worker: configuration.bypass_service_worker,
+                    cache_disabled: configuration.cache_disabled,
                     blocked_url_patterns: configuration.blocked_url_patterns,
                     fetch_subresource_interception_enabled: configuration
                         .fetch_subresource_interception

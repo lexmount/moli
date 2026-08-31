@@ -68,7 +68,10 @@ impl Page {
         resource_runtime: &BrowserResourceRuntime,
     ) -> Result<()> {
         self.dispatch_unit_page_command_async(
-            RendererPageCommand::ReplaceBrowserResourceRuntime(resource_runtime.clone()),
+            RendererPageCommand::ReplaceBrowserResourceRuntime {
+                resource_runtime: resource_runtime.clone(),
+                navigator_identity: resource_runtime.browser_identity().clone(),
+            },
             "replace browser resource runtime",
         )
         .await
@@ -78,9 +81,21 @@ impl Page {
         &self,
         resource_runtime: &BrowserResourceRuntime,
     ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::ReplaceBrowserResourceRuntime(
-            resource_runtime.clone(),
-        ))
+        self.start_replace_browser_resource_runtime_with_navigator_identity(
+            resource_runtime,
+            resource_runtime.browser_identity().clone(),
+        )
+    }
+
+    pub fn start_replace_browser_resource_runtime_with_navigator_identity(
+        &self,
+        resource_runtime: &BrowserResourceRuntime,
+        navigator_identity: moli_browser_profile::BrowserIdentityProfile,
+    ) -> Result<PendingPageCommand> {
+        self.start_page_command(RendererPageCommand::ReplaceBrowserResourceRuntime {
+            resource_runtime: resource_runtime.clone(),
+            navigator_identity,
+        })
     }
 
     pub fn finish_replace_browser_resource_runtime(
@@ -204,10 +219,17 @@ impl Page {
     }
 
     pub fn start_set_idle_override(
-        &self,
+        &mut self,
         idle_override: Option<EmulatedIdleOverride>,
     ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::SetIdleOverride(idle_override))
+        let pending =
+            self.start_page_command(RendererPageCommand::SetIdleOverride(idle_override))?;
+        // SetIdleOverride is synchronous browser-side state in Chromium. Make
+        // it visible at command admission so a navigation from another CDP
+        // session cannot observe an older protocol snapshot after the renderer
+        // has already accepted the command.
+        self.idle_override = idle_override;
+        Ok(pending)
     }
 
     pub fn finish_set_idle_override(&mut self, completion: CompletedPageCommand) -> Result<()> {

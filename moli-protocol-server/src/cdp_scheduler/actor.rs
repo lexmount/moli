@@ -24,10 +24,9 @@ use super::frontend_control::CdpFrontendControlState;
 use super::{
     CdpBackgroundEventReceiver, CdpBackgroundNavigationCompletionReceiver, CdpCookieSnapshot,
     CdpOwnerActorLifecycle, CdpRendererPublicationReceiver, CdpScheduler,
-    CdpSchedulerEventReceivers, CommandDispatchState, CommandDispatchStepOutput,
-    CommandOutputReleasePermit, CommandStartAction, CommandTaskStep, CommandTurnOutput,
-    ProtocolAdapterScheduler, ProtocolAdapterSchedulerAdvance, ProtocolAdapterSchedulerInput,
-    ProtocolOutputSequence,
+    CdpSchedulerEventReceivers, CommandDispatchState, CommandOutputReleasePermit,
+    CommandStartAction, CommandTaskStep, CommandTurnOutput, ProtocolAdapterScheduler,
+    ProtocolAdapterSchedulerAdvance, ProtocolAdapterSchedulerInput, ProtocolOutputSequence,
 };
 
 struct PendingRuntimeDeferredReplyState {
@@ -157,7 +156,7 @@ impl SchedulerInputReceivers {
         &mut self,
         deferred_runtime_response_rx: &mut mpsc::UnboundedReceiver<RuntimeInspectorResponseReady>,
         has_pending_runtime_deferred_reply: bool,
-        adapter_scheduler: &mut ProtocolAdapterScheduler<CommandDispatchState>,
+        adapter_scheduler: &mut ProtocolAdapterScheduler,
         page_javascript_blocked: bool,
     ) -> Option<SchedulerInput> {
         if let Some(input) = self
@@ -242,7 +241,7 @@ async fn run_cdp_scheduler_actor(
     scheduler
         .conn
         .set_runtime_inspector_response_ready_sender(deferred_runtime_response_tx.clone());
-    let mut adapter_scheduler = ProtocolAdapterScheduler::<CommandDispatchState>::default();
+    let mut adapter_scheduler = ProtocolAdapterScheduler::default();
     let mut pending_runtime_deferred_replies: VecDeque<PendingRuntimeDeferredReplyState> =
         VecDeque::new();
     let (pending_command_completion_tx, mut pending_command_completion_rx) =
@@ -314,11 +313,7 @@ async fn run_cdp_scheduler_actor(
                         generation,
                         visual_state,
                     } = frame;
-                    let output = route_top_level_background_event(
-                        &mut adapter_scheduler,
-                        &mut scheduler,
-                        event,
-                    );
+                    let output = scheduler.route_background_event_around_inflight_navigation(event);
                     if !flush_protocol_output_with_runtime_deferred_reply_routing(
                         &frontend_router,
                         &mut scheduler,
@@ -430,7 +425,7 @@ async fn handle_scheduler_input(
     scheduler_input_rx: &mut SchedulerInputReceivers,
     pending_runtime_deferred_replies: &mut VecDeque<PendingRuntimeDeferredReplyState>,
     deferred_runtime_response_tx: &mpsc::UnboundedSender<RuntimeInspectorResponseReady>,
-    adapter_scheduler: &mut ProtocolAdapterScheduler<CommandDispatchState>,
+    adapter_scheduler: &mut ProtocolAdapterScheduler,
     pending_command_completion_tx: &mpsc::UnboundedSender<PendingCommandCompletion>,
     in_flight_commands: &mut InFlightCommands,
     blocked_commands: &mut VecDeque<BlockedCommandDispatch>,
@@ -475,7 +470,7 @@ async fn handle_scheduler_input(
             .await
         }
         SchedulerInput::BackgroundEvent(event) => {
-            let output = route_top_level_background_event(adapter_scheduler, scheduler, event);
+            let output = scheduler.route_background_event_around_inflight_navigation(event);
             flush_protocol_output_with_runtime_deferred_reply_routing(
                 frontend_router,
                 scheduler,
@@ -545,7 +540,7 @@ async fn flush_renderer_publication_predecessor(
     scheduler: &mut CdpScheduler,
     scheduler_input_rx: &mut SchedulerInputReceivers,
     pending_runtime_deferred_replies: &mut VecDeque<PendingRuntimeDeferredReplyState>,
-    adapter_scheduler: &mut ProtocolAdapterScheduler<CommandDispatchState>,
+    adapter_scheduler: &mut ProtocolAdapterScheduler,
     predecessor: Option<&RendererOutputFence>,
 ) -> bool {
     let Some(predecessor) = predecessor else {
@@ -577,7 +572,7 @@ async fn ingest_and_flush_renderer_publication(
     frontend_router: &CdpFrontendRouter,
     scheduler: &mut CdpScheduler,
     pending_runtime_deferred_replies: &mut VecDeque<PendingRuntimeDeferredReplyState>,
-    adapter_scheduler: &mut ProtocolAdapterScheduler<CommandDispatchState>,
+    adapter_scheduler: &mut ProtocolAdapterScheduler,
     publication: RendererOutputTransportMessage,
 ) -> bool {
     let output = adapter_scheduler
@@ -597,7 +592,7 @@ async fn flush_background_completion_input(
     scheduler: &mut CdpScheduler,
     scheduler_input_rx: &mut SchedulerInputReceivers,
     pending_runtime_deferred_replies: &mut VecDeque<PendingRuntimeDeferredReplyState>,
-    adapter_scheduler: &mut ProtocolAdapterScheduler<CommandDispatchState>,
+    adapter_scheduler: &mut ProtocolAdapterScheduler,
     input: SchedulerInput,
 ) -> bool {
     let (prefix_output, mut completion_output, renderer_output_predecessor) = match input {
@@ -1143,14 +1138,12 @@ fn runtime_deferred_reply_unexpected_pending_output(
 async fn handle_adapter_scheduler_input(
     frontend_router: &CdpFrontendRouter,
     scheduler: &mut CdpScheduler,
-    adapter_scheduler: &mut ProtocolAdapterScheduler<CommandDispatchState>,
+    adapter_scheduler: &mut ProtocolAdapterScheduler,
     pending_runtime_deferred_replies: &mut VecDeque<PendingRuntimeDeferredReplyState>,
     input: ProtocolAdapterSchedulerInput,
 ) -> bool {
     let trace_started = moli_trace::cdp_runtime_trace_enabled().then(Instant::now);
-    let advance = adapter_scheduler
-        .advance_input(scheduler, input, CommandDispatchState::pending_command)
-        .await;
+    let advance = adapter_scheduler.advance_input(scheduler, input).await;
     let (kind, observation_id, ok) = match advance {
         ProtocolAdapterSchedulerAdvance::Idle => ("idle", None, true),
         ProtocolAdapterSchedulerAdvance::ClientTurnYielded => ("client_turn_yielded", None, true),
@@ -1169,10 +1162,8 @@ async fn handle_adapter_scheduler_input(
         }
         ProtocolAdapterSchedulerAdvance::DeferredLoadCompleted {
             observation_id,
-            attachment,
             output,
         } => {
-            let output = attachment.complete_protocol_output(output);
             let ok = flush_protocol_output_with_runtime_deferred_reply_routing(
                 frontend_router,
                 scheduler,
@@ -1201,27 +1192,6 @@ async fn handle_adapter_scheduler_input(
         );
     }
     ok
-}
-
-fn route_top_level_background_event(
-    adapter_scheduler: &mut ProtocolAdapterScheduler<CommandDispatchState>,
-    scheduler: &mut CdpScheduler,
-    event: BackgroundProtocolEvent,
-) -> ProtocolOutputSequence {
-    let output = scheduler.route_background_event_around_inflight_navigation(event);
-    if output.is_empty() {
-        return output;
-    }
-    let mut events = output.into_background_events();
-    let Some(event) = events.pop() else {
-        return ProtocolOutputSequence::empty();
-    };
-    let Some(dispatch) = adapter_scheduler.pending_load_attachment_mut() else {
-        return ProtocolOutputSequence::from_background_event(event);
-    };
-    match dispatch.route_pending_background_event(event) {
-        CommandDispatchStepOutput::Emit(output) => output,
-    }
 }
 
 fn enqueue_pending_runtime_deferred_reply_state(
@@ -1392,7 +1362,7 @@ async fn handle_frontend_command(
     scheduler_input_rx: &mut SchedulerInputReceivers,
     pending_runtime_deferred_replies: &mut VecDeque<PendingRuntimeDeferredReplyState>,
     deferred_runtime_response_tx: &mpsc::UnboundedSender<RuntimeInspectorResponseReady>,
-    adapter_scheduler: &mut ProtocolAdapterScheduler<CommandDispatchState>,
+    adapter_scheduler: &mut ProtocolAdapterScheduler,
     pending_command_completion_tx: &mpsc::UnboundedSender<PendingCommandCompletion>,
     in_flight_commands: &mut InFlightCommands,
     blocked_commands: &mut VecDeque<BlockedCommandDispatch>,
@@ -1436,7 +1406,7 @@ async fn handle_client_command_with_interleaved_output(
     command: ParsedCdpCommand,
     pending_runtime_deferred_replies: &mut VecDeque<PendingRuntimeDeferredReplyState>,
     deferred_runtime_response_tx: &mpsc::UnboundedSender<RuntimeInspectorResponseReady>,
-    adapter_scheduler: &mut ProtocolAdapterScheduler<CommandDispatchState>,
+    adapter_scheduler: &mut ProtocolAdapterScheduler,
     pending_command_completion_tx: &mpsc::UnboundedSender<PendingCommandCompletion>,
     in_flight_commands: &mut InFlightCommands,
     blocked_commands: &mut VecDeque<BlockedCommandDispatch>,
@@ -1519,7 +1489,7 @@ async fn start_ready_command_dispatch(
     mut command_context: CommandDispatchContext,
     pending_runtime_deferred_replies: &mut VecDeque<PendingRuntimeDeferredReplyState>,
     deferred_runtime_response_tx: &mpsc::UnboundedSender<RuntimeInspectorResponseReady>,
-    adapter_scheduler: &mut ProtocolAdapterScheduler<CommandDispatchState>,
+    adapter_scheduler: &mut ProtocolAdapterScheduler,
     pending_command_completion_tx: &mpsc::UnboundedSender<PendingCommandCompletion>,
     in_flight_commands: &mut InFlightCommands,
     next_in_flight_command_token: &mut u64,
@@ -1615,7 +1585,7 @@ async fn drain_blocked_commands_after_navigation_gate(
     scheduler_input_rx: &mut SchedulerInputReceivers,
     pending_runtime_deferred_replies: &mut VecDeque<PendingRuntimeDeferredReplyState>,
     deferred_runtime_response_tx: &mpsc::UnboundedSender<RuntimeInspectorResponseReady>,
-    adapter_scheduler: &mut ProtocolAdapterScheduler<CommandDispatchState>,
+    adapter_scheduler: &mut ProtocolAdapterScheduler,
     pending_command_completion_tx: &mpsc::UnboundedSender<PendingCommandCompletion>,
     in_flight_commands: &mut InFlightCommands,
     blocked_commands: &mut VecDeque<BlockedCommandDispatch>,
@@ -1683,7 +1653,7 @@ async fn flush_completed_command_output(
     scheduler: &mut CdpScheduler,
     scheduler_input_rx: &mut SchedulerInputReceivers,
     pending_runtime_deferred_replies: &mut VecDeque<PendingRuntimeDeferredReplyState>,
-    adapter_scheduler: &mut ProtocolAdapterScheduler<CommandDispatchState>,
+    adapter_scheduler: &mut ProtocolAdapterScheduler,
     metadata: &InFlightCommandMetadata,
     mut output: CommandTurnOutput,
 ) -> bool {
@@ -1850,7 +1820,7 @@ async fn handle_pending_command_completion(
     scheduler_input_rx: &mut SchedulerInputReceivers,
     pending_runtime_deferred_replies: &mut VecDeque<PendingRuntimeDeferredReplyState>,
     deferred_runtime_response_tx: &mpsc::UnboundedSender<RuntimeInspectorResponseReady>,
-    adapter_scheduler: &mut ProtocolAdapterScheduler<CommandDispatchState>,
+    adapter_scheduler: &mut ProtocolAdapterScheduler,
     pending_command_completion_tx: &mpsc::UnboundedSender<PendingCommandCompletion>,
     in_flight_commands: &mut InFlightCommands,
     completion: PendingCommandCompletion,

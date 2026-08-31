@@ -749,6 +749,30 @@ impl DocumentLifecycleRecord {
         true
     }
 
+    /// Abort the current Document's remaining loading algorithm without
+    /// retiring the Document itself.
+    ///
+    /// Blink's `Document::CancelParsing()` moves readiness to `complete` but
+    /// marks the load event as completed instead of dispatching it.  Keep the
+    /// same distinction here: queued lifecycle work still names a current
+    /// owner, but none of its old transition tokens remain admissible.
+    pub(super) fn stop_loading_without_load_event(&mut self) -> Option<bool> {
+        let previous_readiness = self.readiness?;
+        let ready_state_changed = previous_readiness != DocumentReadinessState::Complete;
+
+        self.blockers.clear_for_retirement();
+        self.incomplete_child_frames.clear();
+        self.parsing_delay_token = None;
+        self.interactive_transition_token = None;
+        self.domcontentloaded_transition_token = None;
+        self.complete_transition_token = None;
+        self.readiness = Some(DocumentReadinessState::Complete);
+        self.load = DocumentLoadEventProgress::Suppressed;
+        self.child_load_delivery_admission = None;
+
+        Some(ready_state_changed)
+    }
+
     pub(super) fn complete_transition_is_pending(
         &self,
         transition_token: DocumentLoadDelayTokenId,

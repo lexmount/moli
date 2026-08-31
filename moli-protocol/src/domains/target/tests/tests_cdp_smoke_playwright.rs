@@ -83,7 +83,25 @@ async fn arm_popup_route(
     base: u64,
     popup_target_id: &str,
     popup_session_id: &str,
+    popup_url: &str,
 ) {
+    assert!(
+        ctx.conn
+            .target_has_waiting_for_debugger_session(popup_target_id),
+        "the auto-attached popup session must own the debugger gate",
+    );
+    let initial_url = ctx
+        .conn
+        .browser_contexts()
+        .find_map(|browser_context| {
+            loaded_page_for_target(browser_context, popup_target_id)
+                .map(|page| page.final_url().to_string())
+        })
+        .expect("popup initial document");
+    assert_eq!(
+        initial_url, "about:blank",
+        "the popup target URL must remain gated until debugger resume",
+    );
     ctx.process_async(json!({
         "id": base,
         "method": "Page.enable",
@@ -114,7 +132,23 @@ async fn arm_popup_route(
     }))
     .await;
     ctx.expect_result(base + 2, json!({}), Some(popup_session_id));
-
+    let fetch_snapshot = ctx
+        .conn
+        .target_fetch_subresource_interception_snapshot_for_session_owner(Some(popup_session_id))
+        .expect("popup target Fetch configuration");
+    let matching_sessions = fetch_snapshot.matching_request_stage_pause_sessions(
+        Some(popup_session_id),
+        crate::devtools_runtime::DevToolsNetworkResourceType::Document,
+        &url::Url::parse(popup_url).expect("popup URL"),
+    );
+    assert_eq!(
+        matching_sessions
+            .iter()
+            .map(|session| session.session_id.as_deref())
+            .collect::<Vec<_>>(),
+        [Some(popup_session_id)],
+        "Fetch.enable must commit the document pattern to the popup target before resume",
+    );
     ctx.process_async(json!({
         "id": base + 3,
         "method": "Runtime.runIfWaitingForDebugger",
@@ -122,6 +156,11 @@ async fn arm_popup_route(
     }))
     .await;
     ctx.expect_result(base + 3, json!({}), Some(popup_session_id));
+    assert!(
+        !ctx.conn
+            .target_has_waiting_for_debugger_session(popup_target_id),
+        "runIfWaitingForDebugger must release the popup session's debugger barrier",
+    );
 
     ctx.process_async(json!({
         "id": base + 4,
@@ -149,6 +188,33 @@ async fn fulfill_popup_document_and_evaluate(
     popup_url: &str,
     expected_text: &str,
 ) {
+    let fetch_snapshot = ctx
+        .conn
+        .target_fetch_subresource_interception_snapshot_for_target(popup_target_id)
+        .expect("popup target Fetch configuration after debugger resume");
+    let matching_sessions = fetch_snapshot.matching_request_stage_pause_sessions(
+        Some(popup_session_id),
+        crate::devtools_runtime::DevToolsNetworkResourceType::Document,
+        &url::Url::parse(popup_url).expect("popup URL"),
+    );
+    assert_eq!(
+        matching_sessions
+            .iter()
+            .map(|session| session.session_id.as_deref())
+            .collect::<Vec<_>>(),
+        [Some(popup_session_id)],
+        "popup activation and debugger resume must preserve target-owned Fetch configuration",
+    );
+    crate::testing::wait_until_scheduler_message(
+        ctx,
+        "debugger-resumed popup document request",
+        |message| {
+            message["method"] == json!("Fetch.requestPaused")
+                && message["sessionId"] == json!(popup_session_id)
+                && message["params"]["resourceType"] == json!("Document")
+        },
+    )
+    .await;
     let paused = ctx
         .sent
         .iter()
@@ -524,6 +590,7 @@ async fn rust_cdp_playwright_auxiliary_session_network_event_contract() {
 async fn rust_cdp_playwright_multi_context_popup_route_and_evaluate_contract() {
     let fixture = SmokeFixtureServer::start().await;
     let mut ctx = TestContext::new();
+    ctx.enable_background_navigation_scheduler_for_test();
     let first = attached_smoke_session(&mut ctx, 87_000).await;
     let second = attached_smoke_session(&mut ctx, 87_100).await;
     assert_ne!(first.browser_context_id, second.browser_context_id);
@@ -540,6 +607,7 @@ async fn rust_cdp_playwright_multi_context_popup_route_and_evaluate_contract() {
         87_210,
         &first_popup_target_id,
         &first_popup_session_id,
+        &first_popup_url,
     )
     .await;
     fulfill_popup_document_and_evaluate(
@@ -562,6 +630,7 @@ async fn rust_cdp_playwright_multi_context_popup_route_and_evaluate_contract() {
         87_310,
         &second_popup_target_id,
         &second_popup_session_id,
+        &second_popup_url,
     )
     .await;
     fulfill_popup_document_and_evaluate(
@@ -588,6 +657,7 @@ async fn rust_cdp_playwright_multi_context_popup_route_and_evaluate_contract() {
 async fn rust_cdp_playwright_concurrent_popup_routes_keep_their_navigation_owners() {
     let fixture = SmokeFixtureServer::start().await;
     let mut ctx = TestContext::new();
+    ctx.enable_background_navigation_scheduler_for_test();
     let opener = attached_smoke_session(&mut ctx, 88_000).await;
 
     set_auto_attach_waiting_for_debugger(&mut ctx, 88_100).await;
@@ -602,6 +672,7 @@ async fn rust_cdp_playwright_concurrent_popup_routes_keep_their_navigation_owner
         88_110,
         &first_popup_target_id,
         &first_popup_session_id,
+        &first_popup_url,
     )
     .await;
 
@@ -614,6 +685,7 @@ async fn rust_cdp_playwright_concurrent_popup_routes_keep_their_navigation_owner
         88_210,
         &second_popup_target_id,
         &second_popup_session_id,
+        &second_popup_url,
     )
     .await;
 
@@ -635,4 +707,214 @@ async fn rust_cdp_playwright_concurrent_popup_routes_keep_their_navigation_owner
         "first-popup-routed",
     )
     .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn rust_cdp_popup_waits_for_every_debugger_barrier_and_detach_releases_the_last() {
+    let fixture = SmokeFixtureServer::start().await;
+    let mut ctx = TestContext::new();
+    ctx.enable_background_navigation_scheduler_for_test();
+    let opener = attached_smoke_session(&mut ctx, 89_000).await;
+
+    set_auto_attach_waiting_for_debugger(&mut ctx, 89_100).await;
+    ctx.process_async(json!({
+        "id": 89_101,
+        "method": "Target.attachToBrowserTarget"
+    }))
+    .await;
+    let browser_attached = ctx.take_first_matching("browser target session", |message| {
+        message["method"] == json!("Target.attachedToTarget")
+            && message["params"]["targetInfo"]["type"] == json!("browser")
+    });
+    let browser_session_id = browser_attached["params"]["sessionId"]
+        .as_str()
+        .expect("browser target session id")
+        .to_owned();
+    ctx.expect_result(89_101, json!({ "sessionId": browser_session_id }), None);
+    ctx.process_async(json!({
+        "id": 89_102,
+        "sessionId": browser_session_id,
+        "method": "Target.setAutoAttach",
+        "params": {
+            "autoAttach": true,
+            "waitForDebuggerOnStart": true,
+            "flatten": true
+        }
+    }))
+    .await;
+    ctx.expect_result(89_102, json!({}), Some(&browser_session_id));
+    ctx.take_all();
+
+    let popup_url = fixture.url("/plain?popup=two-debugger-barriers");
+    ctx.process_async(json!({
+        "id": 89_103,
+        "method": "Runtime.evaluate",
+        "sessionId": opener.session_id,
+        "params": {
+            "expression": format!("window.open('{popup_url}', '_blank') !== null"),
+            "returnByValue": true
+        }
+    }))
+    .await;
+    let evaluated = take_response_by_id(&mut ctx, 89_103);
+    assert_eq!(evaluated["result"]["result"]["value"], true);
+    let created = ctx.take_first_matching("two-owner popup target", |message| {
+        message["method"] == json!("Target.targetCreated")
+            && message["params"]["targetInfo"]["url"] == json!(popup_url)
+    });
+    let popup_target_id = created["params"]["targetInfo"]["targetId"]
+        .as_str()
+        .expect("popup target id")
+        .to_owned();
+    let root_attached = ctx.take_first_matching("root popup attachment", |message| {
+        message.get("sessionId").is_none()
+            && message["method"] == json!("Target.attachedToTarget")
+            && message["params"]["targetInfo"]["targetId"] == json!(popup_target_id)
+    });
+    let browser_owned_attached =
+        ctx.take_first_matching("browser-owned popup attachment", |message| {
+            message["sessionId"] == json!(browser_session_id)
+                && message["method"] == json!("Target.attachedToTarget")
+                && message["params"]["targetInfo"]["targetId"] == json!(popup_target_id)
+        });
+    assert_eq!(root_attached["params"]["waitingForDebugger"], true);
+    assert_eq!(browser_owned_attached["params"]["waitingForDebugger"], true);
+    let root_popup_session_id = root_attached["params"]["sessionId"]
+        .as_str()
+        .expect("root popup session id")
+        .to_owned();
+    let browser_popup_session_id = browser_owned_attached["params"]["sessionId"]
+        .as_str()
+        .expect("browser-owned popup session id")
+        .to_owned();
+
+    ctx.process_async(json!({
+        "id": 89_104,
+        "method": "Fetch.enable",
+        "sessionId": root_popup_session_id,
+        "params": {
+            "patterns": [{
+                "urlPattern": "*",
+                "resourceType": "Document",
+                "requestStage": "Request"
+            }]
+        }
+    }))
+    .await;
+    ctx.expect_result(89_104, json!({}), Some(&root_popup_session_id));
+
+    ctx.process_async(json!({
+        "id": 89_105,
+        "method": "Runtime.runIfWaitingForDebugger",
+        "sessionId": root_popup_session_id
+    }))
+    .await;
+    ctx.expect_result(89_105, json!({}), Some(&root_popup_session_id));
+    assert!(
+        ctx.conn
+            .target_has_waiting_for_debugger_session(&popup_target_id),
+        "the second inspector session must keep the target behind its debugger barrier"
+    );
+    assert!(
+        !ctx.sent
+            .iter()
+            .any(|message| message["method"] == json!("Fetch.requestPaused")),
+        "one of two waiting sessions must not release the popup navigation: {:?}",
+        ctx.sent
+    );
+
+    ctx.process_async(json!({
+        "id": 89_106,
+        "method": "Target.detachFromTarget",
+        "params": { "sessionId": browser_popup_session_id }
+    }))
+    .await;
+    ctx.expect_result(89_106, json!({}), None);
+    assert!(
+        !ctx.conn
+            .target_has_waiting_for_debugger_session(&popup_target_id),
+        "detaching the final waiting session must release the target barrier"
+    );
+
+    fulfill_popup_document_and_evaluate(
+        &mut ctx,
+        89_110,
+        &popup_target_id,
+        &root_popup_session_id,
+        &popup_url,
+        "all-debugger-barriers-released",
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn queued_popup_navigation_rechecks_a_late_debugger_barrier() {
+    let fixture = SmokeFixtureServer::start().await;
+    let mut ctx = TestContext::new();
+    let opener = attached_smoke_session(&mut ctx, 90_000).await;
+    set_auto_attach_waiting_for_debugger(&mut ctx, 90_100).await;
+
+    let popup_url = fixture.url("/plain?popup=late-debugger-barrier");
+    let (popup_target_id, popup_session_id, browser_context_id) =
+        open_popup_from_session(&mut ctx, 90_101, &opener.session_id, &popup_url).await;
+    let action = crate::conn::PopupTargetNavigationOwnerAction::capture(
+        &ctx.conn,
+        &browser_context_id,
+        &popup_target_id,
+        popup_url,
+        crate::conn::PopupTargetNavigationKind::InitialDocumentAfterDebuggerResume,
+    )
+    .expect("the paused popup should have an exact navigation owner action");
+
+    assert!(
+        ctx.conn
+            .release_waiting_for_debugger_session(Some(&popup_session_id))
+    );
+    assert!(
+        !ctx.conn
+            .target_has_waiting_for_debugger_session(&popup_target_id)
+    );
+
+    let late_session_id = "SID-late-debugger".to_owned();
+    assert!(
+        ctx.conn
+            .prepare_auto_attached_page_session_binding(&popup_target_id, late_session_id.clone(),)
+    );
+    let prepared = ctx.conn.prepare_auto_attach_session_commit(
+        late_session_id,
+        Some(opener.session_id.clone()),
+        true,
+    );
+    let target_info = ctx
+        .conn
+        .browser_context_by_id(&browser_context_id)
+        .and_then(|browser_context| browser_context.devtools_target_info(&popup_target_id))
+        .expect("popup target info");
+    let _ = ctx
+        .conn
+        .commit_prepared_attach_event_plan(crate::conn::PreparedTargetAttach::new(
+            &popup_target_id,
+            target_info,
+            [prepared],
+        ));
+    assert!(
+        ctx.conn
+            .target_has_waiting_for_debugger_session(&popup_target_id),
+        "the late session must install a new target barrier before queued work runs",
+    );
+
+    let outcome = complete_popup_target_navigation_owner_action_async(&mut ctx.conn, action).await;
+    assert!(outcome.into_parts().0.is_empty());
+    assert!(
+        !ctx.conn
+            .has_pending_document_navigation_for_session_owner(Some(&popup_session_id)),
+        "queued work must not start the target URL through a newly paused target",
+    );
+    let page_url = ctx
+        .conn
+        .browser_context_by_id(&browser_context_id)
+        .and_then(|browser_context| loaded_page_for_target(browser_context, &popup_target_id))
+        .map(|page| page.final_url().as_str())
+        .expect("popup initial Page");
+    assert_eq!(page_url, "about:blank");
 }

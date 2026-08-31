@@ -4730,9 +4730,22 @@ impl ScriptVm {
     /// The Document authority is installed before realm bootstrap and remains
     /// stable here. Existing leases keep their captured request client; only
     /// subsequently registered loads observe this replacement transport.
+    #[cfg(test)]
     pub(super) fn replace_document_resource_runtime(
         &mut self,
         request_client: &ResourceRequestClient,
+    ) -> DocumentResourceLoader {
+        let navigator_identity = request_client.browser_identity().clone();
+        self.replace_document_resource_runtime_with_navigator_identity(
+            request_client,
+            &navigator_identity,
+        )
+    }
+
+    pub(super) fn replace_document_resource_runtime_with_navigator_identity(
+        &mut self,
+        request_client: &ResourceRequestClient,
+        navigator_identity: &moli_browser_profile::BrowserIdentityProfile,
     ) -> DocumentResourceLoader {
         let current = self
             .current_main_document_resource_loader()
@@ -4743,10 +4756,19 @@ impl ScriptVm {
             .replace_main_document_resource_transport(&document_loader);
         self.document_runtime
             .set_cookie_store(document_loader.request_client().cookie_store());
-        let identity = document_loader.request_client().browser_identity().clone();
-        let _ = self
-            .with_default_context_scope(|scope, _| set_window_navigator_identity(scope, &identity));
+        let _ = self.with_default_context_scope(|scope, _| {
+            set_window_navigator_identity(scope, navigator_identity)
+        });
         document_loader
+    }
+
+    pub(super) fn set_document_navigator_identity(
+        &mut self,
+        navigator_identity: &moli_browser_profile::BrowserIdentityProfile,
+    ) {
+        let _ = self.with_default_context_scope(|scope, _| {
+            set_window_navigator_identity(scope, navigator_identity)
+        });
     }
 
     pub(super) fn set_web_storage_handles(&mut self, handles: &crate::RendererWebStorageHandles) {

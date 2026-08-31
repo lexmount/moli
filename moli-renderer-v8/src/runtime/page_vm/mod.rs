@@ -1073,6 +1073,7 @@ pub(crate) struct PageVmEnvConfig {
     pub(crate) runtime_isolated_worlds: Vec<crate::protocol_types::RuntimeIsolatedWorldDefinition>,
     pub(crate) permission_overrides: Vec<crate::protocol_types::PermissionOverrideRegistration>,
     pub(crate) extra_http_headers: Vec<(String, String)>,
+    pub(crate) navigator_identity: moli_browser_profile::BrowserIdentityProfile,
     pub(crate) document_policy_container: crate::document_runtime::DocumentPolicyContainer,
     pub(crate) document_default_language: Option<String>,
     pub(crate) document_last_modified: Option<f64>,
@@ -1588,6 +1589,10 @@ pub(crate) struct PageVm {
     /// committed-Document loader lives only in `ScriptVm`'s exact-owner
     /// registry and may change across `document.open()` or navigation.
     pub(super) request_client: ResourceRequestClient,
+    /// Identity exposed by the current Document's Navigator. This is distinct
+    /// from the request transport identity when multiple DevTools sessions
+    /// contribute Emulation overrides.
+    pub(super) navigator_identity: moli_browser_profile::BrowserIdentityProfile,
     pub(super) runtime_isolated_worlds: Vec<crate::protocol_types::RuntimeIsolatedWorldDefinition>,
     pub(super) permission_overrides: Vec<crate::protocol_types::PermissionOverrideRegistration>,
     pub(super) document_start_scripts: Vec<DocumentStartScript>,
@@ -1851,11 +1856,12 @@ impl PageVm {
         self.document_lifecycle.drain_live_events()
     }
 
-    pub(super) fn stop_document_lifecycle(&self) {
+    pub(super) fn stop_document_lifecycle(&mut self) -> Result<()> {
         let _ = self.document_lifecycle.request_termination(
             self.document_lifecycle.identity(),
             RendererDocumentTerminationReason::Stopped,
         );
+        self.vm_mut().stop_current_main_document_loading()
     }
 
     pub(crate) fn document_lifecycle_wait_outcome(
@@ -4262,6 +4268,7 @@ impl PageVm {
             env.reserved_service_worker_client_id,
         )?;
         let mut vm = vm_bootstrap.finish()?;
+        vm.set_document_navigator_identity(&env.navigator_identity);
         vm.set_layout_policy(env.layout_policy);
         vm.install_page_task_capabilities(page_task_capabilities);
         vm.set_root_document_lifecycle(document_lifecycle.clone());
@@ -4290,6 +4297,7 @@ impl PageVm {
             next_module_script_evaluation_reaction_id: 0,
             target_stage: PageVmInitStage::Load,
             request_client: document_loader.request_client().clone(),
+            navigator_identity: env.navigator_identity.clone(),
             runtime_isolated_worlds: env.runtime_isolated_worlds.clone(),
             permission_overrides: env.permission_overrides.clone(),
             document_start_scripts: env.document_start_scripts.clone(),

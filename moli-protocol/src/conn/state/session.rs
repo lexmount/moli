@@ -149,6 +149,14 @@ impl Default for TargetPageState {
 }
 
 impl TargetPageState {
+    pub(crate) fn effective_renderer_browser_identity_override_owned(
+        &self,
+    ) -> Option<moli_browser_profile::BrowserIdentityProfile> {
+        self.devtools_sessions
+            .effective_renderer_browser_identity_override()
+            .or_else(|| self.network_policy.base_browser_identity_override_owned())
+    }
+
     pub(crate) fn mutate_devtools_network_session_state<T>(
         &mut self,
         is_attached_session: bool,
@@ -225,8 +233,9 @@ impl TargetPageState {
     }
 
     pub(crate) fn refresh_devtools_emulation_policy(&mut self) {
-        self.network_policy.devtools_browser_identity_override =
-            self.devtools_sessions.effective_browser_identity_override();
+        self.network_policy.devtools_browser_identity_override = self
+            .devtools_sessions
+            .effective_network_browser_identity_override();
         self.locale_override = self
             .devtools_sessions
             .effective_locale_override()
@@ -649,6 +658,12 @@ impl Default for TargetNetworkPolicyState {
 }
 
 impl TargetNetworkPolicyState {
+    pub(crate) fn base_browser_identity_override_owned(
+        &self,
+    ) -> Option<moli_browser_profile::BrowserIdentityProfile> {
+        self.base_browser_identity.profile_owned()
+    }
+
     pub(crate) fn cache_disabled(&self) -> bool {
         self.base_cache_disabled || self.devtools_cache_disabled
     }

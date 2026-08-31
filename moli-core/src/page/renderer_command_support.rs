@@ -175,7 +175,7 @@ impl Page {
     }
 
     pub fn idle_override(&self) -> Option<super::EmulatedIdleOverride> {
-        self.page_state.state().idle_override()
+        self.idle_override
     }
 
     pub fn status(&self) -> u16 {

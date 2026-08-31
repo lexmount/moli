@@ -940,6 +940,7 @@ mod tests {
             runtime_isolated_worlds: vec![],
             permission_overrides: vec![],
             extra_http_headers: vec![],
+            navigator_identity: Default::default(),
             document_policy_container: Default::default(),
             document_default_language: None,
             document_last_modified: None,

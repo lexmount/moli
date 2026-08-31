@@ -1560,14 +1560,27 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
         final_url: &Url,
-    ) -> PreparedDocumentPageCommitConfiguration {
+    ) -> Result<PreparedDocumentPageCommitConfiguration, String> {
         let idle_override = self.idle_override_for_navigation(session_id, final_url);
         let load_inputs = self.navigation_load_inputs_for_session_owner(session_id);
+        // The renderer runtime is shared by the BrowserContext, but each Page
+        // target owns its NavigationEngine and may have a different transport
+        // identity. Resolve through that target's engine at the commit
+        // boundary instead of copying whichever runtime another target most
+        // recently registered on the shared renderer context.
+        let browser_resource_runtime = self
+            .ensure_resource_request_client_for_navigation_load_inputs(&load_inputs)?
+            .browser_resource_runtime();
+        let navigator_identity = load_inputs
+            .navigator_identity_override
+            .clone()
+            .or_else(|| self.global_browser_identity_override.clone())
+            .unwrap_or_else(|| self.base_browser_identity.clone());
         let runtime_isolated_worlds = self
             .prepare_loaded_navigation_commit_for_session_owner(session_id)
             .map(|commit_state| commit_state.isolated_worlds)
             .unwrap_or_default();
-        PreparedDocumentPageCommitConfiguration {
+        Ok(PreparedDocumentPageCommitConfiguration {
             document_start_scripts: load_inputs.document_start_scripts,
             runtime_bindings: load_inputs.runtime_bindings,
             runtime_inspector_session_restore_snapshots: load_inputs
@@ -1583,10 +1596,14 @@ impl CdpConnection {
             emulated_media: load_inputs.emulated_media,
             idle_override,
             viewport_surface: load_inputs.viewport_surface,
+            browser_resource_runtime,
+            navigator_identity,
             network_offline: load_inputs.network_offline,
+            bypass_service_worker: load_inputs.bypass_service_worker,
+            cache_disabled: load_inputs.cache_disabled,
             blocked_url_patterns: load_inputs.blocked_url_patterns,
             fetch_subresource_interception: load_inputs.fetch_subresource_interception,
-        }
+        })
     }
 
     fn idle_override_for_navigation(
@@ -1594,11 +1611,10 @@ impl CdpConnection {
         session_id: Option<&str>,
         final_url: &Url,
     ) -> Option<moli_core::page::EmulatedIdleOverride> {
-        // Commit configuration is assembled after the document navigation has
-        // entered its pending state, where ordinary protocol access to the old
-        // document is intentionally blocked. The outgoing page remains the
-        // owner of frame-host state until commit and is the source Chromium
-        // preserves when a same-site navigation reuses that frame host.
+        // Chromium stores this override on RenderFrameHostImpl's IdleManager,
+        // not on the DevTools target. Preserve it only while a same-site
+        // navigation can retain that frame-host state; a cross-site renderer
+        // replacement must start with the actual idle state.
         let page = self
             .runtime_session_owner_slot(session_id)
             .ok()?
@@ -1801,7 +1817,13 @@ impl CdpConnection {
             .is_some_and(moli_url::is_about_blank)
     }
 
-    pub(crate) fn runtime_session_owner_should_start_initial_document_navigation(
+    /// Returns whether the materialized initial `about:blank` still needs to
+    /// be replaced by the target URL.
+    ///
+    /// This is a structural lifecycle query.  It deliberately does not look
+    /// at `waitForDebuggerOnStart`: the explicit debugger-resume path uses it
+    /// after the paused session has been released.
+    pub(crate) fn runtime_session_owner_needs_initial_document_navigation(
         &self,
         session_id: Option<&str>,
     ) -> bool {
@@ -1814,6 +1836,22 @@ impl CdpConnection {
             return false;
         }
         true
+    }
+
+    /// Returns whether an ordinary Page/Target command may opportunistically
+    /// start the initial target-URL navigation.
+    ///
+    /// A target created with `waitForDebuggerOnStart` must remain on its
+    /// initial document until `Runtime.runIfWaitingForDebugger` has published
+    /// its terminal response.  Keeping that admission rule here prevents
+    /// commands such as `Page.enable` and `Page.createIsolatedWorld` from
+    /// racing each other into replacing the paused renderer attachment.
+    pub(crate) fn runtime_session_owner_can_start_initial_document_navigation(
+        &self,
+        session_id: Option<&str>,
+    ) -> bool {
+        !self.session_owner_target_has_waiting_for_debugger_session(session_id)
+            && self.runtime_session_owner_needs_initial_document_navigation(session_id)
     }
 
     pub(crate) fn runtime_session_owner_initial_empty_document_has_replacement_url(
@@ -2182,7 +2220,7 @@ impl CdpConnection {
                 let configuration = self.prepared_document_commit_configuration_for_session_owner(
                     session_id,
                     navigation.final_url(),
-                );
+                )?;
                 navigation
                     .update_commit_configuration(configuration)
                     .await?;

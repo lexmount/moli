@@ -8,6 +8,7 @@ use std::{
     },
 };
 
+use indexmap::IndexMap;
 use moli_cookie_jar::{StoredCookie, StoredCookieQueryReport};
 use moli_fetch::FetchConfig;
 use parking_lot::Mutex;
@@ -1163,7 +1164,11 @@ pub struct CdpConnection {
     /// Chromium/Playwright auto-attach can ask new targets to wait until
     /// Runtime.runIfWaitingForDebugger before their initial document proceeds.
     pub auto_attach_wait_for_debugger_on_start: bool,
-    auto_attach_owner_sessions: HashMap<Option<String>, AutoAttachOwnerPolicy>,
+    // Insertion order is protocol state: the first matching owner supplies
+    // the primary auto-attached Page session, while later owners attach as
+    // auxiliary sessions. A randomized HashMap iteration order made that
+    // choice vary between otherwise identical processes.
+    auto_attach_owner_sessions: IndexMap<Option<String>, AutoAttachOwnerPolicy>,
     target_control: TargetControlPlane,
     default_target_lifecycle: DefaultTargetLifecycle,
     service_worker_auto_attach_related_owners: Vec<ServiceWorkerAutoAttachRelatedOwner>,
@@ -1475,7 +1480,7 @@ impl CdpConnection {
             target_info_change_events_enabled: false,
             target_discovery_filter: None,
             auto_attach_wait_for_debugger_on_start: false,
-            auto_attach_owner_sessions: HashMap::new(),
+            auto_attach_owner_sessions: IndexMap::new(),
             target_control: TargetControlPlane::default(),
             default_target_lifecycle: DefaultTargetLifecycle::default(),
             service_worker_auto_attach_related_owners: Vec::new(),
@@ -1881,6 +1886,37 @@ impl CdpConnection {
         self.loaded_page_mut_for_interruptible_protocol_access_for_route(session_id, owner_route)
     }
 
+    /// Returns the Page that currently carries target-scoped configuration.
+    ///
+    /// A cross-Document navigation keeps its outgoing Page attached until the
+    /// replacement commits. Network and Emulation settings belong to the
+    /// stable target/session, so they must remain writable during that window:
+    /// the outgoing Page needs the update if navigation fails, while commit
+    /// configuration replays the same target state into the replacement Page.
+    /// Document-reading commands must continue to use
+    /// [`Self::loaded_page_mut_for_protocol_access`] and observe the navigation
+    /// gate instead.
+    pub(crate) fn loaded_page_mut_for_target_configuration(
+        &mut self,
+        session_id: Option<&str>,
+    ) -> Result<&mut Page, String> {
+        let none_session_owner_route = self.none_session_owner_route_override();
+        self.loaded_page_mut_for_target_configuration_for_route(
+            session_id,
+            none_session_owner_route.as_ref(),
+        )
+    }
+
+    pub(crate) fn loaded_page_mut_for_target_configuration_for_route(
+        &mut self,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
+    ) -> Result<&mut Page, String> {
+        self.runtime_session_owner_slot_mut_for_route(session_id, owner_route)?
+            .loaded_page_mut()
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())
+    }
+
     /// Returns the exact Page that remains attached while a cross-Document
     /// navigation is suspended.
     ///
@@ -2259,12 +2295,12 @@ impl CdpConnection {
                 Some(route),
             ));
         }
-        Some(CommandOwnerScope::from_session_and_owner_route(
+        Some(CommandOwnerScope::capture(
+            self,
             context
                 .session_id
                 .as_ref()
                 .map(|session_id| session_id.as_str()),
-            None,
         ))
     }
 

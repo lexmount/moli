@@ -1348,7 +1348,7 @@ async fn classic_session_runtime_loop(
         navigation_runtime_config,
     );
     let mut attached_bidi: Option<ClassicAttachedBidiSocket> = None;
-    let mut adapter_scheduler = ProtocolAdapterScheduler::<()>::default();
+    let mut adapter_scheduler = ProtocolAdapterScheduler::default();
     loop {
         if receivers.renderer_publication_rx.is_closed() {
             break;
@@ -1532,7 +1532,7 @@ async fn classic_session_runtime_loop(
                 }
                 input = adapter_scheduler.recv_input(), if !page_javascript_blocked => {
                     let _ = adapter_scheduler
-                        .advance_input(&mut scheduler, input, || ())
+                        .advance_input(&mut scheduler, input)
                         .await;
                 }
                 request = rx.recv() => {
@@ -1874,7 +1874,7 @@ impl ValueExt for serde_json::Value {
 }
 
 async fn classic_session_ingest_ready_renderer_publications(
-    adapter_scheduler: &mut ProtocolAdapterScheduler<()>,
+    adapter_scheduler: &mut ProtocolAdapterScheduler,
     scheduler: &mut CdpScheduler,
     receivers: &mut CdpSchedulerEventReceivers,
 ) {

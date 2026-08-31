@@ -44,9 +44,7 @@ pub(crate) use actor::spawn_cdp_scheduler_actor;
 pub(crate) use adapter_scheduler::{
     ProtocolAdapterScheduler, ProtocolAdapterSchedulerAdvance, ProtocolAdapterSchedulerInput,
 };
-pub(crate) use command_dispatch::{
-    CommandDispatchState, CommandDispatchStepOutput, CommandTurnOutput,
-};
+pub(crate) use command_dispatch::{CommandDispatchState, CommandTurnOutput};
 pub(crate) use frontend_control::{CdpCookieSnapshot, CdpOwnerActorLifecycle};
 use protocol_residence::{
     ClientTurnPredecessor, ProtocolSchedulerResidence, ProtocolSchedulerStep, SchedulerQueues,
@@ -2422,12 +2420,20 @@ impl CdpScheduler {
             .await
     }
 
-    pub(crate) async fn ingest_renderer_publication_after_load(
+    pub(crate) async fn ingest_renderer_publication_after_loads(
         &mut self,
         publication: RendererOutputTransportMessage,
-        observation_id: DeferredMainDocumentLoadObservationId,
+        observation_ids: Vec<DeferredMainDocumentLoadObservationId>,
     ) -> ProtocolOutputSequence {
-        self.ingest_renderer_publication(publication, vec![observation_id], None)
+        let future_load_predecessor = observation_ids
+            .is_empty()
+            .then(|| {
+                DeferredMainDocumentLoadPredecessorCandidate::from_renderer_publication(
+                    &publication,
+                )
+            })
+            .flatten();
+        self.ingest_renderer_publication(publication, observation_ids, future_load_predecessor)
             .await
     }
 

@@ -6510,13 +6510,10 @@ fn try_start_page_enable_command(
             "BrowserContextNotLoaded",
         )));
     }
-    if conn.session_owner_target_has_waiting_for_debugger_session(cmd.session_id) {
-        return Some(PageCommandTaskStep::Complete(CommandOutputPlan::success()));
-    }
     match conn.runtime_session_owner_slot(cmd.session_id) {
         Ok(slot)
             if slot.has_loaded_page()
-                && conn.runtime_session_owner_should_start_initial_document_navigation(
+                && conn.runtime_session_owner_can_start_initial_document_navigation(
                     cmd.session_id,
                 ) =>
         {

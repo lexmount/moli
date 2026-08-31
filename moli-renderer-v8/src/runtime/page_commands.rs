@@ -411,7 +411,7 @@ impl PageVm {
                 ),
             ),
             RendererPageCommand::StopDocumentLifecycle => {
-                self.stop_document_lifecycle();
+                self.stop_document_lifecycle()?;
                 Ok(RendererPageReply::Unit)
             }
             RendererPageCommand::SearchTextByLines {
@@ -1033,8 +1033,11 @@ impl PageVm {
                     .set_javascript_dialog_handler_enabled(enabled);
                 Ok(RendererPageReply::Unit)
             }
-            RendererPageCommand::ReplaceBrowserResourceRuntime(resource_runtime) => {
-                self.replace_browser_resource_runtime(&resource_runtime);
+            RendererPageCommand::ReplaceBrowserResourceRuntime {
+                resource_runtime,
+                navigator_identity,
+            } => {
+                self.replace_browser_resource_runtime(&resource_runtime, &navigator_identity);
                 Ok(RendererPageReply::Unit)
             }
             RendererPageCommand::RetireDocumentResourceAuthorities => {

@@ -1053,9 +1053,8 @@ impl CdpConnection {
         };
         if refresh_active_engine {
             self.apply_active_engine_fetch_overrides();
-            return self.start_rebuild_resource_runtime_for_session_owner(session_id);
         }
-        Ok(None)
+        self.start_rebuild_resource_runtime_for_session_owner(session_id)
     }
 
     fn start_set_non_page_browser_identity_override(
@@ -1116,9 +1115,8 @@ impl CdpConnection {
         };
         if refresh_active_engine {
             self.apply_active_engine_fetch_overrides();
-            return self.start_rebuild_resource_runtime_for_session_owner(session_id);
         }
-        Ok(None)
+        self.start_rebuild_resource_runtime_for_session_owner(session_id)
     }
 
     pub(crate) fn start_set_tls_verify_host_for_session_owner(

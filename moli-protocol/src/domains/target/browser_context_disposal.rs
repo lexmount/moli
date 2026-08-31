@@ -234,6 +234,7 @@ async fn fail_pending_navigations_for_disposed_target_async(
         out,
         session_id,
         DISPOSE_REASON,
+        DISPOSE_REASON,
         pending_navigations,
         pending_auth_navigations,
         pending_response_navigations,

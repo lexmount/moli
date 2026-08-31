@@ -1283,7 +1283,7 @@ fn start_create_isolated_world_initial_navigation_or_renderer_phase(
     mut task: CreateIsolatedWorldCommandTask,
 ) -> PageCommandTaskStep {
     let should_start_target_url_navigation =
-        conn.runtime_session_owner_should_start_initial_document_navigation(session_id);
+        conn.runtime_session_owner_can_start_initial_document_navigation(session_id);
     if !should_start_target_url_navigation {
         return start_create_isolated_world_frame_or_world_phase(
             conn, command_id, session_id, task,

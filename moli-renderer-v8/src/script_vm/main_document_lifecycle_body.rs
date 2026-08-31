@@ -19,6 +19,31 @@ use crate::dom::native::DocumentReadyState;
 use crate::frame_owner_model::{FrameDocumentTaskOwner, MainDocumentInteractiveLifecycleAction};
 
 impl ScriptVm {
+    /// Apply Blink's `CancelParsing()` readiness boundary for Page.stopLoading.
+    ///
+    /// This is deliberately separate from the ordinary Window-load body: the
+    /// Document remains current and receives `readystatechange`, while the
+    /// frame-owner lifecycle suppresses all later DCL/load delivery.
+    pub(crate) fn stop_current_main_document_loading(&mut self) -> anyhow::Result<()> {
+        let Some(owner) = self.current_main_document_task_owner() else {
+            return Ok(());
+        };
+        let ready_state_changed = self
+            ._context_host
+            .borrow_mut()
+            .stop_current_main_document_loading(owner)
+            .unwrap_or(false);
+
+        if ready_state_changed {
+            self.set_document_ready_state(DocumentReadyState::Complete)?;
+            let _dispatch =
+                self.dispatch_document_lifecycle_event_body_best_effort("readystatechange");
+        }
+
+        let checkpoint = self.finish_main_document_lifecycle_checkpoint();
+        self.finish_main_document_lifecycle_turn(checkpoint)
+    }
+
     /// Start one lifecycle body without performing any task-end or internal
     /// lifecycle checkpoint.
     pub(crate) fn begin_main_document_lifecycle_body(

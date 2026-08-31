@@ -1074,6 +1074,24 @@ impl BrowserContext {
             .is_none_or(TargetOwnerState::can_install_current_initial_empty_document_page)
     }
 
+    /// Reports whether one exact Page target is still on its materialized
+    /// initial empty Document and has a non-empty target URL left to load.
+    ///
+    /// This target-addressed query is used when the last debugger barrier is
+    /// released by detaching its session, after that session can no longer be
+    /// used as a routing key.
+    pub(crate) fn target_needs_initial_document_navigation(&self, target_id: &str) -> bool {
+        let Some(target) = self.page_target(target_id) else {
+            return false;
+        };
+        let owner_state = &target.owner_state;
+        let Some(initial_url) = owner_state.initial_empty_document_url_if_current() else {
+            return false;
+        };
+        target.target_url() != initial_url
+            && !owner_state.initial_empty_document_pending_cross_document_navigation()
+    }
+
     pub(crate) fn loaded_document_renderer_owner_ids_for_diagnostics(&self) -> HashSet<u64> {
         let mut owner_ids = HashSet::new();
         if let Some(page) = self.loaded_page() {
@@ -1632,6 +1650,15 @@ impl BrowserContext {
         &self,
     ) -> Option<moli_browser_profile::BrowserIdentityProfile> {
         self.effective_active_browser_identity_override().cloned()
+    }
+
+    pub(crate) fn effective_active_renderer_browser_identity_override_owned(
+        &self,
+    ) -> Option<moli_browser_profile::BrowserIdentityProfile> {
+        self.page_targets
+            .active()
+            .and_then(|host| host.effective_renderer_browser_identity_override_owned())
+            .or_else(|| self.default_browser_identity.profile_owned())
     }
 
     pub(crate) fn default_browser_identity_override(

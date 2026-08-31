@@ -111,10 +111,21 @@ impl PreparedProtocolOutputs {
                     .append_to_output_sink(&mut prepared);
             }
             RendererProtocolObservation::RuntimeInspector(batch) => {
+                let source_batches = vec![batch.clone()];
                 let mut batches = conn.route_current_renderer_inspector_output_for_session_owner(
                     session_id,
-                    vec![batch.clone()],
+                    source_batches.clone(),
                 );
+                if batches.is_empty() {
+                    crate::domains::runtime::RuntimePreparedOutputs::
+                        from_retired_renderer_runtime_inspector_session_responses(
+                            conn,
+                            session_id,
+                            &source_batches,
+                        )
+                        .append_to_output_sink(&mut prepared);
+                    return prepared;
+                }
                 for batch in &mut batches {
                     let Some(attachment) = conn
                         .target_page_protocol_attachment_identity_for_renderer_inspector_route(

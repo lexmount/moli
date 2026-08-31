@@ -482,6 +482,11 @@ impl TargetControlPlane {
             .target_has_waiting_for_debugger_session(target_id)
     }
 
+    pub(crate) fn release_waiting_for_debugger_session(&mut self, session_id: &str) -> bool {
+        self.sessions
+            .release_waiting_for_debugger_session(session_id)
+    }
+
     pub(crate) fn auto_attached_sessions_for_owner(
         &self,
         owner_session_id: Option<&str>,
@@ -714,7 +719,7 @@ mod tests {
         assert_eq!(detached.target_id(), "TID-page");
         assert_eq!(detached.route(), Some(&route));
         assert!(!detached.auto_attached());
-        assert!(!detached.waiting_for_debugger());
+        assert!(!detached.was_waiting_for_debugger());
 
         let events = plan.into_background_events();
         assert_eq!(events.len(), 1);

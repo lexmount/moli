@@ -3077,11 +3077,12 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
                 "NavigationRequestNotCurrent",
             ));
         };
-        let none_session_owner_route = completion_state
-            .navigate_session_id
-            .is_none()
-            .then(|| conn.none_session_owner_route_override())
-            .flatten();
+        let none_session_owner_route = crate::conn::CommandOwnerScope::capture(
+            conn,
+            completion_state.navigate_session_id.as_deref(),
+        )
+        .session_owner_route()
+        .cloned();
         tokio::task::spawn_local(async move {
             let body_completion_sink = crate::conn::BackgroundNavigationBodyCompletionSink::new(
                 sender.clone(),
@@ -3382,11 +3383,14 @@ pub(crate) async fn complete_materialized_navigation_into_buffer_async(
     match navigation {
         network::MaterializedNavigationLoadOutcome::ResponseCommitReady(navigation) => {
             let navigation = *navigation;
-            let configuration = conn.prepared_document_commit_configuration_for_session_owner(
+            let update_result = match conn.prepared_document_commit_configuration_for_session_owner(
                 state.navigate_session_id.as_deref(),
                 navigation.final_url(),
-            );
-            if let Err(error) = navigation.update_commit_configuration(configuration).await {
+            ) {
+                Ok(configuration) => navigation.update_commit_configuration(configuration).await,
+                Err(error) => Err(error),
+            };
+            if let Err(error) = update_result {
                 push_navigation_commit_error(out, &state, error);
             } else {
                 let renderer_page = navigation.renderer_page_residence_identity();

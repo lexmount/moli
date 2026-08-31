@@ -362,6 +362,209 @@ async fn emulated_media_can_complete_through_pending_command_dispatch() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn pending_emulation_completion_follows_the_exact_target_across_activation_and_navigation() {
+    let mut ctx = TestContext::new();
+    load_session_page_for_pending_emulation_test(&mut ctx).await;
+    let dispatched_attachment_id = ctx
+        .conn
+        .browser_context
+        .as_ref()
+        .and_then(|browser_context| browser_context.page_target("TID-1"))
+        .and_then(PageTargetHost::loaded_page)
+        .and_then(moli_core::page::Page::renderer_agent_attachment_id)
+        .expect("the original target should have a renderer attachment");
+    let target = super::PendingEmulationPageTarget::BrowserContextTarget {
+        browser_context_id: "BID-1".to_owned(),
+        target_id: "TID-1".to_owned(),
+    };
+
+    let browser_context = ctx.conn.browser_context.as_mut().unwrap();
+    assert!(
+        browser_context.insert_page_target_host(PageTargetHost::with_url(
+            "TID-2".to_owned(),
+            None,
+            "about:blank".to_owned(),
+        ))
+    );
+    browser_context.set_active_target_id("TID-2");
+    assert!(
+        !super::pending_emulation_page_configuration_will_be_replayed(
+            &ctx.conn,
+            &target,
+            &super::PendingEmulationPageOperation::SetTimezoneOverride,
+            Some(dispatched_attachment_id),
+        ),
+        "changing foreground selection must not make an error from the same Page look stale"
+    );
+
+    ctx.process_async(json!({
+        "id": 9_104,
+        "sessionId": "SID-1",
+        "method": "Page.navigate",
+        "params": { "url": "data:text/html,<body>replacement</body>" }
+    }))
+    .await;
+    assert!(ctx.take_response_by_id(9_104)["result"]["loaderId"].is_string());
+    assert!(
+        super::pending_emulation_page_configuration_will_be_replayed(
+            &ctx.conn,
+            &target,
+            &super::PendingEmulationPageOperation::SetTimezoneOverride,
+            Some(dispatched_attachment_id),
+        ),
+        "only replacement of the exact target attachment may retire its renderer error"
+    );
+    assert!(
+        !super::pending_emulation_page_configuration_will_be_replayed(
+            &ctx.conn,
+            &target,
+            &super::PendingEmulationPageOperation::SetIdleOverride,
+            Some(dispatched_attachment_id),
+        ),
+        "frame-host idle state must not use the target-policy replay path",
+    );
+
+    let result = super::complete_pending_devtools_emulation_command(
+        &mut ctx.conn,
+        super::CompletedEmulationCommandDispatch {
+            command_id: None,
+            session_id: Some("SID-1".to_owned()),
+            completed: super::CompletedEmulationRendererDispatch::Pages(vec![
+                super::CompletedEmulationPageCommand {
+                    target,
+                    operation: super::PendingEmulationPageOperation::SetTimezoneOverride,
+                    dispatched_attachment_id: Some(dispatched_attachment_id),
+                    completed: Err("renderer attachment retired".to_owned()),
+                },
+            ]),
+        },
+    )
+    .expect("the stored target policy should be replayed into the replacement document");
+    assert!(matches!(result, DevToolsCommandResult::Empty));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pending_idle_override_response_does_not_replay_into_replacement_page() {
+    let mut ctx = TestContext::new();
+    load_session_page_for_pending_emulation_test(&mut ctx).await;
+
+    let raw = json!({
+        "id": 9_105,
+        "sessionId": "SID-1",
+        "method": "Emulation.setIdleOverride",
+        "params": { "isUserActive": false, "isScreenUnlocked": false }
+    })
+    .to_string();
+    let CdpCommandTaskStep::Pending(pending) = ctx.conn.start_command_dispatch(&raw) else {
+        panic!("the loaded Page should receive the idle override command");
+    };
+    let completed = pending.wait().await;
+
+    ctx.process_async(json!({
+        "id": 9_106,
+        "sessionId": "SID-1",
+        "method": "Page.navigate",
+        "params": { "url": "data:text/html,<body>replacement</body>" }
+    }))
+    .await;
+    assert!(ctx.take_response_by_id(9_106)["result"]["loaderId"].is_string());
+
+    let CdpCommandTaskStep::Complete(outcome) =
+        ctx.conn.complete_pending_command_dispatch(completed).await
+    else {
+        panic!("the retired idle override should settle in one protocol phase");
+    };
+    assert!(outcome.into_parts().0.iter().any(|message| {
+        message["id"] == json!(9_105)
+            && message["sessionId"] == json!("SID-1")
+            && message["result"] == json!({})
+    }));
+    let page = ctx
+        .conn
+        .browser_context
+        .as_ref()
+        .and_then(|context| context.page_target("TID-1"))
+        .and_then(PageTargetHost::loaded_page)
+        .expect("replacement Page");
+    assert_eq!(
+        page.idle_override(),
+        None,
+        "a settled command on the retired frame host must not become target-level policy",
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn admitted_idle_override_is_visible_to_concurrent_same_site_navigation() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new().route(
+                "/",
+                get(|| async { "<!doctype html><title>idle navigation</title>" }),
+            ),
+        )
+        .await
+        .unwrap();
+    });
+    let mut ctx = TestContext::new();
+    load_session_page_for_pending_emulation_test_at_url(
+        &mut ctx,
+        &format!("http://{address}/?initial"),
+    )
+    .await;
+
+    let raw = json!({
+        "id": 9_107,
+        "sessionId": "SID-1",
+        "method": "Emulation.setIdleOverride",
+        "params": { "isUserActive": false, "isScreenUnlocked": false }
+    })
+    .to_string();
+    let CdpCommandTaskStep::Pending(pending) = ctx.conn.start_command_dispatch(&raw) else {
+        panic!("the loaded Page should receive the idle override command");
+    };
+    let completed = pending.wait().await;
+
+    ctx.process_async(json!({
+        "id": 9_108,
+        "sessionId": "SID-1",
+        "method": "Page.navigate",
+        "params": { "url": format!("http://{address}/?replacement") }
+    }))
+    .await;
+    assert!(ctx.take_response_by_id(9_108)["result"]["loaderId"].is_string());
+
+    let CdpCommandTaskStep::Complete(outcome) =
+        ctx.conn.complete_pending_command_dispatch(completed).await
+    else {
+        panic!("the retired idle override should settle in one protocol phase");
+    };
+    assert!(outcome.into_parts().0.iter().any(|message| {
+        message["id"] == json!(9_107)
+            && message["sessionId"] == json!("SID-1")
+            && message["result"] == json!({})
+    }));
+    let page = ctx
+        .conn
+        .browser_context
+        .as_ref()
+        .and_then(|context| context.page_target("TID-1"))
+        .and_then(PageTargetHost::loaded_page)
+        .expect("replacement Page");
+    assert_eq!(
+        page.idle_override(),
+        Some(moli_core::page::EmulatedIdleOverride {
+            is_user_active: false,
+            is_screen_unlocked: false,
+        }),
+        "same-site commit must read admitted state from the outgoing document handle",
+    );
+    server.abort();
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn idle_override_updates_idle_detector_and_clear_restores_actual_state() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -463,7 +666,6 @@ async fn idle_override_updates_idle_detector_and_clear_restores_actual_state() {
             && message["sessionId"] == json!("SID-1")
             && message["result"] == json!({})
     }));
-
     let page = ctx
         .conn
         .browser_context
@@ -501,20 +703,35 @@ async fn idle_override_updates_idle_detector_and_clear_restores_actual_state() {
     }));
 
     ctx.conn
-        .start_document_navigation_for_session_owner(Some("SID-1"), "LID-idle-same-site".to_owned())
-        .expect("same-site navigation should enter the pending state");
+        .start_document_navigation_for_session_owner(
+            Some("SID-1"),
+            "LID-idle-cross-document".to_owned(),
+        )
+        .expect("cross-Document navigation should enter the pending state");
     let configuration = ctx
         .conn
         .prepared_document_commit_configuration_for_session_owner(
             Some("SID-1"),
             &url::Url::parse("http://127.0.0.1:65530/same-site-different-origin").unwrap(),
-        );
+        )
+        .expect("commit configuration should resolve the target resource runtime");
     assert_eq!(
         configuration.idle_override,
         Some(moli_core::page::EmulatedIdleOverride {
             is_user_active: false,
             is_screen_unlocked: false,
         })
+    );
+    let cross_site_configuration = ctx
+        .conn
+        .prepared_document_commit_configuration_for_session_owner(
+            Some("SID-1"),
+            &url::Url::parse("http://idle-override-cross-site.test/").unwrap(),
+        )
+        .expect("cross-site commit configuration should resolve the target resource runtime");
+    assert_eq!(
+        cross_site_configuration.idle_override, None,
+        "a cross-site renderer replacement must not inherit frame-host idle state",
     );
     server.abort();
 }
@@ -908,6 +1125,18 @@ async fn multi_session_browser_identity_uses_attachment_order_and_field_contribu
             .network_policy
             .user_agent_override(),
         Some("Moli/Aux-1")
+    );
+    assert_eq!(
+        ctx.conn
+            .browser_context
+            .as_ref()
+            .expect("browser context")
+            .active_page_state()
+            .effective_renderer_browser_identity_override_owned()
+            .expect("renderer identity")
+            .user_agent(),
+        "Moli/Primary-2",
+        "renderer agents use first-enable order rather than browser attachment order"
     );
 
     expect_session_command_result(

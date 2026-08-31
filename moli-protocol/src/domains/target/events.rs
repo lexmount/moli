@@ -298,6 +298,7 @@ pub(super) async fn fail_pending_fetch_state_for_target_background_events_async(
         out,
         session_id,
         reason,
+        reason,
         pending_navigations,
         pending_auth_navigations,
         pending_response_navigations,

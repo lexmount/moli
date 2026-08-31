@@ -684,6 +684,8 @@ async def async_main(argv: list[str] | None = None) -> int:
     }
     if failures:
         payload["error"] = "\n".join(failures)
+        if serve is not None and serve.logs:
+            payload["moliLogTail"] = serve.logs[-5_000:]
     _emit_worker_payload(payload, args.result, failed=not ok)
     return 0 if ok else 1
 

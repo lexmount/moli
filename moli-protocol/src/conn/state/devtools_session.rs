@@ -62,6 +62,7 @@ pub(crate) struct DevToolsSessionState {
 pub(crate) struct DevToolsSessionRegistry {
     states: BTreeMap<DevToolsSessionKey, DevToolsSessionState>,
     attached_order: Vec<String>,
+    browser_identity_activation_order: Vec<DevToolsSessionKey>,
 }
 
 impl Default for DevToolsSessionRegistry {
@@ -72,6 +73,7 @@ impl Default for DevToolsSessionRegistry {
                 DevToolsSessionState::default(),
             )]),
             attached_order: Vec::new(),
+            browser_identity_activation_order: Vec::new(),
         }
     }
 }
@@ -139,6 +141,8 @@ impl DevToolsSessionRegistry {
         if removed.is_some() {
             self.attached_order
                 .retain(|attached| attached != session_id);
+            self.browser_identity_activation_order
+                .retain(|candidate| candidate != &key);
         }
         removed
     }
@@ -147,6 +151,8 @@ impl DevToolsSessionRegistry {
         self.states
             .retain(|key, _state| matches!(key, DevToolsSessionKey::Primary));
         self.attached_order.clear();
+        self.browser_identity_activation_order
+            .retain(|key| matches!(key, DevToolsSessionKey::Primary));
     }
 
     pub(crate) fn attached_len(&self) -> usize {
@@ -207,19 +213,49 @@ impl DevToolsSessionRegistry {
         aggregate
     }
 
-    pub(crate) fn effective_browser_identity_override(
+    pub(crate) fn effective_network_browser_identity_override(
         &self,
+    ) -> Option<moli_browser_profile::BrowserIdentityProfile> {
+        Self::aggregate_browser_identity_overrides(self.states_in_attachment_order().filter_map(
+            |state| {
+                state
+                    .emulation_session_state
+                    .browser_identity_override
+                    .as_ref()
+            },
+        ))
+    }
+
+    /// Resolves the identity exposed by the live renderer Document.
+    ///
+    /// Chromium's renderer agents enter the instrumenting-agent list when a
+    /// session first enables a non-empty UA override. Updating that session
+    /// does not move it in the list, so this order intentionally differs from
+    /// the browser-side attachment order used for navigation request headers.
+    pub(crate) fn effective_renderer_browser_identity_override(
+        &self,
+    ) -> Option<moli_browser_profile::BrowserIdentityProfile> {
+        Self::aggregate_browser_identity_overrides(
+            self.browser_identity_activation_order
+                .iter()
+                .filter_map(|key| self.states.get(key))
+                .filter_map(|state| {
+                    state
+                        .emulation_session_state
+                        .browser_identity_override
+                        .as_ref()
+                }),
+        )
+    }
+
+    fn aggregate_browser_identity_overrides<'a>(
+        contributions: impl Iterator<Item = &'a DevToolsBrowserIdentityOverride>,
     ) -> Option<moli_browser_profile::BrowserIdentityProfile> {
         let mut identity_base = None;
         let mut user_agent = None;
         let mut accept_language = None;
         let mut navigator_platform = None;
-        for contribution in self.states_in_attachment_order().filter_map(|state| {
-            state
-                .emulation_session_state
-                .browser_identity_override
-                .as_ref()
-        }) {
+        for contribution in contributions {
             identity_base = Some(&contribution.base);
             if contribution.user_agent.is_some() {
                 user_agent = Some(contribution);
@@ -257,6 +293,12 @@ impl DevToolsSessionRegistry {
         session_id: Option<&str>,
         browser_identity_override: Option<DevToolsBrowserIdentityOverride>,
     ) {
+        let key = Self::routed_key(is_attached_session, session_id);
+        if browser_identity_override.is_some()
+            && !self.browser_identity_activation_order.contains(&key)
+        {
+            self.browser_identity_activation_order.push(key);
+        }
         let state = self.routed_mut_or_insert(is_attached_session, session_id);
         state.emulation_session_state.browser_identity_override = browser_identity_override;
     }
@@ -342,6 +384,8 @@ impl DevToolsSessionRegistry {
         if let Some(state) = self.states.get_mut(&key) {
             state.emulation_session_state = DevToolsEmulationSessionState::default();
         }
+        self.browser_identity_activation_order
+            .retain(|candidate| candidate != &key);
     }
 
     pub(crate) fn states_mut(&mut self) -> impl Iterator<Item = &mut DevToolsSessionState> {
@@ -350,6 +394,8 @@ impl DevToolsSessionRegistry {
 
     pub(crate) fn reset(&mut self, preserve_attached_sessions: bool) {
         *self.primary_mut() = DevToolsSessionState::default();
+        self.browser_identity_activation_order
+            .retain(|key| !matches!(key, DevToolsSessionKey::Primary));
         if !preserve_attached_sessions {
             self.clear_attached();
         }
@@ -1128,8 +1174,16 @@ mod tests {
         sessions: &DevToolsSessionRegistry,
     ) -> moli_browser_profile::BrowserIdentityProfile {
         sessions
-            .effective_browser_identity_override()
+            .effective_network_browser_identity_override()
             .expect("browser identity contribution should be effective")
+    }
+
+    fn effective_renderer_identity(
+        sessions: &DevToolsSessionRegistry,
+    ) -> moli_browser_profile::BrowserIdentityProfile {
+        sessions
+            .effective_renderer_browser_identity_override()
+            .expect("renderer browser identity contribution should be effective")
     }
 
     #[test]
@@ -1203,7 +1257,7 @@ mod tests {
     }
 
     #[test]
-    fn browser_identity_override_uses_attachment_order_not_setter_order() {
+    fn browser_identity_uses_distinct_network_and_renderer_agent_order() {
         let mut sessions = DevToolsSessionRegistry::default();
         sessions.ensure_attached("SID-later");
         sessions.set_browser_identity_override(
@@ -1217,41 +1271,63 @@ mod tests {
             identity_override("Moli/Primary-1", None, None),
         );
         assert_eq!(effective_identity(&sessions).user_agent(), "Moli/Later-1");
-
-        sessions.set_browser_identity_override(
-            false,
-            None,
-            identity_override("Moli/Primary-2", None, None),
-        );
         assert_eq!(
-            effective_identity(&sessions).user_agent(),
-            "Moli/Later-1",
-            "a later setter must not outrank a later-attached session"
+            effective_renderer_identity(&sessions).user_agent(),
+            "Moli/Primary-1",
+            "the renderer follows agent activation order, not attachment order"
         );
-
-        sessions.set_browser_identity_override(true, Some("SID-later"), None);
-        assert_eq!(effective_identity(&sessions).user_agent(), "Moli/Primary-2");
 
         sessions.set_browser_identity_override(
             true,
             Some("SID-later"),
             identity_override("Moli/Later-2", None, None),
         );
+        assert_eq!(
+            effective_identity(&sessions).user_agent(),
+            "Moli/Later-2",
+            "the browser-side winner remains the later-attached session"
+        );
+        assert_eq!(
+            effective_renderer_identity(&sessions).user_agent(),
+            "Moli/Primary-1",
+            "updating an enabled renderer agent must not reorder it"
+        );
+
+        sessions.set_browser_identity_override(
+            false,
+            None,
+            identity_override("Moli/Primary-2", None, None),
+        );
         assert_eq!(effective_identity(&sessions).user_agent(), "Moli/Later-2");
+        assert_eq!(
+            effective_renderer_identity(&sessions).user_agent(),
+            "Moli/Primary-2"
+        );
+
+        sessions.set_browser_identity_override(false, None, None);
+        assert_eq!(effective_identity(&sessions).user_agent(), "Moli/Later-2");
+        assert_eq!(
+            effective_renderer_identity(&sessions).user_agent(),
+            "Moli/Later-2"
+        );
+
+        sessions.set_browser_identity_override(
+            false,
+            None,
+            identity_override("Moli/Primary-3", Some("fr-FR"), Some("PrimaryPlatform")),
+        );
+        assert_eq!(effective_identity(&sessions).user_agent(), "Moli/Later-2");
+        let renderer_identity = effective_renderer_identity(&sessions);
+        assert_eq!(renderer_identity.user_agent(), "Moli/Primary-3");
+        assert_eq!(renderer_identity.accept_language(), "fr-FR");
+        assert_eq!(renderer_identity.navigator_platform(), "PrimaryPlatform");
 
         sessions.remove_attached("SID-later");
-        assert_eq!(effective_identity(&sessions).user_agent(), "Moli/Primary-2");
-
-        sessions.ensure_attached("SID-later");
-        sessions.set_browser_identity_override(
-            true,
-            Some("SID-later"),
-            identity_override("", Some("fr-FR"), Some("AuxPlatform")),
+        assert_eq!(effective_identity(&sessions).user_agent(), "Moli/Primary-3");
+        assert_eq!(
+            effective_renderer_identity(&sessions).user_agent(),
+            "Moli/Primary-3"
         );
-        let identity = effective_identity(&sessions);
-        assert_eq!(identity.user_agent(), "Moli/Primary-2");
-        assert_eq!(identity.accept_language(), "fr-FR");
-        assert_eq!(identity.navigator_platform(), "AuxPlatform");
     }
 
     #[test]

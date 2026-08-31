@@ -35,6 +35,7 @@ pub(crate) use popup::{
     complete_popup_target_navigation_owner_action_async,
     create_popup_target_from_renderer_output_background_events_async,
     emit_target_info_changed_for_session_owner_background_event,
+    schedule_initial_document_target_url_navigation_after_debugger_barrier_release_for_target,
     schedule_initial_document_target_url_navigation_after_debugger_resume,
 };
 pub(crate) fn popup_activation_creates_new_target(
@@ -253,6 +254,7 @@ async fn clear_detached_target_owner_fetch_state_background_events_async(
         conn,
         out,
         session_id,
+        "Target detached",
         "Target detached",
         pending_navigations,
         pending_auth_navigations,

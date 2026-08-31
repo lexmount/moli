@@ -1182,6 +1182,7 @@ impl PageVm {
             runtime_isolated_worlds: self.runtime_isolated_worlds.clone(),
             permission_overrides: self.permission_overrides.clone(),
             extra_http_headers: self.extra_http_headers.clone(),
+            navigator_identity: self.navigator_identity.clone(),
             document_policy_container: crate::document_runtime::DocumentPolicyContainer {
                 document_content_security_policies: self.vm().document_content_security_policies(),
                 ..Default::default()

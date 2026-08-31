@@ -1892,10 +1892,10 @@ fn continue_streaming_document_response_in_background(
         prepared_document,
     } = pending;
     let session_id = navigation.navigate_session_id.clone();
-    let none_session_owner_route = session_id
-        .is_none()
-        .then(|| conn.none_session_owner_route_override())
-        .flatten();
+    let none_session_owner_route =
+        crate::conn::CommandOwnerScope::capture(conn, session_id.as_deref())
+            .session_owner_route()
+            .cloned();
     let cancellation = response.cancellation_handle();
     if response_code.is_none()
         && response_headers.is_empty()

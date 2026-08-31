@@ -12,6 +12,12 @@ pub struct PendingPageCommand {
     renderer_agent_attachment_id: Option<RendererAgentAttachmentId>,
 }
 
+impl PendingPageCommand {
+    pub fn renderer_agent_attachment_id(&self) -> Option<RendererAgentAttachmentId> {
+        self.renderer_agent_attachment_id
+    }
+}
+
 pub struct PendingRuntimeInspectorCommandDispatch {
     kind: PendingRuntimeInspectorCommandDispatchKind,
 }

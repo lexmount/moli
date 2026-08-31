@@ -86,7 +86,7 @@ async def start_moli_serve(
         str(port),
         "--resource",
         "--log-level",
-        "info",
+        os.environ.get("MOLI_SMOKE_LOG_LEVEL", "info"),
     ]
     if layout:
         command.append("--layout")

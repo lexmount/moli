@@ -173,7 +173,10 @@ pub(crate) struct TargetNavigationLoadInputs {
     storage_handles: TargetNavigationStorageHandles,
     pub(crate) root_frame_id: Option<String>,
     pub(crate) renderer_runtime: RendererBrowserContextRuntimeOwnerAccess,
+    /// Browser-side identity used for navigation request headers.
     pub(crate) browser_identity_override: Option<moli_browser_profile::BrowserIdentityProfile>,
+    /// Renderer-agent identity exposed through the committed Document's Navigator.
+    pub(crate) navigator_identity_override: Option<moli_browser_profile::BrowserIdentityProfile>,
     pub(crate) http_proxy_override: Option<String>,
     pub(crate) http_no_proxy_override: Option<String>,
     pub(crate) tls_verify_host_override: Option<bool>,
@@ -270,6 +273,8 @@ impl TargetNavigationLoadInputs {
             renderer_runtime: browser_context.renderer_runtime_owner_access(),
             browser_identity_override: browser_context
                 .effective_active_browser_identity_override_owned(),
+            navigator_identity_override: browser_context
+                .effective_active_renderer_browser_identity_override_owned(),
             http_proxy_override: browser_context.effective_active_http_proxy_override_owned(),
             http_no_proxy_override: browser_context.effective_active_http_no_proxy_override_owned(),
             tls_verify_host_override: browser_context.effective_active_tls_verify_host_override(),
@@ -324,6 +329,8 @@ impl TargetNavigationLoadInputs {
         inputs.browser_context_id = Some(browser_context.id.clone());
         inputs.browser_identity_override =
             browser_context.effective_active_browser_identity_override_owned();
+        inputs.navigator_identity_override =
+            browser_context.effective_active_renderer_browser_identity_override_owned();
         inputs.http_proxy_override = browser_context.effective_active_http_proxy_override_owned();
         inputs.http_no_proxy_override =
             browser_context.effective_active_http_no_proxy_override_owned();
@@ -351,6 +358,7 @@ impl TargetNavigationLoadInputs {
             root_frame_id: None,
             renderer_runtime,
             browser_identity_override: None,
+            navigator_identity_override: None,
             http_proxy_override: None,
             http_no_proxy_override: None,
             tls_verify_host_override: None,
@@ -804,6 +812,9 @@ impl<'a> TargetSessionOwnerRef<'a> {
                     browser_identity_override: page_state
                         .network_policy
                         .browser_identity_override_owned()
+                        .or_else(|| browser_context.default_browser_identity_override_owned()),
+                    navigator_identity_override: page_state
+                        .effective_renderer_browser_identity_override_owned()
                         .or_else(|| browser_context.default_browser_identity_override_owned()),
                     http_proxy_override: page_state
                         .http_proxy_override

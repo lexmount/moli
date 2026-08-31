@@ -48,10 +48,12 @@ async fn commit_navigation_outcome_for_session_test(
     match outcome {
         NavigationLoadOutcome::ResponseCommitReady(navigation) => {
             let navigation = *navigation;
-            let configuration = conn.prepared_document_commit_configuration_for_session_owner(
-                session_id,
-                navigation.final_url(),
-            );
+            let configuration = conn
+                .prepared_document_commit_configuration_for_session_owner(
+                    session_id,
+                    navigation.final_url(),
+                )
+                .expect("test navigation commit configuration should resolve");
             navigation
                 .update_commit_configuration(configuration)
                 .await

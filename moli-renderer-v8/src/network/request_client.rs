@@ -64,6 +64,13 @@ impl ResourceRequestClient {
         self.resource_runtime.clone()
     }
 
+    pub(crate) fn replace_browser_resource_runtime(
+        &mut self,
+        resource_runtime: BrowserResourceRuntime,
+    ) {
+        self.resource_runtime = resource_runtime;
+    }
+
     pub fn shares_resource_runtime_with(&self, other: &Self) -> bool {
         self.resource_runtime
             .shares_state_with(&other.resource_runtime)

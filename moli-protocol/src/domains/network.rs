@@ -1,4 +1,4 @@
-use crate::conn::{CdpConnection, Cmd};
+use crate::conn::{CdpConnection, Cmd, CommandOwnerScope};
 use crate::devtools_runtime::{
     DevToolsAddNetworkDataCollectorCommand, DevToolsBrowserContextId, DevToolsCommand,
     DevToolsCommandResult, DevToolsError, DevToolsErrorKind,
@@ -122,26 +122,41 @@ use settings::clear_browser_cache_command_output_plan;
 
 pub(crate) struct PendingNetworkCommandDispatch {
     command_id: Option<u64>,
-    session_id: Option<String>,
+    owner_scope: CommandOwnerScope,
     kind: PendingNetworkCommandKind,
     pending: PendingNetworkCommandWork,
 }
 
 pub(crate) struct CompletedNetworkCommandDispatch {
     command_id: Option<u64>,
-    session_id: Option<String>,
+    owner_scope: CommandOwnerScope,
     kind: PendingNetworkCommandKind,
     completed: CompletedNetworkCommandWork,
 }
 
 enum PendingNetworkCommandWork {
-    Page(moli_core::page::PendingPageCommand),
+    Page {
+        attachment_id: Option<moli_core::page::RendererAgentAttachmentId>,
+        pending: moli_core::page::PendingPageCommand,
+    },
     Resource(Box<moli_core::page::RendererPreparedNetworkResourceLoad>),
 }
 
 enum CompletedNetworkCommandWork {
-    Page(Result<Box<moli_core::page::CompletedPageCommand>, String>),
+    Page {
+        attachment_id: Option<moli_core::page::RendererAgentAttachmentId>,
+        completed: Result<Box<moli_core::page::CompletedPageCommand>, String>,
+    },
     Resource(moli_core::page::RendererNetworkResourceLoadOutcome),
+}
+
+impl PendingNetworkCommandWork {
+    fn page(pending: moli_core::page::PendingPageCommand) -> Self {
+        Self::Page {
+            attachment_id: pending.renderer_agent_attachment_id(),
+            pending,
+        }
+    }
 }
 
 pub(crate) enum NetworkCommandTaskStep {
@@ -164,25 +179,29 @@ enum PendingNetworkCommandKind {
 
 impl PendingNetworkCommandDispatch {
     pub(crate) fn session_id(&self) -> Option<&str> {
-        self.session_id.as_deref()
+        self.owner_scope.session_id()
     }
 
     pub(crate) async fn wait(self) -> CompletedNetworkCommandDispatch {
         let completed = match self.pending {
-            PendingNetworkCommandWork::Page(pending) => CompletedNetworkCommandWork::Page(
-                pending
+            PendingNetworkCommandWork::Page {
+                attachment_id,
+                pending,
+            } => CompletedNetworkCommandWork::Page {
+                attachment_id,
+                completed: pending
                     .wait()
                     .await
                     .map(Box::new)
                     .map_err(|error| error.to_string()),
-            ),
+            },
             PendingNetworkCommandWork::Resource(pending) => {
                 CompletedNetworkCommandWork::Resource((*pending).execute().await)
             }
         };
         CompletedNetworkCommandDispatch {
             command_id: self.command_id,
-            session_id: self.session_id,
+            owner_scope: self.owner_scope,
             kind: self.kind,
             completed,
         }
@@ -195,7 +214,7 @@ impl CompletedNetworkCommandDispatch {
     }
 
     pub(crate) fn session_id(&self) -> Option<&str> {
-        self.session_id.as_deref()
+        self.owner_scope.session_id()
     }
 }
 
@@ -449,17 +468,22 @@ fn validate_top_level_target_ids(
 }
 
 fn pending_network_page_command_step(
+    conn: &mut CdpConnection,
     command_id: Option<u64>,
     session_id: Option<&str>,
     kind: PendingNetworkCommandKind,
-    result: Result<Option<moli_core::page::PendingPageCommand>, String>,
+    start: impl FnOnce(
+        &mut CdpConnection,
+    ) -> Result<Option<moli_core::page::PendingPageCommand>, String>,
 ) -> NetworkCommandTaskStep {
+    let owner_scope = CommandOwnerScope::capture(conn, session_id);
+    let result = start(conn);
     match result {
         Ok(Some(pending)) => NetworkCommandTaskStep::Pending(PendingNetworkCommandDispatch {
             command_id,
-            session_id: session_id.map(str::to_owned),
+            owner_scope,
             kind,
-            pending: PendingNetworkCommandWork::Page(pending),
+            pending: PendingNetworkCommandWork::page(pending),
         }),
         Ok(None) => NetworkCommandTaskStep::Complete(CommandOutputPlan::success()),
         Err(message) if message == "BrowserContextNotLoaded" => NetworkCommandTaskStep::Complete(
@@ -491,12 +515,13 @@ fn start_set_network_domain_enabled_command(
     } else {
         PendingNetworkCommandKind::Disable
     };
+    let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
     match conn.start_replay_effective_network_request_policy_for_session_owner(cmd.session_id) {
         Ok(Some(pending)) => NetworkCommandTaskStep::Pending(PendingNetworkCommandDispatch {
             command_id: cmd.id,
-            session_id: cmd.session_id.map(str::to_owned),
+            owner_scope,
             kind,
-            pending: PendingNetworkCommandWork::Page(pending),
+            pending: PendingNetworkCommandWork::page(pending),
         }),
         Ok(None) => NetworkCommandTaskStep::Complete(if enabled {
             settings::enabled_command_output_plan(conn, cmd.session_id)
@@ -516,10 +541,11 @@ fn start_set_extra_http_headers_command(
         Err(plan) => return NetworkCommandTaskStep::Complete(plan),
     };
     pending_network_page_command_step(
+        conn,
         cmd.id,
         cmd.session_id,
         PendingNetworkCommandKind::SetExtraHttpHeaders,
-        conn.start_set_extra_http_headers_for_session_owner(cmd.session_id, headers),
+        |conn| conn.start_set_extra_http_headers_for_session_owner(cmd.session_id, headers),
     )
 }
 
@@ -532,10 +558,11 @@ fn start_set_cache_disabled_command(
         Err(plan) => return NetworkCommandTaskStep::Complete(plan),
     };
     pending_network_page_command_step(
+        conn,
         cmd.id,
         cmd.session_id,
         PendingNetworkCommandKind::SetCacheDisabled,
-        conn.start_set_cache_disabled_for_session_owner(cmd.session_id, cache_disabled),
+        |conn| conn.start_set_cache_disabled_for_session_owner(cmd.session_id, cache_disabled),
     )
 }
 
@@ -548,10 +575,11 @@ fn start_set_blocked_urls_command(
         Err(plan) => return NetworkCommandTaskStep::Complete(plan),
     };
     pending_network_page_command_step(
+        conn,
         cmd.id,
         cmd.session_id,
         PendingNetworkCommandKind::SetBlockedUrls,
-        conn.start_set_blocked_url_patterns_for_session_owner(cmd.session_id, patterns),
+        |conn| conn.start_set_blocked_url_patterns_for_session_owner(cmd.session_id, patterns),
     )
 }
 
@@ -564,10 +592,11 @@ fn start_set_bypass_service_worker_command(
         Err(plan) => return NetworkCommandTaskStep::Complete(plan),
     };
     pending_network_page_command_step(
+        conn,
         cmd.id,
         cmd.session_id,
         PendingNetworkCommandKind::SetBypassServiceWorker,
-        conn.start_set_bypass_service_worker_for_session_owner(cmd.session_id, bypass),
+        |conn| conn.start_set_bypass_service_worker_for_session_owner(cmd.session_id, bypass),
     )
 }
 
@@ -580,17 +609,20 @@ fn start_emulate_network_conditions_command(
         Err(plan) => return NetworkCommandTaskStep::Complete(plan),
     };
     pending_network_page_command_step(
+        conn,
         cmd.id,
         cmd.session_id,
         PendingNetworkCommandKind::EmulateNetworkConditions,
-        conn.start_set_emulated_network_conditions_for_session_owner(
-            cmd.session_id,
-            conditions.offline,
-            conditions.latency,
-            conditions.download_throughput,
-            conditions.upload_throughput,
-            conditions.connection_type,
-        ),
+        |conn| {
+            conn.start_set_emulated_network_conditions_for_session_owner(
+                cmd.session_id,
+                conditions.offline,
+                conditions.latency,
+                conditions.download_throughput,
+                conditions.upload_throughput,
+                conditions.connection_type,
+            )
+        },
     )
 }
 
@@ -604,13 +636,16 @@ fn start_set_user_agent_override_command(
         Err(plan) => return NetworkCommandTaskStep::Complete(plan),
     };
     pending_network_page_command_step(
+        conn,
         cmd.id,
         cmd.session_id,
         PendingNetworkCommandKind::SetUserAgentOverride,
-        conn.start_set_devtools_browser_identity_override_for_session_owner(
-            cmd.session_id,
-            browser_identity,
-        ),
+        |conn| {
+            conn.start_set_devtools_browser_identity_override_for_session_owner(
+                cmd.session_id,
+                browser_identity,
+            )
+        },
     )
 }
 
@@ -670,6 +705,7 @@ pub(crate) fn complete_pending_network_command(
 
 #[derive(Clone, Copy)]
 enum NetworkPageCommandFinish {
+    RequestPolicy,
     ExtraHttpHeaders,
     BlockedUrls,
     BypassServiceWorker,
@@ -681,31 +717,43 @@ fn complete_network_policy_refresh(
     completed: CompletedNetworkCommandDispatch,
     enabled: bool,
 ) -> CommandOutputPlan {
+    let owner_scope = completed.owner_scope.clone();
+    let session_id = owner_scope.session_id().map(str::to_owned);
     let completion = match completed.completed {
-        CompletedNetworkCommandWork::Page(Ok(completion)) => *completion,
-        CompletedNetworkCommandWork::Page(Err(error)) => {
+        CompletedNetworkCommandWork::Page {
+            completed: Ok(completion),
+            ..
+        } => *completion,
+        CompletedNetworkCommandWork::Page {
+            attachment_id,
+            completed: Err(error),
+        } => {
+            if network_page_configuration_will_be_replayed(conn, &owner_scope, attachment_id) {
+                return if enabled {
+                    settings::enabled_command_output_plan(conn, session_id.as_deref())
+                } else {
+                    CommandOutputPlan::success()
+                };
+            }
             return CommandOutputPlan::error(-32000, error);
         }
         CompletedNetworkCommandWork::Resource(_) => {
             return CommandOutputPlan::error(-32000, "InvalidNetworkCommandCompletion");
         }
     };
-    let page = match conn.loaded_page_mut_for_protocol_access(completed.session_id.as_deref()) {
-        Ok(page) => page,
-        Err(message) if message == "NoDocumentLoaded" => {
-            return if enabled {
-                settings::enabled_command_output_plan(conn, completed.session_id.as_deref())
-            } else {
-                CommandOutputPlan::success()
-            };
-        }
-        Err(message) => return CommandOutputPlan::error(-32000, message),
-    };
-    if let Err(error) = page.finish_set_network_request_policy(completion) {
-        return CommandOutputPlan::error(-32000, error.to_string());
+    if let Err(error) = finish_network_page_operation_on_current_attachment(
+        conn.loaded_page_mut_for_target_configuration_for_route(
+            owner_scope.session_id(),
+            owner_scope.session_owner_route(),
+        )
+        .ok(),
+        NetworkPageCommandFinish::RequestPolicy,
+        completion,
+    ) {
+        return CommandOutputPlan::error(-32000, error);
     }
     if enabled {
-        settings::enabled_command_output_plan(conn, completed.session_id.as_deref())
+        settings::enabled_command_output_plan(conn, owner_scope.session_id())
     } else {
         CommandOutputPlan::success()
     }
@@ -716,58 +764,132 @@ fn complete_unit_page_network_command(
     completed: CompletedNetworkCommandDispatch,
     finish: NetworkPageCommandFinish,
 ) -> CommandOutputPlan {
+    let owner_scope = completed.owner_scope.clone();
     let completion = match completed.completed {
-        CompletedNetworkCommandWork::Page(Ok(completion)) => *completion,
-        CompletedNetworkCommandWork::Page(Err(error)) => {
+        CompletedNetworkCommandWork::Page {
+            completed: Ok(completion),
+            ..
+        } => *completion,
+        CompletedNetworkCommandWork::Page {
+            attachment_id,
+            completed: Err(error),
+        } => {
+            if network_page_configuration_will_be_replayed(conn, &owner_scope, attachment_id) {
+                return CommandOutputPlan::success();
+            }
             return CommandOutputPlan::error(-32000, error);
         }
         CompletedNetworkCommandWork::Resource(_) => {
             return CommandOutputPlan::error(-32000, "InvalidNetworkCommandCompletion");
         }
     };
-    let page = match conn.loaded_page_mut_for_protocol_access(completed.session_id.as_deref()) {
-        Ok(page) => page,
-        Err(message) if message == "NoDocumentLoaded" => {
-            return CommandOutputPlan::success();
-        }
-        Err(message) => return CommandOutputPlan::error(-32000, message),
-    };
-    let result = match finish {
-        NetworkPageCommandFinish::ExtraHttpHeaders => {
-            page.finish_set_extra_http_headers(completion)
-        }
-        NetworkPageCommandFinish::BlockedUrls => page.finish_set_blocked_url_patterns(completion),
-        NetworkPageCommandFinish::BypassServiceWorker => {
-            page.finish_set_bypass_service_worker(completion)
-        }
-        NetworkPageCommandFinish::NetworkOffline => page.finish_set_network_offline(completion),
-    };
-    match result {
+    match finish_network_page_operation_on_current_attachment(
+        conn.loaded_page_mut_for_target_configuration_for_route(
+            owner_scope.session_id(),
+            owner_scope.session_owner_route(),
+        )
+        .ok(),
+        finish,
+        completion,
+    ) {
         Ok(()) => CommandOutputPlan::success(),
-        Err(error) => CommandOutputPlan::error(-32000, error.to_string()),
+        Err(error) => CommandOutputPlan::error(-32000, error),
     }
+}
+
+fn finish_network_page_operation_on_current_attachment(
+    page: Option<&mut moli_core::page::Page>,
+    finish: NetworkPageCommandFinish,
+    completion: moli_core::page::CompletedPageCommand,
+) -> Result<(), String> {
+    let completion_attachment = completion.renderer_agent_attachment_id();
+    if let Some(page) = page
+        && page.renderer_agent_attachment_id() == completion_attachment
+    {
+        let result = match finish {
+            NetworkPageCommandFinish::RequestPolicy => {
+                page.finish_set_network_request_policy(completion)
+            }
+            NetworkPageCommandFinish::ExtraHttpHeaders => {
+                page.finish_set_extra_http_headers(completion)
+            }
+            NetworkPageCommandFinish::BlockedUrls => {
+                page.finish_set_blocked_url_patterns(completion)
+            }
+            NetworkPageCommandFinish::BypassServiceWorker => {
+                page.finish_set_bypass_service_worker(completion)
+            }
+            NetworkPageCommandFinish::NetworkOffline => page.finish_set_network_offline(completion),
+        };
+        return result.map_err(|error| error.to_string());
+    }
+
+    // Target/session policy was committed before renderer dispatch. If a
+    // navigation installs another attachment before this frozen unit reply is
+    // decoded, consume the old turn without applying its PageState snapshot
+    // to the replacement. Prepared-document commit configuration carries the
+    // authoritative policy into that replacement.
+    completion
+        .into_unit_page_command_turn()
+        .map(drop)
+        .map_err(|error| format!("stale Network command returned an unexpected reply: {error}"))
 }
 
 fn complete_rebuild_loader_network_command(
     conn: &mut CdpConnection,
     completed: CompletedNetworkCommandDispatch,
 ) -> CommandOutputPlan {
+    let owner_scope = completed.owner_scope.clone();
     let completion = match completed.completed {
-        CompletedNetworkCommandWork::Page(Ok(completion)) => *completion,
-        CompletedNetworkCommandWork::Page(Err(error)) => {
+        CompletedNetworkCommandWork::Page {
+            completed: Ok(completion),
+            ..
+        } => *completion,
+        CompletedNetworkCommandWork::Page {
+            attachment_id,
+            completed: Err(error),
+        } => {
+            if network_page_configuration_will_be_replayed(conn, &owner_scope, attachment_id) {
+                return CommandOutputPlan::success();
+            }
             return CommandOutputPlan::error(-32000, error);
         }
         CompletedNetworkCommandWork::Resource(_) => {
             return CommandOutputPlan::error(-32000, "InvalidNetworkCommandCompletion");
         }
     };
-    match conn.finish_rebuild_resource_runtime_for_session_owner(
-        completed.session_id.as_deref(),
+    match conn.finish_rebuild_resource_runtime_for_route(
+        owner_scope.session_id(),
+        owner_scope.session_owner_route(),
         completion,
     ) {
         Ok(()) => CommandOutputPlan::success(),
         Err(error) => CommandOutputPlan::error(-32000, error),
     }
+}
+
+fn network_page_configuration_will_be_replayed(
+    conn: &mut CdpConnection,
+    owner_scope: &CommandOwnerScope,
+    dispatched_attachment: Option<moli_core::page::RendererAgentAttachmentId>,
+) -> bool {
+    let Some(dispatched_attachment) = dispatched_attachment else {
+        return false;
+    };
+    let owner_still_exists = conn
+        .target_owner_identity_for_route(
+            owner_scope.session_id(),
+            owner_scope.session_owner_route(),
+        )
+        .is_some();
+    let current_attachment = conn
+        .loaded_page_mut_for_target_configuration_for_route(
+            owner_scope.session_id(),
+            owner_scope.session_owner_route(),
+        )
+        .ok()
+        .and_then(|page| page.renderer_agent_attachment_id());
+    owner_still_exists && current_attachment != Some(dispatched_attachment)
 }
 
 #[cfg(test)]
