@@ -6531,6 +6531,77 @@ fn live_document_named_properties_follow_html_candidate_and_liveness_rules() {
 }
 
 #[test]
+fn live_document_named_iframe_singletons_return_child_windows() {
+    let mut vm = new_parsed_test_vm(
+        "https://example.com/",
+        r#"<!doctype html><html><body>
+          <iframe id="single-frame" name="singleFrame"></iframe>
+          <iframe id="duplicate-first" name="duplicateFrame"></iframe>
+          <iframe id="duplicate-second" name="duplicateFrame"></iframe>
+          <iframe id="numeric-frame" name="42"></iframe>
+          <iframe id="id-only-frame"></iframe>
+          <iframe id="dynamic-frame"></iframe>
+        </body></html>"#,
+    );
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const single = document.getElementById("single-frame");
+              const first = document.getElementById("duplicate-first");
+              const second = document.getElementById("duplicate-second");
+              const numeric = document.getElementById("numeric-frame");
+              const dynamic = document.getElementById("dynamic-frame");
+              const duplicate = document.duplicateFrame;
+              const initial = {
+                singletonIsWindow: document.singleFrame === single.contentWindow,
+                singletonClass: Object.prototype.toString.call(document.singleFrame),
+                duplicateIsCollection: duplicate instanceof HTMLCollection,
+                duplicateMembers:
+                  duplicate.length === 2 && duplicate[0] === first && duplicate[1] === second,
+                numericIsWindow: document[42] === numeric.contentWindow,
+                idOnlyAbsent:
+                  document["id-only-frame"] === undefined &&
+                  !("id-only-frame" in document),
+              };
+
+              dynamic.name = "dynamicBefore";
+              const beforeUpdate = document.dynamicBefore === dynamic.contentWindow;
+              dynamic.name = "dynamicAfter";
+              dynamic.id = "differentId";
+              const afterUpdate =
+                document.dynamicBefore === undefined &&
+                !("dynamicBefore" in document) &&
+                document.dynamicAfter === dynamic.contentWindow &&
+                document.differentId === undefined;
+
+              single.removeAttribute("name");
+              const removedName =
+                document.singleFrame === undefined && !("singleFrame" in document);
+              dynamic.remove();
+              const removedElement =
+                document.dynamicAfter === undefined && !("dynamicAfter" in document);
+
+              return JSON.stringify({
+                initial,
+                beforeUpdate,
+                afterUpdate,
+                removedName,
+                removedElement,
+              });
+            })()
+            "#,
+        )
+        .expect("document iframe named-property probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"initial":{"singletonIsWindow":true,"singletonClass":"[object Window]","duplicateIsCollection":true,"duplicateMembers":true,"numericIsWindow":true,"idOnlyAbsent":true},"beforeUpdate":true,"afterUpdate":true,"removedName":true,"removedElement":true}"#
+    );
+}
+
+#[test]
 fn legacy_named_access_filters_name_candidates_by_consumer() {
     let mut vm = new_parsed_test_vm(
         "https://example.com/",

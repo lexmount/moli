@@ -665,13 +665,15 @@ pub(super) use tree_mutation::{
     node_insert_adjacent_element_callback, node_insert_adjacent_html_callback,
     node_insert_adjacent_node_callback, node_insert_adjacent_text_callback,
 };
-pub(super) use url_attributes::update_iframe_snapshot_navigation;
 use url_attributes::{
     default_port_for_scheme, disconnected_iframe_can_materialize_detached_content,
     iframe_has_inactive_child_context, iframe_is_in_own_child_document,
     iframe_is_inside_its_own_child_context_document, iframe_uses_detached_content_cache,
     normalize_url_default_port, parsed_url_like_attribute, resolve_url_like_attribute,
     set_resolved_url_attribute, should_block_dangling_markup_subresource,
+};
+pub(super) use url_attributes::{
+    live_frame_owner_content_window_for_handle, update_iframe_snapshot_navigation,
 };
 
 #[derive(WebApiFunctionTemplate)]
@@ -3605,24 +3607,8 @@ fn frame_owner_content_window_getter_function<'s>(
         }
         return;
     }
-    let runtime = unsafe { &mut *runtime_ptr };
-    runtime.refresh_child_browsing_context(scope, handle);
-    let exposes_same_origin_wrapper =
-        runtime.child_browsing_context_is_same_origin_with_top(handle);
-    let window = runtime.child_browsing_context_window_proxy_for_top(scope, handle);
-    if window.is_some() {
-        runtime.mark_child_browsing_context_window_wrapper_exposed_to_top(handle);
-    }
-    if exposes_same_origin_wrapper && window.is_some() {
-        runtime.request_child_frame_realm_materialization(handle);
-    }
-    match window {
-        Some(window) => {
-            if runtime.child_browsing_context_is_same_origin_with_top(handle) {
-                runtime.set_cached_detached_iframe_content_window(scope, handle, window);
-            }
-            rv.set(window.into());
-        }
+    match live_frame_owner_content_window_for_handle(scope, runtime_ptr, handle) {
+        Some(window) => rv.set(window.into()),
         None => rv.set_null(),
     }
 }
