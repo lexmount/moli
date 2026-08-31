@@ -36,6 +36,7 @@ enum DocumentWriteParserPumpInput<'a> {
 enum HtmlFragmentParserContextMode {
     Standard,
     RangeCreateContextualFragment,
+    SiblingInsertion,
 }
 
 struct DocumentWriteParserMutationOwner<'a, 'scope, 'pin> {
@@ -555,8 +556,11 @@ impl DocumentRuntime {
             .and_then(Node::local_name)
             .unwrap_or("body")
             .to_owned();
-        if context_mode == HtmlFragmentParserContextMode::RangeCreateContextualFragment
-            && context_namespace == "http://www.w3.org/1999/xhtml"
+        if matches!(
+            context_mode,
+            HtmlFragmentParserContextMode::RangeCreateContextualFragment
+                | HtmlFragmentParserContextMode::SiblingInsertion
+        ) && context_namespace == "http://www.w3.org/1999/xhtml"
             && context_local_name.eq_ignore_ascii_case("html")
         {
             context_local_name = "body".to_owned();
@@ -948,7 +952,13 @@ impl DocumentRuntime {
         html: &str,
         insert: impl FnOnce(&mut Self, &mut v8::PinScope<'_, '_>, *mut JsContextHost, DomHandle) -> bool,
     ) -> bool {
-        let Some(fragment) = self.build_fragment_from_html(
+        let scripting_enabled = unsafe { &*host_ptr }.document_scripting_enabled(document_handle);
+        let context_mode = if context_handle == target {
+            HtmlFragmentParserContextMode::Standard
+        } else {
+            HtmlFragmentParserContextMode::SiblingInsertion
+        };
+        let Some(fragment) = self.build_fragment_from_html_with_context_mode(
             scope,
             host_ptr,
             document_handle,
@@ -956,11 +966,13 @@ impl DocumentRuntime {
             html,
             true,
             HtmlFragmentCustomElementUpgradeTiming::AfterInsertion,
+            context_mode,
+            scripting_enabled,
+            false,
         ) else {
             return false;
         };
         let added_children = self.dom_host().child_handles(fragment).collect::<Vec<_>>();
-        let _ = target;
         let changed = insert(self, scope, host_ptr, fragment);
         if changed
             && !self.upgrade_inserted_html_fragment_custom_elements(

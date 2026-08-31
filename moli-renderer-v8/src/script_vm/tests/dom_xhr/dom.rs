@@ -423,6 +423,82 @@ fn element_insert_adjacent_methods_parse_webidl_arguments() {
         "true|elementtextundefinedbold|bold|throw:TypeError|throw:TypeError|throw:RangeError|throw:TypeError|throw:SyntaxError|throw:TypeError|throw:TypeError|throw:TypeError|throw:TypeError"
     );
 }
+
+#[test]
+fn insert_adjacent_html_enforces_sibling_context_rules() {
+    let mut vm = new_storage_test_vm("https://insert-adjacent-sibling-context.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const probe = callback => {
+    try {
+      callback();
+      return 'missing';
+    } catch (error) {
+      return `${error.name}:${error.code}`;
+    }
+  };
+  const sources = ['', 'text', '<!--comment-->', '<div></div>'];
+  const positions = ['beforebegin', 'afterend'];
+  const detached = document.createElement('div');
+  const root = document.documentElement ||
+    document.appendChild(document.createElement('html'));
+  const detachedErrors = positions.flatMap(position =>
+    sources.map(source => probe(() => detached.insertAdjacentHTML(position, source)))
+  );
+  const documentErrors = positions.flatMap(position =>
+    sources.map(source => probe(() => root.insertAdjacentHTML(position, source)))
+  );
+
+  while (root.firstChild) {
+    root.removeChild(root.firstChild);
+  }
+  root.insertAdjacentHTML(
+    'afterbegin',
+    '<head id="inside-head"></head><body id="inside-body"></body>'
+  );
+  const preservedInnerHtmlContext =
+    document.head?.id === 'inside-head' &&
+    document.body?.id === 'inside-body' &&
+    root.firstChild === document.head &&
+    root.lastChild === document.body;
+  const head = document.head ||
+    root.insertBefore(document.createElement('head'), root.firstChild);
+  const body = document.body || root.appendChild(document.createElement('body'));
+  head.insertAdjacentHTML('beforebegin', '<p id="before-head"></p>');
+  body.insertAdjacentHTML('afterend', '<p id="after-body"></p>');
+  const beforeHead = document.getElementById('before-head');
+  const afterBody = document.getElementById('after-body');
+
+  return JSON.stringify({
+    detachedErrors,
+    documentErrors,
+    preservedInnerHtmlContext,
+    counts: [
+      document.getElementsByTagName('html').length,
+      document.getElementsByTagName('head').length,
+      document.getElementsByTagName('body').length
+    ],
+    placement: [
+      beforeHead.nextSibling === head,
+      body.nextSibling === afterBody,
+      beforeHead.parentNode === root,
+      afterBody.parentNode === root
+    ]
+  });
+})()
+"#,
+        )
+        .expect("insertAdjacentHTML sibling context rules should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"detachedErrors":["NoModificationAllowedError:7","NoModificationAllowedError:7","NoModificationAllowedError:7","NoModificationAllowedError:7","NoModificationAllowedError:7","NoModificationAllowedError:7","NoModificationAllowedError:7","NoModificationAllowedError:7"],"documentErrors":["NoModificationAllowedError:7","NoModificationAllowedError:7","NoModificationAllowedError:7","NoModificationAllowedError:7","NoModificationAllowedError:7","NoModificationAllowedError:7","NoModificationAllowedError:7","NoModificationAllowedError:7"],"preservedInnerHtmlContext":true,"counts":[1,1,1],"placement":[true,true,true,true]}"#
+    );
+}
+
 #[test]
 fn document_fragment_and_shadow_root_get_element_by_id_match_browser_lookup_boundaries() {
     let mut vm = new_storage_test_vm("https://fragment-shadow-get-by-id.test/");
