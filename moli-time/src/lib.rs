@@ -187,6 +187,16 @@ pub fn local_time_zone_offset_seconds(timestamp_ms: f64) -> Option<i32> {
     )
 }
 
+/// Returns whether the compiled IANA database recognizes a time-zone name.
+///
+/// Protocol surfaces must reject an unknown override before publishing it to
+/// a target. Date formatting deliberately has a UTC fallback for defensive
+/// rendering, so using an offset lookup as validation after committing state
+/// would turn an invalid CDP command into a misleading success.
+pub fn is_valid_time_zone_identifier(timezone: &str) -> bool {
+    !timezone.is_empty() && COMPILED_TZ_PROVIDER.get(timezone.as_bytes()).is_ok()
+}
+
 pub fn local_date_fields(timestamp_ms: f64, timezone: Option<&str>) -> Option<LocalDateFields> {
     let datetime = offset_datetime_from_unix_millis(timestamp_ms)?;
     let offset = timezone
@@ -351,6 +361,14 @@ mod tests {
             format_date_local_string(winter, Some("Europe/Paris")),
             "Mon Jan 01 2024 01:00:00 GMT+0100"
         );
+    }
+
+    #[test]
+    fn time_zone_identifier_validation_uses_the_same_compiled_database() {
+        assert!(is_valid_time_zone_identifier("UTC"));
+        assert!(is_valid_time_zone_identifier("Europe/Paris"));
+        assert!(!is_valid_time_zone_identifier(""));
+        assert!(!is_valid_time_zone_identifier("Mars/Olympus"));
     }
 
     #[test]

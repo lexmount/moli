@@ -1109,6 +1109,39 @@ async fn set_timezone_override_without_loaded_browser_context_errors() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn invalid_timezone_override_is_rejected_without_replacing_active_state() {
+    let mut ctx = TestContext::new();
+    load_session_page_for_pending_emulation_test(&mut ctx).await;
+
+    ctx.process_async(json!({
+        "id": 7_001,
+        "method": "Emulation.setTimezoneOverride",
+        "sessionId": "SID-1",
+        "params": { "timezoneId": "Europe/Paris" }
+    }))
+    .await;
+    ctx.expect_result(7_001, json!({}), Some("SID-1"));
+
+    ctx.process_async(json!({
+        "id": 7_002,
+        "method": "Emulation.setTimezoneOverride",
+        "sessionId": "SID-1",
+        "params": { "timezoneId": "Mars/Olympus" }
+    }))
+    .await;
+    ctx.expect_error(7_002, -32000, "Invalid timezone id");
+    assert_eq!(
+        ctx.conn
+            .browser_context
+            .as_ref()
+            .expect("browser context")
+            .timezone_override
+            .as_deref(),
+        Some("Europe/Paris")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn multi_session_locale_and_timezone_claims_match_chromium() {
     const LOCALE: &str = "Emulation.setLocaleOverride";
     const TIMEZONE: &str = "Emulation.setTimezoneOverride";
