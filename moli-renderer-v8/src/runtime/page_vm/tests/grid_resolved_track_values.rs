@@ -179,3 +179,65 @@ document.body.innerHTML = `
     .await
     .expect("cyclic Grid gap fixture should run");
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn screenshot_selects_grid_minimum_contributions_from_authored_sizing_sources() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/grid-minimum-contribution-source.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0}
+.column{display:grid;width:10px;height:10px;grid-template-columns:minmax(auto,auto);grid-template-rows:10px}
+.row{display:grid;width:10px;height:10px;grid-template-columns:10px;grid-template-rows:minmax(auto,auto)}
+#fixed>div{width:60px;min-width:90px}
+#smaller-min>div{width:60px;min-width:40px}
+#ratio>div{width:auto;height:60px;min-width:90px;aspect-ratio:1}
+#content-box>div{box-sizing:content-box;width:60px;min-width:90px;padding:0 8px;border:0 solid;border-width:0 5px}
+#block>div{width:10px;height:60px;min-height:90px}
+</style>`;
+document.body.innerHTML = `
+  <div class=column id=fixed><div></div></div>
+  <div class=column id=smaller-min><div></div></div>
+  <div class=column id=ratio><div></div></div>
+  <div class=column id=content-box><div></div></div>
+  <div class=row id=block><div></div></div>`;
+'installed'
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(400, 300, 1.0))?
+            .expect("Grid minimum-contribution screenshot layout");
+
+        let geometry = page_vm.vm_mut().eval(
+            r#"JSON.stringify(Object.fromEntries(['fixed','smaller-min','ratio','content-box','block'].map(id=>{
+  const grid=document.getElementById(id);
+  const child=grid.firstElementChild.getBoundingClientRect();
+  const style=getComputedStyle(grid);
+  return [id,{columns:style.gridTemplateColumns,rows:style.gridTemplateRows,size:[child.width,child.height]}];
+})))"#,
+        )?;
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&geometry)?,
+            serde_json::json!({
+                "fixed": {"columns": "90px", "rows": "10px", "size": [90, 10]},
+                "smaller-min": {"columns": "60px", "rows": "10px", "size": [60, 10]},
+                "ratio": {"columns": "90px", "rows": "10px", "size": [90, 60]},
+                "content-box": {"columns": "116px", "rows": "10px", "size": [116, 10]},
+                "block": {"columns": "10px", "rows": "90px", "size": [10, 90]},
+            }),
+            "Grid must choose between the used minimum and min-content contribution from the authored preferred-size source, before aspect-ratio transfer",
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("Grid minimum-contribution fixture should run");
+}
