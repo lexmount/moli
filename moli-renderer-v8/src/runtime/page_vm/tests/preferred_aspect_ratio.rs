@@ -35,6 +35,27 @@ svg{display:block;width:120px;height:auto}
 #both-definite{width:130px;height:70px;aspect-ratio:1/1}
 #degenerate{aspect-ratio:0/1}
 #auto-degenerate{aspect-ratio:auto 0/1}
+.automatic-minimum{display:block}
+#block-automatic-minimum,#row-flex-automatic-minimum{
+  height:100px;
+  aspect-ratio:1/2;
+}
+#block-transferred-maximum{
+  height:200px;
+  max-height:100px;
+  aspect-ratio:1/2;
+}
+#column-flex-automatic-minimum{
+  width:100px;
+  aspect-ratio:2/1;
+}
+#row-flex-automatic-minimum,#column-flex-automatic-minimum{flex-basis:0}
+#flex-transferred-maximum{max-height:50px;aspect-ratio:2/1}
+.row-flex{display:flex}
+.column-flex{display:flex;flex-direction:column}
+.wide-content{width:100px}
+.wider-content{width:200px}
+.tall-content{height:100px}
 </style>`;
 document.body.innerHTML = `
 <div class=ordinary id=ratio-content></div>
@@ -49,7 +70,12 @@ document.body.innerHTML = `
 <svg id=height-only viewBox="0 0 200 100"></svg>
 <svg id=both-definite viewBox="0 0 200 100"></svg>
 <svg id=degenerate viewBox="0 0 200 100"></svg>
-<svg id=auto-degenerate viewBox="0 0 200 100"></svg>`;
+<svg id=auto-degenerate viewBox="0 0 200 100"></svg>
+<div class=automatic-minimum id=block-automatic-minimum><div class=wide-content></div></div>
+<div class=automatic-minimum id=block-transferred-maximum><div class=wide-content></div></div>
+<div class=row-flex><div class=automatic-minimum id=row-flex-automatic-minimum><div class=wide-content></div></div></div>
+<div class=column-flex><div class=automatic-minimum id=column-flex-automatic-minimum><div class=tall-content></div></div></div>
+<div class=row-flex><div class=automatic-minimum id=flex-transferred-maximum><div class=wider-content></div></div></div>`;
 'installed'
 "#,
         )?;
@@ -77,6 +103,11 @@ document.body.innerHTML = `
             ("both-definite", [130, 70]),
             ("degenerate", [120, 60]),
             ("auto-degenerate", [120, 60]),
+            ("block-automatic-minimum", [100, 100]),
+            ("block-transferred-maximum", [100, 100]),
+            ("row-flex-automatic-minimum", [100, 100]),
+            ("column-flex-automatic-minimum", [100, 100]),
+            ("flex-transferred-maximum", [100, 50]),
         ] {
             assert_eq!(
                 geometry[id],
