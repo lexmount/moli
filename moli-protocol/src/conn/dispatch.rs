@@ -108,16 +108,16 @@ impl PendingCdpCommandDispatchKind {
 
     fn owner_scope_capture_session_id(&self) -> Option<Option<&str>> {
         match self {
-            Self::Autofill(pending) => Some(pending.session_id()),
-            Self::Accessibility(pending) => Some(pending.session_id()),
             Self::Input(pending) => Some(pending.session_id()),
-            Self::Css(pending) => Some(pending.session_id()),
             Self::Dom(pending) => Some(pending.session_id()),
-            Self::DomDebugger(pending) => Some(pending.session_id()),
-            Self::DomSnapshot(pending) => Some(pending.session_id()),
-            Self::Performance(pending) => Some(pending.session_id()),
             Self::Tracing(pending) => Some(pending.session_id()),
             Self::Runtime(_)
+            | Self::Autofill(_)
+            | Self::Accessibility(_)
+            | Self::Css(_)
+            | Self::DomDebugger(_)
+            | Self::DomSnapshot(_)
+            | Self::Performance(_)
             | Self::DomStorage(_)
             | Self::Page(_)
             | Self::Emulation(_)

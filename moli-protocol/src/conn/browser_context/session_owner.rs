@@ -39,10 +39,25 @@ impl CdpConnection {
         &self,
         session_id: Option<&str>,
     ) -> Option<TargetSessionOwner> {
+        let none_session_owner_route = self.none_session_owner_route_override();
+        self.target_session_owner_for_route(session_id, none_session_owner_route.as_ref())
+    }
+
+    /// Resolves target ownership from an explicit command route.
+    ///
+    /// This is the non-ambient owner boundary used while migrating deferred
+    /// commands away from `none_session_owner_route_override`. A concrete
+    /// session always resolves through the session registry; `owner_route`
+    /// only selects the owner of an implicit primary Page attachment.
+    pub(super) fn target_session_owner_for_route(
+        &self,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
+    ) -> Option<TargetSessionOwner> {
         let route = match session_id {
             Some(session_id) => self.session_route(Some(session_id))?,
-            None => match self.none_session_owner_route_override() {
-                Some(route) => route,
+            None => match owner_route {
+                Some(route) => route.clone(),
                 None => {
                     let Some(browser_context) = self.browser_context.as_ref() else {
                         return Some(TargetSessionOwner::NoLoadedBrowserContext);

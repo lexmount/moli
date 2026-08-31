@@ -566,16 +566,15 @@ pub(crate) async fn complete_popup_target_activation_action_async(
     action: PopupTargetActivationAction,
 ) -> crate::conn::CdpTurnOutcome {
     let (owner_scope, browser_context_id, target_id) = action.into_parts();
-    let target_is_current = {
-        let mut route_scope = owner_scope.enter(conn);
-        let conn = route_scope.conn_mut();
-        conn.target_owner_identity_for_session(None).is_some_and(
-            |(current_browser_context_id, current_target_id)| {
-                current_browser_context_id == browser_context_id
-                    && current_target_id.as_deref() == Some(target_id.as_str())
-            },
-        ) && popup_target_has_loaded_page(conn, &browser_context_id, &target_id)
-    };
+    let target_is_current =
+        conn.target_owner_identity_for_route(
+            owner_scope.session_id(),
+            owner_scope.session_owner_route(),
+        )
+        .is_some_and(|(current_browser_context_id, current_target_id)| {
+            current_browser_context_id == browser_context_id
+                && current_target_id.as_deref() == Some(target_id.as_str())
+        }) && popup_target_has_loaded_page(conn, &browser_context_id, &target_id);
     if !target_is_current {
         tracing::debug!(
             browser_context_id,

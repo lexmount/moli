@@ -913,27 +913,25 @@ impl CdpConnection {
             .unwrap_or(false)
     }
 
-    pub(crate) fn begin_page_screencast_capture_for_session_owner(
+    pub(crate) fn begin_page_screencast_capture_for_route(
         &mut self,
         session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
         generation: i32,
     ) -> Option<bool> {
-        self.with_target_session_owner_mut(session_id, |owner| {
-            owner.begin_page_screencast_capture(generation)
-        })
-        .flatten()
+        self.target_session_owner_mut_for_route(session_id, owner_route)?
+            .begin_page_screencast_capture(generation)
     }
 
-    pub(crate) fn complete_page_screencast_capture_for_session_owner(
+    pub(crate) fn complete_page_screencast_capture_for_route(
         &mut self,
         session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
         generation: i32,
         frame_emitted: bool,
     ) -> Option<bool> {
-        self.with_target_session_owner_mut(session_id, |owner| {
-            owner.complete_page_screencast_capture(generation, frame_emitted)
-        })
-        .flatten()
+        self.target_session_owner_mut_for_route(session_id, owner_route)?
+            .complete_page_screencast_capture(generation, frame_emitted)
     }
 
     pub(crate) fn acknowledge_page_screencast_frame_for_session_owner(

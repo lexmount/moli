@@ -256,6 +256,19 @@ impl CdpConnection {
             .map_err(|error| format!("failed to update page resource runtime: {error}"))
     }
 
+    pub(crate) fn finish_rebuild_resource_runtime_for_route(
+        &mut self,
+        session_id: Option<&str>,
+        owner_route: Option<&super::CdpSessionRoute>,
+        completion: CompletedPageCommand,
+    ) -> Result<(), String> {
+        let Some(page) = self.resource_runtime_apply_page_for_route(session_id, owner_route) else {
+            return Ok(());
+        };
+        page.finish_replace_browser_resource_runtime(completion)
+            .map_err(|error| format!("failed to update page resource runtime: {error}"))
+    }
+
     fn resource_runtime_apply_page_for_session_owner(
         &mut self,
         session_id: Option<&str>,
@@ -270,5 +283,23 @@ impl CdpConnection {
                 .and_then(|bc| bc.active_target.runtime_slot.loaded_page_mut());
         }
         self.loaded_page_mut_for_protocol_access(session_id).ok()
+    }
+
+    fn resource_runtime_apply_page_for_route(
+        &mut self,
+        session_id: Option<&str>,
+        owner_route: Option<&super::CdpSessionRoute>,
+    ) -> Option<&mut moli_core::page::Page> {
+        if matches!(
+            session_id.and_then(|session_id| self.session_route(Some(session_id))),
+            Some(super::CdpSessionRoute::Browser)
+        ) {
+            return self
+                .browser_context
+                .as_mut()
+                .and_then(|bc| bc.active_target.runtime_slot.loaded_page_mut());
+        }
+        self.loaded_page_mut_for_protocol_access_for_route(session_id, owner_route)
+            .ok()
     }
 }

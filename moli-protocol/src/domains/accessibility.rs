@@ -1,4 +1,4 @@
-use crate::conn::{CdpConnection, Cmd};
+use crate::conn::{CdpConnection, Cmd, CommandOwnerScope};
 use crate::domains::actions::AccessibilityAction;
 use crate::domains::command_output::CommandOutputPlan;
 use moli_core::page::{
@@ -12,14 +12,14 @@ mod tests;
 
 pub(crate) struct PendingAccessibilityCommandDispatch {
     command_id: Option<u64>,
-    session_id: Option<String>,
+    owner_scope: CommandOwnerScope,
     kind: PendingAccessibilityCommandKind,
     pending: PendingAccessibilityCommandWork,
 }
 
 pub(crate) struct CompletedAccessibilityCommandDispatch {
     command_id: Option<u64>,
-    session_id: Option<String>,
+    owner_scope: CommandOwnerScope,
     kind: PendingAccessibilityCommandKind,
     completed: CompletedAccessibilityCommandWork,
 }
@@ -82,8 +82,18 @@ struct PendingAccessibilityCommandStartError {
 }
 
 impl PendingAccessibilityCommandDispatch {
-    pub(crate) fn session_id(&self) -> Option<&str> {
-        self.session_id.as_deref()
+    fn from_command(
+        conn: &CdpConnection,
+        cmd: &Cmd<'_>,
+        kind: PendingAccessibilityCommandKind,
+        pending: PendingAccessibilityCommandWork,
+    ) -> Self {
+        Self {
+            command_id: cmd.id,
+            owner_scope: CommandOwnerScope::capture(conn, cmd.session_id),
+            kind,
+            pending,
+        }
     }
 
     pub async fn wait(self) -> CompletedAccessibilityCommandDispatch {
@@ -96,7 +106,7 @@ impl PendingAccessibilityCommandDispatch {
         };
         CompletedAccessibilityCommandDispatch {
             command_id: self.command_id,
-            session_id: self.session_id,
+            owner_scope: self.owner_scope,
             kind: self.kind,
             completed,
         }
@@ -109,7 +119,7 @@ impl CompletedAccessibilityCommandDispatch {
     }
 
     pub(crate) fn session_id(&self) -> Option<&str> {
-        self.session_id.as_deref()
+        self.owner_scope.session_id()
     }
 }
 
@@ -437,16 +447,16 @@ fn start_pending_object_reference_command(
         &operation,
     )
     .map_err(PendingAccessibilityCommandStartError::renderer_error)?;
-    Ok(Some(PendingAccessibilityCommandDispatch {
-        command_id: cmd.id,
-        session_id: cmd.session_id.map(str::to_owned),
-        kind: PendingAccessibilityCommandKind::ObjectAccessibilityPayloads {
+    Ok(Some(PendingAccessibilityCommandDispatch::from_command(
+        conn,
+        cmd,
+        PendingAccessibilityCommandKind::ObjectAccessibilityPayloads {
             frame_id: resolved_frame_id,
             top_frame_id,
             operation,
         },
-        pending: PendingAccessibilityCommandWork::Page(pending),
-    }))
+        PendingAccessibilityCommandWork::Page(pending),
+    )))
 }
 
 fn renderer_backend_node_id_for_reference(reference: &helpers::NodeReferenceParams) -> Option<u32> {
@@ -481,16 +491,16 @@ fn start_pending_dom_node_reference_command(
     let pending = page
         .start_document_frontend_node_binding(renderer_inspector_session_id, frontend_node_id)
         .map_err(PendingAccessibilityCommandStartError::renderer_error)?;
-    Ok(Some(PendingAccessibilityCommandDispatch {
-        command_id: cmd.id,
-        session_id: cmd.session_id.map(str::to_owned),
-        kind: PendingAccessibilityCommandKind::FrontendAccessibilityPayloads {
+    Ok(Some(PendingAccessibilityCommandDispatch::from_command(
+        conn,
+        cmd,
+        PendingAccessibilityCommandKind::FrontendAccessibilityPayloads {
             frame_id: resolved_frame_id,
             top_frame_id,
             operation,
         },
-        pending: PendingAccessibilityCommandWork::Page(pending),
-    }))
+        PendingAccessibilityCommandWork::Page(pending),
+    )))
 }
 
 fn start_accessibility_object_page_command(
@@ -545,16 +555,16 @@ fn start_pending_backend_reference_command(
     };
     let pending = start_accessibility_backend_page_command(page, backend_node_id, &operation)
         .map_err(PendingAccessibilityCommandStartError::renderer_error)?;
-    Ok(Some(PendingAccessibilityCommandDispatch {
-        command_id: cmd.id,
-        session_id: cmd.session_id.map(str::to_owned),
-        kind: PendingAccessibilityCommandKind::BackendAccessibilityPayloads {
+    Ok(Some(PendingAccessibilityCommandDispatch::from_command(
+        conn,
+        cmd,
+        PendingAccessibilityCommandKind::BackendAccessibilityPayloads {
             frame_id: resolved_frame_id,
             top_frame_id,
             operation,
         },
-        pending: PendingAccessibilityCommandWork::Page(pending),
-    }))
+        PendingAccessibilityCommandWork::Page(pending),
+    )))
 }
 
 fn start_accessibility_backend_page_command(
@@ -631,12 +641,12 @@ fn start_pending_frame_scoped_accessibility_command(
         .map_err(PendingAccessibilityCommandStartError::renderer_error)?;
         (child_frame_kind, pending)
     };
-    Ok(Some(PendingAccessibilityCommandDispatch {
-        command_id: cmd.id,
-        session_id: cmd.session_id.map(str::to_owned),
+    Ok(Some(PendingAccessibilityCommandDispatch::from_command(
+        conn,
+        cmd,
         kind,
-        pending: PendingAccessibilityCommandWork::Page(pending),
-    }))
+        PendingAccessibilityCommandWork::Page(pending),
+    )))
 }
 
 fn start_child_frame_accessibility_page_command(
@@ -661,20 +671,25 @@ pub(crate) async fn complete_pending_accessibility_command(
 ) -> AccessibilityCommandDispatchStep {
     let CompletedAccessibilityCommandDispatch {
         command_id,
-        session_id,
+        owner_scope,
         kind,
         completed,
     } = completed;
     let CompletedAccessibilityCommandWork::Page(completed) = completed;
     let completed = *completed;
 
+    let session_id = owner_scope.session_id().map(str::to_owned);
     let session_id_ref = session_id.as_deref();
-    if let Err(message) = conn.ensure_document_accessible_for_session_owner(session_id_ref) {
+    let owner_route = owner_scope.session_owner_route();
+    if let Err(message) = conn.ensure_document_accessible_for_route(session_id_ref, owner_route) {
         return AccessibilityCommandDispatchStep::Complete(CommandOutputPlan::error(
             -32000, message,
         ));
     }
-    let Some(page) = helpers::loaded_page_mut_for_session(conn, session_id_ref) else {
+    let Some(page) = conn
+        .loaded_page_mut_for_protocol_access_for_route(session_id_ref, owner_route)
+        .ok()
+    else {
         return AccessibilityCommandDispatchStep::Complete(CommandOutputPlan::error(
             -32000,
             "NoDocumentLoaded",
@@ -785,7 +800,7 @@ pub(crate) async fn complete_pending_accessibility_command(
             return AccessibilityCommandDispatchStep::Pending(
                 PendingAccessibilityCommandDispatch {
                     command_id,
-                    session_id,
+                    owner_scope,
                     kind: PendingAccessibilityCommandKind::BackendAccessibilityPayloads {
                         frame_id,
                         top_frame_id,

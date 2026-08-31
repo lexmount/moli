@@ -1693,8 +1693,20 @@ impl CdpConnection {
         &self,
         session_id: Option<&str>,
     ) -> bool {
+        let none_session_owner_route = self.none_session_owner_route_override();
+        self.has_pending_document_navigation_for_route(
+            session_id,
+            none_session_owner_route.as_ref(),
+        )
+    }
+
+    pub(crate) fn has_pending_document_navigation_for_route(
+        &self,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
+    ) -> bool {
         let Some((browser_context_id, target_id)) =
-            self.target_owner_identity_for_session(session_id)
+            self.target_owner_identity_for_route(session_id, owner_route)
         else {
             return false;
         };
@@ -1704,14 +1716,22 @@ impl CdpConnection {
             })
     }
 
-    fn document_navigation_state_for_session_owner(
+    fn document_navigation_state_for_route(
         &self,
         session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
     ) -> DevToolsDocumentNavigationState {
-        if self.target_owner_identity_for_session(session_id).is_none() {
+        let Some((browser_context_id, target_id)) =
+            self.target_owner_identity_for_route(session_id, owner_route)
+        else {
             return DevToolsDocumentNavigationState::Unavailable;
-        }
-        if self.has_pending_document_navigation_for_session_owner(session_id) {
+        };
+        if self
+            .browser_context_by_id(&browser_context_id)
+            .is_some_and(|browser_context| {
+                browser_context.has_pending_document_navigation_for_target(target_id.as_deref())
+            })
+        {
             return DevToolsDocumentNavigationState::PendingNavigation;
         }
         // The initial empty Document has a real loader identity before any
@@ -1721,34 +1741,26 @@ impl CdpConnection {
         // Otherwise a materialized `about:blank` is misclassified as
         // `AwaitingCommit`, and ChromeDriver-style pre-command navigation
         // waits can never complete.
-        match self.target_session_owner_frame_tree_loader_id(session_id) {
+        match self.target_session_owner_frame_tree_loader_id_for_route(session_id, owner_route) {
             Some(loader_id) => DevToolsDocumentNavigationState::Committed { loader_id },
             None => DevToolsDocumentNavigationState::AwaitingCommit,
         }
     }
 
     /// Resolves Document readiness through the exact target captured by a
-    /// protocol-neutral command context. A target-id context intentionally
-    /// uses the owner-route override rather than whichever target is currently
-    /// active in the browser context.
+    /// protocol-neutral command context. A target-id context resolves its
+    /// explicit route rather than whichever target is currently active in the
+    /// browser context.
     pub fn devtools_context_document_navigation_state(
         &mut self,
         context: &DevToolsCommandContext,
     ) -> DevToolsDocumentNavigationState {
-        if let Some(target_id) = context.target_id.as_ref() {
-            let Some(route) = self.target_session_route_for_target_id(target_id.as_str()) else {
-                return DevToolsDocumentNavigationState::Unavailable;
-            };
-            let mut route_scope = self.scoped_none_session_owner_route_override(route);
-            return route_scope
-                .conn_mut()
-                .document_navigation_state_for_session_owner(None);
-        }
-        self.document_navigation_state_for_session_owner(
-            context
-                .session_id
-                .as_ref()
-                .map(|session_id| session_id.as_str()),
+        let Some(owner_scope) = self.command_owner_scope_for_devtools_context(context) else {
+            return DevToolsDocumentNavigationState::Unavailable;
+        };
+        self.document_navigation_state_for_route(
+            owner_scope.session_id(),
+            owner_scope.session_owner_route(),
         )
     }
 
@@ -1783,7 +1795,16 @@ impl CdpConnection {
         &self,
         session_id: Option<&str>,
     ) -> Result<(), String> {
-        if self.has_pending_document_navigation_for_session_owner(session_id) {
+        let none_session_owner_route = self.none_session_owner_route_override();
+        self.ensure_document_accessible_for_route(session_id, none_session_owner_route.as_ref())
+    }
+
+    pub(crate) fn ensure_document_accessible_for_route(
+        &self,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
+    ) -> Result<(), String> {
+        if self.has_pending_document_navigation_for_route(session_id, owner_route) {
             return Err("Navigation is changing the document".to_owned());
         }
         Ok(())
@@ -1844,8 +1865,20 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
     ) -> Result<&mut Page, String> {
-        self.ensure_document_accessible_for_session_owner(session_id)?;
-        self.loaded_page_mut_for_interruptible_protocol_access(session_id)
+        let none_session_owner_route = self.none_session_owner_route_override();
+        self.loaded_page_mut_for_protocol_access_for_route(
+            session_id,
+            none_session_owner_route.as_ref(),
+        )
+    }
+
+    pub(crate) fn loaded_page_mut_for_protocol_access_for_route(
+        &mut self,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
+    ) -> Result<&mut Page, String> {
+        self.ensure_document_accessible_for_route(session_id, owner_route)?;
+        self.loaded_page_mut_for_interruptible_protocol_access_for_route(session_id, owner_route)
     }
 
     /// Returns the exact Page that remains attached while a cross-Document
@@ -1859,7 +1892,19 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
     ) -> Result<&mut Page, String> {
-        self.runtime_session_owner_slot_mut(session_id)?
+        let none_session_owner_route = self.none_session_owner_route_override();
+        self.loaded_page_mut_for_interruptible_protocol_access_for_route(
+            session_id,
+            none_session_owner_route.as_ref(),
+        )
+    }
+
+    pub(crate) fn loaded_page_mut_for_interruptible_protocol_access_for_route(
+        &mut self,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
+    ) -> Result<&mut Page, String> {
+        self.runtime_session_owner_slot_mut_for_route(session_id, owner_route)?
             .loaded_page_mut()
             .ok_or_else(|| "NoDocumentLoaded".to_owned())
     }
@@ -2231,11 +2276,10 @@ impl CdpConnection {
         context: &DevToolsCommandContext,
     ) -> Option<DevToolsPageResidenceIdentity> {
         let owner_scope = self.command_owner_scope_for_devtools_context(context)?;
-        let session_id = owner_scope.session_id().map(str::to_owned);
-        let mut route_scope = owner_scope.enter(self);
-        route_scope
-            .conn_mut()
-            .target_page_residence_identity_for_session(session_id.as_deref())
+        self.target_page_residence_identity_for_route(
+            owner_scope.session_id(),
+            owner_scope.session_owner_route(),
+        )
     }
 
     pub fn capture_devtools_document_lifecycle_wait_key(
@@ -2244,26 +2288,15 @@ impl CdpConnection {
         expected_loader_id: &str,
         milestone: moli_core::page::RendererDocumentLifecycleMilestone,
     ) -> Option<DevToolsDocumentLifecycleWaitKey> {
-        let registration = if let Some(target_id) = context.target_id.as_ref() {
-            let route = self.target_session_route_for_target_id(target_id.as_str())?;
-            let mut route_scope = self.scoped_none_session_owner_route_override(route);
-            route_scope
-                .conn_mut()
-                .runtime_session_owner_slot_mut(None)
-                .ok()?
-                .page_slot_mut()
-                .register_renderer_document_lifecycle_waiter(milestone, expected_loader_id)
-        } else {
-            self.runtime_session_owner_slot_mut(
-                context
-                    .session_id
-                    .as_ref()
-                    .map(|session_id| session_id.as_str()),
+        let owner_scope = self.command_owner_scope_for_devtools_context(context)?;
+        let registration = self
+            .runtime_session_owner_slot_mut_for_route(
+                owner_scope.session_id(),
+                owner_scope.session_owner_route(),
             )
             .ok()?
             .page_slot_mut()
-            .register_renderer_document_lifecycle_waiter(milestone, expected_loader_id)
-        };
+            .register_renderer_document_lifecycle_waiter(milestone, expected_loader_id);
         let (registration_id, binding) = registration?;
         Some(DevToolsDocumentLifecycleWaitKey {
             registration_id,
@@ -2280,24 +2313,12 @@ impl CdpConnection {
         context: &DevToolsCommandContext,
         key: &DevToolsDocumentLifecycleWaitKey,
     ) -> DevToolsDocumentLifecycleWaitState {
-        if let Some(target_id) = context.target_id.as_ref() {
-            let Some(route) = self.target_session_route_for_target_id(target_id.as_str()) else {
-                return DevToolsDocumentLifecycleWaitState::Unavailable;
-            };
-            let mut route_scope = self.scoped_none_session_owner_route_override(route);
-            return route_scope
-                .conn_mut()
-                .runtime_session_owner_slot(None)
-                .ok()
-                .map_or(DevToolsDocumentLifecycleWaitState::Unavailable, |slot| {
-                    devtools_document_lifecycle_wait_state_for_slot(slot, key)
-                });
-        }
-        self.runtime_session_owner_slot(
-            context
-                .session_id
-                .as_ref()
-                .map(|session_id| session_id.as_str()),
+        let Some(owner_scope) = self.command_owner_scope_for_devtools_context(context) else {
+            return DevToolsDocumentLifecycleWaitState::Unavailable;
+        };
+        self.runtime_session_owner_slot_for_route(
+            owner_scope.session_id(),
+            owner_scope.session_owner_route(),
         )
         .ok()
         .map_or(DevToolsDocumentLifecycleWaitState::Unavailable, |slot| {
@@ -2310,30 +2331,12 @@ impl CdpConnection {
         context: &DevToolsCommandContext,
         key: &DevToolsDocumentLifecycleWaitKey,
     ) -> bool {
-        if let Some(target_id) = context.target_id.as_ref() {
-            let Some(route) = self.target_session_route_for_target_id(target_id.as_str()) else {
-                return false;
-            };
-            let mut route_scope = self.scoped_none_session_owner_route_override(route);
-            return route_scope
-                .conn_mut()
-                .runtime_session_owner_slot_mut(None)
-                .is_ok_and(|slot| {
-                    slot.page_slot_mut()
-                        .release_renderer_document_lifecycle_waiter(
-                            key.registration_id,
-                            key.renderer_document,
-                            key.renderer_epoch,
-                            &key.frame_id,
-                            &key.loader_id,
-                        )
-                });
-        }
-        self.runtime_session_owner_slot_mut(
-            context
-                .session_id
-                .as_ref()
-                .map(|session_id| session_id.as_str()),
+        let Some(owner_scope) = self.command_owner_scope_for_devtools_context(context) else {
+            return false;
+        };
+        self.runtime_session_owner_slot_mut_for_route(
+            owner_scope.session_id(),
+            owner_scope.session_owner_route(),
         )
         .is_ok_and(|slot| {
             slot.page_slot_mut()

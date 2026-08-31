@@ -6,7 +6,9 @@ use serde_json::json;
 use url::Url;
 
 use crate::{
-    conn::{BrowserContextPageStorageHandles, CdpConnection, Cmd, CommandOwnerScope},
+    conn::{
+        BrowserContextPageStorageHandles, CdpConnection, CdpSessionRoute, Cmd, CommandOwnerScope,
+    },
     domains::{actions::DomStorageAction, command_output::CommandOutputPlan},
 };
 
@@ -199,7 +201,12 @@ fn start_storage_operation(
     storage_id: DomStorageId,
     operation: DomStorageOperation,
 ) -> DomStorageCommandTaskStep {
-    if let Err(plan) = storage_handles_for_session_owner(conn, cmd.session_id) {
+    let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
+    if let Err(plan) = storage_handles_for_route(
+        conn,
+        owner_scope.session_id(),
+        owner_scope.session_owner_route(),
+    ) {
         return DomStorageCommandTaskStep::Complete(plan);
     }
 
@@ -210,14 +217,17 @@ fn start_storage_operation(
         return DomStorageCommandTaskStep::Complete(complete_storage_operation(
             conn,
             cmd.session_id,
+            owner_scope.session_owner_route(),
             storage_id,
             operation,
             &storage_key,
         ));
     }
 
-    let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
-    if let Ok(page) = conn.loaded_page_mut_for_protocol_access(cmd.session_id) {
+    if let Ok(page) = conn.loaded_page_mut_for_protocol_access_for_route(
+        owner_scope.session_id(),
+        owner_scope.session_owner_route(),
+    ) {
         return match page.start_document_storage_key_snapshot() {
             Ok(pending) => {
                 DomStorageCommandTaskStep::Pending(Box::new(PendingDomStorageCommandDispatch {
@@ -248,6 +258,7 @@ fn start_storage_operation(
     DomStorageCommandTaskStep::Complete(complete_storage_operation(
         conn,
         cmd.session_id,
+        owner_scope.session_owner_route(),
         storage_id,
         operation,
         &storage_key,
@@ -301,12 +312,11 @@ fn complete_top_frame_resolution(
             return DomStorageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, error));
         }
     };
-    let mut route_scope = owner_scope.enter(conn);
     let storage_key = {
-        let Ok(page) = route_scope
-            .conn_mut()
-            .loaded_page_mut_for_protocol_access(owner_scope.session_id())
-        else {
+        let Ok(page) = conn.loaded_page_mut_for_protocol_access_for_route(
+            owner_scope.session_id(),
+            owner_scope.session_owner_route(),
+        ) else {
             return DomStorageCommandTaskStep::Complete(frame_not_found_plan());
         };
         match page.finish_document_storage_key_snapshot(completion) {
@@ -322,8 +332,9 @@ fn complete_top_frame_resolution(
 
     if storage_id_matches_key(&storage_id, &storage_key) {
         return DomStorageCommandTaskStep::Complete(complete_storage_operation(
-            route_scope.conn_mut(),
+            conn,
             owner_scope.session_id(),
+            owner_scope.session_owner_route(),
             storage_id,
             operation,
             &storage_key,
@@ -331,15 +342,14 @@ fn complete_top_frame_resolution(
     }
 
     let child_pending = {
-        let Ok(page) = route_scope
-            .conn_mut()
-            .loaded_page_mut_for_protocol_access(owner_scope.session_id())
-        else {
+        let Ok(page) = conn.loaded_page_mut_for_protocol_access_for_route(
+            owner_scope.session_id(),
+            owner_scope.session_owner_route(),
+        ) else {
             return DomStorageCommandTaskStep::Complete(frame_not_found_plan());
         };
         page.start_child_frame_tree_snapshot()
     };
-    drop(route_scope);
     match child_pending {
         Ok(pending) => {
             DomStorageCommandTaskStep::Pending(Box::new(PendingDomStorageCommandDispatch {
@@ -372,12 +382,11 @@ fn complete_child_frame_resolution(
             return DomStorageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, error));
         }
     };
-    let mut route_scope = owner_scope.enter(conn);
     let child_frames = {
-        let Ok(page) = route_scope
-            .conn_mut()
-            .loaded_page_mut_for_protocol_access(owner_scope.session_id())
-        else {
+        let Ok(page) = conn.loaded_page_mut_for_protocol_access_for_route(
+            owner_scope.session_id(),
+            owner_scope.session_owner_route(),
+        ) else {
             return DomStorageCommandTaskStep::Complete(frame_not_found_plan());
         };
         match page.finish_child_frame_tree_snapshot(completion) {
@@ -394,8 +403,9 @@ fn complete_child_frame_resolution(
         return DomStorageCommandTaskStep::Complete(frame_not_found_plan());
     };
     DomStorageCommandTaskStep::Complete(complete_storage_operation(
-        route_scope.conn_mut(),
+        conn,
         owner_scope.session_id(),
+        owner_scope.session_owner_route(),
         storage_id,
         operation,
         &storage_key,
@@ -405,6 +415,7 @@ fn complete_child_frame_resolution(
 fn complete_storage_operation(
     conn: &CdpConnection,
     session_id: Option<&str>,
+    owner_route: Option<&CdpSessionRoute>,
     storage_id: DomStorageId,
     operation: DomStorageOperation,
     storage_key: &str,
@@ -412,7 +423,7 @@ fn complete_storage_operation(
     if !storage_id_matches_key(&storage_id, storage_key) {
         return frame_not_found_plan();
     }
-    let handles = match storage_handles_for_session_owner(conn, session_id) {
+    let handles = match storage_handles_for_route(conn, session_id, owner_route) {
         Ok(handles) => handles,
         Err(plan) => return plan,
     };
@@ -459,8 +470,20 @@ fn storage_handles_for_session_owner(
     conn: &CdpConnection,
     session_id: Option<&str>,
 ) -> Result<BrowserContextPageStorageHandles, CommandOutputPlan> {
+    let none_session_owner_route = session_id
+        .is_none()
+        .then(|| conn.none_session_owner_route_override())
+        .flatten();
+    storage_handles_for_route(conn, session_id, none_session_owner_route.as_ref())
+}
+
+fn storage_handles_for_route(
+    conn: &CdpConnection,
+    session_id: Option<&str>,
+    owner_route: Option<&CdpSessionRoute>,
+) -> Result<BrowserContextPageStorageHandles, CommandOutputPlan> {
     let Some((browser_context_id, Some(target_id))) =
-        conn.target_owner_identity_for_session(session_id)
+        conn.target_owner_identity_for_route(session_id, owner_route)
     else {
         return Err(CommandOutputPlan::error(
             -32000,

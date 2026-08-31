@@ -1,4 +1,4 @@
-use crate::conn::{CdpConnection, Cmd};
+use crate::conn::{CdpConnection, Cmd, CommandOwnerScope};
 use crate::domains::actions::CssAction;
 use crate::domains::command_output::CommandOutputPlan;
 use chromiumoxide_cdp::cdp::browser_protocol::css::{
@@ -27,14 +27,14 @@ struct NodeReferenceParams {
 
 pub(crate) struct PendingCssCommandDispatch {
     command_id: Option<u64>,
-    session_id: Option<String>,
+    owner_scope: CommandOwnerScope,
     kind: PendingCssCommandKind,
     pending: PendingPageCommand,
 }
 
 pub(crate) struct CompletedCssCommandDispatch {
     command_id: Option<u64>,
-    session_id: Option<String>,
+    owner_scope: CommandOwnerScope,
     kind: PendingCssCommandKind,
     completed: Result<CompletedPageCommand, String>,
 }
@@ -78,14 +78,24 @@ struct PendingCssCommandStartError {
 }
 
 impl PendingCssCommandDispatch {
-    pub(crate) fn session_id(&self) -> Option<&str> {
-        self.session_id.as_deref()
+    fn from_command(
+        conn: &CdpConnection,
+        cmd: &Cmd<'_>,
+        kind: PendingCssCommandKind,
+        pending: PendingPageCommand,
+    ) -> Self {
+        Self {
+            command_id: cmd.id,
+            owner_scope: CommandOwnerScope::capture(conn, cmd.session_id),
+            kind,
+            pending,
+        }
     }
 
     pub async fn wait(self) -> CompletedCssCommandDispatch {
         CompletedCssCommandDispatch {
             command_id: self.command_id,
-            session_id: self.session_id,
+            owner_scope: self.owner_scope,
             kind: self.kind,
             completed: self.pending.wait().await.map_err(|error| error.to_string()),
         }
@@ -98,7 +108,7 @@ impl CompletedCssCommandDispatch {
     }
 
     pub(crate) fn session_id(&self) -> Option<&str> {
-        self.session_id.as_deref()
+        self.owner_scope.session_id()
     }
 }
 
@@ -251,15 +261,15 @@ fn start_pending_get_style_sheet_command(
             &style_sheet_id,
         )
         .map_err(PendingCssCommandStartError::renderer_error)?;
-    Ok(PendingCssCommandDispatch {
-        command_id: cmd.id,
-        session_id: cmd.session_id.map(str::to_owned),
-        kind: PendingCssCommandKind::GetStyleSheet {
+    Ok(PendingCssCommandDispatch::from_command(
+        conn,
+        cmd,
+        PendingCssCommandKind::GetStyleSheet {
             style_sheet_id,
             frame_id,
         },
         pending,
-    })
+    ))
 }
 
 fn start_pending_set_style_sheet_text_command(
@@ -283,12 +293,12 @@ fn start_pending_set_style_sheet_text_command(
             &params.text,
         )
         .map_err(PendingCssCommandStartError::renderer_error)?;
-    Ok(PendingCssCommandDispatch {
-        command_id: cmd.id,
-        session_id: cmd.session_id.map(str::to_owned),
-        kind: PendingCssCommandKind::SetStyleSheetText { style_sheet_id },
+    Ok(PendingCssCommandDispatch::from_command(
+        conn,
+        cmd,
+        PendingCssCommandKind::SetStyleSheetText { style_sheet_id },
         pending,
-    })
+    ))
 }
 
 fn start_pending_get_computed_style_for_node_command(
@@ -309,12 +319,12 @@ fn start_pending_get_computed_style_for_node_command(
                 object_id,
             )
             .map_err(PendingCssCommandStartError::renderer_error)?;
-        return Ok(PendingCssCommandDispatch {
-            command_id: cmd.id,
-            session_id: cmd.session_id.map(str::to_owned),
-            kind: PendingCssCommandKind::GetComputedStyleForNode,
+        return Ok(PendingCssCommandDispatch::from_command(
+            conn,
+            cmd,
+            PendingCssCommandKind::GetComputedStyleForNode,
             pending,
-        });
+        ));
     }
     if let Some(cdp_node_id) = params.node_id {
         return node_references::start_frontend_node_binding_for_computed_style(
@@ -332,12 +342,12 @@ fn start_pending_get_computed_style_for_node_command(
         return Err(PendingCssCommandStartError::node_not_found());
     }
     .map_err(PendingCssCommandStartError::renderer_error)?;
-    Ok(PendingCssCommandDispatch {
-        command_id: cmd.id,
-        session_id: cmd.session_id.map(str::to_owned),
-        kind: PendingCssCommandKind::GetComputedStyleForNode,
+    Ok(PendingCssCommandDispatch::from_command(
+        conn,
+        cmd,
+        PendingCssCommandKind::GetComputedStyleForNode,
         pending,
-    })
+    ))
 }
 
 fn start_pending_inline_style_command(
@@ -369,29 +379,40 @@ fn start_pending_inline_style_command(
         return Err(PendingCssCommandStartError::node_not_found());
     }
     .map_err(PendingCssCommandStartError::renderer_error)?;
-    Ok(Some(PendingCssCommandDispatch {
-        command_id: cmd.id,
-        session_id: cmd.session_id.map(str::to_owned),
-        kind: PendingCssCommandKind::GetInlineStyleForNode { kind },
+    Ok(Some(PendingCssCommandDispatch::from_command(
+        conn,
+        cmd,
+        PendingCssCommandKind::GetInlineStyleForNode { kind },
         pending,
-    }))
+    )))
 }
 
 pub(crate) fn complete_pending_css_command(
     conn: &mut CdpConnection,
     completed: CompletedCssCommandDispatch,
 ) -> CssCommandDispatchStep {
-    let command_id = completed.command_id;
-    let session_id = completed.session_id.as_deref();
-    let Some(page) = loaded_page_mut_for_session(conn, session_id) else {
+    let CompletedCssCommandDispatch {
+        command_id,
+        owner_scope,
+        kind,
+        completed,
+    } = completed;
+    let session_id = owner_scope.session_id();
+    let Some(page) = conn
+        .loaded_page_mut_for_protocol_access_for_route(
+            session_id,
+            owner_scope.session_owner_route(),
+        )
+        .ok()
+    else {
         return CssCommandDispatchStep::Complete(CommandOutputPlan::error(
             -32000,
             "NoDocumentLoaded",
         ));
     };
-    match completed.kind {
+    match kind {
         PendingCssCommandKind::Enable { frame_id } => {
-            let completion = match completed.completed {
+            let completion = match completed {
                 Ok(completion) => completion,
                 Err(error) => {
                     return CssCommandDispatchStep::Complete(CommandOutputPlan::error(
@@ -409,7 +430,7 @@ pub(crate) fn complete_pending_css_command(
             )
         }
         PendingCssCommandKind::Disable => {
-            let completion = match completed.completed {
+            let completion = match completed {
                 Ok(completion) => completion,
                 Err(error) => {
                     return CssCommandDispatchStep::Complete(CommandOutputPlan::error(
@@ -425,7 +446,7 @@ pub(crate) fn complete_pending_css_command(
             )
         }
         PendingCssCommandKind::ResolveFrontendNodeForComputedStyle => {
-            let completion = match completed.completed {
+            let completion = match completed {
                 Ok(completion) => completion,
                 Err(error) => {
                     return CssCommandDispatchStep::Complete(CommandOutputPlan::error(
@@ -464,13 +485,13 @@ pub(crate) fn complete_pending_css_command(
                 };
             CssCommandDispatchStep::Pending(PendingCssCommandDispatch {
                 command_id,
-                session_id: session_id.map(str::to_owned),
+                owner_scope,
                 kind: PendingCssCommandKind::GetComputedStyleForNode,
                 pending,
             })
         }
         PendingCssCommandKind::ResolveFrontendNodeForInlineStyle { kind } => {
-            let completion = match completed.completed {
+            let completion = match completed {
                 Ok(completion) => completion,
                 Err(error) => {
                     return CssCommandDispatchStep::Complete(CommandOutputPlan::error(
@@ -509,7 +530,7 @@ pub(crate) fn complete_pending_css_command(
                 };
             CssCommandDispatchStep::Pending(PendingCssCommandDispatch {
                 command_id,
-                session_id: session_id.map(str::to_owned),
+                owner_scope,
                 kind: PendingCssCommandKind::GetInlineStyleForNode { kind },
                 pending,
             })
@@ -518,7 +539,7 @@ pub(crate) fn complete_pending_css_command(
             style_sheet_id,
             frame_id,
         } => {
-            let completion = match completed.completed {
+            let completion = match completed {
                 Ok(completion) => completion,
                 Err(error) => {
                     return CssCommandDispatchStep::Complete(CommandOutputPlan::error(
@@ -539,7 +560,7 @@ pub(crate) fn complete_pending_css_command(
             })
         }
         PendingCssCommandKind::SetStyleSheetText { style_sheet_id } => {
-            let completion = match completed.completed {
+            let completion = match completed {
                 Ok(completion) => completion,
                 Err(error) => {
                     return CssCommandDispatchStep::Complete(CommandOutputPlan::error(
@@ -561,7 +582,7 @@ pub(crate) fn complete_pending_css_command(
             )
         }
         PendingCssCommandKind::GetComputedStyleForNode => {
-            let completion = match completed.completed {
+            let completion = match completed {
                 Ok(completion) => completion,
                 Err(error) => {
                     return CssCommandDispatchStep::Complete(CommandOutputPlan::error(
@@ -583,7 +604,7 @@ pub(crate) fn complete_pending_css_command(
             )
         }
         PendingCssCommandKind::GetInlineStyleForNode { kind } => {
-            let completion = match completed.completed {
+            let completion = match completed {
                 Ok(completion) => completion,
                 Err(error) => {
                     return CssCommandDispatchStep::Complete(CommandOutputPlan::error(

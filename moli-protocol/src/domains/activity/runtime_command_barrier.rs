@@ -155,6 +155,21 @@ impl RuntimeCommandCausalOwner {
             target_id,
         })
     }
+
+    fn capture_for_scope(conn: &CdpConnection, scope: &CommandOwnerScope) -> Option<Self> {
+        if let Some(page) = conn.target_page_residence_identity_for_route(
+            scope.session_id(),
+            scope.session_owner_route(),
+        ) {
+            return Some(Self::Page(page));
+        }
+        let (browser_context_id, target_id) =
+            conn.target_owner_identity_for_route(scope.session_id(), scope.session_owner_route())?;
+        Some(Self::Target {
+            browser_context_id,
+            target_id,
+        })
+    }
 }
 
 impl RuntimeCommandOutputRoute {
@@ -360,12 +375,10 @@ impl RuntimeCommandOutputBarriers {
 
     fn command_owner_is_current(
         &self,
-        conn: &mut CdpConnection,
+        conn: &CdpConnection,
         barrier: &ActiveRuntimeCommandOutputBarrier,
     ) -> bool {
-        let mut scope = barrier.command_scope.enter(conn);
-        RuntimeCommandCausalOwner::capture(scope.conn_mut(), barrier.command_scope.session_id())
-            .as_ref()
+        RuntimeCommandCausalOwner::capture_for_scope(conn, &barrier.command_scope).as_ref()
             == Some(&barrier.causal_owner)
     }
 

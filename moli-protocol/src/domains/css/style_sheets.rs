@@ -32,12 +32,12 @@ pub(super) fn start_pending_enable_command(
             renderer_inspector_session_id,
         )
         .map_err(PendingCssCommandStartError::renderer_error)?;
-    Ok(Some(PendingCssCommandDispatch {
-        command_id: cmd.id,
-        session_id: cmd.session_id.map(str::to_owned),
-        kind: PendingCssCommandKind::Enable { frame_id },
+    Ok(Some(PendingCssCommandDispatch::from_command(
+        conn,
+        cmd,
+        PendingCssCommandKind::Enable { frame_id },
         pending,
-    }))
+    )))
 }
 
 pub(super) fn start_pending_disable_command(
@@ -53,12 +53,12 @@ pub(super) fn start_pending_disable_command(
     let pending = page
         .start_reset_css_agent_session(renderer_inspector_session_id)
         .map_err(PendingCssCommandStartError::renderer_error)?;
-    Ok(Some(PendingCssCommandDispatch {
-        command_id: cmd.id,
-        session_id: cmd.session_id.map(str::to_owned),
-        kind: PendingCssCommandKind::Disable,
+    Ok(Some(PendingCssCommandDispatch::from_command(
+        conn,
+        cmd,
+        PendingCssCommandKind::Disable,
         pending,
-    }))
+    )))
 }
 
 pub(super) fn complete_enable_command_output_plan(

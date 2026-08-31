@@ -495,7 +495,9 @@ fn start_get_storage_key_for_frame_command(
 
     if params.frame_id == target_id {
         let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
-        if let Some(page) = loaded_page_mut_for_session(conn, cmd.session_id) {
+        if let Some(page) =
+            loaded_page_mut_for_session(conn, cmd.session_id, owner_scope.session_owner_route())
+        {
             return match page.start_document_storage_key_snapshot() {
                 Ok(pending) => StorageCommandTaskStep::Pending(PendingStorageCommandDispatch {
                     command_id: cmd.id,
@@ -522,7 +524,9 @@ fn start_get_storage_key_for_frame_command(
         return StorageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message));
     }
     let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
-    let Some(page) = loaded_page_mut_for_session(conn, cmd.session_id) else {
+    let Some(page) =
+        loaded_page_mut_for_session(conn, cmd.session_id, owner_scope.session_owner_route())
+    else {
         return StorageCommandTaskStep::Complete(CommandOutputPlan::error(
             -32000,
             "NoFrameForGivenId",
@@ -773,9 +777,11 @@ fn complete_get_storage_key_for_top_frame_command(
         Ok(completion) => completion,
         Err(error) => return CommandOutputPlan::error(-32000, error),
     };
-    let mut route_scope = owner_scope.enter(conn);
-    let Some(page) = loaded_page_mut_for_session(route_scope.conn_mut(), owner_scope.session_id())
-    else {
+    let Some(page) = loaded_page_mut_for_session(
+        conn,
+        owner_scope.session_id(),
+        owner_scope.session_owner_route(),
+    ) else {
         return CommandOutputPlan::error(-32000, "NoFrameForGivenId");
     };
     match page.finish_document_storage_key_snapshot(completion) {
@@ -794,9 +800,11 @@ fn complete_get_storage_key_for_frame_command(
         Ok(completion) => completion,
         Err(error) => return CommandOutputPlan::error(-32000, error),
     };
-    let mut route_scope = owner_scope.enter(conn);
-    let Some(page) = loaded_page_mut_for_session(route_scope.conn_mut(), owner_scope.session_id())
-    else {
+    let Some(page) = loaded_page_mut_for_session(
+        conn,
+        owner_scope.session_id(),
+        owner_scope.session_owner_route(),
+    ) else {
         return CommandOutputPlan::error(-32000, "NoFrameForGivenId");
     };
     let child_frames = match page.finish_child_frame_tree_snapshot(completion) {
@@ -910,8 +918,10 @@ fn complete_set_cookies_result(
 fn loaded_page_mut_for_session<'a>(
     conn: &'a mut CdpConnection,
     session_id: Option<&str>,
+    owner_route: Option<&crate::conn::CdpSessionRoute>,
 ) -> Option<&'a mut moli_core::page::Page> {
-    conn.loaded_page_mut_for_protocol_access(session_id).ok()
+    conn.loaded_page_mut_for_protocol_access_for_route(session_id, owner_route)
+        .ok()
 }
 
 fn find_child_frame<'a>(

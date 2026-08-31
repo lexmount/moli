@@ -32,6 +32,15 @@ impl CommandOwnerScope {
         self.session_id.as_deref()
     }
 
+    /// Returns the exact route captured for an implicit-session command.
+    ///
+    /// A concrete CDP session remains authoritative through `session_id`; the
+    /// route is only needed for protocol-neutral and deferred work which uses
+    /// Chromium's implicit primary Page attachment.
+    pub(crate) fn session_owner_route(&self) -> Option<&CdpSessionRoute> {
+        self.session_owner_route.as_ref()
+    }
+
     pub(crate) fn enter<'a>(
         &self,
         conn: &'a mut CdpConnection,

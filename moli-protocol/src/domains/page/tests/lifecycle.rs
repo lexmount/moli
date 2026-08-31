@@ -3640,15 +3640,12 @@ async fn screencast_commands_update_page_session_state() {
 
     assert_eq!(
         ctx.conn
-            .begin_page_screencast_capture_for_session_owner(Some("SID-screencast"), 1),
+            .begin_page_screencast_capture_for_route(Some("SID-screencast"), None, 1),
         Some(true)
     );
     assert_eq!(
-        ctx.conn.complete_page_screencast_capture_for_session_owner(
-            Some("SID-screencast"),
-            1,
-            true,
-        ),
+        ctx.conn
+            .complete_page_screencast_capture_for_route(Some("SID-screencast"), None, 1, true,),
         Some(true)
     );
 
@@ -4125,15 +4122,17 @@ async fn repeated_start_invalidates_old_screencast_ack_generation() {
 
         let generation = i32::try_from(id - 62).expect("small screencast generation");
         assert_eq!(
-            ctx.conn.begin_page_screencast_capture_for_session_owner(
+            ctx.conn.begin_page_screencast_capture_for_route(
                 Some("SID-screencast-generation"),
+                None,
                 generation,
             ),
             Some(true)
         );
         assert_eq!(
-            ctx.conn.complete_page_screencast_capture_for_session_owner(
+            ctx.conn.complete_page_screencast_capture_for_route(
                 Some("SID-screencast-generation"),
+                None,
                 generation,
                 true,
             ),

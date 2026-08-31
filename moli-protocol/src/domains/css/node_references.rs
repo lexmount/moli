@@ -18,12 +18,12 @@ pub(super) fn start_frontend_node_binding_for_computed_style(
     let pending = page
         .start_document_frontend_node_binding(renderer_inspector_session_id, frontend_node_id)
         .map_err(PendingCssCommandStartError::renderer_error)?;
-    Ok(PendingCssCommandDispatch {
-        command_id: cmd.id,
-        session_id: cmd.session_id.map(str::to_owned),
-        kind: PendingCssCommandKind::ResolveFrontendNodeForComputedStyle,
+    Ok(PendingCssCommandDispatch::from_command(
+        conn,
+        cmd,
+        PendingCssCommandKind::ResolveFrontendNodeForComputedStyle,
         pending,
-    })
+    ))
 }
 
 pub(super) fn start_frontend_node_binding_for_inline_style(
@@ -40,12 +40,12 @@ pub(super) fn start_frontend_node_binding_for_inline_style(
     let pending = page
         .start_document_frontend_node_binding(renderer_inspector_session_id, frontend_node_id)
         .map_err(PendingCssCommandStartError::renderer_error)?;
-    Ok(Some(PendingCssCommandDispatch {
-        command_id: cmd.id,
-        session_id: cmd.session_id.map(str::to_owned),
-        kind: PendingCssCommandKind::ResolveFrontendNodeForInlineStyle { kind },
+    Ok(Some(PendingCssCommandDispatch::from_command(
+        conn,
+        cmd,
+        PendingCssCommandKind::ResolveFrontendNodeForInlineStyle { kind },
         pending,
-    }))
+    )))
 }
 
 pub(super) fn backend_node_id_from_frontend_resolution(

@@ -2832,18 +2832,18 @@ fn finish_pending_emulation_page_command(
 ) -> Result<(), String> {
     match target {
         PendingEmulationPageTarget::SessionOwner { owner_scope } => {
-            let mut route_scope = owner_scope.enter(conn);
             if matches!(operation, PendingEmulationPageOperation::SetUserAgentLoader) {
-                return route_scope
-                    .conn_mut()
-                    .finish_rebuild_resource_runtime_for_session_owner(
-                        owner_scope.session_id(),
-                        completion,
-                    );
+                return conn.finish_rebuild_resource_runtime_for_route(
+                    owner_scope.session_id(),
+                    owner_scope.session_owner_route(),
+                    completion,
+                );
             }
-            let page = route_scope
-                .conn_mut()
-                .loaded_page_mut_for_interruptible_protocol_access(owner_scope.session_id())
+            let page = conn
+                .loaded_page_mut_for_interruptible_protocol_access_for_route(
+                    owner_scope.session_id(),
+                    owner_scope.session_owner_route(),
+                )
                 .ok();
             finish_emulation_page_operation_on_current_attachment(page, operation, completion)
         }

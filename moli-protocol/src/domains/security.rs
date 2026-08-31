@@ -96,12 +96,12 @@ pub(crate) fn complete_pending_security_command(
         Ok(completion) => completion,
         Err(error) => return CommandOutputPlan::error(-32000, error),
     };
-    let owner_scope = completed.owner_scope.clone();
-    let mut route_scope = owner_scope.enter(conn);
-    match route_scope
-        .conn_mut()
-        .finish_rebuild_resource_runtime_for_session_owner(owner_scope.session_id(), completion)
-    {
+    let owner_scope = completed.owner_scope;
+    match conn.finish_rebuild_resource_runtime_for_route(
+        owner_scope.session_id(),
+        owner_scope.session_owner_route(),
+        completion,
+    ) {
         Ok(()) => CommandOutputPlan::success(),
         Err(error) => CommandOutputPlan::error(-32000, error),
     }

@@ -6,20 +6,20 @@ use moli_core::page::{
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
-use crate::conn::{CdpConnection, Cmd};
+use crate::conn::{CdpConnection, Cmd, CommandOwnerScope};
 use crate::domains::actions::DomDebuggerAction;
 use crate::domains::command_output::CommandOutputPlan;
 
 pub(crate) struct PendingDomDebuggerCommandDispatch {
     command_id: Option<u64>,
-    session_id: Option<String>,
+    owner_scope: CommandOwnerScope,
     pending: PendingPageCommand,
     operation: CompletedDomDebuggerOperation,
 }
 
 pub(crate) struct CompletedDomDebuggerCommandDispatch {
     command_id: Option<u64>,
-    session_id: Option<String>,
+    owner_scope: CommandOwnerScope,
     completed: Result<CompletedPageCommand, String>,
     operation: CompletedDomDebuggerOperation,
 }
@@ -78,14 +78,10 @@ fn default_depth() -> i32 {
 }
 
 impl PendingDomDebuggerCommandDispatch {
-    pub(crate) fn session_id(&self) -> Option<&str> {
-        self.session_id.as_deref()
-    }
-
     pub(crate) async fn wait(self) -> CompletedDomDebuggerCommandDispatch {
         CompletedDomDebuggerCommandDispatch {
             command_id: self.command_id,
-            session_id: self.session_id,
+            owner_scope: self.owner_scope,
             completed: self.pending.wait().await.map_err(|error| error.to_string()),
             operation: self.operation,
         }
@@ -98,7 +94,7 @@ impl CompletedDomDebuggerCommandDispatch {
     }
 
     pub(crate) fn session_id(&self) -> Option<&str> {
-        self.session_id.as_deref()
+        self.owner_scope.session_id()
     }
 }
 
@@ -228,7 +224,7 @@ pub(crate) fn try_start_dom_debugger_command_dispatch(
         Ok((pending, operation)) => {
             DomDebuggerCommandTaskStep::Pending(PendingDomDebuggerCommandDispatch {
                 command_id: cmd.id,
-                session_id: cmd.session_id.map(str::to_owned),
+                owner_scope: CommandOwnerScope::capture(conn, cmd.session_id),
                 pending,
                 operation,
             })
@@ -247,15 +243,19 @@ pub(crate) fn complete_pending_dom_debugger_command(
     conn: &mut CdpConnection,
     completed: CompletedDomDebuggerCommandDispatch,
 ) -> CommandOutputPlan {
-    let session_id = completed.session_id;
+    let session_id = completed.owner_scope.session_id().map(str::to_owned);
+    let owner_route = completed.owner_scope.session_owner_route();
     match completed.operation {
         CompletedDomDebuggerOperation::GetEventListeners => {
             let resolution = completed.completed.and_then(|completion| {
-                conn.loaded_page_mut_for_protocol_access(session_id.as_deref())
-                    .and_then(|page| {
-                        page.finish_dom_debugger_get_event_listeners(completion)
-                            .map_err(|error| error.to_string())
-                    })
+                conn.loaded_page_mut_for_protocol_access_for_route(
+                    session_id.as_deref(),
+                    owner_route,
+                )
+                .and_then(|page| {
+                    page.finish_dom_debugger_get_event_listeners(completion)
+                        .map_err(|error| error.to_string())
+                })
             });
             match resolution {
                 Ok(RendererDomDebuggerEventListenersResolution::Found(listeners)) => {
@@ -272,14 +272,17 @@ pub(crate) fn complete_pending_dom_debugger_command(
             enabled,
         } => {
             let completion = completed.completed.and_then(|completion| {
-                conn.loaded_page_mut_for_protocol_access(session_id.as_deref())
-                    .and_then(|page| {
-                        page.finish_unit_runtime_page_command(
-                            completion,
-                            "DOMDebugger event listener breakpoint",
-                        )
-                        .map_err(|error| error.to_string())
-                    })
+                conn.loaded_page_mut_for_protocol_access_for_route(
+                    session_id.as_deref(),
+                    owner_route,
+                )
+                .and_then(|page| {
+                    page.finish_unit_runtime_page_command(
+                        completion,
+                        "DOMDebugger event listener breakpoint",
+                    )
+                    .map_err(|error| error.to_string())
+                })
             });
             if let Err(message) = completion {
                 return CommandOutputPlan::error(-32000, message);
@@ -308,14 +311,14 @@ pub(crate) fn complete_pending_dom_debugger_command(
             enabled,
         } => {
             let completion = completed.completed.and_then(|completion| {
-                conn.loaded_page_mut_for_protocol_access(session_id.as_deref())
-                    .and_then(|page| {
-                        page.finish_unit_runtime_page_command(
-                            completion,
-                            "DOMDebugger XHR breakpoint",
-                        )
+                conn.loaded_page_mut_for_protocol_access_for_route(
+                    session_id.as_deref(),
+                    owner_route,
+                )
+                .and_then(|page| {
+                    page.finish_unit_runtime_page_command(completion, "DOMDebugger XHR breakpoint")
                         .map_err(|error| error.to_string())
-                    })
+                })
             });
             if let Err(message) = completion {
                 return CommandOutputPlan::error(-32000, message);
@@ -337,11 +340,14 @@ pub(crate) fn complete_pending_dom_debugger_command(
         }
         CompletedDomDebuggerOperation::ConfigureDomBreakpoint => {
             let resolution = completed.completed.and_then(|completion| {
-                conn.loaded_page_mut_for_protocol_access(session_id.as_deref())
-                    .and_then(|page| {
-                        page.finish_dom_debugger_configure_dom_breakpoint(completion)
-                            .map_err(|error| error.to_string())
-                    })
+                conn.loaded_page_mut_for_protocol_access_for_route(
+                    session_id.as_deref(),
+                    owner_route,
+                )
+                .and_then(|page| {
+                    page.finish_dom_debugger_configure_dom_breakpoint(completion)
+                        .map_err(|error| error.to_string())
+                })
             });
             match resolution {
                 Ok(RendererDomDebuggerDomBreakpointResolution::Configured) => {

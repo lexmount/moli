@@ -2470,16 +2470,17 @@ impl CdpConnection {
             .await
     }
 
-    pub(crate) async fn close_page_target_for_session_owner_async(
+    pub(crate) async fn close_page_target_for_route_async(
         &mut self,
         session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
     ) -> Option<ClosedPageTarget> {
         let collected_network_data_artifacts = self
-            .target_session_owner_ref(session_id)?
+            .target_session_owner_ref_for_route(session_id, owner_route)?
             .runtime_slot()?
             .collected_network_data_artifacts();
         let closed = self
-            .target_session_owner_mut(session_id)?
+            .target_session_owner_mut_for_route(session_id, owner_route)?
             .close_page_target_async()
             .await?;
         self.record_collected_network_data_artifacts(collected_network_data_artifacts);
@@ -2676,6 +2677,15 @@ impl CdpConnection {
             .page_session_state()
     }
 
+    pub(crate) fn target_page_session_state_for_route(
+        &self,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
+    ) -> Option<&TargetPageSessionState> {
+        self.target_session_owner_ref_for_route(session_id, owner_route)?
+            .page_session_state()
+    }
+
     pub(crate) fn target_devtools_session_state_for_session(
         &self,
         session_id: Option<&str>,
@@ -2789,11 +2799,30 @@ impl CdpConnection {
             .mutate_session_state(|mut state| state.devtools_session_state_mut().map(f))
     }
 
+    pub(crate) fn with_target_devtools_session_state_for_route_mut<R>(
+        &mut self,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
+        f: impl FnOnce(&mut DevToolsSessionState) -> R,
+    ) -> Option<R> {
+        self.target_session_owner_mut_for_route(session_id, owner_route)?
+            .mutate_session_state(|mut state| state.devtools_session_state_mut().map(f))
+    }
+
     pub(crate) fn target_owner_identity_for_session(
         &self,
         session_id: Option<&str>,
     ) -> Option<(String, Option<String>)> {
         self.target_session_owner_ref(session_id)?.owner_identity()
+    }
+
+    pub(crate) fn target_owner_identity_for_route(
+        &self,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
+    ) -> Option<(String, Option<String>)> {
+        self.target_session_owner_ref_for_route(session_id, owner_route)?
+            .owner_identity()
     }
 
     /// Captures the exact target-local Page residence currently addressed by
@@ -2807,8 +2836,17 @@ impl CdpConnection {
         &self,
         session_id: Option<&str>,
     ) -> Option<TargetPageResidenceIdentity> {
+        let none_session_owner_route = self.none_session_owner_route_override();
+        self.target_page_residence_identity_for_route(session_id, none_session_owner_route.as_ref())
+    }
+
+    pub(crate) fn target_page_residence_identity_for_route(
+        &self,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
+    ) -> Option<TargetPageResidenceIdentity> {
         let (browser_context_id, routed_target_id) =
-            self.target_owner_identity_for_session(session_id)?;
+            self.target_owner_identity_for_route(session_id, owner_route)?;
         // `None` in a `CdpSessionRoute::ActiveTarget` is a routing shorthand:
         // it means "whichever target is currently active". A Page residence
         // identity must never retain that mutable shorthand. Freeze the
@@ -2821,7 +2859,7 @@ impl CdpConnection {
                 .map(str::to_owned)
         });
         let page_attachment_id = self
-            .runtime_session_owner_slot(session_id)
+            .runtime_session_owner_slot_for_route(session_id, owner_route)
             .ok()?
             .page_attachment_id()?;
         Some(TargetPageResidenceIdentity::new(
@@ -3122,10 +3160,19 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
     ) -> Result<&mut TargetRuntimeSlot, String> {
+        let none_session_owner_route = self.none_session_owner_route_override();
+        self.runtime_session_owner_slot_mut_for_route(session_id, none_session_owner_route.as_ref())
+    }
+
+    pub(crate) fn runtime_session_owner_slot_mut_for_route(
+        &mut self,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
+    ) -> Result<&mut TargetRuntimeSlot, String> {
         let renderer_inspector_session_id =
             self.target_renderer_runtime_inspector_session_id_for_session(session_id);
         let slot = self
-            .target_session_owner_mut(session_id)
+            .target_session_owner_mut_for_route(session_id, owner_route)
             .and_then(TargetSessionOwnerMut::into_runtime_slot_mut)
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?;
         if let Some(page) = slot.loaded_page_mut() {
@@ -3138,7 +3185,16 @@ impl CdpConnection {
         &self,
         session_id: Option<&str>,
     ) -> Result<&TargetRuntimeSlot, String> {
-        self.target_session_owner_ref(session_id)
+        let none_session_owner_route = self.none_session_owner_route_override();
+        self.runtime_session_owner_slot_for_route(session_id, none_session_owner_route.as_ref())
+    }
+
+    pub(crate) fn runtime_session_owner_slot_for_route(
+        &self,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
+    ) -> Result<&TargetRuntimeSlot, String> {
+        self.target_session_owner_ref_for_route(session_id, owner_route)
             .and_then(|owner| owner.runtime_slot())
             .ok_or_else(|| "NoDocumentLoaded".to_owned())
     }
@@ -3315,11 +3371,29 @@ impl CdpConnection {
             .frame_tree_loader_id()
     }
 
+    pub(crate) fn target_session_owner_frame_tree_loader_id_for_route(
+        &self,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
+    ) -> Option<String> {
+        self.target_session_owner_ref_for_route(session_id, owner_route)?
+            .frame_tree_loader_id()
+    }
+
     pub(crate) fn target_session_owner_emulated_device_metrics(
         &self,
         session_id: Option<&str>,
     ) -> Option<crate::conn::EmulatedDeviceMetrics> {
         self.target_session_owner_ref(session_id)?
+            .emulated_device_metrics()
+    }
+
+    pub(crate) fn target_session_owner_emulated_device_metrics_for_route(
+        &self,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
+    ) -> Option<crate::conn::EmulatedDeviceMetrics> {
+        self.target_session_owner_ref_for_route(session_id, owner_route)?
             .emulated_device_metrics()
     }
 
@@ -3400,7 +3474,16 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
     ) -> Option<TargetSessionOwnerMut<'_>> {
-        match self.target_session_owner(session_id)? {
+        let none_session_owner_route = self.none_session_owner_route_override();
+        self.target_session_owner_mut_for_route(session_id, none_session_owner_route.as_ref())
+    }
+
+    pub(super) fn target_session_owner_mut_for_route(
+        &mut self,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
+    ) -> Option<TargetSessionOwnerMut<'_>> {
+        match self.target_session_owner_for_route(session_id, owner_route)? {
             TargetSessionOwner::ActiveTarget {
                 browser_context_id,
                 is_auxiliary_target_session,
@@ -3439,7 +3522,16 @@ impl CdpConnection {
         &self,
         session_id: Option<&str>,
     ) -> Option<TargetSessionOwnerRef<'_>> {
-        match self.target_session_owner(session_id)? {
+        let none_session_owner_route = self.none_session_owner_route_override();
+        self.target_session_owner_ref_for_route(session_id, none_session_owner_route.as_ref())
+    }
+
+    pub(super) fn target_session_owner_ref_for_route(
+        &self,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
+    ) -> Option<TargetSessionOwnerRef<'_>> {
+        match self.target_session_owner_for_route(session_id, owner_route)? {
             TargetSessionOwner::ActiveTarget {
                 browser_context_id,
                 is_auxiliary_target_session,

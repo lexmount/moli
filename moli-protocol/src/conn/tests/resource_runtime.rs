@@ -1705,6 +1705,60 @@ fn devtools_document_lifecycle_wait_key_observes_interruption_and_target_loss() 
     );
 }
 
+#[test]
+fn devtools_target_context_resolves_background_page_without_ambient_route() {
+    let mut conn = CdpConnection::new();
+    let mut browser_context = BrowserContext::new("BID-explicit-owner".into());
+    browser_context.set_active_target_id("TID-active");
+    browser_context
+        .active_target
+        .runtime_slot
+        .set_page_attachment_id_for_test(1001);
+    assert!(
+        browser_context.insert_page_target_host(PageTargetHost::with_url(
+            "TID-background".to_owned(),
+            None,
+            "about:blank".to_owned(),
+        ))
+    );
+    let background = browser_context
+        .background_target_mut("TID-background")
+        .expect("background PageTargetHost");
+    background
+        .active_target
+        .runtime_slot
+        .set_page_attachment_id_for_test(1002);
+    background
+        .active_target
+        .runtime_slot
+        .start_document_navigation("TID-background".to_owned(), "LID-background".to_owned());
+    conn.browser_context = Some(browser_context);
+
+    let context = crate::devtools_runtime::DevToolsCommandContext {
+        protocol: crate::devtools_runtime::DevToolsProtocol::WebDriverBidi,
+        session_id: None,
+        target_id: Some(crate::devtools_runtime::DevToolsTargetId::from(
+            "TID-background",
+        )),
+        browser_context_id: None,
+    };
+
+    assert_eq!(conn.none_session_owner_route_override(), None);
+    let residence = conn
+        .page_residence_identity_for_devtools_context(&context)
+        .expect("explicit target context should resolve its Page");
+    assert_eq!(residence.target_id(), Some("TID-background"));
+    assert_eq!(
+        conn.devtools_context_document_navigation_state(&context),
+        crate::DevToolsDocumentNavigationState::PendingNavigation
+    );
+    assert_eq!(
+        conn.none_session_owner_route_override(),
+        None,
+        "explicit lookup must not mutate connection-global routing state"
+    );
+}
+
 #[tokio::test]
 async fn direct_runtime_evaluate_same_document_navigation_updates_inactive_owner() {
     let mut ctx = crate::testing::TestContext::new();

@@ -1876,10 +1876,10 @@ impl CdpConnection {
         &mut self,
         registration: &PageScreencastRegistration,
     ) -> PageScreencastSubscriptionStatus {
-        let mut route_scope = registration.owner_scope.enter(self);
-        page_screencast_subscription_status_for_current_route(
-            route_scope.conn_mut(),
+        page_screencast_subscription_status_for_route(
+            self,
             registration.session_id(),
+            registration.owner_scope.session_owner_route(),
             registration.generation,
         )
     }
@@ -1892,22 +1892,25 @@ impl CdpConnection {
         let session_id = registration.session_id().map(str::to_owned);
         let generation = registration.generation;
         let owner_scope = registration.owner_scope.clone();
-        let mut route_scope = owner_scope.enter(self);
-        let conn = route_scope.conn_mut();
         let session_id_ref = session_id.as_deref();
-        if page_screencast_subscription_status_for_current_route(conn, session_id_ref, generation)
-            != PageScreencastSubscriptionStatus::Ready
+        let owner_route = owner_scope.session_owner_route();
+        if page_screencast_subscription_status_for_route(
+            self,
+            session_id_ref,
+            owner_route,
+            generation,
+        ) != PageScreencastSubscriptionStatus::Ready
         {
             return PageScreencastCaptureStart::Stale;
         }
-        let Some(config) = conn
-            .target_page_session_state_for_session(session_id_ref)
+        let Some(config) = self
+            .target_page_session_state_for_route(session_id_ref, owner_route)
             .and_then(|state| state.page_screencast.config())
             .cloned()
         else {
             return PageScreencastCaptureStart::Stale;
         };
-        let viewport = current_viewport_surface(conn, session_id_ref);
+        let viewport = current_viewport_surface_for_route(self, session_id_ref, owner_route);
         let request = RendererCaptureScreencastFrameRequest {
             format: match config.format() {
                 PageScreencastFormat::Png => RendererScreenshotFormat::Png,
@@ -1919,17 +1922,18 @@ impl CdpConnection {
             max_height: config.max_height(),
             known_visual_state,
         };
-        let pending = match conn.loaded_page_mut_for_protocol_access(session_id_ref) {
-            Ok(page) => match page.start_capture_screencast_frame(request) {
-                Ok(pending) => pending,
-                Err(error) => {
-                    tracing::debug!(?error, "failed to start screencast frame capture");
-                    return PageScreencastCaptureStart::Retry;
-                }
-            },
-            Err(_) => return PageScreencastCaptureStart::Retry,
-        };
-        if conn.begin_page_screencast_capture_for_session_owner(session_id_ref, generation)
+        let pending =
+            match self.loaded_page_mut_for_protocol_access_for_route(session_id_ref, owner_route) {
+                Ok(page) => match page.start_capture_screencast_frame(request) {
+                    Ok(pending) => pending,
+                    Err(error) => {
+                        tracing::debug!(?error, "failed to start screencast frame capture");
+                        return PageScreencastCaptureStart::Retry;
+                    }
+                },
+                Err(_) => return PageScreencastCaptureStart::Retry,
+            };
+        if self.begin_page_screencast_capture_for_route(session_id_ref, owner_route, generation)
             != Some(true)
         {
             tracing::debug!(
@@ -1959,22 +1963,28 @@ impl CdpConnection {
             viewport,
             completed,
         } = completed;
-        let mut route_scope = owner_scope.enter(self);
-        let conn = route_scope.conn_mut();
         let session_id_ref = session_id.as_deref();
-        if page_screencast_subscription_status_for_current_route(conn, session_id_ref, generation)
-            != PageScreencastSubscriptionStatus::CaptureInProgress
+        let owner_route = owner_scope.session_owner_route();
+        if page_screencast_subscription_status_for_route(
+            self,
+            session_id_ref,
+            owner_route,
+            generation,
+        ) != PageScreencastSubscriptionStatus::CaptureInProgress
         {
             return PageScreencastCaptureCompletion::Stale;
         }
 
         let frame = match completed {
             Ok(completion) => {
-                let page = match conn.loaded_page_mut_for_protocol_access(session_id_ref) {
+                let page = match self
+                    .loaded_page_mut_for_protocol_access_for_route(session_id_ref, owner_route)
+                {
                     Ok(page) => page,
                     Err(_) => {
-                        let _ = conn.complete_page_screencast_capture_for_session_owner(
+                        let _ = self.complete_page_screencast_capture_for_route(
                             session_id_ref,
+                            owner_route,
                             generation,
                             false,
                         );
@@ -1984,8 +1994,9 @@ impl CdpConnection {
                 match page.finish_capture_screencast_frame(*completion) {
                     Ok(RendererCaptureScreencastFrameReply::Captured(frame)) => frame,
                     Ok(RendererCaptureScreencastFrameReply::Unchanged) => {
-                        if conn.complete_page_screencast_capture_for_session_owner(
+                        if self.complete_page_screencast_capture_for_route(
                             session_id_ref,
+                            owner_route,
                             generation,
                             false,
                         ) != Some(true)
@@ -1999,8 +2010,9 @@ impl CdpConnection {
                         | RendererCaptureScreencastFrameReply::NoDocument,
                     )
                     | Err(_) => {
-                        let _ = conn.complete_page_screencast_capture_for_session_owner(
+                        let _ = self.complete_page_screencast_capture_for_route(
                             session_id_ref,
+                            owner_route,
                             generation,
                             false,
                         );
@@ -2009,8 +2021,9 @@ impl CdpConnection {
                 }
             }
             Err(_) => {
-                let _ = conn.complete_page_screencast_capture_for_session_owner(
+                let _ = self.complete_page_screencast_capture_for_route(
                     session_id_ref,
+                    owner_route,
                     generation,
                     false,
                 );
@@ -2019,8 +2032,12 @@ impl CdpConnection {
         };
 
         let visual_state = frame.visual_state;
-        if conn.complete_page_screencast_capture_for_session_owner(session_id_ref, generation, true)
-            != Some(true)
+        if self.complete_page_screencast_capture_for_route(
+            session_id_ref,
+            owner_route,
+            generation,
+            true,
+        ) != Some(true)
         {
             return PageScreencastCaptureCompletion::Stale;
         }
@@ -2048,12 +2065,13 @@ impl CdpConnection {
     }
 }
 
-fn page_screencast_subscription_status_for_current_route(
+fn page_screencast_subscription_status_for_route(
     conn: &CdpConnection,
     session_id: Option<&str>,
+    owner_route: Option<&CdpSessionRoute>,
     generation: i32,
 ) -> PageScreencastSubscriptionStatus {
-    let Some(state) = conn.target_page_session_state_for_session(session_id) else {
+    let Some(state) = conn.target_page_session_state_for_route(session_id, owner_route) else {
         return PageScreencastSubscriptionStatus::Inactive;
     };
     let screencast = &state.page_screencast;
@@ -5779,6 +5797,17 @@ fn current_viewport_surface(
 ) -> EmulatedViewportSurface {
     EmulatedViewportSurface::from_metrics(
         conn.target_session_owner_emulated_device_metrics(session_id)
+            .as_ref(),
+    )
+}
+
+fn current_viewport_surface_for_route(
+    conn: &CdpConnection,
+    session_id: Option<&str>,
+    owner_route: Option<&CdpSessionRoute>,
+) -> EmulatedViewportSurface {
+    EmulatedViewportSurface::from_metrics(
+        conn.target_session_owner_emulated_device_metrics_for_route(session_id, owner_route)
             .as_ref(),
     )
 }

@@ -5,19 +5,19 @@ use moli_core::page::{
 };
 
 use crate::{
-    conn::{CdpConnection, Cmd},
+    conn::{CdpConnection, Cmd, CommandOwnerScope},
     domains::{actions::AutofillAction, command_output::CommandOutputPlan},
 };
 
 pub(crate) struct PendingAutofillCommandDispatch {
     command_id: Option<u64>,
-    session_id: Option<String>,
+    owner_scope: CommandOwnerScope,
     pending: PendingPageCommand,
 }
 
 pub(crate) struct CompletedAutofillCommandDispatch {
     command_id: Option<u64>,
-    session_id: Option<String>,
+    owner_scope: CommandOwnerScope,
     completed: Result<CompletedPageCommand, String>,
 }
 
@@ -27,14 +27,10 @@ pub(crate) enum AutofillCommandTaskStep {
 }
 
 impl PendingAutofillCommandDispatch {
-    pub(crate) fn session_id(&self) -> Option<&str> {
-        self.session_id.as_deref()
-    }
-
     pub(crate) async fn wait(self) -> CompletedAutofillCommandDispatch {
         CompletedAutofillCommandDispatch {
             command_id: self.command_id,
-            session_id: self.session_id,
+            owner_scope: self.owner_scope,
             completed: self.pending.wait().await.map_err(|error| error.to_string()),
         }
     }
@@ -46,7 +42,7 @@ impl CompletedAutofillCommandDispatch {
     }
 
     pub(crate) fn session_id(&self) -> Option<&str> {
-        self.session_id.as_deref()
+        self.owner_scope.session_id()
     }
 }
 
@@ -111,6 +107,7 @@ pub(crate) fn try_start_autofill_command_dispatch(
         card,
         address,
     };
+    let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
     let pending = conn
         .loaded_page_mut_for_protocol_access(cmd.session_id)
         .and_then(|page| {
@@ -120,7 +117,7 @@ pub(crate) fn try_start_autofill_command_dispatch(
     match pending {
         Ok(pending) => AutofillCommandTaskStep::Pending(PendingAutofillCommandDispatch {
             command_id: cmd.id,
-            session_id: cmd.session_id.map(str::to_owned),
+            owner_scope,
             pending,
         }),
         Err(message) => {
@@ -133,8 +130,10 @@ pub(crate) fn complete_pending_autofill_command(
     conn: &mut CdpConnection,
     completed: CompletedAutofillCommandDispatch,
 ) -> CommandOutputPlan {
+    let session_id = completed.owner_scope.session_id();
+    let owner_route = completed.owner_scope.session_owner_route();
     let outcome = completed.completed.and_then(|completion| {
-        conn.loaded_page_mut_for_protocol_access(completed.session_id.as_deref())
+        conn.loaded_page_mut_for_protocol_access_for_route(session_id, owner_route)
             .and_then(|page| {
                 page.finish_autofill_trigger(completion)
                     .map_err(|error| error.to_string())

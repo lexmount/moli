@@ -9,19 +9,19 @@ use moli_core::page::{
 };
 use serde::Deserialize;
 
-use crate::conn::{CdpConnection, Cmd};
+use crate::conn::{CdpConnection, Cmd, CommandOwnerScope};
 use crate::domains::actions::DomSnapshotAction;
 use crate::domains::command_output::CommandOutputPlan;
 
 pub(crate) struct PendingDomSnapshotCommandDispatch {
     command_id: Option<u64>,
-    session_id: Option<String>,
+    owner_scope: CommandOwnerScope,
     pending: PendingPageCommand,
 }
 
 pub(crate) struct CompletedDomSnapshotCommandDispatch {
     command_id: Option<u64>,
-    session_id: Option<String>,
+    owner_scope: CommandOwnerScope,
     completed: Result<CompletedPageCommand, String>,
 }
 
@@ -31,14 +31,10 @@ pub(crate) enum DomSnapshotCommandDispatchStep {
 }
 
 impl PendingDomSnapshotCommandDispatch {
-    pub(crate) fn session_id(&self) -> Option<&str> {
-        self.session_id.as_deref()
-    }
-
     pub async fn wait(self) -> CompletedDomSnapshotCommandDispatch {
         CompletedDomSnapshotCommandDispatch {
             command_id: self.command_id,
-            session_id: self.session_id,
+            owner_scope: self.owner_scope,
             completed: self.pending.wait().await.map_err(|error| error.to_string()),
         }
     }
@@ -50,7 +46,7 @@ impl CompletedDomSnapshotCommandDispatch {
     }
 
     pub(crate) fn session_id(&self) -> Option<&str> {
-        self.session_id.as_deref()
+        self.owner_scope.session_id()
     }
 }
 
@@ -143,7 +139,7 @@ fn start_capture_snapshot_command_with_params(
 
     DomSnapshotCommandDispatchStep::Pending(PendingDomSnapshotCommandDispatch {
         command_id,
-        session_id: session_id.map(str::to_owned),
+        owner_scope: CommandOwnerScope::capture(conn, session_id),
         pending,
     })
 }
@@ -152,8 +148,12 @@ pub(crate) fn complete_pending_dom_snapshot_command(
     conn: &mut CdpConnection,
     completed: CompletedDomSnapshotCommandDispatch,
 ) -> DomSnapshotCommandDispatchStep {
-    let session_id = completed.session_id.as_deref();
-    let Some(page) = loaded_page_mut_for_session(conn, session_id) else {
+    let session_id = completed.owner_scope.session_id();
+    let owner_route = completed.owner_scope.session_owner_route();
+    let Some(page) = conn
+        .loaded_page_mut_for_protocol_access_for_route(session_id, owner_route)
+        .ok()
+    else {
         return DomSnapshotCommandDispatchStep::Complete(CommandOutputPlan::error(
             -32000,
             "NoDocumentLoaded",

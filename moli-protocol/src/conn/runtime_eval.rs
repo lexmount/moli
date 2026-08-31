@@ -1042,6 +1042,29 @@ impl CdpConnection {
         ) == Some(correlation)
     }
 
+    pub(crate) fn take_renderer_call_if_correlation_matches_for_route(
+        &mut self,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
+        correlation: RendererCommandCorrelation,
+    ) -> bool {
+        if session_id.is_some() {
+            return self.take_renderer_call_if_correlation_matches_for_session_owner(
+                session_id,
+                correlation,
+            );
+        }
+        self.with_target_devtools_session_state_for_route_mut(session_id, owner_route, |state| {
+            state.take_renderer_call_for_frontend_if_matches(
+                correlation.frontend_command_id().get(),
+                correlation.renderer_call_id(),
+                correlation.dispatched_attachment_id(),
+            )
+        })
+        .flatten()
+            == Some(correlation)
+    }
+
     fn take_frontend_command_for_renderer_if_attachment_matches_for_session_owner(
         &mut self,
         session_id: Option<&str>,

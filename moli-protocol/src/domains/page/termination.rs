@@ -647,11 +647,12 @@ pub(crate) async fn complete_page_target_termination_owner_action_async(
     action: PageTargetTerminationOwnerAction,
 ) -> crate::conn::CdpTurnOutcome {
     let (owner_scope, expected_target_id, kind) = action.into_parts();
-    let mut route_scope = owner_scope.enter(conn);
-    let conn = route_scope.conn_mut();
     let mut out = Vec::new();
     let current_target_id = conn
-        .target_owner_identity_for_session(owner_scope.session_id())
+        .target_owner_identity_for_route(
+            owner_scope.session_id(),
+            owner_scope.session_owner_route(),
+        )
         .and_then(|(_, target_id)| target_id);
     if current_target_id.as_deref() != Some(expected_target_id.as_str()) {
         return crate::conn::CdpTurnOutcome::new_with_protocol_events(
@@ -662,8 +663,11 @@ pub(crate) async fn complete_page_target_termination_owner_action_async(
     let target_host_closure = conn.prepare_target_host_closure(&expected_target_id);
     let closed = match kind {
         PageTargetTerminationKind::PageClose => {
-            conn.close_page_target_for_session_owner_async(owner_scope.session_id())
-                .await
+            conn.close_page_target_for_route_async(
+                owner_scope.session_id(),
+                owner_scope.session_owner_route(),
+            )
+            .await
         }
         PageTargetTerminationKind::TargetClose => {
             let is_active_target = conn
