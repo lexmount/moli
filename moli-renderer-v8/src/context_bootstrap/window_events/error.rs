@@ -39,66 +39,46 @@ pub(super) fn ensure_window_reflecting_body_onerror_handler(scope: &mut v8::PinS
     );
 }
 
-fn dispatch_window_error_event_for_reason<'s>(
+struct ReportedExceptionDetails {
+    message: String,
+    filename: String,
+    lineno: u32,
+    colno: u32,
+    error: v8::Global<v8::Value>,
+}
+
+fn reported_exception_details<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    host_ptr: *mut JsContextHost,
     reason: v8::Local<'s, v8::Value>,
-) -> std::result::Result<(), String> {
-    let mut message = String::new();
-    let mut filename = String::new();
-    let mut lineno = 0.0;
-    let mut colno = 0.0;
-    let mut error_value: v8::Local<'s, v8::Value> = v8::null(scope).into();
+) -> ReportedExceptionDetails {
+    // `reportError()` feeds the exception directly into HTML's exception
+    // reporting algorithm. V8's Message preserves the engine's internal
+    // exception metadata without observing author-defined `name`, `message`,
+    // or location getters on the value.
+    let exception_message = v8::Exception::create_message(scope, reason);
+    let message = exception_message.get(scope).to_rust_string_lossy(scope);
+    let filename = exception_message
+        .get_script_resource_name(scope)
+        .and_then(|value| value.to_string(scope))
+        .map(|value| value.to_rust_string_lossy(scope))
+        .unwrap_or_default();
+    let lineno = exception_message
+        .get_line_number(scope)
+        .and_then(|line| u32::try_from(line).ok())
+        .unwrap_or(0);
+    let colno = exception_message
+        .get_start_column()
+        .checked_add(1)
+        .and_then(|column| u32::try_from(column).ok())
+        .unwrap_or(0);
 
-    if reason.is_string() {
-        message = reason
-            .to_string(scope)
-            .map(|s| s.to_rust_string_lossy(scope))
-            .unwrap_or_default();
-    } else if !reason.is_null_or_undefined() {
-        if reason.is_object() {
-            error_value = reason;
-            if let Ok(obj) = v8::Local::<v8::Object>::try_from(reason) {
-                if let Some(v) = obj.get(scope, v8str(scope, "message").into())
-                    && !v.is_null_or_undefined()
-                {
-                    message = v
-                        .to_string(scope)
-                        .map(|s| s.to_rust_string_lossy(scope))
-                        .unwrap_or_default();
-                }
-                if let Some(v) = obj.get(scope, v8str(scope, "fileName").into())
-                    && !v.is_null_or_undefined()
-                {
-                    filename = v
-                        .to_string(scope)
-                        .map(|s| s.to_rust_string_lossy(scope))
-                        .unwrap_or_default();
-                }
-                if let Some(v) = obj.get(scope, v8str(scope, "lineNumber").into()) {
-                    lineno = v.number_value(scope).unwrap_or(0.0);
-                }
-                if let Some(v) = obj.get(scope, v8str(scope, "columnNumber").into()) {
-                    colno = v.number_value(scope).unwrap_or(0.0);
-                }
-            }
-        } else {
-            message = reason
-                .to_string(scope)
-                .map(|s| s.to_rust_string_lossy(scope))
-                .unwrap_or_default();
-        }
+    ReportedExceptionDetails {
+        message,
+        filename,
+        lineno,
+        colno,
+        error: v8::Global::new(scope, reason),
     }
-
-    dispatch_window_error_event_with_details(
-        scope,
-        host_ptr,
-        &message,
-        &filename,
-        lineno as u32,
-        colno as u32,
-        Some(error_value),
-    )
 }
 
 pub(crate) fn dispatch_window_report_error_message<'s>(
@@ -120,7 +100,15 @@ pub(crate) fn dispatch_window_report_error_message<'s>(
             filename_value.into(),
         );
     }
-    dispatch_window_error_event_for_reason(scope, host_ptr, reason)
+    dispatch_window_error_event_with_details(
+        scope,
+        host_ptr,
+        message,
+        filename.unwrap_or(""),
+        0,
+        0,
+        Some(reason),
+    )
 }
 
 pub(crate) fn dispatch_window_error_event_with_details<'s>(
@@ -208,7 +196,53 @@ pub(in crate::context_bootstrap) fn window_report_error_callback<'s>(
         return;
     };
 
-    if let Err(message) = dispatch_window_error_event_for_reason(scope, host_ptr, args.get(0)) {
+    let receiver = match crate::native_bridge::WindowOperationReceiver::capture_and_authorize(
+        scope,
+        args.this(),
+        unsafe { &*host_ptr },
+    ) {
+        Ok(receiver) => receiver,
+        Err(crate::native_bridge::WindowOperationReceiverCaptureError::IllegalInvocation) => {
+            throw_type_error(scope, "Illegal invocation");
+            return;
+        }
+        Err(crate::native_bridge::WindowOperationReceiverCaptureError::CrossOrigin) => {
+            crate::native_bridge::throw_cross_origin_location_security_error(scope);
+            return;
+        }
+    };
+
+    if args.length() < 1 {
+        throw_type_error(
+            scope,
+            &crate::webidl::WebIdlError::missing_required(crate::webidl::Context::argument(
+                "Window.reportError",
+                1,
+            ))
+            .to_string(),
+        );
+        return;
+    }
+
+    let details = reported_exception_details(scope, args.get(0));
+    let Some(binding) = receiver.resolve_live_binding(unsafe { &*host_ptr }) else {
+        // A discarded Window remains a valid receiver, but there is no live
+        // global left on which to report the exception.
+        return;
+    };
+    let dispatch_result = binding.with_current_scope(scope, host_ptr, |scope, _dispatch_scope| {
+        let error = v8::Local::new(scope, &details.error);
+        dispatch_window_error_event_with_details(
+            scope,
+            host_ptr,
+            &details.message,
+            &details.filename,
+            details.lineno,
+            details.colno,
+            Some(error),
+        )
+    });
+    if let Some(Err(message)) = dispatch_result {
         throw_type_error(scope, &message);
     }
 }
