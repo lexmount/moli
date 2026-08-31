@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
-use super::devtools_session::DevToolsSessionRegistry;
+use super::devtools_session::{
+    DevToolsNetworkPolicyAggregate, DevToolsNetworkSessionState, DevToolsSessionRegistry,
+};
 use super::emulation::{
     EmulatedDeviceMetrics, EmulatedGeolocationOverrideState, EmulatedMediaOverrides,
     EmulatedNetworkConditions,
@@ -90,10 +92,13 @@ pub struct TargetPageState {
     pub(crate) http_proxy_override: Option<String>,
     pub(crate) http_no_proxy_override: Option<String>,
     pub(crate) tls_verify_host_override: Option<bool>,
+    // Target-scoped non-CDP policy (for example WebDriver BiDi). CDP session
+    // contributions temporarily shadow this layer and reveal it on detach.
+    pub(crate) base_locale_override: Option<String>,
+    pub(crate) base_timezone_override: Option<String>,
+    // Materialized values consumed by navigation and the renderer.
     pub(crate) locale_override: Option<String>,
     pub(crate) timezone_override: Option<String>,
-    pub(crate) locale_overrides: TargetSessionOverrideStack<String>,
-    pub(crate) timezone_overrides: TargetSessionOverrideStack<String>,
     pub(crate) network_conditions: Option<EmulatedNetworkConditions>,
     pub(crate) geolocation_override: Option<EmulatedGeolocationOverrideState>,
     pub(crate) emulated_media: EmulatedMediaOverrides,
@@ -120,10 +125,10 @@ impl Default for TargetPageState {
             http_proxy_override: None,
             http_no_proxy_override: None,
             tls_verify_host_override: None,
+            base_locale_override: None,
+            base_timezone_override: None,
             locale_override: None,
             timezone_override: None,
-            locale_overrides: TargetSessionOverrideStack::default(),
-            timezone_overrides: TargetSessionOverrideStack::default(),
             network_conditions: None,
             geolocation_override: None,
             emulated_media: EmulatedMediaOverrides::default(),
@@ -144,6 +149,116 @@ impl Default for TargetPageState {
 }
 
 impl TargetPageState {
+    pub(crate) fn mutate_devtools_network_session_state<T>(
+        &mut self,
+        is_attached_session: bool,
+        session_id: Option<&str>,
+        f: impl FnOnce(&mut DevToolsNetworkSessionState) -> T,
+    ) -> T {
+        let result = {
+            let session = self
+                .devtools_sessions
+                .routed_mut_or_insert(is_attached_session, session_id);
+            f(&mut session.network_session_state)
+        };
+        self.refresh_devtools_network_policy();
+        result
+    }
+
+    pub(crate) fn refresh_devtools_network_policy(&mut self) {
+        self.network_policy
+            .apply_devtools_network_policy(self.devtools_sessions.effective_network_policy());
+    }
+
+    pub(crate) fn set_devtools_browser_identity_override(
+        &mut self,
+        is_attached_session: bool,
+        session_id: Option<&str>,
+        browser_identity_override: Option<super::DevToolsBrowserIdentityOverride>,
+    ) {
+        self.devtools_sessions.set_browser_identity_override(
+            is_attached_session,
+            session_id,
+            browser_identity_override,
+        );
+        self.refresh_devtools_emulation_policy();
+    }
+
+    pub(crate) fn set_devtools_locale_override(
+        &mut self,
+        is_attached_session: bool,
+        session_id: Option<&str>,
+        locale_override: Option<String>,
+    ) -> Result<(), &'static str> {
+        self.devtools_sessions.set_locale_override(
+            is_attached_session,
+            session_id,
+            locale_override,
+        )?;
+        self.refresh_devtools_emulation_policy();
+        Ok(())
+    }
+
+    pub(crate) fn set_devtools_timezone_override(
+        &mut self,
+        is_attached_session: bool,
+        session_id: Option<&str>,
+        timezone_override: Option<String>,
+    ) -> Result<(), &'static str> {
+        self.devtools_sessions.set_timezone_override(
+            is_attached_session,
+            session_id,
+            timezone_override,
+        )?;
+        self.refresh_devtools_emulation_policy();
+        Ok(())
+    }
+
+    pub(crate) fn set_base_locale_override(&mut self, locale_override: Option<String>) {
+        self.base_locale_override = locale_override;
+        self.refresh_devtools_emulation_policy();
+    }
+
+    pub(crate) fn set_base_timezone_override(&mut self, timezone_override: Option<String>) {
+        self.base_timezone_override = timezone_override;
+        self.refresh_devtools_emulation_policy();
+    }
+
+    pub(crate) fn refresh_devtools_emulation_policy(&mut self) {
+        self.network_policy.devtools_browser_identity_override =
+            self.devtools_sessions.effective_browser_identity_override();
+        self.locale_override = self
+            .devtools_sessions
+            .effective_locale_override()
+            .map(str::to_owned)
+            .or_else(|| self.base_locale_override.clone());
+        self.timezone_override = self
+            .devtools_sessions
+            .effective_timezone_override()
+            .map(str::to_owned)
+            .or_else(|| self.base_timezone_override.clone());
+    }
+
+    pub(crate) fn clear_devtools_network_state(
+        &mut self,
+        is_attached_session: bool,
+        session_id: Option<&str>,
+    ) {
+        self.devtools_sessions
+            .clear_routed_network_state(is_attached_session, session_id);
+        self.refresh_devtools_network_policy();
+    }
+
+    pub(crate) fn clear_devtools_emulation_state(
+        &mut self,
+        is_attached_session: bool,
+        session_id: Option<&str>,
+    ) {
+        self.devtools_sessions
+            .clear_routed_emulation_state(is_attached_session, session_id);
+        self.refresh_devtools_emulation_policy();
+    }
+
     pub(crate) fn has_pending_javascript_dialog(&self) -> bool {
         self.devtools_sessions.states().any(|session| {
             !session
@@ -165,8 +280,6 @@ impl TargetPageState {
             || self.tls_verify_host_override.is_some()
             || self.locale_override.is_some()
             || self.timezone_override.is_some()
-            || self.locale_overrides != TargetSessionOverrideStack::default()
-            || self.timezone_overrides != TargetSessionOverrideStack::default()
             || self.network_conditions.is_some()
             || self.geolocation_override.is_some()
             || self.emulated_media != EmulatedMediaOverrides::default()
@@ -192,14 +305,12 @@ impl TargetPageState {
         self.active_target
             .runtime_slot
             .disable_primary_network_events();
-        self.network_policy = TargetNetworkPolicyState::default();
+        self.network_policy.clear_session_scoped_state();
+        self.refresh_devtools_network_policy();
+        self.refresh_devtools_emulation_policy();
         self.http_proxy_override = None;
         self.http_no_proxy_override = None;
         self.tls_verify_host_override = None;
-        self.locale_override = None;
-        self.timezone_override = None;
-        self.locale_overrides.clear();
-        self.timezone_overrides.clear();
         self.network_conditions = None;
         self.geolocation_override = None;
         self.emulated_media = EmulatedMediaOverrides::default();
@@ -493,49 +604,11 @@ pub(crate) struct InspectorSessionState {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct TargetSessionOverrideStack<T> {
-    entries: Vec<(Option<String>, T)>,
-}
-
-impl<T> Default for TargetSessionOverrideStack<T> {
-    fn default() -> Self {
-        Self {
-            entries: Vec::new(),
-        }
-    }
-}
-
-impl<T> TargetSessionOverrideStack<T> {
-    pub(crate) fn effective(&self) -> Option<&T> {
-        self.entries.last().map(|(_session_id, value)| value)
-    }
-
-    pub(crate) fn replace(&mut self, session_id: Option<&str>, value: Option<T>) {
-        self.entries
-            .retain(|(owner, _value)| owner.as_deref() != session_id);
-        if let Some(value) = value {
-            self.entries.push((session_id.map(str::to_owned), value));
-        }
-    }
-
-    pub(crate) fn remove_session(&mut self, session_id: &str) -> bool {
-        let effective_changed = self
-            .entries
-            .last()
-            .is_some_and(|(owner, _value)| owner.as_deref() == Some(session_id));
-        self.entries
-            .retain(|(owner, _value)| owner.as_deref() != Some(session_id));
-        effective_changed
-    }
-
-    pub(crate) fn clear(&mut self) {
-        self.entries.clear();
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct TargetNetworkPolicyState {
-    cache_disabled: bool,
+    // Target-wide policy contributed by WebDriver BiDi or connection defaults.
+    base_cache_disabled: bool,
+    // OR of cache-disabled contributions from enabled CDP Network handlers.
+    devtools_cache_disabled: bool,
     bypass_service_worker: bool,
     network_offline: bool,
     blocked_url_patterns: Vec<String>,
@@ -543,15 +616,22 @@ pub(crate) struct TargetNetworkPolicyState {
     emulated_download_throughput: f64,
     emulated_upload_throughput: f64,
     emulated_connection_type: Option<String>,
-    browser_identity_overrides:
-        TargetSessionOverrideStack<moli_browser_profile::BrowserIdentityProfile>,
-    extra_header_overrides: TargetSessionOverrideStack<Vec<(String, String)>>,
+    base_browser_identity_override: Option<moli_browser_profile::BrowserIdentityProfile>,
+    devtools_browser_identity_override: Option<moli_browser_profile::BrowserIdentityProfile>,
+    // Target-scoped headers contributed by WebDriver BiDi.
+    base_extra_headers: Vec<(String, String)>,
+    // Headers aggregated from enabled CDP Network handlers.
+    devtools_extra_headers: Vec<(String, String)>,
+    // Materialized target-local result. Keeping this derived projection lets
+    // request snapshots borrow the effective headers without allocating.
+    extra_headers: Vec<(String, String)>,
 }
 
 impl Default for TargetNetworkPolicyState {
     fn default() -> Self {
         Self {
-            cache_disabled: false,
+            base_cache_disabled: false,
+            devtools_cache_disabled: false,
             bypass_service_worker: false,
             network_offline: false,
             blocked_url_patterns: Vec::new(),
@@ -559,28 +639,52 @@ impl Default for TargetNetworkPolicyState {
             emulated_download_throughput: -1.0,
             emulated_upload_throughput: -1.0,
             emulated_connection_type: None,
-            browser_identity_overrides: TargetSessionOverrideStack::default(),
-            extra_header_overrides: TargetSessionOverrideStack::default(),
+            base_browser_identity_override: None,
+            devtools_browser_identity_override: None,
+            base_extra_headers: Vec::new(),
+            devtools_extra_headers: Vec::new(),
+            extra_headers: Vec::new(),
         }
     }
 }
 
 impl TargetNetworkPolicyState {
-    #[cfg(test)]
     pub(crate) fn cache_disabled(&self) -> bool {
-        self.cache_disabled
+        self.base_cache_disabled || self.devtools_cache_disabled
     }
 
-    pub(crate) fn set_cache_disabled(&mut self, cache_disabled: bool) {
-        self.cache_disabled = cache_disabled;
+    pub(crate) fn set_base_cache_disabled(&mut self, cache_disabled: bool) {
+        self.base_cache_disabled = cache_disabled;
+    }
+
+    pub(crate) fn clear_session_scoped_state(&mut self) {
+        let base_cache_disabled = self.base_cache_disabled;
+        let base_extra_headers = std::mem::take(&mut self.base_extra_headers);
+        let base_browser_identity_override = self.base_browser_identity_override.take();
+        *self = Self::default();
+        self.base_cache_disabled = base_cache_disabled;
+        self.base_extra_headers = base_extra_headers;
+        self.base_browser_identity_override = base_browser_identity_override;
+        self.refresh_extra_headers();
     }
 
     pub(crate) fn bypass_service_worker(&self) -> bool {
         self.bypass_service_worker
     }
 
+    #[cfg(test)]
     pub(crate) fn set_bypass_service_worker(&mut self, bypass_service_worker: bool) {
         self.bypass_service_worker = bypass_service_worker;
+    }
+
+    pub(crate) fn apply_devtools_network_policy(
+        &mut self,
+        aggregate: DevToolsNetworkPolicyAggregate,
+    ) {
+        self.devtools_cache_disabled = aggregate.cache_disabled;
+        self.bypass_service_worker = aggregate.bypass_service_worker;
+        self.devtools_extra_headers = aggregate.extra_headers;
+        self.refresh_extra_headers();
     }
 
     pub(crate) fn network_offline(&self) -> bool {
@@ -610,34 +714,44 @@ impl TargetNetworkPolicyState {
     }
 
     pub(crate) fn extra_headers(&self) -> &[(String, String)] {
-        self.extra_header_overrides
-            .effective()
-            .map(Vec::as_slice)
-            .unwrap_or(&[])
+        &self.extra_headers
     }
 
-    pub(crate) fn replace_extra_headers_for_session(
+    pub(crate) fn replace_base_extra_headers(
         &mut self,
-        session_id: Option<&str>,
         extra_headers: Vec<(String, String)>,
     ) -> Vec<(String, String)> {
-        let override_value = (!extra_headers.is_empty()).then_some(extra_headers);
-        self.extra_header_overrides
-            .replace(session_id, override_value);
-        self.extra_headers().to_vec()
+        self.base_extra_headers = extra_headers;
+        self.refresh_extra_headers();
+        self.extra_headers.clone()
+    }
+
+    fn refresh_extra_headers(&mut self) {
+        let mut effective = Vec::new();
+        for layer in [&self.base_extra_headers, &self.devtools_extra_headers] {
+            for (name, value) in layer {
+                effective.retain(|(existing, _): &(String, String)| {
+                    !existing.eq_ignore_ascii_case(name)
+                });
+                effective.push((name.clone(), value.clone()));
+            }
+        }
+        self.extra_headers = effective;
     }
 
     #[cfg(test)]
     pub(crate) fn push_extra_header(&mut self, header: (String, String)) {
-        let mut headers = self.extra_headers().to_vec();
+        let mut headers = self.base_extra_headers.clone();
         headers.push(header);
-        self.replace_extra_headers_for_session(None, headers);
+        self.replace_base_extra_headers(headers);
     }
 
     pub(crate) fn browser_identity_override(
         &self,
     ) -> Option<&moli_browser_profile::BrowserIdentityProfile> {
-        self.browser_identity_overrides.effective()
+        self.devtools_browser_identity_override
+            .as_ref()
+            .or(self.base_browser_identity_override.as_ref())
     }
 
     #[cfg(test)]
@@ -664,26 +778,11 @@ impl TargetNetworkPolicyState {
         &mut self,
         browser_identity: moli_browser_profile::BrowserIdentityProfile,
     ) {
-        self.set_browser_identity_override_for_session(None, Some(browser_identity));
+        self.base_browser_identity_override = Some(browser_identity);
     }
 
     pub(crate) fn clear_browser_identity_override(&mut self) {
-        self.set_browser_identity_override_for_session(None, None);
-    }
-
-    pub(crate) fn set_browser_identity_override_for_session(
-        &mut self,
-        session_id: Option<&str>,
-        browser_identity: Option<moli_browser_profile::BrowserIdentityProfile>,
-    ) {
-        self.browser_identity_overrides
-            .replace(session_id, browser_identity);
-    }
-
-    pub(crate) fn remove_session_overrides(&mut self, session_id: &str) -> (bool, bool) {
-        let browser_identity_changed = self.browser_identity_overrides.remove_session(session_id);
-        let extra_headers_changed = self.extra_header_overrides.remove_session(session_id);
-        (browser_identity_changed, extra_headers_changed)
+        self.base_browser_identity_override = None;
     }
 
     #[cfg(test)]
@@ -726,55 +825,47 @@ impl TargetNetworkPolicyState {
 #[cfg(test)]
 mod tests {
     use super::{
-        PageScreencastConfig, PageScreencastFormat, PageScreencastSessionState,
-        TargetNetworkPolicyState, TargetSessionOverrideStack,
+        PageScreencastConfig, PageScreencastFormat, PageScreencastSessionState, TargetPageState,
     };
 
     #[test]
-    fn detached_session_network_overrides_restore_the_previous_session() {
-        let mut policy = TargetNetworkPolicyState::default();
-        policy.replace_extra_headers_for_session(
-            Some("session-a"),
-            vec![("X-Test".to_owned(), "A".to_owned())],
-        );
-        policy.set_browser_identity_override_for_session(
-            Some("session-a"),
-            Some(moli_browser_profile::BrowserIdentityProfile::new(
-                "Moli/A", "fr-FR",
-            )),
-        );
-        policy.replace_extra_headers_for_session(
-            Some("session-b"),
-            vec![("X-Test".to_owned(), "B".to_owned())],
-        );
-        policy.set_browser_identity_override_for_session(
-            Some("session-b"),
-            Some(moli_browser_profile::BrowserIdentityProfile::new(
-                "Moli/B", "ja-JP",
-            )),
+    fn devtools_emulation_overrides_reveal_target_base_state_when_cleared() {
+        let mut state = TargetPageState::default();
+        state.set_base_locale_override(Some("en-GB".to_owned()));
+        state.set_base_timezone_override(Some("Europe/London".to_owned()));
+        state.network_policy.set_browser_identity_override(
+            moli_browser_profile::BrowserIdentityProfile::new("Moli/Base", "en-GB"),
         );
 
-        assert_eq!(policy.extra_headers()[0].1, "B");
-        assert_eq!(policy.user_agent_override(), Some("Moli/B"));
-        assert_eq!(policy.remove_session_overrides("session-b"), (true, true));
-        assert_eq!(policy.extra_headers()[0].1, "A");
-        assert_eq!(policy.user_agent_override(), Some("Moli/A"));
-        assert_eq!(policy.remove_session_overrides("session-a"), (true, true));
-        assert!(policy.extra_headers().is_empty());
-        assert_eq!(policy.user_agent_override(), None);
-    }
+        state
+            .set_devtools_locale_override(false, None, Some("fr-FR".to_owned()))
+            .unwrap();
+        state
+            .set_devtools_timezone_override(false, None, Some("Europe/Paris".to_owned()))
+            .unwrap();
+        state.set_devtools_browser_identity_override(
+            false,
+            None,
+            crate::conn::DevToolsBrowserIdentityOverride::from_command(
+                &moli_browser_profile::BrowserIdentityProfile::default(),
+                "Moli/CDP".to_owned(),
+                Some("fr-FR".to_owned()),
+                None,
+                None,
+            ),
+        );
+        assert_eq!(state.locale_override.as_deref(), Some("fr-FR"));
+        assert_eq!(state.timezone_override.as_deref(), Some("Europe/Paris"));
+        assert_eq!(state.network_policy.user_agent_override(), Some("Moli/CDP"));
 
-    #[test]
-    fn detached_session_emulation_override_restores_the_previous_session() {
-        let mut overrides = TargetSessionOverrideStack::default();
-        overrides.replace(Some("session-a"), Some("fr-FR".to_owned()));
-        overrides.replace(Some("session-b"), Some("ja-JP".to_owned()));
-        assert_eq!(overrides.effective().map(String::as_str), Some("ja-JP"));
-
-        assert!(overrides.remove_session("session-b"));
-        assert_eq!(overrides.effective().map(String::as_str), Some("fr-FR"));
-        overrides.replace(Some("session-a"), None);
-        assert!(overrides.effective().is_none());
+        state.clear_devtools_network_state(false, None);
+        state.clear_devtools_emulation_state(false, None);
+        assert_eq!(state.locale_override.as_deref(), Some("en-GB"));
+        assert_eq!(state.timezone_override.as_deref(), Some("Europe/London"));
+        assert_eq!(
+            state.network_policy.user_agent_override(),
+            Some("Moli/Base")
+        );
     }
 
     fn jpeg_config() -> PageScreencastConfig {

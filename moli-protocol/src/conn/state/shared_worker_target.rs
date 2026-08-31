@@ -490,13 +490,17 @@ impl SharedWorkerTargetState {
         let Some(state) = self.session_state_mut(session_id) else {
             return false;
         };
-        state.network_output_session_state.network_enabled = enabled;
+        if enabled {
+            state.network_session_state.network_enabled = true;
+        } else {
+            state.network_session_state = Default::default();
+        }
         true
     }
 
     pub(crate) fn network_enabled(&self, session_id: &str) -> bool {
         self.session_state(session_id)
-            .is_some_and(|state| state.network_output_session_state.network_enabled)
+            .is_some_and(|state| state.network_session_state.network_enabled)
     }
 
     pub(crate) fn set_console_enabled(&mut self, session_id: &str, enabled: bool) {

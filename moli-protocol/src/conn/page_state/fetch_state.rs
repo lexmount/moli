@@ -59,8 +59,7 @@ impl BrowserContext {
     }
 
     pub(crate) fn insert_page_target_host(&mut self, mut host: PageTargetHost) -> bool {
-        host.network_policy
-            .set_cache_disabled(self.global_cache_disabled);
+        host.set_base_cache_disabled(self.global_cache_disabled);
         if let Some(config) = self.page_navigation_runtime_config.clone() {
             let engine = self.new_page_navigation_engine(config);
             let replaced = host.replace_navigation_engine(engine);

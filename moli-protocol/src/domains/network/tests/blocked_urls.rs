@@ -354,10 +354,15 @@ async fn set_blocked_urls_worker_fetch_emits_loading_failed() {
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    bc.active_target
-        .runtime_slot
-        .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
+
+    ctx.process_async(json!({
+        "id": 28_101,
+        "method": "Network.enable",
+        "sessionId": "SID-1"
+    }))
+    .await;
+    ctx.expect_result(28_101, json!({}), Some("SID-1"));
 
     ctx.process_async(json!({
         "id": 2811,
@@ -493,10 +498,15 @@ async fn set_blocked_urls_worker_xhr_emits_loading_failed() {
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    bc.active_target
-        .runtime_slot
-        .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
+
+    ctx.process_async(json!({
+        "id": 28_102,
+        "method": "Network.enable",
+        "sessionId": "SID-1"
+    }))
+    .await;
+    ctx.expect_result(28_102, json!({}), Some("SID-1"));
 
     ctx.process_async(json!({
         "id": 2816,
@@ -628,10 +638,15 @@ async fn set_blocked_urls_worker_websocket_emits_loading_failed() {
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    bc.active_target
-        .runtime_slot
-        .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
+
+    ctx.process_async(json!({
+        "id": 28_103,
+        "method": "Network.enable",
+        "sessionId": "SID-1"
+    }))
+    .await;
+    ctx.expect_result(28_103, json!({}), Some("SID-1"));
 
     ctx.process_async(json!({
         "id": 2822,

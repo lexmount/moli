@@ -1,17 +1,11 @@
 use super::target_session_owner::{TargetSessionOwnerMut, TargetSessionOwnerRef};
 use super::*;
-use crate::conn::state::TargetSessionOverrideStack;
 use crate::conn::{
     EmulatedDeviceMetrics, EmulatedGeolocationOverrideState, EmulatedMediaOverrides,
     EmulatedNetworkConditions,
 };
 
 pub(crate) struct TargetEmulationSessionStateMut<'a> {
-    session_id: Option<String>,
-    pub(crate) locale_override: &'a mut Option<String>,
-    pub(crate) timezone_override: &'a mut Option<String>,
-    locale_overrides: &'a mut TargetSessionOverrideStack<String>,
-    timezone_overrides: &'a mut TargetSessionOverrideStack<String>,
     pub(crate) network_conditions: &'a mut Option<EmulatedNetworkConditions>,
     pub(crate) geolocation_override: &'a mut Option<EmulatedGeolocationOverrideState>,
     pub(crate) emulated_media: &'a mut EmulatedMediaOverrides,
@@ -23,20 +17,6 @@ pub(crate) struct TargetEmulationSessionStateMut<'a> {
     pub(crate) script_execution_disabled: &'a mut bool,
 }
 
-impl TargetEmulationSessionStateMut<'_> {
-    pub(crate) fn set_locale_override(&mut self, locale: Option<String>) {
-        self.locale_overrides
-            .replace(self.session_id.as_deref(), locale);
-        *self.locale_override = self.locale_overrides.effective().cloned();
-    }
-
-    pub(crate) fn set_timezone_override(&mut self, timezone: Option<String>) {
-        self.timezone_overrides
-            .replace(self.session_id.as_deref(), timezone);
-        *self.timezone_override = self.timezone_overrides.effective().cloned();
-    }
-}
-
 impl TargetSessionOwnerMut<'_> {
     fn mutate_emulation_session_state(
         mut self,
@@ -44,17 +24,10 @@ impl TargetSessionOwnerMut<'_> {
     ) -> bool {
         match &mut self {
             Self::ActiveTarget {
-                browser_context,
-                session_id,
-                ..
+                browser_context, ..
             } => {
                 let state = browser_context.active_page_state_mut();
                 f(Some(TargetEmulationSessionStateMut {
-                    session_id: session_id.clone(),
-                    locale_override: &mut state.locale_override,
-                    timezone_override: &mut state.timezone_override,
-                    locale_overrides: &mut state.locale_overrides,
-                    timezone_overrides: &mut state.timezone_overrides,
                     network_conditions: &mut state.network_conditions,
                     geolocation_override: &mut state.geolocation_override,
                     emulated_media: &mut state.emulated_media,
@@ -69,15 +42,9 @@ impl TargetSessionOwnerMut<'_> {
             Self::PageTargetHost {
                 browser_context,
                 target_id,
-                session_id,
                 ..
             } => browser_context.mutate_parked_page_session_state(target_id, |state| {
                 f(Some(TargetEmulationSessionStateMut {
-                    session_id: session_id.clone(),
-                    locale_override: &mut state.locale_override,
-                    timezone_override: &mut state.timezone_override,
-                    locale_overrides: &mut state.locale_overrides,
-                    timezone_overrides: &mut state.timezone_overrides,
                     network_conditions: &mut state.network_conditions,
                     geolocation_override: &mut state.geolocation_override,
                     emulated_media: &mut state.emulated_media,
@@ -95,6 +62,48 @@ impl TargetSessionOwnerMut<'_> {
             }
         }
         true
+    }
+
+    fn set_devtools_locale_override(
+        &mut self,
+        locale_override: Option<String>,
+    ) -> Result<(), &'static str> {
+        self.mutate_page_state(|state, is_auxiliary_target_session, session_id| {
+            state.set_devtools_locale_override(
+                is_auxiliary_target_session,
+                session_id,
+                locale_override,
+            )
+        })
+        .unwrap_or(Err("BrowserContextNotLoaded"))
+    }
+
+    fn set_devtools_timezone_override(
+        &mut self,
+        timezone_override: Option<String>,
+    ) -> Result<(), &'static str> {
+        self.mutate_page_state(|state, is_auxiliary_target_session, session_id| {
+            state.set_devtools_timezone_override(
+                is_auxiliary_target_session,
+                session_id,
+                timezone_override,
+            )
+        })
+        .unwrap_or(Err("BrowserContextNotLoaded"))
+    }
+
+    fn set_base_locale_override(&mut self, locale_override: Option<String>) -> bool {
+        self.mutate_page_state(|state, _is_auxiliary_target_session, _session_id| {
+            state.set_base_locale_override(locale_override);
+        })
+        .is_some()
+    }
+
+    fn set_base_timezone_override(&mut self, timezone_override: Option<String>) -> bool {
+        self.mutate_page_state(|state, _is_auxiliary_target_session, _session_id| {
+            state.set_base_timezone_override(timezone_override);
+        })
+        .is_some()
     }
 }
 
@@ -126,6 +135,44 @@ impl CdpConnection {
             owner.mutate_emulation_session_state(f)
         })
         .unwrap_or(false)
+    }
+
+    pub(crate) fn set_devtools_locale_override_for_session_owner(
+        &mut self,
+        session_id: Option<&str>,
+        locale_override: Option<String>,
+    ) -> Result<(), &'static str> {
+        self.target_session_owner_mut(session_id)
+            .ok_or("BrowserContextNotLoaded")?
+            .set_devtools_locale_override(locale_override)
+    }
+
+    pub(crate) fn set_devtools_timezone_override_for_session_owner(
+        &mut self,
+        session_id: Option<&str>,
+        timezone_override: Option<String>,
+    ) -> Result<(), &'static str> {
+        self.target_session_owner_mut(session_id)
+            .ok_or("BrowserContextNotLoaded")?
+            .set_devtools_timezone_override(timezone_override)
+    }
+
+    pub(crate) fn set_base_locale_override_for_session_owner(
+        &mut self,
+        session_id: Option<&str>,
+        locale_override: Option<String>,
+    ) -> bool {
+        self.target_session_owner_mut(session_id)
+            .is_some_and(|mut owner| owner.set_base_locale_override(locale_override))
+    }
+
+    pub(crate) fn set_base_timezone_override_for_session_owner(
+        &mut self,
+        session_id: Option<&str>,
+        timezone_override: Option<String>,
+    ) -> bool {
+        self.target_session_owner_mut(session_id)
+            .is_some_and(|mut owner| owner.set_base_timezone_override(timezone_override))
     }
 
     pub(crate) fn emit_touch_events_for_mouse_for_session_owner(

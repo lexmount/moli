@@ -1956,6 +1956,14 @@ async fn same_context_background_session_can_stage_its_own_extra_headers_before_
     ctx.expect_result(10419460, json!({}), None);
 
     ctx.process_async(json!({
+        "id": 104194601,
+        "method": "Network.enable",
+        "sessionId": "SID-active"
+    }))
+    .await;
+    ctx.expect_result(104194601, json!({}), Some("SID-active"));
+
+    ctx.process_async(json!({
         "id": 10419461,
         "method": "Network.setExtraHTTPHeaders",
         "sessionId": "SID-active",
@@ -1988,6 +1996,14 @@ async fn same_context_background_session_can_stage_its_own_extra_headers_before_
         .expect("second target session id")
         .to_owned();
     ctx.expect_result(10419462, json!({ "targetId": second_target_id }), None);
+
+    ctx.process_async(json!({
+        "id": 104194602,
+        "method": "Network.enable",
+        "sessionId": second_session_id
+    }))
+    .await;
+    ctx.expect_result(104194602, json!({}), Some(&second_session_id));
 
     ctx.process_async(json!({
         "id": 10419463,
@@ -2136,6 +2152,14 @@ async fn same_context_background_session_can_clear_its_own_extra_headers_before_
     ctx.expect_result(104194661, json!({}), None);
 
     ctx.process_async(json!({
+        "id": 1041946611,
+        "method": "Network.enable",
+        "sessionId": "SID-active"
+    }))
+    .await;
+    ctx.expect_result(1041946611, json!({}), Some("SID-active"));
+
+    ctx.process_async(json!({
         "id": 104194662,
         "method": "Network.setExtraHTTPHeaders",
         "sessionId": "SID-active",
@@ -2170,6 +2194,14 @@ async fn same_context_background_session_can_clear_its_own_extra_headers_before_
     ctx.expect_result(104194663, json!({ "targetId": second_target_id }), None);
 
     ctx.process_async(json!({
+        "id": 1041946631,
+        "method": "Network.enable",
+        "sessionId": second_session_id
+    }))
+    .await;
+    ctx.expect_result(1041946631, json!({}), Some(&second_session_id));
+
+    ctx.process_async(json!({
         "id": 104194664,
         "method": "Network.setExtraHTTPHeaders",
         "sessionId": second_session_id,
@@ -2201,12 +2233,10 @@ async fn same_context_background_session_can_clear_its_own_extra_headers_before_
             active.network_policy.extra_headers(),
             vec![("X-Target".into(), "A".into())]
         );
-        assert!(
-            active
-                .parked_page_session_state(&second_target_id)
-                .is_none(),
-            "clearing staged headers back to default should fold away the parked state entry"
-        );
+        let staged = active
+            .parked_page_session_state(&second_target_id)
+            .expect("enabled background session should retain its target-owned state");
+        assert!(staged.network_policy.extra_headers().is_empty());
     }
 
     let url_a = format!("http://{addr}/page-a");

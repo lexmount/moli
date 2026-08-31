@@ -25,11 +25,10 @@ use moli_page_types::{
     RendererDomDebuggerXhrBreakpoint,
 };
 
-/// CDP session-owned state for DevTools domains that are backed by a renderer
-/// inspector session.
+/// CDP domain-handler state owned by one DevTools session.
 ///
-/// This is the protocol-side state object we can share across page and worker
-/// targets while the renderer-side V8 inspector backend is still target-shaped.
+/// Browser-side policy and renderer-inspector state live together here so
+/// attachment, replay, and disposal all address the same session object.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct DevToolsSessionState {
     pub(crate) dom_session_state: DevToolsDomSessionState,
@@ -40,7 +39,8 @@ pub(crate) struct DevToolsSessionState {
     pub(crate) runtime_session_state: TargetRuntimeSessionState,
     pub(crate) console_output_session_state: DevToolsConsoleOutputSessionState,
     pub(crate) dom_storage_session_state: DevToolsDomStorageSessionState,
-    pub(crate) network_output_session_state: DevToolsNetworkOutputSessionState,
+    pub(crate) network_session_state: DevToolsNetworkSessionState,
+    pub(crate) emulation_session_state: DevToolsEmulationSessionState,
     pub(crate) runtime_bindings: Vec<RuntimeBindingDefinition>,
     pub(crate) runtime_binding_replay_pending: BTreeSet<(String, Option<String>)>,
     pub(crate) runtime_remote_object_ids: HashSet<String>,
@@ -61,6 +61,7 @@ pub(crate) struct DevToolsSessionState {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct DevToolsSessionRegistry {
     states: BTreeMap<DevToolsSessionKey, DevToolsSessionState>,
+    attached_order: Vec<String>,
 }
 
 impl Default for DevToolsSessionRegistry {
@@ -70,6 +71,7 @@ impl Default for DevToolsSessionRegistry {
                 DevToolsSessionKey::Primary,
                 DevToolsSessionState::default(),
             )]),
+            attached_order: Vec::new(),
         }
     }
 }
@@ -120,19 +122,31 @@ impl DevToolsSessionRegistry {
     }
 
     pub(crate) fn ensure_attached(&mut self, session_id: &str) -> &mut DevToolsSessionState {
+        if !self
+            .states
+            .contains_key(&DevToolsSessionKey::Attached(session_id.to_owned()))
+        {
+            self.attached_order.push(session_id.to_owned());
+        }
         self.states
             .entry(DevToolsSessionKey::Attached(session_id.to_owned()))
             .or_default()
     }
 
     pub(crate) fn remove_attached(&mut self, session_id: &str) -> Option<DevToolsSessionState> {
-        self.states
-            .remove(&DevToolsSessionKey::Attached(session_id.to_owned()))
+        let key = DevToolsSessionKey::Attached(session_id.to_owned());
+        let removed = self.states.remove(&key);
+        if removed.is_some() {
+            self.attached_order
+                .retain(|attached| attached != session_id);
+        }
+        removed
     }
 
     pub(crate) fn clear_attached(&mut self) {
         self.states
             .retain(|key, _state| matches!(key, DevToolsSessionKey::Primary));
+        self.attached_order.clear();
     }
 
     pub(crate) fn attached_len(&self) -> usize {
@@ -156,6 +170,178 @@ impl DevToolsSessionRegistry {
 
     pub(crate) fn states(&self) -> impl Iterator<Item = &DevToolsSessionState> {
         self.states.values()
+    }
+
+    /// Iterates browser-side domain handlers in attachment order: the implicit
+    /// primary session first, then flattened sessions in attach order. Network
+    /// header merging and Emulation identity precedence expose this order.
+    pub(crate) fn states_in_attachment_order(&self) -> impl Iterator<Item = &DevToolsSessionState> {
+        std::iter::once(self.primary()).chain(
+            self.attached_order
+                .iter()
+                .filter_map(|session_id| self.attached(session_id)),
+        )
+    }
+
+    pub(crate) fn effective_network_policy(&self) -> DevToolsNetworkPolicyAggregate {
+        let mut aggregate = DevToolsNetworkPolicyAggregate::default();
+        for state in self.states_in_attachment_order() {
+            let network = &state.network_session_state;
+            if !network.network_enabled {
+                continue;
+            }
+            aggregate.cache_disabled |= network.cache_disabled;
+            aggregate.bypass_service_worker |= network.bypass_service_worker;
+            for (name, value) in &network.extra_headers {
+                if let Some(index) = aggregate
+                    .extra_headers
+                    .iter()
+                    .position(|(existing, _)| existing.eq_ignore_ascii_case(name))
+                {
+                    aggregate.extra_headers[index] = (name.clone(), value.clone());
+                } else {
+                    aggregate.extra_headers.push((name.clone(), value.clone()));
+                }
+            }
+        }
+        aggregate
+    }
+
+    pub(crate) fn effective_browser_identity_override(
+        &self,
+    ) -> Option<moli_browser_profile::BrowserIdentityProfile> {
+        let mut identity_base = None;
+        let mut user_agent = None;
+        let mut accept_language = None;
+        let mut navigator_platform = None;
+        for contribution in self.states_in_attachment_order().filter_map(|state| {
+            state
+                .emulation_session_state
+                .browser_identity_override
+                .as_ref()
+        }) {
+            identity_base = Some(&contribution.base);
+            if contribution.user_agent.is_some() {
+                user_agent = Some(contribution);
+            }
+            if contribution.accept_language.is_some() {
+                accept_language = Some(contribution);
+            }
+            if contribution.navigator_platform.is_some() {
+                navigator_platform = Some(contribution);
+            }
+        }
+        identity_base.map(|base| {
+            moli_browser_profile::BrowserIdentityProfile::from_devtools_override(
+                base,
+                user_agent
+                    .and_then(|contribution| contribution.user_agent.clone())
+                    .unwrap_or_default(),
+                accept_language.and_then(|contribution| contribution.accept_language.clone()),
+                navigator_platform.and_then(|contribution| contribution.navigator_platform.clone()),
+                user_agent.and_then(|contribution| contribution.user_agent_metadata.clone()),
+            )
+        })
+    }
+
+    fn routed_key(is_attached_session: bool, session_id: Option<&str>) -> DevToolsSessionKey {
+        if is_attached_session && let Some(session_id) = session_id {
+            return DevToolsSessionKey::Attached(session_id.to_owned());
+        }
+        DevToolsSessionKey::Primary
+    }
+
+    pub(crate) fn set_browser_identity_override(
+        &mut self,
+        is_attached_session: bool,
+        session_id: Option<&str>,
+        browser_identity_override: Option<DevToolsBrowserIdentityOverride>,
+    ) {
+        let state = self.routed_mut_or_insert(is_attached_session, session_id);
+        state.emulation_session_state.browser_identity_override = browser_identity_override;
+    }
+
+    pub(crate) fn set_locale_override(
+        &mut self,
+        is_attached_session: bool,
+        session_id: Option<&str>,
+        locale_override: Option<String>,
+    ) -> Result<(), &'static str> {
+        let key = Self::routed_key(is_attached_session, session_id);
+        let current_session_owns_override = self
+            .states
+            .get(&key)
+            .is_some_and(|state| state.emulation_session_state.locale_override.is_some());
+        let another_session_owns_override = self.states.iter().any(|(candidate, state)| {
+            candidate != &key && state.emulation_session_state.locale_override.is_some()
+        });
+        if !current_session_owns_override && another_session_owns_override {
+            return Err("Another locale override is already in effect");
+        }
+        self.routed_mut_or_insert(is_attached_session, session_id)
+            .emulation_session_state
+            .locale_override = locale_override;
+        Ok(())
+    }
+
+    pub(crate) fn set_timezone_override(
+        &mut self,
+        is_attached_session: bool,
+        session_id: Option<&str>,
+        timezone_override: Option<String>,
+    ) -> Result<(), &'static str> {
+        let key = Self::routed_key(is_attached_session, session_id);
+        let current_session_owns_override = self
+            .states
+            .get(&key)
+            .is_some_and(|state| state.emulation_session_state.timezone_override.is_some());
+        let another_session_owns_override = self.states.iter().any(|(candidate, state)| {
+            candidate != &key && state.emulation_session_state.timezone_override.is_some()
+        });
+        if timezone_override.is_some()
+            && !current_session_owns_override
+            && another_session_owns_override
+        {
+            return Err("Timezone override is already in effect");
+        }
+        self.routed_mut_or_insert(is_attached_session, session_id)
+            .emulation_session_state
+            .timezone_override = timezone_override;
+        Ok(())
+    }
+
+    pub(crate) fn effective_locale_override(&self) -> Option<&str> {
+        self.states
+            .values()
+            .find_map(|state| state.emulation_session_state.locale_override.as_deref())
+    }
+
+    pub(crate) fn effective_timezone_override(&self) -> Option<&str> {
+        self.states
+            .values()
+            .find_map(|state| state.emulation_session_state.timezone_override.as_deref())
+    }
+
+    pub(crate) fn clear_routed_network_state(
+        &mut self,
+        is_attached_session: bool,
+        session_id: Option<&str>,
+    ) {
+        let key = Self::routed_key(is_attached_session, session_id);
+        if let Some(state) = self.states.get_mut(&key) {
+            state.network_session_state = DevToolsNetworkSessionState::default();
+        }
+    }
+
+    pub(crate) fn clear_routed_emulation_state(
+        &mut self,
+        is_attached_session: bool,
+        session_id: Option<&str>,
+    ) {
+        let key = Self::routed_key(is_attached_session, session_id);
+        if let Some(state) = self.states.get_mut(&key) {
+            state.emulation_session_state = DevToolsEmulationSessionState::default();
+        }
     }
 
     pub(crate) fn states_mut(&mut self) -> impl Iterator<Item = &mut DevToolsSessionState> {
@@ -426,9 +612,73 @@ pub(crate) struct DevToolsDomStorageSessionState {
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
-pub(crate) struct DevToolsNetworkOutputSessionState {
+pub(crate) struct DevToolsNetworkSessionState {
     pub(crate) network_enabled: bool,
+    pub(crate) cache_disabled: bool,
+    pub(crate) bypass_service_worker: bool,
+    pub(crate) extra_headers: Vec<(String, String)>,
     pub(crate) service_worker_fetch_diagnostic_entries: usize,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct DevToolsEmulationSessionState {
+    // UA, Accept-Language, and platform are independent handler contributions.
+    pub(crate) browser_identity_override: Option<DevToolsBrowserIdentityOverride>,
+    // Locale and timezone are exclusive controller claims, unlike UA fields.
+    pub(crate) locale_override: Option<String>,
+    pub(crate) timezone_override: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct DevToolsBrowserIdentityOverride {
+    // Keep individual command contributions instead of a flattened profile:
+    // Chromium lets different sessions win UA, Accept-Language, and
+    // navigator.platform independently in attachment order.
+    base: moli_browser_profile::BrowserIdentityProfile,
+    user_agent: Option<String>,
+    accept_language: Option<String>,
+    navigator_platform: Option<String>,
+    user_agent_metadata: Option<moli_browser_profile::BrowserUserAgentMetadataOverride>,
+}
+
+impl DevToolsBrowserIdentityOverride {
+    pub(crate) fn from_command(
+        base: &moli_browser_profile::BrowserIdentityProfile,
+        user_agent: String,
+        accept_language: Option<String>,
+        navigator_platform: Option<String>,
+        user_agent_metadata: Option<moli_browser_profile::BrowserUserAgentMetadataOverride>,
+    ) -> Option<Self> {
+        let user_agent = (!user_agent.is_empty()).then_some(user_agent);
+        let accept_language = accept_language.filter(|value| !value.is_empty());
+        let navigator_platform = navigator_platform.filter(|value| !value.is_empty());
+        (user_agent.is_some() || accept_language.is_some() || navigator_platform.is_some()).then(
+            || Self {
+                base: base.clone(),
+                user_agent,
+                accept_language,
+                navigator_platform,
+                user_agent_metadata,
+            },
+        )
+    }
+
+    pub(crate) fn to_browser_identity(&self) -> moli_browser_profile::BrowserIdentityProfile {
+        moli_browser_profile::BrowserIdentityProfile::from_devtools_override(
+            &self.base,
+            self.user_agent.clone().unwrap_or_default(),
+            self.accept_language.clone(),
+            self.navigator_platform.clone(),
+            self.user_agent_metadata.clone(),
+        )
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct DevToolsNetworkPolicyAggregate {
+    pub(crate) cache_disabled: bool,
+    pub(crate) bypass_service_worker: bool,
+    pub(crate) extra_headers: Vec<(String, String)>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -860,6 +1110,28 @@ mod tests {
         }
     }
 
+    fn identity_override(
+        user_agent: &str,
+        accept_language: Option<&str>,
+        navigator_platform: Option<&str>,
+    ) -> Option<DevToolsBrowserIdentityOverride> {
+        DevToolsBrowserIdentityOverride::from_command(
+            &moli_browser_profile::BrowserIdentityProfile::default(),
+            user_agent.to_owned(),
+            accept_language.map(str::to_owned),
+            navigator_platform.map(str::to_owned),
+            None,
+        )
+    }
+
+    fn effective_identity(
+        sessions: &DevToolsSessionRegistry,
+    ) -> moli_browser_profile::BrowserIdentityProfile {
+        sessions
+            .effective_browser_identity_override()
+            .expect("browser identity contribution should be effective")
+    }
+
     #[test]
     fn registry_owns_primary_and_attached_sessions_in_stable_order() {
         let mut sessions = DevToolsSessionRegistry::default();
@@ -879,6 +1151,159 @@ mod tests {
         assert!(sessions.attached("SID-a").is_none());
         assert!(sessions.attached("SID-b").is_some());
         assert_eq!(sessions.primary(), &DevToolsSessionState::default());
+    }
+
+    #[test]
+    fn network_policy_uses_attachment_order_and_domain_specific_aggregation() {
+        let mut sessions = DevToolsSessionRegistry::default();
+        let primary = &mut sessions.primary_mut().network_session_state;
+        primary.network_enabled = true;
+        primary.cache_disabled = true;
+        primary.extra_headers = vec![
+            ("X-Primary".to_owned(), "primary".to_owned()),
+            ("X-Shared".to_owned(), "primary".to_owned()),
+        ];
+
+        let attached_b = &mut sessions.ensure_attached("SID-b").network_session_state;
+        attached_b.network_enabled = true;
+        attached_b.bypass_service_worker = true;
+        attached_b.extra_headers = vec![
+            ("X-B".to_owned(), "b".to_owned()),
+            ("x-shared".to_owned(), "b".to_owned()),
+        ];
+
+        let attached_a = &mut sessions.ensure_attached("SID-a").network_session_state;
+        attached_a.network_enabled = false;
+        attached_a.cache_disabled = true;
+        attached_a.extra_headers = vec![("X-Ignored".to_owned(), "a".to_owned())];
+
+        let policy = sessions.effective_network_policy();
+        assert!(policy.cache_disabled);
+        assert!(policy.bypass_service_worker);
+        assert_eq!(
+            policy.extra_headers,
+            vec![
+                ("X-Primary".to_owned(), "primary".to_owned()),
+                ("x-shared".to_owned(), "b".to_owned()),
+                ("X-B".to_owned(), "b".to_owned()),
+            ]
+        );
+
+        sessions.remove_attached("SID-b");
+        let policy = sessions.effective_network_policy();
+        assert!(policy.cache_disabled);
+        assert!(!policy.bypass_service_worker);
+        assert_eq!(
+            policy.extra_headers,
+            vec![
+                ("X-Primary".to_owned(), "primary".to_owned()),
+                ("X-Shared".to_owned(), "primary".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn browser_identity_override_uses_attachment_order_not_setter_order() {
+        let mut sessions = DevToolsSessionRegistry::default();
+        sessions.ensure_attached("SID-later");
+        sessions.set_browser_identity_override(
+            true,
+            Some("SID-later"),
+            identity_override("Moli/Later-1", None, None),
+        );
+        sessions.set_browser_identity_override(
+            false,
+            None,
+            identity_override("Moli/Primary-1", None, None),
+        );
+        assert_eq!(effective_identity(&sessions).user_agent(), "Moli/Later-1");
+
+        sessions.set_browser_identity_override(
+            false,
+            None,
+            identity_override("Moli/Primary-2", None, None),
+        );
+        assert_eq!(
+            effective_identity(&sessions).user_agent(),
+            "Moli/Later-1",
+            "a later setter must not outrank a later-attached session"
+        );
+
+        sessions.set_browser_identity_override(true, Some("SID-later"), None);
+        assert_eq!(effective_identity(&sessions).user_agent(), "Moli/Primary-2");
+
+        sessions.set_browser_identity_override(
+            true,
+            Some("SID-later"),
+            identity_override("Moli/Later-2", None, None),
+        );
+        assert_eq!(effective_identity(&sessions).user_agent(), "Moli/Later-2");
+
+        sessions.remove_attached("SID-later");
+        assert_eq!(effective_identity(&sessions).user_agent(), "Moli/Primary-2");
+
+        sessions.ensure_attached("SID-later");
+        sessions.set_browser_identity_override(
+            true,
+            Some("SID-later"),
+            identity_override("", Some("fr-FR"), Some("AuxPlatform")),
+        );
+        let identity = effective_identity(&sessions);
+        assert_eq!(identity.user_agent(), "Moli/Primary-2");
+        assert_eq!(identity.accept_language(), "fr-FR");
+        assert_eq!(identity.navigator_platform(), "AuxPlatform");
+    }
+
+    #[test]
+    fn locale_and_timezone_follow_their_distinct_exclusive_claim_rules() {
+        let mut sessions = DevToolsSessionRegistry::default();
+        sessions.ensure_attached("SID-a");
+        sessions.ensure_attached("SID-b");
+
+        sessions
+            .set_locale_override(true, Some("SID-a"), Some("fr-FR".to_owned()))
+            .unwrap();
+        assert_eq!(
+            sessions
+                .set_locale_override(true, Some("SID-b"), Some("de-DE".to_owned()))
+                .unwrap_err(),
+            "Another locale override is already in effect"
+        );
+        assert_eq!(
+            sessions
+                .set_locale_override(true, Some("SID-b"), None)
+                .unwrap_err(),
+            "Another locale override is already in effect",
+            "Chromium treats a non-owner locale clear as a new claim"
+        );
+        sessions
+            .set_locale_override(true, Some("SID-a"), Some("it-IT".to_owned()))
+            .unwrap();
+        assert_eq!(sessions.effective_locale_override(), Some("it-IT"));
+
+        sessions
+            .set_timezone_override(true, Some("SID-a"), Some("Europe/Paris".to_owned()))
+            .unwrap();
+        assert_eq!(
+            sessions
+                .set_timezone_override(true, Some("SID-b"), Some("America/New_York".to_owned()),)
+                .unwrap_err(),
+            "Timezone override is already in effect"
+        );
+        sessions
+            .set_timezone_override(true, Some("SID-b"), None)
+            .expect("Chromium accepts a non-owner timezone clear as a no-op");
+        assert_eq!(sessions.effective_timezone_override(), Some("Europe/Paris"));
+
+        sessions.remove_attached("SID-a");
+        assert_eq!(sessions.effective_locale_override(), None);
+        assert_eq!(sessions.effective_timezone_override(), None);
+        sessions
+            .set_locale_override(true, Some("SID-b"), Some("de-DE".to_owned()))
+            .unwrap();
+        sessions
+            .set_timezone_override(true, Some("SID-b"), Some("America/New_York".to_owned()))
+            .unwrap();
     }
 
     #[test]

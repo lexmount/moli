@@ -127,6 +127,49 @@ impl Page {
         )
     }
 
+    pub async fn set_network_request_policy_async(
+        &mut self,
+        extra_http_headers: &[(String, String)],
+        bypass_service_worker: bool,
+        cache_disabled: bool,
+    ) -> Result<()> {
+        self.dispatch_unit_page_command_async(
+            RendererPageCommand::SetNetworkRequestPolicy {
+                extra_http_headers: extra_http_headers.to_vec(),
+                bypass_service_worker,
+                cache_disabled,
+            },
+            "set network request policy",
+        )
+        .await
+    }
+
+    pub fn start_set_network_request_policy(
+        &self,
+        extra_http_headers: &[(String, String)],
+        bypass_service_worker: bool,
+        cache_disabled: bool,
+    ) -> Result<PendingPageCommand> {
+        self.start_page_command(RendererPageCommand::SetNetworkRequestPolicy {
+            extra_http_headers: extra_http_headers.to_vec(),
+            bypass_service_worker,
+            cache_disabled,
+        })
+    }
+
+    pub fn finish_set_network_request_policy(
+        &mut self,
+        completion: CompletedPageCommand,
+    ) -> Result<()> {
+        let reply = self.finish_page_command(completion);
+        expect_page_reply!(
+            reply,
+            "set network request policy",
+            "a unit reply",
+            RendererPageReply::Unit => Ok(()),
+        )
+    }
+
     pub async fn set_permission_overrides_async(
         &mut self,
         overrides: &[PermissionOverrideRegistration],

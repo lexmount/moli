@@ -17,6 +17,14 @@ async fn same_context_targets_restore_their_own_page_session_overrides_after_swi
         .attach_active_session("SID-active");
 
     ctx.process_async(json!({
+        "id": 104158,
+        "method": "Network.enable",
+        "sessionId": "SID-active"
+    }))
+    .await;
+    ctx.expect_result(104158, json!({}), Some("SID-active"));
+
+    ctx.process_async(json!({
         "id": 104159,
         "method": "Network.setExtraHTTPHeaders",
         "sessionId": "SID-active",
@@ -63,6 +71,14 @@ async fn same_context_targets_restore_their_own_page_session_overrides_after_swi
         .expect("second target session id")
         .to_owned();
     ctx.expect_event("Target.attachedToTarget", None);
+
+    ctx.process_async(json!({
+        "id": 1041621,
+        "method": "Network.enable",
+        "sessionId": second_session_id
+    }))
+    .await;
+    ctx.expect_result(1041621, json!({}), Some(&second_session_id));
 
     ctx.process_async(json!({
         "id": 104163,

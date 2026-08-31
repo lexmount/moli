@@ -50,8 +50,12 @@ async fn close_target_success() {
     bc.active_target
         .runtime_slot
         .enable_primary_network_events();
-    bc.network_policy.set_cache_disabled(true);
-    bc.network_policy.set_bypass_service_worker(true);
+    bc.mutate_devtools_network_session_state(false, None, |network| {
+        network.network_enabled = true;
+        network.cache_disabled = true;
+        network.bypass_service_worker = true;
+        network.extra_headers = vec![("X-Test".into(), "1".into())];
+    });
     bc.css_enabled = true;
     bc.active_target.fetch_owner.configure(
         None,
@@ -62,8 +66,6 @@ async fn close_target_success() {
             request_stage: crate::conn::FetchRequestStage::Response,
         }],
     );
-    bc.network_policy
-        .push_extra_header(("X-Test".into(), "1".into()));
     bc.set_target_security_origin("https://old.example".into());
     bc.set_target_secure_context_type("InsecureScheme".into());
     bc.set_next_network_request_sequence_for_test(41);

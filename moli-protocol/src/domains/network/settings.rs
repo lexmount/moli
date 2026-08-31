@@ -1,4 +1,4 @@
-use crate::conn::{CdpConnection, Cmd};
+use crate::conn::{CdpConnection, Cmd, DevToolsBrowserIdentityOverride};
 use crate::domains::command_output::CommandOutputPlan;
 #[allow(deprecated)]
 use chromiumoxide_cdp::cdp::browser_protocol::{
@@ -24,15 +24,12 @@ pub(super) struct EmulatedNetworkConditionsForCommand {
     pub(super) connection_type: Option<String>,
 }
 
-pub(super) fn enable_command_output_plan(
+pub(super) fn enabled_command_output_plan(
     conn: &mut CdpConnection,
-    cmd: &Cmd<'_>,
+    session_id: Option<&str>,
 ) -> CommandOutputPlan {
-    if !conn.enable_network_listener_for_session_owner(cmd.session_id) {
-        return CommandOutputPlan::error(-31998, "BrowserContextNotLoaded");
-    }
     let mut plan = CommandOutputPlan::success();
-    if let Some(session_id) = cmd.session_id {
+    if let Some(session_id) = session_id {
         plan.extend_background_events(
             super::super::target::dedicated_worker_main_script_network_replay_for_session(
                 conn, session_id,
@@ -40,16 +37,6 @@ pub(super) fn enable_command_output_plan(
         );
     }
     plan
-}
-
-pub(super) fn disable_command_output_plan(
-    conn: &mut CdpConnection,
-    cmd: &Cmd<'_>,
-) -> CommandOutputPlan {
-    bool_result_plan(
-        conn.disable_network_listener_for_session_owner(cmd.session_id),
-        "BrowserContextNotLoaded",
-    )
 }
 
 pub(super) fn clear_browser_cache_command_output_plan(
@@ -70,18 +57,12 @@ pub(super) fn clear_browser_cache_command_output_plan(
     CommandOutputPlan::success()
 }
 
-pub(super) fn set_cache_disabled_command_output_plan(
-    conn: &mut CdpConnection,
-    cmd: &Cmd<'_>,
-) -> CommandOutputPlan {
+pub(super) fn cache_disabled_for_command(cmd: &Cmd<'_>) -> Result<bool, CommandOutputPlan> {
     let params: SetCacheDisabledParams = match cmd.get_params() {
         Ok(Some(params)) => params,
-        _ => return CommandOutputPlan::error(-32602, "InvalidParams"),
+        _ => return Err(CommandOutputPlan::error(-32602, "InvalidParams")),
     };
-    bool_result_plan(
-        conn.set_cache_disabled_for_session_owner(cmd.session_id, params.cache_disabled),
-        "BrowserContextNotLoaded",
-    )
+    Ok(params.cache_disabled)
 }
 
 pub(super) fn bypass_service_worker_for_command(cmd: &Cmd<'_>) -> Result<bool, CommandOutputPlan> {
@@ -135,7 +116,7 @@ pub(super) fn extra_http_headers_for_command(
 pub(crate) fn user_agent_override_for_command(
     cmd: &Cmd<'_>,
     base: &moli_browser_profile::BrowserIdentityProfile,
-) -> Result<moli_browser_profile::BrowserIdentityProfile, CommandOutputPlan> {
+) -> Result<Option<DevToolsBrowserIdentityOverride>, CommandOutputPlan> {
     let params: SetUserAgentOverrideParams = match cmd.get_params() {
         Ok(Some(params)) => params,
         _ => return Err(CommandOutputPlan::error(-32602, "InvalidParams")),
@@ -220,15 +201,13 @@ pub(crate) fn user_agent_override_for_command(
             form_factors: metadata.form_factors,
         }
     });
-    Ok(
-        moli_browser_profile::BrowserIdentityProfile::from_devtools_override(
-            base,
-            params.user_agent,
-            params.accept_language,
-            params.platform,
-            metadata,
-        ),
-    )
+    Ok(DevToolsBrowserIdentityOverride::from_command(
+        base,
+        params.user_agent,
+        params.accept_language,
+        params.platform,
+        metadata,
+    ))
 }
 
 fn is_valid_chromium_header_value(value: &str) -> bool {
@@ -260,14 +239,6 @@ fn validate_client_hint_brand_list(
         validate_client_hint_field(Some(&brand.version), "Invalid brand version string")?;
     }
     Ok(())
-}
-
-fn bool_result_plan(success: bool, failure_message: &str) -> CommandOutputPlan {
-    if success {
-        CommandOutputPlan::success()
-    } else {
-        CommandOutputPlan::error(-31998, failure_message)
-    }
 }
 
 fn extra_http_headers_from_params(

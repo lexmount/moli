@@ -145,9 +145,19 @@ impl PageTargetHost {
 
     pub(crate) fn replace_navigation_engine(
         &mut self,
-        engine: NavigationEngine,
+        mut engine: NavigationEngine,
     ) -> Option<NavigationEngine> {
+        engine.set_bypass_service_worker(self.network_policy.bypass_service_worker());
+        engine.set_cache_disabled(self.network_policy.cache_disabled());
         self.navigation_engine.replace(engine)
+    }
+
+    pub(crate) fn set_base_cache_disabled(&mut self, disabled: bool) {
+        self.network_policy.set_base_cache_disabled(disabled);
+        let effective = self.network_policy.cache_disabled();
+        if let Some(engine) = self.navigation_engine.as_mut() {
+            engine.set_cache_disabled(effective);
+        }
     }
 
     pub(crate) fn navigation_engine_and_runtime_slot_mut(

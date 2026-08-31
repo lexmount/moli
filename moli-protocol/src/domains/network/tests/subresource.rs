@@ -266,6 +266,162 @@ fetch('/api')
 
     server.abort();
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn enabling_and_disabling_sessions_replays_aggregated_headers_to_loaded_page() {
+    async fn page() -> impl IntoResponse {
+        (
+            [(CONTENT_TYPE.as_str(), "text/html")],
+            "<!doctype html><body>ready</body>",
+        )
+    }
+
+    async fn api(headers: axum::http::HeaderMap) -> impl IntoResponse {
+        headers
+            .get("x-shared")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("")
+            .to_owned()
+    }
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new()
+                .route("/page", get(page))
+                .route("/api", get(api)),
+        )
+        .await
+        .unwrap();
+    });
+
+    let page_url = format!("http://{addr}/page");
+    let api_url = format!("http://{addr}/api");
+    let mut ctx = TestContext::new();
+    let mut bc = BrowserContext::new("BID-1".into());
+    bc.set_active_target_id("TID-1");
+    bc.attach_active_session("SID-1");
+    assert!(bc.assign_auxiliary_session_to_target("TID-1", "SID-aux".to_owned()));
+    ctx.conn.browser_context = Some(bc);
+
+    ctx.process_async(json!({
+        "id": 50_001,
+        "method": "Page.navigate",
+        "sessionId": "SID-1",
+        "params": {"url": page_url},
+    }))
+    .await;
+    ctx.expect_result(
+        50_001,
+        json!({"frameId": "TID-1", "loaderId": LOADER_ID}),
+        Some("SID-1"),
+    );
+
+    for (id, session_id, value) in [(50_002, "SID-1", "primary"), (50_003, "SID-aux", "aux")] {
+        ctx.process_async(json!({
+            "id": id,
+            "method": "Network.setExtraHTTPHeaders",
+            "sessionId": session_id,
+            "params": {"headers": {"X-Shared": value}},
+        }))
+        .await;
+        ctx.expect_result(id, json!({}), Some(session_id));
+    }
+
+    async fn fetch_header(ctx: &mut TestContext, id: u64, api_url: &str, expected: &str) {
+        ctx.process_async(json!({
+            "id": id,
+            "method": "Runtime.evaluate",
+            "sessionId": "SID-1",
+            "params": {
+                "expression": format!("fetch({api_url:?}).then(response => response.text())"),
+                "awaitPromise": true,
+                "returnByValue": true,
+            },
+        }))
+        .await;
+        wait_until_messages(
+            ctx,
+            Some("SID-1"),
+            "network policy fetch response",
+            |messages| messages.iter().any(|message| message["id"] == json!(id)),
+        )
+        .await;
+        ctx.expect_result(
+            id,
+            json!({"result": {"type": "string", "value": expected}}),
+            Some("SID-1"),
+        );
+        ctx.sent.clear();
+    }
+
+    fetch_header(&mut ctx, 50_004, &api_url, "").await;
+
+    ctx.process_async(json!({
+        "id": 50_005,
+        "method": "Network.enable",
+        "sessionId": "SID-1",
+    }))
+    .await;
+    ctx.expect_result(50_005, json!({}), Some("SID-1"));
+    fetch_header(&mut ctx, 50_006, &api_url, "primary").await;
+
+    ctx.process_async(json!({
+        "id": 50_007,
+        "method": "Network.enable",
+        "sessionId": "SID-aux",
+    }))
+    .await;
+    ctx.expect_result(50_007, json!({}), Some("SID-aux"));
+    fetch_header(&mut ctx, 50_008, &api_url, "aux").await;
+
+    ctx.process_async(json!({
+        "id": 50_009,
+        "method": "Network.disable",
+        "sessionId": "SID-aux",
+    }))
+    .await;
+    ctx.expect_result(50_009, json!({}), Some("SID-aux"));
+    fetch_header(&mut ctx, 50_010, &api_url, "primary").await;
+
+    ctx.process_async(json!({
+        "id": 50_011,
+        "method": "Network.enable",
+        "sessionId": "SID-aux",
+    }))
+    .await;
+    ctx.expect_result(50_011, json!({}), Some("SID-aux"));
+    fetch_header(&mut ctx, 50_012, &api_url, "primary").await;
+
+    ctx.process_async(json!({
+        "id": 50_013,
+        "method": "Network.setExtraHTTPHeaders",
+        "sessionId": "SID-aux",
+        "params": {"headers": {"X-Shared": "aux-after-enable"}},
+    }))
+    .await;
+    ctx.expect_result(50_013, json!({}), Some("SID-aux"));
+    fetch_header(&mut ctx, 50_014, &api_url, "aux-after-enable").await;
+
+    ctx.conn
+        .clear_target_session_overrides_async("SID-aux")
+        .await
+        .expect("detaching the auxiliary session should restore effective request policy");
+    assert_eq!(
+        ctx.conn
+            .browser_context
+            .as_mut()
+            .unwrap()
+            .remove_auxiliary_session("SID-aux")
+            .as_deref(),
+        Some("TID-1")
+    );
+    fetch_header(&mut ctx, 50_015, &api_url, "primary").await;
+
+    server.abort();
+}
 #[tokio::test(flavor = "multi_thread")]
 async fn page_fetch_response_clone_preserves_binary_body_source() {
     async fn page() -> impl IntoResponse {
@@ -1626,6 +1782,14 @@ async fn parser_external_script_applies_extra_http_headers() {
     ctx.conn.browser_context = Some(bc);
 
     ctx.process_async(json!({
+        "id": 70_000,
+        "method": "Network.enable",
+        "sessionId": "SID-1"
+    }))
+    .await;
+    ctx.expect_result(70_000, json!({}), Some("SID-1"));
+
+    ctx.process_async(json!({
         "id": 70_001,
         "method": "Network.setExtraHTTPHeaders",
         "sessionId": "SID-1",
@@ -2114,6 +2278,14 @@ worker.onmessage = event => {
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.browser_context = Some(bc);
+
+    ctx.process_async(json!({
+        "id": 70_019,
+        "method": "Network.enable",
+        "sessionId": "SID-1"
+    }))
+    .await;
+    ctx.expect_result(70_019, json!({}), Some("SID-1"));
 
     ctx.process_async(json!({
         "id": 70_020,

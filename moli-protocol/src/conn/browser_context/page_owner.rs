@@ -1010,7 +1010,6 @@ mod tests {
     fn active_session_state_mut(browser_context: &mut BrowserContext) -> TargetSessionStateMut<'_> {
         let state = browser_context.active_page_state_mut();
         TargetSessionStateMut::Active {
-            session_id: None,
             devtools_session_state: &mut state.devtools_sessions
                 [moli_page_types::DevToolsSessionKey::Primary],
             network_policy: &mut state.network_policy,
@@ -1020,7 +1019,6 @@ mod tests {
 
     fn parked_session_state_mut(state: &mut TargetPageState) -> TargetSessionStateMut<'_> {
         TargetSessionStateMut::Parked {
-            session_id: None,
             devtools_session_state: &mut state.devtools_sessions
                 [moli_page_types::DevToolsSessionKey::Primary],
             network_policy: &mut state.network_policy,

@@ -5216,6 +5216,11 @@ pub enum RendererPageCommand {
     PrepareAppManifestLoad,
     PublishAppManifestLoad(Box<crate::RendererAppManifestLoadPublication>),
     SetExtraHttpHeaders(Vec<(String, String)>),
+    SetNetworkRequestPolicy {
+        extra_http_headers: Vec<(String, String)>,
+        bypass_service_worker: bool,
+        cache_disabled: bool,
+    },
     SetPermissionOverrides(Vec<crate::protocol_types::PermissionOverrideRegistration>),
     SetIdleOverride(Option<crate::protocol_types::EmulatedIdleOverride>),
     SetLocaleOverride(Option<String>),

@@ -150,6 +150,9 @@ pub(crate) enum NetworkCommandTaskStep {
 }
 
 enum PendingNetworkCommandKind {
+    Enable,
+    Disable,
+    SetCacheDisabled,
     SetExtraHttpHeaders,
     SetBlockedUrls,
     SetBypassServiceWorker,
@@ -213,15 +216,15 @@ pub(crate) fn start_network_domain_command_dispatch(
         ));
     };
     match action {
-        NetworkAction::Enable => {
-            NetworkDomainCommandTaskStep::Complete(settings::enable_command_output_plan(conn, cmd))
-        }
-        NetworkAction::Disable => {
-            NetworkDomainCommandTaskStep::Complete(settings::disable_command_output_plan(conn, cmd))
-        }
-        NetworkAction::SetCacheDisabled => NetworkDomainCommandTaskStep::Complete(
-            settings::set_cache_disabled_command_output_plan(conn, cmd),
+        NetworkAction::Enable => NetworkDomainCommandTaskStep::Network(
+            start_set_network_domain_enabled_command(conn, cmd, true),
         ),
+        NetworkAction::Disable => NetworkDomainCommandTaskStep::Network(
+            start_set_network_domain_enabled_command(conn, cmd, false),
+        ),
+        NetworkAction::SetCacheDisabled => {
+            NetworkDomainCommandTaskStep::Network(start_set_cache_disabled_command(conn, cmd))
+        }
         NetworkAction::SetBypassServiceWorker => NetworkDomainCommandTaskStep::Network(
             start_set_bypass_service_worker_command(conn, cmd),
         ),
@@ -466,6 +469,44 @@ fn pending_network_page_command_step(
     }
 }
 
+fn start_set_network_domain_enabled_command(
+    conn: &mut CdpConnection,
+    cmd: &Cmd<'_>,
+    enabled: bool,
+) -> NetworkCommandTaskStep {
+    let updated = if enabled {
+        conn.enable_network_listener_for_session_owner(cmd.session_id)
+    } else {
+        conn.disable_network_listener_for_session_owner(cmd.session_id)
+    };
+    if !updated {
+        return NetworkCommandTaskStep::Complete(CommandOutputPlan::error(
+            -31998,
+            "BrowserContextNotLoaded",
+        ));
+    }
+
+    let kind = if enabled {
+        PendingNetworkCommandKind::Enable
+    } else {
+        PendingNetworkCommandKind::Disable
+    };
+    match conn.start_replay_effective_network_request_policy_for_session_owner(cmd.session_id) {
+        Ok(Some(pending)) => NetworkCommandTaskStep::Pending(PendingNetworkCommandDispatch {
+            command_id: cmd.id,
+            session_id: cmd.session_id.map(str::to_owned),
+            kind,
+            pending: PendingNetworkCommandWork::Page(pending),
+        }),
+        Ok(None) => NetworkCommandTaskStep::Complete(if enabled {
+            settings::enabled_command_output_plan(conn, cmd.session_id)
+        } else {
+            CommandOutputPlan::success()
+        }),
+        Err(error) => NetworkCommandTaskStep::Complete(CommandOutputPlan::error(-32000, error)),
+    }
+}
+
 fn start_set_extra_http_headers_command(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,
@@ -479,6 +520,22 @@ fn start_set_extra_http_headers_command(
         cmd.session_id,
         PendingNetworkCommandKind::SetExtraHttpHeaders,
         conn.start_set_extra_http_headers_for_session_owner(cmd.session_id, headers),
+    )
+}
+
+fn start_set_cache_disabled_command(
+    conn: &mut CdpConnection,
+    cmd: &Cmd<'_>,
+) -> NetworkCommandTaskStep {
+    let cache_disabled = match settings::cache_disabled_for_command(cmd) {
+        Ok(cache_disabled) => cache_disabled,
+        Err(plan) => return NetworkCommandTaskStep::Complete(plan),
+    };
+    pending_network_page_command_step(
+        cmd.id,
+        cmd.session_id,
+        PendingNetworkCommandKind::SetCacheDisabled,
+        conn.start_set_cache_disabled_for_session_owner(cmd.session_id, cache_disabled),
     )
 }
 
@@ -550,9 +607,9 @@ fn start_set_user_agent_override_command(
         cmd.id,
         cmd.session_id,
         PendingNetworkCommandKind::SetUserAgentOverride,
-        conn.start_set_browser_identity_override_for_session_owner(
+        conn.start_set_devtools_browser_identity_override_for_session_owner(
             cmd.session_id,
-            Some(browser_identity),
+            browser_identity,
         ),
     )
 }
@@ -562,6 +619,15 @@ pub(crate) fn complete_pending_network_command(
     completed: CompletedNetworkCommandDispatch,
 ) -> NetworkCommandTaskStep {
     match completed.kind {
+        PendingNetworkCommandKind::Enable => {
+            NetworkCommandTaskStep::Complete(complete_network_policy_refresh(conn, completed, true))
+        }
+        PendingNetworkCommandKind::Disable => NetworkCommandTaskStep::Complete(
+            complete_network_policy_refresh(conn, completed, false),
+        ),
+        PendingNetworkCommandKind::SetCacheDisabled => NetworkCommandTaskStep::Complete(
+            complete_network_policy_refresh(conn, completed, false),
+        ),
         PendingNetworkCommandKind::SetExtraHttpHeaders => {
             NetworkCommandTaskStep::Complete(complete_unit_page_network_command(
                 conn,
@@ -602,11 +668,47 @@ pub(crate) fn complete_pending_network_command(
     }
 }
 
+#[derive(Clone, Copy)]
 enum NetworkPageCommandFinish {
     ExtraHttpHeaders,
     BlockedUrls,
     BypassServiceWorker,
     NetworkOffline,
+}
+
+fn complete_network_policy_refresh(
+    conn: &mut CdpConnection,
+    completed: CompletedNetworkCommandDispatch,
+    enabled: bool,
+) -> CommandOutputPlan {
+    let completion = match completed.completed {
+        CompletedNetworkCommandWork::Page(Ok(completion)) => *completion,
+        CompletedNetworkCommandWork::Page(Err(error)) => {
+            return CommandOutputPlan::error(-32000, error);
+        }
+        CompletedNetworkCommandWork::Resource(_) => {
+            return CommandOutputPlan::error(-32000, "InvalidNetworkCommandCompletion");
+        }
+    };
+    let page = match conn.loaded_page_mut_for_protocol_access(completed.session_id.as_deref()) {
+        Ok(page) => page,
+        Err(message) if message == "NoDocumentLoaded" => {
+            return if enabled {
+                settings::enabled_command_output_plan(conn, completed.session_id.as_deref())
+            } else {
+                CommandOutputPlan::success()
+            };
+        }
+        Err(message) => return CommandOutputPlan::error(-32000, message),
+    };
+    if let Err(error) = page.finish_set_network_request_policy(completion) {
+        return CommandOutputPlan::error(-32000, error.to_string());
+    }
+    if enabled {
+        settings::enabled_command_output_plan(conn, completed.session_id.as_deref())
+    } else {
+        CommandOutputPlan::success()
+    }
 }
 
 fn complete_unit_page_network_command(

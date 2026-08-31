@@ -1046,6 +1046,13 @@ async fn run_worker_pre_bootstrap_debugger_pause(
                 };
                 loader.request_client().set_network_offline(offline);
             }
+            Some(WorkerMessage::SetCacheDisabled(disabled)) => {
+                state
+                    .borrow()
+                    .loader
+                    .request_client()
+                    .set_cache_disabled(disabled);
+            }
             Some(WorkerMessage::SetBlockedUrlPatterns(patterns)) => {
                 let (loader, patterns_for_loader) = {
                     let mut state = state.borrow_mut();
@@ -2710,6 +2717,13 @@ async fn worker_main(
                     state.loader.clone()
                 };
                 loader.request_client().set_network_offline(offline);
+            }
+            WorkerLoopWake::Message(Some(WorkerMessage::SetCacheDisabled(disabled))) => {
+                state
+                    .borrow()
+                    .loader
+                    .request_client()
+                    .set_cache_disabled(disabled);
             }
             WorkerLoopWake::Message(Some(WorkerMessage::SetBlockedUrlPatterns(patterns))) => {
                 let (loader, patterns_for_loader) = {

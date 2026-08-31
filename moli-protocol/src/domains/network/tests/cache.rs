@@ -173,6 +173,71 @@ async fn cached_subresource_reload_emits_served_from_cache_before_response() {
         "immutable reload should not contact the origin again"
     );
 
+    ctx.process_async(json!({
+        "id": 76,
+        "method": "Network.setCacheDisabled",
+        "sessionId": "SID-1",
+        "params": {"cacheDisabled": true}
+    }))
+    .await;
+    ctx.expect_result(76, json!({}), Some("SID-1"));
+    ctx.sent.clear();
+
+    ctx.process_async(json!({
+        "id": 77,
+        "method": "Page.reload",
+        "sessionId": "SID-1",
+        "params": {}
+    }))
+    .await;
+    flush_until_subresource_finished(
+        &mut ctx,
+        "Script",
+        1,
+        "cache-disabled immutable script network completion",
+    )
+    .await;
+    assert_eq!(
+        asset_hits.load(Ordering::SeqCst),
+        2,
+        "cache-disabled reload must contact the origin"
+    );
+    assert!(
+        !ctx.sent.iter().any(|message| {
+            message["method"] == json!("Network.requestServedFromCache")
+                && message["sessionId"] == json!("SID-1")
+        }),
+        "cache-disabled requests must not be reported as cache hits"
+    );
+
+    ctx.process_async(json!({
+        "id": 78,
+        "method": "Network.setCacheDisabled",
+        "sessionId": "SID-1",
+        "params": {"cacheDisabled": false}
+    }))
+    .await;
+    ctx.expect_result(78, json!({}), Some("SID-1"));
+    ctx.sent.clear();
+
+    ctx.process_async(json!({
+        "id": 79,
+        "method": "Page.reload",
+        "sessionId": "SID-1",
+        "params": {}
+    }))
+    .await;
+    wait_until_cached_request_finished(
+        &mut ctx,
+        "cache re-enabled immutable script network completion",
+    )
+    .await;
+    assert_eq!(
+        asset_hits.load(Ordering::SeqCst),
+        2,
+        "re-enabled cache should reuse the response stored by the bypass load"
+    );
+
     server.abort();
     let _ = fs::remove_dir_all(cache_dir);
 }
@@ -279,6 +344,87 @@ async fn cached_main_document_navigation_emits_served_from_cache_before_response
         document_hits.load(Ordering::SeqCst),
         1,
         "the cached second navigation must not contact the origin"
+    );
+
+    ctx.process_async(json!({
+        "id": 80,
+        "method": "Network.setCacheDisabled",
+        "sessionId": "SID-1",
+        "params": {"cacheDisabled": true}
+    }))
+    .await;
+    ctx.expect_result(80, json!({}), Some("SID-1"));
+    ctx.sent.clear();
+
+    ctx.process_async(json!({
+        "id": 81,
+        "method": "Page.navigate",
+        "sessionId": "SID-1",
+        "params": {"url": url}
+    }))
+    .await;
+    wait_until_messages(
+        &mut ctx,
+        Some("SID-1"),
+        "cache-disabled main document network completion",
+        |messages| {
+            let Some(request_id) = messages.iter().find_map(|message| {
+                if message["method"] == json!("Network.requestWillBeSent")
+                    && message["params"]["type"] == json!("Document")
+                {
+                    message["params"]["requestId"].as_str()
+                } else {
+                    None
+                }
+            }) else {
+                return false;
+            };
+            messages.iter().any(|message| {
+                message["method"] == json!("Network.loadingFinished")
+                    && message["params"]["requestId"] == json!(request_id)
+            })
+        },
+    )
+    .await;
+    assert_eq!(
+        document_hits.load(Ordering::SeqCst),
+        2,
+        "cache-disabled navigation must contact the origin"
+    );
+    assert!(
+        !ctx.sent.iter().any(|message| {
+            message["method"] == json!("Network.requestServedFromCache")
+                && message["sessionId"] == json!("SID-1")
+        }),
+        "cache-disabled navigation must not be reported as a cache hit"
+    );
+
+    ctx.process_async(json!({
+        "id": 82,
+        "method": "Network.setCacheDisabled",
+        "sessionId": "SID-1",
+        "params": {"cacheDisabled": false}
+    }))
+    .await;
+    ctx.expect_result(82, json!({}), Some("SID-1"));
+    ctx.sent.clear();
+
+    ctx.process_async(json!({
+        "id": 83,
+        "method": "Page.navigate",
+        "sessionId": "SID-1",
+        "params": {"url": url}
+    }))
+    .await;
+    wait_until_cached_request_finished(
+        &mut ctx,
+        "cache re-enabled main document network completion",
+    )
+    .await;
+    assert_eq!(
+        document_hits.load(Ordering::SeqCst),
+        2,
+        "re-enabled cache should reuse the response stored by the bypass navigation"
     );
 
     server.abort();
@@ -579,6 +725,13 @@ async fn set_cache_disabled_updates_browser_context_state() {
     ctx.conn.browser_context = Some(BrowserContext::new("BID-1".into()));
 
     ctx.process_async(json!({
+        "id": 219,
+        "method": "Network.enable"
+    }))
+    .await;
+    ctx.expect_result(219, json!({}), None);
+
+    ctx.process_async(json!({
         "id": 22,
         "method": "Network.setCacheDisabled",
         "params": { "cacheDisabled": true }
@@ -806,6 +959,13 @@ async fn set_bypass_service_worker_rejects_invalid_params() {
 async fn set_bypass_service_worker_updates_browser_context_state() {
     let mut ctx = TestContext::new();
     ctx.conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+
+    ctx.process_async(json!({
+        "id": 239,
+        "method": "Network.enable"
+    }))
+    .await;
+    ctx.expect_result(239, json!({}), None);
 
     ctx.process_async(json!({
         "id": 26,

@@ -52,6 +52,14 @@ self.addEventListener("fetch", event => {
     ctx.conn.browser_context = Some(browser_context);
 
     ctx.process_async(json!({
+        "id": 80_000,
+        "method": "Network.enable",
+        "sessionId": "SID-1"
+    }))
+    .await;
+    ctx.expect_result(80_000, json!({}), Some("SID-1"));
+
+    ctx.process_async(json!({
         "id": 80_001,
         "method": "Page.navigate",
         "sessionId": "SID-1",

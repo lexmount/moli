@@ -5175,6 +5175,10 @@ impl ScriptVm {
             .set_bypass_service_worker(bypass);
     }
 
+    pub(super) fn set_cache_disabled(&mut self, disabled: bool) {
+        self._context_host.borrow_mut().set_cache_disabled(disabled);
+    }
+
     pub(super) fn set_blocked_url_patterns(&mut self, patterns: &[String]) {
         self._context_host
             .borrow_mut()

@@ -56,6 +56,125 @@ async fn auxiliary_network_enable_does_not_enable_primary_session() {
         vec![Some("SID-aux".to_owned())]
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn page_network_policy_aggregates_enabled_sessions_like_chromium_handlers() {
+    let mut ctx = TestContext::new();
+    let mut bc = BrowserContext::new("BID-1".into());
+    bc.set_active_target_id("TID-1".to_owned());
+    bc.attach_active_session("SID-primary".to_owned());
+    assert!(bc.assign_auxiliary_session_to_target("TID-1", "SID-aux".to_owned()));
+    ctx.conn.browser_context = Some(bc);
+
+    for (id, session_id) in [(20_001, "SID-primary"), (20_002, "SID-aux")] {
+        ctx.process_async(json!({
+            "id": id,
+            "method": "Network.enable",
+            "sessionId": session_id,
+        }))
+        .await;
+        ctx.expect_result(id, json!({}), Some(session_id));
+    }
+
+    for (id, session_id, method, params) in [
+        (
+            20_003,
+            "SID-primary",
+            "Network.setCacheDisabled",
+            json!({"cacheDisabled": true}),
+        ),
+        (
+            20_004,
+            "SID-primary",
+            "Network.setBypassServiceWorker",
+            json!({"bypass": true}),
+        ),
+        (
+            20_005,
+            "SID-primary",
+            "Network.setExtraHTTPHeaders",
+            json!({"headers": {"X-Primary": "primary", "X-Shared": "primary"}}),
+        ),
+        (
+            20_006,
+            "SID-aux",
+            "Network.setCacheDisabled",
+            json!({"cacheDisabled": false}),
+        ),
+        (
+            20_007,
+            "SID-aux",
+            "Network.setBypassServiceWorker",
+            json!({"bypass": false}),
+        ),
+        (
+            20_008,
+            "SID-aux",
+            "Network.setExtraHTTPHeaders",
+            json!({"headers": {"X-Aux": "aux", "x-shared": "aux"}}),
+        ),
+    ] {
+        ctx.process_async(json!({
+            "id": id,
+            "method": method,
+            "sessionId": session_id,
+            "params": params,
+        }))
+        .await;
+        ctx.expect_result(id, json!({}), Some(session_id));
+    }
+
+    let policy = &ctx.conn.browser_context.as_ref().unwrap().network_policy;
+    assert!(policy.cache_disabled());
+    assert!(policy.bypass_service_worker());
+    assert_eq!(
+        policy.extra_headers(),
+        [
+            ("X-Primary".to_owned(), "primary".to_owned()),
+            ("x-shared".to_owned(), "aux".to_owned()),
+            ("X-Aux".to_owned(), "aux".to_owned()),
+        ]
+    );
+
+    ctx.process_async(json!({
+        "id": 20_009,
+        "method": "Network.disable",
+        "sessionId": "SID-primary",
+    }))
+    .await;
+    ctx.expect_result(20_009, json!({}), Some("SID-primary"));
+
+    let policy = &ctx.conn.browser_context.as_ref().unwrap().network_policy;
+    assert!(!policy.cache_disabled());
+    assert!(!policy.bypass_service_worker());
+    assert_eq!(
+        policy.extra_headers(),
+        [
+            ("X-Aux".to_owned(), "aux".to_owned()),
+            ("x-shared".to_owned(), "aux".to_owned()),
+        ]
+    );
+
+    ctx.process_async(json!({
+        "id": 20_010,
+        "method": "Network.enable",
+        "sessionId": "SID-primary",
+    }))
+    .await;
+    ctx.expect_result(20_010, json!({}), Some("SID-primary"));
+
+    let policy = &ctx.conn.browser_context.as_ref().unwrap().network_policy;
+    assert!(!policy.cache_disabled());
+    assert!(!policy.bypass_service_worker());
+    assert_eq!(
+        policy.extra_headers(),
+        [
+            ("X-Aux".to_owned(), "aux".to_owned()),
+            ("x-shared".to_owned(), "aux".to_owned()),
+        ],
+        "Network.disable must clear the disabled session's policy state"
+    );
+}
 #[tokio::test(flavor = "multi_thread")]
 async fn enable_after_page_load_does_not_replay_historical_subresource_events() {
     async fn page() -> impl IntoResponse {

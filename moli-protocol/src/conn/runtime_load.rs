@@ -2536,6 +2536,7 @@ impl CdpConnection {
             engine.reset_resource_runtime_without_loaded_page();
         }
         engine.set_bypass_service_worker(load_inputs.bypass_service_worker);
+        engine.set_cache_disabled(load_inputs.cache_disabled);
         // The engine may publish lifecycle or resource activity before the
         // DCL-bound navigation result is adopted into a target slot. Bind its
         // scheduler sender at construction time so that early tail work queues
@@ -3041,6 +3042,7 @@ impl CdpConnection {
             .navigation_engine_for_load_inputs_mut(&load_inputs)
             .ok_or_else(|| "navigation Page engine unavailable".to_owned())?;
         engine.set_bypass_service_worker(load_inputs.bypass_service_worker);
+        engine.set_cache_disabled(load_inputs.cache_disabled);
         engine
             .fetch_navigation_response_with_storage_async(
                 resource_storage.into_navigation_storage(),
@@ -3079,6 +3081,7 @@ impl CdpConnection {
         let mut request = Request::new_bytes(method, raw_url, body, request_headers)
             .map_err(|error| format!("failed to build request for `{raw_url}`: {error}"))?
             .with_top_level_navigation_cookie_context()
+            .with_page_network_policy()
             .with_browser_navigation_kind(load_inputs.browser_navigation_kind);
         if !load_inputs.infer_navigation_referrer {
             request = request.without_inferred_referrer();
@@ -3159,6 +3162,7 @@ impl CdpConnection {
         let mut request = Request::new_bytes(method, raw_url, body, request_headers)
             .map_err(|error| format!("failed to build request for `{raw_url}`: {error}"))?
             .with_top_level_navigation_cookie_context()
+            .with_page_network_policy()
             .with_browser_navigation_kind(load_inputs.browser_navigation_kind);
         if !load_inputs.infer_navigation_referrer {
             request = request.without_inferred_referrer();

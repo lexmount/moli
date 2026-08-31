@@ -173,7 +173,10 @@ impl NavigationResourceLoader {
         self.begin_fetch()?;
         match self
             .request_client
-            .fetch_with_cancel(request, self.inner.cancel.clone())
+            .fetch_with_cancel(
+                request.with_page_network_policy(),
+                self.inner.cancel.clone(),
+            )
             .await
         {
             Ok(response) => {
@@ -194,7 +197,10 @@ impl NavigationResourceLoader {
         self.begin_fetch()?;
         match self
             .request_client
-            .fetch_text_stream_with_cancel_and_network_metadata(request, self.inner.cancel.clone())
+            .fetch_text_stream_with_cancel_and_network_metadata(
+                request.with_page_network_policy(),
+                self.inner.cancel.clone(),
+            )
             .await
         {
             Ok(response) => {
@@ -212,7 +218,10 @@ impl NavigationResourceLoader {
         self.begin_fetch()?;
         match self
             .request_client
-            .fetch_raw_stream_with_cancel(request, self.inner.cancel.clone())
+            .fetch_raw_stream_with_cancel(
+                request.with_page_network_policy(),
+                self.inner.cancel.clone(),
+            )
             .await
         {
             Ok(mut response) => {
@@ -248,7 +257,10 @@ impl NavigationResourceLoader {
         self.begin_fetch()?;
         match self
             .request_client
-            .fetch_raw_stream_with_cancel_and_network_metadata(request, self.inner.cancel.clone())
+            .fetch_raw_stream_with_cancel_and_network_metadata(
+                request.with_page_network_policy(),
+                self.inner.cancel.clone(),
+            )
             .await
         {
             Ok(response) => {

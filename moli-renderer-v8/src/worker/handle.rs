@@ -155,6 +155,8 @@ pub(crate) enum WorkerMessage {
     SetExtraHttpHeaders(Vec<(String, String)>),
     /// Update the Network.emulateNetworkConditions offline state visible to worker-owned fetch/XHR.
     SetNetworkOffline(bool),
+    /// Update the effective Network.setCacheDisabled state visible to worker-owned fetch/XHR.
+    SetCacheDisabled(bool),
     /// Update the Network.setBlockedURLs state visible to worker-owned fetch/XHR.
     SetBlockedUrlPatterns(Vec<String>),
     /// Update Fetch domain subresource interception visible to worker-owned fetch/XHR.
@@ -891,6 +893,10 @@ impl WorkerHandle {
 
     pub(crate) fn set_network_offline(&self, offline: bool) {
         let _ = self.tx.send(WorkerMessage::SetNetworkOffline(offline));
+    }
+
+    pub(crate) fn set_cache_disabled(&self, disabled: bool) {
+        let _ = self.tx.send(WorkerMessage::SetCacheDisabled(disabled));
     }
 
     pub(crate) fn set_blocked_url_patterns(&self, patterns: &[String]) {

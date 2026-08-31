@@ -207,6 +207,10 @@ impl PageVm {
         self.vm_mut().set_bypass_service_worker(bypass);
     }
 
+    pub(crate) fn set_cache_disabled(&mut self, disabled: bool) {
+        self.vm_mut().set_cache_disabled(disabled);
+    }
+
     pub(crate) fn set_blocked_url_patterns(&mut self, patterns: &[String]) {
         self.blocked_url_patterns = patterns.to_vec();
         self.vm_mut().set_blocked_url_patterns(patterns);

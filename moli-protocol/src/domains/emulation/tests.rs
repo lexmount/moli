@@ -54,6 +54,49 @@ async fn load_session_page_for_pending_emulation_test_at_url(ctx: &mut TestConte
     install_session_page_for_emulation_test(ctx, bc, url).await;
 }
 
+fn install_multi_session_page_state(ctx: &mut TestContext) {
+    let mut browser_context = BrowserContext::new("BID-1".into());
+    browser_context.set_active_target_id("TID-1");
+    browser_context.attach_active_session("SID-primary");
+    assert!(browser_context.assign_auxiliary_session_to_target("TID-1", "SID-aux".to_owned()));
+    ctx.conn.browser_context = Some(browser_context);
+}
+
+async fn expect_session_command_result(
+    ctx: &mut TestContext,
+    id: u64,
+    session_id: &str,
+    method: &str,
+    params: serde_json::Value,
+) {
+    ctx.process_async(json!({
+        "id": id,
+        "method": method,
+        "sessionId": session_id,
+        "params": params,
+    }))
+    .await;
+    ctx.expect_result(id, json!({}), Some(session_id));
+}
+
+async fn expect_session_command_error(
+    ctx: &mut TestContext,
+    id: u64,
+    session_id: &str,
+    method: &str,
+    params: serde_json::Value,
+    message: &str,
+) {
+    ctx.process_async(json!({
+        "id": id,
+        "method": method,
+        "sessionId": session_id,
+        "params": params,
+    }))
+    .await;
+    ctx.expect_error(id, -32000, message);
+}
+
 async fn install_session_page_for_emulation_test(
     ctx: &mut TestContext,
     bc: BrowserContext,
@@ -766,6 +809,181 @@ async fn set_timezone_override_without_loaded_browser_context_errors() {
     }))
     .await;
     ctx.expect_error(7, -31998, "BrowserContextNotLoaded");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn multi_session_locale_and_timezone_claims_match_chromium() {
+    const LOCALE: &str = "Emulation.setLocaleOverride";
+    const TIMEZONE: &str = "Emulation.setTimezoneOverride";
+    let mut ctx = TestContext::new();
+    install_multi_session_page_state(&mut ctx);
+
+    expect_session_command_result(
+        &mut ctx,
+        70_001,
+        "SID-primary",
+        LOCALE,
+        json!({
+            "locale": "fr-FR"
+        }),
+    )
+    .await;
+    expect_session_command_error(
+        &mut ctx,
+        70_002,
+        "SID-aux",
+        LOCALE,
+        json!({ "locale": "de-DE" }),
+        "Another locale override is already in effect",
+    )
+    .await;
+    expect_session_command_result(
+        &mut ctx,
+        70_003,
+        "SID-primary",
+        TIMEZONE,
+        json!({
+            "timezoneId": "Europe/Paris"
+        }),
+    )
+    .await;
+    expect_session_command_error(
+        &mut ctx,
+        70_004,
+        "SID-aux",
+        TIMEZONE,
+        json!({ "timezoneId": "America/New_York" }),
+        "Timezone override is already in effect",
+    )
+    .await;
+    expect_session_command_result(
+        &mut ctx,
+        70_005,
+        "SID-aux",
+        TIMEZONE,
+        json!({ "timezoneId": "" }),
+    )
+    .await;
+
+    let page_state = ctx
+        .conn
+        .browser_context
+        .as_ref()
+        .expect("browser context")
+        .active_page_state();
+    assert_eq!(page_state.locale_override.as_deref(), Some("fr-FR"));
+    assert_eq!(
+        page_state.timezone_override.as_deref(),
+        Some("Europe/Paris")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn multi_session_browser_identity_uses_attachment_order_and_field_contributions() {
+    const EMULATION_UA: &str = "Emulation.setUserAgentOverride";
+    const NETWORK_UA: &str = "Network.setUserAgentOverride";
+    let mut ctx = TestContext::new();
+    install_multi_session_page_state(&mut ctx);
+
+    for (id, method, session_id, user_agent) in [
+        (71_001, EMULATION_UA, "SID-aux", "Moli/Aux-1"),
+        (71_002, NETWORK_UA, "SID-primary", "Moli/Primary-1"),
+        (71_003, EMULATION_UA, "SID-primary", "Moli/Primary-2"),
+    ] {
+        expect_session_command_result(
+            &mut ctx,
+            id,
+            session_id,
+            method,
+            json!({ "userAgent": user_agent }),
+        )
+        .await;
+    }
+    assert_eq!(
+        ctx.conn
+            .browser_context
+            .as_ref()
+            .expect("browser context")
+            .network_policy
+            .user_agent_override(),
+        Some("Moli/Aux-1")
+    );
+
+    expect_session_command_result(
+        &mut ctx,
+        71_004,
+        "SID-aux",
+        NETWORK_UA,
+        json!({ "userAgent": "" }),
+    )
+    .await;
+    assert_eq!(
+        ctx.conn
+            .browser_context
+            .as_ref()
+            .expect("browser context")
+            .network_policy
+            .user_agent_override(),
+        Some("Moli/Primary-2")
+    );
+
+    expect_session_command_result(
+        &mut ctx,
+        71_005,
+        "SID-aux",
+        EMULATION_UA,
+        json!({
+            "userAgent": "",
+            "acceptLanguage": "fr-FR",
+            "platform": "AuxPlatform"
+        }),
+    )
+    .await;
+    let identity = ctx
+        .conn
+        .browser_context
+        .as_ref()
+        .expect("browser context")
+        .network_policy
+        .browser_identity_override()
+        .expect("UA and per-field contributions should compose an identity");
+    assert_eq!(identity.user_agent(), "Moli/Primary-2");
+    assert_eq!(identity.accept_language(), "fr-FR");
+    assert_eq!(identity.navigator_platform(), "AuxPlatform");
+
+    expect_session_command_result(
+        &mut ctx,
+        71_006,
+        "SID-aux",
+        NETWORK_UA,
+        json!({ "userAgent": "Moli/Aux-2" }),
+    )
+    .await;
+    expect_session_command_result(&mut ctx, 71_007, "SID-aux", "Network.disable", json!({})).await;
+    assert_eq!(
+        ctx.conn
+            .browser_context
+            .as_ref()
+            .expect("browser context")
+            .network_policy
+            .user_agent_override(),
+        Some("Moli/Aux-2"),
+        "Network.disable must not dispose the shared Emulation agent state"
+    );
+
+    ctx.conn
+        .clear_target_session_overrides_async("SID-aux")
+        .await
+        .expect("detaching the auxiliary session should restore the previous UA");
+    assert_eq!(
+        ctx.conn
+            .browser_context
+            .as_ref()
+            .expect("browser context")
+            .network_policy
+            .user_agent_override(),
+        Some("Moli/Primary-2")
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

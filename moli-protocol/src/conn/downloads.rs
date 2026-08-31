@@ -416,7 +416,9 @@ impl CdpConnection {
         let mut request = Request::get(&activation.url)
             .map_err(|error| format!("invalid download url: {error}"))?;
         request.request_headers = owner.request_headers;
-        request = request.with_top_level_navigation_cookie_context();
+        request = request
+            .with_top_level_navigation_cookie_context()
+            .with_page_network_policy();
         if let Some(ref initiator_url) = owner.initiator_url {
             request = request.with_initiator_url(initiator_url);
         }

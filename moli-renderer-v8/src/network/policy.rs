@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::{Result, anyhow};
 use http::HeaderName;
 use indexmap::IndexMap;
-use moli_fetch::{Request, url_pattern_matches};
+use moli_fetch::{Request, RequestCacheMode, url_pattern_matches};
 use parking_lot::Mutex;
 
 use crate::{protocol_types::OptionalResourceFetchMask, types::SubresourceResourceType};
@@ -21,6 +21,7 @@ struct PageNetworkPolicyState {
     optional_resource_fetch_mask: OptionalResourceFetchMask,
     subframe_loading_enabled: bool,
     bypass_service_worker: bool,
+    cache_disabled: bool,
 }
 
 impl PageNetworkPolicyState {
@@ -41,6 +42,7 @@ impl Default for PageNetworkPolicyState {
             optional_resource_fetch_mask: OptionalResourceFetchMask::NONE,
             subframe_loading_enabled: true,
             bypass_service_worker: false,
+            cache_disabled: false,
         }
     }
 }
@@ -118,6 +120,7 @@ impl PageNetworkPolicy {
                 optional_resource_fetch_mask: snapshot.optional_resource_fetch_mask,
                 subframe_loading_enabled: snapshot.subframe_loading_enabled,
                 bypass_service_worker: snapshot.bypass_service_worker,
+                cache_disabled: snapshot.cache_disabled,
             })),
             network_conditions: Arc::new(Mutex::new(PageNetworkConditionsState {
                 revision: snapshot.network_conditions_revision,
@@ -143,6 +146,7 @@ impl PageNetworkPolicy {
                 optional_resource_fetch_mask: snapshot.optional_resource_fetch_mask,
                 subframe_loading_enabled: snapshot.subframe_loading_enabled,
                 bypass_service_worker: snapshot.bypass_service_worker,
+                cache_disabled: snapshot.cache_disabled,
             })),
             network_conditions: Arc::clone(&self.network_conditions),
         }
@@ -171,6 +175,7 @@ impl PageNetworkPolicy {
             optional_resource_fetch_mask: state.optional_resource_fetch_mask,
             subframe_loading_enabled: state.subframe_loading_enabled,
             bypass_service_worker: state.bypass_service_worker,
+            cache_disabled: state.cache_disabled,
         }
     }
 
@@ -281,6 +286,19 @@ impl PageNetworkPolicy {
     pub fn bypass_service_worker(&self) -> bool {
         self.state.lock().bypass_service_worker
     }
+
+    pub fn set_cache_disabled(&self, disabled: bool) {
+        let mut state = self.state.lock();
+        if state.cache_disabled == disabled {
+            return;
+        }
+        state.cache_disabled = disabled;
+        state.advance_revision();
+    }
+
+    pub fn cache_disabled(&self) -> bool {
+        self.state.lock().cache_disabled
+    }
 }
 
 /// Immutable request-time view of one Page's network policy.
@@ -297,6 +315,7 @@ pub struct PageNetworkPolicySnapshot {
     optional_resource_fetch_mask: OptionalResourceFetchMask,
     subframe_loading_enabled: bool,
     bypass_service_worker: bool,
+    cache_disabled: bool,
 }
 
 impl PageNetworkPolicySnapshot {
@@ -321,6 +340,10 @@ impl PageNetworkPolicySnapshot {
         self.bypass_service_worker
     }
 
+    pub fn cache_disabled(&self) -> bool {
+        self.cache_disabled
+    }
+
     pub(crate) fn blocks_url(&self, url: &url::Url) -> bool {
         self.blocked_url_patterns
             .iter()
@@ -337,6 +360,10 @@ impl PageNetworkPolicySnapshot {
         }
         if self.blocks_url(&request.url) {
             return Err(anyhow!(BLOCKED_BY_CLIENT_ERROR_TEXT));
+        }
+
+        if self.cache_disabled {
+            request = request.with_cache_mode(RequestCacheMode::Bypass);
         }
 
         if !self.extra_http_headers.is_empty() {
@@ -430,6 +457,26 @@ mod tests {
         );
         assert!(policy.snapshot().network_offline());
         assert!(policy.revision() > snapshot.revision());
+    }
+
+    #[test]
+    fn cache_disabled_forces_page_requests_to_bypass_cache() {
+        let policy = PageNetworkPolicy::default();
+        let before = policy.revision();
+        policy.set_cache_disabled(true);
+
+        let request = policy
+            .snapshot()
+            .apply_to_request(
+                Request::get("https://example.test/cache")
+                    .unwrap()
+                    .with_page_network_policy(),
+            )
+            .unwrap();
+
+        assert_eq!(request.cache_mode(), RequestCacheMode::Bypass);
+        assert!(policy.cache_disabled());
+        assert!(policy.revision() > before);
     }
 
     #[test]

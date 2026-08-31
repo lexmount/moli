@@ -2944,8 +2944,12 @@ async fn close_clears_loaded_page_state_and_emits_detached_events() {
     bc.active_target
         .runtime_slot
         .enable_primary_network_events();
-    bc.network_policy.set_cache_disabled(true);
-    bc.network_policy.set_bypass_service_worker(true);
+    bc.mutate_devtools_network_session_state(false, None, |network| {
+        network.network_enabled = true;
+        network.cache_disabled = true;
+        network.bypass_service_worker = true;
+        network.extra_headers = vec![("X-Test".into(), "1".into())];
+    });
     bc.css_enabled = true;
     bc.active_target.fetch_owner.configure(
         None,
@@ -2956,8 +2960,6 @@ async fn close_clears_loaded_page_state_and_emits_detached_events() {
             request_stage: FetchRequestStage::Response,
         }],
     );
-    bc.network_policy
-        .push_extra_header(("X-Test".into(), "1".into()));
     bc.active_target
         .owner_state
         .target_crash_state

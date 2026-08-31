@@ -4,7 +4,7 @@ use crate::conn::state::{
     BrowserContextPageStorageHandles, BrowserContextResourceStorageHandles, DevToolsSessionState,
     PageNavigationHistoryEntry, RendererMainDocumentCommitSeed, TargetFetchConfig,
     TargetNetworkPolicyState, TargetOwnerState, TargetPageAbsenceReason,
-    TargetPageResidenceIdentity, TargetRuntimeSessionState, TargetRuntimeSlot,
+    TargetPageResidenceIdentity, TargetPageState, TargetRuntimeSessionState, TargetRuntimeSlot,
 };
 use crate::conn::{
     BackgroundProtocolEvent, ConnectionNetworkRequestIdAllocator, DocumentStartScript,
@@ -104,13 +104,11 @@ impl ClosedPageTarget {
 
 pub(super) enum TargetSessionStateMut<'a> {
     Active {
-        session_id: Option<String>,
         devtools_session_state: &'a mut DevToolsSessionState,
         network_policy: &'a mut TargetNetworkPolicyState,
         tls_verify_host_override: &'a mut Option<bool>,
     },
     Parked {
-        session_id: Option<String>,
         devtools_session_state: &'a mut DevToolsSessionState,
         network_policy: &'a mut TargetNetworkPolicyState,
         tls_verify_host_override: &'a mut Option<bool>,
@@ -196,6 +194,7 @@ pub(crate) struct TargetNavigationLoadInputs {
     pub(crate) viewport_surface: Option<moli_core::page::ViewportSurface>,
     pub(crate) network_offline: bool,
     pub(crate) bypass_service_worker: bool,
+    pub(crate) cache_disabled: bool,
     pub(crate) blocked_url_patterns: Vec<String>,
     pub(crate) fetch_subresource_interception:
         (bool, Option<moli_core::page::SubresourceResourceType>),
@@ -303,6 +302,7 @@ impl TargetNavigationLoadInputs {
             network_offline: browser_context.network_policy.network_offline()
                 || browser_context.effective_active_network_offline(),
             bypass_service_worker: browser_context.network_policy.bypass_service_worker(),
+            cache_disabled: browser_context.network_policy.cache_disabled(),
             blocked_url_patterns: browser_context
                 .network_policy
                 .blocked_url_patterns()
@@ -370,6 +370,7 @@ impl TargetNavigationLoadInputs {
             viewport_surface: None,
             network_offline: false,
             bypass_service_worker: false,
+            cache_disabled: false,
             blocked_url_patterns: Vec::new(),
             fetch_subresource_interception: (false, None),
             permission_overrides: Vec::new(),
@@ -823,6 +824,7 @@ impl<'a> TargetSessionOwnerRef<'a> {
                     network_offline: page_state.network_policy.network_offline()
                         || browser_context.effective_parked_network_offline(target_id),
                     bypass_service_worker: page_state.network_policy.bypass_service_worker(),
+                    cache_disabled: page_state.network_policy.cache_disabled(),
                     blocked_url_patterns: page_state.network_policy.blocked_url_patterns().to_vec(),
                     fetch_subresource_interception: page_state
                         .fetch_owner
@@ -954,7 +956,6 @@ impl<'a> TargetSessionOwnerMut<'a> {
                     .devtools_sessions
                     .routed_mut_or_insert(*is_auxiliary_target_session, session_id.as_deref());
                 f(TargetSessionStateMut::Active {
-                    session_id: session_id.clone(),
                     devtools_session_state,
                     network_policy: &mut state.network_policy,
                     tls_verify_host_override: &mut state.tls_verify_host_override,
@@ -971,13 +972,42 @@ impl<'a> TargetSessionOwnerMut<'a> {
                     .devtools_sessions
                     .routed_mut_or_insert(*is_auxiliary_target_session, session_id.as_deref());
                 f(TargetSessionStateMut::Parked {
-                    session_id: session_id.clone(),
                     devtools_session_state,
                     network_policy: &mut state.network_policy,
                     tls_verify_host_override: &mut state.tls_verify_host_override,
                 })
             }),
             Self::NoLoadedBrowserContext => f(TargetSessionStateMut::NoLoaded),
+        }
+    }
+
+    pub(super) fn mutate_page_state<T>(
+        &mut self,
+        f: impl FnOnce(&mut TargetPageState, bool, Option<&str>) -> T,
+    ) -> Option<T> {
+        match self {
+            Self::ActiveTarget {
+                browser_context,
+                session_id,
+                is_auxiliary_target_session,
+                ..
+            } => Some(f(
+                browser_context.active_page_state_mut(),
+                *is_auxiliary_target_session,
+                session_id.as_deref(),
+            )),
+            Self::PageTargetHost {
+                browser_context,
+                target_id,
+                session_id,
+                is_auxiliary_target_session,
+                ..
+            } => Some(
+                browser_context.mutate_parked_page_session_state(target_id, |state| {
+                    f(state, *is_auxiliary_target_session, session_id.as_deref())
+                }),
+            ),
+            Self::NoLoadedBrowserContext => None,
         }
     }
 
@@ -4112,8 +4142,8 @@ mod tests {
             "https://parked.example/start".to_owned(),
         ));
         parked.mutate_parked_page_session_state("TID-parked", |state| {
-            state.locale_override = Some("fr-FR".to_owned());
-            state.timezone_override = Some("Europe/Paris".to_owned());
+            state.set_base_locale_override(Some("fr-FR".to_owned()));
+            state.set_base_timezone_override(Some("Europe/Paris".to_owned()));
             state.http_proxy_override = Some("http://proxy.example:8080".to_owned());
             state.http_no_proxy_override = Some("localhost,127.0.0.1".to_owned());
             state.tls_verify_host_override = Some(false);

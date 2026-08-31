@@ -1089,6 +1089,16 @@ impl PageVm {
                 self.set_extra_http_headers(&headers);
                 Ok(RendererPageReply::Unit)
             }
+            RendererPageCommand::SetNetworkRequestPolicy {
+                extra_http_headers,
+                bypass_service_worker,
+                cache_disabled,
+            } => {
+                self.set_extra_http_headers(&extra_http_headers);
+                self.set_bypass_service_worker(bypass_service_worker);
+                self.set_cache_disabled(cache_disabled);
+                Ok(RendererPageReply::Unit)
+            }
             RendererPageCommand::SetPermissionOverrides(overrides) => {
                 self.set_permission_overrides(&overrides);
                 Ok(RendererPageReply::Unit)

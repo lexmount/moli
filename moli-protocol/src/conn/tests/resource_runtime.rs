@@ -3167,6 +3167,7 @@ async fn direct_network_policy_routes_to_inactive_active_owner_without_promoting
     conn.inactive_browser_contexts.push(inactive);
 
     for raw in [
+        r#"{"id":0,"method":"Network.enable","sessionId":"SID-B"}"#,
         r#"{"id":1,"method":"Network.setCacheDisabled","sessionId":"SID-B","params":{"cacheDisabled":true}}"#,
         r#"{"id":2,"method":"Network.setBypassServiceWorker","sessionId":"SID-B","params":{"bypass":true}}"#,
         r#"{"id":3,"method":"Network.setBlockedURLs","sessionId":"SID-B","params":{"urls":["*://blocked.test/*"]}}"#,
@@ -3281,6 +3282,7 @@ async fn direct_network_policy_routes_to_inactive_background_owner_without_promo
     conn.inactive_browser_contexts.push(inactive);
 
     for raw in [
+        r#"{"id":0,"method":"Network.enable","sessionId":"SID-background"}"#,
         r#"{"id":1,"method":"Network.setCacheDisabled","sessionId":"SID-background","params":{"cacheDisabled":true}}"#,
         r#"{"id":2,"method":"Network.setBypassServiceWorker","sessionId":"SID-background","params":{"bypass":true}}"#,
         r#"{"id":3,"method":"Network.setBlockedURLs","sessionId":"SID-background","params":{"urls":["*://blocked-background.test/*"]}}"#,

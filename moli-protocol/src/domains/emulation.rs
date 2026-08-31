@@ -457,15 +457,15 @@ fn start_locale_override_command(
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})));
     }
     let locale_override = params.locale.clone().filter(|value| !value.is_empty());
-    if !conn.mutate_emulation_session_state_for_session_owner(cmd.session_id, |state| {
-        if let Some(mut state) = state {
-            state.set_locale_override(locale_override.clone());
-        }
-    }) {
-        return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(
-            -31998,
-            "BrowserContextNotLoaded",
-        ));
+    if let Err(message) =
+        conn.set_devtools_locale_override_for_session_owner(cmd.session_id, locale_override.clone())
+    {
+        let code = if message == "BrowserContextNotLoaded" {
+            -31998
+        } else {
+            -32000
+        };
+        return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(code, message));
     }
     let pending = if emulation_command_is_context_wide(conn, cmd.session_id) {
         match start_context_locale_override_page_commands(conn) {
@@ -571,15 +571,15 @@ fn start_timezone_override_command(
         let trimmed = params.timezone_id.trim();
         (!trimmed.is_empty()).then(|| trimmed.to_owned())
     };
-    if !conn.mutate_emulation_session_state_for_session_owner(cmd.session_id, |state| {
-        if let Some(mut state) = state {
-            state.set_timezone_override(timezone_override.clone());
-        }
-    }) {
-        return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(
-            -31998,
-            "BrowserContextNotLoaded",
-        ));
+    if let Err(message) = conn
+        .set_devtools_timezone_override_for_session_owner(cmd.session_id, timezone_override.clone())
+    {
+        let code = if message == "BrowserContextNotLoaded" {
+            -31998
+        } else {
+            -32000
+        };
+        return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(code, message));
     }
     let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
     let Some(page) = loaded_page_mut_for_session(conn, cmd.session_id) else {
@@ -753,9 +753,9 @@ fn start_user_agent_override_command(
         Err(plan) => return EmulationCommandTaskStep::Complete(plan),
     };
     let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
-    match conn.start_set_browser_identity_override_for_session_owner(
+    match conn.start_set_devtools_browser_identity_override_for_session_owner(
         cmd.session_id,
-        Some(browser_identity),
+        browser_identity,
     ) {
         Ok(Some(pending)) => EmulationCommandTaskStep::Pending(PendingEmulationCommandDispatch {
             command_id: cmd.id,
@@ -1401,7 +1401,7 @@ fn start_extra_headers_for_current_route(
 ) -> Result<Vec<PendingEmulationPageCommand>, DevToolsError> {
     let target = pending_emulation_target_for_route(route)?;
     let pending = conn
-        .start_set_extra_http_headers_for_session_owner(None, headers)
+        .start_set_target_extra_http_headers_for_session_owner(None, headers)
         .map_err(devtools_emulation_owner_error)?;
     Ok(pending
         .map(|pending| {
@@ -1657,7 +1657,7 @@ fn start_user_agent_override_for_current_route(
 ) -> Result<Option<PendingEmulationPageCommand>, DevToolsError> {
     let target = pending_emulation_target_for_route(route)?;
     let pending = conn
-        .start_set_user_agent_override_for_session_owner(None, user_agent)
+        .start_set_base_user_agent_override_for_session_owner(None, user_agent)
         .map_err(devtools_emulation_owner_error)?;
     if let Some(pending) = pending {
         return Ok(Some(PendingEmulationPageCommand {
@@ -1771,11 +1771,7 @@ fn start_locale_override_for_current_route(
     route: &CdpSessionRoute,
     locale: Option<String>,
 ) -> Result<Vec<PendingEmulationPageCommand>, DevToolsError> {
-    if !conn.mutate_emulation_session_state_for_session_owner(None, |state| {
-        if let Some(mut state) = state {
-            state.set_locale_override(locale.clone());
-        }
-    }) {
+    if !conn.set_base_locale_override_for_session_owner(None, locale) {
         return Err(devtools_emulation_owner_error(
             "BrowserContextNotLoaded".to_owned(),
         ));
@@ -1880,11 +1876,7 @@ fn start_timezone_override_for_current_route(
     route: &CdpSessionRoute,
     timezone: Option<String>,
 ) -> Result<Option<PendingEmulationPageCommand>, DevToolsError> {
-    if !conn.mutate_emulation_session_state_for_session_owner(None, |state| {
-        if let Some(mut state) = state {
-            state.set_timezone_override(timezone.clone());
-        }
-    }) {
+    if !conn.set_base_timezone_override_for_session_owner(None, timezone) {
         return Err(devtools_emulation_owner_error(
             "BrowserContextNotLoaded".to_owned(),
         ));

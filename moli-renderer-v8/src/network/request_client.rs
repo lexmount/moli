@@ -1001,6 +1001,10 @@ impl ResourceRequestClient {
         self.page_network_policy.bypass_service_worker()
     }
 
+    pub fn set_cache_disabled(&self, disabled: bool) {
+        self.page_network_policy.set_cache_disabled(disabled);
+    }
+
     fn apply_network_policy(&self, mut request: Request) -> Result<Request> {
         if let Some(browser_site_context) = self.browser_site_context.as_deref() {
             request = request.with_browser_site_context(browser_site_context.clone());

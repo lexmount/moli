@@ -4446,6 +4446,13 @@ async fn runtime_evaluate_fetch_applies_extra_http_headers() {
     let api_url = format!("http://{addr}/api");
     let mut ctx = TestContext::new();
     with_loaded_http_document_async(&mut ctx, &page_url, "SID-1", "TID-1").await;
+    ctx.process_async(json!({
+        "id": 489,
+        "method": "Network.enable",
+        "sessionId": "SID-1"
+    }))
+    .await;
+    let _ = take_response_by_id(&mut ctx, 489);
     let _ = enable_runtime_and_take_execution_context_id_async(&mut ctx, 490).await;
     ctx.process_async(json!({
         "id": 491,
@@ -4667,6 +4674,13 @@ async fn runtime_evaluate_xhr_applies_extra_http_headers() {
     let xhr_url = format!("http://{addr}/xhr");
     let mut ctx = TestContext::new();
     with_loaded_http_document_async(&mut ctx, &page_url, "SID-1", "TID-1").await;
+    ctx.process_async(json!({
+        "id": 493,
+        "method": "Network.enable",
+        "sessionId": "SID-1"
+    }))
+    .await;
+    let _ = take_response_by_id(&mut ctx, 493);
     let _ = enable_runtime_and_take_execution_context_id_async(&mut ctx, 494).await;
     ctx.process_async(json!({
         "id": 495,

@@ -709,6 +709,10 @@ impl NavigationEngine {
         self.page_network_policy.set_bypass_service_worker(bypass);
     }
 
+    pub fn set_cache_disabled(&mut self, disabled: bool) {
+        self.page_network_policy.set_cache_disabled(disabled);
+    }
+
     fn ensure_resource_runtime(
         &mut self,
         cookie_store: SharedBrowserCookieStore,

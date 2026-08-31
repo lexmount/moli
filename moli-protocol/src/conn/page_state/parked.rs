@@ -4,7 +4,6 @@ use super::super::{
     ParkedTargetOwnerState, ServiceWorkerTargetState, SharedWorkerTargetState, TargetIdentityState,
     TargetInitialEmptyDocumentCreator,
 };
-use crate::conn::state::{DevToolsSessionState, TargetNetworkPolicyState};
 use crate::devtools_runtime::{
     DevToolsBrowserContextId, DevToolsTargetId, DevToolsTargetInfo, DevToolsTargetKind,
 };
@@ -285,13 +284,13 @@ impl BrowserContext {
         target_id: &str,
         session_id: String,
     ) -> bool {
-        if self.is_active_target(target_id) || self.background_target(target_id).is_some() {
-            self.auxiliary_target_sessions
-                .insert(session_id, target_id.to_owned());
-            true
-        } else {
-            false
-        }
+        let Some(target) = self.page_target_mut(target_id) else {
+            return false;
+        };
+        target.devtools_sessions.ensure_attached(&session_id);
+        self.auxiliary_target_sessions
+            .insert(session_id, target_id.to_owned());
+        true
     }
 
     pub(crate) fn auxiliary_target_id_for_session(&self, session_id: &str) -> Option<&str> {
@@ -331,23 +330,17 @@ impl BrowserContext {
 
     pub(crate) fn remove_auxiliary_session(&mut self, session_id: &str) -> Option<String> {
         let target_id = self.auxiliary_target_sessions.remove(session_id)?;
-        if self.is_active_target(&target_id) {
-            self.active_target
-                .runtime_slot
-                .remove_auxiliary_network_session(session_id);
-            self.active_target
-                .fetch_owner
-                .remove_fetch_session(Some(session_id));
-            self.devtools_sessions.remove_attached(session_id);
-        } else if let Some(target) = self.background_target_mut(&target_id) {
+        if let Some(target) = self.page_target_mut(&target_id) {
             target
                 .runtime_slot
                 .remove_auxiliary_network_session(session_id);
-            target.devtools_sessions.remove_attached(session_id);
             target.fetch_owner.remove_fetch_session(Some(session_id));
             target
                 .runtime_slot
                 .remove_network_session_observation_cursor(Some(session_id));
+            target.devtools_sessions.remove_attached(session_id);
+            target.refresh_devtools_network_policy();
+            target.refresh_devtools_emulation_policy();
         }
         Some(target_id)
     }
@@ -372,68 +365,67 @@ impl BrowserContext {
             return Ok(false);
         };
 
-        let (browser_identity_changed, extra_headers_changed, locale_changed, timezone_changed) =
-            if self.is_active_target(&target_id) {
-                let (browser_identity_changed, extra_headers_changed) =
-                    self.network_policy.remove_session_overrides(session_id);
-                let locale_changed = self.locale_overrides.remove_session(session_id);
-                let timezone_changed = self.timezone_overrides.remove_session(session_id);
-                if locale_changed {
-                    self.locale_override = self.locale_overrides.effective().cloned();
-                }
-                if timezone_changed {
-                    self.timezone_override = self.timezone_overrides.effective().cloned();
-                }
-                (
-                    browser_identity_changed,
-                    extra_headers_changed,
-                    locale_changed,
-                    timezone_changed,
-                )
-            } else {
-                self.mutate_parked_page_session_state(&target_id, |state| {
-                    let (browser_identity_changed, extra_headers_changed) =
-                        state.network_policy.remove_session_overrides(session_id);
-                    let locale_changed = state.locale_overrides.remove_session(session_id);
-                    let timezone_changed = state.timezone_overrides.remove_session(session_id);
-                    if locale_changed {
-                        state.locale_override = state.locale_overrides.effective().cloned();
-                    }
-                    if timezone_changed {
-                        state.timezone_override = state.timezone_overrides.effective().cloned();
-                    }
-                    (
-                        browser_identity_changed,
-                        extra_headers_changed,
-                        locale_changed,
-                        timezone_changed,
-                    )
-                })
-            };
+        let is_auxiliary = self.auxiliary_target_id_for_session(session_id) == Some(&target_id);
+        let Some(target) = self.page_target_mut(&target_id) else {
+            return Ok(false);
+        };
+        let state = target.state_mut();
+        let previous_headers = state.network_policy.extra_headers().to_vec();
+        let previous_bypass = state.network_policy.bypass_service_worker();
+        let previous_cache_disabled = state.network_policy.cache_disabled();
+        let previous_browser_identity = state.network_policy.browser_identity_override_owned();
+        let previous_locale = state.locale_override.clone();
+        let previous_timezone = state.timezone_override.clone();
+        let routed_session_id = is_auxiliary.then_some(session_id);
+        state.clear_devtools_network_state(is_auxiliary, routed_session_id);
+        state.clear_devtools_emulation_state(is_auxiliary, routed_session_id);
+        let extra_headers_changed = previous_headers != state.network_policy.extra_headers();
+        let bypass_service_worker_changed =
+            previous_bypass != state.network_policy.bypass_service_worker();
+        let cache_disabled_changed =
+            previous_cache_disabled != state.network_policy.cache_disabled();
+        let browser_identity_changed =
+            previous_browser_identity != state.network_policy.browser_identity_override_owned();
+        let locale_changed = previous_locale != state.locale_override;
+        let timezone_changed = previous_timezone != state.timezone_override;
 
-        if !extra_headers_changed && !locale_changed && !timezone_changed {
+        if !extra_headers_changed
+            && !bypass_service_worker_changed
+            && !cache_disabled_changed
+            && !locale_changed
+            && !timezone_changed
+        {
             return Ok(browser_identity_changed);
         }
 
-        let (effective_headers, effective_locale, effective_timezone) =
-            if self.is_active_target(&target_id) {
-                (
-                    self.effective_extra_headers(),
-                    self.effective_active_locale_override_owned(),
-                    self.effective_active_timezone_override_owned(),
-                )
-            } else {
-                let page_state = self.parked_page_session_state(&target_id);
-                (
-                    self.effective_parked_extra_headers(&target_id),
-                    page_state
-                        .and_then(|state| state.locale_override.clone())
-                        .or_else(|| self.default_locale_override.clone()),
-                    page_state
-                        .and_then(|state| state.timezone_override.clone())
-                        .or_else(|| self.default_timezone_override.clone()),
-                )
-            };
+        let (
+            effective_headers,
+            effective_bypass,
+            effective_cache_disabled,
+            effective_locale,
+            effective_timezone,
+        ) = if self.is_active_target(&target_id) {
+            (
+                self.effective_extra_headers(),
+                self.network_policy.bypass_service_worker(),
+                self.network_policy.cache_disabled(),
+                self.effective_active_locale_override_owned(),
+                self.effective_active_timezone_override_owned(),
+            )
+        } else {
+            let page_state = self.parked_page_session_state(&target_id);
+            (
+                self.effective_parked_extra_headers(&target_id),
+                page_state.is_some_and(|state| state.network_policy.bypass_service_worker()),
+                page_state.is_some_and(|state| state.network_policy.cache_disabled()),
+                page_state
+                    .and_then(|state| state.locale_override.clone())
+                    .or_else(|| self.default_locale_override.clone()),
+                page_state
+                    .and_then(|state| state.timezone_override.clone())
+                    .or_else(|| self.default_timezone_override.clone()),
+            )
+        };
         let page = if self.is_active_target(&target_id) {
             self.active_target.runtime_slot.loaded_page_mut()
         } else {
@@ -443,12 +435,16 @@ impl BrowserContext {
         let Some(page) = page else {
             return Ok(browser_identity_changed);
         };
-        if extra_headers_changed {
-            page.set_extra_http_headers_async(&effective_headers)
-                .await
-                .map_err(|error| {
-                    format!("failed to restore detached session extra headers: {error}")
-                })?;
+        if extra_headers_changed || bypass_service_worker_changed || cache_disabled_changed {
+            page.set_network_request_policy_async(
+                &effective_headers,
+                effective_bypass,
+                effective_cache_disabled,
+            )
+            .await
+            .map_err(|error| {
+                format!("failed to restore detached session network request policy: {error}")
+            })?;
         }
         if locale_changed {
             page.set_locale_override_async(effective_locale.as_deref())
@@ -514,19 +510,28 @@ impl BrowserContext {
             .runtime_slot
             .remove_network_session_observation_cursor(Some(session_id));
 
+        let effective_headers = self.effective_parked_extra_headers(&target_id);
+        let effective_bypass = self
+            .parked_page_session_state(&target_id)
+            .is_some_and(|state| state.network_policy.bypass_service_worker());
+        let cache_disabled = self
+            .parked_page_session_state(&target_id)
+            .is_some_and(|state| state.network_policy.cache_disabled());
+
         if let Some(page) = self
             .background_target_mut(&target_id)
             .and_then(|target| target.runtime_slot.loaded_page_mut())
         {
-            page.set_extra_http_headers_async(&[])
-                .await
-                .map_err(|error| format!("failed to clear page extra headers: {error}"))?;
+            page.set_network_request_policy_async(
+                &effective_headers,
+                effective_bypass,
+                cache_disabled,
+            )
+            .await
+            .map_err(|error| format!("failed to clear page network request policy: {error}"))?;
             page.set_network_offline_async(false)
                 .await
                 .map_err(|error| format!("failed to clear page offline state: {error}"))?;
-            page.set_bypass_service_worker_async(false)
-                .await
-                .map_err(|error| format!("failed to clear page service worker bypass: {error}"))?;
             page.set_blocked_url_patterns_async(&[])
                 .await
                 .map_err(|error| format!("failed to clear page blocked URLs: {error}"))?;
@@ -568,9 +573,11 @@ impl BrowserContext {
                 target_id
             })?;
         self.mutate_parked_page_session_state(&target_id, |state| {
-            *state.devtools_sessions.primary_mut() = DevToolsSessionState::default();
+            state.devtools_sessions.reset(true);
             state.runtime_slot.disable_primary_network_events();
-            state.network_policy = TargetNetworkPolicyState::default();
+            state.network_policy.clear_session_scoped_state();
+            state.refresh_devtools_network_policy();
+            state.refresh_devtools_emulation_policy();
             state.fetch_owner.reset_config();
         });
         self.background_target_mut(&target_id)

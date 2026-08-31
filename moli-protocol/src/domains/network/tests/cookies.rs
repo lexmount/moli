@@ -66,6 +66,10 @@ async fn set_extra_http_headers_replaces_previous_headers() {
     let mut ctx = TestContext::new();
     ctx.conn.browser_context = Some(BrowserContext::new("NID-A".into()));
 
+    ctx.process_async(json!({"id": 2, "method": "Network.enable"}))
+        .await;
+    ctx.expect_result(2, json!({}), None);
+
     ctx.process_async(json!({"id": 3, "method": "Network.setExtraHTTPHeaders", "params": { "headers": { "foo": "bar" }}}))
         .await;
     ctx.expect_result(3, json!({}), None);

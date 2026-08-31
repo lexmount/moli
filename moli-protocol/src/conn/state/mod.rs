@@ -48,7 +48,8 @@ pub(crate) use dedicated_worker_target::{
     DedicatedWorkerMainScriptOutcome, DedicatedWorkerMainScriptSnapshot, DedicatedWorkerTargetState,
 };
 pub(crate) use devtools_session::{
-    DevToolsConsoleOutputSessionState, DevToolsLogViolationThreshold, DevToolsSessionState,
+    DevToolsBrowserIdentityOverride, DevToolsConsoleOutputSessionState,
+    DevToolsLogViolationThreshold, DevToolsNetworkSessionState, DevToolsSessionState,
     PreparedRendererCallReplacements, SessionRendererCallReplay, SessionRendererCallTermination,
 };
 pub(crate) use document_lifecycle_observer::{
@@ -100,7 +101,7 @@ pub(crate) use service_worker_target::{
 pub(crate) use session::TargetPerformanceSessionState;
 pub(crate) use session::{
     PageScreencastConfig, PageScreencastFormat, PerformanceTimeDomain, TargetNetworkPolicyState,
-    TargetPageSessionState, TargetRuntimeSessionState, TargetSessionOverrideStack,
+    TargetPageSessionState, TargetRuntimeSessionState,
 };
 pub(crate) use session_storage::TargetSessionStorageNamespace;
 pub(crate) use shared_worker_attachment::{

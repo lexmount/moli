@@ -2450,6 +2450,19 @@ impl JsContextHost {
         }
     }
 
+    pub(crate) fn set_cache_disabled(&mut self, disabled: bool) {
+        if let Some(resource_loader) = self.current_main_document_resource_loader() {
+            resource_loader
+                .request_client()
+                .set_cache_disabled(disabled);
+        }
+        for worker in self.workers.values() {
+            if let super::workers::WorkerExecutionState::Running { handle } = &worker.execution {
+                handle.set_cache_disabled(disabled);
+            }
+        }
+    }
+
     pub(crate) fn set_blocked_url_patterns(&mut self, patterns: &[String]) {
         self.blocked_url_patterns = patterns.to_vec();
         if let Some(resource_loader) = self.current_main_document_resource_loader() {

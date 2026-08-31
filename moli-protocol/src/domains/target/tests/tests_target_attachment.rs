@@ -1548,8 +1548,12 @@ async fn detach_from_target() {
     bc.active_target
         .runtime_slot
         .enable_primary_network_events();
-    bc.network_policy.set_cache_disabled(true);
-    bc.network_policy.set_bypass_service_worker(true);
+    bc.mutate_devtools_network_session_state(false, None, |network| {
+        network.network_enabled = true;
+        network.cache_disabled = true;
+        network.bypass_service_worker = true;
+        network.extra_headers = vec![("X-Test".into(), "1".into())];
+    });
     bc.css_enabled = true;
     bc.active_target.fetch_owner.configure(
         None,
@@ -1560,8 +1564,6 @@ async fn detach_from_target() {
             request_stage: crate::conn::FetchRequestStage::Request,
         }],
     );
-    bc.network_policy
-        .push_extra_header(("X-Test".into(), "1".into()));
 
     ctx.process_async(json!({"id": 12, "method": "Target.detachFromTarget",
                        "params": {"targetId": tid}}))
@@ -2197,8 +2199,12 @@ async fn set_auto_attach_false_detaches_existing_target() {
     bc.active_target
         .runtime_slot
         .enable_primary_network_events();
-    bc.network_policy.set_cache_disabled(true);
-    bc.network_policy.set_bypass_service_worker(true);
+    bc.mutate_devtools_network_session_state(false, None, |network| {
+        network.network_enabled = true;
+        network.cache_disabled = true;
+        network.bypass_service_worker = true;
+        network.extra_headers = vec![("X-Test".into(), "1".into())];
+    });
     bc.css_enabled = true;
     bc.active_target.fetch_owner.configure(
         None,
@@ -2209,8 +2215,6 @@ async fn set_auto_attach_false_detaches_existing_target() {
             request_stage: crate::conn::FetchRequestStage::Request,
         }],
     );
-    bc.network_policy
-        .push_extra_header(("X-Test".into(), "1".into()));
     ctx.conn.auto_attach = true;
 
     ctx.process_async(json!({

@@ -716,11 +716,18 @@ impl ServiceWorkerTargetState {
         let Some(state) = self.session_state_mut(session_id) else {
             return false;
         };
-        let was_enabled = state.network_output_session_state.network_enabled;
-        state.network_output_session_state.network_enabled = enabled;
-        if !enabled || !was_enabled {
+        let was_enabled = state.network_session_state.network_enabled;
+        if enabled {
+            state.network_session_state.network_enabled = true;
+            if !was_enabled {
+                state
+                    .network_session_state
+                    .service_worker_fetch_diagnostic_entries = diagnostic_len;
+            }
+        } else {
+            state.network_session_state = Default::default();
             state
-                .network_output_session_state
+                .network_session_state
                 .service_worker_fetch_diagnostic_entries = diagnostic_len;
         }
         true
@@ -728,7 +735,7 @@ impl ServiceWorkerTargetState {
 
     pub(crate) fn network_enabled(&self, session_id: &str) -> bool {
         self.session_state(session_id)
-            .is_some_and(|state| state.network_output_session_state.network_enabled)
+            .is_some_and(|state| state.network_session_state.network_enabled)
     }
 
     pub(crate) fn clear_console_messages(&mut self, session_id: &str) {
@@ -859,11 +866,11 @@ impl ServiceWorkerTargetState {
         let Some(state) = self.session_state(session_id) else {
             return &[];
         };
-        if !state.network_output_session_state.network_enabled {
+        if !state.network_session_state.network_enabled {
             return &[];
         }
         &self.fetch_diagnostics[state
-            .network_output_session_state
+            .network_session_state
             .service_worker_fetch_diagnostic_entries
             .min(self.fetch_diagnostics.len())..]
     }
@@ -901,7 +908,7 @@ impl ServiceWorkerTargetState {
         let diagnostic_len = self.fetch_diagnostics.len();
         if let Some(state) = self.session_state_mut(session_id) {
             state
-                .network_output_session_state
+                .network_session_state
                 .service_worker_fetch_diagnostic_entries = diagnostic_end.min(diagnostic_len);
         }
     }
