@@ -56,6 +56,7 @@ pub(crate) struct RuntimeMutationOptions {
     pub(crate) dispatch_atomic_move_callbacks: bool,
     pub(crate) parser_created: bool,
     pub(crate) check_inline_style_csp: bool,
+    pub(crate) defer_document_followups_to_parser_owner: bool,
 }
 
 impl RuntimeMutationOptions {
@@ -67,6 +68,7 @@ impl RuntimeMutationOptions {
             dispatch_atomic_move_callbacks: false,
             parser_created: false,
             check_inline_style_csp: true,
+            defer_document_followups_to_parser_owner: false,
         }
     }
 
@@ -78,6 +80,19 @@ impl RuntimeMutationOptions {
             dispatch_atomic_move_callbacks: false,
             parser_created: true,
             check_inline_style_csp: true,
+            defer_document_followups_to_parser_owner: false,
+        }
+    }
+
+    pub(crate) const fn child_parser_tree_sink() -> Self {
+        Self {
+            source: DomMutationSource::ParserTreeSink,
+            connected_script_policy: ConnectedScriptMutationPolicy::DeferToOwner,
+            hide_nonce_content_attributes: false,
+            dispatch_atomic_move_callbacks: false,
+            parser_created: true,
+            check_inline_style_csp: false,
+            defer_document_followups_to_parser_owner: true,
         }
     }
 

@@ -97,6 +97,35 @@ impl DocumentRuntime {
         host_ptr: *mut JsContextHost,
         effects: DomMutationEffects,
     ) {
+        self.apply_parser_stream_mutation_effects_to_live_dom_host_with_options(
+            scope,
+            host_ptr,
+            effects,
+            RuntimeMutationOptions::parser_tree_sink(),
+        );
+    }
+
+    pub(crate) fn apply_child_parser_stream_mutation_effects_to_live_dom_host(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut JsContextHost,
+        effects: DomMutationEffects,
+    ) {
+        self.apply_parser_stream_mutation_effects_to_live_dom_host_with_options(
+            scope,
+            host_ptr,
+            effects,
+            RuntimeMutationOptions::child_parser_tree_sink(),
+        );
+    }
+
+    fn apply_parser_stream_mutation_effects_to_live_dom_host_with_options(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut JsContextHost,
+        effects: DomMutationEffects,
+        mutation_options: RuntimeMutationOptions,
+    ) {
         let connected_roots = effects.tree().connected_roots().to_vec();
         let form_owner_effects = effects.clone();
         self.assert_active_parser_document_incarnation();
@@ -111,7 +140,7 @@ impl DocumentRuntime {
                 host_ptr,
                 dom_host,
                 effects,
-                RuntimeMutationOptions::parser_tree_sink(),
+                mutation_options,
             )
         };
         let _ = finish_runtime_mutation_effects(self, scope, host_ptr, result);

@@ -113,8 +113,8 @@ mod reaction_upgrade;
 mod reactions;
 use reactions::{CustomElementReaction, enter_upgrade_dynamic_markup_insertion};
 pub(crate) use reactions::{
-    flush_parser_custom_element_reaction_queue, push_parser_custom_element_reaction_queue,
-    with_custom_element_reaction_scope,
+    discard_empty_parser_custom_element_reaction_queue, flush_parser_custom_element_reaction_queue,
+    push_parser_custom_element_reaction_queue, with_custom_element_reaction_scope,
 };
 mod registry;
 pub(crate) use registry::{

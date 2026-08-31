@@ -36,6 +36,10 @@ impl ParserPostStepRuntimeWork {
         self.custom_element_reaction_queue_flush_requested = true;
     }
 
+    fn cancel_custom_element_reaction_queue_flush(&mut self) {
+        self.custom_element_reaction_queue_flush_requested = false;
+    }
+
     fn queue_focus_reset(&mut self, handle: DomHandle) {
         if !self.focus_resets.contains(&handle) {
             self.focus_resets.push(handle);
@@ -185,6 +189,26 @@ impl DocumentRuntime {
     ) {
         let followups = self.pending_parser_post_step_runtime_work.take();
         self.run_parser_post_step_runtime_work(scope, host_ptr, &followups);
+    }
+
+    pub(crate) fn run_pending_child_parser_post_step_runtime_work(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut JsContextHost,
+    ) {
+        // Parser insertion planning conservatively opens the parser reaction
+        // queue for every connected subtree. A child-parser step must not turn
+        // an empty queue into an extra microtask checkpoint: the selected task
+        // dispatcher owns that ordinary checkpoint. Keep the parser-specific
+        // checkpoint only when a real custom-element reaction was enqueued.
+        if self.parser_reentry.custom_element_reaction_queue_active
+            && custom_elements::discard_empty_parser_custom_element_reaction_queue(host_ptr)
+        {
+            self.parser_reentry.custom_element_reaction_queue_active = false;
+            self.pending_parser_post_step_runtime_work
+                .cancel_custom_element_reaction_queue_flush();
+        }
+        self.run_pending_parser_post_step_runtime_work(scope, host_ptr);
     }
 
     fn run_parser_post_step_runtime_work(
