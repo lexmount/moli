@@ -2085,6 +2085,109 @@ document.body.setAttribute('data-error-state', [
         );
     }
 
+    #[tokio::test]
+    async fn navigation_terminal_retires_selected_and_late_main_parser_continuations() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let PhaseOnePageVmHarness {
+                    page_vm,
+                    loader,
+                    state,
+                } = new_phase_one_page_vm_harness_for_test();
+                let replacement_state = ParseTimeDriverState::new_with_scripting_enabled_for_test(
+                    Url::parse("https://example.test/replacement-state")
+                        .expect("replacement state URL"),
+                );
+                let state = std::mem::replace(state, replacement_state);
+                let mut runtime = ConcurrentParseTimeRuntime::new_parser_owner(
+                    (*loader).clone(),
+                    PageVmInitStage::Load,
+                    state,
+                    page_vm,
+                );
+                let producer = runtime
+                    .page_vm
+                    .vm()
+                    .document_runtime
+                    .main_parser_continuation_producer()
+                    .expect("active phase one should expose its parser continuation producer");
+                let request_client = runtime
+                    .page_vm
+                    .main_document_resource_loader()
+                    .request_client()
+                    .clone();
+
+                assert_eq!(
+                    producer
+                        .request()
+                        .expect("first parser continuation request"),
+                    crate::page_task_queue::MainParserContinuationRequest::Enqueued
+                );
+                let selected_task_ran = runtime
+                    .page_vm
+                    .run_exact_selected_page_task_for_test(
+                        crate::runtime::page_vm::PageSelectedTaskTestSelector::MainParserContinuation,
+                        &request_client,
+                    )
+                    .await
+                    .expect("selected parser continuation should run");
+                assert!(selected_task_ran);
+                assert!(
+                    runtime
+                        .page_vm
+                        .vm()
+                        .document_runtime
+                        .has_main_parser_continuation_admission(),
+                    "the selected task should grant its active phase-one driver one admission"
+                );
+
+                runtime
+                    .page_vm
+                    .vm_mut()
+                    .eval("location.href = 'https://example.test/next'")
+                    .expect("location assignment should evaluate");
+                let mut page_vm = runtime.into_navigation_triggered_page_vm();
+                assert!(
+                    page_vm
+                        .vm()
+                        .document_runtime
+                        .main_parser_continuation_producer()
+                        .is_none(),
+                    "a Page awaiting navigation must not retain an active phase-one producer"
+                );
+                assert!(
+                    !page_vm
+                        .vm_mut()
+                        .document_runtime
+                        .take_main_parser_continuation_admission(),
+                    "the navigation terminal must clear an already-selected admission"
+                );
+
+                assert_eq!(
+                    producer
+                        .request()
+                        .expect("late parser continuation request"),
+                    crate::page_task_queue::MainParserContinuationRequest::Enqueued
+                );
+                let late_task_ran = page_vm
+                    .run_exact_selected_page_task_for_test(
+                        crate::runtime::page_vm::PageSelectedTaskTestSelector::MainParserContinuation,
+                        &request_client,
+                    )
+                    .await
+                    .expect("late parser continuation should stale-reject normally");
+                assert!(late_task_ran);
+                assert!(
+                    !page_vm
+                        .vm_mut()
+                        .document_runtime
+                        .take_main_parser_continuation_admission(),
+                    "a late task from the retired producer must not recreate an admission"
+                );
+            })
+            .await;
+    }
+
     fn native_dom_has_element_id(dom: &moli_dom::native::NativeDom, id: &str) -> bool {
         dom.nodes()
             .iter()

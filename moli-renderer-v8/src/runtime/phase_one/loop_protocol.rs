@@ -178,12 +178,15 @@ impl ParseTimePhaseOnePump {
                     reason: ParseTimePhaseTransitionReason::DocumentReplaced,
                 }))
             }
-            Ok(OwnerStepProgress::TriggeredNavigation) => ParseTimeOwnerPumpAction::Complete(Ok(
-                ParseTimeOwnerCompletion::TriggeredNavigation {
-                    page_vm: Box::new(runtime.page_vm),
-                    stage: runtime.stage,
-                },
-            )),
+            Ok(OwnerStepProgress::TriggeredNavigation) => {
+                let stage = runtime.stage;
+                ParseTimeOwnerPumpAction::Complete(Ok(
+                    ParseTimeOwnerCompletion::TriggeredNavigation {
+                        page_vm: Box::new(runtime.into_navigation_triggered_page_vm()),
+                        stage,
+                    },
+                ))
+            }
             Err(error) => ParseTimeOwnerPumpAction::Complete(Err(error)),
         }
     }
