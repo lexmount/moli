@@ -372,6 +372,126 @@ fn window_global_accessors_use_the_borrowed_window_receiver() {
 }
 
 #[test]
+fn cross_realm_window_members_apply_global_interface_receiver_semantics() {
+    let mut vm = new_storage_test_vm("https://window-global-receiver.test/");
+
+    vm.eval(
+        r#"
+(() => {
+  const root = document.documentElement ||
+    document.appendChild(document.createElement("html"));
+  const body = document.body || root.appendChild(document.createElement("body"));
+  const frame = document.createElement("iframe");
+  frame.id = "global-receiver-frame";
+  frame.name = "dummy";
+  body.appendChild(frame);
+})()
+"#,
+    )
+    .expect("cross-realm Window receiver child frame should be created");
+    materialize_single_child_default_realm_for_test(
+        &mut vm,
+        "cross-realm Window receiver child Realm",
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const frame = document.getElementById("global-receiver-frame");
+  const other = frame.contentWindow;
+  const notWindow = Object.create(Object.getPrototypeOf(other));
+  const throwsOtherTypeError = callback => {
+    try {
+      callback();
+      return false;
+    } catch (error) {
+      return error instanceof other.TypeError && !(error instanceof TypeError);
+    }
+  };
+
+  const invalidGetters = [
+    () => { Object.create(other).window; },
+    () => Object.getOwnPropertyDescriptor(other, "history").get.call(notWindow),
+    () => Reflect.get(other, "screen", notWindow),
+    () => new Proxy(other, {}).onclick
+  ].every(throwsOtherTypeError);
+
+  const invalidSetters = [
+    () => { Object.create(other).name = "ignored"; },
+    () => Object.getOwnPropertyDescriptor(other, "status").set.call(notWindow, "ignored"),
+    () => Reflect.set(other, "parent", window, notWindow),
+    () => { new Proxy(other, {}).location = location; }
+  ].every(throwsOtherTypeError);
+
+  const invalidOperations = [
+    () => Object.create(other).focus(),
+    () => other.clearInterval.call(notWindow, 0),
+    () => Reflect.apply(other.blur, notWindow, []),
+    () => new Proxy(other, {}).removeEventListener("foo", () => {})
+  ].every(throwsOtherTypeError);
+
+  const nameGetter = Object.getOwnPropertyDescriptor(other, "name").get;
+  const statusDescriptor = Object.getOwnPropertyDescriptor(other, "status");
+  const nullGetters =
+    Reflect.get(other, "self", null) === other &&
+    Reflect.get(other, "document", undefined) === other.document &&
+    nameGetter.call(null) === "dummy";
+
+  const newSelf = {};
+  const nullSetters =
+    Reflect.set(other, "self", newSelf, null) &&
+    Reflect.set(other, "name", "newName", undefined);
+  statusDescriptor.set.call(null, "ready");
+
+  const extractedFocus = other.focus;
+  extractedFocus();
+
+  let caughtEvent;
+  const eventListener = event => {
+    caughtEvent = event;
+  };
+  other.addEventListener.call(null, "global-receiver", eventListener);
+  const dispatchedEvent = new other.Event("global-receiver");
+  const extractedDispatch = other.dispatchEvent;
+  const dispatchResult = extractedDispatch(dispatchedEvent);
+  const focusedChild = document.activeElement === frame;
+  frame.remove();
+  let detachedCleanup = true;
+  try {
+    other.removeEventListener("global-receiver", eventListener);
+  } catch (error) {
+    detachedCleanup = false;
+  }
+
+  return [
+    invalidGetters,
+    invalidSetters,
+    invalidOperations,
+    nullGetters,
+    nullSetters,
+    other.self === newSelf,
+    other.name === "newName",
+    statusDescriptor.get.call(null) === "ready",
+    focusedChild,
+    dispatchResult,
+    caughtEvent === dispatchedEvent,
+    detachedCleanup
+  ].join("|");
+})()
+"#,
+        )
+        .expect("cross-realm Window receiver semantics should evaluate");
+
+    assert_eq!(
+        result,
+        std::iter::repeat_n("true", 12)
+            .collect::<Vec<_>>()
+            .join("|")
+    );
+}
+
+#[test]
 fn child_document_body_with_scope_exposes_insert_before() {
     let mut vm = new_storage_test_vm("https://child-window-with-body.test/");
 

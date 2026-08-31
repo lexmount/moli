@@ -409,6 +409,9 @@ pub(super) fn event_target_remove_event_listener_callback<'s>(
         event_target_handle_from_this(scope, &args, host_ptr, host)
     };
     let Some(target) = target else {
+        if crate::context_bootstrap::is_window_receiver(scope, args.this()) {
+            return;
+        }
         throw_type_error(scope, "Illegal invocation");
         return;
     };
@@ -739,6 +742,10 @@ pub(super) fn window_clear_timer_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if !crate::context_bootstrap::is_window_receiver(scope, args.this()) {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    }
     let id_val = args.get(0);
     let id = id_val.number_value(scope).unwrap_or(0.0) as u32;
     cancel_window_timer_for_receiver(scope, args.this(), id);

@@ -606,20 +606,13 @@ unsafe extern "C" fn window_access_check_callback(
         return true;
     }
 
-    let Some((accessing_host_ptr, accessing_identity)) = (|| {
-        let host_ptr = crate::util::context_host_ptr_from_context_slot(accessing_context)?;
-        let identity = unsafe { &*host_ptr }
-            .window_execution_context_identity_for_access_check(accessing_context)?;
-        Some((host_ptr, identity))
-    })() else {
+    let Some(accessing_host_ptr) =
+        crate::util::context_host_ptr_from_context_slot(accessing_context)
+    else {
         return false;
     };
-    let Some((accessed_host_ptr, accessed_identity)) = (|| {
-        let host_ptr = crate::util::context_host_ptr_from_context_slot(accessed_context)?;
-        let identity = unsafe { &*host_ptr }
-            .window_execution_context_identity_for_access_check(accessed_context)?;
-        Some((host_ptr, identity))
-    })() else {
+    let Some(accessed_host_ptr) = crate::util::context_host_ptr_from_context_slot(accessed_context)
+    else {
         return false;
     };
     if accessing_host_ptr != accessed_host_ptr {
@@ -627,7 +620,34 @@ unsafe extern "C" fn window_access_check_callback(
     }
 
     let host = unsafe { &*accessing_host_ptr };
-    host.window_execution_context_can_access(accessing_identity, accessed_identity)
+    let Some(accessing_identity) =
+        host.window_execution_context_identity_for_access_check(accessing_context)
+    else {
+        return false;
+    };
+    if let Some(accessed_identity) =
+        host.window_execution_context_identity_for_access_check(accessed_context)
+        && host.window_execution_context_can_access(accessing_identity, accessed_identity)
+    {
+        return true;
+    }
+    if !host.window_execution_context_identity_is_current(accessing_identity)
+        || accessed_context
+            .get_slot::<super::super::RuntimeObservableContextToken>()
+            .is_none()
+    {
+        return false;
+    }
+
+    // Removing a same-origin iframe retires its LocalWindow registration, but
+    // JavaScript can still retain that inner global long enough to clean up
+    // listeners and other realm-owned state. The context's internalized
+    // security token is the last live effective-origin snapshot, so equal
+    // tokens preserve that access without reopening retired cross-origin or
+    // opaque realms.
+    accessing_context
+        .get_security_token(scope)
+        .strict_equals(accessed_context.get_security_token(scope))
 }
 
 impl JsContextHost {

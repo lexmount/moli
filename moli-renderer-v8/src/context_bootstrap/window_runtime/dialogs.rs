@@ -68,6 +68,39 @@ pub(crate) fn window_noop_callback(
 ) {
 }
 
+pub(crate) fn window_focus_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let receiver = args.this();
+    if !crate::context_bootstrap::is_window_receiver(scope, receiver) {
+        webidl::throw_type_error(scope, "Window.focus called on incompatible receiver.");
+        return;
+    }
+    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+        return;
+    };
+    if let Some(crate::native_bridge::OwnerDispatchScope::Child(handle)) =
+        super::super::navigation_window::runtime_window_dispatch_scope(scope, receiver)
+    {
+        crate::native_bridge::element::focus_element(scope, host_ptr, handle);
+    }
+    rv.set_undefined();
+}
+
+pub(crate) fn window_blur_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if !crate::context_bootstrap::is_window_receiver(scope, args.this()) {
+        webidl::throw_type_error(scope, "Window.blur called on incompatible receiver.");
+        return;
+    }
+    rv.set_undefined();
+}
+
 pub(crate) fn window_stop_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,

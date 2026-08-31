@@ -14283,7 +14283,7 @@ __domainAccessFrame.src = globalThis.__replacementDomainChildUrl;
 async fn one_sided_document_domain_disables_original_tuple_origin_fast_path() {
     const HOST: &str = "www.example.test";
 
-    let server = StaticHttpServer::spawn(1).await;
+    let server = StaticHttpServer::spawn(2).await;
     let parent_url = server.url_for_host(HOST, "/page.html");
     let child_url = server.url_for_host(HOST, "/child.html");
     let loader = static_http_loader([server.resolve_entry(HOST)]);
@@ -14363,7 +14363,52 @@ globalThis.__probeOneSidedDomainFrame = () => {
             .expect("restored exact-domain access probe should evaluate"),
         "www.example.test"
     );
-    assert_eq!(server.finish_targets().await, vec!["/child.html"]);
+
+    vm.exec(
+        r#"
+const retiredFrame = document.createElement("iframe");
+globalThis.__retiredOneSidedDomainChildLoaded = false;
+retiredFrame.onload = () => { globalThis.__retiredOneSidedDomainChildLoaded = true; };
+retiredFrame.src = globalThis.__oneSidedDomainChildUrl;
+(document.body || document.documentElement || document).appendChild(retiredFrame);
+globalThis.__retiredOneSidedDomainWindow = retiredFrame.contentWindow;
+"#,
+        None,
+    )
+    .expect("one-sided document.domain retired Window setup should run");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(globalThis.__retiredOneSidedDomainChildLoaded)",
+        "true",
+        "fresh child without document.domain should load",
+    )
+    .await;
+
+    assert_eq!(
+        vm.eval(
+            r#"
+(() => {
+  const probe = () => {
+    try {
+      return __retiredOneSidedDomainWindow.document.domain;
+    } catch (error) {
+      return error && error.name;
+    }
+  };
+  const beforeRemoval = probe();
+  document.querySelectorAll("iframe")[1].remove();
+  return [beforeRemoval, probe()].join("|");
+})()
+"#,
+        )
+        .expect("retired one-sided document.domain Window probe should evaluate"),
+        "SecurityError|SecurityError"
+    );
+    assert_eq!(
+        server.finish_targets().await,
+        vec!["/child.html", "/child.html"]
+    );
 }
 
 #[test]
