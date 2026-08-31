@@ -9090,6 +9090,107 @@ fn dom_parser_uses_its_constructor_realm_associated_document() {
     );
 }
 
+#[test]
+fn dom_parser_non_object_new_target_prototype_uses_new_target_realm_default() {
+    let mut vm = new_storage_test_vm("https://dom-parser-new-target.test/top.html");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const frame = document.createElement('iframe');
+  (document.body || document.documentElement || document).appendChild(frame);
+  const child = frame.contentWindow;
+  child.history.replaceState(null, '', '/child.html');
+
+  const TopBad = new Function();
+  TopBad.prototype = 7;
+  const ChildBad = new child.Function();
+  ChildBad.prototype = 7;
+
+  const BoundChild = Function.prototype.bind.call(new child.Function());
+  BoundChild.prototype = 7;
+  const BoundTop = child.Function.prototype.bind.call(new Function());
+  BoundTop.prototype = 7;
+
+  const ProxyChild = new Proxy(new child.Function(), {});
+  ProxyChild.prototype = 7;
+  const ProxyTop = new child.Proxy(new Function(), {});
+  ProxyTop.prototype = 7;
+
+  let getterCount = 0;
+  const GetterProxyChild = new Proxy(new child.Function(), {
+    get(target, property, receiver) {
+      if (property === 'prototype') {
+        getterCount += 1;
+        return 7;
+      }
+      return Reflect.get(target, property, receiver);
+    }
+  });
+
+  const parseUrl = parser =>
+    DOMParser.prototype.parseFromString.call(
+      parser,
+      '<html></html>',
+      'text/html'
+    ).URL;
+  const check = (parser, expectedPrototype, expectedUrl) => [
+    Object.getPrototypeOf(parser) === expectedPrototype,
+    parseUrl(parser) === expectedUrl
+  ];
+  const topUrl = location.href;
+  const childUrl = child.location.href;
+
+  return JSON.stringify({
+    directTop: check(
+      Reflect.construct(child.DOMParser, [], TopBad),
+      DOMParser.prototype,
+      childUrl
+    ),
+    directChild: check(
+      Reflect.construct(DOMParser, [], ChildBad),
+      child.DOMParser.prototype,
+      topUrl
+    ),
+    boundChild: check(
+      Reflect.construct(DOMParser, [], BoundChild),
+      child.DOMParser.prototype,
+      topUrl
+    ),
+    boundTop: check(
+      Reflect.construct(child.DOMParser, [], BoundTop),
+      DOMParser.prototype,
+      childUrl
+    ),
+    proxyChild: check(
+      Reflect.construct(DOMParser, [], ProxyChild),
+      child.DOMParser.prototype,
+      topUrl
+    ),
+    proxyTop: check(
+      Reflect.construct(child.DOMParser, [], ProxyTop),
+      DOMParser.prototype,
+      childUrl
+    ),
+    getterProxyChild: check(
+      Reflect.construct(DOMParser, [], GetterProxyChild),
+      child.DOMParser.prototype,
+      topUrl
+    ),
+    getterCount
+  });
+})()
+"#,
+        )
+        .expect("DOMParser NewTarget realm prototype fallback probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"directTop":[true,true],"directChild":[true,true],"boundChild":[true,true],"boundTop":[true,true],"proxyChild":[true,true],"proxyTop":[true,true],"getterProxyChild":[true,true],"getterCount":1}"#
+    );
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn dom_parser_retained_across_child_navigation_uses_original_document() {
     const HOST: &str = "dom-parser-retained.test";
