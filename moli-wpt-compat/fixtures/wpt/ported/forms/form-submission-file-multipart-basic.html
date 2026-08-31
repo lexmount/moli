@@ -54,6 +54,14 @@ function append_target_frame(name) {
   return frame;
 }
 
+function file_list(files) {
+  const transfer = new DataTransfer();
+  for (const file of files) {
+    transfer.items.add(file);
+  }
+  return transfer.files;
+}
+
 test(function () {
   const text = document.createElement("input");
   assert_equals(text.files, null, "files should not apply to non-file inputs");
@@ -66,7 +74,7 @@ test(function () {
   assert_equals(input.files, empty, "files getter should return the same object until replaced");
 
   const file = new File(["file-body"], "note.txt", { type: "text/plain" });
-  const files = new FileList([file]);
+  const files = file_list([file]);
   input.files = files;
   assert_equals(input.files, files, "files setter should install the selected FileList");
 }, "HTMLInputElement.files exposes a replaceable FileList for file inputs");
@@ -80,7 +88,7 @@ test(function () {
   upload.type = "file";
   upload.name = "upload";
   upload.multiple = true;
-  upload.files = new FileList([
+  upload.files = file_list([
     new File(["alpha-body"], "alpha.txt", { type: "text/plain" }),
     new File(["beta-body"], "beta.bin"),
   ]);
@@ -115,7 +123,7 @@ promise_test(async function () {
   const upload = document.createElement("input");
   upload.type = "file";
   upload.name = "upload";
-  upload.files = new FileList([
+  upload.files = file_list([
     new File(["file-body"], 'report"name.txt', { type: "text/custom" }),
   ]);
   const emptyInput = document.createElement("input");
@@ -180,7 +188,7 @@ promise_test(async function () {
   externalUpload.type = "file";
   externalUpload.name = "upload";
   externalUpload.multiple = true;
-  externalUpload.files = new FileList([
+  externalUpload.files = file_list([
     new File(["external-alpha-body"], "external-alpha.txt", { type: "text/external-alpha" }),
     new File(["external-beta-body"], "external-beta.bin"),
   ]);
