@@ -124,6 +124,7 @@ mod fetch_xhr;
 mod file_entry_file_callback;
 mod file_system_directory_reader;
 mod grid_resolved_track_values;
+mod grid_self_alignment;
 mod hash_change_delivery;
 mod history_traversal;
 mod image_load_event;

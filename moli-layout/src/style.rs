@@ -42,6 +42,7 @@ use style::{
         specified::box_::{DisplayInside, DisplayOutside},
         specified::{
             TextAlignKeyword, WillChangeBits,
+            align::AlignFlags,
             text::{TextTransform, TextTransformCase},
         },
     },
@@ -850,6 +851,14 @@ impl ResolvedLayoutStyle {
             specified_aspect_ratio,
         );
         let mut taffy = stylo_taffy::to_taffy_style(&computed);
+        // The generic adapter predates Taffy's context-dependent `normal`
+        // self-alignment. Re-project all four self-alignment properties at the
+        // browser/layout boundary so `normal` reaches the formatting context
+        // instead of becoming an authored `stretch` value.
+        taffy.align_items = taffy_item_alignment(position_style.align_items.0);
+        taffy.align_self = taffy_item_alignment(position_style.align_self.0);
+        taffy.justify_items = taffy_item_alignment((position_style.justify_items.computed.0).0);
+        taffy.justify_self = taffy_item_alignment(position_style.justify_self.0);
         taffy.size = Size {
             width: taffy_size_dimension(&position_style.width, taffy.size.width),
             height: taffy_size_dimension(&position_style.height, taffy.size.height),
@@ -2182,6 +2191,16 @@ fn usable_aspect_ratio(ratio: Option<f32>) -> Option<f32> {
     ratio.filter(|ratio| ratio.is_finite() && *ratio > 0.0)
 }
 
+/// Project CSS self-alignment while retaining the formatting-context meaning
+/// of `normal`. All other keywords stay owned by the generic Stylo adapter.
+fn taffy_item_alignment(input: AlignFlags) -> Option<taffy::AlignItems> {
+    if input.value() == AlignFlags::NORMAL {
+        Some(taffy::AlignItems::NORMAL)
+    } else {
+        stylo_taffy::convert::item_alignment(input)
+    }
+}
+
 fn taffy_size_dimension(
     size: &GenericSize<style::values::computed::NonNegativeLengthPercentage>,
     fallback: taffy::Dimension,
@@ -2617,6 +2636,28 @@ mod aspect_ratio_tests {
         assert_eq!(
             PreferredAspectRatio::Auto.resolve(None, BoxSizing::BorderBox),
             None
+        );
+    }
+}
+
+#[cfg(test)]
+mod alignment_tests {
+    use super::*;
+
+    #[test]
+    fn stylo_item_alignment_preserves_context_dependent_normal() {
+        assert_eq!(
+            taffy_item_alignment(AlignFlags::NORMAL),
+            Some(taffy::AlignItems::NORMAL)
+        );
+        assert_ne!(
+            taffy_item_alignment(AlignFlags::NORMAL),
+            taffy_item_alignment(AlignFlags::STRETCH)
+        );
+        assert_eq!(taffy_item_alignment(AlignFlags::AUTO), None);
+        assert_eq!(
+            taffy_item_alignment(AlignFlags::CENTER | AlignFlags::SAFE),
+            Some(taffy::AlignItems::SAFE_CENTER)
         );
     }
 }
