@@ -964,6 +964,18 @@ fn decompress_woff2_brotli(
     Ok(output)
 }
 
+/// Validates a downloadable font payload without retaining it in a document.
+///
+/// `FontFace` BufferSource and data-URL inputs must use the same decoder and
+/// OpenType registration checks as stylesheet-backed fonts. A MIME or magic
+/// byte sniff alone accepts truncated WOFF/WOFF2 payloads that can never be
+/// shaped.
+pub fn validate_web_font_bytes(bytes: &[u8]) -> Result<(), WebFontRegistrationError> {
+    let face = WebFontFace::new("__moli-font-validation__");
+    let sfnt_bytes = decode_web_font_bytes(bytes)?;
+    validate_registered_font(&face, sfnt_bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -977,6 +989,23 @@ mod tests {
     fn missing_x_height_uses_the_blink_ascent_fallback() {
         assert!((resolved_inline_x_height(10.0, None) - 5.6).abs() < f32::EPSILON);
         assert_eq!(resolved_inline_x_height(10.0, Some(4.25)), 4.25);
+    }
+
+    #[test]
+    fn standalone_web_font_validation_rejects_truncated_magic_payloads() {
+        assert_eq!(
+            validate_web_font_bytes(b"wOF2garbage"),
+            Err(WebFontRegistrationError::DecodeFailed { format: "WOFF2" })
+        );
+        assert_eq!(
+            validate_web_font_bytes(b"wOFFgarbage"),
+            Err(WebFontRegistrationError::DecodeFailed { format: "WOFF" })
+        );
+        assert_eq!(
+            validate_web_font_bytes(b"garbage"),
+            Err(WebFontRegistrationError::UnsupportedPayload)
+        );
+        assert!(validate_web_font_bytes(TEST_WOFF2).is_ok());
     }
 
     #[test]
