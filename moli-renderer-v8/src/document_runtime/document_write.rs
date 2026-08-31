@@ -32,6 +32,12 @@ enum DocumentWriteParserPumpInput<'a> {
     QueuedOrBuffered,
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum HtmlFragmentParserContextMode {
+    Standard,
+    SiblingInsertion,
+}
+
 struct DocumentWriteParserMutationOwner<'a, 'scope, 'pin> {
     runtime: &'a mut DocumentRuntime,
     scope: &'a mut v8::PinScope<'scope, 'pin>,
@@ -523,7 +529,7 @@ impl DocumentRuntime {
         }
     }
 
-    fn build_fragment_from_html_internal(
+    fn build_fragment_from_html_with_context_mode(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut PageScriptHost,
@@ -532,6 +538,7 @@ impl DocumentRuntime {
         html: &str,
         scripts_already_started: bool,
         custom_element_upgrade_timing: HtmlFragmentCustomElementUpgradeTiming,
+        context_mode: HtmlFragmentParserContextMode,
         scripting_enabled: bool,
         allow_declarative_shadow_roots: bool,
     ) -> Option<DomHandle> {
@@ -540,10 +547,19 @@ impl DocumentRuntime {
         let context_node = context_handle.and_then(|element| self.dom_host().node(element));
         let context_namespace = context_node
             .and_then(Node::namespace)
-            .unwrap_or("http://www.w3.org/1999/xhtml");
-        let context_local_name = context_node.and_then(Node::local_name).unwrap_or("body");
-        let context =
-            HtmlFragmentContext::new(context_handle, context_namespace, context_local_name);
+            .unwrap_or("http://www.w3.org/1999/xhtml")
+            .to_owned();
+        let mut context_local_name = context_node
+            .and_then(Node::local_name)
+            .unwrap_or("body")
+            .to_owned();
+        if context_mode == HtmlFragmentParserContextMode::SiblingInsertion
+            && context_namespace == "http://www.w3.org/1999/xhtml"
+            && context_local_name.eq_ignore_ascii_case("html")
+        {
+            context_local_name = "body".to_owned();
+        }
+        let context = HtmlFragmentContext::new(context_handle, &context_namespace, &context_local_name);
         let is_frameset_context = context_namespace == "http://www.w3.org/1999/xhtml"
             && context_local_name.eq_ignore_ascii_case("frameset");
         let registry_association = match context_handle {
@@ -641,7 +657,7 @@ impl DocumentRuntime {
         html: &str,
     ) -> Option<DomHandle> {
         let scripting_enabled = unsafe { &*host_ptr }.document_scripting_enabled(document_handle);
-        self.build_fragment_from_html_internal(
+        self.build_fragment_from_html_with_context_mode(
             scope,
             host_ptr,
             document_handle,
@@ -649,6 +665,7 @@ impl DocumentRuntime {
             html,
             false,
             HtmlFragmentCustomElementUpgradeTiming::InReturnedFragment,
+            HtmlFragmentParserContextMode::Standard,
             scripting_enabled,
             false,
         )
@@ -665,7 +682,7 @@ impl DocumentRuntime {
         custom_element_upgrade_timing: HtmlFragmentCustomElementUpgradeTiming,
     ) -> Option<DomHandle> {
         let scripting_enabled = unsafe { &*host_ptr }.document_scripting_enabled(document_handle);
-        self.build_fragment_from_html_internal(
+        self.build_fragment_from_html_with_context_mode(
             scope,
             host_ptr,
             document_handle,
@@ -673,6 +690,7 @@ impl DocumentRuntime {
             html,
             scripts_already_started,
             custom_element_upgrade_timing,
+            HtmlFragmentParserContextMode::Standard,
             scripting_enabled,
             false,
         )
@@ -688,7 +706,7 @@ impl DocumentRuntime {
         custom_element_upgrade_timing: HtmlFragmentCustomElementUpgradeTiming,
     ) -> Option<DomHandle> {
         let scripting_enabled = unsafe { &*host_ptr }.document_scripting_enabled(document_handle);
-        self.build_fragment_from_html_internal(
+        self.build_fragment_from_html_with_context_mode(
             scope,
             host_ptr,
             document_handle,
@@ -696,6 +714,7 @@ impl DocumentRuntime {
             html,
             true,
             custom_element_upgrade_timing,
+            HtmlFragmentParserContextMode::Standard,
             scripting_enabled,
             true,
         )
@@ -951,7 +970,13 @@ impl DocumentRuntime {
             DomHandle,
         ) -> bool,
     ) -> bool {
-        let Some(fragment) = self.build_fragment_from_html(
+        let scripting_enabled = unsafe { &*host_ptr }.document_scripting_enabled(document_handle);
+        let context_mode = if context_handle == target {
+            HtmlFragmentParserContextMode::Standard
+        } else {
+            HtmlFragmentParserContextMode::SiblingInsertion
+        };
+        let Some(fragment) = self.build_fragment_from_html_with_context_mode(
             scope,
             host_ptr,
             document_handle,
@@ -959,11 +984,13 @@ impl DocumentRuntime {
             html,
             true,
             HtmlFragmentCustomElementUpgradeTiming::AfterInsertion,
+            context_mode,
+            scripting_enabled,
+            false,
         ) else {
             return false;
         };
         let added_children = self.dom_host().child_handles(fragment).collect::<Vec<_>>();
-        let _ = target;
         let changed = insert(self, scope, host_ptr, fragment);
         if changed
             && !self.upgrade_inserted_html_fragment_custom_elements(
