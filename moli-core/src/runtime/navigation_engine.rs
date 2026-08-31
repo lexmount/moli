@@ -345,8 +345,7 @@ impl PendingBuiltDocumentPage {
     }
 }
 
-/// Browser-owner configuration that must survive every NavigationEngine
-/// replacement and BrowserContext handoff.
+/// Configuration copied into each Page-owned or standalone NavigationEngine.
 #[derive(Debug, Clone)]
 pub struct NavigationRuntimeConfig {
     fetch_config: FetchConfig,
@@ -767,8 +766,8 @@ impl NavigationEngine {
         expected_final_url: &Url,
         source: CommittedDocumentResourceSource,
     ) -> Result<ResourceRequestClient> {
-        let expected_runtime = self.ensure_resource_runtime(cookie_store)?;
         let CommittedDocumentResourceSource::Navigation(seed) = source else {
+            let expected_runtime = self.ensure_resource_runtime(cookie_store)?;
             return Ok(
                 ResourceRequestClient::from_browser_resource_runtime_with_page_network_policy(
                     expected_runtime,
@@ -783,11 +782,23 @@ impl NavigationEngine {
             );
         }
         let committed_runtime = seed.browser_resource_runtime();
-        if !expected_runtime.shares_state_with(&committed_runtime) {
+        if self
+            .browser_context_access
+            .validate_registered(&committed_runtime)
+            .is_err()
+            || !Arc::ptr_eq(&committed_runtime.cookie_store(), &cookie_store)
+            || !committed_runtime.matches_fetch_config(&self.fetch_config)
+        {
             anyhow::bail!(
                 "navigation commit seed does not belong to the NavigationEngine browser resource runtime"
             );
         }
+        // Another target sharing this BrowserContext may replace the ambient
+        // transport binding while this request is in flight. The immutable
+        // navigation seed remains the exact authority for the committed
+        // Document as long as its runtime is still registered under this
+        // owner and matches the target's captured policy.
+        self.resource_runtime = Some(committed_runtime.clone());
         Ok(
             ResourceRequestClient::from_browser_resource_runtime_with_page_network_policy(
                 committed_runtime,
@@ -2735,6 +2746,55 @@ mod tests {
             error
                 .to_string()
                 .contains("does not belong to the NavigationEngine browser resource runtime")
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn navigation_commit_keeps_its_registered_runtime_after_peer_target_replacement() {
+        let mut target_a = NavigationEngine::new();
+        let mut target_b = target_a.clone();
+        let cookie_store = target_a
+            .resource_request_client()
+            .expect("target A initial request client")
+            .browser_resource_runtime()
+            .cookie_store();
+        target_a.set_user_agent_override("Moli/Target-A");
+        let target_a_client = target_a
+            .rebuild_resource_request_client(cookie_store.clone())
+            .expect("target A runtime");
+        let start_url = Url::parse("https://example.test/start").expect("navigation start URL");
+        let final_url = Url::parse("https://example.test/final").expect("navigation final URL");
+        let navigation = moli_renderer_v8::network::navigation::NavigationResourceLoader::new(
+            target_a_client.clone(),
+            start_url,
+            moli_renderer_v8::network::RendererResourceTaskRunner::from_current_tokio()
+                .expect("test must own a Tokio runtime"),
+        );
+        navigation
+            .note_service_worker_response_ready()
+            .expect("target A navigation response ready");
+        let seed = navigation
+            .commit(final_url.clone())
+            .expect("target A navigation seed");
+
+        target_b.set_user_agent_override("Moli/Target-B");
+        let target_b_client = target_b
+            .rebuild_resource_request_client(cookie_store.clone())
+            .expect("target B must replace the ambient BrowserContext runtime");
+        assert!(!target_a_client.shares_resource_runtime_with(&target_b_client));
+
+        let committed_client = target_a
+            .resource_request_client_for_committed_document(
+                cookie_store,
+                &final_url,
+                CommittedDocumentResourceSource::Navigation(Box::new(seed)),
+            )
+            .expect("target A must commit with the runtime that fetched its response");
+
+        assert!(committed_client.shares_resource_runtime_with(&target_a_client));
+        assert_eq!(
+            committed_client.browser_identity().user_agent(),
+            "Moli/Target-A"
         );
     }
 }

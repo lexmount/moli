@@ -5672,7 +5672,7 @@ async fn playwright_over_cdp_context_persists_response_cookies_across_navigation
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn playwright_over_cdp_context_reapplies_document_start_scripts_to_new_targets() {
+async fn playwright_over_cdp_target_document_start_script_does_not_leak_to_new_target() {
     async fn handler() -> impl IntoResponse {
         (
             [(CONTENT_TYPE.as_str(), "text/html")],
@@ -5788,7 +5788,10 @@ async fn playwright_over_cdp_context_reapplies_document_start_scripts_to_new_tar
     }))
     .await;
     let second_evaluation = take_response_by_id(&mut ctx, 2322);
-    assert_eq!(second_evaluation["result"]["result"]["value"], json!(1));
+    assert_eq!(
+        second_evaluation["result"]["result"]["type"],
+        json!("undefined")
+    );
 
     let active = ctx
         .conn
@@ -5804,7 +5807,7 @@ async fn playwright_over_cdp_context_reapplies_document_start_scripts_to_new_tar
             .owner_state
             .document_start_scripts
             .len(),
-        1
+        0
     );
 
     server.abort();

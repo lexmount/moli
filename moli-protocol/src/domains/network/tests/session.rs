@@ -607,7 +607,7 @@ async fn background_fetch_runtime_activity_broadcasts_to_auxiliary_network_sessi
 
     let page_url = format!("http://{addr}/page");
     let mut ctx = TestContext::new();
-    let target = BackgroundTarget::new(
+    let target = PageTargetHost::new(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
         TargetIdentityState::about_blank(),
@@ -615,7 +615,7 @@ async fn background_fetch_runtime_activity_broadcasts_to_auxiliary_network_sessi
     );
 
     let mut bc = BrowserContext::new("BID-background".into());
-    bc.background_targets.push(target);
+    bc.insert_page_target_host(target);
     assert!(
         bc.assign_auxiliary_session_to_target("TID-background", "SID-aux-background".to_owned())
     );
@@ -785,7 +785,7 @@ async fn get_response_body_reads_background_auxiliary_target_slot() {
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-active".to_owned());
     bc.attach_active_session("SID-active".to_owned());
-    bc.background_targets.push(BackgroundTarget::with_url(
+    bc.insert_page_target_host(PageTargetHost::with_url(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
         "https://background.example/".to_owned(),

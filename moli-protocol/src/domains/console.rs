@@ -199,8 +199,7 @@ mod tests {
         }
         let browser_context = ctx.conn.browser_context.as_ref().expect("browser context");
         assert!(
-            !browser_context
-                .devtools_session_state
+            !browser_context.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .console_output_session_state
                 .console_enabled,
             "transitional observable-output enabled bit should track Console.disable"
@@ -222,7 +221,7 @@ mod tests {
                 .browser_context
                 .as_ref()
                 .expect("browser context should exist")
-                .devtools_session_state
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .console_output_session_state
                 .console_enabled,
             "transitional Console projection must not flip before V8 Console.enable succeeds"
@@ -246,7 +245,7 @@ mod tests {
                 .browser_context
                 .as_ref()
                 .expect("browser context should exist")
-                .devtools_session_state
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .console_output_session_state
                 .console_enabled,
             "transitional Console projection should flip after V8 Console.enable succeeds"
@@ -323,7 +322,7 @@ mod tests {
             .browser_context
             .as_mut()
             .expect("browser context should be loaded");
-        bc.devtools_session_state
+        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .console_output_session_state
             .console_enabled = true;
         assert_eq!(
@@ -546,16 +545,15 @@ mod tests {
         ctx.expect_result(13, json!({}), Some("SID-background"));
         let active = ctx.conn.browser_context.as_ref().expect("browser context");
         assert!(
-            !active
-                .devtools_session_state
+            !active.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .console_output_session_state
                 .console_enabled
         );
         assert!(
             active
                 .parked_page_session_state("TID-background")
-                .is_some_and(|state| state
-                    .devtools_session_state
+                .is_some_and(|state| state.devtools_sessions
+                    [moli_page_types::DevToolsSessionKey::Primary]
                     .console_output_session_state
                     .console_enabled),
             "background target should stage Console.enable"

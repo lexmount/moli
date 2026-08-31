@@ -3,11 +3,13 @@ use crate::{
     native_bridge::{JsContextHostBridgeRef, RuntimeObservableContextToken},
     script_vm::inspector::DocumentInspectorContextRegistrationId,
 };
+use moli_page_types::DevToolsSessionKey;
 use serde_json::Value;
 use std::collections::BTreeMap;
 
 pub(super) struct PageIsolatedWorldContext {
     pub(super) name: String,
+    pub(super) devtools_session: Option<DevToolsSessionKey>,
     pub(super) grant_universal_access: bool,
     pub(super) frame_id: Option<String>,
     pub(super) child_handle: Option<DomHandle>,
@@ -90,15 +92,37 @@ impl PageIsolatedWorldRegistry {
 
     pub(super) fn execution_context_id_for_scope(
         &self,
+        devtools_session: Option<&DevToolsSessionKey>,
         frame_id: Option<&str>,
         name: &str,
     ) -> Option<i64> {
         self.contexts
             .iter()
             .find_map(|(execution_context_id, world)| {
-                (world.frame_id.as_deref() == frame_id && world.name == name)
+                (world.devtools_session.as_ref() == devtools_session
+                    && world.frame_id.as_deref() == frame_id
+                    && world.name == name)
                     .then_some(*execution_context_id)
             })
+    }
+
+    pub(super) fn has_world_for_scope(&self, frame_id: Option<&str>, name: &str) -> bool {
+        self.contexts
+            .values()
+            .any(|world| world.frame_id.as_deref() == frame_id && world.name == name)
+    }
+
+    pub(super) fn execution_context_ids_for_devtools_session(
+        &self,
+        devtools_session: &DevToolsSessionKey,
+    ) -> Vec<i64> {
+        self.contexts
+            .iter()
+            .filter_map(|(execution_context_id, world)| {
+                (world.devtools_session.as_ref() == Some(devtools_session))
+                    .then_some(*execution_context_id)
+            })
+            .collect()
     }
 
     pub(super) fn execution_context_ids_for_name(&self, name: &str) -> Vec<i64> {
@@ -204,6 +228,13 @@ impl PageIsolatedWorldRegistry {
         created: &InspectorIsolatedContextCreated<'_>,
         root_frame_id: Option<&str>,
     ) -> Option<i64> {
+        if self
+            .contexts
+            .get(&created.inspector_context_id)
+            .is_some_and(|world| self.matches_inspector_context(world, created, root_frame_id))
+        {
+            return Some(created.inspector_context_id);
+        }
         self.contexts
             .iter()
             .find_map(|(execution_context_id, world)| {

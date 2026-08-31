@@ -55,11 +55,7 @@ impl CdpConnection {
             .iter_mut()
             .chain(self.inactive_browser_contexts.iter_mut())
         {
-            browser_context
-                .active_target
-                .runtime_slot
-                .finish_renderer_page_output_retirement(renderer_page);
-            for target in &mut browser_context.background_targets {
+            for target in browser_context.page_targets.iter_mut() {
                 target
                     .runtime_slot
                     .finish_renderer_page_output_retirement(renderer_page);

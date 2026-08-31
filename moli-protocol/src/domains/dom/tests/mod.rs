@@ -2,9 +2,7 @@ use super::{
     backend_node_id_for_snapshot, frontend_node_id_for_snapshot, node_snapshot_base_payload,
     node_snapshot_to_cdp, node_snapshot_to_cdp_with_limit,
 };
-use crate::conn::{
-    BackgroundTarget, BrowserContext, CdpCommandTaskStep, PendingCdpCommandDispatch,
-};
+use crate::conn::{BrowserContext, CdpCommandTaskStep, PageTargetHost, PendingCdpCommandDispatch};
 use crate::testing::TestContext;
 use moli_core::page::{RENDERER_BACKEND_NODE_ID_START, is_renderer_backend_node_id};
 use moli_page_types::{DocumentNodeSnapshot, DocumentSnapshotNodeId};

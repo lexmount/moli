@@ -9,9 +9,10 @@ use moli_cookie_jar::{
 };
 use moli_core::network::{SharedWebStorageStore, new_shared_web_storage_store};
 use moli_core::runtime::{
-    NavigationPageStorageHandles, NavigationResourceStorageHandles, RendererBrowserContextRuntime,
-    RendererBrowserContextRuntimeOwner, RendererBrowserContextRuntimeOwnerAccess,
-    RendererSharedWorkerRuntimeDiagnostics, storage_partition::StoragePartitionState,
+    NavigationEngine, NavigationPageStorageHandles, NavigationResourceStorageHandles,
+    NavigationRuntimeConfig, RendererBrowserContextRuntime, RendererBrowserContextRuntimeOwner,
+    RendererBrowserContextRuntimeOwnerAccess, RendererSharedWorkerRuntimeDiagnostics,
+    storage_partition::StoragePartitionState,
 };
 use moli_core::storage::{
     SharedIndexedDbManager, SharedStorageBucketStore, StorageBucketIdentity, WeakIndexedDbManager,
@@ -23,26 +24,25 @@ use serde_json::{Value, json};
 use super::{
     DevToolsSessionState,
     dedicated_worker_target::DedicatedWorkerTargetState,
-    devtools_sessions_have_pending_inspector_awaits,
-    devtools_sessions_pending_inspector_await_count,
     emulation::{
-        EmulatedDeviceMetrics, EmulatedGeolocationOverrideState, EmulatedMediaOverrides,
-        EmulatedNetworkConditions,
+        EmulatedDeviceMetrics, EmulatedGeolocationOverrideState, EmulatedNetworkConditions,
     },
-    identity::TargetIdentityState,
     javascript_dialog::TargetPreparedJavaScriptDialog,
     page_slot::{DocumentNavigationToken, DocumentStartScript},
-    parking::{TargetOwnerState, TargetParkingStateStore},
+    page_target_host::{PageTargetHost, PageTargetRegistry},
+    parking::TargetOwnerState,
     service_worker_target::ServiceWorkerTargetState,
-    session::{ActiveTargetState, TargetNetworkPolicyState},
+    session::TargetPageState,
     shared_worker_target::SharedWorkerTargetState,
 };
+
+#[cfg(test)]
+const TEST_FIXTURE_PAGE_TARGET_ID: &str = "__moli_test_fixture_page__";
 
 pub struct BrowserContext {
     pub id: String,
     storage_partition: BrowserContextStoragePartition,
-    target_id: Option<String>,
-    session_id: Option<String>,
+    pub(crate) page_targets: PageTargetRegistry,
     pub auxiliary_target_sessions: HashMap<String, String>,
     // Chromium exposes the live creator target, immutable creator frame, and
     // window.opener access as three independent TargetInfo properties.
@@ -57,15 +57,10 @@ pub struct BrowserContext {
     pub target_window_names: HashMap<String, String>,
     pub target_popup_ids: HashMap<String, u64>,
     pending_popup_javascript_dialogs: HashMap<u64, Vec<TargetPreparedJavaScriptDialog>>,
-    pub background_targets: Vec<super::parking::BackgroundTarget>,
     pub(crate) shared_worker_targets: BTreeMap<SharedWorkerInstanceId, SharedWorkerTargetState>,
     pub(crate) dedicated_worker_targets: BTreeMap<u64, DedicatedWorkerTargetState>,
     pub(crate) service_worker_targets: BTreeMap<u64, ServiceWorkerTargetState>,
     pub(crate) service_worker_domain_sessions: BTreeSet<Option<String>>,
-    target_identity: TargetIdentityState,
-    pub(crate) devtools_session_state: DevToolsSessionState,
-    pub(crate) auxiliary_devtools_session_states: HashMap<String, DevToolsSessionState>,
-    pub(crate) network_policy: TargetNetworkPolicyState,
     pub(crate) default_extra_headers: Vec<(String, String)>,
     pub(crate) global_extra_headers: Vec<(String, String)>,
     pub(crate) default_browser_identity_override:
@@ -76,36 +71,20 @@ pub struct BrowserContext {
     pub(crate) default_geolocation_override: Option<EmulatedGeolocationOverrideState>,
     pub(crate) global_network_conditions: Option<EmulatedNetworkConditions>,
     pub(crate) global_geolocation_override: Option<EmulatedGeolocationOverrideState>,
-    pub tls_verify_host_override: Option<bool>,
-    pub http_proxy_override: Option<String>,
-    pub http_no_proxy_override: Option<String>,
+    pub(crate) global_cache_disabled: bool,
+    pub(crate) default_http_proxy_override: Option<String>,
+    pub(crate) default_http_no_proxy_override: Option<String>,
+    pub(crate) default_tls_verify_host_override: Option<bool>,
     pub proxy_autoconfig_url: Option<String>,
     pub proxy_socks_version: Option<u8>,
     pub(crate) default_emulated_device_metrics: Option<EmulatedDeviceMetrics>,
-    pub locale_override: Option<String>,
-    pub timezone_override: Option<String>,
-    pub(crate) network_conditions: Option<EmulatedNetworkConditions>,
-    pub geolocation_override: Option<EmulatedGeolocationOverrideState>,
-    pub emulated_media: EmulatedMediaOverrides,
-    pub emulated_device_metrics: Option<EmulatedDeviceMetrics>,
-    pub cpu_throttling_rate: f64,
-    pub input_intercept_drags_enabled: bool,
-    pub input_drag_intercepted: bool,
-    pub touch_emulation_enabled: bool,
-    pub emit_touch_events_for_mouse: bool,
-    pub focus_emulation_enabled: bool,
-    pub script_execution_disabled: bool,
-    pub css_enabled: bool,
     pub(crate) next_default_document_start_script_id: u32,
     pub(crate) default_document_start_scripts: Vec<(String, DocumentStartScript)>,
-    pub(crate) document_cookie_manager_surface:
-        super::super::cookie_manager_surface::BrowserContextCookieManagerSurface,
-    pub(crate) target_parking: TargetParkingStateStore,
-    pub dom_remote_object_node_cache: HashMap<String, Value>,
-    pub(crate) active_target: ActiveTargetState,
     pub(crate) storage_quota_overrides: HashMap<String, f64>,
     pub(crate) http_cache_root: Option<PathBuf>,
     pub(crate) http_cache_max_bytes: Option<u64>,
+    pub(crate) page_navigation_runtime_config: Option<NavigationRuntimeConfig>,
+    renderer_output_transport_sender: Option<moli_core::RendererOutputTransportSender>,
     // Keep the sole strong per-context network owner last. Protocol teardown
     // must drop pages and NavigationEngines before this field is released.
     pub(crate) renderer_runtime_owner: Option<RendererBrowserContextRuntimeOwner>,
@@ -371,10 +350,24 @@ impl std::fmt::Debug for BrowserContext {
         f.debug_struct("BrowserContext")
             .field("id", &self.id)
             .field("storage_partition", &self.storage_partition)
-            .field("target_id", &self.target_id)
-            .field("session_id", &self.session_id)
+            .field("active_target_id", &self.active_target_id())
+            .field("active_session_id", &self.active_session_id())
             .field("has_loaded_page", &self.has_loaded_page())
             .finish_non_exhaustive()
+    }
+}
+
+impl std::ops::Deref for BrowserContext {
+    type Target = TargetPageState;
+
+    fn deref(&self) -> &Self::Target {
+        self.active_page_state()
+    }
+}
+
+impl std::ops::DerefMut for BrowserContext {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.active_page_state_mut()
     }
 }
 
@@ -383,6 +376,20 @@ fn usize_to_u64_saturating(value: usize) -> u64 {
 }
 
 impl BrowserContext {
+    pub(crate) fn active_page_state(&self) -> &TargetPageState {
+        self.page_targets
+            .active()
+            .expect("BrowserContext has no active page target")
+            .state()
+    }
+
+    pub(crate) fn active_page_state_mut(&mut self) -> &mut TargetPageState {
+        self.page_targets
+            .active_mut()
+            .expect("BrowserContext has no active page target")
+            .state_mut()
+    }
+
     /// Parks a dialog only until the matching lightweight-popup target obtains
     /// a concrete protocol attachment.
     ///
@@ -416,7 +423,19 @@ impl BrowserContext {
     }
 
     pub fn new(id: String) -> Self {
-        Self::new_with_initial_cookies(id, Vec::new())
+        let context = Self::new_with_initial_cookies(id, Vec::new());
+        #[cfg(test)]
+        let context = {
+            let mut context = context;
+            let inserted = context.page_targets.insert(PageTargetHost::empty(
+                TEST_FIXTURE_PAGE_TARGET_ID.to_owned(),
+            ));
+            debug_assert!(inserted);
+            let selected = context.page_targets.select(TEST_FIXTURE_PAGE_TARGET_ID);
+            debug_assert!(selected);
+            context
+        };
+        context
     }
 
     pub(crate) fn new_with_initial_cookies(
@@ -501,8 +520,7 @@ impl BrowserContext {
         Self {
             id,
             storage_partition,
-            target_id: None,
-            session_id: None,
+            page_targets: PageTargetRegistry::default(),
             auxiliary_target_sessions: HashMap::new(),
             target_opener_ids: HashMap::new(),
             target_opener_frame_ids: HashMap::new(),
@@ -510,15 +528,10 @@ impl BrowserContext {
             target_window_names: HashMap::new(),
             target_popup_ids: HashMap::new(),
             pending_popup_javascript_dialogs: HashMap::new(),
-            background_targets: Vec::new(),
             shared_worker_targets: BTreeMap::new(),
             dedicated_worker_targets: BTreeMap::new(),
             service_worker_targets: BTreeMap::new(),
             service_worker_domain_sessions: BTreeSet::new(),
-            target_identity: TargetIdentityState::about_blank(),
-            devtools_session_state: DevToolsSessionState::default(),
-            auxiliary_devtools_session_states: HashMap::new(),
-            network_policy: TargetNetworkPolicyState::default(),
             default_extra_headers: Vec::new(),
             global_extra_headers: Vec::new(),
             default_browser_identity_override: None,
@@ -528,37 +541,110 @@ impl BrowserContext {
             default_geolocation_override: None,
             global_network_conditions: None,
             global_geolocation_override: None,
-            tls_verify_host_override: None,
-            http_proxy_override: None,
-            http_no_proxy_override: None,
+            global_cache_disabled: false,
+            default_http_proxy_override: None,
+            default_http_no_proxy_override: None,
+            default_tls_verify_host_override: None,
             proxy_autoconfig_url: None,
             proxy_socks_version: None,
             default_emulated_device_metrics: None,
-            locale_override: None,
-            timezone_override: None,
-            network_conditions: None,
-            geolocation_override: None,
-            emulated_media: EmulatedMediaOverrides::default(),
-            emulated_device_metrics: None,
-            cpu_throttling_rate: 1.0,
-            input_intercept_drags_enabled: false,
-            input_drag_intercepted: false,
-            touch_emulation_enabled: false,
-            emit_touch_events_for_mouse: false,
-            focus_emulation_enabled: false,
-            script_execution_disabled: false,
-            css_enabled: false,
             next_default_document_start_script_id: 0,
             default_document_start_scripts: Vec::new(),
-            document_cookie_manager_surface: Default::default(),
-            target_parking: TargetParkingStateStore::default(),
-            dom_remote_object_node_cache: HashMap::new(),
-            active_target: ActiveTargetState::default(),
             storage_quota_overrides: HashMap::new(),
             http_cache_root,
             http_cache_max_bytes,
+            page_navigation_runtime_config: None,
+            renderer_output_transport_sender: None,
             renderer_runtime_owner: Some(RendererBrowserContextRuntime::new()),
         }
+    }
+
+    pub(crate) fn new_page_navigation_engine(
+        &self,
+        config: NavigationRuntimeConfig,
+    ) -> NavigationEngine {
+        let engine = if let Some(source) = self
+            .page_targets
+            .iter()
+            .find_map(PageTargetHost::navigation_engine)
+        {
+            NavigationEngine::new_with_runtime_config_and_shared_renderer_owner(config, source)
+                .expect("live PageTargetHost renderer owner must accept another page engine")
+        } else {
+            NavigationEngine::new_with_runtime_config_and_browser_context_access(
+                config,
+                self.renderer_runtime_owner_access(),
+            )
+            .expect("live BrowserContext owner must accept a page engine")
+        };
+        if let Some(sender) = self.renderer_output_transport_sender.clone() {
+            engine.set_renderer_output_transport_sender(sender);
+        }
+        engine
+    }
+
+    pub(crate) fn bind_page_navigation_engines(
+        &mut self,
+        config: NavigationRuntimeConfig,
+        renderer_output_transport_sender: Option<moli_core::RendererOutputTransportSender>,
+    ) {
+        self.page_navigation_runtime_config = Some(config.clone());
+        self.renderer_output_transport_sender = renderer_output_transport_sender;
+
+        let mut shared_source = self
+            .page_targets
+            .iter()
+            .find_map(PageTargetHost::navigation_engine)
+            .cloned();
+        let renderer_runtime = self.renderer_runtime_owner_access();
+        let sender = self.renderer_output_transport_sender.clone();
+        for host in self.page_targets.iter_mut() {
+            if host.navigation_engine().is_some() {
+                continue;
+            }
+            let engine = if let Some(source) = shared_source.as_ref() {
+                NavigationEngine::new_with_runtime_config_and_shared_renderer_owner(
+                    config.clone(),
+                    source,
+                )
+                .expect("live PageTargetHost renderer owner must accept another page engine")
+            } else {
+                NavigationEngine::new_with_runtime_config_and_browser_context_access(
+                    config.clone(),
+                    renderer_runtime.clone(),
+                )
+                .expect("live BrowserContext owner must accept a page engine")
+            };
+            if let Some(sender) = sender.clone() {
+                engine.set_renderer_output_transport_sender(sender);
+            }
+            shared_source = Some(engine.clone());
+            let replaced = host.replace_navigation_engine(engine);
+            debug_assert!(replaced.is_none());
+        }
+    }
+
+    pub(crate) fn set_renderer_output_transport_sender(
+        &mut self,
+        sender: moli_core::RendererOutputTransportSender,
+    ) {
+        self.renderer_output_transport_sender = Some(sender.clone());
+        for host in self.page_targets.iter() {
+            if let Some(engine) = host.navigation_engine() {
+                engine.set_renderer_output_transport_sender(sender.clone());
+            }
+        }
+    }
+
+    pub(crate) fn page_navigation_engine(&self, target_id: &str) -> Option<&NavigationEngine> {
+        self.page_target(target_id)?.navigation_engine()
+    }
+
+    pub(crate) fn page_navigation_engine_mut(
+        &mut self,
+        target_id: &str,
+    ) -> Option<&mut NavigationEngine> {
+        self.page_target_mut(target_id)?.navigation_engine_mut()
     }
 
     pub(crate) fn is_profile_backed_storage_partition(&self) -> bool {
@@ -575,15 +661,25 @@ impl BrowserContext {
     }
 
     pub(crate) fn resource_storage_handles(&self) -> BrowserContextResourceStorageHandles {
+        let session_storage_store = self
+            .page_targets
+            .active()
+            .map(|target| target.session_storage_namespace.store().clone())
+            .unwrap_or_else(new_shared_web_storage_store);
         self.storage_partition
             .handles
-            .resource_storage_handles(self.active_target.session_storage_namespace.store().clone())
+            .resource_storage_handles(session_storage_store)
     }
 
     pub(crate) fn page_storage_handles(&self) -> BrowserContextPageStorageHandles {
+        let session_storage_store = self
+            .page_targets
+            .active()
+            .map(|target| target.session_storage_namespace.store().clone())
+            .unwrap_or_else(new_shared_web_storage_store);
         self.storage_partition
             .handles
-            .page_storage_handles(self.active_target.session_storage_namespace.store().clone())
+            .page_storage_handles(session_storage_store)
     }
 
     pub(crate) fn page_storage_handles_for_target(
@@ -746,9 +842,9 @@ impl BrowserContext {
             .loaded_page()
             .is_some_and(|page| page.renderer_owner_local_host_id() == owner_local_host_id)
         {
-            return self.target_id.clone();
+            return self.active_target_id_owned();
         }
-        self.background_targets.iter().find_map(|target| {
+        self.background_targets().find_map(|target| {
             target
                 .loaded_page()
                 .is_some_and(|page| page.renderer_owner_local_host_id() == owner_local_host_id)
@@ -771,22 +867,66 @@ impl BrowserContext {
             self.shared_worker_target_pending_inspector_await_count_for_diagnostics();
         let service_worker_target_pending_inspector_await_count =
             self.service_worker_target_pending_inspector_await_count_for_diagnostics();
-        let auxiliary_devtools_pending_inspector_await_count: usize = self
-            .auxiliary_devtools_session_states
-            .values()
-            .map(DevToolsSessionState::pending_inspector_await_count)
-            .sum();
-        let runtime_session_diagnostics = json!({
-            "runtimeEnabled": self.devtools_session_state.runtime_session_state.runtime_frontend_enabled,
-            "inspectorEnabled": self.devtools_session_state.runtime_session_state.inspector_enabled,
-            "inspectorTargetCrashedDelivered": self.devtools_session_state.runtime_session_state.inspector_target_crashed_delivered(),
-            "profilerCommandStateSource": "renderer-v8-inspector-agent",
-            "v8InspectorStateBytes": self.devtools_session_state.inspector_session_state.v8_state.as_ref().map_or(0, |state| state.len()),
-            "auxiliaryDevToolsSessionStateCount": self.auxiliary_devtools_session_states.len(),
-            "pendingInspectorAwaitCount": self.devtools_session_state.pending_inspector_await_count()
-                + auxiliary_devtools_pending_inspector_await_count,
-            "primaryPendingInspectorAwaitCount": self.devtools_session_state.pending_inspector_await_count(),
-            "auxiliaryPendingInspectorAwaitCount": auxiliary_devtools_pending_inspector_await_count,
+        let active_target = self.page_targets.active();
+        let runtime_session_diagnostics = active_target
+            .map(|target| {
+                let primary = target.devtools_sessions.primary();
+                let auxiliary_pending_inspector_await_count: usize = target
+                    .devtools_sessions
+                    .attached_states()
+                    .map(DevToolsSessionState::pending_inspector_await_count)
+                    .sum();
+                json!({
+                    "runtimeEnabled": primary.runtime_session_state.runtime_frontend_enabled,
+                    "inspectorEnabled": primary.runtime_session_state.inspector_enabled,
+                    "inspectorTargetCrashedDelivered": primary.runtime_session_state.inspector_target_crashed_delivered(),
+                    "profilerCommandStateSource": "renderer-v8-inspector-agent",
+                    "v8InspectorStateBytes": primary.inspector_session_state.v8_state.as_ref().map_or(0, |state| state.len()),
+                    "auxiliaryDevToolsSessionStateCount": target.devtools_sessions.attached_len(),
+                    "pendingInspectorAwaitCount": target.devtools_sessions.pending_inspector_await_count(),
+                    "primaryPendingInspectorAwaitCount": primary.pending_inspector_await_count(),
+                    "auxiliaryPendingInspectorAwaitCount": auxiliary_pending_inspector_await_count,
+                })
+            })
+            .unwrap_or(Value::Null);
+        let page_session_diagnostics = active_target
+            .map(|target| {
+                let primary = target.devtools_sessions.primary();
+                json!({
+                    "pageLifecycleEvents": primary.page_session_state.page_lifecycle_events,
+                    "logEnabled": primary.page_session_state.log_enabled,
+                    "consoleEnabled": primary.console_output_session_state.console_enabled,
+                    "performanceEnabled": primary
+                        .page_session_state
+                        .performance
+                        .enabled(),
+                    "performanceTimeDomain": primary
+                        .page_session_state
+                        .performance
+                        .time_domain()
+                        .as_str(),
+                    "pageFontFamilyCount": primary.page_session_state.page_font_families.len(),
+                })
+            })
+            .unwrap_or(Value::Null);
+        let target_host_state_diagnostics = json!({
+            "targetHostCount": self.background_target_count(),
+            "pageSessionStateCount": self.background_targets()
+                .filter(|target| target.state().has_non_default_session_state())
+                .count(),
+            "targetOwnerStateWithPendingInspectorAwaitCount": self.background_targets()
+                .filter(|target| target.has_pending_inspector_awaits())
+                .count(),
+            "pendingInspectorAwaitCount": self.background_targets()
+                .map(|target| target.pending_inspector_await_count())
+                .sum::<usize>(),
+            "nonEmptyFetchStateCount": self.background_targets()
+                .filter(|target| !target.fetch_owner.pending_state().is_empty())
+                .count(),
+            "ownerStates": self.background_targets().map(|target| json!({
+                "targetId": target.target_id(),
+                "ownerState": target.owner_state.moli_memory_diagnostics(),
+            })).collect::<Vec<_>>(),
         });
         json!({
             "id": self.id,
@@ -802,10 +942,9 @@ impl BrowserContext {
                 "id": attachment_id.get(),
                 "targetId": self.active_target_id(),
             })),
-            "backgroundTargetCount": self.background_targets.len(),
+            "backgroundTargetCount": self.background_target_count(),
             "backgroundLoadedPageCount": self
-                .background_targets
-                .iter()
+                .background_targets()
                 .filter(|target| target.has_loaded_page())
                 .count(),
             "targetInfoCount": target_infos.len(),
@@ -819,7 +958,8 @@ impl BrowserContext {
             "targetCanAccessOpenerCount": self.target_can_access_opener.len(),
             "targetWindowNameCount": self.target_window_names.len(),
             "defaultDocumentStartScriptCount": self.default_document_start_scripts.len(),
-            "domRemoteObjectNodeCacheCount": self.dom_remote_object_node_cache.len(),
+            "domRemoteObjectNodeCacheCount": active_target
+                .map_or(0, |target| target.dom_remote_object_node_cache.len()),
             "sharedWorkerTargetCount": self.shared_worker_targets.len(),
             "serviceWorkerTargetCount": self.service_worker_targets.len(),
             "pendingInspectorAwaitCount": page_target_pending_inspector_await_count
@@ -845,35 +985,21 @@ impl BrowserContext {
                 "browserContextRuntime": self.renderer_runtime().moli_memory_diagnostics(),
             },
             "runtimeSession": runtime_session_diagnostics,
-            "pageSession": {
-                "pageLifecycleEvents": self.devtools_session_state.page_session_state.page_lifecycle_events,
-                "logEnabled": self.devtools_session_state.page_session_state.log_enabled,
-                "consoleEnabled": self.devtools_session_state.console_output_session_state.console_enabled,
-                "performanceEnabled": self
-                    .devtools_session_state
-                    .page_session_state
-                    .performance
-                    .enabled(),
-                "performanceTimeDomain": self
-                    .devtools_session_state
-                    .page_session_state
-                    .performance
-                    .time_domain()
-                    .as_str(),
-                "pageFontFamilyCount": self.devtools_session_state.page_session_state.page_font_families.len(),
-            },
-            "activeRuntimeSlot": self.active_target.runtime_slot.moli_memory_diagnostics(),
-            "activeFetch": self.active_target.fetch_owner.moli_memory_diagnostics(),
-            "activeOwnerState": self.active_target.owner_state.moli_memory_diagnostics(),
-            "targetParking": self.target_parking.moli_memory_diagnostics(),
+            "pageSession": page_session_diagnostics,
+            "activeRuntimeSlot": active_target
+                .map(|target| target.runtime_slot.moli_memory_diagnostics()),
+            "activeFetch": active_target
+                .map(|target| target.fetch_owner.moli_memory_diagnostics()),
+            "activeOwnerState": active_target
+                .map(|target| target.owner_state.moli_memory_diagnostics()),
+            "targetHosts": target_host_state_diagnostics,
         })
     }
 
     pub(crate) fn loaded_document_page_count(&self) -> usize {
         usize::from(self.has_loaded_page())
             + self
-                .background_targets
-                .iter()
+                .background_targets()
                 .filter(|target| target.has_loaded_page())
                 .count()
     }
@@ -886,8 +1012,7 @@ impl BrowserContext {
                     .runtime_slot
                     .has_pending_initial_document_page_build(),
         ) + self
-            .background_targets
-            .iter()
+            .background_targets()
             .filter(|target| {
                 target
                     .runtime_slot()
@@ -978,7 +1103,7 @@ impl BrowserContext {
         if let Some(page) = self.loaded_page() {
             owner_ids.insert(page.renderer_owner_local_host_id().as_u64());
         }
-        for target in &self.background_targets {
+        for target in self.background_targets() {
             if let Some(page) = target.loaded_page() {
                 owner_ids.insert(page.renderer_owner_local_host_id().as_u64());
             }
@@ -1006,42 +1131,29 @@ impl BrowserContext {
 
     fn loaded_pages_for_diagnostics(&self) -> impl Iterator<Item = &moli_core::page::Page> {
         self.loaded_page().into_iter().chain(
-            self.background_targets
-                .iter()
+            self.background_targets()
                 .filter_map(|target| target.loaded_page()),
         )
     }
 
     pub(crate) fn page_target_pending_inspector_await_count_for_diagnostics(&self) -> usize {
-        devtools_sessions_pending_inspector_await_count(
-            &self.devtools_session_state,
-            &self.auxiliary_devtools_session_states,
-        ) + self.target_parking.pending_inspector_await_count()
+        self.page_targets
+            .iter()
+            .map(|target| target.pending_inspector_await_count())
+            .sum()
     }
 
     pub(crate) fn has_pending_javascript_dialog(&self) -> bool {
-        !self
-            .devtools_session_state
-            .page_session_state
-            .javascript_dialog_state
-            .is_empty()
-            || self
-                .auxiliary_devtools_session_states
-                .values()
-                .any(|session| {
-                    !session
-                        .page_session_state
-                        .javascript_dialog_state
-                        .is_empty()
-                })
-            || self.target_parking.has_pending_javascript_dialog()
+        self.page_targets
+            .iter()
+            .any(PageTargetHost::has_pending_javascript_dialog)
     }
 
     pub(crate) fn page_target_with_pending_inspector_await_count_for_diagnostics(&self) -> usize {
-        usize::from(devtools_sessions_have_pending_inspector_awaits(
-            &self.devtools_session_state,
-            &self.auxiliary_devtools_session_states,
-        )) + self.target_parking.pending_inspector_await_target_count()
+        self.page_targets
+            .iter()
+            .filter(|target| target.has_pending_inspector_awaits())
+            .count()
     }
 
     pub(crate) fn shared_worker_target_pending_inspector_await_count_for_diagnostics(
@@ -1199,13 +1311,9 @@ impl BrowserContext {
     }
 
     pub(crate) fn has_inflight_background_navigation(&self) -> bool {
-        self.active_target
-            .runtime_slot
-            .has_inflight_background_navigation()
-            || self
-                .background_targets
-                .iter()
-                .any(|target| target.runtime_slot().has_inflight_background_navigation())
+        self.page_targets
+            .iter()
+            .any(|target| target.runtime_slot().has_inflight_background_navigation())
     }
 
     pub(crate) fn has_inflight_background_navigation_for_target(&self, target_id: &str) -> bool {
@@ -1523,18 +1631,24 @@ impl BrowserContext {
     }
 
     pub(crate) fn active_target_id(&self) -> Option<&str> {
-        self.target_id.as_deref()
+        let target_id = self.page_targets.active_target_id()?;
+        #[cfg(test)]
+        if target_id == TEST_FIXTURE_PAGE_TARGET_ID {
+            return None;
+        }
+        Some(target_id)
     }
 
     pub(crate) fn active_target_id_owned(&self) -> Option<String> {
-        self.target_id.clone()
+        self.active_target_id().map(str::to_owned)
     }
 
     pub(crate) fn effective_active_browser_identity_override(
         &self,
     ) -> Option<&moli_browser_profile::BrowserIdentityProfile> {
-        self.network_policy
-            .browser_identity_override()
+        self.page_targets
+            .active()
+            .and_then(|host| host.network_policy.browser_identity_override())
             .or(self.default_browser_identity_override.as_ref())
     }
 
@@ -1545,34 +1659,54 @@ impl BrowserContext {
     }
 
     pub(crate) fn effective_active_locale_override_owned(&self) -> Option<String> {
-        self.locale_override
-            .clone()
+        self.page_targets
+            .active()
+            .and_then(|host| host.locale_override.clone())
             .or_else(|| self.default_locale_override.clone())
     }
 
-    pub(crate) fn effective_active_locale_override(&self) -> Option<&str> {
-        self.locale_override
-            .as_deref()
-            .or(self.default_locale_override.as_deref())
-    }
-
     pub(crate) fn effective_active_timezone_override_owned(&self) -> Option<String> {
-        self.timezone_override
-            .clone()
+        self.page_targets
+            .active()
+            .and_then(|host| host.timezone_override.clone())
             .or_else(|| self.default_timezone_override.clone())
     }
 
     pub(crate) fn effective_active_network_conditions(&self) -> Option<EmulatedNetworkConditions> {
-        self.network_conditions
+        self.page_targets
+            .active()
+            .and_then(|host| host.network_conditions)
             .or(self.default_network_conditions)
             .or(self.global_network_conditions)
+    }
+
+    pub(crate) fn effective_active_http_proxy_override_owned(&self) -> Option<String> {
+        self.page_targets
+            .active()
+            .and_then(|host| host.http_proxy_override.clone())
+            .or_else(|| self.default_http_proxy_override.clone())
+    }
+
+    pub(crate) fn effective_active_http_no_proxy_override_owned(&self) -> Option<String> {
+        self.page_targets
+            .active()
+            .and_then(|host| host.http_no_proxy_override.clone())
+            .or_else(|| self.default_http_no_proxy_override.clone())
+    }
+
+    pub(crate) fn effective_active_tls_verify_host_override(&self) -> Option<bool> {
+        self.page_targets
+            .active()
+            .and_then(|host| host.tls_verify_host_override)
+            .or(self.default_tls_verify_host_override)
     }
 
     pub(crate) fn effective_active_geolocation_override(
         &self,
     ) -> Option<EmulatedGeolocationOverrideState> {
-        self.geolocation_override
-            .clone()
+        self.page_targets
+            .active()
+            .and_then(|host| host.geolocation_override.clone())
             .or_else(|| self.default_geolocation_override.clone())
             .or_else(|| self.global_geolocation_override.clone())
     }
@@ -1604,7 +1738,7 @@ impl BrowserContext {
     }
 
     pub(crate) fn has_active_target(&self) -> bool {
-        self.target_id.is_some()
+        self.page_targets.active().is_some()
     }
 
     pub(crate) fn is_active_target(&self, target_id: &str) -> bool {
@@ -1613,37 +1747,39 @@ impl BrowserContext {
 
     pub(crate) fn set_active_target_id(&mut self, target_id: impl Into<String>) {
         let target_id = target_id.into();
-        let target_changed = self.target_id.as_deref() != Some(target_id.as_str());
-        if target_changed && !self.has_loaded_page() {
-            self.active_target
-                .runtime_slot
-                .prepare_renderer_channel_for_new_target();
+        #[cfg(test)]
+        if self.page_targets.active_target_id() == Some(TEST_FIXTURE_PAGE_TARGET_ID) {
+            let rekeyed = self.page_targets.rekey_active(target_id.clone());
+            debug_assert!(rekeyed, "test fixture page target id must be replaceable");
+            return;
         }
-        if self
-            .target_id
-            .as_deref()
-            .is_some_and(|current_target_id| current_target_id != target_id)
-        {
-            self.active_target.session_storage_namespace = Default::default();
+        if self.page_targets.get(&target_id).is_none() {
+            let inserted = self.insert_page_target_host(PageTargetHost::empty(target_id.clone()));
+            debug_assert!(inserted, "new page target id must be unique");
         }
-        self.target_id = Some(target_id);
+        let selected = self.page_targets.select(&target_id);
+        debug_assert!(selected, "registered page target must be selectable");
     }
 
+    pub(crate) fn rekey_active_target(&mut self, target_id: impl Into<String>) -> bool {
+        self.page_targets.rekey_active(target_id.into())
+    }
+
+    #[cfg(test)]
     pub(crate) fn clear_active_target_id(&mut self) {
-        self.target_id = None;
-        self.active_target.session_storage_namespace = Default::default();
+        self.page_targets.clear_selection();
     }
 
     pub(crate) fn active_session_id(&self) -> Option<&str> {
-        self.session_id.as_deref()
+        self.page_targets.active()?.session_id()
     }
 
     pub(crate) fn active_session_id_owned(&self) -> Option<String> {
-        self.session_id.clone()
+        self.active_session_id().map(str::to_owned)
     }
 
     pub(crate) fn has_active_session(&self) -> bool {
-        self.session_id.is_some()
+        self.active_session_id().is_some()
     }
 
     pub(crate) fn active_target_is_unclaimed_default_placeholder(
@@ -1653,22 +1789,21 @@ impl BrowserContext {
         self.active_target_id() == Some(default_target_id)
             && !self.has_active_session()
             && !self.has_loaded_page()
-            && self.background_targets.is_empty()
+            && self.background_target_count() == 0
             && self.shared_worker_targets.is_empty()
             && self.dedicated_worker_targets.is_empty()
             && self.service_worker_targets.is_empty()
     }
 
     pub(crate) fn attach_active_session(&mut self, session_id: impl Into<String>) {
-        self.session_id = Some(session_id.into());
-    }
-
-    pub(crate) fn replace_active_session(&mut self, session_id: Option<String>) {
-        self.session_id = session_id;
+        self.page_targets
+            .active_mut()
+            .expect("cannot attach a session without an active page target")
+            .attach_session(session_id.into());
     }
 
     pub(crate) fn detach_active_session(&mut self) -> Option<String> {
-        self.session_id.take()
+        self.page_targets.active_mut()?.detach_session()
     }
 
     pub(crate) fn target_url(&self) -> &str {
@@ -1683,10 +1818,6 @@ impl BrowserContext {
         self.target_identity.secure_context_type()
     }
 
-    pub(crate) fn target_identity(&self) -> &TargetIdentityState {
-        &self.target_identity
-    }
-
     pub(crate) fn set_target_url(&mut self, url: String) {
         self.target_identity.set_url(url);
     }
@@ -1698,18 +1829,6 @@ impl BrowserContext {
     pub(crate) fn set_target_secure_context_type(&mut self, secure_context_type: String) {
         self.target_identity
             .set_secure_context_type(secure_context_type);
-    }
-
-    pub(crate) fn replace_target_identity(&mut self, identity: TargetIdentityState) {
-        self.target_identity = identity;
-    }
-
-    pub(crate) fn reset_target_identity_to_new_tab(&mut self) {
-        self.target_identity = TargetIdentityState::new_tab();
-    }
-
-    pub(crate) fn reset_target_identity_to_about_blank(&mut self) {
-        self.target_identity = TargetIdentityState::about_blank();
     }
 }
 

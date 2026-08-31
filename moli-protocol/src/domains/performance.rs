@@ -564,7 +564,7 @@ mod tests {
             .browser_context
             .as_ref()
             .expect("browser context")
-            .devtools_session_state
+            .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .performance;
         assert!(performance.enabled());
@@ -643,7 +643,7 @@ mod tests {
             .browser_context
             .as_ref()
             .expect("browser context")
-            .devtools_session_state
+            .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .performance;
         assert_eq!(performance.time_domain(), PerformanceTimeDomain::TimeTicks);
@@ -877,15 +877,14 @@ mod tests {
 
         let browser_context = ctx.conn.browser_context.as_ref().expect("browser context");
         assert!(
-            !browser_context
-                .devtools_session_state
+            !browser_context.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .performance
                 .enabled()
         );
         let auxiliary = browser_context
-            .auxiliary_devtools_session_states
-            .get("SID-aux")
+            .devtools_sessions
+            .attached("SID-aux")
             .expect("auxiliary session state")
             .page_session_state
             .performance;
@@ -1110,8 +1109,7 @@ mod tests {
         ctx.expect_result(5, json!({}), Some("SID-background"));
         let active = ctx.conn.browser_context.as_ref().expect("browser context");
         assert!(
-            !active
-                .devtools_session_state
+            !active.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .performance
                 .enabled()
@@ -1119,8 +1117,8 @@ mod tests {
         assert!(
             active
                 .parked_page_session_state("TID-background")
-                .is_some_and(|state| state
-                    .devtools_session_state
+                .is_some_and(|state| state.devtools_sessions
+                    [moli_page_types::DevToolsSessionKey::Primary]
                     .page_session_state
                     .performance
                     .enabled()),

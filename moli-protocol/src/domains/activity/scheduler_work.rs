@@ -260,20 +260,23 @@ impl ProtocolSchedulerWork {
     /// Reports owner work that must complete inside the producing command's
     /// turn.
     ///
-    /// Popup navigation is safe to start while completing the producing
-    /// command: it retains its exact target route and cannot replace the
-    /// command's active renderer. Popup activation is deliberately excluded.
-    /// It can replace that renderer and must therefore cross the ordinary
-    /// client-turn predecessor so the opener's command result is collected
-    /// from its original owner first.
+    /// Popup navigation produced by the opener is safe to start while
+    /// completing that command because it targets a different renderer. The
+    /// initial navigation released by `Runtime.runIfWaitingForDebugger` is an
+    /// exception: it replaces the command's own initial empty Document, so it
+    /// crosses the ordinary client-turn predecessor just like activation.
     pub fn is_command_followup(&self) -> bool {
-        matches!(
-            &self.payload,
+        match &self.payload {
             ProtocolSchedulerWorkPayload::BidiChannelOwnerAction(_)
-                | ProtocolSchedulerWorkPayload::TopLevelLocationNavigationOwnerAction(_)
-                | ProtocolSchedulerWorkPayload::PopupTargetNavigationOwnerAction(_)
-                | ProtocolSchedulerWorkPayload::PageTargetTerminationOwnerAction(_)
-        )
+            | ProtocolSchedulerWorkPayload::TopLevelLocationNavigationOwnerAction(_)
+            | ProtocolSchedulerWorkPayload::PageTargetTerminationOwnerAction(_) => true,
+            ProtocolSchedulerWorkPayload::PopupTargetNavigationOwnerAction(action) => {
+                action.is_command_followup()
+            }
+            ProtocolSchedulerWorkPayload::ProtocolObservation(_)
+            | ProtocolSchedulerWorkPayload::MainDocumentLoadOwnerAction(_)
+            | ProtocolSchedulerWorkPayload::PopupTargetActivationAction(_) => false,
+        }
     }
 
     pub fn navigation_gate_target_id(&self) -> Option<&str> {

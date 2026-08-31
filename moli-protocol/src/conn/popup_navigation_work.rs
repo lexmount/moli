@@ -24,6 +24,7 @@ pub(crate) struct PopupTargetNavigationOwnerAction {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PopupTargetNavigationKind {
     InitialDocument,
+    InitialDocumentAfterDebuggerResume,
     NamedTargetReuse,
 }
 
@@ -38,7 +39,7 @@ impl PopupTargetNavigationOwnerAction {
         let route = conn.target_session_route_for_target_id(target_id)?;
         (route.browser_context_id() == Some(browser_context_id)).then(|| Self {
             // Activation has an independent owner action. Unlike a frozen
-            // BackgroundTarget route, AuxiliaryTarget keeps this exact target
+            // PageTargetHost route, AuxiliaryTarget keeps this exact target
             // addressable if that action changes its residence first.
             owner_scope: CommandOwnerScope::from_session_and_owner_route(
                 None,
@@ -68,6 +69,10 @@ impl PopupTargetNavigationOwnerAction {
 
     pub(crate) fn kind(&self) -> PopupTargetNavigationKind {
         self.kind
+    }
+
+    pub(crate) fn is_command_followup(&self) -> bool {
+        self.kind != PopupTargetNavigationKind::InitialDocumentAfterDebuggerResume
     }
 
     pub(crate) fn into_parts(

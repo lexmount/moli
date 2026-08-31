@@ -821,8 +821,7 @@ async fn same_context_targets_remove_only_their_own_utility_binding_definition_a
             .as_ref()
             .expect("active browser context");
         assert!(
-            active
-                .devtools_session_state
+            active.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .runtime_bindings
                 .iter()
                 .any(|binding| {
@@ -835,7 +834,11 @@ async fn same_context_targets_remove_only_their_own_utility_binding_definition_a
             .expect("first target should remain staged");
         let staged_bindings = active
             .parked_page_session_state(staged.target_id())
-            .map(|state| state.devtools_session_state.runtime_bindings.as_slice())
+            .map(|state| {
+                state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                    .runtime_bindings
+                    .as_slice()
+            })
             .unwrap_or(&[]);
         assert!(!staged_bindings.iter().any(|binding| {
             binding.name == "sharedUtilityBinding"
@@ -1011,8 +1014,7 @@ async fn same_context_targets_remove_only_their_own_main_world_binding_definitio
             .as_ref()
             .expect("active browser context");
         assert!(
-            active
-                .devtools_session_state
+            active.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .runtime_bindings
                 .iter()
                 .any(|binding| {
@@ -1024,7 +1026,11 @@ async fn same_context_targets_remove_only_their_own_main_world_binding_definitio
             .expect("first target should remain staged");
         let staged_bindings = active
             .parked_page_session_state(staged.target_id())
-            .map(|state| state.devtools_session_state.runtime_bindings.as_slice())
+            .map(|state| {
+                state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                    .runtime_bindings
+                    .as_slice()
+            })
             .unwrap_or(&[]);
         assert!(!staged_bindings.iter().any(|binding| {
             binding.name == "sharedMainBinding" && binding.execution_context_name.is_none()
@@ -1233,7 +1239,7 @@ async fn same_context_targets_remove_only_their_own_dual_world_binding_definitio
             .expect("active browser context");
         assert!(
             active
-                .devtools_session_state
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
 
                 .runtime_bindings
                 .iter()
@@ -1244,7 +1250,7 @@ async fn same_context_targets_remove_only_their_own_dual_world_binding_definitio
             .expect("first target should remain staged");
         let staged_bindings = active
             .parked_page_session_state(staged.target_id())
-            .map(|state| state.devtools_session_state.runtime_bindings.as_slice())
+            .map(|state| state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary].runtime_bindings.as_slice())
             .unwrap_or(&[]);
         assert_eq!(
             staged_bindings
@@ -2660,28 +2666,26 @@ async fn same_context_targets_restore_only_their_own_utility_pre_document_bindin
     let mut ctx = TestContext::new();
     load_bc_with_target(&mut ctx, "BID-9", "TID-000000000E");
     let bc = ctx.conn.browser_context.as_mut().unwrap();
-    bc.background_targets
-        .push(crate::conn::BackgroundTarget::new(
-            "TID-000000000F".into(),
-            None,
-            crate::conn::TargetIdentityState::new(
-                "about:blank#second".into(),
-                crate::conn::URL_BASE.into(),
-                "Secure".into(),
-            ),
-            crate::conn::TargetPageSlot::empty_for_test_fixture(),
-        ));
-    bc.background_targets
-        .push(crate::conn::BackgroundTarget::new(
-            "TID-0000000010".into(),
-            None,
-            crate::conn::TargetIdentityState::new(
-                "about:blank#third".into(),
-                crate::conn::URL_BASE.into(),
-                "Secure".into(),
-            ),
-            crate::conn::TargetPageSlot::empty_for_test_fixture(),
-        ));
+    bc.insert_page_target_host(crate::conn::PageTargetHost::new(
+        "TID-000000000F".into(),
+        None,
+        crate::conn::TargetIdentityState::new(
+            "about:blank#second".into(),
+            crate::conn::URL_BASE.into(),
+            "Secure".into(),
+        ),
+        crate::conn::TargetPageSlot::empty_for_test_fixture(),
+    ));
+    bc.insert_page_target_host(crate::conn::PageTargetHost::new(
+        "TID-0000000010".into(),
+        None,
+        crate::conn::TargetIdentityState::new(
+            "about:blank#third".into(),
+            crate::conn::URL_BASE.into(),
+            "Secure".into(),
+        ),
+        crate::conn::TargetPageSlot::empty_for_test_fixture(),
+    ));
 
     ctx.process_async(json!({
         "id": 10456,

@@ -168,7 +168,7 @@ async fn rust_cdp_chromium_target_create_browser_context_proxy_server_is_recorde
     assert_eq!(
         ctx.conn
             .browser_context_by_id(&browser_context_id)
-            .and_then(|context| context.http_proxy_override.as_deref()),
+            .and_then(|context| context.default_http_proxy_override.as_deref()),
         Some("http://proxy.example:8080")
     );
 }
@@ -196,7 +196,7 @@ async fn rust_cdp_chromium_target_create_browser_context_proxy_bypass_normalizes
     assert_eq!(
         ctx.conn
             .browser_context_by_id(&browser_context_id)
-            .and_then(|context| context.http_no_proxy_override.as_deref()),
+            .and_then(|context| context.default_http_no_proxy_override.as_deref()),
         Some("localhost,.example.com")
     );
 }

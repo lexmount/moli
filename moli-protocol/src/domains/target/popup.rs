@@ -452,6 +452,34 @@ pub(crate) async fn start_initial_document_target_url_navigation_if_needed_backg
     true
 }
 
+pub(crate) fn schedule_initial_document_target_url_navigation_after_debugger_resume(
+    conn: &mut CdpConnection,
+    session_id: Option<&str>,
+) -> bool {
+    if !conn.runtime_session_owner_should_start_initial_document_navigation(session_id) {
+        return false;
+    }
+    let Some(target_url) = conn.runtime_session_owner_target_url(session_id) else {
+        return false;
+    };
+    let Some((browser_context_id, Some(target_id))) =
+        conn.target_owner_identity_for_session(session_id)
+    else {
+        return false;
+    };
+    let Some(action) = PopupTargetNavigationOwnerAction::capture(
+        conn,
+        &browser_context_id,
+        &target_id,
+        target_url,
+        PopupTargetNavigationKind::InitialDocumentAfterDebuggerResume,
+    ) else {
+        return false;
+    };
+    conn.publish_popup_target_navigation_owner_action(action);
+    true
+}
+
 fn popup_target_has_loaded_page(
     conn: &CdpConnection,
     browser_context_id: &str,
@@ -497,7 +525,8 @@ pub(crate) async fn complete_popup_target_navigation_owner_action_async(
 
     let mut protocol_events = Vec::new();
     match kind {
-        PopupTargetNavigationKind::InitialDocument => {
+        PopupTargetNavigationKind::InitialDocument
+        | PopupTargetNavigationKind::InitialDocumentAfterDebuggerResume => {
             if !conn.runtime_session_owner_should_start_initial_document_navigation(None) {
                 return crate::conn::CdpTurnOutcome::new_with_protocol_events(
                     Vec::new(),
@@ -514,7 +543,11 @@ pub(crate) async fn complete_popup_target_navigation_owner_action_async(
         &url,
     )
     .await;
-    if kind == PopupTargetNavigationKind::InitialDocument {
+    if matches!(
+        kind,
+        PopupTargetNavigationKind::InitialDocument
+            | PopupTargetNavigationKind::InitialDocumentAfterDebuggerResume
+    ) {
         emit_target_info_changed_for_target_background_event(
             conn,
             &mut protocol_events,

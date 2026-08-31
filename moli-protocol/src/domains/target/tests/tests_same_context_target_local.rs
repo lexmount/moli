@@ -167,7 +167,7 @@ async fn get_target_info_reports_background_target_in_same_browser_context() {
         .as_ref()
         .expect("active browser context");
     assert_eq!(bc.active_target_id(), Some("TID-000000000A"));
-    assert_eq!(bc.background_targets.len(), 1);
+    assert_eq!(bc.background_target_count(), 1);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -508,7 +508,7 @@ async fn close_target_removes_background_target_without_disturbing_active_target
         .as_ref()
         .expect("active browser context");
     assert_eq!(bc.active_target_id(), Some("TID-000000000A"));
-    assert!(bc.background_targets.is_empty());
+    assert!(bc.has_no_background_targets());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -571,7 +571,7 @@ async fn close_active_target_promotes_background_target_to_active_slot() {
         .expect("active browser context");
     assert_eq!(bc.active_target_id(), Some("TID-000000000A"));
     assert_eq!(bc.active_session_id(), Some("SID-active"));
-    assert!(bc.background_targets.is_empty());
+    assert!(bc.has_no_background_targets());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1345,28 +1345,26 @@ async fn activate_target_chain_restores_multiple_set_auto_attach_background_load
         .attach_active_session("SID-active");
     {
         let bc = ctx.conn.browser_context.as_mut().unwrap();
-        bc.background_targets
-            .push(crate::conn::BackgroundTarget::new(
-                "TID-000000000F".into(),
-                None,
-                crate::conn::TargetIdentityState::new(
-                    "about:blank#second".into(),
-                    crate::conn::URL_BASE.into(),
-                    "Secure".into(),
-                ),
-                crate::conn::TargetPageSlot::empty_for_test_fixture(),
-            ));
-        bc.background_targets
-            .push(crate::conn::BackgroundTarget::new(
-                "TID-0000000010".into(),
-                None,
-                crate::conn::TargetIdentityState::new(
-                    "about:blank#third".into(),
-                    crate::conn::URL_BASE.into(),
-                    "Secure".into(),
-                ),
-                crate::conn::TargetPageSlot::empty_for_test_fixture(),
-            ));
+        bc.insert_page_target_host(crate::conn::PageTargetHost::new(
+            "TID-000000000F".into(),
+            None,
+            crate::conn::TargetIdentityState::new(
+                "about:blank#second".into(),
+                crate::conn::URL_BASE.into(),
+                "Secure".into(),
+            ),
+            crate::conn::TargetPageSlot::empty_for_test_fixture(),
+        ));
+        bc.insert_page_target_host(crate::conn::PageTargetHost::new(
+            "TID-0000000010".into(),
+            None,
+            crate::conn::TargetIdentityState::new(
+                "about:blank#third".into(),
+                crate::conn::URL_BASE.into(),
+                "Secure".into(),
+            ),
+            crate::conn::TargetPageSlot::empty_for_test_fixture(),
+        ));
     }
 
     ctx.process_async(json!({
@@ -1546,28 +1544,26 @@ async fn close_target_restores_loaded_runtime_to_previous_set_auto_attach_target
         .attach_active_session("SID-active");
     {
         let bc = ctx.conn.browser_context.as_mut().unwrap();
-        bc.background_targets
-            .push(crate::conn::BackgroundTarget::new(
-                "TID-000000000F".into(),
-                None,
-                crate::conn::TargetIdentityState::new(
-                    "about:blank#second".into(),
-                    crate::conn::URL_BASE.into(),
-                    "Secure".into(),
-                ),
-                crate::conn::TargetPageSlot::empty_for_test_fixture(),
-            ));
-        bc.background_targets
-            .push(crate::conn::BackgroundTarget::new(
-                "TID-0000000010".into(),
-                None,
-                crate::conn::TargetIdentityState::new(
-                    "about:blank#third".into(),
-                    crate::conn::URL_BASE.into(),
-                    "Secure".into(),
-                ),
-                crate::conn::TargetPageSlot::empty_for_test_fixture(),
-            ));
+        bc.insert_page_target_host(crate::conn::PageTargetHost::new(
+            "TID-000000000F".into(),
+            None,
+            crate::conn::TargetIdentityState::new(
+                "about:blank#second".into(),
+                crate::conn::URL_BASE.into(),
+                "Secure".into(),
+            ),
+            crate::conn::TargetPageSlot::empty_for_test_fixture(),
+        ));
+        bc.insert_page_target_host(crate::conn::PageTargetHost::new(
+            "TID-0000000010".into(),
+            None,
+            crate::conn::TargetIdentityState::new(
+                "about:blank#third".into(),
+                crate::conn::URL_BASE.into(),
+                "Secure".into(),
+            ),
+            crate::conn::TargetPageSlot::empty_for_test_fixture(),
+        ));
     }
 
     ctx.process_async(json!({
@@ -1804,8 +1800,7 @@ async fn page_command_on_background_target_session_routes_without_promoting_load
         .browser_context
         .as_mut()
         .unwrap()
-        .background_targets
-        .push(crate::conn::BackgroundTarget::new(
+        .insert_page_target_host(crate::conn::PageTargetHost::new(
             "TID-000000000F".into(),
             Some("SID-bg".into()),
             crate::conn::TargetIdentityState::new(
@@ -1891,7 +1886,7 @@ async fn close_target_aborts_paused_request_stage_navigation() {
     let mut bc = BrowserContext::new("BID-9".into());
     bc.set_active_target_id("TID-000000000A");
     bc.attach_active_session("SID-1");
-    bc.devtools_session_state
+    bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .inspector_enabled = true;
     bc.active_target
@@ -1949,11 +1944,7 @@ async fn close_target_aborts_paused_request_stage_navigation() {
     assert!(!bc.has_active_target());
     assert!(!bc.has_active_session());
     assert!(!bc.has_loaded_page());
-    assert!(
-        !bc.active_target
-            .fetch_owner
-            .has_pending_fetch_state_for_test()
-    );
+    assert!(bc.page_target("TID-000000000A").is_none());
 
     server.abort();
 }
@@ -2076,11 +2067,7 @@ async fn close_target_aborts_paused_runtime_fetch_subresource() {
     assert!(!bc.has_active_target());
     assert!(!bc.has_active_session());
     assert!(!bc.has_loaded_page());
-    assert!(
-        !bc.active_target
-            .fetch_owner
-            .has_pending_fetch_state_for_test()
-    );
+    assert!(bc.page_target("TID-000000000A").is_none());
 
     server.abort();
 }
@@ -2581,7 +2568,7 @@ async fn playwright_over_cdp_context_target_attach_and_navigate_smoke() {
             "method": "Runtime.evaluate",
             "sessionId": session_id,
             "params": {
-                "expression": "JSON.stringify({ marker: document.body.dataset.marker, lang: navigator.language, tz: Intl.DateTimeFormat().resolvedOptions().timeZone, dark: matchMedia('(prefers-color-scheme: dark)').matches })"
+                "expression": "JSON.stringify({ marker: document.body.dataset.marker, lang: navigator.language, locale: Intl.DateTimeFormat().resolvedOptions().locale, tz: Intl.DateTimeFormat().resolvedOptions().timeZone, dark: matchMedia('(prefers-color-scheme: dark)').matches })"
             }
         }))
         .await;
@@ -2592,7 +2579,8 @@ async fn playwright_over_cdp_context_target_attach_and_navigate_smoke() {
     let payload: serde_json::Value =
         serde_json::from_str(payload).expect("evaluation payload should be valid json");
     assert_eq!(payload["marker"], "seeded");
-    assert_eq!(payload["lang"], "fr-FR");
+    assert_eq!(payload["lang"], "en-US");
+    assert_eq!(payload["locale"], "fr-FR");
     assert_eq!(payload["tz"], "UTC");
     assert_eq!(payload["dark"], true);
 

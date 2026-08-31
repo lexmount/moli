@@ -1441,6 +1441,7 @@ fn document_start_run_immediately_drains_pending_style_invalidations_without_com
     let result = vm
         .run_document_start_script_now(&crate::DocumentStartScript {
             registry_key: None,
+            devtools_session: None,
             source: "globalThis.__runImmediatelyDrainTarget.className = 'active';".to_owned(),
             world_name: None,
             has_bidi_channel_argument: false,

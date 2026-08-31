@@ -180,46 +180,22 @@ async fn add_script_to_evaluate_on_new_document_invalid_call_does_not_advance_id
     ctx.expect_result(38, json!({ "identifier": "2" }), Some("SID-1"));
 }
 #[tokio::test(flavor = "multi_thread")]
-async fn add_script_to_evaluate_on_new_document_reuses_identifier_for_duplicate_script() {
+async fn add_script_to_evaluate_on_new_document_keeps_duplicate_registrations_distinct() {
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
 
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .active_target
-        .owner_state
-        .document_start_scripts
-        .push((
-            "7".to_owned(),
-            DocumentStartScript {
-                registry_key: None,
-                source: "globalThis.__lm_dedupe_count = (globalThis.__lm_dedupe_count || 0) + 1;"
-                    .to_owned(),
-                world_name: None,
-                has_bidi_channel_argument: false,
-                bidi_channel_handoffs: Vec::new(),
-            },
-        ));
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .active_target
-        .owner_state
-        .next_document_start_script_id = 0;
-
-    ctx.process_async(json!({
-        "id": 39,
-        "method": "Page.addScriptToEvaluateOnNewDocument",
-        "sessionId": "SID-1",
-        "params": {
-            "source": "globalThis.__lm_dedupe_count = (globalThis.__lm_dedupe_count || 0) + 1;"
-        }
-    }))
-    .await;
-    ctx.expect_result(39, json!({ "identifier": "7" }), Some("SID-1"));
+    for (id, identifier) in [(39, "1"), (40, "2")] {
+        ctx.process_async(json!({
+            "id": id,
+            "method": "Page.addScriptToEvaluateOnNewDocument",
+            "sessionId": "SID-1",
+            "params": {
+                "source": "globalThis.__lm_duplicate_count = (globalThis.__lm_duplicate_count || 0) + 1;"
+            }
+        }))
+        .await;
+        ctx.expect_result(id, json!({ "identifier": identifier }), Some("SID-1"));
+    }
 
     let script_count = ctx
         .conn
@@ -231,140 +207,44 @@ async fn add_script_to_evaluate_on_new_document_reuses_identifier_for_duplicate_
         .document_start_scripts
         .len();
     assert_eq!(
-        script_count, 1,
-        "duplicate preload script should reuse identifier instead of appending",
+        script_count, 2,
+        "each duplicate source registration must remain independently removable",
     );
 
     ctx.process_async(json!({
-            "id": 40,
+            "id": 41,
             "method": "Page.navigate",
             "sessionId": "SID-1",
             "params": {
-                "url": "data:text/html,<body><script>document.body.textContent = String(globalThis.__lm_dedupe_count || 0);</script></body>"
+                "url": "data:text/html,<body><script>document.body.textContent = String(globalThis.__lm_duplicate_count || 0);</script></body>"
             }
         })).await;
     let _ = ctx.take_all();
 
     let html = loaded_page_html_for_test(&mut ctx).await;
     assert!(
-        html.contains(">1<"),
-        "expected deduped preload script to execute once, got {html}"
+        html.contains(">2<"),
+        "expected both duplicate preload registrations to execute, got {html}"
     );
-}
-#[tokio::test(flavor = "multi_thread")]
-async fn add_script_to_evaluate_on_new_document_restored_scripts_bump_from_max_identifier() {
-    let mut ctx = TestContext::new();
-    load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
 
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .active_target
-        .owner_state
-        .document_start_scripts
-        .push((
-            "123".to_owned(),
-            DocumentStartScript {
-                registry_key: None,
-                source: "globalThis.__lm_preload = 'seed';".to_owned(),
-                world_name: None,
-                has_bidi_channel_argument: false,
-                bidi_channel_handoffs: Vec::new(),
-            },
-        ));
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .active_target
-        .owner_state
-        .next_document_start_script_id = 0;
-
+    for (id, identifier) in [(42, "1"), (43, "2")] {
+        ctx.process_async(json!({
+            "id": id,
+            "method": "Page.removeScriptToEvaluateOnNewDocument",
+            "sessionId": "SID-1",
+            "params": { "identifier": identifier }
+        }))
+        .await;
+        ctx.expect_result(id, json!({}), Some("SID-1"));
+    }
     ctx.process_async(json!({
-        "id": 41,
+        "id": 44,
         "method": "Page.addScriptToEvaluateOnNewDocument",
         "sessionId": "SID-1",
-        "params": {
-            "source": "globalThis.__lm_preload = 'new';"
-        }
+        "params": { "source": "globalThis.__lm_reused_identifier = true;" }
     }))
     .await;
-    ctx.expect_result(41, json!({ "identifier": "124" }), Some("SID-1"));
-
-    let identifier_count = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .expect("browser context")
-        .active_target
-        .owner_state
-        .document_start_scripts
-        .iter()
-        .filter(|(identifier, _)| identifier == "123" || identifier == "124")
-        .count();
-    assert_eq!(
-        identifier_count, 2,
-        "restored max id should be used to generate next identifier"
-    );
-}
-#[tokio::test(flavor = "multi_thread")]
-async fn add_script_to_evaluate_on_new_document_bump_ignores_non_numeric_identifiers() {
-    let mut ctx = TestContext::new();
-    load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
-
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .active_target
-        .owner_state
-        .document_start_scripts
-        .push((
-            "legacy-script".to_owned(),
-            DocumentStartScript {
-                registry_key: None,
-                source: "globalThis.__lm_preload = 'legacy';".to_owned(),
-                world_name: None,
-                has_bidi_channel_argument: false,
-                bidi_channel_handoffs: Vec::new(),
-            },
-        ));
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .active_target
-        .owner_state
-        .document_start_scripts
-        .push((
-            "9".to_owned(),
-            DocumentStartScript {
-                registry_key: None,
-                source: "globalThis.__lm_preload = 'seed';".to_owned(),
-                world_name: None,
-                has_bidi_channel_argument: false,
-                bidi_channel_handoffs: Vec::new(),
-            },
-        ));
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .active_target
-        .owner_state
-        .next_document_start_script_id = 0;
-
-    ctx.process_async(json!({
-        "id": 41,
-        "method": "Page.addScriptToEvaluateOnNewDocument",
-        "sessionId": "SID-1",
-        "params": {
-            "source": "globalThis.__lm_preload = 'new';"
-        }
-    }))
-    .await;
-    ctx.expect_result(41, json!({ "identifier": "10" }), Some("SID-1"));
+    ctx.expect_result(44, json!({ "identifier": "1" }), Some("SID-1"));
 }
 #[tokio::test(flavor = "multi_thread")]
 async fn add_script_to_evaluate_on_new_document_persists_across_multiple_navigations() {
@@ -1715,7 +1595,7 @@ async fn create_isolated_world_returns_unique_context_ids_and_emits_runtime_even
 #[tokio::test(flavor = "multi_thread")]
 async fn create_isolated_world_targets_loaded_background_owner_without_promotion() {
     let mut ctx = TestContext::new();
-    let background = BackgroundTarget::with_url(
+    let background = PageTargetHost::with_url(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
         "about:blank".to_owned(),
@@ -1724,7 +1604,7 @@ async fn create_isolated_world_targets_loaded_background_owner_without_promotion
     let mut bc = BrowserContext::new("BID-1".to_owned());
     bc.set_active_target_id("TID-active".to_owned());
     bc.attach_active_session("SID-active".to_owned());
-    bc.background_targets.push(background);
+    bc.insert_page_target_host(background);
     ctx.conn.browser_context = Some(bc);
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<body>background</body>",
@@ -1892,7 +1772,7 @@ async fn create_isolated_world_after_reactivating_browser_context_with_another_l
             .active_target
             .runtime_slot
             .replace_loaded_page(Some(first_page));
-        bc.devtools_session_state
+        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
             .runtime_frontend_enabled = false;
     }
@@ -1918,7 +1798,7 @@ async fn create_isolated_world_after_reactivating_browser_context_with_another_l
             .active_target
             .runtime_slot
             .replace_loaded_page(Some(second_page));
-        bc.devtools_session_state
+        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
             .runtime_frontend_enabled = false;
     }

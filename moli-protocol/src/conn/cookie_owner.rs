@@ -196,28 +196,18 @@ fn browser_context_cookie_manager_surface_snapshot(
 ) -> BrowserContextCookieManagerSurfaceSnapshot {
     let snapshot = browser_context.raw_cookie_manager_surface_snapshot();
     let current_document_url = browser_context
-        .active_target
-        .runtime_slot
         .loaded_page()
         .map(|page| page.final_url().clone());
     let navigation_initiator_url = browser_context
-        .active_target
-        .runtime_slot
         .loaded_page()
         .and_then(|page| page.navigation_initiator_url().cloned());
     let requested_document_url = browser_context
-        .active_target
-        .runtime_slot
         .loaded_page()
         .map(|page| page.requested_url().clone());
     let navigation_was_redirected = browser_context
-        .active_target
-        .runtime_slot
         .loaded_page()
         .is_some_and(|page| page.navigation_redirected());
     let navigation_redirect_count = browser_context
-        .active_target
-        .runtime_slot
         .loaded_page()
         .map(|page| page.navigation_redirect_count())
         .unwrap_or(0);
@@ -554,7 +544,11 @@ impl BrowserContext {
     pub(crate) async fn document_cookie_owner_snapshot_async(
         &mut self,
     ) -> Option<DocumentCookieOwnerSnapshot> {
-        let page = self.active_target.runtime_slot.loaded_page_mut()?;
+        let page = self
+            .page_targets
+            .active_mut()?
+            .runtime_slot
+            .loaded_page_mut()?;
         page.document_cookie_owner_snapshot_async().await.ok()
     }
 
@@ -566,8 +560,6 @@ impl BrowserContext {
         // document URL into every `set()` call. Prefer the live page URL when
         // one exists; otherwise fall back to the BrowserContext's current URL.
         if let Some(url) = self
-            .active_target
-            .runtime_slot
             .loaded_page()
             .map(|page| page.final_url().clone())
             .filter(|url| matches!(url.scheme(), "http" | "https"))
@@ -578,8 +570,10 @@ impl BrowserContext {
             );
         }
 
-        if let Some(url) = Url::parse(self.target_url())
-            .ok()
+        if let Some(url) = self
+            .page_targets
+            .active()
+            .and_then(|host| Url::parse(host.target_url()).ok())
             .filter(|url| matches!(url.scheme(), "http" | "https"))
         {
             return (

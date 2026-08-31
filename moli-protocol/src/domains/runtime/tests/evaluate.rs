@@ -331,7 +331,7 @@ async fn loaded_page_runtime_enable_projection_waits_for_v8_success() {
             .browser_context
             .as_ref()
             .expect("browser context should exist")
-            .devtools_session_state
+            .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
             .runtime_frontend_enabled,
         "protocol Runtime.enabled projection must not flip before V8 Runtime.enable succeeds"
@@ -353,7 +353,7 @@ async fn loaded_page_runtime_enable_projection_waits_for_v8_success() {
             .browser_context
             .as_ref()
             .expect("browser context should exist")
-            .devtools_session_state
+            .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
             .runtime_frontend_enabled,
         "protocol Runtime.enabled projection should flip after V8 Runtime.enable succeeds"
@@ -517,11 +517,6 @@ async fn loaded_page_runtime_agent_state_commands_dispatch_after_runtime_enable(
 async fn runtime_agent_configuration_is_restored_on_replacement_page_isolate() {
     let mut ctx = TestContext::new();
     with_loaded_document_async(&mut ctx, "<!doctype html><body>before</body>").await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist")
-        .set_active_target_id("TID-runtime-agent-restore");
     enable_runtime_and_take_execution_context_id_async(&mut ctx, 11_016).await;
 
     for (id, method, params) in [
@@ -555,8 +550,7 @@ async fn runtime_agent_configuration_is_restored_on_replacement_page_isolate() {
         .as_ref()
         .expect("browser context should exist");
     assert!(
-        browser_context
-            .devtools_session_state
+        browser_context.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .inspector_session_state
             .v8_state
             .is_some(),
@@ -607,11 +601,6 @@ async fn runtime_agent_configuration_is_restored_on_replacement_page_isolate() {
 async fn opaque_reattach_state_wins_over_conflicting_runtime_listener_configuration() {
     let mut ctx = TestContext::new();
     with_loaded_document_async(&mut ctx, "<!doctype html><body>before</body>").await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist")
-        .set_active_target_id("TID-runtime-reattach-precedence");
 
     ctx.process_async(json!({"id": 11_023, "method": "Runtime.enable"}))
         .await;
@@ -626,15 +615,13 @@ async fn opaque_reattach_state_wins_over_conflicting_runtime_listener_configurat
         .as_mut()
         .expect("browser context should exist");
     assert!(
-        browser_context
-            .devtools_session_state
+        browser_context.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .inspector_session_state
             .v8_state
             .is_some(),
         "successful Runtime.disable must persist the disabled V8 agent cookie"
     );
-    browser_context
-        .devtools_session_state
+    browser_context.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .runtime_frontend_enabled = true;
 
@@ -1709,7 +1696,7 @@ async fn enable_and_disable_update_browser_context_runtime_flag() {
             .browser_context
             .as_ref()
             .expect("browser context should exist")
-            .devtools_session_state
+            .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
             .runtime_frontend_enabled
     );
@@ -1722,7 +1709,7 @@ async fn enable_and_disable_update_browser_context_runtime_flag() {
             .browser_context
             .as_ref()
             .expect("browser context should exist")
-            .devtools_session_state
+            .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
             .runtime_frontend_enabled
     );
@@ -1735,7 +1722,7 @@ async fn enable_and_disable_update_browser_context_runtime_flag() {
             .browser_context
             .as_ref()
             .expect("browser context should exist")
-            .devtools_session_state
+            .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
             .runtime_frontend_enabled
     );
@@ -1907,7 +1894,7 @@ async fn dom_get_document_rejects_while_main_document_navigation_is_pending() {
 #[tokio::test]
 async fn document_navigation_gate_is_scoped_to_background_target_owner() {
     let mut ctx = TestContext::new();
-    let background_target = crate::conn::BackgroundTarget::with_url(
+    let background_target = crate::conn::PageTargetHost::with_url(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
         "about:blank".to_owned(),
@@ -1916,11 +1903,10 @@ async fn document_navigation_gate_is_scoped_to_background_target_owner() {
     let mut browser_context = BrowserContext::new("BID-1".to_owned());
     browser_context.set_active_target_id("TID-active");
     browser_context.attach_active_session("SID-active");
-    browser_context
-        .devtools_session_state
+    browser_context.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .runtime_frontend_enabled = true;
-    browser_context.background_targets.push(background_target);
+    browser_context.insert_page_target_host(background_target);
     ctx.conn.browser_context = Some(browser_context);
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<html><title>active</title></html>",
@@ -1934,8 +1920,7 @@ async fn document_navigation_gate_is_scoped_to_background_target_owner() {
     .await;
     let browser_context = ctx.conn.browser_context.as_mut().expect("browser context");
     browser_context.mutate_parked_page_session_state("TID-background", |state| {
-        state
-            .devtools_session_state
+        state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
             .runtime_frontend_enabled = true;
     });
@@ -6621,7 +6606,7 @@ async fn registered_named_world_object_handles_remain_callable_after_navigation(
         .expect("browser context should exist");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    bc.devtools_session_state
+    bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .runtime_frontend_enabled = true;
 

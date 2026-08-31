@@ -664,11 +664,18 @@ mod tests {
 
         ctx.expect_result(1, json!({}), Some("SID-background"));
         let active = ctx.conn.browser_context.as_ref().expect("browser context");
-        assert!(!active.devtools_session_state.page_session_state.log_enabled);
+        assert!(
+            !active.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                .page_session_state
+                .log_enabled
+        );
         assert!(
             active
                 .parked_page_session_state("TID-background")
-                .is_some_and(|state| state.devtools_session_state.page_session_state.log_enabled),
+                .is_some_and(|state| state.devtools_sessions
+                    [moli_page_types::DevToolsSessionKey::Primary]
+                    .page_session_state
+                    .log_enabled),
             "background target should stage Log.enable"
         );
     }
@@ -851,7 +858,7 @@ mod tests {
             .browser_context
             .as_ref()
             .expect("browser context")
-            .devtools_session_state
+            .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .console_output_session_state
             .log_violation_thresholds;
         assert_eq!(thresholds.len(), 1);
@@ -868,7 +875,7 @@ mod tests {
                 .browser_context
                 .as_ref()
                 .expect("browser context")
-                .devtools_session_state
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .console_output_session_state
                 .log_violation_thresholds
                 .is_empty()

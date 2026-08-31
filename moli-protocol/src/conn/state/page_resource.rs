@@ -115,11 +115,6 @@ impl TargetPageResourceStore {
         }
     }
 
-    pub(crate) fn clear(&mut self) {
-        self.committed_loader_id = None;
-        self.main_documents.clear();
-    }
-
     pub(crate) fn is_empty(&self) -> bool {
         self.committed_loader_id.is_none() && self.main_documents.is_empty()
     }

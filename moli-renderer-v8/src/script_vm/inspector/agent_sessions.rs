@@ -451,6 +451,7 @@ mod tests {
             RendererDevToolsSessionConnection::new(context_group_id, agent_token, None);
         let session_key = DevToolsSessionKey::Attached("SID-agent-sessions".to_owned());
         let binding = RuntimeBindingRegistration {
+            devtools_session: None,
             name: "bridge".to_owned(),
             execution_context_name: Some("utility".to_owned()),
         };
@@ -499,6 +500,7 @@ mod tests {
     fn runtime_binding_configuration_is_agent_local() {
         let session_key = DevToolsSessionKey::Attached("SID-agent-local-config".to_owned());
         let binding = RuntimeBindingRegistration {
+            devtools_session: None,
             name: "bridge".to_owned(),
             execution_context_name: Some("utility".to_owned()),
         };

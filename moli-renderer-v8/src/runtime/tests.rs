@@ -1480,6 +1480,7 @@ async fn streaming_unstyled_xml_converts_live_document_before_domcontentloaded()
         .update_commit_configuration(RendererPreparedDocumentCommitConfiguration {
             document_start_scripts: vec![crate::DocumentStartScript {
                 registry_key: None,
+                devtools_session: None,
                 source: concat!(
                     "globalThis.__xmlViewerDcl = null;",
                     "document.addEventListener('DOMContentLoaded', () => {",
@@ -1599,6 +1600,7 @@ async fn prepared_streaming_xml_document_waits_for_permit_and_uses_latest_config
             document_start_scripts: vec![
                 crate::DocumentStartScript {
                     registry_key: None,
+                    devtools_session: None,
                     source: r#"globalThis.__nativePreload = "ready";"#.to_owned(),
                     world_name: None,
                     has_bidi_channel_argument: false,
@@ -1606,6 +1608,7 @@ async fn prepared_streaming_xml_document_waits_for_permit_and_uses_latest_config
                 },
                 crate::DocumentStartScript {
                     registry_key: None,
+                    devtools_session: None,
                     source: r#"globalThis.__nativeWorldPreload = "ready";"#.to_owned(),
                     world_name: Some("native-world".to_owned()),
                     has_bidi_channel_argument: false,
@@ -1613,6 +1616,7 @@ async fn prepared_streaming_xml_document_waits_for_permit_and_uses_latest_config
                 },
             ],
             runtime_bindings: vec![crate::protocol_types::RuntimeBindingRegistration {
+                devtools_session: None,
                 name: "nativeBinding".to_owned(),
                 execution_context_name: None,
             }],
@@ -2564,6 +2568,7 @@ globalThis.__preparedCommitObserved = JSON.stringify([
             document_start_scripts: vec![
                 crate::DocumentStartScript {
                     registry_key: None,
+                    devtools_session: None,
                     source: r#"globalThis.__latestPreload = "ready";"#.to_owned(),
                     world_name: None,
                     has_bidi_channel_argument: false,
@@ -2571,6 +2576,7 @@ globalThis.__preparedCommitObserved = JSON.stringify([
                 },
                 crate::DocumentStartScript {
                     registry_key: None,
+                    devtools_session: None,
                     source: r#"globalThis.__latestWorld = "ready";"#.to_owned(),
                     world_name: Some("latest-world".to_owned()),
                     has_bidi_channel_argument: false,
@@ -2578,6 +2584,7 @@ globalThis.__preparedCommitObserved = JSON.stringify([
                 },
             ],
             runtime_bindings: vec![crate::protocol_types::RuntimeBindingRegistration {
+                devtools_session: None,
                 name: "latestBinding".to_owned(),
                 execution_context_name: None,
             }],
@@ -4222,6 +4229,7 @@ async fn runtime_binding_replay_cannot_consume_same_id_frontend_deferred_respons
     ));
 
     let binding = crate::protocol_types::RuntimeBindingRegistration {
+        devtools_session: None,
         name: "internalCollisionBinding".to_owned(),
         execution_context_name: None,
     };
@@ -9862,6 +9870,7 @@ async fn set_runtime_binding_state_updates_renderer_inspector_session_store() {
     )
     .await;
     let binding = crate::protocol_types::RuntimeBindingRegistration {
+        devtools_session: None,
         name: "rendererSessionStoredBinding".to_owned(),
         execution_context_name: None,
     };
@@ -9900,6 +9909,7 @@ async fn set_runtime_binding_state_updates_renderer_inspector_session_store() {
     )
     .await;
     let scoped_binding = crate::protocol_types::RuntimeBindingRegistration {
+        devtools_session: None,
         name: "rendererSessionClearedBinding".to_owned(),
         execution_context_name: Some("cleared-binding-world".to_owned()),
     };
@@ -9957,6 +9967,7 @@ async fn apply_runtime_protocol_state_keeps_session_binding_replay_scoped() {
     )
     .await;
     let stored_only_binding = crate::protocol_types::RuntimeBindingRegistration {
+        devtools_session: None,
         name: "storedOnlySessionBinding".to_owned(),
         execution_context_name: Some("stored-only-world".to_owned()),
     };
@@ -10831,6 +10842,7 @@ async fn per_page_isolate_policy_scopes_document_start_scripts_to_page_worlds() 
 
     let script = crate::DocumentStartScript {
         registry_key: None,
+        devtools_session: None,
         source: r#"globalThis.__sharedPreloadOwner = "first-page";"#.to_owned(),
         world_name: Some("shared-preload-world".to_owned()),
         has_bidi_channel_argument: false,
@@ -10978,6 +10990,7 @@ async fn per_page_isolate_policy_keeps_stored_document_start_scripts_page_local(
 
     let stored_script = crate::DocumentStartScript {
         registry_key: None,
+        devtools_session: None,
         source: r#"globalThis.__sharedStoredPreloadOwner = "first-page";"#.to_owned(),
         world_name: Some("shared-stored-preload-world".to_owned()),
         has_bidi_channel_argument: false,
@@ -11116,6 +11129,7 @@ async fn stored_document_start_script_remove_uses_registry_key_namespace() {
         vec![
             crate::DocumentStartScript {
                 registry_key: Some("default:1".to_owned()),
+                devtools_session: None,
                 source: r#"globalThis.__defaultPreload = "default";"#.to_owned(),
                 world_name: Some("registry-key-world".to_owned()),
                 has_bidi_channel_argument: false,
@@ -11123,6 +11137,7 @@ async fn stored_document_start_script_remove_uses_registry_key_namespace() {
             },
             crate::DocumentStartScript {
                 registry_key: Some("target:TID-1:1".to_owned()),
+                devtools_session: None,
                 source: r#"globalThis.__targetPreload = "target";"#.to_owned(),
                 world_name: Some("registry-key-world".to_owned()),
                 has_bidi_channel_argument: false,

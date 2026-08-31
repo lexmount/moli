@@ -213,7 +213,7 @@ async fn dom_enable_include_whitespace_controls_inspector_tree_projection() {
 #[tokio::test(flavor = "multi_thread")]
 async fn dom_document_reads_target_loaded_background_owner_without_promotion() {
     let mut ctx = TestContext::new();
-    let background = BackgroundTarget::with_url(
+    let background = PageTargetHost::with_url(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
         "about:blank".to_owned(),
@@ -222,7 +222,7 @@ async fn dom_document_reads_target_loaded_background_owner_without_promotion() {
     let mut bc = BrowserContext::new("BID-A".to_owned());
     bc.set_active_target_id("TID-active".to_owned());
     bc.attach_active_session("SID-active".to_owned());
-    bc.background_targets.push(background);
+    bc.insert_page_target_host(background);
     ctx.conn.browser_context = Some(bc);
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<!doctype html><html><body><section id='owned'>background</section></body></html>",

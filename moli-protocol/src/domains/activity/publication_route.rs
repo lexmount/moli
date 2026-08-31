@@ -64,7 +64,7 @@ impl RendererPublicationRoute {
             };
         }
         let owner_route = match target_id {
-            Some(target_id) => CdpSessionRoute::BackgroundTarget {
+            Some(target_id) => CdpSessionRoute::PageTargetHost {
                 browser_context_id,
                 target_id,
             },
@@ -180,24 +180,25 @@ impl RendererPublicationOwner {
                     // Prefer the target route captured when the renderer stream
                     // was bound. This disambiguates the brief handoff window in
                     // which active and parked state can both refer to one Page.
-                    let frozen_route = if target_id.is_none()
-                        || browser_context.active_target_id() == target_id.as_deref()
-                    {
+                    let frozen_target = target_id
+                        .as_deref()
+                        .and_then(|target_id| browser_context.page_target(target_id))
+                        .or_else(|| {
+                            target_id
+                                .is_none()
+                                .then(|| browser_context.page_targets.active())
+                                .flatten()
+                        });
+                    let frozen_route = frozen_target.and_then(|target| {
+                        let route_target_id = (!browser_context
+                            .is_active_target(target.target_id()))
+                        .then(|| target.target_id().to_owned());
                         route_for(
-                            &browser_context.active_target.runtime_slot,
-                            None,
-                            browser_context.active_session_id_owned(),
+                            target.runtime_slot(),
+                            route_target_id,
+                            target.session_id().map(str::to_owned),
                         )
-                    } else {
-                        target_id.as_deref().and_then(|target_id| {
-                            let target = browser_context.background_target(target_id)?;
-                            route_for(
-                                target.runtime_slot(),
-                                Some(target_id.to_owned()),
-                                target.session_id().map(str::to_owned),
-                            )
-                        })
-                    };
+                    });
                     if frozen_route.is_some() {
                         return frozen_route;
                     }
@@ -206,23 +207,16 @@ impl RendererPublicationOwner {
                     // initial Page was installed. The Page residence and Page
                     // attachment id remain stable across that rename, so use
                     // those identities to recover the current concrete route.
-                    if let Some(route) = route_for(
-                        &browser_context.active_target.runtime_slot,
-                        None,
-                        browser_context.active_session_id_owned(),
-                    ) {
-                        return Some(route);
-                    }
-                    browser_context
-                        .background_targets
-                        .iter()
-                        .find_map(|target| {
-                            route_for(
-                                target.runtime_slot(),
-                                Some(target.target_id().to_owned()),
-                                target.session_id().map(str::to_owned),
-                            )
-                        })
+                    browser_context.page_targets.iter().find_map(|target| {
+                        let route_target_id = (!browser_context
+                            .is_active_target(target.target_id()))
+                        .then(|| target.target_id().to_owned());
+                        route_for(
+                            target.runtime_slot(),
+                            route_target_id,
+                            target.session_id().map(str::to_owned),
+                        )
+                    })
                 }),
         }
     }

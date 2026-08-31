@@ -158,7 +158,7 @@ async fn same_context_background_session_can_stage_its_own_pre_document_state_be
         let staged_devtools_state = active
             .parked_page_session_state(staged.target_id())
             .expect("staged page session state")
-            .devtools_session_state
+            .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .runtime_bindings
             .as_slice();
         assert_eq!(staged_devtools_state.len(), 1);
@@ -178,7 +178,9 @@ async fn same_context_background_session_can_stage_its_own_pre_document_state_be
             script_id
         );
         assert!(
-            active.devtools_session_state.runtime_bindings.is_empty(),
+            active.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                .runtime_bindings
+                .is_empty(),
             "active target DevTools session must not inherit staged target binding"
         );
         assert!(
@@ -356,7 +358,7 @@ async fn same_context_background_session_can_stage_its_own_utility_pre_document_
         let staged_devtools_state = active
             .parked_page_session_state(staged.target_id())
             .expect("staged page session state")
-            .devtools_session_state
+            .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .runtime_bindings
             .as_slice();
         assert_eq!(staged_devtools_state.len(), 1);
@@ -383,7 +385,9 @@ async fn same_context_background_session_can_stage_its_own_utility_pre_document_
             script_id
         );
         assert!(
-            active.devtools_session_state.runtime_bindings.is_empty(),
+            active.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                .runtime_bindings
+                .is_empty(),
             "active target DevTools session must not inherit staged target binding"
         );
         assert!(
@@ -609,7 +613,11 @@ async fn same_context_background_session_can_remove_its_own_binding_before_promo
             .expect("staged background target");
         let staged_bindings_empty = active
             .parked_page_session_state(staged.target_id())
-            .is_none_or(|state| state.devtools_session_state.runtime_bindings.is_empty());
+            .is_none_or(|state| {
+                state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                    .runtime_bindings
+                    .is_empty()
+            });
         assert!(
             staged_bindings_empty,
             "removed binding should be cleared from parked DevTools session"
@@ -768,7 +776,7 @@ async fn same_context_background_session_can_remove_its_own_preload_before_promo
         let staged_bindings = &active
             .parked_page_session_state(staged.target_id())
             .expect("staged page session state")
-            .devtools_session_state
+            .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .runtime_bindings;
         assert_eq!(staged_bindings.len(), 1);
         assert!(
@@ -919,7 +927,11 @@ async fn same_context_background_session_can_remove_its_own_utility_binding_befo
             .expect("staged background target");
         let staged_bindings_empty = active
             .parked_page_session_state(staged.target_id())
-            .is_none_or(|state| state.devtools_session_state.runtime_bindings.is_empty());
+            .is_none_or(|state| {
+                state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                    .runtime_bindings
+                    .is_empty()
+            });
         assert!(
             staged_bindings_empty,
             "removed utility binding should be cleared from parked DevTools session"
@@ -1103,7 +1115,7 @@ async fn same_context_background_session_can_remove_its_own_utility_preload_befo
         let staged_bindings = &active
             .parked_page_session_state(staged.target_id())
             .expect("staged page session state")
-            .devtools_session_state
+            .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .runtime_bindings;
         assert_eq!(staged_bindings.len(), 1);
         assert_eq!(
@@ -2613,7 +2625,7 @@ async fn same_context_background_session_can_clear_its_own_user_agent_before_pro
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn same_context_background_session_can_stage_its_own_locale_and_timezone_before_promotion() {
+async fn same_context_background_session_stages_locale_without_changing_request_language() {
     async fn handler(
         State(seen): State<Arc<Mutex<Vec<(String, Option<String>)>>>>,
         headers: HeaderMap,
@@ -2765,7 +2777,7 @@ async fn same_context_background_session_can_stage_its_own_locale_and_timezone_b
             "method": "Runtime.evaluate",
             "sessionId": "SID-active",
             "params": {
-                "expression": "JSON.stringify({ lang: navigator.language, tz: Intl.DateTimeFormat().resolvedOptions().timeZone })"
+                "expression": "JSON.stringify({ lang: navigator.language, locale: Intl.DateTimeFormat().resolvedOptions().locale, tz: Intl.DateTimeFormat().resolvedOptions().timeZone })"
             }
         }))
     .await;
@@ -2775,7 +2787,8 @@ async fn same_context_background_session_can_stage_its_own_locale_and_timezone_b
         .expect("active payload should be string");
     let active_payload: serde_json::Value =
         serde_json::from_str(active_payload).expect("active payload should be valid json");
-    assert_eq!(active_payload["lang"], json!("en-GB"));
+    assert_eq!(active_payload["lang"], json!("en-US"));
+    assert_eq!(active_payload["locale"], json!("en-GB"));
     assert_eq!(active_payload["tz"], json!("UTC"));
 
     ctx.process_async(json!({
@@ -2809,7 +2822,7 @@ async fn same_context_background_session_can_stage_its_own_locale_and_timezone_b
             "method": "Runtime.evaluate",
             "sessionId": second_session_id,
             "params": {
-                "expression": "JSON.stringify({ lang: navigator.language, tz: Intl.DateTimeFormat().resolvedOptions().timeZone })"
+                "expression": "JSON.stringify({ lang: navigator.language, locale: Intl.DateTimeFormat().resolvedOptions().locale, tz: Intl.DateTimeFormat().resolvedOptions().timeZone })"
             }
         }))
     .await;
@@ -2819,15 +2832,16 @@ async fn same_context_background_session_can_stage_its_own_locale_and_timezone_b
         .expect("promoted payload should be string");
     let promoted_payload: serde_json::Value =
         serde_json::from_str(promoted_payload).expect("promoted payload should be valid json");
-    assert_eq!(promoted_payload["lang"], json!("fr-FR"));
+    assert_eq!(promoted_payload["lang"], json!("en-US"));
+    assert_eq!(promoted_payload["locale"], json!("fr-FR"));
     assert_eq!(promoted_payload["tz"], json!("Asia/Shanghai"));
 
     let seen = seen.lock().clone();
     assert_eq!(
         seen,
         vec![
-            ("/page-a".to_owned(), Some("en-GB".to_owned())),
-            ("/page-b".to_owned(), Some("fr-FR".to_owned()))
+            ("/page-a".to_owned(), Some("en-US,en;q=0.9".to_owned())),
+            ("/page-b".to_owned(), Some("en-US,en;q=0.9".to_owned()))
         ]
     );
 
@@ -2957,7 +2971,10 @@ async fn same_context_background_session_can_clear_its_own_locale_before_promoti
         .and_then(|tail| tail.split("</body>").next())
         .expect("active payload should be embedded in body")
         .to_owned();
-    assert_ne!(active_surface, "fr-FR|fr-FR");
+    assert!(
+        active_surface.starts_with("en-US|en-US,en;q=0.9"),
+        "active target should retain the default navigator and request languages: {active_surface}"
+    );
 
     ctx.process_async(json!({
         "id": 104194806,
@@ -2991,10 +3008,6 @@ async fn same_context_background_session_can_clear_its_own_locale_before_promoti
     assert_eq!(
         promoted_surface, active_surface,
         "promoted target should observe default locale surface after clearing its staged override"
-    );
-    assert_ne!(
-        promoted_surface, "fr-FR|fr-FR",
-        "promoted target should not retain the staged locale override"
     );
 
     server.abort();
@@ -3490,30 +3503,26 @@ async fn same_context_background_session_can_stage_its_own_page_settings_before_
             .parked_page_session_state(&second_target_id)
             .expect("staged page settings for background target");
         assert!(
-            staged
-                .devtools_session_state
+            staged.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .page_bypass_csp_enabled
         );
         assert_eq!(
-            staged
-                .devtools_session_state
+            staged.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .page_font_families
                 .get("standard"),
             Some(&json!("Georgia"))
         );
         assert_eq!(
-            staged
-                .devtools_session_state
+            staged.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .page_font_families
                 .get("fixed"),
             Some(&json!("Fira Code"))
         );
         assert!(
-            staged
-                .devtools_session_state
+            staged.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .page_intercept_file_chooser_dialog_enabled
         );
@@ -3534,30 +3543,26 @@ async fn same_context_background_session_can_stage_its_own_page_settings_before_
         .expect("promoted browser context");
     assert_eq!(active.active_target_id(), Some(second_target_id.as_str()));
     assert!(
-        active
-            .devtools_session_state
+        active.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_bypass_csp_enabled
     );
     assert_eq!(
-        active
-            .devtools_session_state
+        active.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_font_families
             .get("standard"),
         Some(&json!("Georgia"))
     );
     assert_eq!(
-        active
-            .devtools_session_state
+        active.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_font_families
             .get("fixed"),
         Some(&json!("Fira Code"))
     );
     assert!(
-        active
-            .devtools_session_state
+        active.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_intercept_file_chooser_dialog_enabled
     );
@@ -4299,8 +4304,7 @@ async fn same_context_background_session_can_stage_its_own_lifecycle_events_befo
             .as_ref()
             .expect("active browser context");
         assert!(
-            !active
-                .devtools_session_state
+            !active.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .page_lifecycle_events
         );
@@ -4308,8 +4312,7 @@ async fn same_context_background_session_can_stage_its_own_lifecycle_events_befo
             .parked_page_session_state(&second_target_id)
             .expect("second target should have staged parked page session state");
         assert!(
-            staged
-                .devtools_session_state
+            staged.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .page_lifecycle_events
         );
@@ -4477,8 +4480,7 @@ async fn same_context_background_session_can_disable_its_own_lifecycle_events_be
             .as_ref()
             .expect("active browser context");
         assert!(
-            !active
-                .devtools_session_state
+            !active.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .page_lifecycle_events
         );
@@ -4615,8 +4617,7 @@ async fn same_context_background_session_can_stage_its_own_runtime_enable_before
             .as_ref()
             .expect("active browser context");
         assert!(
-            !active
-                .devtools_session_state
+            !active.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .runtime_session_state
                 .runtime_frontend_enabled
         );
@@ -4624,8 +4625,7 @@ async fn same_context_background_session_can_stage_its_own_runtime_enable_before
             .parked_page_session_state(&second_target_id)
             .expect("second target should have staged parked page session state");
         assert!(
-            staged
-                .devtools_session_state
+            staged.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .runtime_session_state
                 .runtime_frontend_enabled
         );
@@ -4844,8 +4844,8 @@ async fn same_context_loaded_background_session_runtime_enable_replays_context_w
         );
         assert!(
             bc.parked_page_session_state(&second_target_id)
-                .is_some_and(|state| state
-                    .devtools_session_state
+                .is_some_and(|state| state.devtools_sessions
+                    [moli_page_types::DevToolsSessionKey::Primary]
                     .runtime_session_state
                     .runtime_frontend_enabled),
             "Runtime.enable should be staged on the background target owner"
@@ -5543,8 +5543,7 @@ async fn same_context_background_session_can_disable_its_own_runtime_before_prom
             .as_ref()
             .expect("active browser context");
         assert!(
-            !active
-                .devtools_session_state
+            !active.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .runtime_session_state
                 .runtime_frontend_enabled
         );
@@ -5691,8 +5690,7 @@ async fn same_context_background_session_can_stage_its_own_inspector_enable_befo
                 .is_crashed()
         );
         assert!(
-            !active
-                .devtools_session_state
+            !active.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .runtime_session_state
                 .inspector_enabled
         );
@@ -5700,8 +5698,7 @@ async fn same_context_background_session_can_stage_its_own_inspector_enable_befo
             .parked_page_session_state(&second_target_id)
             .expect("second target should have staged parked page session state");
         assert!(
-            staged
-                .devtools_session_state
+            staged.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .runtime_session_state
                 .inspector_enabled
         );
@@ -5834,8 +5831,7 @@ async fn same_context_background_session_can_disable_its_own_inspector_before_pr
             .as_ref()
             .expect("active browser context");
         assert!(
-            !active
-                .devtools_session_state
+            !active.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .runtime_session_state
                 .inspector_enabled
         );
@@ -6223,15 +6219,18 @@ async fn same_context_background_session_can_stage_its_own_fetch_enable_before_p
         let staged = active
             .parked_page_session_state(&second_target_id)
             .expect("second target should have staged parked page session state");
-        assert!(staged.fetch_config.is_enabled());
-        assert_eq!(staged.fetch_config.patterns().len(), 1);
-        assert_eq!(staged.fetch_config.patterns()[0].url_pattern, "*");
+        assert!(staged.fetch_owner.config_snapshot().is_enabled());
+        assert_eq!(staged.fetch_owner.config_snapshot().patterns().len(), 1);
         assert_eq!(
-            staged.fetch_config.patterns()[0].resource_type_filter,
+            staged.fetch_owner.config_snapshot().patterns()[0].url_pattern,
+            "*"
+        );
+        assert_eq!(
+            staged.fetch_owner.config_snapshot().patterns()[0].resource_type_filter,
             Some(crate::conn::FetchResourceTypeFilter::Document)
         );
         assert_eq!(
-            staged.fetch_config.patterns()[0].request_stage,
+            staged.fetch_owner.config_snapshot().patterns()[0].request_stage,
             crate::conn::FetchRequestStage::Request
         );
     }
@@ -6554,8 +6553,8 @@ async fn same_context_background_session_can_stage_its_own_fetch_auth_handling_b
         let staged = active
             .parked_page_session_state(&second_target_id)
             .expect("second target should have staged parked page session state");
-        assert!(staged.fetch_config.is_enabled());
-        assert!(staged.fetch_config.handle_auth_requests());
+        assert!(staged.fetch_owner.config_snapshot().is_enabled());
+        assert!(staged.fetch_owner.config_snapshot().handle_auth_requests());
     }
 
     ctx.process_async(json!({
@@ -6909,7 +6908,7 @@ async fn same_context_background_session_can_stage_its_own_network_enable_before
         let staged = active
             .parked_page_session_state(&second_target_id)
             .expect("second target should have staged parked page session state");
-        assert!(staged.network_enabled);
+        assert!(staged.runtime_slot.primary_network_events_enabled());
     }
 
     ctx.process_async(json!({
@@ -7106,7 +7105,11 @@ async fn same_context_background_session_can_disable_its_own_network_before_prom
             "network disable should collapse staged parked state back to default"
         );
         assert!(
-            active.parked_network_artifacts(&second_target_id).is_none(),
+            active
+                .background_target(&second_target_id)
+                .expect("background target")
+                .runtime_slot
+                .network_artifacts_are_default_for_test(),
             "network disable should clear staged parked network artifacts"
         );
     }
@@ -7296,7 +7299,7 @@ async fn same_context_background_session_can_stage_its_own_cache_and_service_wor
         let staged = active
             .parked_page_session_state(&second_target_id)
             .expect("second target should have staged parked page session state");
-        assert!(staged.network_enabled);
+        assert!(staged.runtime_slot.primary_network_events_enabled());
         assert!(staged.network_policy.cache_disabled());
         assert!(staged.network_policy.bypass_service_worker());
     }
@@ -7537,7 +7540,7 @@ async fn same_context_background_session_can_disable_its_own_cache_and_service_w
         let staged = active
             .parked_page_session_state(&second_target_id)
             .expect("second target should have staged parked page session state");
-        assert!(staged.network_enabled);
+        assert!(staged.runtime_slot.primary_network_events_enabled());
         assert!(!staged.network_policy.cache_disabled());
         assert!(!staged.network_policy.bypass_service_worker());
     }

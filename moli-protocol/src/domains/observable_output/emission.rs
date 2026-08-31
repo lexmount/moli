@@ -346,7 +346,7 @@ mod tests {
     use serde_json::json;
 
     use crate::conn::{
-        BackgroundProtocolEvent, BackgroundTarget, BrowserContext, TargetIdentityState,
+        BackgroundProtocolEvent, BrowserContext, PageTargetHost, TargetIdentityState,
         TargetPageSlot,
     };
     use crate::domains::observable_output::{
@@ -407,10 +407,12 @@ mod tests {
             .active_target
             .runtime_slot
             .replace_loaded_page(Some(page));
-        bc.devtools_session_state
+        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .console_output_session_state
             .console_enabled = true;
-        bc.devtools_session_state.page_session_state.log_enabled = true;
+        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+            .page_session_state
+            .log_enabled = true;
         ctx.conn.browser_context = Some(bc);
 
         let queue = TargetObservableOutputQueue::for_test(vec![
@@ -426,13 +428,16 @@ mod tests {
             bc.target_url(),
             bc.page_attachment_id()
                 .expect("loaded Page must have an attachment id"),
-            bc.devtools_session_state
+            bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .console_output_session_state
                 .console_enabled,
-            bc.devtools_session_state.page_session_state.log_enabled,
+            bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                .page_session_state
+                .log_enabled,
             true,
             &bc.active_target.owner_state,
-            &bc.devtools_session_state.console_output_session_state,
+            &bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                .console_output_session_state,
             Some("SID-1"),
         );
         let mut duplicate_slot =
@@ -491,7 +496,7 @@ mod tests {
                 .browser_context
                 .as_ref()
                 .expect("browser context should be loaded")
-                .devtools_session_state
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .console_output_session_state
                 .log_lifecycle_entries
                 == 1,
@@ -540,7 +545,7 @@ mod tests {
             .active_target
             .runtime_slot
             .replace_loaded_page(Some(page));
-        bc.devtools_session_state
+        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .console_output_session_state
             .console_enabled = true;
         ctx.conn.browser_context = Some(bc);
@@ -602,7 +607,7 @@ mod tests {
             .active_target
             .runtime_slot
             .replace_loaded_page(Some(page));
-        bc.devtools_session_state
+        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .console_output_session_state
             .console_enabled = true;
         ctx.conn.browser_context = Some(bc);
@@ -663,7 +668,7 @@ mod tests {
             .await
             .expect("first test page should load");
         let _ = bc.replace_loaded_page(Some(first_page));
-        bc.devtools_session_state
+        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .console_output_session_state
             .console_enabled = true;
         ctx.conn.browser_context = Some(bc);
@@ -685,7 +690,7 @@ mod tests {
                 .expect("browser context should remain loaded");
             let _ = bc.replace_loaded_page(Some(second_page));
             bc.set_target_url(page_url.to_owned());
-            bc.devtools_session_state
+            bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .console_output_session_state
                 .console_enabled = true;
         }
@@ -732,18 +737,17 @@ mod tests {
         bc.set_active_target_id("TID-active".to_owned());
         bc.attach_active_session("SID-active".to_owned());
         let _ = bc.replace_loaded_page(Some(active_page));
-        bc.devtools_session_state
+        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .console_output_session_state
             .console_enabled = true;
-        bc.background_targets.push(BackgroundTarget::new(
+        bc.insert_page_target_host(PageTargetHost::new(
             "TID-background".to_owned(),
             Some("SID-background".to_owned()),
             TargetIdentityState::with_url("data:text/html,background-owner".to_owned()),
             TargetPageSlot::with_loaded_page_for_test(background_page),
         ));
         bc.mutate_parked_page_session_state("TID-background", |state| {
-            state
-                .devtools_session_state
+            state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .console_output_session_state
                 .console_enabled = true;
         });
@@ -821,18 +825,17 @@ mod tests {
         bc.set_active_target_id("TID-active".to_owned());
         bc.attach_active_session("SID-active".to_owned());
         let _ = bc.replace_loaded_page(Some(active_page));
-        bc.devtools_session_state
+        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .console_output_session_state
             .console_enabled = true;
-        bc.background_targets.push(BackgroundTarget::new(
+        bc.insert_page_target_host(PageTargetHost::new(
             "TID-promoted".to_owned(),
             Some("SID-promoted".to_owned()),
             TargetIdentityState::with_url("data:text/html,promoted-owner".to_owned()),
             TargetPageSlot::with_loaded_page_for_test(promoted_page),
         ));
         bc.mutate_parked_page_session_state("TID-promoted", |state| {
-            state
-                .devtools_session_state
+            state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .console_output_session_state
                 .console_enabled = true;
         });
@@ -942,7 +945,7 @@ mod tests {
             .await
             .expect("test page should load");
         let _ = bc.replace_loaded_page(Some(page));
-        bc.devtools_session_state
+        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
             .runtime_frontend_enabled = true;
         ctx.conn.browser_context = Some(bc);
@@ -1000,7 +1003,7 @@ mod tests {
             .await
             .expect("test page should load");
         let _ = bc.replace_loaded_page(Some(page));
-        bc.devtools_session_state
+        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
             .runtime_frontend_enabled = true;
         ctx.conn.browser_context = Some(bc);
@@ -1055,7 +1058,7 @@ mod tests {
             .await
             .expect("test page should load");
         let _ = bc.replace_loaded_page(Some(page));
-        bc.devtools_session_state
+        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
             .runtime_frontend_enabled = true;
         ctx.conn.browser_context = Some(bc);
@@ -1109,10 +1112,10 @@ mod tests {
             .await
             .expect("test page should load");
         let _ = bc.replace_loaded_page(Some(page));
-        bc.devtools_session_state
+        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
             .runtime_frontend_enabled = true;
-        bc.devtools_session_state
+        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .console_output_session_state
             .renderer_runtime_agent_owns_page_console_api_events = true;
         ctx.conn.browser_context = Some(bc);
@@ -1185,7 +1188,7 @@ mod tests {
             .await
             .expect("test page should load");
         let _ = bc.replace_loaded_page(Some(page));
-        bc.devtools_session_state
+        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
             .runtime_frontend_enabled = true;
         ctx.conn.browser_context = Some(bc);
@@ -1221,7 +1224,7 @@ mod tests {
             .await
             .expect("first test page should load");
         let _ = bc.replace_loaded_page(Some(first_page));
-        bc.devtools_session_state
+        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
             .runtime_frontend_enabled = true;
         ctx.conn.browser_context = Some(bc);
@@ -1249,7 +1252,7 @@ mod tests {
                 .expect("browser context should remain loaded");
             let _ = bc.replace_loaded_page(Some(second_page));
             bc.set_target_url(page_url.to_owned());
-            bc.devtools_session_state
+            bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .runtime_session_state
                 .runtime_frontend_enabled = true;
         }
@@ -1281,7 +1284,7 @@ mod tests {
             .await
             .expect("first test page should load");
         let _ = bc.replace_loaded_page(Some(first_page));
-        bc.devtools_session_state
+        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
             .runtime_frontend_enabled = true;
         ctx.conn.browser_context = Some(bc);
@@ -1309,7 +1312,7 @@ mod tests {
                 .expect("browser context should remain loaded");
             let _ = bc.replace_loaded_page(Some(second_page));
             bc.set_target_url(page_url.to_owned());
-            bc.devtools_session_state
+            bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .runtime_session_state
                 .runtime_frontend_enabled = true;
         }

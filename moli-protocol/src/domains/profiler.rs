@@ -564,12 +564,13 @@ mod tests {
         with_loaded_document_async(&mut ctx, "<!doctype html><body></body>").await;
         {
             let browser_context = ctx.conn.browser_context.as_mut().expect("browser context");
-            browser_context.set_active_target_id("TID-profiler-isolation");
             browser_context.attach_active_session("SID-profiler-primary");
-            assert!(browser_context.assign_auxiliary_session_to_target(
-                "TID-profiler-isolation",
-                "SID-profiler-aux".to_owned()
-            ));
+            assert!(
+                browser_context.assign_auxiliary_session_to_target(
+                    "TID-profiler",
+                    "SID-profiler-aux".to_owned()
+                )
+            );
         }
 
         let primary_enable = process_and_take_response(
@@ -582,7 +583,11 @@ mod tests {
             37,
         )
         .await;
-        assert_eq!(primary_enable["result"], json!({}));
+        assert_eq!(
+            primary_enable["result"],
+            json!({}),
+            "primary Profiler.enable response: {primary_enable:?}"
+        );
 
         let aux_start_without_enable = process_and_take_response(
             &mut ctx,
@@ -670,12 +675,13 @@ mod tests {
         with_loaded_document_async(&mut ctx, "<!doctype html><body></body>").await;
         {
             let browser_context = ctx.conn.browser_context.as_mut().expect("browser context");
-            browser_context.set_active_target_id("TID-profiler-coverage-isolation");
             browser_context.attach_active_session("SID-profiler-primary");
-            assert!(browser_context.assign_auxiliary_session_to_target(
-                "TID-profiler-coverage-isolation",
-                "SID-profiler-aux".to_owned()
-            ));
+            assert!(
+                browser_context.assign_auxiliary_session_to_target(
+                    "TID-profiler",
+                    "SID-profiler-aux".to_owned()
+                )
+            );
         }
 
         let primary_enable = process_and_take_response(
@@ -809,10 +815,9 @@ mod tests {
         with_loaded_document_async(&mut ctx, "<!doctype html><body></body>").await;
         {
             let browser_context = ctx.conn.browser_context.as_mut().expect("browser context");
-            browser_context.set_active_target_id("TID-profiler-detach");
             browser_context.attach_active_session("SID-profiler-old");
             assert!(browser_context.assign_auxiliary_session_to_target(
-                "TID-profiler-detach",
+                "TID-profiler",
                 "SID-profiler-aux-old".to_owned()
             ));
         }
@@ -864,7 +869,7 @@ mod tests {
             let browser_context = ctx.conn.browser_context.as_ref().expect("browser context");
             assert_eq!(browser_context.active_session_id(), None);
             assert!(
-                browser_context.auxiliary_devtools_session_states.is_empty(),
+                browser_context.devtools_sessions.attached_is_empty(),
                 "detaching the primary target session must drop active auxiliary inspector session state"
             );
         }
@@ -1574,7 +1579,7 @@ mod tests {
             .browser_context
             .as_ref()
             .expect("browser context")
-            .devtools_session_state
+            .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .inspector_session_state;
         assert!(
             inspector_state.v8_state.is_some(),

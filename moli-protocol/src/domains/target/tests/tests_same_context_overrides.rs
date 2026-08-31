@@ -147,7 +147,7 @@ async fn same_context_targets_restore_their_own_page_session_overrides_after_swi
         "method": "Runtime.evaluate",
         "sessionId": "SID-active",
         "params": {
-            "expression": "JSON.stringify({ title: document.title, lang: navigator.language })"
+            "expression": "JSON.stringify({ title: document.title, lang: navigator.language, locale: Intl.DateTimeFormat().resolvedOptions().locale })"
         }
     }))
     .await;
@@ -158,7 +158,8 @@ async fn same_context_targets_restore_their_own_page_session_overrides_after_swi
     let first_payload: serde_json::Value =
         serde_json::from_str(first_payload).expect("first payload should be valid json");
     assert_eq!(first_payload["title"], json!("first-restored"));
-    assert_eq!(first_payload["lang"], json!("en-GB"));
+    assert_eq!(first_payload["lang"], json!("en-US"));
+    assert_eq!(first_payload["locale"], json!("en-GB"));
 
     ctx.process_async(json!({
         "id": 104168,
@@ -204,7 +205,7 @@ async fn same_context_targets_restore_their_own_page_session_overrides_after_swi
         "method": "Runtime.evaluate",
         "sessionId": second_session_id,
         "params": {
-            "expression": "JSON.stringify({ title: document.title, lang: navigator.language })"
+            "expression": "JSON.stringify({ title: document.title, lang: navigator.language, locale: Intl.DateTimeFormat().resolvedOptions().locale })"
         }
     }))
     .await;
@@ -215,7 +216,8 @@ async fn same_context_targets_restore_their_own_page_session_overrides_after_swi
     let second_payload: serde_json::Value =
         serde_json::from_str(second_payload).expect("second payload should be valid json");
     assert_eq!(second_payload["title"], json!("second-restored"));
-    assert_eq!(second_payload["lang"], json!("fr-FR"));
+    assert_eq!(second_payload["lang"], json!("en-US"));
+    assert_eq!(second_payload["locale"], json!("fr-FR"));
 }
 
 #[tokio::test(flavor = "multi_thread")]

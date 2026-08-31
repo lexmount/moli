@@ -616,7 +616,7 @@ async fn devtools_set_cache_behavior_global_updates_existing_targets_and_default
     let mut ctx = TestContext::new();
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-active".to_owned());
-    bc.background_targets.push(BackgroundTarget::new(
+    bc.insert_page_target_host(PageTargetHost::new(
         "TID-background".to_owned(),
         None,
         TargetIdentityState::about_blank(),
@@ -660,8 +660,7 @@ async fn devtools_set_cache_behavior_global_updates_existing_targets_and_default
     assert!(
         ctx.conn
             .new_browser_context("BID-future".to_owned())
-            .network_policy
-            .cache_disabled()
+            .global_cache_disabled
     );
 }
 
@@ -670,7 +669,7 @@ async fn devtools_set_cache_behavior_contexts_only_updates_requested_targets() {
     let mut ctx = TestContext::new();
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-active".to_owned());
-    bc.background_targets.push(BackgroundTarget::new(
+    bc.insert_page_target_host(PageTargetHost::new(
         "TID-background".to_owned(),
         None,
         TargetIdentityState::about_blank(),
@@ -711,8 +710,7 @@ async fn devtools_set_cache_behavior_contexts_only_updates_requested_targets() {
     assert!(
         !ctx.conn
             .new_browser_context("BID-future".to_owned())
-            .network_policy
-            .cache_disabled()
+            .global_cache_disabled
     );
 }
 
@@ -778,8 +776,7 @@ async fn devtools_set_cache_behavior_without_contexts_sets_future_default() {
     assert!(
         ctx.conn
             .new_browser_context("BID-future".to_owned())
-            .network_policy
-            .cache_disabled()
+            .global_cache_disabled
     );
 }
 #[tokio::test(flavor = "multi_thread")]

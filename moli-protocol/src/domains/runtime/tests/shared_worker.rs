@@ -583,13 +583,13 @@ onconnect = event => {
         .browser_context
         .as_mut()
         .expect("browser context should remain installed");
-    let mut background = crate::conn::BackgroundTarget::with_url(
+    let mut background = crate::conn::PageTargetHost::with_url(
         "TID-diagnostics-document-worker-bg".to_owned(),
         Some("SID-diagnostics-document-worker-bg".to_owned()),
         background_url.to_owned(),
     );
     background.replace_loaded_page(Some(background_page));
-    browser_context.background_targets.push(background);
+    browser_context.insert_page_target_host(background);
     ctx.sent.clear();
 
     ctx.process_async(json!({

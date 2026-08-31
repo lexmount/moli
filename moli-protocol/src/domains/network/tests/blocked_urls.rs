@@ -250,14 +250,14 @@ async fn background_set_blocked_urls_updates_loaded_owner_page_without_promotion
     ctx.conn.browser_context = None;
     ctx.sent.clear();
 
-    let background = BackgroundTarget::new(
+    let background = PageTargetHost::new(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
         TargetIdentityState::about_blank(),
         TargetPageSlot::empty_for_test_fixture(),
     );
     let mut inactive = BrowserContext::new("BID-background".to_owned());
-    inactive.background_targets.push(background);
+    inactive.insert_page_target_host(background);
     ctx.conn.inactive_browser_contexts.push(inactive);
     ctx.install_navigation_fixture_for_session_owner(&page_url, Some("SID-background"))
         .await;

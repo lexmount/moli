@@ -5011,7 +5011,7 @@ async fn get_frame_owner_invalid_params_error() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn get_frame_owner_without_target_id_errors() {
+async fn get_frame_owner_without_selected_target_errors() {
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-A");
 
@@ -5037,11 +5037,7 @@ async fn get_frame_owner_without_target_id_errors() {
         "params": { "frameId": "TID-1" }
     }))
     .await;
-    ctx.expect_error(
-        2,
-        -32000,
-        "Frame with the given id does not belong to the target.",
-    );
+    ctx.expect_error(2, -31998, "BrowserContextNotLoaded");
 }
 
 #[tokio::test(flavor = "multi_thread")]

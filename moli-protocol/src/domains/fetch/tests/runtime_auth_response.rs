@@ -472,11 +472,8 @@ async fn runtime_child_frame_fetch_subresource_interception_uses_child_frame_att
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &top_url, "SID-1", "TID-1").await;
     ctx.enable_page_events_for_test(Some("SID-1"));
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .devtools_session_state
+    ctx.conn.browser_context.as_mut().unwrap().devtools_sessions
+        [moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .inspector_enabled = true;
     ctx.sent.clear();
@@ -5185,11 +5182,8 @@ async fn close_aborts_paused_response_stage_runtime_xhr_subresource() {
     let xhr_url = format!("http://{addr}/xhr");
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &page_url, "SID-1", "TID-1").await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .devtools_session_state
+    ctx.conn.browser_context.as_mut().unwrap().devtools_sessions
+        [moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .inspector_enabled = true;
     ctx.sent.clear();
@@ -5521,11 +5515,8 @@ async fn close_aborts_paused_runtime_xhr_auth_subresource() {
     let protected_url = format!("http://{addr}/protected");
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &page_url, "SID-1", "TID-1").await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .devtools_session_state
+    ctx.conn.browser_context.as_mut().unwrap().devtools_sessions
+        [moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .inspector_enabled = true;
     ctx.sent.clear();

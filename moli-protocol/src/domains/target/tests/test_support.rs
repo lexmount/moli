@@ -32,17 +32,16 @@ pub(super) fn push_background_target(
         .browser_context
         .as_mut()
         .expect("browser context must exist before adding background target");
-    bc.background_targets
-        .push(crate::conn::BackgroundTarget::new(
-            target_id.to_owned(),
-            session_id.map(str::to_owned),
-            crate::conn::TargetIdentityState::new(
-                url.to_owned(),
-                crate::conn::URL_BASE.into(),
-                "Secure".into(),
-            ),
-            crate::conn::TargetPageSlot::empty_for_test_fixture(),
-        ));
+    bc.insert_page_target_host(crate::conn::PageTargetHost::new(
+        target_id.to_owned(),
+        session_id.map(str::to_owned),
+        crate::conn::TargetIdentityState::new(
+            url.to_owned(),
+            crate::conn::URL_BASE.into(),
+            "Secure".into(),
+        ),
+        crate::conn::TargetPageSlot::empty_for_test_fixture(),
+    ));
 }
 
 pub(super) fn loaded_page_for_target<'a>(
@@ -54,7 +53,7 @@ pub(super) fn loaded_page_for_target<'a>(
     } else {
         browser_context
             .background_target(target_id)
-            .and_then(crate::conn::BackgroundTarget::loaded_page)
+            .and_then(crate::conn::PageTargetHost::loaded_page)
     }
 }
 

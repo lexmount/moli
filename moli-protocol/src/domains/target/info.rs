@@ -107,8 +107,8 @@ pub(super) fn execute_devtools_get_target_info_command(
         ));
     }
     let target_exists = conn.browser_contexts().any(|bc| {
-        bc.has_active_target()
-            || !bc.background_targets.is_empty()
+        bc.active_target_id().is_some()
+            || !bc.has_no_background_targets()
             || bc.has_any_shared_worker_targets()
             || bc.has_any_dedicated_worker_targets()
             || bc.has_any_service_worker_targets()

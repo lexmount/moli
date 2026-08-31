@@ -1735,16 +1735,18 @@ class FixtureServer:
                 )
 
             def _send_slow_download(self) -> None:
-                body = b"slow download contents"
+                body = b"slow download contents\n" * (256 * 1024)
                 self.send_response(HTTPStatus.OK)
                 self.send_header("Content-Type", "text/plain; charset=utf-8")
                 self.send_header("Cache-Control", "no-store")
                 self.send_header("Content-Disposition", 'attachment; filename="slow-smoke-download.txt"')
+                self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
-                self.wfile.write(body[:4])
+                split = 64 * 1024
+                self.wfile.write(body[:split])
                 self.wfile.flush()
                 time.sleep(5)
-                self.wfile.write(body[4:])
+                self.wfile.write(body[split:])
 
             def _handle_websocket(self) -> None:
                 key = self.headers.get("Sec-WebSocket-Key")

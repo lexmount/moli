@@ -108,6 +108,21 @@ impl CompletedPageCommand {
         }
         Ok(self.output)
     }
+
+    /// Consumes a unit-reply command that settled on an attachment which is
+    /// no longer current.
+    ///
+    /// The caller deliberately does not install the frozen Page state on the
+    /// replacement attachment. Target-scoped browser state must instead be
+    /// replayed while that replacement Page is installed.
+    pub fn into_unit_page_command_turn(self) -> Result<RendererCommandTurnOutput> {
+        if !matches!(self.output.completion().reply(), RendererPageReply::Unit) {
+            return Err(anyhow::anyhow!(
+                "unit page command returned an unexpected renderer reply"
+            ));
+        }
+        Ok(self.output)
+    }
 }
 
 impl Page {

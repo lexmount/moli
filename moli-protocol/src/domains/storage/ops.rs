@@ -660,7 +660,11 @@ fn start_devtools_set_cookies_result(
             "UnknownBrowserContextId",
         )));
     };
-    let Some(page) = browser_context.active_target.runtime_slot.loaded_page_mut() else {
+    let Some(page) = browser_context
+        .page_targets
+        .active_mut()
+        .and_then(|target| target.runtime_slot.loaded_page_mut())
+    else {
         let manager_surface = browser_context.cookie_manager_surface_snapshot_without_live_page();
         let reports = set_cookies_with_manager_surface(browser_context, &manager_surface, cookies);
         return DevToolsSetCookiesTaskStep::Complete(Ok(set_cookie_reports_result(&reports)));
@@ -708,7 +712,7 @@ fn effective_storage_browser_context_id(
             | Some(crate::conn::CdpSessionRoute::AuxiliaryTarget {
                 browser_context_id, ..
             })
-            | Some(crate::conn::CdpSessionRoute::BackgroundTarget {
+            | Some(crate::conn::CdpSessionRoute::PageTargetHost {
                 browser_context_id, ..
             }) => Ok(browser_context_id),
             Some(crate::conn::CdpSessionRoute::Browser) => conn
@@ -878,7 +882,11 @@ fn complete_set_cookies_result(
         ));
     };
     let owner = {
-        let Some(page) = browser_context.active_target.runtime_slot.loaded_page_mut() else {
+        let Some(page) = browser_context
+            .page_targets
+            .active_mut()
+            .and_then(|target| target.runtime_slot.loaded_page_mut())
+        else {
             return Err(DevToolsError::new(
                 DevToolsErrorKind::Internal,
                 "NoDocumentLoaded",

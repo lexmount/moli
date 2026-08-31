@@ -63,7 +63,6 @@ pub(crate) use agent::TargetIoStreamRead;
 pub(crate) use agent::{
     CapturedRequestBody, CapturedResponseBody, CollectedNetworkDataArtifact,
     NetworkBacklogPreferredRequestId, RetiringTargetNetworkAgentState, TargetNetworkAgentState,
-    TargetNetworkArtifacts,
 };
 pub(crate) use backlog::{
     NetworkBacklogProjectionContext, emit_pending_network_backlog_activity_background_events,
@@ -419,8 +418,7 @@ fn top_level_target_ids(conn: &CdpConnection) -> Vec<String> {
                 .into_iter()
                 .chain(
                     browser_context
-                        .background_targets
-                        .iter()
+                        .background_targets()
                         .map(|target| target.target_id().to_owned()),
                 )
         })

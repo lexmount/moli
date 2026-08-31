@@ -1,7 +1,7 @@
 use crate::conn::{
-    BackgroundTarget, BrowserContext, CdpCommandTaskStep, EmulatedGeolocationOverride,
-    EmulatedGeolocationOverrideState, PendingCdpCommandDispatch, TargetIdentityState,
-    TargetPageSlot,
+    BrowserContext, CdpCommandTaskStep, EmulatedGeolocationOverride,
+    EmulatedGeolocationOverrideState, PageTargetHost, PendingCdpCommandDispatch,
+    TargetIdentityState, TargetPageSlot,
 };
 use crate::devtools_runtime::{
     DevToolsBrowserContextId, DevToolsCommand, DevToolsCommandContext, DevToolsCommandResult,
@@ -651,6 +651,71 @@ async fn live_geolocation_override_uses_pending_command_dispatch() {
             && message["sessionId"] == json!("SID-1")
             && message["result"] == json!({})
     }));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn device_metrics_completion_survives_initial_page_replacement() {
+    let mut ctx = TestContext::new();
+    load_session_page_for_pending_emulation_test_at_url(
+        &mut ctx,
+        "data:text/html,<body>initial</body>",
+    )
+    .await;
+
+    let raw = json!({
+        "id": 9128,
+        "sessionId": "SID-1",
+        "method": "Emulation.setDeviceMetricsOverride",
+        "params": {
+            "width": 640,
+            "height": 360,
+            "deviceScaleFactor": 2,
+            "mobile": false
+        }
+    })
+    .to_string();
+    let CdpCommandTaskStep::Pending(pending) = ctx.conn.start_command_dispatch(&raw) else {
+        panic!("loaded Emulation.setDeviceMetricsOverride should update the renderer Page");
+    };
+    let completed = pending.wait().await;
+
+    ctx.process_async(json!({
+        "id": 9129,
+        "sessionId": "SID-1",
+        "method": "Page.navigate",
+        "params": { "url": "data:text/html,<body>replacement</body>" }
+    }))
+    .await;
+    let navigate = ctx.take_response_by_id(9129);
+    assert_eq!(navigate["result"]["frameId"], json!("TID-1"));
+    assert!(navigate["result"]["loaderId"].is_string());
+
+    let CdpCommandTaskStep::Complete(outcome) =
+        ctx.conn.complete_pending_command_dispatch(completed).await
+    else {
+        panic!("device metrics completion should settle after Page replacement");
+    };
+    let messages = outcome.into_parts().0;
+    assert!(messages.iter().any(|message| {
+        message["id"] == json!(9128)
+            && message["sessionId"] == json!("SID-1")
+            && message["result"] == json!({})
+    }));
+
+    ctx.process_async(json!({
+        "id": 9130,
+        "sessionId": "SID-1",
+        "method": "Runtime.evaluate",
+        "params": {
+            "expression": "JSON.stringify([innerWidth, innerHeight, devicePixelRatio])",
+            "returnByValue": true
+        }
+    }))
+    .await;
+    assert_eq!(
+        ctx.take_response_by_id(9130)["result"]["result"]["value"],
+        json!("[640,360,2]")
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1418,7 +1483,7 @@ async fn emulation_async_dispatch_updates_live_page_user_agent_and_xhr_header() 
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn emulation_async_dispatch_updates_live_page_surface_and_accept_language() {
+async fn emulation_async_dispatch_updates_live_page_surface_without_mutating_accept_language() {
     async fn page_handler() -> impl IntoResponse {
         "<!doctype html><html><body>ok</body></html>"
     }
@@ -1519,7 +1584,7 @@ async fn emulation_async_dispatch_updates_live_page_surface_and_accept_language(
     assert_eq!(payload["localized"], json!("02/01/2020 11:04:05"));
     assert_eq!(payload["dark"], json!(true));
     assert_eq!(payload["light"], json!(false));
-    assert_eq!(seen.lock().as_deref(), Some("fr-FR"));
+    assert_eq!(seen.lock().as_deref(), Some("en-US,en;q=0.9"));
 
     server.abort();
 }
@@ -1882,14 +1947,14 @@ async fn device_metrics_override_updates_layout_metrics() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn locale_override_updates_headers_and_navigator_language() {
+async fn locale_override_updates_intl_without_mutating_language_surfaces() {
     async fn handler(headers: HeaderMap) -> impl IntoResponse {
         let accept_language = headers
             .get(axum::http::header::ACCEPT_LANGUAGE)
             .and_then(|value| value.to_str().ok())
             .unwrap_or("");
         format!(
-            "<!doctype html><html><body data-accept-language=\"{accept_language}\"><script>document.body.textContent = [navigator.language, navigator.languages[0], document.body.dataset.acceptLanguage].join('|');</script></body></html>"
+            "<!doctype html><html><body data-accept-language=\"{accept_language}\"><script>document.body.textContent = [Intl.DateTimeFormat().resolvedOptions().locale, navigator.language, navigator.languages.join(','), document.body.dataset.acceptLanguage].join('|');</script></body></html>"
         )
     }
 
@@ -1925,13 +1990,16 @@ async fn locale_override_updates_headers_and_navigator_language() {
 
     let _ = ctx.take_all();
     let html = loaded_page_html_for_test(&mut ctx).await;
-    assert!(html.contains(">fr-FR|fr-FR|fr-FR<"), "got {html}");
+    assert!(
+        html.contains(">fr-FR|en-US|en-US,en|en-US,en;q=0.9<"),
+        "got {html}"
+    );
 
     server.abort();
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn live_locale_override_updates_navigator_without_page_define_property() {
+async fn live_locale_override_updates_intl_without_mutating_navigator() {
     let mut ctx = TestContext::new();
     load_session_page_for_pending_emulation_test(&mut ctx).await;
 
@@ -1969,7 +2037,7 @@ async fn live_locale_override_updates_navigator_without_page_define_property() {
         "method": "Runtime.evaluate",
         "sessionId": "SID-1",
         "params": {
-            "expression": "JSON.stringify({ language: navigator.language, languages: Array.from(navigator.languages || []), reflectedLocaleSlot: Object.prototype.hasOwnProperty.call(globalThis, '__moliLocaleOverride') })"
+            "expression": "JSON.stringify({ intlLocale: Intl.DateTimeFormat().resolvedOptions().locale, language: navigator.language, languages: Array.from(navigator.languages || []), reflectedLocaleSlot: Object.prototype.hasOwnProperty.call(globalThis, '__moliLocaleOverride') })"
         }
     }))
     .await;
@@ -1979,8 +2047,9 @@ async fn live_locale_override_updates_navigator_without_page_define_property() {
         .expect("runtime evaluate should return a JSON string");
     let payload: serde_json::Value =
         serde_json::from_str(payload).expect("runtime evaluate payload should be json");
-    assert_eq!(payload["language"], json!("fr-FR"));
-    assert_eq!(payload["languages"], json!(["fr-FR"]));
+    assert_eq!(payload["intlLocale"], json!("fr-FR"));
+    assert_eq!(payload["language"], json!("en-US"));
+    assert_eq!(payload["languages"], json!(["en-US", "en"]));
     assert_eq!(payload["reflectedLocaleSlot"], json!(false));
 }
 
@@ -2066,7 +2135,7 @@ async fn locale_and_timezone_overrides_apply_to_locale_date_formatting() {
 #[tokio::test(flavor = "multi_thread")]
 async fn context_emulated_media_applies_to_loaded_background_page_without_promotion() {
     let mut ctx = TestContext::new();
-    let background = BackgroundTarget::new(
+    let background = PageTargetHost::new(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
         TargetIdentityState::about_blank(),
@@ -2076,7 +2145,7 @@ async fn context_emulated_media_applies_to_loaded_background_page_without_promot
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-active".to_owned());
     bc.attach_active_session("SID-active");
-    bc.background_targets.push(background);
+    bc.insert_page_target_host(background);
     ctx.conn.browser_context = Some(bc);
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<body>background</body>",
@@ -2142,7 +2211,7 @@ async fn context_emulated_media_applies_to_loaded_background_page_without_promot
 #[tokio::test(flavor = "multi_thread")]
 async fn context_locale_override_applies_to_loaded_background_page_without_promotion() {
     let mut ctx = TestContext::new();
-    let background = BackgroundTarget::new(
+    let background = PageTargetHost::new(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
         TargetIdentityState::about_blank(),
@@ -2152,7 +2221,7 @@ async fn context_locale_override_applies_to_loaded_background_page_without_promo
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-active".to_owned());
     bc.attach_active_session("SID-active");
-    bc.background_targets.push(background);
+    bc.insert_page_target_host(background);
     ctx.conn.browser_context = Some(bc);
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<body>background</body>",
@@ -2219,7 +2288,7 @@ async fn context_locale_override_applies_to_loaded_background_page_without_promo
 #[tokio::test(flavor = "multi_thread")]
 async fn session_emulation_routes_to_loaded_background_owner_without_promotion() {
     let mut ctx = TestContext::new();
-    let background = BackgroundTarget::new(
+    let background = PageTargetHost::new(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
         TargetIdentityState::about_blank(),
@@ -2229,7 +2298,7 @@ async fn session_emulation_routes_to_loaded_background_owner_without_promotion()
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-active".to_owned());
     bc.attach_active_session("SID-active");
-    bc.background_targets.push(background);
+    bc.insert_page_target_host(background);
     ctx.conn.browser_context = Some(bc);
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<body>background</body>",

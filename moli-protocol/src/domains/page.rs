@@ -1399,7 +1399,7 @@ async fn bring_session_route_to_front_async(
             browser_context_id,
             target_id,
         }
-        | CdpSessionRoute::BackgroundTarget {
+        | CdpSessionRoute::PageTargetHost {
             browser_context_id,
             target_id,
         } => (browser_context_id, target_id),
@@ -3455,7 +3455,7 @@ mod producer_tests {
         bc.set_active_target_id("TID-activity-order");
         bc.set_target_url("https://example.test/page".to_owned());
         bc.attach_active_session("SID-activity-order");
-        bc.devtools_session_state
+        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_file_chooser_opened_event_enabled = true;
         conn.browser_context = Some(bc);
@@ -3611,10 +3611,10 @@ mod producer_tests {
         bc.set_active_target_id("TID-later-activity-order");
         bc.set_target_url("https://example.test/page".to_owned());
         bc.attach_active_session("SID-later-activity-order");
-        bc.devtools_session_state
+        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_lifecycle_events = true;
-        bc.devtools_session_state
+        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_domain_enabled = true;
         conn.browser_context = Some(bc);
@@ -3777,13 +3777,13 @@ mod producer_tests {
         bc.set_target_url("https://example.test/page".to_owned());
         bc.set_active_target_id("TID-1");
         bc.attach_active_session("SID-1");
-        bc.devtools_session_state
+        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_lifecycle_events = true;
-        bc.devtools_session_state
+        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_domain_enabled = true;
-        bc.devtools_session_state
+        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
             .runtime_frontend_enabled = true;
         conn.browser_context = Some(bc);
@@ -3858,10 +3858,10 @@ mod producer_tests {
         bc.set_target_url("https://example.test/page".to_owned());
         bc.set_active_target_id("TID-1");
         bc.attach_active_session("SID-1");
-        bc.devtools_session_state
+        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_lifecycle_events = true;
-        bc.devtools_session_state
+        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_domain_enabled = true;
         conn.browser_context = Some(bc);
@@ -3994,7 +3994,7 @@ mod producer_tests {
         bc.set_target_url("https://top.example/page".to_owned());
         bc.set_active_target_id("TID-1");
         bc.attach_active_session("SID-1");
-        bc.devtools_session_state
+        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_domain_enabled = true;
         conn.browser_context = Some(bc);
@@ -4201,10 +4201,10 @@ mod producer_tests {
         bc.set_target_url("https://example.test/page".to_owned());
         bc.set_active_target_id("TID-1");
         bc.attach_active_session("SID-1");
-        bc.devtools_session_state
+        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_lifecycle_events = true;
-        bc.devtools_session_state
+        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_domain_enabled = true;
         conn.browser_context = Some(bc);
@@ -4379,7 +4379,7 @@ mod producer_tests {
         bc.set_target_url("https://example.test/page".to_owned());
         bc.set_active_target_id("TID-1");
         bc.attach_active_session("SID-1");
-        bc.devtools_session_state
+        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_domain_enabled = true;
         conn.browser_context = Some(bc);
@@ -4546,8 +4546,7 @@ mod producer_tests {
         browser_context.set_target_url("https://example.test/page".to_owned());
         browser_context.set_active_target_id("TID-child-delivery-route");
         browser_context.attach_active_session("SID-child-delivery-route");
-        browser_context
-            .devtools_session_state
+        browser_context.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_domain_enabled = true;
         conn.browser_context = Some(browser_context);
@@ -4639,7 +4638,7 @@ mod producer_tests {
         bc.set_target_url("about:blank".to_owned());
         bc.set_active_target_id("TID-1");
         bc.attach_active_session("SID-1");
-        bc.devtools_session_state
+        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_domain_enabled = true;
         conn.browser_context = Some(bc);
@@ -4783,8 +4782,7 @@ mod producer_tests {
             conn.browser_context
                 .as_ref()
                 .unwrap()
-                .background_targets
-                .len(),
+                .background_target_count(),
             1,
             "prepared popup should create the owner popup target without reading a loaded page"
         );
@@ -4792,8 +4790,8 @@ mod producer_tests {
             conn.browser_context
                 .as_ref()
                 .unwrap()
-                .background_targets
-                .first()
+                .background_targets()
+                .next()
                 .and_then(|target| target.loaded_page())
                 .is_some_and(|page| moli_url::is_about_blank(page.final_url())),
             "target creation should install only the initial empty Document"

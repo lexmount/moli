@@ -152,8 +152,7 @@ async fn push_loaded_runtime_frontend_enabled_background_context_async(
         .replace_loaded_page(Some(page));
     background_context.set_active_target_id(target_id.to_owned());
     background_context.attach_active_session(session_id.to_owned());
-    background_context
-        .devtools_session_state
+    background_context.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .runtime_frontend_enabled = true;
     ctx.conn.inactive_browser_contexts.push(background_context);
@@ -166,7 +165,7 @@ async fn with_loaded_runtime_frontend_enabled_background_target_async(
     background_session_id: &str,
     html: &str,
 ) {
-    let background_target = crate::conn::BackgroundTarget::with_url(
+    let background_target = crate::conn::PageTargetHost::with_url(
         background_target_id.to_owned(),
         Some(background_session_id.to_owned()),
         format!("data:text/html,{html}"),
@@ -175,10 +174,9 @@ async fn with_loaded_runtime_frontend_enabled_background_target_async(
     let mut browser_context = crate::conn::BrowserContext::new("BID-1".to_owned());
     browser_context.set_active_target_id(active_target_id.to_owned());
     browser_context.attach_active_session(active_session_id.to_owned());
-    browser_context.background_targets.push(background_target);
+    browser_context.insert_page_target_host(background_target);
     browser_context.mutate_parked_page_session_state(background_target_id, |state| {
-        state
-            .devtools_session_state
+        state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
             .runtime_frontend_enabled = true;
     });

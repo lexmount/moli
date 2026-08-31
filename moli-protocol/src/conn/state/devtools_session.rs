@@ -1,4 +1,7 @@
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::{
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    ops::{Index, IndexMut},
+};
 
 use super::{
     page_slot::RuntimeBindingDefinition,
@@ -10,9 +13,16 @@ use super::{
     },
     session::{InspectorSessionState, TargetPageSessionState, TargetRuntimeSessionState},
 };
-use moli_core::network::WebStorageMutationSubscription;
+use moli_core::{
+    network::WebStorageMutationSubscription,
+    page::{
+        RendererInspectorProtocolConfiguration, RendererInspectorSessionRestoreSnapshot,
+        V8InspectorSessionAttach,
+    },
+};
 use moli_page_types::{
-    RendererDomDebuggerEventListenerBreakpoint, RendererDomDebuggerXhrBreakpoint,
+    DevToolsSessionKey, RendererDomDebuggerEventListenerBreakpoint,
+    RendererDomDebuggerXhrBreakpoint,
 };
 
 /// CDP session-owned state for DevTools domains that are backed by a renderer
@@ -40,6 +50,295 @@ pub(crate) struct DevToolsSessionState {
     pub(crate) emitted_child_default_execution_context_ids: HashSet<i64>,
     pub(crate) inspector_session_state: InspectorSessionState,
     pub(crate) pending_inspector_awaits: TargetPendingInspectorAwaitRegistry,
+}
+
+/// Every DevTools session attached to one Page target.
+///
+/// The renderer's implicit root session is represented by `Primary`; flattened
+/// target sessions use `Attached(session_id)`. Keeping both in one ordered map
+/// gives attachment, disposal, replay, and effective-domain aggregation one
+/// source of truth.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct DevToolsSessionRegistry {
+    states: BTreeMap<DevToolsSessionKey, DevToolsSessionState>,
+}
+
+impl Default for DevToolsSessionRegistry {
+    fn default() -> Self {
+        Self {
+            states: BTreeMap::from([(
+                DevToolsSessionKey::Primary,
+                DevToolsSessionState::default(),
+            )]),
+        }
+    }
+}
+
+impl DevToolsSessionRegistry {
+    pub(crate) fn primary(&self) -> &DevToolsSessionState {
+        self.states
+            .get(&DevToolsSessionKey::Primary)
+            .expect("DevTools session registry must retain its primary session")
+    }
+
+    pub(crate) fn primary_mut(&mut self) -> &mut DevToolsSessionState {
+        self.states
+            .get_mut(&DevToolsSessionKey::Primary)
+            .expect("DevTools session registry must retain its primary session")
+    }
+
+    pub(crate) fn routed(
+        &self,
+        is_attached_session: bool,
+        session_id: Option<&str>,
+    ) -> Option<&DevToolsSessionState> {
+        if is_attached_session {
+            return self.attached(session_id?);
+        }
+        Some(self.primary())
+    }
+
+    pub(crate) fn routed_mut_or_insert(
+        &mut self,
+        is_attached_session: bool,
+        session_id: Option<&str>,
+    ) -> &mut DevToolsSessionState {
+        if is_attached_session && let Some(session_id) = session_id {
+            return self.ensure_attached(session_id);
+        }
+        self.primary_mut()
+    }
+
+    pub(crate) fn attached(&self, session_id: &str) -> Option<&DevToolsSessionState> {
+        self.states
+            .get(&DevToolsSessionKey::Attached(session_id.to_owned()))
+    }
+
+    pub(crate) fn attached_mut(&mut self, session_id: &str) -> Option<&mut DevToolsSessionState> {
+        self.states
+            .get_mut(&DevToolsSessionKey::Attached(session_id.to_owned()))
+    }
+
+    pub(crate) fn ensure_attached(&mut self, session_id: &str) -> &mut DevToolsSessionState {
+        self.states
+            .entry(DevToolsSessionKey::Attached(session_id.to_owned()))
+            .or_default()
+    }
+
+    pub(crate) fn remove_attached(&mut self, session_id: &str) -> Option<DevToolsSessionState> {
+        self.states
+            .remove(&DevToolsSessionKey::Attached(session_id.to_owned()))
+    }
+
+    pub(crate) fn clear_attached(&mut self) {
+        self.states
+            .retain(|key, _state| matches!(key, DevToolsSessionKey::Primary));
+    }
+
+    pub(crate) fn attached_len(&self) -> usize {
+        self.states.len().saturating_sub(1)
+    }
+
+    pub(crate) fn attached_is_empty(&self) -> bool {
+        self.attached_len() == 0
+    }
+
+    pub(crate) fn attached_entries(&self) -> impl Iterator<Item = (&str, &DevToolsSessionState)> {
+        self.states.iter().filter_map(|(key, state)| match key {
+            DevToolsSessionKey::Primary => None,
+            DevToolsSessionKey::Attached(session_id) => Some((session_id.as_str(), state)),
+        })
+    }
+
+    pub(crate) fn attached_states(&self) -> impl Iterator<Item = &DevToolsSessionState> {
+        self.attached_entries().map(|(_session_id, state)| state)
+    }
+
+    pub(crate) fn states(&self) -> impl Iterator<Item = &DevToolsSessionState> {
+        self.states.values()
+    }
+
+    pub(crate) fn states_mut(&mut self) -> impl Iterator<Item = &mut DevToolsSessionState> {
+        self.states.values_mut()
+    }
+
+    pub(crate) fn reset(&mut self, preserve_attached_sessions: bool) {
+        *self.primary_mut() = DevToolsSessionState::default();
+        if !preserve_attached_sessions {
+            self.clear_attached();
+        }
+    }
+
+    pub(crate) fn has_non_default_state(&self) -> bool {
+        self.primary() != &DevToolsSessionState::default() || !self.attached_is_empty()
+    }
+
+    pub(crate) fn has_pending_inspector_awaits(&self) -> bool {
+        self.states()
+            .any(DevToolsSessionState::has_pending_inspector_awaits)
+    }
+
+    pub(crate) fn pending_inspector_await_count(&self) -> usize {
+        self.states()
+            .map(DevToolsSessionState::pending_inspector_await_count)
+            .sum()
+    }
+
+    pub(crate) fn drain_pending_inspector_awaits_for_sessions(
+        &mut self,
+        session_ids: &[&str],
+    ) -> Vec<(u64, PendingInspectorAwait)> {
+        self.states_mut()
+            .flat_map(|state| state.drain_pending_inspector_awaits_for_sessions(session_ids))
+            .collect()
+    }
+
+    pub(crate) fn prepare_renderer_call_replacements(
+        &mut self,
+        primary_session_id: Option<&str>,
+        old_attachment_id: moli_page_types::RendererAgentAttachmentId,
+        new_attachment_id: moli_page_types::RendererAgentAttachmentId,
+    ) -> Result<PreparedRendererCallReplacements, RendererCallIdExhausted> {
+        let terminations = self.prepare_renderer_call_terminations(
+            primary_session_id,
+            old_attachment_id,
+            new_attachment_id,
+        )?;
+        let replays = self.prepare_renderer_call_replays(
+            primary_session_id,
+            old_attachment_id,
+            new_attachment_id,
+        )?;
+        Ok(PreparedRendererCallReplacements::new(
+            new_attachment_id,
+            terminations,
+            replays,
+        ))
+    }
+
+    fn prepare_renderer_call_replays(
+        &mut self,
+        primary_session_id: Option<&str>,
+        old_attachment_id: moli_page_types::RendererAgentAttachmentId,
+        new_attachment_id: moli_page_types::RendererAgentAttachmentId,
+    ) -> Result<Vec<SessionRendererCallReplay>, RendererCallIdExhausted> {
+        let mut replays = Vec::new();
+        for (key, state) in &mut self.states {
+            let (frontend_session_id, renderer_inspector_session_id) = match key {
+                DevToolsSessionKey::Primary => (primary_session_id.map(str::to_owned), None),
+                DevToolsSessionKey::Attached(session_id) => {
+                    (Some(session_id.clone()), Some(session_id.clone()))
+                }
+            };
+            replays.extend(
+                state
+                    .prepare_renderer_call_replays(old_attachment_id, new_attachment_id)?
+                    .into_iter()
+                    .map(|replay| SessionRendererCallReplay {
+                        frontend_session_id: frontend_session_id.clone(),
+                        renderer_inspector_session_id: renderer_inspector_session_id.clone(),
+                        replay,
+                    }),
+            );
+        }
+        Ok(replays)
+    }
+
+    fn prepare_renderer_call_terminations(
+        &mut self,
+        primary_session_id: Option<&str>,
+        old_attachment_id: moli_page_types::RendererAgentAttachmentId,
+        terminal_attachment_id: moli_page_types::RendererAgentAttachmentId,
+    ) -> Result<Vec<SessionRendererCallTermination>, RendererCallIdExhausted> {
+        let mut terminations = Vec::new();
+        for (key, state) in &mut self.states {
+            let frontend_session_id = match key {
+                DevToolsSessionKey::Primary => primary_session_id.map(str::to_owned),
+                DevToolsSessionKey::Attached(session_id) => Some(session_id.clone()),
+            };
+            terminations.extend(
+                state
+                    .prepare_renderer_call_terminations(old_attachment_id, terminal_attachment_id)?
+                    .into_iter()
+                    .map(|termination| SessionRendererCallTermination {
+                        frontend_session_id: frontend_session_id.clone(),
+                        termination,
+                    }),
+            );
+        }
+        Ok(terminations)
+    }
+
+    pub(crate) fn runtime_bindings_for_renderer(&self) -> Vec<RuntimeBindingDefinition> {
+        let mut bindings = Vec::new();
+        for (key, state) in &self.states {
+            for binding in &state.runtime_bindings {
+                let binding = binding.with_devtools_session(key.clone());
+                if !bindings.iter().any(|existing| existing == &binding) {
+                    bindings.push(binding);
+                }
+            }
+        }
+        bindings
+    }
+
+    pub(crate) fn runtime_inspector_restore_snapshots(
+        &self,
+    ) -> Vec<RendererInspectorSessionRestoreSnapshot> {
+        self.states
+            .iter()
+            .filter_map(|(key, state)| {
+                let requires_restore = state.runtime_session_state.runtime_frontend_enabled
+                    || state.console_output_session_state.console_enabled
+                    || !state.runtime_bindings.is_empty()
+                    || !state.dom_debugger_event_listener_breakpoints.is_empty()
+                    || !state.dom_debugger_xhr_breakpoints.is_empty()
+                    || state.inspector_session_state.v8_state.is_some();
+                requires_restore.then(|| RendererInspectorSessionRestoreSnapshot {
+                    inspector_session_id: key.wire_session_id().map(str::to_owned),
+                    v8_attach: V8InspectorSessionAttach::from_optional_state(
+                        state.inspector_session_state.v8_state.clone(),
+                    ),
+                    protocol_configuration: RendererInspectorProtocolConfiguration {
+                        runtime_bindings: state.runtime_bindings.clone(),
+                        runtime_frontend_enabled: state
+                            .runtime_session_state
+                            .runtime_frontend_enabled,
+                        console_frontend_enabled: state
+                            .console_output_session_state
+                            .console_enabled,
+                        dom_debugger_event_listener_breakpoints: state
+                            .dom_debugger_event_listener_breakpoints
+                            .clone(),
+                        dom_debugger_xhr_breakpoints: state.dom_debugger_xhr_breakpoints.clone(),
+                    },
+                })
+            })
+            .collect()
+    }
+
+    pub(crate) fn page_bypass_csp_enabled(&self) -> bool {
+        self.states()
+            .any(|state| state.page_session_state.page_bypass_csp_enabled)
+    }
+}
+
+impl Index<DevToolsSessionKey> for DevToolsSessionRegistry {
+    type Output = DevToolsSessionState;
+
+    fn index(&self, key: DevToolsSessionKey) -> &Self::Output {
+        self.states
+            .get(&key)
+            .expect("indexed DevTools session must be registered")
+    }
+}
+
+impl IndexMut<DevToolsSessionKey> for DevToolsSessionRegistry {
+    fn index_mut(&mut self, key: DevToolsSessionKey) -> &mut Self::Output {
+        self.states
+            .get_mut(&key)
+            .expect("indexed DevTools session must be registered")
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -162,6 +461,7 @@ impl DevToolsSessionState {
             binding.name == name && binding.execution_context_name == execution_context_name
         }) {
             self.runtime_bindings.push(RuntimeBindingDefinition {
+                devtools_session: None,
                 name,
                 execution_context_name,
             });
@@ -548,170 +848,107 @@ impl DevToolsDomStorageSessionState {
     }
 }
 
-pub(crate) fn devtools_sessions_have_pending_inspector_awaits(
-    primary: &DevToolsSessionState,
-    auxiliary: &HashMap<String, DevToolsSessionState>,
-) -> bool {
-    primary.has_pending_inspector_awaits()
-        || auxiliary
-            .values()
-            .any(DevToolsSessionState::has_pending_inspector_awaits)
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-pub(crate) fn devtools_sessions_pending_inspector_await_count(
-    primary: &DevToolsSessionState,
-    auxiliary: &HashMap<String, DevToolsSessionState>,
-) -> usize {
-    primary.pending_inspector_await_count()
-        + auxiliary
-            .values()
-            .map(DevToolsSessionState::pending_inspector_await_count)
-            .sum::<usize>()
-}
-
-pub(crate) fn drain_pending_inspector_awaits_for_devtools_sessions(
-    primary: &mut DevToolsSessionState,
-    auxiliary: &mut HashMap<String, DevToolsSessionState>,
-    session_ids: &[&str],
-) -> Vec<(u64, PendingInspectorAwait)> {
-    let mut drained = primary.drain_pending_inspector_awaits_for_sessions(session_ids);
-    for state in auxiliary.values_mut() {
-        drained.extend(state.drain_pending_inspector_awaits_for_sessions(session_ids));
-    }
-    drained
-}
-
-pub(crate) fn prepare_renderer_call_replays_for_devtools_sessions(
-    primary_session_id: Option<&str>,
-    primary: &mut DevToolsSessionState,
-    auxiliary: &mut HashMap<String, DevToolsSessionState>,
-    old_attachment_id: moli_page_types::RendererAgentAttachmentId,
-    new_attachment_id: moli_page_types::RendererAgentAttachmentId,
-) -> Result<Vec<SessionRendererCallReplay>, RendererCallIdExhausted> {
-    let mut replays = primary
-        .prepare_renderer_call_replays(old_attachment_id, new_attachment_id)?
-        .into_iter()
-        .map(|replay| SessionRendererCallReplay {
-            frontend_session_id: primary_session_id.map(str::to_owned),
-            renderer_inspector_session_id: None,
-            replay,
-        })
-        .collect::<Vec<_>>();
-    let mut auxiliary_session_ids = auxiliary.keys().cloned().collect::<Vec<_>>();
-    auxiliary_session_ids.sort();
-    for session_id in auxiliary_session_ids {
-        let state = auxiliary
-            .get_mut(&session_id)
-            .expect("selected auxiliary session must remain registered");
-        replays.extend(
-            state
-                .prepare_renderer_call_replays(old_attachment_id, new_attachment_id)?
-                .into_iter()
-                .map(|replay| SessionRendererCallReplay {
-                    frontend_session_id: Some(session_id.clone()),
-                    renderer_inspector_session_id: Some(session_id.clone()),
-                    replay,
-                }),
-        );
-    }
-    Ok(replays)
-}
-
-pub(crate) fn prepare_renderer_call_terminations_for_devtools_sessions(
-    primary_session_id: Option<&str>,
-    primary: &mut DevToolsSessionState,
-    auxiliary: &mut HashMap<String, DevToolsSessionState>,
-    old_attachment_id: moli_page_types::RendererAgentAttachmentId,
-    terminal_attachment_id: moli_page_types::RendererAgentAttachmentId,
-) -> Result<Vec<SessionRendererCallTermination>, RendererCallIdExhausted> {
-    let mut terminations = primary
-        .prepare_renderer_call_terminations(old_attachment_id, terminal_attachment_id)?
-        .into_iter()
-        .map(|termination| SessionRendererCallTermination {
-            frontend_session_id: primary_session_id.map(str::to_owned),
-            termination,
-        })
-        .collect::<Vec<_>>();
-    let mut auxiliary_session_ids = auxiliary.keys().cloned().collect::<Vec<_>>();
-    auxiliary_session_ids.sort();
-    for session_id in auxiliary_session_ids {
-        let state = auxiliary
-            .get_mut(&session_id)
-            .expect("selected auxiliary session must remain registered");
-        terminations.extend(
-            state
-                .prepare_renderer_call_terminations(old_attachment_id, terminal_attachment_id)?
-                .into_iter()
-                .map(|termination| SessionRendererCallTermination {
-                    frontend_session_id: Some(session_id.clone()),
-                    termination,
-                }),
-        );
-    }
-    Ok(terminations)
-}
-
-pub(crate) fn prepare_renderer_call_replacements_for_devtools_sessions(
-    primary_session_id: Option<&str>,
-    primary: &mut DevToolsSessionState,
-    auxiliary: &mut HashMap<String, DevToolsSessionState>,
-    old_attachment_id: moli_page_types::RendererAgentAttachmentId,
-    new_attachment_id: moli_page_types::RendererAgentAttachmentId,
-) -> Result<PreparedRendererCallReplacements, RendererCallIdExhausted> {
-    let terminations = prepare_renderer_call_terminations_for_devtools_sessions(
-        primary_session_id,
-        primary,
-        auxiliary,
-        old_attachment_id,
-        new_attachment_id,
-    )?;
-    let replays = prepare_renderer_call_replays_for_devtools_sessions(
-        primary_session_id,
-        primary,
-        auxiliary,
-        old_attachment_id,
-        new_attachment_id,
-    )?;
-    Ok(PreparedRendererCallReplacements::new(
-        new_attachment_id,
-        terminations,
-        replays,
-    ))
-}
-
-pub(crate) fn runtime_bindings_for_renderer(
-    primary: &DevToolsSessionState,
-    auxiliary: &HashMap<String, DevToolsSessionState>,
-) -> Vec<RuntimeBindingDefinition> {
-    fn push_unique(
-        bindings: &mut Vec<RuntimeBindingDefinition>,
-        binding: &RuntimeBindingDefinition,
-    ) {
-        if !bindings.iter().any(|existing| existing == binding) {
-            bindings.push(binding.clone());
+    fn binding(name: &str) -> RuntimeBindingDefinition {
+        RuntimeBindingDefinition {
+            devtools_session: None,
+            name: name.to_owned(),
+            execution_context_name: None,
         }
     }
 
-    let mut bindings = Vec::new();
-    for binding in &primary.runtime_bindings {
-        push_unique(&mut bindings, binding);
-    }
-    let mut auxiliary = auxiliary.iter().collect::<Vec<_>>();
-    auxiliary.sort_by_key(|(session_id, _)| *session_id);
-    for (_, state) in auxiliary {
-        for binding in &state.runtime_bindings {
-            push_unique(&mut bindings, binding);
-        }
-    }
-    bindings
-}
+    #[test]
+    fn registry_owns_primary_and_attached_sessions_in_stable_order() {
+        let mut sessions = DevToolsSessionRegistry::default();
+        sessions.ensure_attached("SID-b");
+        sessions.ensure_attached("SID-a");
 
-pub(crate) fn page_bypass_csp_enabled_for_devtools_sessions(
-    primary: &DevToolsSessionState,
-    auxiliary: &HashMap<String, DevToolsSessionState>,
-) -> bool {
-    primary.page_session_state.page_bypass_csp_enabled
-        || auxiliary
-            .values()
-            .any(|state| state.page_session_state.page_bypass_csp_enabled)
+        assert_eq!(sessions.attached_len(), 2);
+        assert_eq!(
+            sessions
+                .attached_entries()
+                .map(|(session_id, _state)| session_id)
+                .collect::<Vec<_>>(),
+            ["SID-a", "SID-b"]
+        );
+
+        sessions.remove_attached("SID-a");
+        assert!(sessions.attached("SID-a").is_none());
+        assert!(sessions.attached("SID-b").is_some());
+        assert_eq!(sessions.primary(), &DevToolsSessionState::default());
+    }
+
+    #[test]
+    fn registry_aggregates_renderer_configuration_by_session_identity() {
+        let mut sessions = DevToolsSessionRegistry::default();
+        sessions
+            .primary_mut()
+            .runtime_bindings
+            .push(binding("primary"));
+        sessions
+            .ensure_attached("SID-b")
+            .runtime_bindings
+            .push(binding("attached-b"));
+        let attached_a = sessions.ensure_attached("SID-a");
+        attached_a.runtime_bindings.push(binding("attached-a"));
+        attached_a.runtime_session_state.runtime_frontend_enabled = true;
+        attached_a.page_session_state.page_bypass_csp_enabled = true;
+
+        let bindings = sessions.runtime_bindings_for_renderer();
+        assert_eq!(
+            bindings
+                .iter()
+                .map(|binding| (binding.name.as_str(), binding.devtools_session.clone()))
+                .collect::<Vec<_>>(),
+            [
+                ("primary", Some(DevToolsSessionKey::Primary)),
+                (
+                    "attached-a",
+                    Some(DevToolsSessionKey::Attached("SID-a".to_owned())),
+                ),
+                (
+                    "attached-b",
+                    Some(DevToolsSessionKey::Attached("SID-b".to_owned())),
+                ),
+            ]
+        );
+        assert!(sessions.page_bypass_csp_enabled());
+
+        let restores = sessions.runtime_inspector_restore_snapshots();
+        assert_eq!(
+            restores
+                .iter()
+                .map(|restore| restore.inspector_session_id.as_deref())
+                .collect::<Vec<_>>(),
+            [None, Some("SID-a"), Some("SID-b")]
+        );
+
+        sessions.remove_attached("SID-a");
+        assert!(!sessions.page_bypass_csp_enabled());
+    }
+
+    #[test]
+    fn registry_pending_await_aggregation_tracks_attached_disposal() {
+        let mut sessions = DevToolsSessionRegistry::default();
+        sessions
+            .primary_mut()
+            .register_pending_inspector_await(1, Some("SID-primary"), None);
+        sessions
+            .ensure_attached("SID-attached")
+            .register_pending_inspector_await(2, Some("SID-attached"), Some("group"));
+
+        assert!(sessions.has_pending_inspector_awaits());
+        assert_eq!(sessions.pending_inspector_await_count(), 2);
+        let drained = sessions.drain_pending_inspector_awaits_for_sessions(&["SID-attached"]);
+        assert_eq!(drained.len(), 1);
+        assert_eq!(sessions.pending_inspector_await_count(), 1);
+
+        sessions.remove_attached("SID-attached");
+        assert_eq!(sessions.pending_inspector_await_count(), 1);
+        sessions.reset(false);
+        assert!(!sessions.has_pending_inspector_awaits());
+    }
 }

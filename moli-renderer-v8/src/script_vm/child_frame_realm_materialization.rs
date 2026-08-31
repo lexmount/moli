@@ -417,12 +417,15 @@ impl ScriptVm {
         frame_id: &str,
         handle: DomHandle,
         owner: FrameDocumentTaskOwner,
+        devtools_session: Option<&moli_page_types::DevToolsSessionKey>,
         world: &crate::protocol_types::RuntimeIsolatedWorldDefinition,
         bindings: &[crate::protocol_types::RuntimeBindingRegistration],
-        prepared_worlds: &mut Vec<(String, i64)>,
+        prepared_worlds: &mut Vec<(Option<moli_page_types::DevToolsSessionKey>, String, i64)>,
     ) -> Result<i64> {
-        if let Some((_, execution_context_id)) =
-            prepared_worlds.iter().find(|(name, _)| name == &world.name)
+        if let Some((_, _, execution_context_id)) =
+            prepared_worlds.iter().find(|(prepared_session, name, _)| {
+                prepared_session.as_ref() == devtools_session && name == &world.name
+            })
         {
             return Ok(*execution_context_id);
         }
@@ -430,7 +433,8 @@ impl ScriptVm {
             anyhow::bail!("child Document owner changed during named-world materialization");
         }
 
-        let execution_context_id = self.ensure_isolated_world_for_frame(
+        let execution_context_id = self.ensure_isolated_world_for_frame_owner(
+            devtools_session,
             frame_id,
             &world.name,
             world.grant_universal_access,
@@ -444,13 +448,17 @@ impl ScriptVm {
         // Chromium's V8RuntimeAgentImpl::addBindings() boundary. Moli
         // additionally installs its native callback-backed binding so calls
         // enter the exact Document-owned runtime queue.
-        for binding in bindings
-            .iter()
-            .filter(|binding| binding.execution_context_name.as_deref() == Some(&world.name))
-        {
+        for binding in bindings.iter().filter(|binding| {
+            binding.devtools_session.as_ref() == devtools_session
+                && binding.execution_context_name.as_deref() == Some(&world.name)
+        }) {
             self.install_runtime_binding_in_execution_context(execution_context_id, &binding.name)?;
         }
-        prepared_worlds.push((world.name.clone(), execution_context_id));
+        prepared_worlds.push((
+            devtools_session.cloned(),
+            world.name.clone(),
+            execution_context_id,
+        ));
         Ok(execution_context_id)
     }
 
@@ -478,7 +486,8 @@ impl ScriptVm {
             )
         };
         let worlds = self.child_named_runtime_world_definitions(runtime_isolated_worlds);
-        let mut prepared_worlds = Vec::<(String, i64)>::new();
+        let mut prepared_worlds =
+            Vec::<(Option<moli_page_types::DevToolsSessionKey>, String, i64)>::new();
         let mut activity = ChildRealmMaterializationBodyActivity::StateOnly;
 
         // Explicit Page.createIsolatedWorld state corresponds to Chromium's
@@ -489,6 +498,7 @@ impl ScriptVm {
                 frame_id,
                 handle,
                 owner,
+                None,
                 world,
                 &bindings,
                 &mut prepared_worlds,
@@ -527,6 +537,7 @@ impl ScriptVm {
                 frame_id,
                 handle,
                 owner,
+                script.devtools_session.as_ref(),
                 world,
                 &bindings,
                 &mut prepared_worlds,
@@ -549,24 +560,33 @@ impl ScriptVm {
         }
 
         // A world retained only by a named Runtime binding has no script to
-        // trigger lazy creation. Materialize it before this child-realm turn
-        // settles so its contextCreated fact remains ordered before frame
-        // navigation output.
-        for world in &worlds {
+        // trigger lazy creation. Materialize it for that binding's owning
+        // session before this child-realm turn settles, so equal world names
+        // from peer sessions never share a context or native callback.
+        for binding in &bindings {
             if !self.child_materialization_owner_is_current(handle, owner) {
                 break;
             }
+            let Some(world_name) = binding.execution_context_name.as_deref() else {
+                continue;
+            };
+            let Some(world) = worlds.iter().find(|world| world.name == world_name) else {
+                self.record_runtime_warning(format_args!(
+                    "child Runtime binding world `{world_name}` has no retained definition"
+                ));
+                continue;
+            };
             if let Err(error) = self.prepare_child_named_runtime_world(
                 frame_id,
                 handle,
                 owner,
+                binding.devtools_session.as_ref(),
                 world,
                 &bindings,
                 &mut prepared_worlds,
             ) {
                 self.record_runtime_warning(format_args!(
-                    "child named world `{}` initialization failed: {error}",
-                    world.name
+                    "child named world `{world_name}` initialization failed: {error}"
                 ));
             }
         }

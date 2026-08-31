@@ -915,19 +915,6 @@ pub(crate) struct BrowserContextCookieManagerSurface {
 }
 
 impl BrowserContextCookieManagerSurface {
-    pub(crate) fn from_snapshot(snapshot: BrowserContextCookieManagerSurfaceSnapshot) -> Self {
-        Self {
-            policy_surface: BrowserContextDocumentCookiePolicySurface::from_snapshot(
-                super::cookie_policy_surface::BrowserContextDocumentCookiePolicySurfaceSnapshot {
-                    overrides: snapshot.policy.overrides,
-                    cookies_enabled_override: snapshot.policy.cookies_enabled_override,
-                    browser_context_overrides: snapshot.policy.browser_context_overrides,
-                    generation: snapshot.policy.generation,
-                },
-            ),
-        }
-    }
-
     pub(crate) fn snapshot(&self) -> BrowserContextCookieManagerSurfaceSnapshot {
         let policy_surface = self.policy_surface.snapshot();
         BrowserContextCookieManagerSurfaceSnapshot {

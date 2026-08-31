@@ -733,7 +733,7 @@ fn parse_inline_style_declarations(style_text: &str) -> Vec<CssDeclaration> {
 #[cfg(test)]
 mod tests {
     use super::parse_inline_style_declarations;
-    use crate::conn::{BackgroundTarget, BrowserContext, CdpCommandTaskStep, CdpSchedulerEvent};
+    use crate::conn::{BrowserContext, CdpCommandTaskStep, CdpSchedulerEvent, PageTargetHost};
     use crate::domains::page::LOADER_ID;
     use crate::testing::{TestContext, wait_until_renderer_document_load};
     use moli_core::page::{
@@ -972,7 +972,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn css_loaded_page_methods_target_background_owner_without_promotion() {
         let mut ctx = TestContext::new();
-        let background = BackgroundTarget::with_url(
+        let background = PageTargetHost::with_url(
             "TID-background".to_owned(),
             Some("SID-background".to_owned()),
             "about:blank".to_owned(),
@@ -981,7 +981,7 @@ mod tests {
         let mut bc = BrowserContext::new("BID-A".to_owned());
         bc.set_active_target_id("TID-active".to_owned());
         bc.attach_active_session("SID-active".to_owned());
-        bc.background_targets.push(background);
+        bc.insert_page_target_host(background);
         ctx.conn.browser_context = Some(bc);
         ctx.install_navigation_fixture_for_session_owner(
             "data:text/html,<html><head><style title='owner'>body { color: red; }</style></head><body><div id='target' style='display:flex;width:123px;color:blue'></div></body></html>",

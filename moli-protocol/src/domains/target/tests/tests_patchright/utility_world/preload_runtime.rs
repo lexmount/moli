@@ -199,8 +199,7 @@ async fn patchright_over_cdp_utility_world_binding_and_preload_stay_isolated_per
         1
     );
     assert!(
-        first_context
-            .devtools_session_state
+        first_context.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .runtime_bindings
             .iter()
             .any(|binding| {
@@ -584,7 +583,7 @@ async fn patchright_over_cdp_existing_utility_world_binding_install_by_execution
             .browser_context
             .as_ref()
             .expect("browser context")
-            .devtools_session_state
+            .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .runtime_bindings
             .iter()
             .all(|binding| binding.name != "utilityBindingById"),
@@ -786,7 +785,7 @@ async fn patchright_over_cdp_pre_document_remove_binding_prevents_first_navigati
             .browser_context
             .as_ref()
             .expect("browser context")
-            .devtools_session_state
+            .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .runtime_bindings
             .iter()
             .all(|binding| binding.name != "temporaryPreDocumentBinding"),

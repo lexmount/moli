@@ -1099,6 +1099,7 @@ impl Browser {
             .cloned()
             .map(|source| DocumentStartScript {
                 registry_key: None,
+                devtools_session: None,
                 source,
                 world_name: None,
                 has_bidi_channel_argument: false,
@@ -1227,6 +1228,7 @@ impl Browser {
             .cloned()
             .map(|source| DocumentStartScript {
                 registry_key: None,
+                devtools_session: None,
                 source,
                 world_name: None,
                 has_bidi_channel_argument: false,

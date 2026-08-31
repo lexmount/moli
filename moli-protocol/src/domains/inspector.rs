@@ -68,7 +68,7 @@ mod tests {
     use moli_core::page::RendererServiceWorkerVersionStatus;
 
     use crate::{
-        conn::{BackgroundTarget, BrowserContext, ServiceWorkerTargetState},
+        conn::{BrowserContext, PageTargetHost, ServiceWorkerTargetState},
         testing::TestContext,
     };
     use serde_json::json;
@@ -86,7 +86,7 @@ mod tests {
                 .browser_context
                 .as_ref()
                 .expect("browser context")
-                .devtools_session_state
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .runtime_session_state
                 .inspector_enabled
         );
@@ -99,7 +99,7 @@ mod tests {
                 .browser_context
                 .as_ref()
                 .expect("browser context")
-                .devtools_session_state
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .runtime_session_state
                 .inspector_enabled
         );
@@ -173,7 +173,7 @@ mod tests {
         let mut bc = BrowserContext::new("BID-1".into());
         bc.set_active_target_id("TID-active");
         bc.attach_active_session("SID-active");
-        bc.background_targets.push(BackgroundTarget::with_url(
+        bc.insert_page_target_host(PageTargetHost::with_url(
             "TID-background".into(),
             Some("SID-background".into()),
             "about:blank#background".into(),
@@ -197,8 +197,8 @@ mod tests {
         assert_eq!(bc.active_target_id(), Some("TID-active"));
         assert!(
             bc.parked_page_session_state("TID-background")
-                .is_some_and(|state| state
-                    .devtools_session_state
+                .is_some_and(|state| state.devtools_sessions
+                    [moli_page_types::DevToolsSessionKey::Primary]
                     .runtime_session_state
                     .inspector_target_crashed_delivered())
         );
@@ -259,17 +259,16 @@ mod tests {
         let mut bc = BrowserContext::new("BID-1".into());
         bc.attach_active_session("SID-active");
         bc.set_active_target_id("TID-A");
-        bc.background_targets
-            .push(crate::conn::BackgroundTarget::new(
-                "TID-B".into(),
-                Some("SID-B".into()),
-                crate::conn::TargetIdentityState::new(
-                    "about:blank#background".into(),
-                    "null".into(),
-                    "InsecureScheme".into(),
-                ),
-                crate::conn::TargetPageSlot::empty_for_test_fixture(),
-            ));
+        bc.insert_page_target_host(crate::conn::PageTargetHost::new(
+            "TID-B".into(),
+            Some("SID-B".into()),
+            crate::conn::TargetIdentityState::new(
+                "about:blank#background".into(),
+                "null".into(),
+                "InsecureScheme".into(),
+            ),
+            crate::conn::TargetPageSlot::empty_for_test_fixture(),
+        ));
         bc.active_target
             .owner_state
             .target_crash_state
@@ -288,13 +287,12 @@ mod tests {
         {
             let bc = ctx.conn.browser_context.as_ref().expect("browser context");
             assert!(
-                !bc.devtools_session_state
+                !bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                     .runtime_session_state
                     .inspector_enabled
             );
             assert!(bc.parked_page_session_state("TID-B").is_some_and(|state| {
-                state
-                    .devtools_session_state
+                state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                     .runtime_session_state
                     .inspector_enabled
             }));
@@ -305,7 +303,7 @@ mod tests {
         ctx.expect_result(5, json!({}), Some("SID-B"));
         let bc = ctx.conn.browser_context.as_ref().expect("browser context");
         assert!(
-            !bc.devtools_session_state
+            !bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .runtime_session_state
                 .inspector_enabled
         );

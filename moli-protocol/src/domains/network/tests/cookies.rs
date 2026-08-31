@@ -181,7 +181,7 @@ async fn background_target_user_agent_override_reaches_replacement_document() {
         true,
     )
     .expect("new BrowserContext owner should be live");
-    ctx.conn.replace_navigation_engine(engine);
+    ctx.conn.replace_standalone_navigation_engine(engine);
     ctx.conn.browser_context = Some(browser_context);
 
     ctx.process_async(json!({

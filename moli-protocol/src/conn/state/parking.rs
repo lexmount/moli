@@ -1,424 +1,30 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
-use moli_core::network::SharedWebStorageStore;
-use moli_page_types::FrontendCommandId;
+use moli_page_types::{DevToolsSessionKey, FrontendCommandId};
 use serde_json::{Value, json};
 
 use crate::{
-    conn::cookie_manager_surface,
     devtools_runtime::{
         DevToolsBidiChannelProperties, DevToolsRealmId, DevToolsRemoteHandleId, DevToolsTargetId,
     },
     domains::{
         audits_output_state::TargetAuditsStorageState,
-        console_output_state::TargetConsoleOutputState,
-        log_output_state::TargetLogStorageState,
-        network::{CollectedNetworkDataArtifact, TargetNetworkArtifacts},
+        console_output_state::TargetConsoleOutputState, log_output_state::TargetLogStorageState,
         observable_output::TargetRuntimeObservableState,
     },
 };
 
 use super::{
-    DevToolsSessionState, devtools_sessions_have_pending_inspector_awaits,
-    devtools_sessions_pending_inspector_await_count,
-    emulation::{
-        EmulatedDeviceMetrics, EmulatedGeolocationOverrideState, EmulatedMediaOverrides,
-        EmulatedNetworkConditions,
-    },
-    fetch::{ParkedFetchState, TargetFetchConfig},
-    identity::TargetIdentityState,
     navigation::{PageNavigationHistoryEntry, TargetNavigationHistoryState},
     page_resource::TargetPageResourceStore,
-    page_slot::{DocumentStartScript, IsolatedWorldDefinition, TargetPageSlot},
+    page_slot::{DocumentStartScript, IsolatedWorldDefinition},
     pending_renderer_command::{
         DuplicatePendingRendererCommand, PendingRendererCommandRegistry,
         PreparedRendererCallDispatch, PreparedRendererCallReplay, PreparedRendererCallTermination,
         RegisterRendererCallError, RendererCallIdExhausted, RendererCommandCorrelation,
         RendererCommandDescriptor,
     },
-    runtime_slot::{TargetNetworkRequestCounters, TargetRuntimeSlot},
-    session::TargetNetworkPolicyState,
-    session_storage::TargetSessionStorageNamespace,
 };
-
-#[derive(Debug)]
-pub struct BackgroundTarget {
-    pub(in crate::conn) target_id: String,
-    pub(in crate::conn) session_id: Option<String>,
-    pub(in crate::conn) target_identity: TargetIdentityState,
-    pub(in crate::conn) runtime_slot: TargetRuntimeSlot,
-    session_storage_namespace: TargetSessionStorageNamespace,
-}
-
-impl BackgroundTarget {
-    pub(crate) fn new(
-        target_id: String,
-        session_id: Option<String>,
-        target_identity: TargetIdentityState,
-        target_page_slot: TargetPageSlot,
-    ) -> Self {
-        Self {
-            target_id,
-            session_id,
-            target_identity,
-            runtime_slot: TargetRuntimeSlot::from_page_slot(target_page_slot),
-            session_storage_namespace: TargetSessionStorageNamespace::default(),
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn with_url(target_id: String, session_id: Option<String>, url: String) -> Self {
-        Self::new(
-            target_id,
-            session_id,
-            TargetIdentityState::with_url(url),
-            TargetPageSlot::empty_for_test_fixture(),
-        )
-    }
-
-    pub(crate) fn with_identity(
-        target_id: String,
-        session_id: Option<String>,
-        target_identity: TargetIdentityState,
-    ) -> Self {
-        Self::new(
-            target_id,
-            session_id,
-            target_identity,
-            TargetPageSlot::empty_for_initial_document_page_build(),
-        )
-    }
-
-    pub(crate) fn target_id(&self) -> &str {
-        &self.target_id
-    }
-
-    pub(crate) fn is_target(&self, target_id: &str) -> bool {
-        self.target_id() == target_id
-    }
-
-    pub(crate) fn session_id(&self) -> Option<&str> {
-        self.session_id.as_deref()
-    }
-
-    pub(crate) fn has_session(&self) -> bool {
-        self.session_id.is_some()
-    }
-
-    pub(crate) fn is_session(&self, session_id: &str) -> bool {
-        self.session_id() == Some(session_id)
-    }
-
-    pub(crate) fn attach_session(&mut self, session_id: String) {
-        self.session_id = Some(session_id);
-    }
-
-    pub(crate) fn detach_session(&mut self) -> Option<String> {
-        self.session_id.take()
-    }
-
-    pub(crate) fn session_storage_store(&self) -> &SharedWebStorageStore {
-        self.session_storage_namespace.store()
-    }
-
-    pub(crate) fn deep_clone_session_storage_namespace(&self) -> TargetSessionStorageNamespace {
-        self.session_storage_namespace.deep_clone()
-    }
-
-    pub(crate) fn replace_session_storage_namespace(
-        &mut self,
-        namespace: TargetSessionStorageNamespace,
-    ) {
-        self.session_storage_namespace = namespace;
-    }
-
-    pub(crate) fn take_session_storage_namespace(&mut self) -> TargetSessionStorageNamespace {
-        std::mem::take(&mut self.session_storage_namespace)
-    }
-}
-
-#[derive(Debug)]
-pub(crate) struct TargetSlotState {
-    target: BackgroundTarget,
-    aux_state: ParkedTargetAuxState,
-}
-
-impl TargetSlotState {
-    pub(crate) fn new(target: BackgroundTarget, aux_state: ParkedTargetAuxState) -> Self {
-        Self { target, aux_state }
-    }
-
-    pub(crate) fn from_active_snapshot(
-        target_id: String,
-        session_id: Option<String>,
-        target_identity: TargetIdentityState,
-        runtime_slot: TargetRuntimeSlot,
-        session_storage_namespace: TargetSessionStorageNamespace,
-        aux_state: ParkedTargetAuxState,
-    ) -> Self {
-        Self {
-            target: BackgroundTarget {
-                target_id,
-                session_id,
-                target_identity,
-                runtime_slot,
-                session_storage_namespace,
-            },
-            aux_state,
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn target(&self) -> &BackgroundTarget {
-        &self.target
-    }
-
-    pub(crate) fn target_id(&self) -> &str {
-        self.target.target_id()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn aux_state(&self) -> &ParkedTargetAuxState {
-        &self.aux_state
-    }
-
-    pub(crate) fn into_parts(self) -> (BackgroundTarget, ParkedTargetAuxState) {
-        (self.target, self.aux_state)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct ParkedPageSessionState {
-    pub(crate) devtools_session_state: DevToolsSessionState,
-    pub(crate) auxiliary_devtools_session_states: HashMap<String, DevToolsSessionState>,
-    pub network_enabled: bool,
-    pub(crate) network_policy: TargetNetworkPolicyState,
-    pub http_proxy_override: Option<String>,
-    pub http_no_proxy_override: Option<String>,
-    pub tls_verify_host_override: Option<bool>,
-    pub locale_override: Option<String>,
-    pub timezone_override: Option<String>,
-    pub(crate) network_conditions: Option<EmulatedNetworkConditions>,
-    pub geolocation_override: Option<EmulatedGeolocationOverrideState>,
-    pub emulated_media: EmulatedMediaOverrides,
-    pub emulated_device_metrics: Option<EmulatedDeviceMetrics>,
-    pub cpu_throttling_rate: f64,
-    pub touch_emulation_enabled: bool,
-    pub emit_touch_events_for_mouse: bool,
-    pub focus_emulation_enabled: bool,
-    pub script_execution_disabled: bool,
-    pub css_enabled: bool,
-    pub fetch_config: TargetFetchConfig,
-}
-
-impl Default for ParkedPageSessionState {
-    fn default() -> Self {
-        Self {
-            devtools_session_state: DevToolsSessionState::default(),
-            auxiliary_devtools_session_states: HashMap::new(),
-            network_enabled: false,
-            network_policy: TargetNetworkPolicyState::default(),
-            http_proxy_override: None,
-            http_no_proxy_override: None,
-            tls_verify_host_override: None,
-            locale_override: None,
-            timezone_override: None,
-            network_conditions: None,
-            geolocation_override: None,
-            emulated_media: EmulatedMediaOverrides::default(),
-            emulated_device_metrics: None,
-            cpu_throttling_rate: 1.0,
-            touch_emulation_enabled: false,
-            emit_touch_events_for_mouse: false,
-            focus_emulation_enabled: false,
-            script_execution_disabled: false,
-            css_enabled: false,
-            fetch_config: TargetFetchConfig::default(),
-        }
-    }
-}
-
-impl ParkedPageSessionState {
-    pub(crate) fn has_pending_javascript_dialog(&self) -> bool {
-        !self
-            .devtools_session_state
-            .page_session_state
-            .javascript_dialog_state
-            .is_empty()
-            || self
-                .auxiliary_devtools_session_states
-                .values()
-                .any(|session| {
-                    !session
-                        .page_session_state
-                        .javascript_dialog_state
-                        .is_empty()
-                })
-    }
-}
-
-fn parked_page_session_has_page_domain_enabled(state: &ParkedPageSessionState) -> bool {
-    state
-        .devtools_session_state
-        .page_session_state
-        .page_domain_enabled
-        || state
-            .auxiliary_devtools_session_states
-            .values()
-            .any(|session_state| session_state.page_session_state.page_domain_enabled)
-}
-
-fn parked_page_session_has_runtime_remote_object_id(
-    state: &ParkedPageSessionState,
-    object_id: &str,
-) -> bool {
-    state
-        .devtools_session_state
-        .has_runtime_remote_object_id(object_id)
-        || state
-            .auxiliary_devtools_session_states
-            .values()
-            .any(|session_state| session_state.has_runtime_remote_object_id(object_id))
-}
-
-fn parked_page_session_has_runtime_remote_object_id_for_different_session(
-    state: &ParkedPageSessionState,
-    devtools_session_id: Option<&str>,
-    object_id: &str,
-) -> bool {
-    if devtools_session_id.is_some()
-        && state
-            .devtools_session_state
-            .has_runtime_remote_object_id(object_id)
-    {
-        return true;
-    }
-    state
-        .auxiliary_devtools_session_states
-        .iter()
-        .any(|(session_id, session_state)| {
-            Some(session_id.as_str()) != devtools_session_id
-                && session_state.has_runtime_remote_object_id(object_id)
-        })
-}
-
-pub(crate) fn parked_page_session_has_pending_inspector_awaits(
-    state: &ParkedPageSessionState,
-) -> bool {
-    devtools_sessions_have_pending_inspector_awaits(
-        &state.devtools_session_state,
-        &state.auxiliary_devtools_session_states,
-    )
-}
-
-pub(crate) fn parked_page_session_pending_inspector_await_count(
-    state: &ParkedPageSessionState,
-) -> usize {
-    devtools_sessions_pending_inspector_await_count(
-        &state.devtools_session_state,
-        &state.auxiliary_devtools_session_states,
-    )
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct ParkedNetworkArtifacts {
-    target_network_artifacts: TargetNetworkArtifacts,
-    request_counters: TargetNetworkRequestCounters,
-}
-
-impl ParkedNetworkArtifacts {
-    pub(crate) fn snapshot_from_runtime_slot(runtime_slot: &TargetRuntimeSlot) -> Self {
-        Self {
-            target_network_artifacts: runtime_slot.snapshot_network_artifacts(),
-            request_counters: runtime_slot.snapshot_network_request_counters(),
-        }
-    }
-
-    pub(crate) fn restore_into_runtime_slot(self, runtime_slot: &mut TargetRuntimeSlot) {
-        runtime_slot.restore_network_artifacts(self.target_network_artifacts);
-        runtime_slot.restore_network_request_counters(self.request_counters);
-    }
-
-    pub(crate) fn collected_network_data_artifacts(&self) -> Vec<CollectedNetworkDataArtifact> {
-        self.target_network_artifacts
-            .collected_network_data_artifacts()
-    }
-
-    pub(crate) fn drain_from_background_target(&mut self, target: &mut BackgroundTarget) {
-        self.target_network_artifacts = target.runtime_slot.take_network_artifacts();
-        self.request_counters = target.runtime_slot.take_network_request_counters();
-    }
-
-    pub(crate) fn drain_into_background_target(&mut self, target: &mut BackgroundTarget) {
-        target
-            .runtime_slot
-            .restore_network_artifacts(std::mem::take(&mut self.target_network_artifacts));
-        target
-            .runtime_slot
-            .restore_network_request_counters(std::mem::take(&mut self.request_counters));
-    }
-
-    pub(crate) fn set_session_observation_cursor_at_counts(
-        &mut self,
-        session_id: Option<&str>,
-        subresource_count: usize,
-        websocket_count: usize,
-    ) {
-        self.target_network_artifacts
-            .set_session_observation_cursor_at_counts(
-                session_id,
-                subresource_count,
-                websocket_count,
-            );
-    }
-
-    pub(crate) fn remove_session_observation_cursor(&mut self, session_id: Option<&str>) {
-        self.target_network_artifacts
-            .remove_session_observation_cursor(session_id);
-    }
-
-    pub(crate) fn remove_captured_response_body_visibility_for_session(
-        &mut self,
-        session_id: Option<&str>,
-    ) {
-        self.target_network_artifacts
-            .remove_captured_response_body_visibility_for_session(session_id);
-    }
-
-    pub(crate) fn clear_captured_response_bodies_and_websocket_request_ids(&mut self) {
-        self.target_network_artifacts
-            .clear_captured_response_bodies();
-        self.target_network_artifacts.clear_websocket_request_ids();
-    }
-
-    #[cfg(test)]
-    pub(crate) fn next_fetch_request_id_for_test(&self) -> u32 {
-        self.request_counters.next_fetch_request_id
-    }
-
-    #[cfg(test)]
-    pub(crate) fn next_subresource_fetch_request_id_for_test(&self) -> u32 {
-        self.request_counters.next_subresource_fetch_request_id
-    }
-
-    #[cfg(test)]
-    pub(crate) fn emitted_subresource_record_count_for_session(
-        &self,
-        session_id: Option<&str>,
-    ) -> usize {
-        self.target_network_artifacts
-            .emitted_subresource_record_count_for_session(session_id)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn emitted_websocket_event_count_for_session(
-        &self,
-        session_id: Option<&str>,
-    ) -> usize {
-        self.target_network_artifacts
-            .emitted_websocket_event_count_for_session(session_id)
-    }
-}
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct TargetCrashState {
@@ -928,6 +534,23 @@ impl TargetOwnerState {
             .any(|(_, script)| script.has_bidi_channel_argument)
     }
 
+    pub(crate) fn take_document_start_script_registry_keys_for_session(
+        &mut self,
+        devtools_session: &DevToolsSessionKey,
+    ) -> Vec<String> {
+        let mut registry_keys = Vec::new();
+        self.document_start_scripts.retain(|(_, script)| {
+            if script.devtools_session.as_ref() != Some(devtools_session) {
+                return true;
+            }
+            if let Some(registry_key) = script.registry_key.clone() {
+                registry_keys.push(registry_key);
+            }
+            false
+        });
+        registry_keys
+    }
+
     pub(crate) fn begin_initial_empty_document(
         &mut self,
         target_id: String,
@@ -1048,6 +671,11 @@ impl TargetOwnerState {
         json!({
             "initialEmptyDocument": initial_empty_document,
             "documentStartScriptCount": self.document_start_scripts.len(),
+            "sessionOwnedDocumentStartScriptCount": self
+                .document_start_scripts
+                .iter()
+                .filter(|(_, script)| script.devtools_session.is_some())
+                .count(),
             "isolatedWorldCount": self.isolated_worlds.len(),
             "retainedPageResourceBodyBytes": self.page_resource_store.retained_body_bytes(),
             "windowSurfaceState": self.window_surface_state.label(),
@@ -1182,15 +810,6 @@ impl TargetOwnerState {
                 .record_same_document_update(url, title, history_update);
     }
 
-    pub(crate) fn clear_page_local_state(&mut self) {
-        self.next_document_start_script_id = 0;
-        self.isolated_worlds.clear();
-        self.attached_child_frame_ids.clear();
-        self.navigation_history_state.clear();
-        self.page_resource_store.clear();
-        self.target_crash_state.clear();
-    }
-
     pub(crate) fn clear_observable_output_state(&mut self) {
         self.runtime_observable_state.clear();
         self.console_output_state.clear();
@@ -1266,287 +885,6 @@ impl TargetOwnerState {
 }
 
 pub(crate) type ParkedTargetOwnerState = TargetOwnerState;
-
-#[derive(Debug)]
-pub(crate) struct ParkedTargetAuxState {
-    pub(crate) cookie_manager_surface:
-        cookie_manager_surface::BrowserContextCookieManagerSurfaceSnapshot,
-    pub(crate) page_session_state: ParkedPageSessionState,
-    pub(crate) fetch_state: ParkedFetchState,
-    pub(crate) network_artifacts: ParkedNetworkArtifacts,
-    pub(crate) target_owner_state: ParkedTargetOwnerState,
-}
-
-impl ParkedTargetAuxState {
-    pub(crate) fn has_pending_javascript_dialog(&self) -> bool {
-        self.page_session_state.has_pending_javascript_dialog()
-    }
-}
-
-#[derive(Debug, Default)]
-pub(crate) struct TargetParkingStateStore {
-    cookie_manager_surfaces:
-        HashMap<String, cookie_manager_surface::BrowserContextCookieManagerSurfaceSnapshot>,
-    page_session_states: HashMap<String, ParkedPageSessionState>,
-    fetch_states: HashMap<String, ParkedFetchState>,
-    network_artifacts: HashMap<String, ParkedNetworkArtifacts>,
-    target_owner_states: HashMap<String, ParkedTargetOwnerState>,
-}
-
-impl TargetParkingStateStore {
-    pub(crate) fn moli_memory_diagnostics(&self) -> Value {
-        let owner_state_summaries = self
-            .target_owner_states
-            .iter()
-            .map(|(target_id, state)| {
-                json!({
-                    "targetId": target_id,
-                    "ownerState": state.moli_memory_diagnostics(),
-                })
-            })
-            .collect::<Vec<_>>();
-        json!({
-            "cookieManagerSurfaceCount": self.cookie_manager_surfaces.len(),
-            "pageSessionStateCount": self.page_session_states.len(),
-            "fetchStateCount": self.fetch_states.len(),
-            "networkArtifactCount": self.network_artifacts.len(),
-            "targetOwnerStateCount": self.target_owner_states.len(),
-            "targetOwnerStateWithPendingInspectorAwaitCount": self
-                .pending_inspector_await_target_count(),
-            "pendingInspectorAwaitCount": self.pending_inspector_await_count(),
-            "nonEmptyFetchStateCount": self
-                .fetch_states
-                .values()
-                .filter(|state| !state.is_empty())
-                .count(),
-            "ownerStates": owner_state_summaries,
-        })
-    }
-
-    pub(crate) fn mutate_target_owner_state<T>(
-        &mut self,
-        target_id: &str,
-        mutate: impl FnOnce(&mut ParkedTargetOwnerState) -> T,
-    ) -> T {
-        let mut state = self.take_target_owner_state(target_id);
-        let result = mutate(&mut state);
-        self.replace_target_owner_state(target_id.to_owned(), state);
-        result
-    }
-
-    pub(crate) fn take_isolated_worlds(&mut self, target_id: &str) -> Vec<IsolatedWorldDefinition> {
-        self.mutate_target_owner_state(target_id, |state| {
-            std::mem::take(&mut state.isolated_worlds)
-        })
-    }
-
-    pub(crate) fn replace_isolated_worlds(
-        &mut self,
-        target_id: String,
-        isolated_worlds: Vec<IsolatedWorldDefinition>,
-    ) {
-        self.mutate_target_owner_state(&target_id, |state| {
-            state.isolated_worlds = isolated_worlds;
-        });
-    }
-
-    pub(crate) fn take_document_start_script_counter(&mut self, target_id: &str) -> u32 {
-        self.mutate_target_owner_state(target_id, |state| {
-            let counter = state.next_document_start_script_id;
-            state.next_document_start_script_id = 0;
-            counter
-        })
-    }
-
-    pub(crate) fn replace_document_start_script_counter(
-        &mut self,
-        target_id: String,
-        counter: u32,
-    ) {
-        self.mutate_target_owner_state(&target_id, |state| {
-            state.next_document_start_script_id = counter;
-        });
-    }
-
-    pub(crate) fn take_cookie_manager_surface(
-        &mut self,
-        target_id: &str,
-    ) -> cookie_manager_surface::BrowserContextCookieManagerSurfaceSnapshot {
-        self.cookie_manager_surfaces
-            .remove(target_id)
-            .unwrap_or_default()
-    }
-
-    pub(crate) fn replace_cookie_manager_surface(
-        &mut self,
-        target_id: String,
-        snapshot: cookie_manager_surface::BrowserContextCookieManagerSurfaceSnapshot,
-    ) {
-        if snapshot == cookie_manager_surface::BrowserContextCookieManagerSurfaceSnapshot::default()
-        {
-            self.cookie_manager_surfaces.remove(&target_id);
-            return;
-        }
-        self.cookie_manager_surfaces.insert(target_id, snapshot);
-    }
-
-    pub(crate) fn page_session_state(&self, target_id: &str) -> Option<&ParkedPageSessionState> {
-        self.page_session_states.get(target_id)
-    }
-
-    pub(crate) fn has_page_domain_enabled_session(&self) -> bool {
-        self.page_session_states
-            .values()
-            .any(parked_page_session_has_page_domain_enabled)
-    }
-
-    pub(crate) fn take_page_session_state(&mut self, target_id: &str) -> ParkedPageSessionState {
-        self.page_session_states
-            .remove(target_id)
-            .unwrap_or_default()
-    }
-
-    pub(crate) fn replace_page_session_state(
-        &mut self,
-        target_id: String,
-        state: ParkedPageSessionState,
-    ) {
-        if state == ParkedPageSessionState::default() {
-            self.page_session_states.remove(&target_id);
-            return;
-        }
-        self.page_session_states.insert(target_id, state);
-    }
-
-    pub(crate) fn take_fetch_state(&mut self, target_id: &str) -> ParkedFetchState {
-        self.fetch_states.remove(target_id).unwrap_or_default()
-    }
-
-    pub(crate) fn fetch_state(&self, target_id: &str) -> Option<&ParkedFetchState> {
-        self.fetch_states.get(target_id)
-    }
-
-    pub(crate) fn replace_fetch_state(&mut self, target_id: String, state: ParkedFetchState) {
-        if state.is_empty() {
-            self.fetch_states.remove(&target_id);
-            return;
-        }
-        self.fetch_states.insert(target_id, state);
-    }
-
-    #[cfg(test)]
-    pub(crate) fn has_non_empty_fetch_state(&self, target_id: &str) -> bool {
-        self.fetch_states
-            .get(target_id)
-            .is_some_and(|state| !state.is_empty())
-    }
-
-    pub(crate) fn take_network_artifacts(&mut self, target_id: &str) -> ParkedNetworkArtifacts {
-        self.network_artifacts.remove(target_id).unwrap_or_default()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn network_artifacts(&self, target_id: &str) -> Option<&ParkedNetworkArtifacts> {
-        self.network_artifacts.get(target_id)
-    }
-
-    pub(crate) fn replace_network_artifacts(
-        &mut self,
-        target_id: String,
-        artifacts: ParkedNetworkArtifacts,
-    ) {
-        if artifacts == ParkedNetworkArtifacts::default() {
-            self.network_artifacts.remove(&target_id);
-            return;
-        }
-        self.network_artifacts.insert(target_id, artifacts);
-    }
-
-    pub(crate) fn take_target_owner_state(&mut self, target_id: &str) -> ParkedTargetOwnerState {
-        self.target_owner_states
-            .remove(target_id)
-            .unwrap_or_default()
-    }
-
-    pub(crate) fn target_owner_state(&self, target_id: &str) -> Option<&ParkedTargetOwnerState> {
-        self.target_owner_states.get(target_id)
-    }
-
-    pub(crate) fn replace_target_owner_state(
-        &mut self,
-        target_id: String,
-        state: ParkedTargetOwnerState,
-    ) {
-        if state.is_default() {
-            self.target_owner_states.remove(&target_id);
-            return;
-        }
-        self.target_owner_states.insert(target_id, state);
-    }
-
-    pub(crate) fn has_pending_javascript_dialog(&self) -> bool {
-        self.page_session_states.values().any(|state| {
-            !state
-                .devtools_session_state
-                .page_session_state
-                .javascript_dialog_state
-                .is_empty()
-                || state
-                    .auxiliary_devtools_session_states
-                    .values()
-                    .any(|session| {
-                        !session
-                            .page_session_state
-                            .javascript_dialog_state
-                            .is_empty()
-                    })
-        })
-    }
-
-    pub(crate) fn has_pending_inspector_awaits(&self) -> bool {
-        self.page_session_states
-            .values()
-            .any(parked_page_session_has_pending_inspector_awaits)
-    }
-
-    pub(crate) fn pending_inspector_await_count(&self) -> usize {
-        self.page_session_states
-            .values()
-            .map(parked_page_session_pending_inspector_await_count)
-            .sum()
-    }
-
-    pub(crate) fn pending_inspector_await_target_count(&self) -> usize {
-        self.page_session_states
-            .values()
-            .filter(|state| parked_page_session_has_pending_inspector_awaits(state))
-            .count()
-    }
-
-    pub(crate) fn has_runtime_remote_object_id(&self, object_id: &str) -> bool {
-        self.page_session_states
-            .values()
-            .any(|state| parked_page_session_has_runtime_remote_object_id(state, object_id))
-    }
-
-    pub(crate) fn runtime_remote_object_id_known_for_different_page_owner(
-        &self,
-        target_id: &str,
-        devtools_session_id: Option<&str>,
-        object_id: &str,
-    ) -> bool {
-        self.page_session_states.iter().any(|(id, state)| {
-            if id == target_id {
-                return parked_page_session_has_runtime_remote_object_id_for_different_session(
-                    state,
-                    devtools_session_id,
-                    object_id,
-                );
-            }
-            parked_page_session_has_runtime_remote_object_id(state, object_id)
-        })
-    }
-}
 
 fn is_initial_empty_document_url(raw_url: &str) -> bool {
     url::Url::parse(raw_url)

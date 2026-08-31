@@ -278,6 +278,7 @@ mod tests {
             protocol_configuration: RendererInspectorProtocolConfiguration {
                 runtime_frontend_enabled: true,
                 runtime_bindings: vec![RuntimeBindingRegistration {
+                    devtools_session: None,
                     name: "binding".to_owned(),
                     execution_context_name: None,
                 }],
@@ -299,6 +300,7 @@ mod tests {
         let restore = RendererInspectorSessionRestoreSnapshot {
             protocol_configuration: RendererInspectorProtocolConfiguration {
                 runtime_bindings: vec![RuntimeBindingRegistration {
+                    devtools_session: None,
                     name: "binding".to_owned(),
                     execution_context_name: Some("utility".to_owned()),
                 }],

@@ -61,9 +61,9 @@ pub(super) fn clear_browser_cache_command_output_plan(
         Err((code, message)) => return CommandOutputPlan::error(code, message),
     };
     bc.clear_network_body_artifacts();
-    bc.active_target
-        .fetch_owner
-        .drop_active_fetch_response_body_streams();
+    for target in bc.page_targets.iter_mut() {
+        target.fetch_owner.drop_active_fetch_response_body_streams();
+    }
     if let Err(message) = bc.clear_http_cache() {
         return CommandOutputPlan::error(-32000, message);
     }

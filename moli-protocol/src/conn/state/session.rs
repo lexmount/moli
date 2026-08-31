@@ -1,10 +1,20 @@
+use std::collections::HashMap;
+
+use super::devtools_session::DevToolsSessionRegistry;
+use super::emulation::{
+    EmulatedDeviceMetrics, EmulatedGeolocationOverrideState, EmulatedMediaOverrides,
+    EmulatedNetworkConditions,
+};
 use super::fetch::TargetFetchOwner;
+use super::identity::TargetIdentityState;
 use super::javascript_dialog::TargetJavaScriptDialogState;
 use super::parking::TargetOwnerState;
 use super::runtime_slot::TargetRuntimeSlot;
 use super::session_storage::TargetSessionStorageNamespace;
+use crate::conn::cookie_manager_surface::BrowserContextCookieManagerSurface;
 use crate::domains::audits_output_state::TargetAuditsSessionState;
 use moli_core::page::V8InspectorSessionState;
+use serde_json::Value;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) enum PerformanceTimeDomain {
@@ -60,11 +70,172 @@ impl TargetPerformanceSessionState {
 }
 
 #[derive(Debug, Default)]
-pub(crate) struct ActiveTargetState {
+pub struct ActiveTargetState {
     pub(crate) runtime_slot: TargetRuntimeSlot,
     pub(crate) fetch_owner: TargetFetchOwner,
     pub(crate) owner_state: TargetOwnerState,
     pub(crate) session_storage_namespace: TargetSessionStorageNamespace,
+}
+
+/// All mutable state owned by one page target.
+///
+/// Foreground selection is deliberately absent from this type. A page keeps
+/// the same state object while visible or hidden; selecting another page must
+/// not serialize this state into a second "parked" representation.
+#[derive(Debug)]
+pub struct TargetPageState {
+    pub(crate) target_identity: TargetIdentityState,
+    pub(crate) devtools_sessions: DevToolsSessionRegistry,
+    pub(crate) network_policy: TargetNetworkPolicyState,
+    pub(crate) http_proxy_override: Option<String>,
+    pub(crate) http_no_proxy_override: Option<String>,
+    pub(crate) tls_verify_host_override: Option<bool>,
+    pub(crate) locale_override: Option<String>,
+    pub(crate) timezone_override: Option<String>,
+    pub(crate) locale_overrides: TargetSessionOverrideStack<String>,
+    pub(crate) timezone_overrides: TargetSessionOverrideStack<String>,
+    pub(crate) network_conditions: Option<EmulatedNetworkConditions>,
+    pub(crate) geolocation_override: Option<EmulatedGeolocationOverrideState>,
+    pub(crate) emulated_media: EmulatedMediaOverrides,
+    pub(crate) emulated_device_metrics: Option<EmulatedDeviceMetrics>,
+    pub(crate) cpu_throttling_rate: f64,
+    pub(crate) input_intercept_drags_enabled: bool,
+    pub(crate) input_drag_intercepted: bool,
+    pub(crate) touch_emulation_enabled: bool,
+    pub(crate) emit_touch_events_for_mouse: bool,
+    pub(crate) focus_emulation_enabled: bool,
+    pub(crate) script_execution_disabled: bool,
+    pub(crate) css_enabled: bool,
+    pub(crate) document_cookie_manager_surface: BrowserContextCookieManagerSurface,
+    pub(crate) dom_remote_object_node_cache: HashMap<String, Value>,
+    pub(crate) active_target: ActiveTargetState,
+}
+
+impl Default for TargetPageState {
+    fn default() -> Self {
+        Self {
+            target_identity: TargetIdentityState::about_blank(),
+            devtools_sessions: DevToolsSessionRegistry::default(),
+            network_policy: TargetNetworkPolicyState::default(),
+            http_proxy_override: None,
+            http_no_proxy_override: None,
+            tls_verify_host_override: None,
+            locale_override: None,
+            timezone_override: None,
+            locale_overrides: TargetSessionOverrideStack::default(),
+            timezone_overrides: TargetSessionOverrideStack::default(),
+            network_conditions: None,
+            geolocation_override: None,
+            emulated_media: EmulatedMediaOverrides::default(),
+            emulated_device_metrics: None,
+            cpu_throttling_rate: 1.0,
+            input_intercept_drags_enabled: false,
+            input_drag_intercepted: false,
+            touch_emulation_enabled: false,
+            emit_touch_events_for_mouse: false,
+            focus_emulation_enabled: false,
+            script_execution_disabled: false,
+            css_enabled: false,
+            document_cookie_manager_surface: BrowserContextCookieManagerSurface::default(),
+            dom_remote_object_node_cache: HashMap::new(),
+            active_target: ActiveTargetState::default(),
+        }
+    }
+}
+
+impl TargetPageState {
+    pub(crate) fn has_pending_javascript_dialog(&self) -> bool {
+        self.devtools_sessions.states().any(|session| {
+            !session
+                .page_session_state
+                .javascript_dialog_state
+                .is_empty()
+        })
+    }
+
+    pub(crate) fn has_non_default_session_state(&self) -> bool {
+        self.devtools_sessions.has_non_default_state()
+            || self
+                .active_target
+                .runtime_slot
+                .primary_network_events_enabled()
+            || self.network_policy != TargetNetworkPolicyState::default()
+            || self.http_proxy_override.is_some()
+            || self.http_no_proxy_override.is_some()
+            || self.tls_verify_host_override.is_some()
+            || self.locale_override.is_some()
+            || self.timezone_override.is_some()
+            || self.locale_overrides != TargetSessionOverrideStack::default()
+            || self.timezone_overrides != TargetSessionOverrideStack::default()
+            || self.network_conditions.is_some()
+            || self.geolocation_override.is_some()
+            || self.emulated_media != EmulatedMediaOverrides::default()
+            || self.emulated_device_metrics.is_some()
+            || self.cpu_throttling_rate != 1.0
+            || self.input_intercept_drags_enabled
+            || self.input_drag_intercepted
+            || self.touch_emulation_enabled
+            || self.emit_touch_events_for_mouse
+            || self.focus_emulation_enabled
+            || self.script_execution_disabled
+            || self.css_enabled
+            || self.active_target.fetch_owner.config_snapshot()
+                != super::fetch::TargetFetchConfig::default()
+    }
+
+    pub(crate) fn clear_session_scoped_state_fields(
+        &mut self,
+        preserve_auxiliary_devtools_sessions: bool,
+    ) {
+        self.devtools_sessions
+            .reset(preserve_auxiliary_devtools_sessions);
+        self.active_target
+            .runtime_slot
+            .disable_primary_network_events();
+        self.network_policy = TargetNetworkPolicyState::default();
+        self.http_proxy_override = None;
+        self.http_no_proxy_override = None;
+        self.tls_verify_host_override = None;
+        self.locale_override = None;
+        self.timezone_override = None;
+        self.locale_overrides.clear();
+        self.timezone_overrides.clear();
+        self.network_conditions = None;
+        self.geolocation_override = None;
+        self.emulated_media = EmulatedMediaOverrides::default();
+        self.emulated_device_metrics = None;
+        self.cpu_throttling_rate = 1.0;
+        self.touch_emulation_enabled = false;
+        self.emit_touch_events_for_mouse = false;
+        self.focus_emulation_enabled = false;
+        self.script_execution_disabled = false;
+        self.css_enabled = false;
+        self.active_target.fetch_owner = TargetFetchOwner::default();
+        self.active_target
+            .runtime_slot
+            .clear_session_scoped_network_observation_artifacts();
+        self.active_target
+            .runtime_slot
+            .request_id_allocator()
+            .reset_fetch_navigation_request_counter();
+        self.active_target
+            .owner_state
+            .clear_observable_output_state();
+    }
+}
+
+impl std::ops::Deref for TargetPageState {
+    type Target = ActiveTargetState;
+
+    fn deref(&self) -> &Self::Target {
+        &self.active_target
+    }
+}
+
+impl std::ops::DerefMut for TargetPageState {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.active_target
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -322,6 +493,47 @@ pub(crate) struct InspectorSessionState {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub(crate) struct TargetSessionOverrideStack<T> {
+    entries: Vec<(Option<String>, T)>,
+}
+
+impl<T> Default for TargetSessionOverrideStack<T> {
+    fn default() -> Self {
+        Self {
+            entries: Vec::new(),
+        }
+    }
+}
+
+impl<T> TargetSessionOverrideStack<T> {
+    pub(crate) fn effective(&self) -> Option<&T> {
+        self.entries.last().map(|(_session_id, value)| value)
+    }
+
+    pub(crate) fn replace(&mut self, session_id: Option<&str>, value: Option<T>) {
+        self.entries
+            .retain(|(owner, _value)| owner.as_deref() != session_id);
+        if let Some(value) = value {
+            self.entries.push((session_id.map(str::to_owned), value));
+        }
+    }
+
+    pub(crate) fn remove_session(&mut self, session_id: &str) -> bool {
+        let effective_changed = self
+            .entries
+            .last()
+            .is_some_and(|(owner, _value)| owner.as_deref() == Some(session_id));
+        self.entries
+            .retain(|(owner, _value)| owner.as_deref() != Some(session_id));
+        effective_changed
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.entries.clear();
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct TargetNetworkPolicyState {
     cache_disabled: bool,
     bypass_service_worker: bool,
@@ -331,8 +543,9 @@ pub(crate) struct TargetNetworkPolicyState {
     emulated_download_throughput: f64,
     emulated_upload_throughput: f64,
     emulated_connection_type: Option<String>,
-    browser_identity_override: Option<moli_browser_profile::BrowserIdentityProfile>,
-    extra_headers: Vec<(String, String)>,
+    browser_identity_overrides:
+        TargetSessionOverrideStack<moli_browser_profile::BrowserIdentityProfile>,
+    extra_header_overrides: TargetSessionOverrideStack<Vec<(String, String)>>,
 }
 
 impl Default for TargetNetworkPolicyState {
@@ -346,8 +559,8 @@ impl Default for TargetNetworkPolicyState {
             emulated_download_throughput: -1.0,
             emulated_upload_throughput: -1.0,
             emulated_connection_type: None,
-            browser_identity_override: None,
-            extra_headers: Vec::new(),
+            browser_identity_overrides: TargetSessionOverrideStack::default(),
+            extra_header_overrides: TargetSessionOverrideStack::default(),
         }
     }
 }
@@ -397,26 +610,34 @@ impl TargetNetworkPolicyState {
     }
 
     pub(crate) fn extra_headers(&self) -> &[(String, String)] {
-        &self.extra_headers
+        self.extra_header_overrides
+            .effective()
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
     }
 
-    pub(crate) fn replace_extra_headers(
+    pub(crate) fn replace_extra_headers_for_session(
         &mut self,
+        session_id: Option<&str>,
         extra_headers: Vec<(String, String)>,
     ) -> Vec<(String, String)> {
-        self.extra_headers = extra_headers;
-        self.extra_headers.clone()
+        let override_value = (!extra_headers.is_empty()).then_some(extra_headers);
+        self.extra_header_overrides
+            .replace(session_id, override_value);
+        self.extra_headers().to_vec()
     }
 
     #[cfg(test)]
     pub(crate) fn push_extra_header(&mut self, header: (String, String)) {
-        self.extra_headers.push(header);
+        let mut headers = self.extra_headers().to_vec();
+        headers.push(header);
+        self.replace_extra_headers_for_session(None, headers);
     }
 
     pub(crate) fn browser_identity_override(
         &self,
     ) -> Option<&moli_browser_profile::BrowserIdentityProfile> {
-        self.browser_identity_override.as_ref()
+        self.browser_identity_overrides.effective()
     }
 
     #[cfg(test)]
@@ -428,7 +649,7 @@ impl TargetNetworkPolicyState {
     pub(crate) fn browser_identity_override_owned(
         &self,
     ) -> Option<moli_browser_profile::BrowserIdentityProfile> {
-        self.browser_identity_override.clone()
+        self.browser_identity_override().cloned()
     }
 
     #[cfg(test)]
@@ -443,11 +664,26 @@ impl TargetNetworkPolicyState {
         &mut self,
         browser_identity: moli_browser_profile::BrowserIdentityProfile,
     ) {
-        self.browser_identity_override = Some(browser_identity);
+        self.set_browser_identity_override_for_session(None, Some(browser_identity));
     }
 
     pub(crate) fn clear_browser_identity_override(&mut self) {
-        self.browser_identity_override = None;
+        self.set_browser_identity_override_for_session(None, None);
+    }
+
+    pub(crate) fn set_browser_identity_override_for_session(
+        &mut self,
+        session_id: Option<&str>,
+        browser_identity: Option<moli_browser_profile::BrowserIdentityProfile>,
+    ) {
+        self.browser_identity_overrides
+            .replace(session_id, browser_identity);
+    }
+
+    pub(crate) fn remove_session_overrides(&mut self, session_id: &str) -> (bool, bool) {
+        let browser_identity_changed = self.browser_identity_overrides.remove_session(session_id);
+        let extra_headers_changed = self.extra_header_overrides.remove_session(session_id);
+        (browser_identity_changed, extra_headers_changed)
     }
 
     #[cfg(test)]
@@ -485,24 +721,61 @@ impl TargetNetworkPolicyState {
         self.emulated_connection_type = connection_type;
         self.network_offline
     }
-
-    pub(crate) fn clear_session_scoped_overrides(&mut self) {
-        self.cache_disabled = false;
-        self.bypass_service_worker = false;
-        self.network_offline = false;
-        self.blocked_url_patterns.clear();
-        self.emulated_network_latency = 0.0;
-        self.emulated_download_throughput = -1.0;
-        self.emulated_upload_throughput = -1.0;
-        self.emulated_connection_type = None;
-        self.browser_identity_override = None;
-        self.extra_headers.clear();
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{PageScreencastConfig, PageScreencastFormat, PageScreencastSessionState};
+    use super::{
+        PageScreencastConfig, PageScreencastFormat, PageScreencastSessionState,
+        TargetNetworkPolicyState, TargetSessionOverrideStack,
+    };
+
+    #[test]
+    fn detached_session_network_overrides_restore_the_previous_session() {
+        let mut policy = TargetNetworkPolicyState::default();
+        policy.replace_extra_headers_for_session(
+            Some("session-a"),
+            vec![("X-Test".to_owned(), "A".to_owned())],
+        );
+        policy.set_browser_identity_override_for_session(
+            Some("session-a"),
+            Some(moli_browser_profile::BrowserIdentityProfile::new(
+                "Moli/A", "fr-FR",
+            )),
+        );
+        policy.replace_extra_headers_for_session(
+            Some("session-b"),
+            vec![("X-Test".to_owned(), "B".to_owned())],
+        );
+        policy.set_browser_identity_override_for_session(
+            Some("session-b"),
+            Some(moli_browser_profile::BrowserIdentityProfile::new(
+                "Moli/B", "ja-JP",
+            )),
+        );
+
+        assert_eq!(policy.extra_headers()[0].1, "B");
+        assert_eq!(policy.user_agent_override(), Some("Moli/B"));
+        assert_eq!(policy.remove_session_overrides("session-b"), (true, true));
+        assert_eq!(policy.extra_headers()[0].1, "A");
+        assert_eq!(policy.user_agent_override(), Some("Moli/A"));
+        assert_eq!(policy.remove_session_overrides("session-a"), (true, true));
+        assert!(policy.extra_headers().is_empty());
+        assert_eq!(policy.user_agent_override(), None);
+    }
+
+    #[test]
+    fn detached_session_emulation_override_restores_the_previous_session() {
+        let mut overrides = TargetSessionOverrideStack::default();
+        overrides.replace(Some("session-a"), Some("fr-FR".to_owned()));
+        overrides.replace(Some("session-b"), Some("ja-JP".to_owned()));
+        assert_eq!(overrides.effective().map(String::as_str), Some("ja-JP"));
+
+        assert!(overrides.remove_session("session-b"));
+        assert_eq!(overrides.effective().map(String::as_str), Some("fr-FR"));
+        overrides.replace(Some("session-a"), None);
+        assert!(overrides.effective().is_none());
+    }
 
     fn jpeg_config() -> PageScreencastConfig {
         PageScreencastConfig::new(PageScreencastFormat::Jpeg, 80, Some(1200), Some(900), 1)

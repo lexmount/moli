@@ -1,8 +1,7 @@
 use super::target_session_owner::TargetSessionOwnerMut;
 use super::*;
 use crate::conn::state::{
-    TargetFetchConfig, TargetFetchOwner, TargetFetchState,
-    TargetFetchSubresourceInterceptionSnapshot,
+    TargetFetchConfig, TargetFetchOwner, TargetFetchSubresourceInterceptionSnapshot,
 };
 use crate::conn::{
     CapturedBody, CompletedFetchResponseBodyStreamReadDispatch, FetchInterceptionPattern,
@@ -23,50 +22,53 @@ pub(crate) type SessionOwnerPendingFetchState = (
     Vec<(String, PendingSubresourceFetchResponseRequest)>,
 );
 
-struct ParkedFetchStateGuard<'a> {
-    browser_context: &'a mut BrowserContext,
-    target_id: String,
-    fetch_state: Option<TargetFetchState>,
+struct SessionPendingFetchOwner<'a>(&'a mut TargetFetchOwner);
+
+impl std::ops::Deref for SessionPendingFetchOwner<'_> {
+    type Target = TargetFetchOwner;
+
+    fn deref(&self) -> &Self::Target {
+        self.0
+    }
 }
 
-impl<'a> ParkedFetchStateGuard<'a> {
-    fn take(browser_context: &'a mut BrowserContext, target_id: &str) -> Self {
-        Self {
-            fetch_state: Some(browser_context.take_parked_fetch_state(target_id)),
-            browser_context,
-            target_id: target_id.to_owned(),
-        }
+impl std::ops::DerefMut for SessionPendingFetchOwner<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.0
     }
+}
 
-    fn fetch_state_mut(&mut self) -> &mut TargetFetchState {
-        self.fetch_state
-            .as_mut()
-            .expect("parked fetch state should be restored exactly once")
+impl SessionPendingFetchOwner<'_> {
+    fn in_flight_subresource_fetch_request_identity(
+        &self,
+        internal_id: u64,
+    ) -> Option<(String, crate::conn::TargetPageResidenceIdentity)> {
+        Some((
+            self.in_flight_subresource_fetch_request_id(internal_id)?
+                .to_owned(),
+            self.in_flight_subresource_fetch_request_page_owner(internal_id)?
+                .clone(),
+        ))
     }
+}
 
-    fn fetch_state(&self) -> &TargetFetchState {
-        self.fetch_state
-            .as_ref()
-            .expect("parked fetch state should be restored exactly once")
-    }
+struct SessionFetchBodyStreamOwner<'a> {
+    owner_key: String,
+    fetch_owner: &'a mut TargetFetchOwner,
+    runtime_slot: &'a mut TargetRuntimeSlot,
+}
 
+impl SessionFetchBodyStreamOwner<'_> {
     fn open_pending_fetch_response_body_stream(
         &mut self,
         request_id: &str,
     ) -> Result<Option<String>, String> {
-        let Some(fetch_state) = self.fetch_state.as_mut() else {
-            return Ok(None);
-        };
-        let owner_key = fetch_stream_owner_key(&self.browser_context.id, &self.target_id);
-        let Some(target) = self.browser_context.background_target_mut(&self.target_id) else {
-            return Ok(None);
-        };
         let handle = target_scoped_stream_handle(
-            &owner_key,
-            target.runtime_slot.allocate_io_stream_handle(),
+            &self.owner_key,
+            self.runtime_slot.allocate_io_stream_handle(),
         );
-        fetch_state.open_pending_fetch_response_body_stream(
-            &mut target.runtime_slot,
+        self.fetch_owner.open_pending_fetch_response_body_stream(
+            self.runtime_slot,
             request_id,
             handle,
         )
@@ -78,96 +80,7 @@ impl<'a> ParkedFetchStateGuard<'a> {
         offset: Option<usize>,
         size: Option<usize>,
     ) -> PendingFetchResponseBodyStreamReadStart {
-        let Some(fetch_state) = self.fetch_state.as_mut() else {
-            return PendingFetchResponseBodyStreamReadStart::NotFound;
-        };
-        fetch_state.start_pending_fetch_response_body_stream_read(handle, offset, size)
-    }
-
-    fn finish_pending_fetch_response_body_stream_read(
-        &mut self,
-        completed: CompletedFetchResponseBodyStreamReadDispatch,
-    ) -> PendingFetchResponseBodyStreamRead {
-        let Some(fetch_state) = self.fetch_state.as_mut() else {
-            return PendingFetchResponseBodyStreamRead::NotFound;
-        };
-        let Some(target) = self.browser_context.background_target_mut(&self.target_id) else {
-            return PendingFetchResponseBodyStreamRead::NotFound;
-        };
-        fetch_state
-            .finish_pending_fetch_response_body_stream_read(&mut target.runtime_slot, completed)
-    }
-
-    fn close_pending_fetch_response_body_stream(&mut self, handle: &str) -> bool {
-        let Some(fetch_state) = self.fetch_state.as_mut() else {
-            return false;
-        };
-        if self
-            .browser_context
-            .background_target(&self.target_id)
-            .is_none()
-        {
-            return false;
-        }
-        fetch_state.close_pending_fetch_response_body_stream(handle)
-    }
-}
-
-impl Drop for ParkedFetchStateGuard<'_> {
-    fn drop(&mut self) {
-        if let Some(fetch_state) = self.fetch_state.take() {
-            self.browser_context
-                .replace_parked_fetch_state(self.target_id.clone(), fetch_state);
-        }
-    }
-}
-
-struct ParkedPendingFetchOwner<'a> {
-    fetch_state: ParkedFetchStateGuard<'a>,
-}
-
-impl<'a> ParkedPendingFetchOwner<'a> {
-    fn take(browser_context: &'a mut BrowserContext, target_id: &str) -> Self {
-        Self {
-            fetch_state: ParkedFetchStateGuard::take(browser_context, target_id),
-        }
-    }
-
-    fn fetch_state_mut(&mut self) -> &mut TargetFetchState {
-        self.fetch_state.fetch_state_mut()
-    }
-
-    fn fetch_state(&self) -> &TargetFetchState {
-        self.fetch_state.fetch_state()
-    }
-}
-
-struct ParkedFetchBodyStreamOwner<'a> {
-    fetch_state: ParkedFetchStateGuard<'a>,
-}
-
-impl<'a> ParkedFetchBodyStreamOwner<'a> {
-    fn take(browser_context: &'a mut BrowserContext, target_id: &str) -> Self {
-        Self {
-            fetch_state: ParkedFetchStateGuard::take(browser_context, target_id),
-        }
-    }
-
-    fn open_pending_fetch_response_body_stream(
-        &mut self,
-        request_id: &str,
-    ) -> Result<Option<String>, String> {
-        self.fetch_state
-            .open_pending_fetch_response_body_stream(request_id)
-    }
-
-    fn start_pending_fetch_response_body_stream_read(
-        &mut self,
-        handle: &str,
-        offset: Option<usize>,
-        size: Option<usize>,
-    ) -> PendingFetchResponseBodyStreamReadStart {
-        self.fetch_state
+        self.fetch_owner
             .start_pending_fetch_response_body_stream_read(handle, offset, size)
     }
 
@@ -175,94 +88,13 @@ impl<'a> ParkedFetchBodyStreamOwner<'a> {
         &mut self,
         completed: CompletedFetchResponseBodyStreamReadDispatch,
     ) -> PendingFetchResponseBodyStreamRead {
-        self.fetch_state
-            .finish_pending_fetch_response_body_stream_read(completed)
+        self.fetch_owner
+            .finish_pending_fetch_response_body_stream_read(self.runtime_slot, completed)
     }
 
     fn close_pending_fetch_response_body_stream(&mut self, handle: &str) -> bool {
-        self.fetch_state
+        self.fetch_owner
             .close_pending_fetch_response_body_stream(handle)
-    }
-}
-
-enum SessionPendingFetchOwner<'a> {
-    Active(&'a mut TargetFetchOwner),
-    Parked(Box<ParkedPendingFetchOwner<'a>>),
-}
-
-enum SessionFetchBodyStreamOwner<'a> {
-    Active {
-        owner_key: String,
-        fetch_owner: &'a mut TargetFetchOwner,
-        runtime_slot: &'a mut TargetRuntimeSlot,
-    },
-    Parked(Box<ParkedFetchBodyStreamOwner<'a>>),
-}
-
-impl SessionFetchBodyStreamOwner<'_> {
-    fn open_pending_fetch_response_body_stream(
-        &mut self,
-        request_id: &str,
-    ) -> Result<Option<String>, String> {
-        match self {
-            Self::Active {
-                owner_key,
-                fetch_owner,
-                runtime_slot,
-            } => {
-                let handle = target_scoped_stream_handle(
-                    owner_key,
-                    runtime_slot.allocate_io_stream_handle(),
-                );
-                fetch_owner.open_pending_fetch_response_body_stream(
-                    runtime_slot,
-                    request_id,
-                    handle,
-                )
-            }
-            Self::Parked(owner) => owner.open_pending_fetch_response_body_stream(request_id),
-        }
-    }
-
-    fn start_pending_fetch_response_body_stream_read(
-        &mut self,
-        handle: &str,
-        offset: Option<usize>,
-        size: Option<usize>,
-    ) -> PendingFetchResponseBodyStreamReadStart {
-        match self {
-            Self::Active { fetch_owner, .. } => {
-                fetch_owner.start_pending_fetch_response_body_stream_read(handle, offset, size)
-            }
-            Self::Parked(owner) => {
-                owner.start_pending_fetch_response_body_stream_read(handle, offset, size)
-            }
-        }
-    }
-
-    fn finish_pending_fetch_response_body_stream_read(
-        &mut self,
-        completed: CompletedFetchResponseBodyStreamReadDispatch,
-    ) -> PendingFetchResponseBodyStreamRead {
-        match self {
-            Self::Active {
-                fetch_owner,
-                runtime_slot,
-                ..
-            } => {
-                fetch_owner.finish_pending_fetch_response_body_stream_read(runtime_slot, completed)
-            }
-            Self::Parked(owner) => owner.finish_pending_fetch_response_body_stream_read(completed),
-        }
-    }
-
-    fn close_pending_fetch_response_body_stream(&mut self, handle: &str) -> bool {
-        match self {
-            Self::Active { fetch_owner, .. } => {
-                fetch_owner.close_pending_fetch_response_body_stream(handle)
-            }
-            Self::Parked(owner) => owner.close_pending_fetch_response_body_stream(handle),
-        }
     }
 }
 
@@ -270,21 +102,24 @@ fn fetch_body_stream_owner_for_target_mut<'a>(
     browser_context: &'a mut BrowserContext,
     target_id: &str,
 ) -> Option<SessionFetchBodyStreamOwner<'a>> {
-    let is_active_target = browser_context.active_target_id() == Some(target_id)
-        || (target_id == "active" && browser_context.active_target_id().is_none());
+    let is_active_target = browser_context.active_target_id() == Some(target_id);
     if is_active_target {
         let owner_key = fetch_stream_owner_key(&browser_context.id, target_id);
         let active_target = &mut browser_context.active_target;
-        return Some(SessionFetchBodyStreamOwner::Active {
+        return Some(SessionFetchBodyStreamOwner {
             owner_key,
             fetch_owner: &mut active_target.fetch_owner,
             runtime_slot: &mut active_target.runtime_slot,
         });
     }
-    browser_context.background_target(target_id)?;
-    Some(SessionFetchBodyStreamOwner::Parked(Box::new(
-        ParkedFetchBodyStreamOwner::take(browser_context, target_id),
-    )))
+    let owner_key = fetch_stream_owner_key(&browser_context.id, target_id);
+    let target = browser_context.background_target_mut(target_id)?;
+    let active_target = &mut target.state_mut().active_target;
+    Some(SessionFetchBodyStreamOwner {
+        owner_key,
+        fetch_owner: &mut active_target.fetch_owner,
+        runtime_slot: &mut active_target.runtime_slot,
+    })
 }
 
 fn runtime_slot_for_target_scoped_stream_mut<'a>(
@@ -299,408 +134,6 @@ fn runtime_slot_for_target_scoped_stream_mut<'a>(
     browser_context
         .background_target_mut(target_id)
         .map(|target| &mut target.runtime_slot)
-}
-
-impl SessionPendingFetchOwner<'_> {
-    fn register_pending_fetch_navigation_request(&mut self, pending: PendingFetchNavigation) {
-        match self {
-            Self::Active(owner) => owner.register_pending_fetch_navigation_request(pending),
-            Self::Parked(owner) => owner
-                .fetch_state_mut()
-                .register_pending_fetch_navigation_request(pending),
-        }
-    }
-
-    fn consume_pending_request_action(&mut self, request_id: &str) -> Result<(), &'static str> {
-        match self {
-            Self::Active(owner) => owner.consume_pending_request_action(request_id),
-            Self::Parked(owner) => owner
-                .fetch_state_mut()
-                .consume_pending_request_action(request_id),
-        }
-    }
-
-    fn take_pending_fetch_navigation_for_action_session(
-        &mut self,
-        request_id: &str,
-        action_session_id: Option<&str>,
-    ) -> Option<PendingFetchNavigation> {
-        match self {
-            Self::Active(owner) => owner
-                .take_pending_fetch_navigation_for_action_session(request_id, action_session_id),
-            Self::Parked(owner) => owner
-                .fetch_state_mut()
-                .take_pending_fetch_navigation_for_action_session(request_id, action_session_id),
-        }
-    }
-
-    fn take_pending_fetch_auth_navigation_for_action_session(
-        &mut self,
-        request_id: &str,
-        action_session_id: Option<&str>,
-    ) -> Option<PendingFetchAuthNavigation> {
-        match self {
-            Self::Active(owner) => owner.take_pending_fetch_auth_navigation_for_action_session(
-                request_id,
-                action_session_id,
-            ),
-            Self::Parked(owner) => owner
-                .fetch_state_mut()
-                .take_pending_fetch_auth_navigation_for_action_session(
-                    request_id,
-                    action_session_id,
-                ),
-        }
-    }
-
-    fn register_pending_fetch_auth_navigation(
-        &mut self,
-        request_id: String,
-        pending: PendingFetchAuthNavigation,
-    ) {
-        match self {
-            Self::Active(owner) => {
-                owner.register_pending_fetch_auth_navigation(request_id, pending);
-            }
-            Self::Parked(owner) => {
-                owner
-                    .fetch_state_mut()
-                    .register_pending_fetch_auth_navigation(request_id, pending);
-            }
-        }
-    }
-
-    fn register_pending_fetch_response_navigation(
-        &mut self,
-        request_id: String,
-        document_navigation_token: Option<crate::conn::DocumentNavigationToken>,
-        navigation: crate::conn::NavigationDispatchState,
-        body: crate::conn::DocumentBodySource,
-    ) {
-        match self {
-            Self::Active(owner) => {
-                owner.register_pending_fetch_response_navigation(
-                    request_id,
-                    document_navigation_token,
-                    navigation,
-                    body,
-                );
-            }
-            Self::Parked(owner) => {
-                owner
-                    .fetch_state_mut()
-                    .register_pending_fetch_response_navigation(
-                        request_id,
-                        document_navigation_token,
-                        navigation,
-                        body,
-                    );
-            }
-        }
-    }
-
-    fn take_pending_fetch_response_transfer_for_terminal_action(
-        &mut self,
-        request_id: &str,
-    ) -> Option<PausedDocumentTransfer> {
-        match self {
-            Self::Active(owner) => {
-                owner.take_pending_fetch_response_transfer_for_terminal_action(request_id)
-            }
-            Self::Parked(owner) => owner
-                .fetch_state_mut()
-                .take_pending_fetch_response_transfer_for_terminal_action(request_id),
-        }
-    }
-
-    fn take_pending_fetch_response_transfer(
-        &mut self,
-        request_id: &str,
-    ) -> Option<PausedDocumentTransfer> {
-        match self {
-            Self::Active(owner) => owner.take_pending_fetch_response_transfer(request_id),
-            Self::Parked(owner) => owner
-                .fetch_state_mut()
-                .take_pending_fetch_response_transfer(request_id),
-        }
-    }
-
-    fn register_pending_fetch_response_transfer(
-        &mut self,
-        request_id: String,
-        transfer: PausedDocumentTransfer,
-    ) {
-        match self {
-            Self::Active(owner) => {
-                owner.register_pending_fetch_response_transfer(request_id, transfer);
-            }
-            Self::Parked(owner) => {
-                owner
-                    .fetch_state_mut()
-                    .register_pending_fetch_response_transfer(request_id, transfer);
-            }
-        }
-    }
-
-    fn pending_subresource_fetch_response_request(
-        &self,
-        request_id: &str,
-        session_id: Option<&str>,
-    ) -> Option<PendingSubresourceFetchResponseRequest> {
-        match self {
-            Self::Active(owner) => owner
-                .pending_subresource_fetch_response_request(request_id, session_id)
-                .cloned(),
-            Self::Parked(owner) => owner
-                .fetch_state()
-                .pending_subresource_fetch_response_request(request_id, session_id)
-                .cloned(),
-        }
-    }
-
-    fn mark_pending_subresource_fetch_response_body_taken_as_stream(
-        &mut self,
-        request_id: &str,
-        session_id: Option<&str>,
-    ) -> bool {
-        match self {
-            Self::Active(owner) => owner
-                .mark_pending_subresource_fetch_response_body_taken_as_stream(
-                    request_id, session_id,
-                ),
-            Self::Parked(owner) => owner
-                .fetch_state_mut()
-                .mark_pending_subresource_fetch_response_body_taken_as_stream(
-                    request_id, session_id,
-                ),
-        }
-    }
-
-    fn take_pending_subresource_fetch_request(
-        &mut self,
-        request_id: &str,
-        session_id: Option<&str>,
-    ) -> Option<PendingSubresourceFetchRequest> {
-        match self {
-            Self::Active(owner) => {
-                owner.take_pending_subresource_fetch_request(request_id, session_id)
-            }
-            Self::Parked(owner) => owner
-                .fetch_state_mut()
-                .take_pending_subresource_fetch_request(request_id, session_id),
-        }
-    }
-
-    fn take_pending_subresource_fetch_auth_request(
-        &mut self,
-        request_id: &str,
-        session_id: Option<&str>,
-    ) -> Option<PendingSubresourceFetchAuthRequest> {
-        match self {
-            Self::Active(owner) => {
-                owner.take_pending_subresource_fetch_auth_request(request_id, session_id)
-            }
-            Self::Parked(owner) => owner
-                .fetch_state_mut()
-                .take_pending_subresource_fetch_auth_request(request_id, session_id),
-        }
-    }
-
-    fn take_pending_subresource_fetch_response_request(
-        &mut self,
-        request_id: &str,
-        session_id: Option<&str>,
-    ) -> Option<PendingSubresourceFetchResponseRequest> {
-        match self {
-            Self::Active(owner) => {
-                owner.take_pending_subresource_fetch_response_request(request_id, session_id)
-            }
-            Self::Parked(owner) => owner
-                .fetch_state_mut()
-                .take_pending_subresource_fetch_response_request(request_id, session_id),
-        }
-    }
-
-    fn take_in_flight_subresource_fetch_request(
-        &mut self,
-        internal_id: u64,
-    ) -> Option<InFlightSubresourceFetchRequest> {
-        match self {
-            Self::Active(owner) => owner.take_in_flight_subresource_fetch_request(internal_id),
-            Self::Parked(owner) => owner
-                .fetch_state_mut()
-                .take_in_flight_subresource_fetch_request(internal_id),
-        }
-    }
-
-    fn claim_subresource_continue_request(
-        &mut self,
-        expected_page_owner: &crate::conn::TargetPageResidenceIdentity,
-        internal_id: u64,
-        session_id: Option<&str>,
-        allow_pending_completion: bool,
-    ) -> Option<crate::conn::ClaimedSubresourceContinueRequest> {
-        match self {
-            Self::Active(owner) => owner.claim_subresource_continue_request(
-                expected_page_owner,
-                internal_id,
-                session_id,
-                allow_pending_completion,
-            ),
-            Self::Parked(owner) => owner.fetch_state_mut().claim_subresource_continue_request(
-                expected_page_owner,
-                internal_id,
-                session_id,
-                allow_pending_completion,
-            ),
-        }
-    }
-
-    fn in_flight_subresource_fetch_request_identity(
-        &mut self,
-        internal_id: u64,
-    ) -> Option<(String, crate::conn::TargetPageResidenceIdentity)> {
-        match self {
-            Self::Active(owner) => Some((
-                owner
-                    .in_flight_subresource_fetch_request_id(internal_id)?
-                    .to_owned(),
-                owner
-                    .in_flight_subresource_fetch_request_page_owner(internal_id)?
-                    .clone(),
-            )),
-            Self::Parked(owner) => Some((
-                owner
-                    .fetch_state()
-                    .in_flight_subresource_fetch_request_id(internal_id)?
-                    .to_owned(),
-                owner
-                    .fetch_state()
-                    .in_flight_subresource_fetch_request_page_owner(internal_id)?
-                    .clone(),
-            )),
-        }
-    }
-
-    fn register_pending_subresource_fetch_request(
-        &mut self,
-        request_id: String,
-        pending: PendingSubresourceFetchRequest,
-    ) {
-        match self {
-            Self::Active(owner) => {
-                owner.register_pending_subresource_fetch_request(request_id, pending);
-            }
-            Self::Parked(owner) => {
-                owner
-                    .fetch_state_mut()
-                    .register_pending_subresource_fetch_request(request_id, pending);
-            }
-        }
-    }
-
-    fn register_in_flight_subresource_fetch_request(
-        &mut self,
-        request_id: Option<String>,
-        pending: PendingSubresourceFetchRequest,
-    ) {
-        match self {
-            Self::Active(owner) => {
-                owner.register_in_flight_subresource_fetch_request(request_id, pending);
-            }
-            Self::Parked(owner) => {
-                owner
-                    .fetch_state_mut()
-                    .register_in_flight_subresource_fetch_request(request_id, pending);
-            }
-        }
-    }
-
-    fn register_in_flight_response_stage_subresource_fetch_request(
-        &mut self,
-        request_id: Option<String>,
-        pending: PendingSubresourceFetchRequest,
-        response_stage_blocked_intercepts: Vec<DevToolsNetworkInterceptId>,
-    ) {
-        match self {
-            Self::Active(owner) => {
-                owner.register_in_flight_response_stage_subresource_fetch_request(
-                    request_id,
-                    pending,
-                    response_stage_blocked_intercepts,
-                );
-            }
-            Self::Parked(owner) => {
-                owner
-                    .fetch_state_mut()
-                    .register_in_flight_response_stage_subresource_fetch_request(
-                        request_id,
-                        pending,
-                        response_stage_blocked_intercepts,
-                    );
-            }
-        }
-    }
-
-    fn register_in_flight_subresource_fetch_request_with_response_match_policy(
-        &mut self,
-        request_id: Option<String>,
-        pending: PendingSubresourceFetchRequest,
-        response_stage_url_match_policy: crate::conn::ResponseStageUrlMatchPolicy,
-    ) {
-        match self {
-            Self::Active(owner) => {
-                owner.register_in_flight_subresource_fetch_request_with_response_match_policy(
-                    request_id,
-                    pending,
-                    response_stage_url_match_policy,
-                );
-            }
-            Self::Parked(owner) => {
-                owner
-                    .fetch_state_mut()
-                    .register_in_flight_subresource_fetch_request_with_response_match_policy(
-                        request_id,
-                        pending,
-                        response_stage_url_match_policy,
-                    );
-            }
-        }
-    }
-
-    fn register_pending_subresource_fetch_auth_request(
-        &mut self,
-        request_id: String,
-        pending: PendingSubresourceFetchAuthRequest,
-    ) {
-        match self {
-            Self::Active(owner) => {
-                owner.register_pending_subresource_fetch_auth_request(request_id, pending);
-            }
-            Self::Parked(owner) => {
-                owner
-                    .fetch_state_mut()
-                    .register_pending_subresource_fetch_auth_request(request_id, pending);
-            }
-        }
-    }
-
-    fn register_pending_subresource_fetch_response_request(
-        &mut self,
-        request_id: String,
-        pending: PendingSubresourceFetchResponseRequest,
-    ) {
-        match self {
-            Self::Active(owner) => {
-                owner.register_pending_subresource_fetch_response_request(request_id, pending);
-            }
-            Self::Parked(owner) => {
-                owner
-                    .fetch_state_mut()
-                    .register_pending_subresource_fetch_response_request(request_id, pending);
-            }
-        }
-    }
 }
 
 impl TargetSessionOwnerMut<'_> {
@@ -721,7 +154,7 @@ impl TargetSessionOwnerMut<'_> {
                 runtime_slot.insert_io_stream_body_source(handle.clone(), body, 0);
                 Ok(handle)
             }
-            Self::BackgroundTarget {
+            Self::PageTargetHost {
                 browser_context,
                 target_id,
                 ..
@@ -815,19 +248,12 @@ fn remove_network_intercept_from_browser_context(
     }
 
     let target_ids = browser_context
-        .background_targets
-        .iter()
+        .background_targets()
         .map(|target| target.target_id().to_owned())
         .collect::<Vec<_>>();
     for target_id in target_ids {
-        if browser_context
-            .parked_page_session_state(&target_id)
-            .is_none()
-        {
-            continue;
-        }
         let removed = browser_context.mutate_parked_page_session_state(&target_id, |state| {
-            state.fetch_config.remove_network_intercept(intercept_id)
+            state.fetch_owner.remove_network_intercept(intercept_id)
         });
         if removed {
             return Ok(Some(None));
@@ -918,24 +344,20 @@ impl CdpConnection {
             } => self
                 .browser_context_by_id(&browser_context_id)
                 .map(|browser_context| browser_context.active_target.fetch_owner.config_snapshot()),
-            CdpSessionRoute::BackgroundTarget {
+            CdpSessionRoute::PageTargetHost {
                 browser_context_id,
                 target_id,
             } => self
                 .browser_context_by_id(&browser_context_id)?
-                .parked_page_session_state(&target_id)
-                .map(|state| state.fetch_config.clone()),
+                .background_target(&target_id)
+                .map(|target| target.fetch_owner.config_snapshot()),
             CdpSessionRoute::AuxiliaryTarget {
                 browser_context_id,
                 target_id,
             } => self
                 .browser_context_by_id(&browser_context_id)?
                 .background_target(&target_id)
-                .and_then(|_| {
-                    self.browser_context_by_id(&browser_context_id)?
-                        .parked_page_session_state(&target_id)
-                        .map(|state| state.fetch_config.clone())
-                }),
+                .map(|target| target.fetch_owner.config_snapshot()),
             CdpSessionRoute::Browser
             | CdpSessionRoute::TabTarget { .. }
             | CdpSessionRoute::SharedWorkerTarget { .. }
@@ -1771,25 +1193,21 @@ fn pending_fetch_request_route(
         });
     }
 
-    browser_context
-        .background_targets
-        .iter()
-        .find_map(|target| {
-            browser_context
-                .target_parking
-                .fetch_state(target.target_id())
-                .is_some_and(|state| state.contains_pending_request(request_id))
-                .then(|| CdpSessionRoute::BackgroundTarget {
-                    browser_context_id: browser_context.id.clone(),
-                    target_id: target.target_id().to_owned(),
-                })
-        })
+    browser_context.background_targets().find_map(|target| {
+        target
+            .fetch_owner
+            .contains_pending_request(request_id)
+            .then(|| CdpSessionRoute::PageTargetHost {
+                browser_context_id: browser_context.id.clone(),
+                target_id: target.target_id().to_owned(),
+            })
+    })
 }
 
 impl TargetSessionOwnerMut<'_> {
     fn session_id(&self) -> Option<&str> {
         match self {
-            Self::ActiveTarget { session_id, .. } | Self::BackgroundTarget { session_id, .. } => {
+            Self::ActiveTarget { session_id, .. } | Self::PageTargetHost { session_id, .. } => {
                 session_id.as_deref()
             }
             Self::NoLoadedBrowserContext => None,
@@ -1800,16 +1218,18 @@ impl TargetSessionOwnerMut<'_> {
         match self {
             Self::ActiveTarget {
                 browser_context, ..
-            } => Some(SessionPendingFetchOwner::Active(
+            } => Some(SessionPendingFetchOwner(
                 &mut browser_context.active_target.fetch_owner,
             )),
-            Self::BackgroundTarget {
+            Self::PageTargetHost {
                 browser_context,
                 target_id,
                 ..
-            } => Some(SessionPendingFetchOwner::Parked(Box::new(
-                ParkedPendingFetchOwner::take(browser_context, target_id),
-            ))),
+            } => Some(SessionPendingFetchOwner(
+                &mut browser_context
+                    .background_target_mut(target_id)?
+                    .fetch_owner,
+            )),
             Self::NoLoadedBrowserContext => None,
         }
     }
@@ -1824,7 +1244,7 @@ impl TargetSessionOwnerMut<'_> {
                     .unwrap_or_else(|| "active".to_owned());
                 fetch_body_stream_owner_for_target_mut(browser_context, &target_id)
             }
-            Self::BackgroundTarget {
+            Self::PageTargetHost {
                 browser_context,
                 target_id,
                 ..
@@ -1936,6 +1356,7 @@ impl TargetSessionOwnerMut<'_> {
     ) -> Option<PendingSubresourceFetchResponseRequest> {
         self.pending_fetch_owner_mut()?
             .pending_subresource_fetch_response_request(request_id, session_id)
+            .cloned()
     }
 
     fn mark_pending_subresource_fetch_response_body_taken_as_stream(

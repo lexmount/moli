@@ -55,13 +55,13 @@ fn published_default_target_defers_navigation_runtime_until_materialization() {
         NavigationRuntimeConfig::default(),
     );
 
-    assert!(!conn.engine.is_materialized());
+    assert!(!conn.standalone_navigation_engine.is_materialized());
     let (renderer_publication_sender, _renderer_publication_receiver) =
         moli_core::renderer_output_transport_channel();
     conn.set_renderer_publication_sender(renderer_publication_sender);
     conn.publish_default_browser_target();
 
-    assert!(!conn.engine.is_materialized());
+    assert!(!conn.standalone_navigation_engine.is_materialized());
     let page = conn
         .devtools_target_info(conn.default_target_id())
         .expect("published default page target");
@@ -73,7 +73,17 @@ fn published_default_target_defers_navigation_runtime_until_materialization() {
 
     conn.install_default_browser_target();
 
-    assert!(conn.engine.is_materialized());
+    assert!(
+        !conn.standalone_navigation_engine.is_materialized(),
+        "materializing the default Page must not allocate the fallback engine"
+    );
+    assert!(
+        conn.browser_context
+            .as_ref()
+            .and_then(|context| context.page_navigation_engine(conn.default_target_id()))
+            .is_some(),
+        "materializing the default target must install its Page-owned engine"
+    );
     assert!(
         conn.devtools_target_info(conn.default_target_id())
             .is_some()
@@ -109,7 +119,7 @@ async fn activating_the_only_default_placeholder_does_not_start_the_runtime() {
     let messages = conn.process_message_messages_only_for_test(&raw).await;
 
     assert_eq!(messages, vec![json!({ "id": 1, "result": {} })]);
-    assert!(!conn.engine.is_materialized());
+    assert!(!conn.standalone_navigation_engine.is_materialized());
     assert!(conn.devtools_target_info(target_id).is_some());
 }
 
@@ -129,7 +139,7 @@ async fn closing_the_default_placeholder_does_not_start_the_runtime() {
         messages.first(),
         Some(&json!({ "id": 2, "result": { "success": true } }))
     );
-    assert!(!conn.engine.is_materialized());
+    assert!(!conn.standalone_navigation_engine.is_materialized());
     assert!(
         conn.devtools_target_info(conn.default_target_id())
             .is_none()
@@ -158,7 +168,17 @@ async fn creating_a_target_preserves_the_published_default_as_a_placeholder() {
         .expect("createTarget response");
 
     assert_ne!(created_target_id, conn.default_target_id());
-    assert!(conn.engine.is_materialized());
+    assert!(
+        conn.standalone_navigation_engine.is_materialized(),
+        "creating a real Page target is the first operation that needs the renderer runtime"
+    );
+    assert!(
+        conn.browser_context
+            .as_ref()
+            .and_then(|context| context.page_navigation_engine(created_target_id))
+            .is_some(),
+        "the created Page must own the materialized navigation engine"
+    );
     assert!(conn.default_target_lifecycle.is_placeholder());
     assert!(
         conn.devtools_target_info(conn.default_target_id())
@@ -211,11 +231,17 @@ fn idle_navigation_engine_reset_preserves_mock_layout_policy() {
         ),
     );
 
-    assert_eq!(conn.engine.layout_policy(), LayoutPolicy::Mock);
+    assert_eq!(
+        conn.standalone_navigation_engine.layout_policy(),
+        LayoutPolicy::Mock
+    );
     let reset = conn.release_idle_navigation_engine_memory_if_idle();
 
     assert!(reset.reset);
-    assert_eq!(conn.engine.layout_policy(), LayoutPolicy::Mock);
+    assert_eq!(
+        conn.standalone_navigation_engine.layout_policy(),
+        LayoutPolicy::Mock
+    );
 }
 
 #[tokio::test]
@@ -231,13 +257,19 @@ async fn browser_context_install_and_removal_preserve_mock_layout_policy() {
     );
     conn.insert_browser_context(BrowserContext::new("CTX-layout".to_owned()));
 
-    assert_eq!(conn.engine.layout_policy(), LayoutPolicy::Mock);
+    assert_eq!(
+        conn.standalone_navigation_engine.layout_policy(),
+        LayoutPolicy::Mock
+    );
     let removed = conn
         .remove_browser_context_by_id_restoring_active_async("CTX-layout", None)
         .await;
 
     assert!(removed.is_some());
-    assert_eq!(conn.engine.layout_policy(), LayoutPolicy::Mock);
+    assert_eq!(
+        conn.standalone_navigation_engine.layout_policy(),
+        LayoutPolicy::Mock
+    );
 }
 
 #[test]
@@ -461,7 +493,7 @@ fn none_session_owner_route_override_scope_restores_previous_route_on_drop() {
         browser_context_id: "BID-active".to_owned(),
         target_id: Some("TID-active".to_owned()),
     };
-    let scoped_route = CdpSessionRoute::BackgroundTarget {
+    let scoped_route = CdpSessionRoute::PageTargetHost {
         browser_context_id: "BID-background".to_owned(),
         target_id: "TID-background".to_owned(),
     };
@@ -508,14 +540,14 @@ fn navigation_background_event_queue_drains_current_token() {
 #[test]
 fn active_browser_context_installs_its_renderer_runtime_on_engine() {
     let mut conn = CdpConnection::new();
-    let browser_context = conn.new_browser_context("CTX-runtime".to_owned());
+    let mut browser_context = conn.new_browser_context("CTX-runtime".to_owned());
+    browser_context.set_active_target_id("TID-runtime");
     let renderer_runtime = browser_context.renderer_runtime();
 
     conn.insert_browser_context(browser_context);
 
     assert!(
-        conn.engine
-            .ensure()
+        conn.active_navigation_engine()
             .browser_context_runtime()
             .shares_state_with(&renderer_runtime)
     );
@@ -524,30 +556,97 @@ fn active_browser_context_installs_its_renderer_runtime_on_engine() {
 #[test]
 fn activating_inactive_browser_context_switches_engine_renderer_runtime() {
     let mut conn = CdpConnection::new();
-    let first = conn.new_browser_context("CTX-first".to_owned());
+    let mut first = conn.new_browser_context("CTX-first".to_owned());
+    first.set_active_target_id("TID-first");
     conn.insert_browser_context(first);
-    let second = conn.new_browser_context("CTX-second".to_owned());
+    let mut second = conn.new_browser_context("CTX-second".to_owned());
+    second.set_active_target_id("TID-second");
     let second_renderer_runtime = second.renderer_runtime();
-    conn.inactive_browser_contexts.push(second);
+    conn.insert_browser_context(second);
 
     assert!(conn.activate_browser_context_by_id("CTX-second"));
 
     assert!(
-        conn.engine
-            .ensure()
+        conn.active_navigation_engine()
             .browser_context_runtime()
             .shares_state_with(&second_renderer_runtime)
+    );
+}
+
+#[test]
+fn activating_another_browser_context_retains_pending_initial_document_engine() {
+    let mut conn = CdpConnection::new();
+    let mut first = conn.new_browser_context("CTX-pending-first".to_owned());
+    first.set_active_target_id("TID-pending-first");
+    first.begin_active_target_initial_empty_document("about:blank".to_owned());
+    conn.insert_browser_context(first);
+    let pending_renderer_owner = conn
+        .active_navigation_engine()
+        .renderer_owner_id_for_diagnostics();
+
+    let mut second = conn.new_browser_context("CTX-pending-second".to_owned());
+    second.set_active_target_id("TID-pending-second");
+    conn.insert_browser_context(second);
+
+    assert!(conn.activate_browser_context_by_id("CTX-pending-second"));
+
+    let retained = conn
+        .browser_context_by_id("CTX-pending-first")
+        .and_then(|context| context.page_navigation_engine("TID-pending-first"))
+        .expect("a pending initial document must keep its renderer engine alive");
+    assert_eq!(
+        retained.renderer_owner_id_for_diagnostics(),
+        pending_renderer_owner,
+        "context switching must retain the exact engine that owns the pending renderer page"
+    );
+}
+
+#[test]
+fn activating_another_target_retains_pending_initial_document_engine() {
+    let mut conn = CdpConnection::new();
+    let mut browser_context = conn.new_browser_context("CTX-pending-target".to_owned());
+    browser_context.set_active_target_id("TID-pending-active");
+    browser_context.begin_active_target_initial_empty_document("about:blank".to_owned());
+    conn.insert_browser_context(browser_context);
+    let pending_renderer_owner = conn
+        .active_navigation_engine()
+        .renderer_owner_id_for_diagnostics();
+    conn.browser_context
+        .as_mut()
+        .expect("browser context")
+        .stage_background_target(
+            "TID-promoted".to_owned(),
+            None,
+            "about:blank".to_owned(),
+            Some("about:blank".to_owned()),
+            None,
+        );
+    conn.browser_context
+        .as_mut()
+        .expect("browser context")
+        .set_active_target_id("TID-promoted");
+
+    let retained = conn
+        .browser_context_by_id("CTX-pending-target")
+        .and_then(|context| context.page_navigation_engine("TID-pending-active"))
+        .expect("a pending initial document must survive target activation");
+    assert_eq!(
+        retained.renderer_owner_id_for_diagnostics(),
+        pending_renderer_owner,
+        "target switching must retain the exact engine that owns the pending renderer page"
     );
 }
 
 #[tokio::test]
 async fn removing_active_browser_context_switches_engine_to_promoted_context() {
     let mut conn = CdpConnection::new();
-    let first = conn.new_browser_context("CTX-first".to_owned());
+    let mut first = conn.new_browser_context("CTX-first".to_owned());
+    first.set_active_target_id("TID-first");
     conn.insert_browser_context(first);
-    let second = conn.new_browser_context("CTX-second".to_owned());
+    let mut second = conn.new_browser_context("CTX-second".to_owned());
+    second.set_active_target_id("TID-second");
     let second_renderer_runtime = second.renderer_runtime();
-    conn.inactive_browser_contexts.push(second);
+    conn.insert_browser_context(second);
 
     let removed = conn
         .remove_browser_context_by_id_restoring_active_async("CTX-first", Some("CTX-first"))
@@ -560,8 +659,7 @@ async fn removing_active_browser_context_switches_engine_to_promoted_context() {
         Some("CTX-second")
     );
     assert!(
-        conn.engine
-            .ensure()
+        conn.active_navigation_engine()
             .browser_context_runtime()
             .shares_state_with(&second_renderer_runtime)
     );
@@ -570,28 +668,41 @@ async fn removing_active_browser_context_switches_engine_to_promoted_context() {
 #[tokio::test]
 async fn memory_diagnostics_reports_page_vm_document_isolate_model() {
     let mut conn = CdpConnection::new();
-    conn.replace_navigation_engine(
+    conn.replace_standalone_navigation_engine(
         NavigationEngine::new_with_page_vm_document_isolate_for_diagnostics(),
     );
 
-    conn.browser_context = Some(BrowserContext::new("BID-shared-diagnostics".to_owned()));
+    let mut browser_context = conn.new_browser_context("BID-shared-diagnostics".to_owned());
+    browser_context.set_active_target_id("TID-shared-diagnostics-active");
+    browser_context.stage_background_target(
+        "TID-shared-diagnostics-bg".to_owned(),
+        Some("SID-shared-diagnostics-bg".to_owned()),
+        "data:text/html,<!doctype html><body>second</body>".to_owned(),
+        Some("about:blank".to_owned()),
+        None,
+    );
+    conn.insert_browser_context(browser_context);
     let first_page = conn
         .load_page_via_runtime_async("data:text/html,<!doctype html><body>first</body>")
         .await
         .expect("first shared diagnostics page should load");
+    conn.browser_context
+        .as_mut()
+        .expect("browser context")
+        .set_active_target_id("TID-shared-diagnostics-bg");
     let second_page = conn
         .load_page_via_runtime_async("data:text/html,<!doctype html><body>second</body>")
         .await
         .expect("second shared diagnostics page should load");
     let browser_context = conn.browser_context.as_mut().expect("browser context");
-    browser_context.replace_loaded_page(Some(first_page));
-    let mut background = super::BackgroundTarget::with_url(
-        "TID-shared-diagnostics-bg".to_owned(),
-        Some("SID-shared-diagnostics-bg".to_owned()),
-        "data:text/html,<!doctype html><body>second</body>".to_owned(),
-    );
-    background.replace_loaded_page(Some(second_page));
-    browser_context.background_targets.push(background);
+    browser_context
+        .page_target_mut("TID-shared-diagnostics-active")
+        .expect("active diagnostics target")
+        .replace_loaded_page(Some(first_page));
+    browser_context
+        .page_target_mut("TID-shared-diagnostics-bg")
+        .expect("background diagnostics target")
+        .replace_loaded_page(Some(second_page));
 
     let pending_diagnostics = conn
         .start_moli_diagnostics()
@@ -787,50 +898,51 @@ async fn moli_diagnostics_preserves_runtime_observable_diagnostics() {
 }
 
 #[tokio::test]
-async fn memory_diagnostics_ignores_empty_retained_renderer_owner_for_document_isolates() {
+async fn memory_diagnostics_excludes_empty_page_hosts_from_document_isolates() {
     let mut conn = CdpConnection::new();
-    conn.replace_navigation_engine(
-        NavigationEngine::new_with_page_vm_document_isolate_for_diagnostics(),
+    let mut browser_context = conn.new_browser_context("BID-doc-owner-diagnostics".to_owned());
+    browser_context.set_active_target_id("TID-doc-owner-diagnostics-active");
+    browser_context.stage_background_target(
+        "TID-doc-owner-diagnostics-bg".to_owned(),
+        Some("SID-doc-owner-diagnostics-bg".to_owned()),
+        "data:text/html,<!doctype html><body>second</body>".to_owned(),
+        Some("about:blank".to_owned()),
+        None,
     );
-
-    conn.browser_context = Some(BrowserContext::new("BID-doc-owner-diagnostics".to_owned()));
+    conn.insert_browser_context(browser_context);
     let first_page = conn
         .load_page_via_runtime_async("data:text/html,<!doctype html><body>first</body>")
         .await
         .expect("first shared diagnostics page should load");
+    conn.browser_context
+        .as_mut()
+        .expect("browser context")
+        .set_active_target_id("TID-doc-owner-diagnostics-bg");
     let second_page = conn
         .load_page_via_runtime_async("data:text/html,<!doctype html><body>second</body>")
         .await
         .expect("second shared diagnostics page should load");
     let browser_context = conn.browser_context.as_mut().expect("browser context");
-    browser_context.replace_loaded_page(Some(first_page));
-    let mut background = super::BackgroundTarget::with_url(
-        "TID-doc-owner-diagnostics-bg".to_owned(),
-        Some("SID-doc-owner-diagnostics-bg".to_owned()),
-        "data:text/html,<!doctype html><body>second</body>".to_owned(),
-    );
-    background.replace_loaded_page(Some(second_page));
-    browser_context.background_targets.push(background);
+    browser_context
+        .page_target_mut("TID-doc-owner-diagnostics-active")
+        .expect("active diagnostics target")
+        .replace_loaded_page(Some(first_page));
+    browser_context
+        .page_target_mut("TID-doc-owner-diagnostics-bg")
+        .expect("background diagnostics target")
+        .replace_loaded_page(Some(second_page));
 
-    let retained_context = BrowserContext::new("BID-empty-retained".to_owned());
-    let retained = NavigationEngine::new_with_fetch_config_and_browser_context_access(
-        FetchConfig::default(),
-        retained_context.renderer_runtime_owner_access(),
-        conn.engine.ensure().optional_resource_fetch_mask(),
-        conn.engine.ensure().subframe_loading_enabled(),
-    )
-    .expect("retained diagnostics context owner should be live");
+    let mut empty_context = BrowserContext::new("BID-empty-page".to_owned());
+    empty_context.set_active_target_id("TID-empty-page");
+    conn.insert_browser_context(empty_context);
+    let empty_page_engine = conn
+        .browser_context_by_id("BID-empty-page")
+        .and_then(|context| context.page_navigation_engine("TID-empty-page"))
+        .expect("empty PageTargetHost must own its navigation engine");
     assert!(
-        !retained.shares_renderer_owner_with(conn.engine.ensure()),
-        "test setup must retain a distinct renderer owner without a loaded document"
+        !empty_page_engine.shares_renderer_owner_with(conn.standalone_navigation_engine.ensure()),
+        "test setup must keep a distinct renderer owner without a loaded document"
     );
-    conn.inactive_browser_contexts.push(retained_context);
-    conn.retain_background_navigation_engine(
-        "BID-empty-retained".to_owned(),
-        "TID-empty-retained".to_owned(),
-        retained,
-    )
-    .expect("diagnostics engine must match its retained BrowserContext");
 
     let diagnostics = conn.moli_memory_diagnostics();
 
@@ -839,13 +951,13 @@ async fn memory_diagnostics_ignores_empty_retained_renderer_owner_for_document_i
         json!(2)
     );
     assert_eq!(
-        diagnostics["isolateScope"]["retainedBackgroundNavigationEngineRendererOwnerCount"],
+        diagnostics["isolateScope"]["pageNavigationEngineRendererOwnerCount"],
         json!(1)
     );
     assert_eq!(
         diagnostics["isolateScope"]["estimatedRendererOwnerCount"],
         json!(2),
-        "the empty retained engine still contributes renderer owner fixed cost"
+        "the empty Page host still contributes renderer owner fixed cost"
     );
     assert_eq!(
         diagnostics["isolateScope"]["loadedDocumentRendererOwnerCount"],
@@ -860,7 +972,7 @@ async fn memory_diagnostics_ignores_empty_retained_renderer_owner_for_document_i
     assert_eq!(
         diagnostics["isolateScope"]["estimatedLiveV8IsolateCount"],
         json!(2),
-        "empty retained renderer owners contribute fixed owner cost but no extra live V8 isolate"
+        "empty Page hosts contribute fixed owner cost but no extra live V8 isolate"
     );
 }
 
@@ -950,7 +1062,7 @@ async fn memory_diagnostics_counts_different_browser_context_document_isolates_s
 
     let mut second_context = conn.new_browser_context("BID-doc-owner-second".to_owned());
     second_context.set_active_target_id("TID-doc-owner-second");
-    conn.inactive_browser_contexts.push(second_context);
+    conn.insert_browser_context(second_context);
     assert!(conn.activate_browser_context_by_id("BID-doc-owner-second"));
 
     let second_page = conn
@@ -977,7 +1089,7 @@ async fn memory_diagnostics_counts_different_browser_context_document_isolates_s
         json!(2)
     );
     assert_eq!(
-        diagnostics["isolateScope"]["retainedBackgroundNavigationEngineRendererOwnerCount"],
+        diagnostics["isolateScope"]["pageNavigationEngineRendererOwnerCount"],
         json!(1),
         "switching browser contexts should retain the first loaded target's renderer owner fixed cost"
     );
@@ -1004,48 +1116,41 @@ async fn memory_diagnostics_counts_different_browser_context_document_isolates_s
 }
 
 #[test]
-fn memory_diagnostics_counts_shared_retained_background_engine_by_renderer_owner() {
+fn memory_diagnostics_counts_page_engines_by_renderer_owner() {
     let mut conn = CdpConnection::new();
-    let browser_context = BrowserContext::new("BID-shared-diagnostics".to_owned());
-    let active = NavigationEngine::new_with_fetch_config_and_browser_context_access(
-        FetchConfig::default(),
-        browser_context.renderer_runtime_owner_access(),
-        conn.engine.ensure().optional_resource_fetch_mask(),
-        conn.engine.ensure().subframe_loading_enabled(),
-    )
-    .expect("active diagnostics context owner should be live");
-    conn.replace_navigation_engine(active);
-    conn.browser_context = Some(browser_context);
-
-    let retained = NavigationEngine::new_with_fetch_config_and_shared_renderer_owner(
-        FetchConfig::default(),
-        conn.engine.ensure(),
-        conn.engine.ensure().optional_resource_fetch_mask(),
-        conn.engine.ensure().subframe_loading_enabled(),
-    )
-    .expect("retained diagnostics wrapper should share a live context owner");
-    assert!(
-        retained.shares_renderer_owner_with(conn.engine.ensure()),
-        "test setup must retain a NavigationEngine wrapper that shares the active renderer owner"
-    );
-    conn.retain_background_navigation_engine(
-        "BID-shared-diagnostics".to_owned(),
+    let mut browser_context = BrowserContext::new("BID-shared-diagnostics".to_owned());
+    browser_context.set_active_target_id("TID-shared-diagnostics-active");
+    browser_context.stage_background_target(
         "TID-shared-diagnostics-bg".to_owned(),
-        retained,
-    )
-    .expect("diagnostics wrapper must match its retained BrowserContext");
+        None,
+        "about:blank".to_owned(),
+        Some("about:blank".to_owned()),
+        None,
+    );
+    conn.insert_browser_context(browser_context);
+
+    let active = conn.active_navigation_engine();
+    let background = conn
+        .browser_context
+        .as_ref()
+        .and_then(|context| context.page_navigation_engine("TID-shared-diagnostics-bg"))
+        .expect("background PageTargetHost must own an engine");
+    assert!(
+        background.shares_renderer_owner_with(active),
+        "same-context PageTargetHost engines must share one renderer owner"
+    );
 
     let diagnostics = conn.moli_memory_diagnostics();
 
     assert_eq!(
-        diagnostics["connection"]["retainedBackgroundNavigationEngineCount"],
-        json!(1),
-        "the CDP connection still retains a background NavigationEngine wrapper"
+        diagnostics["connection"]["pageNavigationEngineCount"],
+        json!(2),
+        "each PageTargetHost must expose one resident NavigationEngine"
     );
     assert_eq!(
-        diagnostics["isolateScope"]["retainedBackgroundNavigationEngineRendererOwnerCount"],
+        diagnostics["isolateScope"]["pageNavigationEngineRendererOwnerCount"],
         json!(0),
-        "a retained background NavigationEngine that shares the active renderer owner must not count as another renderer owner"
+        "same-context Page engines must not count as another renderer owner"
     );
     assert_eq!(
         diagnostics["isolateScope"]["estimatedRendererOwnerCount"],
@@ -1054,28 +1159,95 @@ fn memory_diagnostics_counts_shared_retained_background_engine_by_renderer_owner
 }
 
 #[test]
-fn retained_background_engine_rejects_a_foreign_browser_context_route() {
+fn page_navigation_engines_remain_target_local_across_selection() {
     let mut conn = CdpConnection::new();
-    conn.browser_context = Some(BrowserContext::new("BID-retain-route".to_owned()));
+    let mut browser_context = conn.new_browser_context("BID-engine-residence".to_owned());
+    browser_context.set_active_target_id("TID-engine-first");
+    browser_context.stage_background_target(
+        "TID-engine-second".to_owned(),
+        None,
+        "about:blank".to_owned(),
+        Some("about:blank".to_owned()),
+        None,
+    );
+    conn.insert_browser_context(browser_context);
+
+    conn.active_navigation_engine_mut()
+        .set_user_agent_override("Moli/Page-First");
+
+    conn.browser_context
+        .as_mut()
+        .expect("browser context")
+        .set_active_target_id("TID-engine-second");
+    assert_ne!(
+        conn.active_navigation_engine()
+            .fetch_config()
+            .browser_identity()
+            .user_agent(),
+        "Moli/Page-First",
+        "selecting another Page must expose that host's own engine"
+    );
+    conn.active_navigation_engine_mut()
+        .set_user_agent_override("Moli/Page-Second");
+
+    conn.browser_context
+        .as_mut()
+        .expect("browser context")
+        .set_active_target_id("TID-engine-first");
+    assert_eq!(
+        conn.active_navigation_engine()
+            .fetch_config()
+            .browser_identity()
+            .user_agent(),
+        "Moli/Page-First",
+        "selection must not replace or move a PageTargetHost engine"
+    );
+    assert_eq!(
+        conn.browser_context
+            .as_ref()
+            .and_then(|context| context.page_navigation_engine("TID-engine-second"))
+            .expect("second Page engine")
+            .fetch_config()
+            .browser_identity()
+            .user_agent(),
+        "Moli/Page-Second",
+        "the unselected Page must retain its engine state in place"
+    );
+}
+
+#[test]
+fn page_target_host_rejects_a_foreign_browser_context_engine() {
+    let mut conn = CdpConnection::new();
+    let mut context = BrowserContext::new("BID-retain-route".to_owned());
+    context.set_active_target_id("TID-retain-route");
+    conn.insert_browser_context(context);
+    let original_owner = conn
+        .active_navigation_engine()
+        .renderer_owner_id_for_diagnostics();
     let foreign_context = BrowserContext::new("BID-retain-route-foreign".to_owned());
     let foreign_engine = NavigationEngine::new_with_fetch_config_and_browser_context_access(
         FetchConfig::default(),
         foreign_context.renderer_runtime_owner_access(),
-        conn.engine.ensure().optional_resource_fetch_mask(),
-        conn.engine.ensure().subframe_loading_enabled(),
+        conn.standalone_navigation_engine
+            .ensure()
+            .optional_resource_fetch_mask(),
+        conn.standalone_navigation_engine
+            .ensure()
+            .subframe_loading_enabled(),
     )
     .expect("foreign context owner should be live during the regression");
 
     let error = conn
-        .retain_background_navigation_engine(
-            "BID-retain-route".to_owned(),
-            "TID-retain-route".to_owned(),
-            foreign_engine,
-        )
-        .expect_err("a retained route must reject an engine from another BrowserContext");
+        .install_page_navigation_engine("BID-retain-route", "TID-retain-route", foreign_engine)
+        .expect_err("a PageTargetHost must reject an engine from another BrowserContext");
 
     assert!(error.contains("does not match BrowserContext `BID-retain-route`"));
-    assert!(conn.retained_background_navigation_engines.is_empty());
+    assert_eq!(
+        conn.active_navigation_engine()
+            .renderer_owner_id_for_diagnostics(),
+        original_owner,
+        "rejecting a foreign engine must preserve the host's resident engine"
+    );
 }
 
 #[tokio::test]
@@ -1098,32 +1270,24 @@ async fn memory_diagnostics_splits_pending_inspector_await_counts_by_target_owne
     browser_context.set_active_target_id("TID-pending-await-active");
     browser_context.attach_active_session("SID-pending-await-active");
     browser_context.replace_loaded_page(Some(active_page));
-    browser_context
-        .devtools_session_state
+    browser_context.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .register_pending_inspector_await(10_001, Some("SID-pending-await-active"), None);
-    browser_context
-        .devtools_session_state
+    browser_context.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .register_pending_inspector_await(
             10_002,
             Some("SID-pending-await-active"),
             Some("active-group"),
         );
 
-    let mut background = super::BackgroundTarget::with_url(
+    let mut background = super::PageTargetHost::with_url(
         "TID-pending-await-bg".to_owned(),
         Some("SID-pending-await-bg".to_owned()),
         "data:text/html,<!doctype html><body>background</body>".to_owned(),
     );
     background.replace_loaded_page(Some(background_page));
-    let mut background_page_session_state = super::ParkedPageSessionState::default();
-    background_page_session_state
-        .devtools_session_state
+    background.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .register_pending_inspector_await(20_001, Some("SID-pending-await-bg"), None);
-    browser_context.target_parking.replace_page_session_state(
-        "TID-pending-await-bg".to_owned(),
-        background_page_session_state,
-    );
-    browser_context.background_targets.push(background);
+    browser_context.insert_page_target_host(background);
 
     let shared_worker_instance_id = SharedWorkerInstanceId::from_u64(30_001);
     let mut shared_worker_target = SharedWorkerTargetState::new(
@@ -1225,7 +1389,7 @@ async fn memory_diagnostics_splits_pending_inspector_await_counts_by_target_owne
         json!(2)
     );
     assert_eq!(
-        diagnostics["activeBrowserContext"]["targetParking"]["pendingInspectorAwaitCount"],
+        diagnostics["activeBrowserContext"]["targetHosts"]["pendingInspectorAwaitCount"],
         json!(1)
     );
 }

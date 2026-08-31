@@ -289,16 +289,17 @@ fn connection_with_background_pending_fetch_action(request_id: &str) -> CdpConne
     let mut browser_context = BrowserContext::new("BID-fetch-background".to_owned());
     browser_context.set_active_target_id("TID-active".to_owned());
     browser_context.attach_active_session("SID-active".to_owned());
+    browser_context.insert_page_target_host(PageTargetHost::with_url(
+        "TID-background".to_owned(),
+        Some("SID-background".to_owned()),
+        "https://example.test/background".to_owned(),
+    ));
     browser_context
-        .background_targets
-        .push(BackgroundTarget::with_url(
-            "TID-background".to_owned(),
-            Some("SID-background".to_owned()),
-            "https://example.test/background".to_owned(),
-        ));
-    let mut fetch_state = browser_context.take_parked_fetch_state("TID-background");
-    fetch_state.insert_pending_fetch_request_id_for_test(request_id.to_owned());
-    browser_context.replace_parked_fetch_state("TID-background".to_owned(), fetch_state);
+        .background_target_mut("TID-background")
+        .expect("background target")
+        .fetch_owner
+        .pending_state_mut()
+        .insert_pending_fetch_request_id_for_test(request_id.to_owned());
     conn.browser_context = Some(browser_context);
     conn
 }
@@ -310,7 +311,7 @@ async fn assert_bidi_fetch_action_consumes_background_request(
     let mut conn = connection_with_background_pending_fetch_action(request_id);
     assert!(matches!(
         conn.pending_fetch_request_session_route(request_id),
-        Some(CdpSessionRoute::BackgroundTarget { target_id, .. }) if target_id == "TID-background"
+        Some(CdpSessionRoute::PageTargetHost { target_id, .. }) if target_id == "TID-background"
     ));
 
     let (result, events, protocol_events, renderer_output_predecessor) = conn
@@ -686,13 +687,11 @@ async fn bidi_fetch_control_resolves_background_request_owner() {
     let mut browser_context = BrowserContext::new("BID-fetch-background".to_owned());
     browser_context.set_active_target_id("TID-active".to_owned());
     browser_context.attach_active_session("SID-active".to_owned());
-    browser_context
-        .background_targets
-        .push(BackgroundTarget::with_url(
-            "TID-background".to_owned(),
-            Some("SID-background".to_owned()),
-            "https://example.test/background".to_owned(),
-        ));
+    browser_context.insert_page_target_host(PageTargetHost::with_url(
+        "TID-background".to_owned(),
+        Some("SID-background".to_owned()),
+        "https://example.test/background".to_owned(),
+    ));
     conn.browser_context = Some(browser_context);
 
     conn.register_pending_fetch_navigation_request_for_session_owner(
@@ -729,7 +728,7 @@ async fn bidi_fetch_control_resolves_background_request_owner() {
 
     assert!(matches!(
         conn.pending_fetch_request_session_route("FETCH-background"),
-        Some(CdpSessionRoute::BackgroundTarget { target_id, .. }) if target_id == "TID-background"
+        Some(CdpSessionRoute::PageTargetHost { target_id, .. }) if target_id == "TID-background"
     ));
 
     let context = DevToolsCommandContext {
@@ -846,13 +845,16 @@ async fn devtools_browser_context_commands_create_list_and_remove_user_context()
     let created_context = conn
         .browser_context_by_id("user-context-1")
         .expect("created browser context");
-    assert_eq!(created_context.tls_verify_host_override, Some(false));
     assert_eq!(
-        created_context.http_proxy_override.as_deref(),
+        created_context.default_tls_verify_host_override,
+        Some(false)
+    );
+    assert_eq!(
+        created_context.default_http_proxy_override.as_deref(),
         Some("127.0.0.1:80")
     );
     assert_eq!(
-        created_context.http_no_proxy_override.as_deref(),
+        created_context.default_http_no_proxy_override.as_deref(),
         Some("localhost,127.0.0.1")
     );
     assert_eq!(created_context.proxy_autoconfig_url, None);
@@ -971,7 +973,7 @@ async fn devtools_browser_context_create_preserves_proxy_autoconfig_and_socks_me
         .browser_context_by_id(create_result.browser_context_id.as_str())
         .expect("created browser context");
     assert_eq!(
-        created_context.http_proxy_override.as_deref(),
+        created_context.default_http_proxy_override.as_deref(),
         Some("socks5://[::1]:1080")
     );
     assert_eq!(
@@ -3178,15 +3180,13 @@ async fn devtools_create_target_can_activate_created_target() {
     );
     assert!(
         browser_context
-            .background_targets
-            .iter()
+            .background_targets()
             .any(|target| target.target_id() == "TID-1"),
         "the previous active target should be preserved as a background target"
     );
     assert!(
         browser_context
-            .background_targets
-            .iter()
+            .background_targets()
             .find(|target| target.target_id() == "TID-1")
             .is_some_and(|target| target.has_loaded_page()),
         "the previous active page should move into the demoted target slot"
@@ -4628,8 +4628,8 @@ async fn devtools_command_applies_known_user_context_viewport_default() {
         .browser_context_by_id("custom-user-context")
         .expect("custom user context should exist");
     assert!(
-        browser_context.emulated_device_metrics.is_none(),
-        "userContext viewport should not install a target-scoped active override"
+        browser_context.active_target_id().is_none(),
+        "userContext viewport should not create a page target"
     );
     let default_metrics = browser_context
         .default_emulated_device_metrics
@@ -8567,8 +8567,7 @@ async fn devtools_network_intercept_commands_route_to_fetch_owner() {
     conn.browser_context
         .as_mut()
         .expect("browser context")
-        .background_targets
-        .push(BackgroundTarget::with_url(
+        .insert_page_target_host(PageTargetHost::with_url(
             "TID-bidi-intercept-background".to_owned(),
             None,
             "https://example.test/background".to_owned(),
@@ -8593,7 +8592,7 @@ async fn devtools_network_intercept_commands_route_to_fetch_owner() {
             .as_ref()
             .expect("browser context")
             .parked_page_session_state("TID-bidi-intercept-background")
-            .is_some_and(|state| state.fetch_config.is_enabled()),
+            .is_some_and(|state| state.fetch_owner.is_enabled()),
         "background target should own the intercept"
     );
 
@@ -8615,7 +8614,7 @@ async fn devtools_network_intercept_commands_route_to_fetch_owner() {
             .as_ref()
             .expect("browser context")
             .parked_page_session_state("TID-bidi-intercept-background")
-            .is_none_or(|state| !state.fetch_config.is_enabled()),
+            .is_none_or(|state| !state.fetch_owner.is_enabled()),
         "target-less remove should clear the background intercept"
     );
 

@@ -1,5 +1,5 @@
 use super::super::{
-    BackgroundTarget, BrowserContext, ConnectionNetworkRequestIdAllocator, PausedDocumentTransfer,
+    BrowserContext, ConnectionNetworkRequestIdAllocator, PageTargetHost, PausedDocumentTransfer,
     PendingFetchAuthNavigation, PendingFetchNavigation, PendingSubresourceFetchAuthRequest,
     PendingSubresourceFetchRequest, PendingSubresourceFetchResponseRequest,
 };
@@ -11,19 +11,62 @@ fn document_navigation_loader_id(sequence: u64) -> String {
 }
 
 impl BrowserContext {
-    pub fn background_target(&self, target_id: &str) -> Option<&BackgroundTarget> {
-        self.background_targets
-            .iter()
-            .find(|target| target.is_target(target_id))
+    pub(crate) fn page_target(&self, target_id: &str) -> Option<&PageTargetHost> {
+        self.page_targets.get(target_id)
     }
 
-    pub(crate) fn background_target_mut(
+    pub(crate) fn page_target_mut(&mut self, target_id: &str) -> Option<&mut PageTargetHost> {
+        self.page_targets.get_mut(target_id)
+    }
+
+    pub fn background_target(&self, target_id: &str) -> Option<&PageTargetHost> {
+        (!self.is_active_target(target_id))
+            .then(|| self.page_target(target_id))
+            .flatten()
+    }
+
+    pub(crate) fn background_target_mut(&mut self, target_id: &str) -> Option<&mut PageTargetHost> {
+        if self.is_active_target(target_id) {
+            return None;
+        }
+        self.page_target_mut(target_id)
+    }
+
+    pub(crate) fn background_targets(&self) -> impl DoubleEndedIterator<Item = &PageTargetHost> {
+        self.page_targets.background()
+    }
+
+    pub(crate) fn background_targets_mut(
         &mut self,
-        target_id: &str,
-    ) -> Option<&mut BackgroundTarget> {
-        self.background_targets
-            .iter_mut()
-            .find(|target| target.is_target(target_id))
+    ) -> impl DoubleEndedIterator<Item = &mut PageTargetHost> {
+        self.page_targets.background_mut()
+    }
+
+    pub(crate) fn background_target_at(&self, index: usize) -> Option<&PageTargetHost> {
+        self.page_targets.background_at(index)
+    }
+
+    pub(crate) fn background_target_at_mut(&mut self, index: usize) -> Option<&mut PageTargetHost> {
+        self.page_targets.background_at_mut(index)
+    }
+
+    pub(crate) fn background_target_count(&self) -> usize {
+        self.page_targets.background_len()
+    }
+
+    pub(crate) fn has_no_background_targets(&self) -> bool {
+        self.page_targets.background_is_empty()
+    }
+
+    pub(crate) fn insert_page_target_host(&mut self, mut host: PageTargetHost) -> bool {
+        host.network_policy
+            .set_cache_disabled(self.global_cache_disabled);
+        if let Some(config) = self.page_navigation_runtime_config.clone() {
+            let engine = self.new_page_navigation_engine(config);
+            let replaced = host.replace_navigation_engine(engine);
+            debug_assert!(replaced.is_none());
+        }
+        self.page_targets.insert(host)
     }
 
     pub(crate) fn take_active_target_pending_fetch_state(
@@ -49,10 +92,16 @@ impl BrowserContext {
         request_id: &str,
     ) -> Result<Option<String>, String> {
         let handle = self.active_target.runtime_slot.allocate_io_stream_handle();
-        self.active_target
+        let active_target = &mut self
+            .page_targets
+            .active_mut()
+            .expect("cannot open a response stream without an active page target")
+            .state_mut()
+            .active_target;
+        active_target
             .fetch_owner
             .open_pending_fetch_response_body_stream(
-                &mut self.active_target.runtime_slot,
+                &mut active_target.runtime_slot,
                 request_id,
                 handle,
             )
@@ -168,9 +217,9 @@ impl BrowserContext {
     }
 
     pub(crate) fn clear_network_body_artifacts(&mut self) {
-        self.active_target
-            .runtime_slot
-            .clear_network_body_artifacts();
+        for target in self.page_targets.iter_mut() {
+            target.runtime_slot.clear_network_body_artifacts();
+        }
     }
 
     pub(crate) fn remove_captured_response_body_visibility_for_session(
@@ -239,12 +288,6 @@ impl BrowserContext {
         self.active_target
             .runtime_slot
             .clear_session_scoped_network_observation_artifacts();
-    }
-
-    pub(crate) fn reset_target_scoped_network_artifacts(&mut self) {
-        self.active_target
-            .runtime_slot
-            .reset_all_target_scoped_network_artifacts();
     }
 
     #[cfg(test)]
@@ -332,7 +375,7 @@ impl BrowserContext {
     }
 }
 
-impl BackgroundTarget {
+impl PageTargetHost {
     pub(crate) fn prepare_document_navigation_request_ids(
         &mut self,
         network_request_id_allocator: &mut ConnectionNetworkRequestIdAllocator,

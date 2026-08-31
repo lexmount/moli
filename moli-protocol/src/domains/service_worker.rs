@@ -569,7 +569,7 @@ fn page_target_ids_for_controlled_client_ids(
     {
         target_ids.insert(target_id.to_owned());
     }
-    for target in &context.background_targets {
+    for target in context.background_targets() {
         let Some(page) = target.loaded_page() else {
             continue;
         };
@@ -600,7 +600,7 @@ mod tests {
     use serde_json::json;
 
     use crate::{
-        conn::{BackgroundTarget, BrowserContext, ServiceWorkerTargetState},
+        conn::{BrowserContext, PageTargetHost, ServiceWorkerTargetState},
         testing::TestContext,
     };
 
@@ -642,13 +642,13 @@ mod tests {
         context.set_target_url("data:text/html,<title>same-url</title>".to_owned());
         let _ = context.replace_loaded_page(Some(active_page));
 
-        let mut background = BackgroundTarget::with_url(
+        let mut background = PageTargetHost::with_url(
             "TID-background".to_owned(),
             None,
             "data:text/html,<title>same-url</title>".to_owned(),
         );
         let _ = background.replace_loaded_page(Some(background_page));
-        context.background_targets.push(background);
+        context.insert_page_target_host(background);
 
         assert_eq!(
             super::page_target_ids_for_controlled_client_ids(&context, &[background_client_id]),

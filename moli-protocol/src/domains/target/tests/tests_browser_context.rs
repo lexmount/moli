@@ -112,7 +112,7 @@ async fn dispose_browser_context_emits_detached_events_for_attached_target() {
     let mut bc = BrowserContext::new("BID-20".into());
     bc.set_active_target_id("TID-000000000A");
     bc.attach_active_session("SID-000000000A");
-    bc.devtools_session_state
+    bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .inspector_enabled = true;
     ctx.conn.browser_context = Some(bc);
@@ -784,7 +784,7 @@ async fn dispose_browser_context_aborts_paused_request_stage_navigation() {
     let mut bc = BrowserContext::new("BID-9".into());
     bc.set_active_target_id("TID-000000000A");
     bc.attach_active_session("SID-1");
-    bc.devtools_session_state
+    bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .inspector_enabled = true;
     bc.active_target

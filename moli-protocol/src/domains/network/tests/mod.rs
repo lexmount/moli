@@ -21,8 +21,8 @@ use crate::testing::{
 };
 use crate::{
     conn::{
-        BackgroundTarget, BrowserContext, CapturedBody, CdpConnection, DocumentBodySource,
-        NETWORK_ERROR_PAGE_URL, NavigationDispatchState, TargetIdentityState, TargetPageSlot,
+        BrowserContext, CapturedBody, CdpConnection, DocumentBodySource, NETWORK_ERROR_PAGE_URL,
+        NavigationDispatchState, PageTargetHost, TargetIdentityState, TargetPageSlot,
     },
     domains::page::LOADER_ID,
 };

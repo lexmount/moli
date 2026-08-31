@@ -8,6 +8,34 @@ use super::{
 };
 
 impl CdpConnection {
+    pub(crate) async fn clear_target_session_overrides_async(
+        &mut self,
+        session_id: &str,
+    ) -> Result<(), String> {
+        let browser_identity_changed = match self.browser_context.as_mut() {
+            Some(browser_context) => {
+                browser_context
+                    .clear_target_session_overrides_async(session_id)
+                    .await?
+            }
+            None => false,
+        };
+        if !browser_identity_changed {
+            return Ok(());
+        }
+
+        let Some(pending) =
+            self.start_rebuild_resource_runtime_for_session_owner(Some(session_id))?
+        else {
+            return Ok(());
+        };
+        let completion = pending
+            .wait()
+            .await
+            .map_err(|error| format!("failed to restore detached session user agent: {error}"))?;
+        self.finish_rebuild_resource_runtime_for_session_owner(Some(session_id), completion)
+    }
+
     pub(crate) fn is_browser_session_id(&self, session_id: Option<&str>) -> bool {
         let Some(session_id) = session_id else {
             return false;
@@ -659,6 +687,10 @@ impl CdpConnection {
         &mut self,
         cleanup_plan: &TargetBindingCleanupPlan,
     ) {
+        self.remove_document_start_scripts_for_detached_session_best_effort_async(
+            cleanup_plan.session_id(),
+        )
+        .await;
         match cleanup_plan.action() {
             TargetBindingCleanupAction::ActiveTargetPrimaryAutoAttached => {
                 if let Some(bc) = self.browser_context.as_mut() {
@@ -823,6 +855,8 @@ impl CdpConnection {
         let target_id = cleanup_plan.target_id().to_owned();
         let reason = cleanup_plan.reason().map(str::to_owned);
         let parent_session_id = cleanup_plan.parent_session_id().map(str::to_owned);
+        self.remove_document_start_scripts_for_detached_session_best_effort_async(&session_id)
+            .await;
         self.clear_active_target_session_binding_for_detach_async()
             .await?;
         Ok(self.detach_known_session_event_plan(
@@ -841,6 +875,8 @@ impl CdpConnection {
         let target_id = cleanup_plan.target_id().to_owned();
         let reason = cleanup_plan.reason().map(str::to_owned);
         let parent_session_id = cleanup_plan.parent_session_id().map(str::to_owned);
+        self.remove_document_start_scripts_for_detached_session_best_effort_async(&session_id)
+            .await;
         let Some(detached_target_id) = self
             .clear_background_target_session_binding_for_detach_async(&session_id)
             .await?
@@ -864,8 +900,7 @@ impl CdpConnection {
         self.browser_context
             .as_ref()
             .map(|bc| {
-                bc.background_targets
-                    .iter()
+                bc.background_targets()
                     .filter_map(|target| {
                         Some(TargetSessionDetachCleanupPlan::new(
                             target.target_id().to_owned(),

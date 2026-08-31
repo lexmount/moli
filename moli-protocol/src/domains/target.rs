@@ -35,7 +35,7 @@ pub(crate) use popup::{
     complete_popup_target_navigation_owner_action_async,
     create_popup_target_from_renderer_output_background_events_async,
     emit_target_info_changed_for_session_owner_background_event,
-    start_initial_document_target_url_navigation_if_needed_background_events_async,
+    schedule_initial_document_target_url_navigation_after_debugger_resume,
 };
 pub(crate) fn popup_activation_creates_new_target(
     conn: &CdpConnection,
@@ -1089,8 +1089,8 @@ fn select_browser_context_for_target(
         return Err("BrowserContextNotLoaded");
     }
     if !conn.browser_contexts().any(|bc| {
-        bc.has_active_target()
-            || !bc.background_targets.is_empty()
+        bc.active_target_id().is_some()
+            || !bc.has_no_background_targets()
             || bc.has_any_shared_worker_targets()
             || bc.has_any_dedicated_worker_targets()
             || bc.has_any_service_worker_targets()

@@ -702,7 +702,7 @@ fn start_loaded_page_permission_override_commands(
                     })?,
             });
         }
-        for target in &mut browser_context.background_targets {
+        for target in browser_context.background_targets_mut() {
             let target_id = target.target_id().to_owned();
             let Some(page) = target.loaded_page_mut() else {
                 continue;

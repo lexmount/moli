@@ -1,4 +1,4 @@
-use crate::conn::{BackgroundTarget, BrowserContext, CdpCommandTaskStep, CdpSchedulerEvent};
+use crate::conn::{BrowserContext, CdpCommandTaskStep, CdpSchedulerEvent, PageTargetHost};
 use crate::domains::page::LOADER_ID;
 use crate::testing::{
     TestContext, wait_until_renderer_document_load, wait_until_scheduler_message,
@@ -411,7 +411,7 @@ fn renderer_backed_ax_node_id(node: &Value) -> String {
 #[tokio::test(flavor = "multi_thread")]
 async fn accessibility_loaded_page_methods_target_background_owner_without_promotion() {
     let mut ctx = TestContext::new();
-    let background = BackgroundTarget::with_url(
+    let background = PageTargetHost::with_url(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
         "about:blank".to_owned(),
@@ -420,7 +420,7 @@ async fn accessibility_loaded_page_methods_target_background_owner_without_promo
     let mut bc = BrowserContext::new("BID-A".to_owned());
     bc.set_active_target_id("TID-active".to_owned());
     bc.attach_active_session("SID-active".to_owned());
-    bc.background_targets.push(background);
+    bc.insert_page_target_host(background);
     ctx.conn.browser_context = Some(bc);
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<html><body><p>Intro</p><button>Owner</button></body></html>",

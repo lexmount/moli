@@ -23,5 +23,4 @@ where
     }
 }
 
-mod crpage;
 mod thin_variants;

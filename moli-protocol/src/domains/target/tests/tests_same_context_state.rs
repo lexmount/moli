@@ -407,11 +407,8 @@ async fn same_context_targets_restore_their_own_crash_state_after_switching() {
         .owner_state
         .target_crash_state
         .mark_crashed();
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .devtools_session_state
+    ctx.conn.browser_context.as_mut().unwrap().devtools_sessions
+        [moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .record_inspector_target_crashed();
 
@@ -623,17 +620,17 @@ async fn same_context_targets_restore_their_own_domain_enablement_after_switchin
             .expect("active browser context");
         assert_eq!(bc.active_target_id(), Some("TID-000000000A"));
         assert!(
-            bc.devtools_session_state
+            bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .page_lifecycle_events
         );
         assert!(
-            bc.devtools_session_state
+            bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .runtime_session_state
                 .runtime_frontend_enabled
         );
         assert!(
-            bc.devtools_session_state
+            bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .runtime_session_state
                 .inspector_enabled
         );
@@ -671,17 +668,17 @@ async fn same_context_targets_restore_their_own_domain_enablement_after_switchin
             .expect("active browser context");
         assert_eq!(bc.active_target_id(), Some(second_target_id.as_str()));
         assert!(
-            !bc.devtools_session_state
+            !bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .page_lifecycle_events
         );
         assert!(
-            !bc.devtools_session_state
+            !bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .runtime_session_state
                 .runtime_frontend_enabled
         );
         assert!(
-            !bc.devtools_session_state
+            !bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .runtime_session_state
                 .inspector_enabled
         );
@@ -1275,11 +1272,8 @@ async fn same_context_targets_restore_their_own_crash_state_after_session_scoped
         .owner_state
         .target_crash_state
         .mark_crashed();
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .devtools_session_state
+    ctx.conn.browser_context.as_mut().unwrap().devtools_sessions
+        [moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .record_inspector_target_crashed();
 
@@ -1531,9 +1525,9 @@ async fn same_context_targets_restore_their_own_domain_enablement_after_session_
             .as_ref()
             .expect("active browser context");
         assert_eq!(bc.active_target_id(), Some("TID-000000000DS"));
-        assert!(bc.devtools_session_state.page_session_state.page_lifecycle_events);
-        assert!(bc.devtools_session_state.runtime_session_state.runtime_frontend_enabled);
-        assert!(bc.devtools_session_state.runtime_session_state.inspector_enabled);
+        assert!(bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary].page_session_state.page_lifecycle_events);
+        assert!(bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary].runtime_session_state.runtime_frontend_enabled);
+        assert!(bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary].runtime_session_state.inspector_enabled);
         assert!(
             bc.active_target
                 .runtime_slot
@@ -1569,9 +1563,9 @@ async fn same_context_targets_restore_their_own_domain_enablement_after_session_
             .as_ref()
             .expect("active browser context after session-scoped promotion");
         assert_eq!(bc.active_target_id(), Some(second_target_id.as_str()));
-        assert!(!bc.devtools_session_state.page_session_state.page_lifecycle_events);
-        assert!(bc.devtools_session_state.runtime_session_state.runtime_frontend_enabled);
-        assert!(!bc.devtools_session_state.runtime_session_state.inspector_enabled);
+        assert!(!bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary].page_session_state.page_lifecycle_events);
+        assert!(bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary].runtime_session_state.runtime_frontend_enabled);
+        assert!(!bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary].runtime_session_state.inspector_enabled);
         assert!(
             bc.active_target
                 .runtime_slot
@@ -1607,9 +1601,9 @@ async fn same_context_targets_restore_their_own_domain_enablement_after_session_
             .as_ref()
             .expect("active browser context after restoring first target");
         assert_eq!(bc.active_target_id(), Some("TID-000000000DS"));
-        assert!(bc.devtools_session_state.page_session_state.page_lifecycle_events);
-        assert!(bc.devtools_session_state.runtime_session_state.runtime_frontend_enabled);
-        assert!(bc.devtools_session_state.runtime_session_state.inspector_enabled);
+        assert!(bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary].page_session_state.page_lifecycle_events);
+        assert!(bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary].runtime_session_state.runtime_frontend_enabled);
+        assert!(bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary].runtime_session_state.inspector_enabled);
         assert!(
             bc.active_target
                 .runtime_slot

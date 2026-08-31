@@ -987,8 +987,6 @@ impl TargetFetchState {
     }
 }
 
-pub type ParkedFetchState = TargetFetchState;
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TargetFetchConfig {
     enabled: bool,
@@ -1725,6 +1723,15 @@ fn network_intercept_matches_auth_required(
 }
 
 impl TargetFetchOwner {
+    pub(crate) fn pending_state(&self) -> &TargetFetchState {
+        &self.pending
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pending_state_mut(&mut self) -> &mut TargetFetchState {
+        &mut self.pending
+    }
+
     pub(crate) fn configure(
         &mut self,
         session_id: Option<String>,
@@ -1762,10 +1769,6 @@ impl TargetFetchOwner {
 
     pub(crate) fn remove_fetch_session(&mut self, session_id: Option<&str>) -> bool {
         self.config.remove_fetch_session(session_id)
-    }
-
-    pub(crate) fn replace_config(&mut self, config: TargetFetchConfig) {
-        self.config = config;
     }
 
     pub(crate) fn config_snapshot(&self) -> TargetFetchConfig {
@@ -2211,14 +2214,6 @@ impl TargetFetchOwner {
 
     pub(crate) fn clear_pending(&mut self) {
         self.pending.clear();
-    }
-
-    pub(crate) fn take_pending_state(&mut self) -> TargetFetchState {
-        std::mem::take(&mut self.pending)
-    }
-
-    pub(crate) fn replace_pending_state(&mut self, state: TargetFetchState) {
-        self.pending = state;
     }
 }
 

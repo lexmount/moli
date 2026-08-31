@@ -53,7 +53,7 @@ async fn runtime_discard_console_entries_suppresses_buffered_runtime_events() {
 #[tokio::test(flavor = "multi_thread")]
 async fn runtime_discard_console_entries_is_page_target_local() {
     let mut ctx = TestContext::new();
-    let background_target = crate::conn::BackgroundTarget::with_url(
+    let background_target = crate::conn::PageTargetHost::with_url(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
         "about:blank".to_owned(),
@@ -62,7 +62,7 @@ async fn runtime_discard_console_entries_is_page_target_local() {
     let mut browser_context = BrowserContext::new("BID-1".to_owned());
     browser_context.set_active_target_id("TID-active");
     browser_context.attach_active_session("SID-active");
-    browser_context.background_targets.push(background_target);
+    browser_context.insert_page_target_host(background_target);
     ctx.conn.browser_context = Some(browser_context);
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<script>console.log('active-discard-peer')</script>",
@@ -346,11 +346,6 @@ async fn heap_profiler_sampling_and_tracking_are_restored_on_replacement_page_is
         "<!doctype html><script>globalThis.__heapBefore = []</script>",
     )
     .await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist")
-        .set_active_target_id("TID-heap-profiler-restore");
 
     for command in [
         json!({"id": 206_840, "method": "HeapProfiler.enable"}),
@@ -523,7 +518,7 @@ async fn deferred_heap_profiler_state_follows_renderer_owned_document_navigation
         .browser_context
         .as_ref()
         .expect("browser context")
-        .devtools_session_state
+        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .inspector_session_state;
     assert!(
         inspector_state.v8_state.is_some(),
@@ -648,9 +643,9 @@ async fn heap_profiler_moli_diagnostics_reports_connection_state_without_loaded_
         "diagnostics should not require a loaded target: {response:?}"
     );
     assert_eq!(
-        connection["retainedBackgroundNavigationEngineCount"],
+        connection["pageNavigationEngineCount"],
         json!(0),
-        "fresh diagnostics should expose retained engine count: {response:?}"
+        "fresh diagnostics should expose page engine count: {response:?}"
     );
     let scheduler = &response["result"]["scheduler"];
     assert_eq!(
@@ -838,7 +833,7 @@ async fn heap_profiler_moli_reset_idle_engine_only_resets_without_loaded_page() 
         .browser_context
         .as_mut()
         .expect("browser context")
-        .reset_active_target_slot_to_empty_async()
+        .remove_active_page_target_async()
         .await;
 
     ctx.process_async(json!({"id": 206_819, "method": "HeapProfiler.moliResetIdleEngine"}))

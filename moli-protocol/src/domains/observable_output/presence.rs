@@ -607,7 +607,7 @@ mod tests {
         bc.active_target
             .runtime_slot
             .set_page_attachment_id_for_test(1);
-        bc.devtools_session_state
+        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
             .runtime_frontend_enabled = true;
         conn.browser_context = Some(bc);
@@ -655,11 +655,13 @@ mod tests {
         bc.active_target
             .runtime_slot
             .set_page_attachment_id_for_test(1);
-        bc.devtools_session_state
+        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .console_output_session_state
             .console_enabled = true;
-        bc.devtools_session_state.page_session_state.log_enabled = true;
-        bc.devtools_session_state
+        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+            .page_session_state
+            .log_enabled = true;
+        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
             .runtime_frontend_enabled = false;
         conn.browser_context = Some(bc);
@@ -704,7 +706,7 @@ mod tests {
         bc.active_target
             .runtime_slot
             .set_page_attachment_id_for_test(1);
-        bc.devtools_session_state
+        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
             .runtime_frontend_enabled = true;
         conn.browser_context = Some(bc);
@@ -743,10 +745,12 @@ mod tests {
             .active_target
             .runtime_slot
             .replace_loaded_page(Some(page));
-        bc.devtools_session_state
+        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .console_output_session_state
             .console_enabled = true;
-        bc.devtools_session_state.page_session_state.log_enabled = true;
+        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+            .page_session_state
+            .log_enabled = true;
         ctx.conn.browser_context = Some(bc);
 
         let outputs = observable_backlog_activity_outputs(&ctx.conn, None);

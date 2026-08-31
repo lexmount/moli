@@ -109,7 +109,7 @@ pub(super) async fn execute_devtools_activate_target_command_async(
         );
         return Ok(Vec::new());
     }
-    if !bc.has_active_target() && bc.background_targets.is_empty() {
+    if bc.active_target_id().is_none() && bc.has_no_background_targets() {
         restore_previously_active_browser_context(
             conn,
             previously_active_browser_context_id.as_deref(),

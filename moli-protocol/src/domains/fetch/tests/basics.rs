@@ -398,7 +398,7 @@ async fn disable_drains_fetch_owned_pending_when_same_session_network_intercept_
 #[tokio::test(flavor = "multi_thread")]
 async fn enable_targets_loaded_background_owner_without_promotion() {
     let mut ctx = TestContext::new();
-    let background = BackgroundTarget::with_url(
+    let background = PageTargetHost::with_url(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
         "about:blank".to_owned(),
@@ -407,7 +407,7 @@ async fn enable_targets_loaded_background_owner_without_promotion() {
     let mut bc = BrowserContext::new("BID-fetch-bg".to_owned());
     bc.set_active_target_id("TID-active".to_owned());
     bc.attach_active_session("SID-active".to_owned());
-    bc.background_targets.push(background);
+    bc.insert_page_target_host(background);
     ctx.conn.browser_context = Some(bc);
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<title>fetch background</title>",
@@ -435,11 +435,14 @@ async fn enable_targets_loaded_background_owner_without_promotion() {
     let staged = bc
         .parked_page_session_state("TID-background")
         .expect("background owner fetch config should be staged");
-    assert!(staged.fetch_config.is_enabled());
-    assert_eq!(staged.fetch_config.session_id(), Some("SID-background"));
-    assert_eq!(staged.fetch_config.patterns().len(), 1);
+    assert!(staged.fetch_owner.config_snapshot().is_enabled());
     assert_eq!(
-        staged.fetch_config.patterns()[0].resource_type_filter,
+        staged.fetch_owner.config_snapshot().session_id(),
+        Some("SID-background")
+    );
+    assert_eq!(staged.fetch_owner.config_snapshot().patterns().len(), 1);
+    assert_eq!(
+        staged.fetch_owner.config_snapshot().patterns()[0].resource_type_filter,
         Some(FetchResourceTypeFilter::Xhr)
     );
 }
@@ -447,7 +450,7 @@ async fn enable_targets_loaded_background_owner_without_promotion() {
 #[tokio::test(flavor = "multi_thread")]
 async fn pending_fetch_enable_keeps_background_owner_route_across_completion() {
     let mut ctx = TestContext::new();
-    let background = BackgroundTarget::with_url(
+    let background = PageTargetHost::with_url(
         "TID-fetch-background".to_owned(),
         None,
         "about:blank".to_owned(),
@@ -455,7 +458,7 @@ async fn pending_fetch_enable_keeps_background_owner_route_across_completion() {
 
     let mut bc = BrowserContext::new("BID-fetch-owner-route".to_owned());
     bc.set_active_target_id("TID-fetch-active".to_owned());
-    bc.background_targets.push(background);
+    bc.insert_page_target_host(background);
     ctx.conn.browser_context = Some(bc);
 
     ctx.install_navigation_fixture_for_session_owner(
@@ -529,10 +532,10 @@ async fn pending_fetch_enable_keeps_background_owner_route_across_completion() {
     let staged = bc
         .parked_page_session_state("TID-fetch-background")
         .expect("background fetch config should stay parked");
-    assert!(staged.fetch_config.is_enabled());
-    assert_eq!(staged.fetch_config.patterns().len(), 1);
+    assert!(staged.fetch_owner.config_snapshot().is_enabled());
+    assert_eq!(staged.fetch_owner.config_snapshot().patterns().len(), 1);
     assert_eq!(
-        staged.fetch_config.patterns()[0].resource_type_filter,
+        staged.fetch_owner.config_snapshot().patterns()[0].resource_type_filter,
         Some(FetchResourceTypeFilter::Xhr)
     );
 }
@@ -598,7 +601,7 @@ async fn enable_targets_inactive_owner_without_activation() {
 #[tokio::test(flavor = "multi_thread")]
 async fn disable_targets_loaded_background_owner_without_promotion() {
     let mut ctx = TestContext::new();
-    let background = BackgroundTarget::with_url(
+    let background = PageTargetHost::with_url(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
         "about:blank".to_owned(),
@@ -607,9 +610,9 @@ async fn disable_targets_loaded_background_owner_without_promotion() {
     let mut bc = BrowserContext::new("BID-fetch-disable-bg".to_owned());
     bc.set_active_target_id("TID-active".to_owned());
     bc.attach_active_session("SID-active".to_owned());
-    bc.background_targets.push(background);
+    bc.insert_page_target_host(background);
     bc.mutate_parked_page_session_state("TID-background", |state| {
-        state.fetch_config.configure(
+        state.fetch_owner.configure(
             Some("SID-background".to_owned()),
             false,
             vec![crate::conn::FetchInterceptionPattern {

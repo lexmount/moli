@@ -937,6 +937,7 @@ fn main_document_open_rebinds_preserved_isolated_runtime_binding_context() {
 async fn child_navigation_retires_runtime_binding_context_and_stale_function() {
     let mut vm = new_storage_test_vm("https://child-runtime-binding-owner.test/");
     vm.set_stored_runtime_bindings(&[crate::protocol_types::RuntimeBindingRegistration {
+        devtools_session: None,
         name: "childOwnerBoundRuntimeBinding".to_owned(),
         execution_context_name: None,
     }]);
@@ -5115,7 +5116,7 @@ fn isolated_world_bridge_ref_is_released_with_script_vm() {
     let mut vm = new_storage_test_vm("https://example.test/");
     let context_host = vm.context_host_weak_for_test();
 
-    vm.ensure_isolated_world("bridge-ref-regression", false)
+    vm.ensure_isolated_world_for_owner(None, "bridge-ref-regression", false)
         .expect("isolated world should be created");
     assert!(
         context_host.upgrade().is_some(),
@@ -6354,6 +6355,7 @@ async fn pending_child_navigation_does_not_materialize_initial_empty_preload_rea
     let mut vm = new_storage_test_vm("https://child-preload-lazy.test/");
     vm.set_stored_document_start_scripts(&[crate::DocumentStartScript {
         registry_key: Some("initial-empty-lazy-preload".to_owned()),
+        devtools_session: None,
         source: "globalThis.__documentStartUrl = document.URL;".to_owned(),
         world_name: None,
         has_bidi_channel_argument: false,
@@ -14661,6 +14663,7 @@ fn inspector_context_created_matches_same_name_child_isolated_world_by_frame_id(
         .expect("root isolated world should be created");
     let child_context_id = vm
         .create_new_isolated_world(
+            None,
             "shared-utility",
             false,
             Some("child-frame".to_owned()),
@@ -14705,6 +14708,57 @@ fn inspector_context_created_matches_same_name_child_isolated_world_by_frame_id(
         Some("child-frame-replayed-realm")
     );
     assert_eq!(vm.page_isolated_world_contexts.len(), 2);
+}
+
+#[test]
+fn same_name_isolated_worlds_are_scoped_to_devtools_session_and_detach() {
+    let mut vm = new_storage_test_vm("https://isolated-world-session.test/");
+    let session_a = moli_page_types::DevToolsSessionKey::from_wire_session_id(Some("session-a"));
+    let session_b = moli_page_types::DevToolsSessionKey::from_wire_session_id(Some("session-b"));
+
+    let context_a = vm
+        .ensure_isolated_world_for_owner(Some(&session_a), "utility", false)
+        .expect("session A isolated world should be created");
+    let context_b = vm
+        .ensure_isolated_world_for_owner(Some(&session_b), "utility", false)
+        .expect("session B same-name isolated world should be distinct");
+    assert_ne!(context_a, context_b);
+    vm.eval_in_isolated_context(context_a, "globalThis.owner = 'session-a'")
+        .expect("session A isolated world should evaluate");
+    vm.eval_in_isolated_context(context_b, "globalThis.owner = 'session-b'")
+        .expect("session B isolated world should evaluate");
+    assert_eq!(
+        vm.eval_in_isolated_context(context_a, "owner")
+            .expect("session A isolated world should retain its state"),
+        "session-a"
+    );
+    assert_eq!(
+        vm.eval_in_isolated_context(context_b, "owner")
+            .expect("session B isolated world should retain its state"),
+        "session-b"
+    );
+
+    assert!(vm.detach_runtime_inspector_session(Some("session-a")));
+    assert!(
+        vm.page_isolated_world_contexts.context(context_a).is_none(),
+        "detaching session A must retire only its isolated world"
+    );
+    assert_eq!(
+        vm.eval_in_isolated_context(context_b, "owner")
+            .expect("session B isolated world should survive peer detach"),
+        "session-b"
+    );
+
+    let replacement_session =
+        moli_page_types::DevToolsSessionKey::from_wire_session_id(Some("session-c"));
+    let replacement_context = vm
+        .ensure_isolated_world_for_owner(Some(&replacement_session), "utility", false)
+        .expect("replacement session isolated world should be created");
+    assert_eq!(
+        vm.eval_in_isolated_context(replacement_context, "typeof owner")
+            .expect("replacement session isolated world should evaluate"),
+        "undefined"
+    );
 }
 
 fn test_trusted_key_dispatch_callback(

@@ -481,10 +481,6 @@ impl TargetNetworkAgentState {
             .remove_session_cursors(session_id);
     }
 
-    pub(crate) fn snapshot_artifacts(&self) -> TargetNetworkArtifacts {
-        self.artifacts.clone()
-    }
-
     pub(crate) fn collected_network_data_artifacts(&self) -> Vec<CollectedNetworkDataArtifact> {
         self.artifacts.collected_network_data_artifacts()
     }
@@ -542,13 +538,46 @@ impl TargetNetworkAgentState {
             .claim_completed_request_id(request_id)
     }
 
-    pub(crate) fn restore_artifacts(&mut self, artifacts: TargetNetworkArtifacts) {
-        self.artifacts = artifacts;
-    }
-
     #[cfg(test)]
     pub(crate) fn allocate_network_request_id(&mut self) -> String {
         self.artifacts.allocate_network_request_id()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_session_observation_cursor_at_counts_for_test(
+        &mut self,
+        session_id: Option<&str>,
+        subresource_count: usize,
+        websocket_count: usize,
+    ) {
+        self.artifacts.set_session_observation_cursor_at_counts(
+            session_id,
+            subresource_count,
+            websocket_count,
+        );
+    }
+
+    #[cfg(test)]
+    pub(crate) fn emitted_subresource_record_count_for_session_for_test(
+        &self,
+        session_id: Option<&str>,
+    ) -> usize {
+        self.artifacts
+            .emitted_subresource_record_count_for_session(session_id)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn emitted_websocket_event_count_for_session_for_test(
+        &self,
+        session_id: Option<&str>,
+    ) -> usize {
+        self.artifacts
+            .emitted_websocket_event_count_for_session(session_id)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn artifacts_are_default_for_test(&self) -> bool {
+        self.artifacts == TargetNetworkArtifacts::default()
     }
 
     #[cfg(test)]
@@ -1438,7 +1467,7 @@ impl CapturedResponseBodyStore {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct TargetNetworkArtifacts {
+struct TargetNetworkArtifacts {
     request_id_allocator: TargetNetworkRequestIdAllocator,
     body_artifacts: TargetNetworkBodyArtifacts,
     subresource_network_artifacts: SubresourceNetworkArtifacts,
@@ -1451,7 +1480,8 @@ impl TargetNetworkArtifacts {
         self.request_id_allocator.allocate_request_id()
     }
 
-    pub(crate) fn set_session_observation_cursor_at_counts(
+    #[cfg(test)]
+    fn set_session_observation_cursor_at_counts(
         &mut self,
         session_id: Option<&str>,
         subresource_record_count: usize,
@@ -1466,30 +1496,8 @@ impl TargetNetworkArtifacts {
         );
     }
 
-    pub(crate) fn remove_session_observation_cursor(&mut self, session_id: Option<&str>) {
-        self.subresource_network_artifacts
-            .remove_session_cursor(session_id);
-        self.websocket_network_artifacts
-            .remove_session_cursors(session_id);
-    }
-
-    pub(crate) fn remove_captured_response_body_visibility_for_session(
-        &mut self,
-        session_id: Option<&str>,
-    ) {
-        self.body_artifacts.remove_session_visibility(session_id);
-    }
-
-    pub(crate) fn clear_captured_response_bodies(&mut self) {
-        self.body_artifacts.clear_captured_response_bodies();
-    }
-
-    pub(crate) fn collected_network_data_artifacts(&self) -> Vec<CollectedNetworkDataArtifact> {
+    fn collected_network_data_artifacts(&self) -> Vec<CollectedNetworkDataArtifact> {
         self.body_artifacts.collected_network_data_artifacts()
-    }
-
-    pub(crate) fn clear_websocket_request_ids(&mut self) {
-        self.websocket_network_artifacts.clear_request_ids();
     }
 
     #[cfg(test)]

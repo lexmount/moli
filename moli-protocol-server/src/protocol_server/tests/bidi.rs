@@ -11879,6 +11879,16 @@ async fn websocket_bidi_emulation_user_context_overrides_apply_to_later_http_nav
     );
     assert_eq!(
         bidi_string_script_value(&mut socket, 9, &context_id, "navigator.language").await,
+        "en-US"
+    );
+    assert_eq!(
+        bidi_string_script_value(
+            &mut socket,
+            91,
+            &context_id,
+            "Intl.DateTimeFormat().resolvedOptions().locale"
+        )
+        .await,
         locale
     );
     let profile = bidi_string_script_value(
@@ -11891,7 +11901,7 @@ async fn websocket_bidi_emulation_user_context_overrides_apply_to_later_http_nav
     let profile: serde_json::Value =
         serde_json::from_str(&profile).expect("profile echo should be JSON");
     assert_eq!(profile["userAgent"], json!(user_agent));
-    assert_eq!(profile["acceptLanguage"], json!(locale));
+    assert_eq!(profile["acceptLanguage"], json!("en-US,en;q=0.9"));
 
     let _ = socket.close(None).await;
     protocol_server.abort();

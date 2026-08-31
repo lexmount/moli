@@ -85,46 +85,50 @@ fn dom_storage_subscriptions_for_browser_context_owner(
     };
 
     let mut subscriptions = Vec::new();
-    if let Some(subscription) = browser_context
-        .devtools_session_state
-        .dom_storage_session_state
-        .mutation_subscription()
-    {
-        subscriptions.push((
-            browser_context.active_session_id_owned(),
-            subscription.clone(),
-        ));
+    if browser_context.page_targets.active().is_some() {
+        if let Some(subscription) = browser_context
+            .devtools_sessions
+            .primary()
+            .dom_storage_session_state
+            .mutation_subscription()
+        {
+            subscriptions.push((
+                browser_context.active_session_id_owned(),
+                subscription.clone(),
+            ));
+        }
+        subscriptions.extend(
+            browser_context
+                .devtools_sessions
+                .attached_entries()
+                .filter_map(|(session_id, state)| {
+                    state
+                        .dom_storage_session_state
+                        .mutation_subscription()
+                        .map(|subscription| (Some(session_id.to_owned()), subscription.clone()))
+                }),
+        );
     }
-    subscriptions.extend(
-        browser_context
-            .auxiliary_devtools_session_states
-            .iter()
-            .filter_map(|(session_id, state)| {
-                state
-                    .dom_storage_session_state
-                    .mutation_subscription()
-                    .map(|subscription| (Some(session_id.clone()), subscription.clone()))
-            }),
-    );
-    for target in &browser_context.background_targets {
+    for target in browser_context.background_targets() {
         let Some(state) = browser_context.parked_page_session_state(target.target_id()) else {
             continue;
         };
         if let (Some(session_id), Some(subscription)) = (
             target.session_id(),
             state
-                .devtools_session_state
+                .devtools_sessions
+                .primary()
                 .dom_storage_session_state
                 .mutation_subscription(),
         ) {
             subscriptions.push((Some(session_id.to_owned()), subscription.clone()));
         }
-        subscriptions.extend(state.auxiliary_devtools_session_states.iter().filter_map(
+        subscriptions.extend(state.devtools_sessions.attached_entries().filter_map(
             |(session_id, state)| {
                 state
                     .dom_storage_session_state
                     .mutation_subscription()
-                    .map(|subscription| (Some(session_id.clone()), subscription.clone()))
+                    .map(|subscription| (Some(session_id.to_owned()), subscription.clone()))
             },
         ));
     }

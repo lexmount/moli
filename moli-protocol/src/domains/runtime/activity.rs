@@ -624,11 +624,13 @@ mod tests {
             .browser_context
             .as_mut()
             .expect("browser context should be loaded");
-        bc.devtools_session_state
+        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .console_output_session_state
             .console_enabled = true;
-        bc.devtools_session_state.page_session_state.log_enabled = true;
-        bc.devtools_session_state
+        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+            .page_session_state
+            .log_enabled = true;
+        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
             .runtime_frontend_enabled = true;
         ctx.conn

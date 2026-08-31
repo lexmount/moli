@@ -160,11 +160,8 @@ async fn runtime_xhr_subresource_pauses_until_continue_request_then_loads_respon
     let xhr_url = format!("http://{addr}/xhr");
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &page_url, "SID-1", "TID-1").await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .devtools_session_state
+    ctx.conn.browser_context.as_mut().unwrap().devtools_sessions
+        [moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .inspector_enabled = true;
     ctx.sent.clear();
@@ -464,11 +461,8 @@ async fn runtime_xhr_subresource_request_animation_frame_pauses_until_continue_r
     let xhr_url = format!("http://{addr}/xhr");
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &page_url, "SID-1", "TID-1").await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .devtools_session_state
+    ctx.conn.browser_context.as_mut().unwrap().devtools_sessions
+        [moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .inspector_enabled = true;
     ctx.sent.clear();
@@ -625,11 +619,8 @@ async fn runtime_xhr_subresource_queue_microtask_pauses_until_continue_request_t
     let xhr_url = format!("http://{addr}/xhr");
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &page_url, "SID-1", "TID-1").await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .devtools_session_state
+    ctx.conn.browser_context.as_mut().unwrap().devtools_sessions
+        [moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .inspector_enabled = true;
     ctx.sent.clear();

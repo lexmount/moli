@@ -2598,7 +2598,7 @@ async fn websocket_cdp_shared_owner_survives_idle_browser_reconnect() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn websocket_cdp_puppeteer_reconnect_replays_existing_runtime_context() {
+async fn websocket_cdp_puppeteer_reconnect_recreates_session_owned_runtime_context() {
     let (addr, server) = spawn_test_protocol_server().await;
     let (status, body) = fetch_server_response(addr, "PUT", "/json/new?about%3Ablank").await;
     assert_eq!(status, 200);
@@ -2649,12 +2649,10 @@ async fn websocket_cdp_puppeteer_reconnect_replays_existing_runtime_context() {
         }),
     )
     .await;
-    assert!(
+    let first_utility_context_id =
         response_by_id(&utility_world, 6)["result"]["executionContextId"]
             .as_i64()
-            .is_some(),
-        "failed to create the persistent Puppeteer utility world: {utility_world:#?}"
-    );
+            .unwrap_or_else(|| panic!("failed to create the utility world: {utility_world:#?}"));
 
     browser
         .close(None)
@@ -2687,25 +2685,48 @@ async fn websocket_cdp_puppeteer_reconnect_replays_existing_runtime_context() {
     )
     .await;
     assert!(
-        replay.iter().any(|message| {
-            message["sessionId"] == json!(replacement_page_session_id)
-                && message["method"] == json!("Runtime.executionContextCreated")
-                && message["params"]["context"]["name"]
-                    == json!("__puppeteer_utility_world__moli_reconnect")
+        replay.iter().all(|message| {
+            message["sessionId"] != json!(replacement_page_session_id)
+                || message["method"] != json!("Runtime.executionContextCreated")
+                || message["params"]["context"]["name"]
+                    != json!("__puppeteer_utility_world__moli_reconnect")
         }),
-        "replacement Runtime.enable did not replay the existing Puppeteer utility world: {replay:#?}"
+        "replacement Runtime.enable inherited a detached session's utility world: {replay:#?}"
     );
+
+    let replacement_utility_world = send_cdp_command(
+        &mut replacement,
+        6,
+        "Page.createIsolatedWorld",
+        Some(&replacement_page_session_id),
+        json!({
+            "frameId": target_id,
+            "worldName": "__puppeteer_utility_world__moli_reconnect",
+            "grantUniveralAccess": true
+        }),
+    )
+    .await;
+    let replacement_utility_context_id =
+        response_by_id(&replacement_utility_world, 6)["result"]["executionContextId"]
+            .as_i64()
+            .unwrap_or_else(|| {
+                panic!(
+                    "replacement session failed to recreate its utility world: \
+                 {replacement_utility_world:#?}"
+                )
+            });
+    assert_ne!(replacement_utility_context_id, first_utility_context_id);
 
     let evaluated = send_cdp_command(
         &mut replacement,
-        6,
+        7,
         "Runtime.evaluate",
         Some(&replacement_page_session_id),
         json!({ "expression": "6 * 7", "returnByValue": true }),
     )
     .await;
     assert_eq!(
-        response_by_id(&evaluated, 6)["result"]["result"]["value"],
+        response_by_id(&evaluated, 7)["result"]["result"]["value"],
         json!(42)
     );
 

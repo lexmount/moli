@@ -1030,6 +1030,13 @@ pub struct BidiPreloadChannelHandoff {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DocumentStartScript {
     pub registry_key: Option<String>,
+    /// DevTools session whose Page agent owns a named-world script.
+    ///
+    /// Blink keeps `InspectorPageAgent` state per DevTools session, so equal
+    /// `worldName` values from two sessions must materialize different worlds.
+    /// `None` is reserved for non-CDP registrations such as configured and
+    /// WebDriver BiDi preloads.
+    pub devtools_session: Option<DevToolsSessionKey>,
     pub source: String,
     pub world_name: Option<String>,
     pub has_bidi_channel_argument: bool,
@@ -1040,6 +1047,12 @@ impl DocumentStartScript {
     pub fn with_registry_key(&self, registry_key: impl Into<String>) -> Self {
         let mut script = self.clone();
         script.registry_key = Some(registry_key.into());
+        script
+    }
+
+    pub fn with_devtools_session(&self, devtools_session: DevToolsSessionKey) -> Self {
+        let mut script = self.clone();
+        script.devtools_session = Some(devtools_session);
         script
     }
 }
@@ -3071,8 +3084,20 @@ pub struct PendingRuntimeBindingCall {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeBindingRegistration {
+    /// Renderer DevTools session that owns this binding when it is part of an
+    /// aggregate Page snapshot. Session-local Inspector configuration leaves
+    /// this as `None` because the containing session is already authoritative.
+    pub devtools_session: Option<DevToolsSessionKey>,
     pub name: String,
     pub execution_context_name: Option<String>,
+}
+
+impl RuntimeBindingRegistration {
+    pub fn with_devtools_session(&self, devtools_session: DevToolsSessionKey) -> Self {
+        let mut binding = self.clone();
+        binding.devtools_session = Some(devtools_session);
+        binding
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

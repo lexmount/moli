@@ -1,9 +1,8 @@
 use super::super::state::{
     CommittedRendererAgentAttachment, PreparedRendererAgentAttachment, TargetPageAbsenceReason,
-    TargetPageAttachmentId, prepare_renderer_call_replacements_for_devtools_sessions,
-    runtime_bindings_for_renderer,
+    TargetPageAttachmentId,
 };
-use super::super::{BackgroundTarget, BrowserContext, TargetRuntimeSlot};
+use super::super::{BrowserContext, PageTargetHost, TargetRuntimeSlot};
 use crate::conn::TargetPageResidenceIdentity;
 use moli_core::page::{Page, RendererPageCommandPostResponseContinuation};
 use url::Url;
@@ -25,96 +24,39 @@ impl BrowserContext {
     }
 
     pub(crate) fn loaded_page(&self) -> Option<&Page> {
-        self.active_target.runtime_slot.loaded_page()
+        self.page_targets
+            .active()
+            .and_then(|host| host.runtime_slot.loaded_page())
     }
 
     pub(crate) fn has_loaded_page(&self) -> bool {
-        self.active_target.runtime_slot.has_loaded_page()
+        self.page_targets
+            .active()
+            .is_some_and(|host| host.runtime_slot.has_loaded_page())
     }
 
     pub(crate) fn page_attachment_id(&self) -> Option<TargetPageAttachmentId> {
-        self.active_target.runtime_slot.page_attachment_id()
+        self.page_targets
+            .active()
+            .and_then(|host| host.runtime_slot.page_attachment_id())
     }
 
     fn clear_active_target_session_scoped_state_fields(&mut self) {
-        let retained_runtime_bindings = runtime_bindings_for_renderer(
-            &self.devtools_session_state,
-            &self.auxiliary_devtools_session_states,
-        );
-        self.devtools_session_state
-            .page_session_state
-            .page_lifecycle_events = false;
-        self.devtools_session_state = Default::default();
-        self.auxiliary_devtools_session_states.clear();
-        self.devtools_session_state.runtime_bindings = retained_runtime_bindings;
-        self.devtools_session_state.page_session_state.log_enabled = false;
-        self.devtools_session_state
-            .console_output_session_state
-            .console_enabled = false;
-        self.devtools_session_state
-            .page_session_state
-            .performance
-            .disable();
-        self.active_target
-            .runtime_slot
-            .disable_primary_network_events();
-        self.network_policy.clear_session_scoped_overrides();
-        self.tls_verify_host_override = None;
-        self.http_proxy_override = None;
-        self.http_no_proxy_override = None;
-        self.locale_override = None;
-        self.timezone_override = None;
-        self.network_conditions = None;
-        self.geolocation_override = None;
-        self.emulated_media = Default::default();
-        self.emulated_device_metrics = None;
-        self.cpu_throttling_rate = 1.0;
-        self.devtools_session_state
-            .page_session_state
-            .page_bypass_csp_enabled = false;
-        self.devtools_session_state
-            .page_session_state
-            .page_font_families
-            .clear();
-        self.devtools_session_state
-            .page_session_state
-            .page_file_chooser_opened_event_enabled = false;
-        self.devtools_session_state
-            .page_session_state
-            .page_intercept_file_chooser_dialog_enabled = false;
-        self.touch_emulation_enabled = false;
-        self.emit_touch_events_for_mouse = false;
-        self.focus_emulation_enabled = false;
-        self.script_execution_disabled = false;
-        self.css_enabled = false;
-        self.active_target.fetch_owner.reset_config();
-        self.clear_pending_fetch_state();
-        self.clear_session_scoped_network_observation_artifacts();
-        self.active_target
-            .runtime_slot
-            .request_id_allocator()
-            .reset_fetch_navigation_request_counter();
-        self.active_target
-            .owner_state
-            .clear_observable_output_state();
+        self.active_page_state_mut()
+            .clear_session_scoped_state_fields(false);
     }
 
     fn clear_active_target_loaded_document_session_state(&mut self) {
-        self.devtools_session_state
-            .page_session_state
-            .clear_loaded_document_context_state();
-        for state in self.auxiliary_devtools_session_states.values_mut() {
-            state
+        for session in self.devtools_sessions.states_mut() {
+            session
                 .page_session_state
                 .clear_loaded_document_context_state();
         }
     }
 
     pub(crate) fn clear_active_target_runtime_remote_object_tracking(&mut self) {
-        self.devtools_session_state
-            .clear_runtime_remote_object_tracking();
-        for state in self.auxiliary_devtools_session_states.values_mut() {
-            state.clear_runtime_remote_object_tracking();
+        for session in self.devtools_sessions.states_mut() {
+            session.clear_runtime_remote_object_tracking();
         }
     }
 
@@ -233,15 +175,6 @@ impl BrowserContext {
             .ingest_owner_page_observable_output_updates()
     }
 
-    async fn close_loaded_page_async(&mut self) -> bool {
-        let page = self.clear_loaded_page_with_reason(TargetPageAbsenceReason::TargetClosed);
-        let had_page = page.is_some();
-        if let Some(page) = page {
-            Self::close_page_best_effort(page).await;
-        }
-        had_page
-    }
-
     pub(crate) async fn commit_loaded_navigation_page_async(
         &mut self,
         mut page: Page,
@@ -283,14 +216,16 @@ impl BrowserContext {
         if let Some(previous_attachment) = previous_attachment
             && previous_attachment.id() != new_attachment_id
         {
-            let replacements = prepare_renderer_call_replacements_for_devtools_sessions(
-                primary_session_id.as_deref(),
-                &mut self.devtools_session_state,
-                &mut self.auxiliary_devtools_session_states,
-                previous_attachment.id(),
-                new_attachment_id,
-            )?;
-            self.active_target
+            let page_state = self.active_page_state_mut();
+            let replacements = page_state
+                .devtools_sessions
+                .prepare_renderer_call_replacements(
+                    primary_session_id.as_deref(),
+                    previous_attachment.id(),
+                    new_attachment_id,
+                )?;
+            page_state
+                .active_target
                 .runtime_slot
                 .install_pending_renderer_call_replacements(replacements);
         }
@@ -372,66 +307,28 @@ impl BrowserContext {
         self.clear_session_scoped_network_observation_artifacts();
     }
 
-    pub(crate) async fn close_active_target_after_page_close_async(&mut self) {
-        if let Some(target_id) = self.active_target_id_owned() {
-            self.forget_target_opener_references_for_target(&target_id);
-            self.forget_target_window_names_for_target(&target_id);
-            self.forget_target_popup_id_for_target(&target_id);
-        }
-        self.clear_active_target_session_scoped_state_fields();
-        self.active_target.owner_state.target_crash_state.clear();
-        self.clear_active_target_id();
-        self.clear_document_navigation_state_for_active_target();
-        self.detach_active_session();
-        self.close_loaded_page_async().await;
-        self.active_target.owner_state.clear_page_local_state();
-        self.reset_target_identity_to_about_blank();
-        self.reset_target_scoped_network_artifacts();
-        self.active_target
-            .owner_state
-            .clear_observable_output_state();
-        self.active_target
-            .runtime_slot
-            .request_id_allocator()
-            .reset_subresource_fetch_request_counter();
-    }
-
-    pub(crate) async fn reset_active_target_slot_to_empty_async(&mut self) {
-        self.clear_active_target_session_scoped_state_fields();
-        self.active_target.owner_state.target_crash_state.clear();
-        if let Some(target_id) = self.active_target_id_owned() {
-            self.forget_target_opener_references_for_target(&target_id);
-            self.forget_target_window_names_for_target(&target_id);
-            self.forget_target_popup_id_for_target(&target_id);
-        }
-        self.detach_active_session();
-        self.clear_active_target_id();
-        self.clear_document_navigation_state_for_active_target();
-        self.close_loaded_page_async().await;
-        self.clear_pending_fetch_state();
-        self.active_target.owner_state.clear_page_local_state();
-        self.restore_raw_cookie_manager_surface_async(Default::default())
-            .await;
-        self.reset_target_identity_to_new_tab();
-        self.reset_target_scoped_network_artifacts();
-        self.active_target
-            .owner_state
-            .clear_observable_output_state();
-        self.active_target
-            .runtime_slot
-            .request_id_allocator()
-            .reset_subresource_fetch_request_counter();
+    pub(crate) async fn remove_active_page_target_async(&mut self) -> bool {
+        let Some(target_id) = self.active_target_id_owned() else {
+            return false;
+        };
+        self.forget_target_opener_references_for_target(&target_id);
+        self.forget_target_window_names_for_target(&target_id);
+        self.forget_target_popup_id_for_target(&target_id);
+        let Some(mut host) = self.page_targets.remove(&target_id) else {
+            return false;
+        };
+        host.close_page_async().await;
+        true
     }
 
     pub(crate) async fn close_all_pages_async(&mut self) {
-        self.close_loaded_page_async().await;
-        for target in &mut self.background_targets {
+        for target in self.page_targets.iter_mut() {
             target.close_page_async().await;
         }
     }
 }
 
-impl BackgroundTarget {
+impl PageTargetHost {
     pub(crate) fn target_url(&self) -> &str {
         self.target_identity.url()
     }

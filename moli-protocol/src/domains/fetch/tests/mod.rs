@@ -8,7 +8,7 @@ use super::{
     PendingFetchNavigation, emit_auth_required, encode_basic_auth, extract_auth_challenge,
     request_auth_for_challenge, response_headers_from_params, url_pattern_matches,
 };
-use crate::conn::{BackgroundTarget, BrowserContext, NETWORK_ERROR_PAGE_URL};
+use crate::conn::{BrowserContext, NETWORK_ERROR_PAGE_URL, PageTargetHost};
 use crate::domains::page::LOADER_ID;
 use crate::testing::{
     TestContext, wait_until_frame_stopped_loading, wait_until_message, wait_until_messages,
@@ -62,7 +62,7 @@ async fn with_loaded_http_background_document(
     background_session_id: &str,
     background_target_id: &str,
 ) {
-    let background = BackgroundTarget::with_url(
+    let background = PageTargetHost::with_url(
         background_target_id.to_owned(),
         Some(background_session_id.to_owned()),
         url.to_owned(),
@@ -71,7 +71,7 @@ async fn with_loaded_http_background_document(
     let mut bc = BrowserContext::new("BID-1".into());
     bc.attach_active_session(active_session_id.to_owned());
     bc.set_active_target_id(active_target_id.to_owned());
-    bc.background_targets.push(background);
+    bc.insert_page_target_host(background);
     ctx.conn.browser_context = Some(bc);
     ctx.install_navigation_fixture_for_session_owner(url, Some(background_session_id))
         .await;

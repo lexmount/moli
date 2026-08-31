@@ -14,6 +14,7 @@ RESPONSE_STAGE_BODY_BASE64 = "cmVzcG9uc2Utc3RhZ2UgYm9keQ=="
 
 
 async def run_multi_context_group(browser: Any, fixture: str, results: list[dict[str, Any]]) -> None:
+    await run_multi_page_after_startup_target_close_smoke(browser, fixture, results)
     await run_multi_context_blob_uuid_partition_smoke(browser, fixture, results)
     await run_multi_context_dialog_owner_state_smoke(browser, fixture, results)
     await run_multi_context_route_owner_state_smoke(browser, fixture, results)
@@ -28,6 +29,144 @@ async def run_multi_context_group(browser: Any, fixture: str, results: list[dict
     await run_multi_context_network_websocket_owner_state_smoke(browser, fixture, results)
     await run_multi_context_held_route_resume_smoke(browser, fixture, results)
     await run_multi_context_held_response_stage_resume_smoke(browser, fixture, results)
+
+
+async def run_multi_page_after_startup_target_close_smoke(
+    browser: Any, fixture: str, results: list[dict[str, Any]]
+) -> None:
+    closed_startup_target = await _close_startup_target_if_present(browser)
+
+    context_a = await browser.new_context()
+    context_b = await browser.new_context()
+    try:
+        page_a, page_a_peer, page_b = await asyncio.gather(
+            context_a.new_page(),
+            context_a.new_page(),
+            context_b.new_page(),
+        )
+        await asyncio.gather(
+            page_a.goto(
+                f"{fixture}/plain?multi-page=a", wait_until="load", timeout=10_000
+            ),
+            page_a_peer.goto(
+                f"{fixture}/plain?multi-page=a-peer",
+                wait_until="load",
+                timeout=10_000,
+            ),
+            page_b.goto(
+                f"{fixture}/plain?multi-page=b", wait_until="load", timeout=10_000
+            ),
+        )
+
+        cdp_a, cdp_a_peer, cdp_b = await asyncio.gather(
+            _new_cdp_session(context_a, page_a, "multi-page A"),
+            _new_cdp_session(context_a, page_a_peer, "multi-page A peer"),
+            _new_cdp_session(context_b, page_b, "multi-page B"),
+        )
+        evaluations = await asyncio.gather(
+            _send_cdp(
+                cdp_a,
+                "Runtime.evaluate",
+                {
+                    "expression": "globalThis.__moliMultiPage = 'a'; __moliMultiPage",
+                    "returnByValue": True,
+                },
+            ),
+            _send_cdp(
+                cdp_a_peer,
+                "Runtime.evaluate",
+                {
+                    "expression": "globalThis.__moliMultiPage = 'a-peer'; __moliMultiPage",
+                    "returnByValue": True,
+                },
+            ),
+            _send_cdp(
+                cdp_b,
+                "Runtime.evaluate",
+                {
+                    "expression": "globalThis.__moliMultiPage = 'b'; __moliMultiPage",
+                    "returnByValue": True,
+                },
+            ),
+        )
+        assert_equal(
+            [evaluation.get("result", {}).get("value") for evaluation in evaluations],
+            ["a", "a-peer", "b"],
+            "three target-local Runtime evaluations",
+        )
+
+        await page_a_peer.close()
+        survivor_values = await asyncio.gather(
+            page_a.evaluate(
+                "() => `${globalThis.__moliMultiPage}:${document.querySelector('main')?.textContent}`"
+            ),
+            page_b.evaluate(
+                "() => `${globalThis.__moliMultiPage}:${document.querySelector('main')?.textContent}`"
+            ),
+        )
+        assert_equal(
+            survivor_values,
+            ["a:plain ok", "b:plain ok"],
+            "surviving pages after peer close",
+        )
+        await asyncio.gather(
+            page_a.goto(
+                f"{fixture}/plain?multi-page=a-final",
+                wait_until="load",
+                timeout=10_000,
+            ),
+            page_b.goto(
+                f"{fixture}/plain?multi-page=b-final",
+                wait_until="load",
+                timeout=10_000,
+            ),
+        )
+        assert_equal(
+            await asyncio.gather(page_a.text_content("main"), page_b.text_content("main")),
+            ["plain ok", "plain ok"],
+            "surviving pages after concurrent renavigation",
+        )
+        record(
+            results,
+            "multi_page_after_startup_target_close",
+            {"closedStartupTarget": closed_startup_target, "pageCount": 3},
+        )
+    finally:
+        await _close_context_best_effort(context_a)
+        await _close_context_best_effort(context_b)
+
+
+async def _close_startup_target_if_present(browser: Any) -> bool:
+    browser_cdp = await browser.new_browser_cdp_session()
+    try:
+        targets = await _send_cdp(browser_cdp, "Target.getTargets")
+        startup_targets = [
+            target
+            for target in targets.get("targetInfos", [])
+            if target.get("type") == "page" and target.get("targetId") == "moli-default"
+        ]
+        if len(startup_targets) > 1:
+            raise SmokeError(f"multiple startup targets were published: {startup_targets!r}")
+        if startup_targets:
+            close_result = await _send_cdp(
+                browser_cdp,
+                "Target.closeTarget",
+                {"targetId": "moli-default"},
+            )
+            assert_equal(close_result.get("success"), True, "close startup Page target")
+
+            async def startup_target_is_absent() -> bool:
+                current = await _send_cdp(browser_cdp, "Target.getTargets")
+                return all(
+                    target.get("targetId") != "moli-default"
+                    for target in current.get("targetInfos", [])
+                )
+
+            await wait_until(startup_target_is_absent, "closed startup Page target")
+            return True
+        return False
+    finally:
+        await browser_cdp.detach()
 
 
 async def run_multi_context_blob_uuid_partition_smoke(

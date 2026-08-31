@@ -1461,7 +1461,7 @@ async fn resetting_opener_target_clears_live_opener_but_keeps_frame_attribution(
         .browser_context
         .as_mut()
         .unwrap()
-        .reset_active_target_slot_to_empty_async()
+        .remove_active_page_target_async()
         .await;
 
     let browser_context = ctx.conn.browser_context.as_ref().unwrap();
@@ -1904,9 +1904,12 @@ async fn window_open_named_target_reused_in_same_command_emits_one_page_event() 
         "same-command named reuse must create one target: {sent:?}"
     );
     let browser_context = ctx.conn.browser_context.as_ref().unwrap();
-    assert_eq!(browser_context.background_targets.len(), 1);
+    assert_eq!(browser_context.background_target_count(), 1);
     assert_eq!(
-        browser_context.background_targets[0].target_url(),
+        browser_context
+            .background_target_at(0)
+            .unwrap()
+            .target_url(),
         "https://example.com/second-popup"
     );
 }
@@ -3523,8 +3526,8 @@ async fn create_target_with_background_true_stages_second_target_in_background_s
     let created = take_created_target_id(&mut ctx, 10);
     let bc = ctx.conn.browser_context.as_ref().unwrap();
     assert_eq!(bc.active_target_id(), Some("TID-000000000A"));
-    assert_eq!(bc.background_targets.len(), 1);
-    assert_eq!(bc.background_targets[0].target_id(), created);
+    assert_eq!(bc.background_target_count(), 1);
+    assert_eq!(bc.background_target_at(0).unwrap().target_id(), created);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -3546,8 +3549,8 @@ async fn create_target_with_focus_false_stages_second_target_in_background_slot(
     let created = take_created_target_id(&mut ctx, 11);
     let bc = ctx.conn.browser_context.as_ref().unwrap();
     assert_eq!(bc.active_target_id(), Some("TID-000000000A"));
-    assert_eq!(bc.background_targets.len(), 1);
-    assert_eq!(bc.background_targets[0].target_id(), created);
+    assert_eq!(bc.background_target_count(), 1);
+    assert_eq!(bc.background_target_at(0).unwrap().target_id(), created);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -3573,5 +3576,5 @@ async fn create_target_rejects_focus_in_background() {
     );
     let bc = ctx.conn.browser_context.as_ref().unwrap();
     assert_eq!(bc.active_target_id(), Some("TID-000000000A"));
-    assert!(bc.background_targets.is_empty());
+    assert!(bc.has_no_background_targets());
 }

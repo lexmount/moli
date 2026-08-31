@@ -40,9 +40,9 @@ use crate::{
 };
 use anyhow::{Context, Result, anyhow};
 use moli_page_types::{
-    RendererDomDebuggerDomBreakpointType, RendererDomDebuggerEventListenerBreakpoint,
-    RendererDomDebuggerXhrBreakpoint, RendererInspectorProtocolConfiguration,
-    V8InspectorSessionAttach,
+    DevToolsSessionKey, RendererDomDebuggerDomBreakpointType,
+    RendererDomDebuggerEventListenerBreakpoint, RendererDomDebuggerXhrBreakpoint,
+    RendererInspectorProtocolConfiguration, V8InspectorSessionAttach,
 };
 
 #[cfg(any(test, feature = "test-support"))]
@@ -3401,13 +3401,22 @@ impl ScriptVm {
 
     pub(super) fn has_isolated_world_named(&self, name: &str) -> bool {
         self.page_isolated_world_contexts
-            .execution_context_id_for_scope(None, name)
-            .is_some()
+            .has_world_for_scope(None, name)
     }
 
     pub(super) fn has_isolated_world_named_for_frame(&self, frame_id: &str, name: &str) -> bool {
         self.page_isolated_world_contexts
-            .execution_context_id_for_scope(Some(frame_id), name)
+            .has_world_for_scope(Some(frame_id), name)
+    }
+
+    pub(super) fn has_isolated_world_for_owner(
+        &self,
+        devtools_session: Option<&DevToolsSessionKey>,
+        frame_id: Option<&str>,
+        name: &str,
+    ) -> bool {
+        self.page_isolated_world_contexts
+            .execution_context_id_for_scope(devtools_session, frame_id, name)
             .is_some()
     }
 
@@ -3956,6 +3965,20 @@ impl ScriptVm {
         retired_count
     }
 
+    fn retire_isolated_worlds_for_devtools_session(
+        &mut self,
+        devtools_session: &DevToolsSessionKey,
+    ) -> usize {
+        let context_ids = self
+            .page_isolated_world_contexts
+            .execution_context_ids_for_devtools_session(devtools_session);
+        let retired_count = context_ids.len();
+        for context_id in context_ids {
+            self.destroy_isolated_world_context(context_id);
+        }
+        retired_count
+    }
+
     pub(super) fn rebind_isolated_worlds_for_document_owner_transition(
         &mut self,
         retired_owner: FrameDocumentTaskOwner,
@@ -4035,6 +4058,7 @@ impl ScriptVm {
 
     fn create_new_isolated_world(
         &mut self,
+        devtools_session: Option<DevToolsSessionKey>,
         name: &str,
         grant_universal_access: bool,
         frame_id: Option<String>,
@@ -4113,6 +4137,7 @@ impl ScriptVm {
             execution_context_id,
             PageIsolatedWorldContext {
                 name: name.to_owned(),
+                devtools_session,
                 grant_universal_access,
                 frame_id,
                 child_handle,
@@ -4257,7 +4282,7 @@ impl ScriptVm {
         name: &str,
         grant_universal_access: bool,
     ) -> Result<i64> {
-        self.ensure_isolated_world(name, grant_universal_access)
+        self.ensure_isolated_world_for_owner(None, name, grant_universal_access)
     }
 
     pub(super) fn create_isolated_world_for_frame(
@@ -4266,17 +4291,18 @@ impl ScriptVm {
         name: &str,
         grant_universal_access: bool,
     ) -> Result<i64> {
-        self.ensure_isolated_world_for_frame(frame_id, name, grant_universal_access)
+        self.ensure_isolated_world_for_frame_owner(None, frame_id, name, grant_universal_access)
     }
 
-    pub(super) fn ensure_isolated_world(
+    pub(super) fn ensure_isolated_world_for_owner(
         &mut self,
+        devtools_session: Option<&DevToolsSessionKey>,
         name: &str,
         grant_universal_access: bool,
     ) -> Result<i64> {
         if let Some(execution_context_id) = self
             .page_isolated_world_contexts
-            .execution_context_id_for_scope(None, name)
+            .execution_context_id_for_scope(devtools_session, None, name)
         {
             let owner_is_current = self
                 .page_isolated_world_contexts
@@ -4293,18 +4319,25 @@ impl ScriptVm {
             }
             return Ok(execution_context_id);
         }
-        self.create_new_isolated_world(name, grant_universal_access, None, None)
+        self.create_new_isolated_world(
+            devtools_session.cloned(),
+            name,
+            grant_universal_access,
+            None,
+            None,
+        )
     }
 
-    pub(super) fn ensure_isolated_world_for_frame(
+    pub(super) fn ensure_isolated_world_for_frame_owner(
         &mut self,
+        devtools_session: Option<&DevToolsSessionKey>,
         frame_id: &str,
         name: &str,
         grant_universal_access: bool,
     ) -> Result<i64> {
         if let Some(execution_context_id) = self
             .page_isolated_world_contexts
-            .execution_context_id_for_scope(Some(frame_id), name)
+            .execution_context_id_for_scope(devtools_session, Some(frame_id), name)
         {
             let owner_is_current = self
                 .page_isolated_world_contexts
@@ -4325,6 +4358,7 @@ impl ScriptVm {
             .child_browsing_context_handle_by_frame_id(frame_id)
             .ok_or_else(|| anyhow!("no live child browsing context for frame `{frame_id}`"))?;
         self.create_new_isolated_world(
+            devtools_session.cloned(),
             name,
             grant_universal_access,
             Some(frame_id.to_owned()),
@@ -4382,9 +4416,17 @@ impl ScriptVm {
             Some(world_name) => {
                 let created = self
                     .page_isolated_world_contexts
-                    .execution_context_id_for_scope(None, world_name)
+                    .execution_context_id_for_scope(
+                        script.devtools_session.as_ref(),
+                        None,
+                        world_name,
+                    )
                     .is_none();
-                let execution_context_id = self.ensure_isolated_world(world_name, false)?;
+                let execution_context_id = self.ensure_isolated_world_for_owner(
+                    script.devtools_session.as_ref(),
+                    world_name,
+                    false,
+                )?;
                 self.exec_in_execution_context(execution_context_id, &script.source)?;
                 Ok(Some((execution_context_id, created)))
             }
@@ -4917,7 +4959,12 @@ impl ScriptVm {
         self._context_host
             .borrow_mut()
             .remove_dom_debugger_session(inspector_session_id);
-        self.page_inspector.detach_session(inspector_session_id)
+        let devtools_session = DevToolsSessionKey::from_wire_session_id(
+            inspector_session_id.filter(|session_id| !session_id.is_empty()),
+        );
+        let detached = self.page_inspector.detach_session(inspector_session_id);
+        let retired_worlds = self.retire_isolated_worlds_for_devtools_session(&devtools_session);
+        detached || retired_worlds != 0
     }
 
     pub(super) fn set_permission_overrides(

@@ -3986,8 +3986,7 @@ mod tests {
         conn.browser_context
             .as_mut()
             .unwrap()
-            .background_targets
-            .push(crate::conn::BackgroundTarget::with_url(
+            .insert_page_target_host(crate::conn::PageTargetHost::with_url(
                 "TID-other-page".to_owned(),
                 Some("SID-other-page".to_owned()),
                 "about:blank".to_owned(),

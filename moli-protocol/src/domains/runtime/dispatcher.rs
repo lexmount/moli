@@ -354,10 +354,6 @@ impl RuntimeInspectorRoutedOutput {
             .count()
     }
 
-    fn events_mut(&mut self) -> &mut Vec<BackgroundProtocolEvent> {
-        &mut self.events
-    }
-
     fn take_events_ready_before_command_response(
         &mut self,
         command_id: Option<u64>,
@@ -8502,12 +8498,10 @@ async fn complete_pending_runtime_inspector_command(
             );
         }
         if completed.action == "runIfWaitingForDebugger" {
-            crate::domains::target::start_initial_document_target_url_navigation_if_needed_background_events_async(
+            crate::domains::target::schedule_initial_document_target_url_navigation_after_debugger_resume(
                 conn,
-                routed_output.events_mut(),
                 completed.session_id(),
-            )
-            .await;
+            );
         }
     }
     routed_output.push_ordered_into_plan(&mut plan, completed.command_id);

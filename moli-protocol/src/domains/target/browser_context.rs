@@ -230,8 +230,7 @@ pub(in crate::domains) fn devtools_client_window_info_for_target(
             ));
         }
         if browser_context
-            .background_targets
-            .iter()
+            .background_targets()
             .any(|target| target.target_id() == target_id.as_str())
         {
             return Some(devtools_client_window_info_from_owner_state(
@@ -306,9 +305,10 @@ pub(super) fn execute_devtools_create_browser_context_command(
     }
 
     let mut browser_context = conn.new_ephemeral_browser_context(id.clone());
-    browser_context.tls_verify_host_override = command.accept_insecure_certs.map(|accept| !accept);
-    browser_context.http_proxy_override = command.proxy_server;
-    browser_context.http_no_proxy_override =
+    browser_context.default_tls_verify_host_override =
+        command.accept_insecure_certs.map(|accept| !accept);
+    browser_context.default_http_proxy_override = command.proxy_server;
+    browser_context.default_http_no_proxy_override =
         normalize_proxy_bypass_list_for_loader(command.proxy_bypass_list.as_deref());
     browser_context.proxy_autoconfig_url = command.proxy_autoconfig_url;
     browser_context.proxy_socks_version = command.proxy_socks_version;
@@ -524,8 +524,8 @@ pub(super) fn create_browser_context(conn: &mut CdpConnection, cmd: &Cmd<'_>) ->
     }
     let id = conn.gen_bc_id();
     let mut browser_context = conn.new_ephemeral_browser_context(id.clone());
-    browser_context.http_proxy_override = params.proxy_server;
-    browser_context.http_no_proxy_override =
+    browser_context.default_http_proxy_override = params.proxy_server;
+    browser_context.default_http_no_proxy_override =
         normalize_proxy_bypass_list_for_loader(params.proxy_bypass_list.as_deref());
     conn.insert_browser_context(browser_context);
     CommandOutputPlan::result(json!({ "browserContextId": id }))

@@ -229,7 +229,7 @@ mod tests {
                 .browser_context
                 .as_mut()
                 .expect("browser context should exist");
-            bc.devtools_session_state
+            bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .runtime_session_state
                 .runtime_frontend_enabled = true;
         }
@@ -320,9 +320,8 @@ mod tests {
         let mut inactive = BrowserContext::new("BID-inactive".to_owned());
         inactive.set_active_target_id("TID-inactive".to_owned());
         inactive
-            .auxiliary_devtools_session_states
-            .entry("SID-aux".to_owned())
-            .or_default()
+            .devtools_sessions
+            .ensure_attached("SID-aux")
             .runtime_session_state
             .runtime_frontend_enabled = true;
         assert!(inactive.assign_auxiliary_session_to_target("TID-inactive", "SID-aux".to_owned()));

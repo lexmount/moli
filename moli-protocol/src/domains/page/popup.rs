@@ -306,8 +306,7 @@ mod tests {
         assert!(
             conn.browser_context_by_id("BID-current")
                 .expect("current browser context")
-                .background_targets
-                .is_empty(),
+                .has_no_background_targets(),
             "draining from another current session must not redirect the popup"
         );
     }
@@ -469,8 +468,7 @@ mod tests {
             conn.browser_context
                 .as_ref()
                 .expect("current browser context")
-                .background_targets
-                .is_empty()
+                .has_no_background_targets()
         );
     }
 }

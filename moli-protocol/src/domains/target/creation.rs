@@ -297,6 +297,8 @@ pub(super) fn execute_devtools_create_target_command(
             browser_context.active_target_id_owned(),
         )
     };
+    let claims_default_placeholder =
+        !has_active_target && previous_active_target_id.as_deref() == Some(default_target_id);
     let auto_attach_page_owners = top_level_page_auto_attach_owner_sessions(conn);
     let auto_attach_tab_owners = top_level_tab_auto_attach_owner_sessions(conn);
     let auto_attached_page_sessions = auto_attach_page_owners
@@ -319,9 +321,6 @@ pub(super) fn execute_devtools_create_target_command(
     let activation = activating_created_target
         .then(|| TargetActivationTransition::new(target_id.clone(), previous_active_target_id));
     let initial_empty_document_url = create_target_initial_empty_document_url(&command.url);
-    if activating_created_target {
-        conn.handoff_navigation_engine_for_active_target_demotion();
-    }
     {
         let bc = conn.browser_context.as_mut().unwrap();
         if creating_background_target {
@@ -340,7 +339,11 @@ pub(super) fn execute_devtools_create_target_command(
                 Some(initial_empty_document_url.clone()),
             );
         } else {
-            bc.set_active_target_id(target_id.clone());
+            let claimed_default_placeholder =
+                claims_default_placeholder && bc.rekey_active_target(target_id.clone());
+            if !claimed_default_placeholder {
+                bc.set_active_target_id(target_id.clone());
+            }
             bc.set_target_url(command.url.clone());
             bc.begin_active_target_initial_empty_document(initial_empty_document_url.clone());
             bc.active_target.owner_state.target_crash_state.clear();

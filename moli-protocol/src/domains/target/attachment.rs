@@ -172,7 +172,7 @@ fn do_attach(conn: &mut CdpConnection, cmd: &Cmd<'_>, target_id: &str) -> Target
     if bc.has_service_worker_target(target_id) {
         return do_attach_service_worker_target(conn, cmd.session_id, target_id);
     }
-    if !bc.has_active_target() && bc.background_targets.is_empty() {
+    if bc.active_target_id().is_none() && bc.has_no_background_targets() {
         if let Some(restore_browser_context_id) = restore_browser_context_id.as_ref() {
             restore_previously_active_browser_context(conn, restore_browser_context_id.as_deref());
         }
@@ -652,7 +652,7 @@ async fn detach_from_target_inner_async(
         let _ = conn
             .detach_runtime_inspector_session_for_session_owner_async(Some(session_id))
             .await;
-        super::auto_attach::clear_emulated_media_for_detached_session_best_effort(conn, session_id)
+        super::auto_attach::clear_detached_session_target_overrides_best_effort(conn, session_id)
             .await;
         super::clear_detached_target_fetch_state_background_events_async(
             conn,
@@ -785,8 +785,7 @@ async fn detach_from_target_inner_async(
     }
     if let Some(session_id) = params.session_id.as_deref() {
         let background_target_id = conn.browser_context.as_ref().and_then(|bc| {
-            bc.background_targets
-                .iter()
+            bc.background_targets()
                 .find(|target| target.is_session(session_id))
                 .map(|target| target.target_id().to_owned())
         });
@@ -1068,7 +1067,7 @@ fn detach_session_route_target_id(route: &crate::conn::CdpSessionRoute) -> Optio
         crate::conn::CdpSessionRoute::TabTarget { tab_target_id, .. } => Some(tab_target_id),
         crate::conn::CdpSessionRoute::ActiveTarget { target_id, .. } => target_id.as_deref(),
         crate::conn::CdpSessionRoute::AuxiliaryTarget { target_id, .. }
-        | crate::conn::CdpSessionRoute::BackgroundTarget { target_id, .. }
+        | crate::conn::CdpSessionRoute::PageTargetHost { target_id, .. }
         | crate::conn::CdpSessionRoute::SharedWorkerTarget { target_id, .. }
         | crate::conn::CdpSessionRoute::DedicatedWorkerTarget { target_id, .. }
         | crate::conn::CdpSessionRoute::ServiceWorkerTarget { target_id, .. } => Some(target_id),

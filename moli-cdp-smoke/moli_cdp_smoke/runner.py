@@ -41,6 +41,7 @@ from .groups.iframe_input import run_iframe_input_group
 from .groups.layout_screenshot import run_layout_screenshot_group
 from .groups.multi_client import run_multi_client_group
 from .groups.multi_context import run_multi_context_group
+from .groups.multi_page import run_multi_page_group
 from .groups.network import (
     run_download_group,
     run_network_body_cache_group,
@@ -347,6 +348,13 @@ BROWSER_GROUPS: tuple[SmokeGroup, ...] = (
         "Cross-context owner-state routing and target isolation workflows.",
         "browser",
         run_multi_context_group,
+    ),
+    SmokeGroup(
+        "multi-page",
+        "Multi-target churn, navigation, interception, popup, session, worker, "
+        "screenshot, and teardown regression matrix.",
+        "browser",
+        run_multi_page_group,
     ),
 )
 

@@ -136,23 +136,20 @@ async fn pending_javascript_dialogs_are_preserved_per_parked_target() {
 
     {
         let browser_context = ctx.conn.browser_context.as_mut().unwrap();
-        browser_context
-            .devtools_session_state
+        browser_context.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .javascript_dialog_state
             .push(dialog("TID-A", "a"));
-        browser_context
-            .background_targets
-            .push(BackgroundTarget::new(
-                "TID-B".to_owned(),
-                Some("SID-B".to_owned()),
-                crate::conn::TargetIdentityState::new(
-                    "about:blank".to_owned(),
-                    URL_BASE.to_owned(),
-                    "Secure".to_owned(),
-                ),
-                crate::conn::TargetPageSlot::empty_for_test_fixture(),
-            ));
+        browser_context.insert_page_target_host(PageTargetHost::new(
+            "TID-B".to_owned(),
+            Some("SID-B".to_owned()),
+            crate::conn::TargetIdentityState::new(
+                "about:blank".to_owned(),
+                URL_BASE.to_owned(),
+                "Secure".to_owned(),
+            ),
+            crate::conn::TargetPageSlot::empty_for_test_fixture(),
+        ));
         assert!(
             browser_context
                 .promote_background_target_to_active_slot_async("TID-B")
@@ -160,14 +157,12 @@ async fn pending_javascript_dialogs_are_preserved_per_parked_target() {
                 .unwrap()
         );
         assert!(
-            browser_context
-                .devtools_session_state
+            browser_context.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .javascript_dialog_state
                 .is_empty()
         );
-        browser_context
-            .devtools_session_state
+        browser_context.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .javascript_dialog_state
             .push(dialog("TID-B", "b"));
@@ -182,8 +177,7 @@ async fn pending_javascript_dialogs_are_preserved_per_parked_target() {
                 .unwrap()
         );
         assert_eq!(
-            browser_context
-                .devtools_session_state
+            browser_context.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .javascript_dialog_state
                 .pending_dialogs(),
@@ -200,8 +194,7 @@ async fn pending_javascript_dialogs_are_preserved_per_parked_target() {
                 .unwrap()
         );
         assert_eq!(
-            browser_context
-                .devtools_session_state
+            browser_context.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .javascript_dialog_state
                 .pending_dialogs(),

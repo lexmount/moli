@@ -12,23 +12,24 @@ impl CdpConnection {
         let http_proxy = self
             .browser_context
             .as_ref()
-            .and_then(|bc| bc.http_proxy_override.clone())
+            .and_then(|bc| bc.effective_active_http_proxy_override_owned())
             .or_else(|| self.base_http_proxy.clone());
         let http_no_proxy = self
             .browser_context
             .as_ref()
-            .and_then(|bc| bc.http_no_proxy_override.clone())
+            .and_then(|bc| bc.effective_active_http_no_proxy_override_owned())
             .or_else(|| self.base_http_no_proxy.clone());
         let tls_verify_host = self
             .browser_context
             .as_ref()
-            .and_then(|bc| bc.tls_verify_host_override)
+            .and_then(|bc| bc.effective_active_tls_verify_host_override())
             .unwrap_or(self.base_tls_verify_host);
         let bypass_service_worker = self
             .browser_context
             .as_ref()
-            .is_some_and(|bc| bc.network_policy.bypass_service_worker());
-        let engine = self.engine.ensure_mut();
+            .and_then(|bc| bc.page_targets.active())
+            .is_some_and(|host| host.network_policy.bypass_service_worker());
+        let engine = self.active_navigation_engine_mut();
         engine.set_browser_identity_override(browser_identity);
         engine.set_http_proxy_override(http_proxy);
         engine.set_http_no_proxy_override(http_no_proxy);
@@ -38,7 +39,7 @@ impl CdpConnection {
 
     pub async fn set_tls_verify_host_async(&mut self, enabled: bool) {
         if let Some(browser_context) = self.browser_context.as_mut() {
-            browser_context.tls_verify_host_override = Some(enabled);
+            browser_context.default_tls_verify_host_override = Some(enabled);
         } else {
             self.base_tls_verify_host = enabled;
         }
@@ -49,7 +50,7 @@ impl CdpConnection {
     pub fn tls_verify_host(&self) -> bool {
         self.browser_context
             .as_ref()
-            .and_then(|bc| bc.tls_verify_host_override)
+            .and_then(|bc| bc.effective_active_tls_verify_host_override())
             .unwrap_or(self.base_tls_verify_host)
     }
 
@@ -121,7 +122,7 @@ impl CdpConnection {
     #[cfg(test)]
     pub(crate) async fn set_http_proxy_override_async(&mut self, proxy: Option<String>) {
         if let Some(browser_context) = self.browser_context.as_mut() {
-            browser_context.http_proxy_override = proxy;
+            browser_context.default_http_proxy_override = proxy;
         } else {
             self.base_http_proxy = proxy;
         }
@@ -132,7 +133,12 @@ impl CdpConnection {
     pub fn http_proxy(&self) -> Option<&str> {
         self.browser_context
             .as_ref()
-            .and_then(|bc| bc.http_proxy_override.as_deref())
+            .and_then(|bc| {
+                bc.page_targets
+                    .active()
+                    .and_then(|host| host.http_proxy_override.as_deref())
+                    .or(bc.default_http_proxy_override.as_deref())
+            })
             .or(self.base_http_proxy.as_deref())
     }
 
@@ -148,12 +154,22 @@ impl CdpConnection {
     pub fn http_no_proxy(&self) -> Option<&str> {
         self.browser_context
             .as_ref()
-            .and_then(|bc| bc.http_no_proxy_override.as_deref())
+            .and_then(|bc| {
+                bc.page_targets
+                    .active()
+                    .and_then(|host| host.http_no_proxy_override.as_deref())
+                    .or(bc.default_http_no_proxy_override.as_deref())
+            })
             .or(self.base_http_no_proxy.as_deref())
     }
 
     pub(crate) fn fetch_config(&self) -> &moli_fetch::FetchConfig {
-        self.engine.fetch_config()
+        self.browser_context
+            .as_ref()
+            .and_then(|context| context.page_targets.active())
+            .and_then(crate::conn::state::PageTargetHost::navigation_engine)
+            .map(moli_core::runtime::NavigationEngine::fetch_config)
+            .unwrap_or_else(|| self.standalone_navigation_engine.fetch_config())
     }
 
     pub(crate) fn base_browser_identity(&self) -> &moli_browser_profile::BrowserIdentityProfile {

@@ -704,16 +704,6 @@ fn navigator_runtime_data_getter_callback<'s>(
         }
         return;
     }
-    if key == "language" {
-        let locale_override = context_host_ptr_from_global_bridge(scope)
-            .and_then(|host_ptr| unsafe { (&*host_ptr).locale_override().map(str::to_owned) })
-            .filter(|locale| !locale.is_empty());
-        if let Some(locale) = locale_override.as_deref() {
-            let value = v8_string(scope, locale).unwrap_or_else(|| v8::String::empty(scope));
-            rv.set(value.into());
-            return;
-        }
-    }
     match backing.get(scope, v8str(scope, key).into()) {
         Some(value) => rv.set(value),
         None => rv.set(v8::undefined(scope).into()),
@@ -1129,12 +1119,6 @@ fn effective_navigator_languages<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     backing: v8::Local<'s, v8::Object>,
 ) -> Vec<String> {
-    if let Some(locale) = context_host_ptr_from_global_bridge(scope)
-        .and_then(|host_ptr| unsafe { (&*host_ptr).locale_override().map(str::to_owned) })
-        .filter(|locale| !locale.is_empty())
-    {
-        return vec![locale];
-    }
     navigator_identity_from_backing(scope, backing)
         .languages()
         .to_vec()

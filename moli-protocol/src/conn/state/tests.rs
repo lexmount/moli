@@ -9,17 +9,18 @@ use super::super::fetch_support::{
 use super::browser_context::BrowserContext;
 use super::devtools_session::DevToolsSessionState;
 use super::fetch::{
-    FetchInterceptionPattern, FetchRequestStage, FetchResourceTypeFilter, ParkedFetchState,
-    TargetFetchOwner, TargetFetchState,
+    FetchInterceptionPattern, FetchRequestStage, FetchResourceTypeFilter, TargetFetchOwner,
+    TargetFetchState,
 };
 use super::navigation::{PageNavigationHistoryEntry, TargetNavigationHistoryState};
 use super::navigation_outcome::{NavigationDispatchState, NavigationResultProjection};
 use super::page_slot::{DocumentStartScript, IsolatedWorldDefinition};
-use super::parking::{
-    ParkedPageSessionState, ParkedTargetOwnerState, TargetOwnerState, TargetParkingStateStore,
-};
 use super::runtime_slot::TargetRuntimeSlot;
-use super::session::TargetPageSessionState;
+use super::session::{TargetPageSessionState, TargetPageState};
+use super::{
+    PageTargetHost,
+    parking::{ParkedTargetOwnerState, TargetOwnerState},
+};
 
 use serde_json::json;
 use std::collections::HashMap;
@@ -49,32 +50,32 @@ fn test_navigation_dispatch_state(fetch_request_id: &str) -> NavigationDispatchS
 }
 
 #[test]
-fn target_parking_store_collapses_default_target_state() {
-    let mut store = TargetParkingStateStore::default();
+fn background_target_owns_page_session_state_atomically() {
+    let mut target = PageTargetHost::with_url("TID-A".to_owned(), None, "about:blank".to_owned());
 
-    let mut page_state = ParkedPageSessionState {
-        devtools_session_state: DevToolsSessionState {
-            page_session_state: TargetPageSessionState {
-                log_enabled: true,
-                ..Default::default()
-            },
+    let mut state = TargetPageState::default();
+    state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary] = DevToolsSessionState {
+        page_session_state: TargetPageSessionState {
+            log_enabled: true,
             ..Default::default()
         },
         ..Default::default()
     };
-    store.replace_page_session_state("TID-A".to_owned(), page_state.clone());
+    *target.state_mut() = state;
     assert!(
-        store
-            .page_session_state("TID-A")
-            .is_some_and(|state| state.devtools_session_state.page_session_state.log_enabled)
+        target.state().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+            .page_session_state
+            .log_enabled
     );
 
-    page_state
-        .devtools_session_state
+    target.state_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .page_session_state
         .log_enabled = false;
-    store.replace_page_session_state("TID-A".to_owned(), page_state);
-    assert!(store.page_session_state("TID-A").is_none());
+    assert!(
+        !target.state().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+            .page_session_state
+            .log_enabled
+    );
 }
 
 #[test]
@@ -1026,20 +1027,21 @@ fn replace_loaded_page_rejects_implicit_no_page_transition() {
 }
 
 #[test]
-fn target_parking_store_tracks_non_empty_fetch_state() {
-    let mut store = TargetParkingStateStore::default();
+fn background_target_owns_fetch_state() {
+    let mut target = PageTargetHost::with_url("TID-A".to_owned(), None, "about:blank".to_owned());
+    assert!(target.fetch_owner.pending_state().is_empty());
 
-    store.replace_fetch_state("TID-A".to_owned(), ParkedFetchState::default());
-    assert!(!store.has_non_empty_fetch_state("TID-A"));
-
-    let mut fetch_state = ParkedFetchState::default();
-    fetch_state.insert_pending_fetch_request_id_for_test("FETCH-1".to_owned());
-    store.replace_fetch_state("TID-A".to_owned(), fetch_state);
-    assert!(store.has_non_empty_fetch_state("TID-A"));
-
-    let restored = store.take_fetch_state("TID-A");
-    assert!(restored.has_pending_fetch_request_id_for_test("FETCH-1"));
-    assert!(!store.has_non_empty_fetch_state("TID-A"));
+    target
+        .fetch_owner
+        .pending_state_mut()
+        .insert_pending_fetch_request_id_for_test("FETCH-1".to_owned());
+    assert!(!target.fetch_owner.pending_state().is_empty());
+    assert!(
+        target
+            .fetch_owner
+            .pending_state()
+            .has_pending_fetch_request_id_for_test("FETCH-1")
+    );
 }
 
 #[test]
@@ -1207,11 +1209,8 @@ fn navigation_history_traversal_reuses_same_document_entries() {
 }
 
 #[test]
-fn target_parking_store_tracks_target_owner_state_independently() {
-    let mut store = TargetParkingStateStore::default();
-
-    store.replace_target_owner_state("TID-A".to_owned(), ParkedTargetOwnerState::default());
-    assert!(store.target_owner_state("TID-A").is_none());
+fn background_target_keeps_owner_state_independent_from_network_artifacts() {
+    let mut target = PageTargetHost::with_url("TID-A".to_owned(), None, "about:blank".to_owned());
 
     let mut owner_state = ParkedTargetOwnerState {
         next_document_start_script_id: 9,
@@ -1231,10 +1230,15 @@ fn target_parking_store_tracks_target_owner_state_independently() {
     owner_state
         .console_output_state
         .advance_console_domain_to_current(3, 1);
-    store.replace_target_owner_state("TID-A".to_owned(), owner_state);
+    target.owner_state = owner_state;
 
-    assert_eq!(store.network_artifacts("TID-A"), None);
-    let restored = store.take_target_owner_state("TID-A");
+    assert!(
+        target
+            .runtime_slot
+            .collected_network_data_artifacts()
+            .is_empty()
+    );
+    let restored = std::mem::take(&mut target.owner_state);
     assert_eq!(
         restored
             .runtime_observable_state
@@ -1261,7 +1265,7 @@ fn target_parking_store_tracks_target_owner_state_independently() {
     );
     assert_eq!(restored.next_document_start_script_id, 9);
     assert_eq!(restored.isolated_worlds.len(), 1);
-    assert!(store.take_target_owner_state("TID-A").is_default());
+    assert!(target.owner_state.is_default());
 }
 
 #[test]
@@ -1271,6 +1275,7 @@ fn committed_document_navigation_state_clears_document_local_runtime_state() {
         "1".to_owned(),
         DocumentStartScript {
             registry_key: None,
+            devtools_session: None,
             source: "globalThis.fromPreload = true;".to_owned(),
             world_name: None,
             has_bidi_channel_argument: false,
@@ -1319,10 +1324,11 @@ fn devtools_session_runtime_context_clear_resets_child_default_emission_cursor()
 }
 
 #[test]
-fn target_parking_store_mutates_target_owner_state_with_default_elision() {
-    let mut store = TargetParkingStateStore::default();
+fn background_target_mutates_owner_state_in_place() {
+    let mut target = PageTargetHost::with_url("TID-A".to_owned(), None, "about:blank".to_owned());
 
-    let identifier = store.mutate_target_owner_state("TID-A", |owner_state| {
+    let identifier = {
+        let owner_state = &mut target.owner_state;
         owner_state.next_document_start_script_id =
             owner_state.next_document_start_script_id.wrapping_add(1);
         let identifier = owner_state.next_document_start_script_id.to_string();
@@ -1330,6 +1336,7 @@ fn target_parking_store_mutates_target_owner_state_with_default_elision() {
             identifier.clone(),
             DocumentStartScript {
                 registry_key: None,
+                devtools_session: None,
                 source: "globalThis.fromPreload = true;".to_owned(),
                 world_name: Some("utility".to_owned()),
                 has_bidi_channel_argument: false,
@@ -1340,12 +1347,10 @@ fn target_parking_store_mutates_target_owner_state_with_default_elision() {
             .console_output_state
             .advance_console_domain_to_current(7, 3);
         identifier
-    });
+    };
 
     assert_eq!(identifier, "1");
-    let parked_state = store
-        .target_owner_state("TID-A")
-        .expect("non-default owner state should be parked");
+    let parked_state = &target.owner_state;
     assert_eq!(parked_state.next_document_start_script_id, 1);
     assert_eq!(parked_state.document_start_scripts.len(), 1);
     assert!(
@@ -1354,15 +1359,16 @@ fn target_parking_store_mutates_target_owner_state_with_default_elision() {
             .has_unemitted_console_domain(7, 3)
     );
 
-    store.mutate_target_owner_state("TID-A", |owner_state| {
+    {
+        let owner_state = &mut target.owner_state;
         owner_state.next_document_start_script_id = 0;
         owner_state.document_start_scripts.clear();
         owner_state.clear_observable_output_state();
-    });
+    }
 
     assert!(
-        store.target_owner_state("TID-A").is_none(),
-        "mutating back to default must remove the parked owner-state entry"
+        target.owner_state.is_default(),
+        "resetting owner state must leave the host's embedded state at its default"
     );
 }
 
@@ -1620,7 +1626,9 @@ fn background_target_initial_empty_document_record_tracks_navigation_lifecycle()
     );
 
     assert_eq!(
-        context.background_targets[0]
+        context
+            .background_target_at(0)
+            .unwrap()
             .runtime_slot()
             .moli_memory_diagnostics()["loadedPageAbsenceReason"],
         json!("initial-document-page-build-pending"),

@@ -376,7 +376,7 @@ mod tests {
 
     use super::{DEFAULT_IO_READ_SIZE, read_io_stream_state};
     use crate::{
-        conn::{BackgroundTarget, BrowserContext, CdpCommandTaskStep, IoStreamState},
+        conn::{BrowserContext, CdpCommandTaskStep, IoStreamState, PageTargetHost},
         testing::TestContext,
     };
 
@@ -542,7 +542,7 @@ mod tests {
         let mut bc = BrowserContext::new("BID-io-owner".to_owned());
         bc.set_active_target_id("TID-active".to_owned());
         bc.attach_active_session("SID-active".to_owned());
-        bc.background_targets.push(BackgroundTarget::with_url(
+        bc.insert_page_target_host(PageTargetHost::with_url(
             "TID-background".to_owned(),
             Some("SID-background".to_owned()),
             "about:blank#background".to_owned(),

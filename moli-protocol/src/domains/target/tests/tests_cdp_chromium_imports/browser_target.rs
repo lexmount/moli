@@ -425,7 +425,7 @@ async fn rust_cdp_capability_target_browser_context_proxy_and_enumeration() {
         ctx.conn
             .browser_context
             .as_ref()
-            .and_then(|context| context.http_proxy_override.as_deref()),
+            .and_then(|context| context.default_http_proxy_override.as_deref()),
         Some("http://proxy.example:8080")
     );
 }

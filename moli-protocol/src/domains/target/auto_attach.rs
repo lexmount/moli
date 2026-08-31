@@ -188,7 +188,7 @@ fn owner_already_auto_attached_to_page_target(
                         .and_then(BrowserContext::active_target_id)
                         == Some(target_id)
             }
-            Some(crate::conn::CdpSessionRoute::BackgroundTarget {
+            Some(crate::conn::CdpSessionRoute::PageTargetHost {
                 target_id: route_target_id,
                 ..
             })
@@ -275,7 +275,7 @@ fn page_session_route_matches_target(
                     .and_then(BrowserContext::active_target_id)
                     == Some(target_id)
         }
-        Some(crate::conn::CdpSessionRoute::BackgroundTarget {
+        Some(crate::conn::CdpSessionRoute::PageTargetHost {
             target_id: route_target_id,
             ..
         })
@@ -481,8 +481,7 @@ async fn set_auto_attach_inner_async(
                         target_ids.push(target_id);
                     }
                     target_ids.extend(
-                        bc.background_targets
-                            .iter()
+                        bc.background_targets()
                             .filter(|target| {
                                 should_auto_attach_page_target_for_owner(
                                     conn,
@@ -516,7 +515,7 @@ async fn set_auto_attach_inner_async(
                     {
                         tab_target_ids.push(tab_target_id.to_owned());
                     }
-                    tab_target_ids.extend(bc.background_targets.iter().filter_map(|target| {
+                    tab_target_ids.extend(bc.background_targets().filter_map(|target| {
                         let tab_target_id =
                             conn.tab_target_id_for_page_target_id(target.target_id())?;
                         should_auto_attach_tab_target_for_owner(
@@ -624,13 +623,12 @@ async fn set_auto_attach_inner_async(
                 if !attach_page_targets || bc.has_loaded_page() {
                     None
                 } else {
-                    bc.background_targets
-                        .iter()
-                        .rposition(|target| !target.has_session() && target.has_loaded_page())
-                        .map(|index| bc.background_targets[index].target_id().to_owned())
+                    bc.background_targets()
+                        .rev()
+                        .find(|target| !target.has_session() && target.has_loaded_page())
+                        .map(|target| target.target_id().to_owned())
                         .or_else(|| {
-                            bc.background_targets
-                                .iter()
+                            bc.background_targets()
                                 .find(|target| !target.has_session())
                                 .map(|target| target.target_id().to_owned())
                         })
@@ -1103,7 +1101,7 @@ pub(super) async fn release_attached_sessions_for_root_frontend_async(
         let _ = conn
             .detach_runtime_inspector_session_for_session_owner_async(Some(&session_id))
             .await;
-        clear_emulated_media_for_detached_session_best_effort(conn, &session_id).await;
+        clear_detached_session_target_overrides_best_effort(conn, &session_id).await;
         if !conn.release_primary_target_session_binding_without_event(&session_id) {
             conn.rollback_auto_attached_session_detach_plan_without_event(&detach_plan);
         }
@@ -1193,7 +1191,7 @@ async fn detach_attached_session_for_owner_async(
             let _ = conn
                 .detach_runtime_inspector_session_for_session_owner_async(Some(session_id))
                 .await;
-            clear_emulated_media_for_detached_session_best_effort(conn, session_id).await;
+            clear_detached_session_target_overrides_best_effort(conn, session_id).await;
             super::clear_detached_target_fetch_state_background_events_async(
                 conn,
                 out.background_events_mut(),
@@ -1221,7 +1219,7 @@ async fn detach_attached_session_for_owner_async(
             let _ = conn
                 .detach_runtime_inspector_session_for_session_owner_async(Some(session_id))
                 .await;
-            clear_emulated_media_for_detached_session_best_effort(conn, session_id).await;
+            clear_detached_session_target_overrides_best_effort(conn, session_id).await;
             let event_plan = conn
                 .detach_session_with_binding_cleanup_event_plan_async(
                     crate::conn::TargetSessionDetachCleanupPlan::new(
@@ -1327,7 +1325,7 @@ async fn detach_attached_session_for_owner_async(
     }
 }
 
-pub(super) async fn clear_emulated_media_for_detached_session_best_effort(
+pub(super) async fn clear_detached_session_target_overrides_best_effort(
     conn: &mut CdpConnection,
     session_id: &str,
 ) {
@@ -1339,6 +1337,13 @@ pub(super) async fn clear_emulated_media_for_detached_session_best_effort(
             session_id,
             error,
             "failed to clear emulated media while detaching target session"
+        );
+    }
+    if let Err(error) = conn.clear_target_session_overrides_async(session_id).await {
+        tracing::warn!(
+            session_id,
+            error,
+            "failed to restore target overrides while detaching target session"
         );
     }
 }

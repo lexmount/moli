@@ -1,7 +1,7 @@
 use super::*;
 use crate::DevToolsDocumentLifecycleWaitState;
 use crate::conn::{
-    BackgroundTarget, CdpInitialStoragePartition, LoadedNavigation, NavigationLoadOutcome,
+    CdpInitialStoragePartition, LoadedNavigation, NavigationLoadOutcome, PageTargetHost,
     TargetIdentityState, TargetPageSlot,
 };
 use moli_core::runtime::storage_partition::StoragePartitionState;
@@ -37,11 +37,19 @@ async fn commit_navigation_outcome_for_test(
     conn: &mut CdpConnection,
     outcome: NavigationLoadOutcome,
 ) -> LoadedNavigation {
+    commit_navigation_outcome_for_session_test(conn, outcome, None).await
+}
+
+async fn commit_navigation_outcome_for_session_test(
+    conn: &mut CdpConnection,
+    outcome: NavigationLoadOutcome,
+    session_id: Option<&str>,
+) -> LoadedNavigation {
     match outcome {
         NavigationLoadOutcome::ResponseCommitReady(navigation) => {
             let navigation = *navigation;
             let configuration = conn.prepared_document_commit_configuration_for_session_owner(
-                None,
+                session_id,
                 navigation.final_url(),
             );
             navigation
@@ -62,6 +70,80 @@ async fn commit_navigation_outcome_for_test(
             panic!("test navigation should not fail: {error_text}")
         }
     }
+}
+
+#[tokio::test]
+async fn buffered_navigation_for_inactive_session_carries_its_target_engine() {
+    let mut conn = CdpConnection::new();
+    let ambient_context = conn.new_browser_context("BID-ambient".to_owned());
+    conn.insert_browser_context(ambient_context);
+    let ambient_renderer_owner = conn
+        .standalone_navigation_engine
+        .ensure()
+        .renderer_owner_id_for_diagnostics();
+
+    let mut target_context = conn.new_browser_context("BID-target".to_owned());
+    target_context.set_active_target_id("TID-target");
+    target_context.attach_active_session("SID-target");
+    target_context.begin_active_target_initial_empty_document("about:blank".to_owned());
+    target_context
+        .start_document_navigation_for_active_target("LOADER-target".to_owned())
+        .expect("target should accept its synthetic navigation");
+    conn.inactive_browser_contexts.push(target_context);
+
+    let requested_url = Url::parse("https://target.example/fulfilled").unwrap();
+    let navigation = NavigationDispatchState {
+        navigate_id: Some(1),
+        navigate_session_id: Some("SID-target".to_owned()),
+        result_projection: NavigationResultProjection::Cdp(json!({
+            "frameId": "TID-target",
+            "loaderId": "LOADER-target",
+        })),
+        frame_id: "TID-target".to_owned(),
+        session_id: Some("SID-target".to_owned()),
+        request_id: Some("LOADER-target".to_owned()),
+        loader_id: "LOADER-target".to_owned(),
+        request_announced: true,
+        requested_url: requested_url.clone(),
+        request_method: "GET".to_owned(),
+        request_body: None,
+        request_body_bytes: None,
+        request_headers: Vec::new(),
+        request_load_policy: crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
+        timestamp: 0.0,
+        source_document_security: Default::default(),
+    };
+
+    let outcome = conn
+        .build_navigation_from_buffered_body_source_for_navigation_async(
+            &navigation,
+            requested_url,
+            200,
+            vec![("content-type".to_owned(), "text/html".to_owned())],
+            crate::conn::CapturedBody::from_string("<main>target</main>".to_owned()),
+            None,
+            moli_fetch::NetworkObservationJournal::default(),
+            crate::domains::network::MainDocumentBodyProgressSource::default(),
+        )
+        .await
+        .expect("buffered target navigation should prepare");
+    let loaded =
+        commit_navigation_outcome_for_session_test(&mut conn, outcome, Some("SID-target")).await;
+    let target_engine = loaded
+        .navigation_engine
+        .as_ref()
+        .expect("target-scoped buffered navigation must carry its engine to commit");
+    let target_renderer_owner = target_engine.renderer_owner_id_for_diagnostics();
+
+    assert_eq!(
+        loaded.page.renderer_owner_local_host_id().as_u64(),
+        target_renderer_owner,
+        "the loaded Page and the engine handed to its target must share one renderer owner"
+    );
+    assert_ne!(
+        target_renderer_owner, ambient_renderer_owner,
+        "a browser-level Fetch action must not build an inactive target on the ambient context engine"
+    );
 }
 
 #[test]
@@ -140,8 +222,10 @@ fn default_browser_contexts_reuse_partition_with_distinct_target_session_storage
         CdpInitialStoragePartition::from_storage_partition(Vec::new(), &storage_partition);
     let conn = CdpConnection::new_with_initial_storage_partition(initial_storage_partition);
 
-    let first = conn.new_browser_context("BID-first".to_owned());
-    let second = conn.new_browser_context("BID-second".to_owned());
+    let mut first = conn.new_browser_context("BID-first".to_owned());
+    first.set_active_target_id("TID-first");
+    let mut second = conn.new_browser_context("BID-second".to_owned());
+    second.set_active_target_id("TID-second");
     let expected_web_storage_store = storage_partition
         .shared_storage_handles()
         .web_storage_store();
@@ -1335,8 +1419,7 @@ async fn direct_runtime_evaluate_routes_to_inactive_active_owner_without_promoti
     let mut inactive = BrowserContext::new("BID-B".into());
     inactive.set_active_target_id("TID-B".to_owned());
     inactive.attach_active_session("SID-B");
-    inactive
-        .devtools_session_state
+    inactive.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .runtime_frontend_enabled = true;
     ctx.conn.inactive_browser_contexts.push(inactive);
@@ -1378,13 +1461,13 @@ async fn direct_runtime_evaluate_document_replacement_lifecycle_uses_inactive_ow
     let mut inactive = BrowserContext::new("BID-document-replacement".into());
     inactive.set_active_target_id("TID-document-replacement".to_owned());
     inactive.attach_active_session("SID-document-replacement");
-    inactive
-        .devtools_session_state
+    inactive.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .runtime_frontend_enabled = true;
-    inactive.devtools_session_state.dom_session_state.enabled = true;
-    inactive
-        .devtools_session_state
+    inactive.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+        .dom_session_state
+        .enabled = true;
+    inactive.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .page_session_state
         .page_lifecycle_events = true;
     ctx.conn.inactive_browser_contexts.push(inactive);
@@ -1629,8 +1712,7 @@ async fn direct_runtime_evaluate_same_document_navigation_updates_inactive_owner
     let mut inactive = BrowserContext::new("BID-same-document".into());
     inactive.set_active_target_id("TID-same-document".to_owned());
     inactive.attach_active_session("SID-same-document");
-    inactive
-        .devtools_session_state
+    inactive.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .runtime_frontend_enabled = true;
     inactive.set_target_url(initial_url.clone());
@@ -1698,17 +1780,16 @@ async fn direct_runtime_evaluate_same_document_navigation_updates_inactive_owner
 async fn direct_runtime_evaluate_javascript_dialog_uses_inactive_background_owner() {
     let mut ctx = crate::testing::TestContext::new();
     let page_url = "data:text/html,<!doctype html><title>dialog-owner</title>".to_owned();
-    let background = BackgroundTarget::with_url(
+    let background = PageTargetHost::with_url(
         "TID-dialog-background".to_owned(),
         Some("SID-dialog-background".to_owned()),
         page_url.clone(),
     );
 
     let mut inactive = BrowserContext::new("BID-dialog-background".into());
-    inactive.background_targets.push(background);
+    inactive.insert_page_target_host(background);
     inactive.mutate_parked_page_session_state("TID-dialog-background", |state| {
-        state
-            .devtools_session_state
+        state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
             .runtime_frontend_enabled = true;
     });
@@ -1791,7 +1872,7 @@ async fn direct_runtime_evaluate_javascript_dialog_uses_inactive_background_owne
         inactive
             .parked_page_session_state("TID-dialog-background")
             .expect("background page session state should remain parked")
-            .devtools_session_state
+            .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .javascript_dialog_state
             .is_empty(),
@@ -1803,17 +1884,16 @@ async fn direct_runtime_evaluate_javascript_dialog_uses_inactive_background_owne
 async fn direct_runtime_evaluate_popup_creates_target_in_inactive_background_owner() {
     let mut ctx = crate::testing::TestContext::new();
     let page_url = "data:text/html,<!doctype html><title>popup-owner</title>";
-    let background = BackgroundTarget::with_url(
+    let background = PageTargetHost::with_url(
         "TID-popup-background".to_owned(),
         Some("SID-popup-background".to_owned()),
         page_url.to_owned(),
     );
 
     let mut inactive = BrowserContext::new("BID-popup-background".into());
-    inactive.background_targets.push(background);
+    inactive.insert_page_target_host(background);
     inactive.mutate_parked_page_session_state("TID-popup-background", |state| {
-        state
-            .devtools_session_state
+        state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
             .runtime_frontend_enabled = true;
     });
@@ -1893,17 +1973,16 @@ async fn direct_runtime_evaluate_self_popup_does_not_navigate_active_target_for_
     ctx.conn.browser_context = Some(active);
 
     let page_url = "data:text/html,<!doctype html><title>self-popup</title>";
-    let background = BackgroundTarget::with_url(
+    let background = PageTargetHost::with_url(
         "TID-self-popup-background".to_owned(),
         Some("SID-self-popup-background".to_owned()),
         page_url.to_owned(),
     );
 
     let mut inactive = BrowserContext::new("BID-self-popup-background".into());
-    inactive.background_targets.push(background);
+    inactive.insert_page_target_host(background);
     inactive.mutate_parked_page_session_state("TID-self-popup-background", |state| {
-        state
-            .devtools_session_state
+        state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
             .runtime_frontend_enabled = true;
     });
@@ -1948,21 +2027,19 @@ async fn direct_runtime_evaluate_self_popup_does_not_navigate_active_target_for_
 async fn direct_runtime_evaluate_file_chooser_uses_inactive_background_owner() {
     let mut ctx = crate::testing::TestContext::new();
     let page_url = "data:text/html,<!doctype html><input id='picker' type='file' multiple>";
-    let background = BackgroundTarget::with_url(
+    let background = PageTargetHost::with_url(
         "TID-file-background".to_owned(),
         Some("SID-file-background".to_owned()),
         page_url.to_owned(),
     );
 
     let mut inactive = BrowserContext::new("BID-file-background".into());
-    inactive.background_targets.push(background);
+    inactive.insert_page_target_host(background);
     inactive.mutate_parked_page_session_state("TID-file-background", |state| {
-        state
-            .devtools_session_state
+        state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
             .runtime_frontend_enabled = true;
-        state
-            .devtools_session_state
+        state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_file_chooser_opened_event_enabled = true;
     });
@@ -2027,8 +2104,7 @@ async fn direct_runtime_evaluate_routes_to_inactive_auxiliary_owner_without_prom
     inactive.set_active_target_id("TID-B".to_owned());
     inactive.attach_active_session("SID-primary");
     assert!(inactive.assign_auxiliary_session_to_target("TID-B", "SID-aux".to_owned()));
-    inactive
-        .devtools_session_state
+    inactive.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .runtime_frontend_enabled = true;
     ctx.conn.inactive_browser_contexts.push(inactive);
@@ -2191,7 +2267,7 @@ async fn direct_page_preload_routes_to_inactive_background_owner_without_promoti
     let mut conn = CdpConnection::new();
 
     let mut inactive = BrowserContext::new("BID-B".into());
-    inactive.background_targets.push(BackgroundTarget::new(
+    inactive.insert_page_target_host(PageTargetHost::new(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
         TargetIdentityState::about_blank(),
@@ -2237,9 +2313,7 @@ async fn direct_page_preload_routes_to_inactive_background_owner_without_promoti
     );
     assert!(
         conn.target_owner_state_for_session(Some("SID-background"))
-            .expect("background owner state should be readable")
-            .document_start_scripts
-            .is_empty(),
+            .is_none_or(|state| state.document_start_scripts.is_empty()),
         "removeScriptToEvaluateOnNewDocument should mutate the inactive background owner"
     );
 }
@@ -2249,7 +2323,7 @@ async fn direct_network_enable_routes_to_inactive_background_owner_without_promo
     let mut conn = CdpConnection::new();
 
     let mut inactive = BrowserContext::new("BID-B".into());
-    inactive.background_targets.push(BackgroundTarget::new(
+    inactive.insert_page_target_host(PageTargetHost::new(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
         TargetIdentityState::about_blank(),
@@ -2279,7 +2353,8 @@ async fn direct_network_enable_routes_to_inactive_background_owner_without_promo
         inactive
             .parked_page_session_state("TID-background")
             .expect("background session state should be staged")
-            .network_enabled
+            .runtime_slot
+            .primary_network_events_enabled()
     );
 }
 
@@ -2288,7 +2363,7 @@ async fn direct_auxiliary_network_enable_for_background_target_does_not_enable_p
     let mut conn = CdpConnection::new();
 
     let mut inactive = BrowserContext::new("BID-B".into());
-    inactive.background_targets.push(BackgroundTarget::new(
+    inactive.insert_page_target_host(PageTargetHost::new(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
         TargetIdentityState::about_blank(),
@@ -2317,7 +2392,7 @@ async fn direct_auxiliary_network_enable_for_background_target_does_not_enable_p
     assert!(
         inactive
             .parked_page_session_state("TID-background")
-            .is_none_or(|state| !state.network_enabled),
+            .is_none_or(|state| !state.runtime_slot.primary_network_events_enabled()),
         "auxiliary background Network.enable must not enable the target's primary listener"
     );
 }
@@ -2329,7 +2404,7 @@ async fn direct_network_enable_routes_to_active_background_owner_without_promoti
     let mut active = BrowserContext::new("BID-A".into());
     active.set_active_target_id("TID-active".to_owned());
     active.attach_active_session("SID-active");
-    active.background_targets.push(BackgroundTarget::new(
+    active.insert_page_target_host(PageTargetHost::new(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
         TargetIdentityState::about_blank(),
@@ -2363,7 +2438,8 @@ async fn direct_network_enable_routes_to_active_background_owner_without_promoti
         active
             .parked_page_session_state("TID-background")
             .expect("background session state should be staged")
-            .network_enabled
+            .runtime_slot
+            .primary_network_events_enabled()
     );
 }
 
@@ -2425,14 +2501,14 @@ async fn direct_network_enable_for_loaded_background_owner_starts_at_network_tai
 
     let mut ctx = crate::testing::TestContext::new();
     let page_url = format!("http://{addr}/page");
-    let background = BackgroundTarget::with_url(
+    let background = PageTargetHost::with_url(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
         page_url.clone(),
     );
 
     let mut inactive = BrowserContext::new("BID-B".into());
-    inactive.background_targets.push(background);
+    inactive.insert_page_target_host(background);
     ctx.conn.inactive_browser_contexts.push(inactive);
     ctx.install_navigation_fixture_for_session_owner(&page_url, Some("SID-background"))
         .await;
@@ -2462,16 +2538,17 @@ async fn direct_network_enable_for_loaded_background_owner_starts_at_network_tai
         .iter()
         .find(|bc| bc.id == "BID-B")
         .expect("inactive owner must remain parked");
-    let artifacts = inactive
-        .parked_network_artifacts("TID-background")
-        .expect("background network artifacts should be staged");
+    let runtime_slot = &inactive
+        .background_target("TID-background")
+        .expect("background network target should remain live")
+        .runtime_slot;
     assert_eq!(
-        artifacts.emitted_subresource_record_count_for_session(None),
+        runtime_slot.emitted_subresource_record_count_for_session_for_test(None),
         1,
         "background Network.enable should not replay pre-enable subresource records"
     );
     assert_eq!(
-        artifacts.emitted_websocket_event_count_for_session(None),
+        runtime_slot.emitted_websocket_event_count_for_session_for_test(None),
         0,
         "background Network.enable should initialize websocket cursor at the loaded target tail"
     );
@@ -2493,12 +2570,11 @@ async fn direct_background_command_does_not_emit_active_observable_output_under_
     let mut active = BrowserContext::new("BID-A".into());
     active.set_active_target_id("TID-active".to_owned());
     active.attach_active_session("SID-active");
-    active
-        .devtools_session_state
+    active.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .console_output_session_state
         .console_enabled = true;
     active.replace_loaded_page(Some(active_page));
-    active.background_targets.push(BackgroundTarget::new(
+    active.insert_page_target_host(PageTargetHost::new(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
         TargetIdentityState::about_blank(),
@@ -2567,8 +2643,7 @@ async fn direct_console_routes_to_inactive_active_owner_without_promoting_slot()
         .find(|bc| bc.id == "BID-B")
         .expect("inactive owner must remain parked");
     assert!(
-        inactive
-            .devtools_session_state
+        inactive.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .console_output_session_state
             .console_enabled
     );
@@ -2620,8 +2695,7 @@ async fn direct_console_routes_to_inactive_active_owner_without_promoting_slot()
         .find(|bc| bc.id == "BID-B")
         .expect("inactive owner must remain parked");
     assert!(
-        !inactive
-            .devtools_session_state
+        !inactive.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .console_output_session_state
             .console_enabled
     );
@@ -2641,7 +2715,7 @@ async fn direct_console_routes_to_inactive_background_owner_without_promoting_sl
     let mut conn = CdpConnection::new();
 
     let mut inactive = BrowserContext::new("BID-B".into());
-    inactive.background_targets.push(BackgroundTarget::new(
+    inactive.insert_page_target_host(PageTargetHost::new(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
         TargetIdentityState::about_blank(),
@@ -2670,8 +2744,8 @@ async fn direct_console_routes_to_inactive_background_owner_without_promoting_sl
     assert!(
         inactive
             .parked_page_session_state("TID-background")
-            .is_some_and(|state| state
-                .devtools_session_state
+            .is_some_and(|state| state.devtools_sessions
+                [moli_page_types::DevToolsSessionKey::Primary]
                 .console_output_session_state
                 .console_enabled),
         "background target should stage Console.enable"
@@ -2698,8 +2772,8 @@ async fn direct_console_routes_to_inactive_background_owner_without_promoting_sl
     assert!(
         inactive
             .parked_page_session_state("TID-background")
-            .is_some_and(|state| state
-                .devtools_session_state
+            .is_some_and(|state| state.devtools_sessions
+                [moli_page_types::DevToolsSessionKey::Primary]
                 .console_output_session_state
                 .console_enabled),
         "clearMessages should not disable the staged background Console state"
@@ -2726,8 +2800,8 @@ async fn direct_console_routes_to_inactive_background_owner_without_promoting_sl
     assert!(
         inactive
             .parked_page_session_state("TID-background")
-            .is_none_or(|state| !state
-                .devtools_session_state
+            .is_none_or(|state| !state.devtools_sessions
+                [moli_page_types::DevToolsSessionKey::Primary]
                 .console_output_session_state
                 .console_enabled),
         "background target should stage or collapse Console.disable"
@@ -2739,14 +2813,14 @@ async fn direct_console_routes_to_loaded_background_owner_and_advances_parked_cu
     let mut ctx = crate::testing::TestContext::new();
     let page_url =
         "data:text/html,<!doctype html><script>console.warn('background warning')</script>";
-    let background = BackgroundTarget::with_url(
+    let background = PageTargetHost::with_url(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
         page_url.to_owned(),
     );
 
     let mut inactive = BrowserContext::new("BID-B".into());
-    inactive.background_targets.push(background);
+    inactive.insert_page_target_host(background);
     ctx.conn.inactive_browser_contexts.push(inactive);
     ctx.install_navigation_fixture_for_session_owner(page_url, Some("SID-background"))
         .await;
@@ -2864,14 +2938,12 @@ async fn direct_log_enable_routes_to_inactive_active_owner_without_promoting_slo
         .find(|bc| bc.id == "BID-B")
         .expect("inactive owner must remain parked");
     assert!(
-        inactive
-            .devtools_session_state
+        inactive.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .log_enabled
     );
     assert_eq!(
-        inactive
-            .devtools_session_state
+        inactive.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .console_output_session_state
             .log_lifecycle_entries,
         0,
@@ -2884,7 +2956,7 @@ async fn direct_log_enable_routes_to_inactive_background_owner_without_promoting
     let mut conn = CdpConnection::new();
 
     let mut inactive = BrowserContext::new("BID-B".into());
-    inactive.background_targets.push(BackgroundTarget::new(
+    inactive.insert_page_target_host(PageTargetHost::new(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
         TargetIdentityState::about_blank(),
@@ -2913,7 +2985,10 @@ async fn direct_log_enable_routes_to_inactive_background_owner_without_promoting
     assert!(
         inactive
             .parked_page_session_state("TID-background")
-            .is_some_and(|state| state.devtools_session_state.page_session_state.log_enabled),
+            .is_some_and(|state| state.devtools_sessions
+                [moli_page_types::DevToolsSessionKey::Primary]
+                .page_session_state
+                .log_enabled),
         "background target should stage Log.enable"
     );
 }
@@ -2928,7 +3003,7 @@ async fn direct_log_enable_routes_to_loaded_background_owner_without_replaying_c
         .await
         .expect("background page should load");
 
-    let mut background = BackgroundTarget::new(
+    let mut background = PageTargetHost::new(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
         TargetIdentityState::about_blank(),
@@ -2938,7 +3013,7 @@ async fn direct_log_enable_routes_to_loaded_background_owner_without_replaying_c
     background.replace_loaded_page(Some(page));
 
     let mut inactive = BrowserContext::new("BID-B".into());
-    inactive.background_targets.push(background);
+    inactive.insert_page_target_host(background);
     conn.inactive_browser_contexts.push(inactive);
 
     let response = conn
@@ -2966,7 +3041,7 @@ async fn direct_log_enable_routes_to_loaded_background_owner_without_replaying_c
         inactive
             .parked_page_session_state("TID-background")
             .expect("parked session state")
-            .devtools_session_state
+            .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .console_output_session_state
             .log_lifecycle_entries,
         0,
@@ -2992,8 +3067,7 @@ async fn direct_log_disable_routes_to_inactive_active_owner_without_promoting_sl
     let mut inactive = BrowserContext::new("BID-B".into());
     inactive.set_active_target_id("TID-B".to_owned());
     inactive.attach_active_session("SID-B");
-    inactive
-        .devtools_session_state
+    inactive.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .page_session_state
         .log_enabled = true;
     ctx.conn.inactive_browser_contexts.push(inactive);
@@ -3023,14 +3097,12 @@ async fn direct_log_disable_routes_to_inactive_active_owner_without_promoting_sl
         .find(|bc| bc.id == "BID-B")
         .expect("inactive owner must remain parked");
     assert!(
-        !inactive
-            .devtools_session_state
+        !inactive.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .log_enabled
     );
     assert_eq!(
-        inactive
-            .devtools_session_state
+        inactive.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .console_output_session_state
             .log_lifecycle_entries,
         0,
@@ -3043,14 +3115,16 @@ async fn direct_log_disable_routes_to_inactive_background_owner_without_promotin
     let mut conn = CdpConnection::new();
 
     let mut inactive = BrowserContext::new("BID-B".into());
-    inactive.background_targets.push(BackgroundTarget::new(
+    inactive.insert_page_target_host(PageTargetHost::new(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
         TargetIdentityState::about_blank(),
         TargetPageSlot::empty_for_test_fixture(),
     ));
     inactive.mutate_parked_page_session_state("TID-background", |state| {
-        state.devtools_session_state.page_session_state.log_enabled = true;
+        state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+            .page_session_state
+            .log_enabled = true;
     });
     conn.inactive_browser_contexts.push(inactive);
 
@@ -3075,7 +3149,10 @@ async fn direct_log_disable_routes_to_inactive_background_owner_without_promotin
     assert!(
         inactive
             .parked_page_session_state("TID-background")
-            .is_none_or(|state| !state.devtools_session_state.page_session_state.log_enabled),
+            .is_none_or(|state| !state.devtools_sessions
+                [moli_page_types::DevToolsSessionKey::Primary]
+                .page_session_state
+                .log_enabled),
         "background target should stage or collapse Log.disable"
     );
 }
@@ -3195,7 +3272,7 @@ async fn direct_network_policy_routes_to_inactive_background_owner_without_promo
     let mut conn = CdpConnection::new();
 
     let mut inactive = BrowserContext::new("BID-B".into());
-    inactive.background_targets.push(BackgroundTarget::new(
+    inactive.insert_page_target_host(PageTargetHost::new(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
         TargetIdentityState::about_blank(),

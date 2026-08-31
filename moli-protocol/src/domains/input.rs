@@ -2198,7 +2198,7 @@ mod producer_tests {
         let mut conn = CdpConnection::default();
         let mut bc = BrowserContext::new("BID-typed".into());
         bc.attach_active_session("SID-typed");
-        bc.devtools_session_state
+        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_file_chooser_opened_event_enabled = true;
         conn.browser_context = Some(bc);
@@ -2281,7 +2281,7 @@ mod producer_tests {
         let mut bc = BrowserContext::new("BID-document-collision".into());
         bc.set_active_target_id("TID-document-collision");
         bc.attach_active_session("SID-document-collision");
-        bc.devtools_session_state
+        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_file_chooser_opened_event_enabled = true;
         conn.browser_context = Some(bc);
@@ -2351,7 +2351,7 @@ mod producer_tests {
         let mut bc = BrowserContext::new("BID-page-replacement".into());
         bc.set_active_target_id("TID-page-replacement");
         bc.attach_active_session("SID-page-replacement");
-        bc.devtools_session_state
+        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_file_chooser_opened_event_enabled = true;
         conn.browser_context = Some(bc);
@@ -2465,7 +2465,7 @@ mod producer_tests {
         let mut conn = CdpConnection::default();
         let mut bc = BrowserContext::new("BID-1".into());
         bc.attach_active_session("SID-1");
-        bc.devtools_session_state
+        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_file_chooser_opened_event_enabled = true;
         conn.browser_context = Some(bc);
@@ -2512,7 +2512,7 @@ mod producer_tests {
         let mut conn = CdpConnection::default();
         let mut bc = BrowserContext::new("BID-context".into());
         bc.attach_active_session("SID-context");
-        bc.devtools_session_state
+        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_file_chooser_opened_event_enabled = true;
         conn.browser_context = Some(bc);

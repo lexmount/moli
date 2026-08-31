@@ -1,5 +1,5 @@
 use super::*;
-use crate::conn::BackgroundTarget;
+use crate::conn::PageTargetHost;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn get_browser_contexts_returns_active_and_inactive_ids() {
@@ -42,7 +42,7 @@ async fn close_active_target_fails_only_active_owner_pending_awaits() {
     let mut bc = BrowserContext::new("BID-await-owner".into());
     bc.set_active_target_id("TID-active-await".to_owned());
     bc.attach_active_session("SID-active-await".to_owned());
-    bc.background_targets.push(BackgroundTarget::with_url(
+    bc.insert_page_target_host(PageTargetHost::with_url(
         "TID-bg-await".to_owned(),
         Some("SID-bg-await".to_owned()),
         "about:blank#bg-await".to_owned(),
@@ -98,8 +98,8 @@ async fn create_browser_context_records_proxy_server_override() {
             .expect("active browser context");
         (
             active.id.clone(),
-            active.http_proxy_override.clone(),
-            active.http_no_proxy_override.clone(),
+            active.default_http_proxy_override.clone(),
+            active.default_http_no_proxy_override.clone(),
         )
     };
     ctx.expect_result(41, json!({ "browserContextId": active_id }), None);
@@ -129,7 +129,10 @@ async fn create_browser_context_preserves_non_loopback_proxy_bypass_entries() {
             .browser_context
             .as_ref()
             .expect("active browser context");
-        (active.id.clone(), active.http_no_proxy_override.clone())
+        (
+            active.id.clone(),
+            active.default_http_no_proxy_override.clone(),
+        )
     };
     ctx.expect_result(42, json!({ "browserContextId": active_id }), None);
     assert_eq!(active_no_proxy.as_deref(), Some("example.com,.internal"));
@@ -248,7 +251,7 @@ async fn dispose_browser_context_aborts_paused_request_stage_navigation() {
     let mut bc = BrowserContext::new("BID-9".into());
     bc.set_active_target_id("TID-000000000A");
     bc.attach_active_session("SID-1");
-    bc.devtools_session_state
+    bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .inspector_enabled = true;
     bc.active_target
@@ -1625,7 +1628,7 @@ async fn same_context_targets_do_not_replay_bare_isolated_worlds_after_switching
             .active_target
             .runtime_slot
             .replace_loaded_page(Some(first_page));
-        bc.devtools_session_state
+        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
             .runtime_frontend_enabled = true;
     }
@@ -1715,11 +1718,8 @@ async fn same_context_targets_do_not_replay_bare_isolated_worlds_after_switching
         second_promote["result"]["result"]["value"],
         json!("second-target")
     );
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .devtools_session_state
+    ctx.conn.browser_context.as_mut().unwrap().devtools_sessions
+        [moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .runtime_frontend_enabled = true;
 
@@ -1752,11 +1752,8 @@ async fn same_context_targets_do_not_replay_bare_isolated_worlds_after_switching
             .is_empty(),
         "target activation must not turn a document-scoped world into persistent state"
     );
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .devtools_session_state
+    ctx.conn.browser_context.as_mut().unwrap().devtools_sessions
+        [moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .runtime_frontend_enabled = true;
     let target_a_replay_url =
@@ -1816,11 +1813,8 @@ async fn same_context_targets_do_not_replay_bare_isolated_worlds_after_switching
     }))
     .await;
     ctx.expect_result(104157, json!({}), None);
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .devtools_session_state
+    ctx.conn.browser_context.as_mut().unwrap().devtools_sessions
+        [moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .runtime_frontend_enabled = true;
 

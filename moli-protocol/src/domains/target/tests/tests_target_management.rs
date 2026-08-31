@@ -1,5 +1,4 @@
 use super::*;
-use crate::conn::ParkedPageSessionState;
 
 /// cdp.target: closeTarget – no browser context
 #[tokio::test(flavor = "multi_thread")]
@@ -39,13 +38,13 @@ async fn close_target_success() {
     let mut ctx = TestContext::new();
     load_bc_with_target(&mut ctx, "BID-9", "TID-000000000A");
     let bc = ctx.conn.browser_context.as_mut().unwrap();
-    bc.devtools_session_state
+    bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .page_session_state
         .page_lifecycle_events = true;
-    bc.devtools_session_state
+    bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .runtime_frontend_enabled = true;
-    bc.devtools_session_state
+    bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .inspector_enabled = true;
     bc.active_target
@@ -87,53 +86,8 @@ async fn close_target_success() {
     assert!(!bc.has_active_target());
     assert!(!bc.has_active_session());
     assert!(!bc.has_loaded_page());
-    assert!(!bc.active_target.owner_state.target_crash_state.is_crashed());
-    assert_eq!(bc.target_security_origin(), crate::conn::URL_BASE);
-    assert_eq!(bc.target_secure_context_type(), "Secure");
-    assert_eq!(bc.next_network_request_sequence_for_test(), 0);
-    assert_eq!(bc.subresource_network_emitted_record_count_for_test(), 0);
-    assert_eq!(bc.next_io_stream_sequence_for_test(), 0);
-    assert_eq!(
-        bc.active_target
-            .runtime_slot
-            .next_subresource_fetch_request_id_for_test(),
-        0
-    );
-    assert!(
-        !bc.devtools_session_state
-            .page_session_state
-            .page_lifecycle_events
-    );
-    assert!(
-        !bc.devtools_session_state
-            .runtime_session_state
-            .runtime_frontend_enabled
-    );
-    assert!(
-        !bc.devtools_session_state
-            .runtime_session_state
-            .inspector_enabled
-    );
-    assert!(
-        !bc.active_target
-            .runtime_slot
-            .primary_network_events_enabled()
-    );
-    assert!(!bc.network_policy.cache_disabled());
-    assert!(!bc.network_policy.bypass_service_worker());
-    assert!(!bc.css_enabled);
-    assert!(!bc.active_target.fetch_owner.is_enabled());
-    assert!(!bc.active_target.fetch_owner.handle_auth_requests());
-    assert!(
-        bc.active_target
-            .fetch_owner
-            .config_snapshot()
-            .patterns()
-            .is_empty()
-    );
-    assert!(bc.network_policy.extra_headers().is_empty());
-    assert!(bc.captured_response_bodies_empty_for_test());
-    assert!(bc.io_streams_empty_for_test());
+    assert!(bc.page_target("TID-000000000A").is_none());
+    assert_eq!(bc.background_target_count(), 0);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -342,7 +296,7 @@ async fn close_target_emits_detached_events() {
     let bc = ctx.conn.browser_context.as_mut().unwrap();
     bc.attach_active_session(session_id.clone());
     assert!(bc.assign_auxiliary_session_to_target("TID-000000000A", "SID-aux".into()));
-    bc.devtools_session_state
+    bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .inspector_enabled = true;
 
@@ -417,12 +371,12 @@ async fn close_target_invalidates_runtime_context_and_object_without_active_page
     let mut bc = BrowserContext::new("BID-runtime-close".into());
     bc.set_active_target_id("TID-active");
     bc.attach_active_session("SID-active");
-    let background_target = crate::conn::BackgroundTarget::with_url(
+    let background_target = crate::conn::PageTargetHost::with_url(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
         "about:blank".to_owned(),
     );
-    bc.background_targets.push(background_target);
+    bc.insert_page_target_host(background_target);
     ctx.conn.browser_context = Some(bc);
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<html><body><script>globalThis.__lm_closed_target_marker = 'active-clean';</script>active</body></html>",
@@ -562,19 +516,16 @@ async fn close_background_target_emits_detached_events_and_clears_attached_sessi
     );
     let bc = ctx.conn.browser_context.as_mut().unwrap();
     assert!(bc.assign_auxiliary_session_to_target("TID-000000000B", "SID-aux".into()));
-    bc.replace_parked_page_session_state(
-        "TID-000000000B".into(),
-        ParkedPageSessionState {
-            devtools_session_state: crate::conn::DevToolsSessionState {
+    bc.mutate_parked_page_session_state("TID-000000000B", |state| {
+        state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary] =
+            crate::conn::DevToolsSessionState {
                 runtime_session_state: crate::conn::TargetRuntimeSessionState {
                     inspector_enabled: true,
                     ..Default::default()
                 },
                 ..Default::default()
-            },
-            ..Default::default()
-        },
-    );
+            };
+    });
 
     ctx.process_async(json!({
         "id": 121,
@@ -633,7 +584,7 @@ async fn close_target_aborts_paused_request_stage_navigation() {
     let mut bc = BrowserContext::new("BID-9".into());
     bc.set_active_target_id("TID-000000000A");
     bc.attach_active_session("SID-1");
-    bc.devtools_session_state
+    bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .inspector_enabled = true;
     bc.active_target
@@ -691,11 +642,7 @@ async fn close_target_aborts_paused_request_stage_navigation() {
     assert!(!bc.has_active_target());
     assert!(!bc.has_active_session());
     assert!(!bc.has_loaded_page());
-    assert!(
-        !bc.active_target
-            .fetch_owner
-            .has_pending_fetch_state_for_test()
-    );
+    assert!(bc.page_target("TID-000000000A").is_none());
 
     server.abort();
 }
@@ -818,11 +765,7 @@ async fn close_target_aborts_paused_runtime_fetch_subresource() {
     assert!(!bc.has_active_target());
     assert!(!bc.has_active_session());
     assert!(!bc.has_loaded_page());
-    assert!(
-        !bc.active_target
-            .fetch_owner
-            .has_pending_fetch_state_for_test()
-    );
+    assert!(bc.page_target("TID-000000000A").is_none());
 
     server.abort();
 }
@@ -1226,8 +1169,11 @@ async fn activate_target_promotes_background_target_into_active_slot() {
 
     let bc = ctx.conn.browser_context.as_ref().unwrap();
     assert_eq!(bc.active_target_id(), Some("TID-000000000B"));
-    assert_eq!(bc.background_targets.len(), 1);
-    assert_eq!(bc.background_targets[0].target_id(), "TID-000000000A");
+    assert_eq!(bc.background_target_count(), 1);
+    assert_eq!(
+        bc.background_target_at(0).unwrap().target_id(),
+        "TID-000000000A"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

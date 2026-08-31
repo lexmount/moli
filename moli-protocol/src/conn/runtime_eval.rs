@@ -23,8 +23,7 @@ use moli_core::{
 
 use crate::conn::state::{
     DevToolsSessionState, PreparedRendererCallTermination, SessionRendererCallReplay,
-    SessionRendererCallTermination, devtools_sessions_have_pending_inspector_awaits,
-    drain_pending_inspector_awaits_for_devtools_sessions,
+    SessionRendererCallTermination,
 };
 use crate::domains::command_output::protocol_message_background_event;
 use crate::domains::runtime_context_events::{
@@ -231,20 +230,21 @@ enum BidiChannelListenerRoute {
 }
 
 fn unregister_runtime_remote_object_group_from_parked_page_session_state(
-    page_session_state: &mut ParkedPageSessionState,
+    page_session_state: &mut TargetPageState,
     session_id: Option<&str>,
     object_group: &str,
 ) {
     if let Some(session_id) = session_id
         && let Some(state) = page_session_state
-            .auxiliary_devtools_session_states
-            .get_mut(session_id)
+            .devtools_sessions
+            .attached_mut(session_id)
     {
         state.unregister_runtime_remote_object_group(object_group);
         return;
     }
     page_session_state
-        .devtools_session_state
+        .devtools_sessions
+        .primary_mut()
         .unregister_runtime_remote_object_group(object_group);
 }
 
@@ -565,7 +565,8 @@ fn collect_moli_diagnostics_pending_snapshots(
         });
     }
 
-    for target in &mut browser_context.background_targets {
+    let browser_context_id = browser_context.id.clone();
+    for target in browser_context.background_targets_mut() {
         if !target.has_loaded_page() {
             continue;
         }
@@ -575,7 +576,7 @@ fn collect_moli_diagnostics_pending_snapshots(
             .start_page_diagnostics_snapshot()
             .map_err(|error| error.to_string())?;
         pending.push(PendingMoliDiagnosticsPageSnapshot {
-            browser_context_id: browser_context.id.clone(),
+            browser_context_id: browser_context_id.clone(),
             target_id: Some(target.target_id().to_owned()),
             pending: pending_snapshot,
         });
@@ -1627,12 +1628,10 @@ impl CdpConnection {
             return true;
         }
         self.browser_contexts().any(|browser_context| {
-            devtools_sessions_have_pending_inspector_awaits(
-                &browser_context.devtools_session_state,
-                &browser_context.auxiliary_devtools_session_states,
-            ) || browser_context
-                .target_parking
-                .has_pending_inspector_awaits()
+            browser_context
+                .page_targets
+                .iter()
+                .any(|target| target.has_pending_inspector_awaits())
                 || browser_context
                     .shared_worker_targets
                     .values()
@@ -1672,16 +1671,15 @@ impl CdpConnection {
 
     pub(crate) fn fail_pending_inspector_awaits_from_page_session_state_for_sessions_background_events_into(
         out: &mut Vec<BackgroundProtocolEvent>,
-        page_session_state: &mut ParkedPageSessionState,
+        page_session_state: &mut TargetPageState,
         primary_session_id: Option<&str>,
         session_ids: &[&str],
         reason: &'static str,
     ) {
-        for (cdp_id, entry) in drain_pending_inspector_awaits_for_devtools_sessions(
-            &mut page_session_state.devtools_session_state,
-            &mut page_session_state.auxiliary_devtools_session_states,
-            session_ids,
-        ) {
+        for (cdp_id, entry) in page_session_state
+            .devtools_sessions
+            .drain_pending_inspector_awaits_for_sessions(session_ids)
+        {
             if let Some(listener) = entry.bidi_channel_listener() {
                 unregister_runtime_remote_object_group_from_parked_page_session_state(
                     page_session_state,
@@ -1701,7 +1699,8 @@ impl CdpConnection {
             && session_ids.contains(&primary_session_id)
         {
             let terminated = page_session_state
-                .devtools_session_state
+                .devtools_sessions
+                .primary_mut()
                 .terminate_all_renderer_calls(reason);
             push_terminated_renderer_call_error_background_events(
                 out,
@@ -1712,8 +1711,8 @@ impl CdpConnection {
         }
         for session_id in session_ids {
             let Some(state) = page_session_state
-                .auxiliary_devtools_session_states
-                .get_mut(*session_id)
+                .devtools_sessions
+                .attached_mut(session_id)
             else {
                 continue;
             };
@@ -2443,24 +2442,26 @@ impl CdpConnection {
                 };
                 if current_devtools_session_id.is_some()
                     && browser_context
-                        .devtools_session_state
+                        .devtools_sessions
+                        .primary()
                         .has_runtime_remote_object_id(object_id)
                 {
                     return true;
                 }
-                for (session_id, state) in &browser_context.auxiliary_devtools_session_states {
-                    if Some(session_id.as_str()) != current_devtools_session_id
+                for (session_id, state) in browser_context.devtools_sessions.attached_entries() {
+                    if Some(session_id) != current_devtools_session_id
                         && state.has_runtime_remote_object_id(object_id)
                     {
                         return true;
                     }
                 }
             } else if browser_context
-                .devtools_session_state
+                .devtools_sessions
+                .primary()
                 .has_runtime_remote_object_id(object_id)
                 || browser_context
-                    .auxiliary_devtools_session_states
-                    .values()
+                    .devtools_sessions
+                    .attached_states()
                     .any(|state| state.has_runtime_remote_object_id(object_id))
             {
                 return true;
@@ -2473,21 +2474,24 @@ impl CdpConnection {
                     devtools_session_id,
                 } if browser_context_id == &browser_context.id => match target_id.as_deref() {
                     Some(target_id) if !browser_context.is_active_target(target_id) => {
-                        browser_context
-                            .target_parking
-                            .runtime_remote_object_id_known_for_different_page_owner(
-                                target_id,
-                                devtools_session_id.as_deref(),
-                                object_id,
-                            )
+                        browser_context.background_targets().any(|target| {
+                            if target.is_target(target_id) {
+                                target.has_runtime_remote_object_id_for_different_session(
+                                    devtools_session_id.as_deref(),
+                                    object_id,
+                                )
+                            } else {
+                                target.has_runtime_remote_object_id(object_id)
+                            }
+                        })
                     }
                     Some(_) | None => browser_context
-                        .target_parking
-                        .has_runtime_remote_object_id(object_id),
+                        .background_targets()
+                        .any(|target| target.has_runtime_remote_object_id(object_id)),
                 },
                 _ => browser_context
-                    .target_parking
-                    .has_runtime_remote_object_id(object_id),
+                    .background_targets()
+                    .any(|target| target.has_runtime_remote_object_id(object_id)),
             };
             if parked_has_different_owner {
                 return true;
@@ -4375,7 +4379,7 @@ impl CdpConnection {
                         .active_target_id_owned()
                 }),
                 CdpSessionRoute::AuxiliaryTarget { target_id, .. }
-                | CdpSessionRoute::BackgroundTarget { target_id, .. } => Some(target_id),
+                | CdpSessionRoute::PageTargetHost { target_id, .. } => Some(target_id),
                 CdpSessionRoute::TabTarget { .. }
                 | CdpSessionRoute::SharedWorkerTarget { .. }
                 | CdpSessionRoute::DedicatedWorkerTarget { .. }
@@ -6481,14 +6485,15 @@ mod tests {
                 .browser_context
                 .as_mut()
                 .expect("test browser context should remain loaded");
-            crate::conn::state::prepare_renderer_call_replacements_for_devtools_sessions(
-                Some("SID-navigation-termination"),
-                &mut browser_context.devtools_session_state,
-                &mut browser_context.auxiliary_devtools_session_states,
-                old_attachment,
-                terminal_attachment,
-            )
-            .expect("navigation replacement should prepare")
+            let page_state = browser_context.active_page_state_mut();
+            page_state
+                .devtools_sessions
+                .prepare_renderer_call_replacements(
+                    Some("SID-navigation-termination"),
+                    old_attachment,
+                    terminal_attachment,
+                )
+                .expect("navigation replacement should prepare")
         };
         let (replacement_attachment, terminations, replays) = replacements.into_parts();
         assert_eq!(replacement_attachment, terminal_attachment);
@@ -6578,14 +6583,15 @@ mod tests {
                 .browser_context
                 .as_mut()
                 .expect("test browser context should remain loaded");
-            crate::conn::state::prepare_renderer_call_replacements_for_devtools_sessions(
-                Some("SID-navigation-primary"),
-                &mut browser_context.devtools_session_state,
-                &mut browser_context.auxiliary_devtools_session_states,
-                old_attachment,
-                terminal_attachment,
-            )
-            .expect("navigation replacement should prepare for every session")
+            let page_state = browser_context.active_page_state_mut();
+            page_state
+                .devtools_sessions
+                .prepare_renderer_call_replacements(
+                    Some("SID-navigation-primary"),
+                    old_attachment,
+                    terminal_attachment,
+                )
+                .expect("navigation replacement should prepare for every session")
         };
         let (_, terminations, replays) = replacements.into_parts();
         assert_eq!(terminations.len(), 2);
@@ -6677,14 +6683,11 @@ mod tests {
                 .browser_context
                 .as_mut()
                 .expect("test browser context should remain loaded");
-            crate::conn::state::prepare_renderer_call_replacements_for_devtools_sessions(
-                None,
-                &mut browser_context.devtools_session_state,
-                &mut browser_context.auxiliary_devtools_session_states,
-                old_attachment,
-                terminal_attachment,
-            )
-            .expect("sessionless navigation replacement should prepare")
+            let page_state = browser_context.active_page_state_mut();
+            page_state
+                .devtools_sessions
+                .prepare_renderer_call_replacements(None, old_attachment, terminal_attachment)
+                .expect("sessionless navigation replacement should prepare")
         };
         let (_, terminations, replays) = replacements.into_parts();
         assert_eq!(terminations.len(), 1);
@@ -7435,13 +7438,11 @@ mod tests {
         let mut browser_context = BrowserContext::new("BID-owner".to_owned());
         browser_context.set_active_target_id("TID-active".to_owned());
         browser_context.attach_active_session("SID-active".to_owned());
-        browser_context
-            .background_targets
-            .push(BackgroundTarget::with_url(
-                "TID-bg".to_owned(),
-                Some("SID-bg".to_owned()),
-                "about:blank#bg".to_owned(),
-            ));
+        browser_context.insert_page_target_host(PageTargetHost::with_url(
+            "TID-bg".to_owned(),
+            Some("SID-bg".to_owned()),
+            "about:blank#bg".to_owned(),
+        ));
         conn.browser_context = Some(browser_context);
 
         conn.register_pending_inspector_await(1, Some("SID-active"));
@@ -7450,17 +7451,15 @@ mod tests {
         {
             let browser_context = conn.browser_context.as_ref().expect("browser context");
             assert!(
-                browser_context
-                    .devtools_session_state
+                browser_context.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                     .has_pending_inspector_awaits(),
                 "active DevTools session should physically store its pending await"
             );
             assert!(
                 browser_context
-                    .target_parking
-                    .page_session_state("TID-bg")
-                    .is_some_and(|state| state
-                        .devtools_session_state
+                    .parked_page_session_state("TID-bg")
+                    .is_some_and(|state| state.devtools_sessions
+                        [moli_page_types::DevToolsSessionKey::Primary]
                         .has_pending_inspector_awaits()),
                 "parked DevTools session should physically store its pending await"
             );
@@ -7516,13 +7515,11 @@ mod tests {
         let mut browser_context = BrowserContext::new("BID-same-id".to_owned());
         browser_context.set_active_target_id("TID-active".to_owned());
         browser_context.attach_active_session("SID-active".to_owned());
-        browser_context
-            .background_targets
-            .push(BackgroundTarget::with_url(
-                "TID-bg".to_owned(),
-                Some("SID-bg".to_owned()),
-                "about:blank#bg".to_owned(),
-            ));
+        browser_context.insert_page_target_host(PageTargetHost::with_url(
+            "TID-bg".to_owned(),
+            Some("SID-bg".to_owned()),
+            "about:blank#bg".to_owned(),
+        ));
         conn.browser_context = Some(browser_context);
 
         conn.register_pending_inspector_await(1, Some("SID-active"));
@@ -7796,13 +7793,11 @@ mod tests {
         let mut browser_context = BrowserContext::new("BID-owner-output".to_owned());
         browser_context.set_active_target_id("TID-active".to_owned());
         browser_context.attach_active_session("SID-active".to_owned());
-        browser_context
-            .background_targets
-            .push(BackgroundTarget::with_url(
-                "TID-bg".to_owned(),
-                Some("SID-bg".to_owned()),
-                "about:blank#bg".to_owned(),
-            ));
+        browser_context.insert_page_target_host(PageTargetHost::with_url(
+            "TID-bg".to_owned(),
+            Some("SID-bg".to_owned()),
+            "about:blank#bg".to_owned(),
+        ));
         conn.browser_context = Some(browser_context);
 
         conn.try_register_pending_inspector_await_with_object_group(

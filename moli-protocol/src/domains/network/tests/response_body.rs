@@ -1682,7 +1682,7 @@ async fn network_data_collector_membership_uses_recorded_target_scope() {
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-active".to_owned());
     bc.attach_active_session("bidi-session-1".to_owned());
-    bc.background_targets.push(BackgroundTarget::with_url(
+    bc.insert_page_target_host(PageTargetHost::with_url(
         "TID-other".to_owned(),
         None,
         "about:blank".to_owned(),
@@ -1805,7 +1805,7 @@ async fn network_data_collector_gated_body_without_match_is_not_readable() {
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-active".to_owned());
     bc.attach_active_session("bidi-session-1".to_owned());
-    bc.background_targets.push(BackgroundTarget::with_url(
+    bc.insert_page_target_host(PageTargetHost::with_url(
         "TID-other".to_owned(),
         None,
         "about:blank".to_owned(),

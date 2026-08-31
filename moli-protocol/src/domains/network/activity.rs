@@ -504,7 +504,7 @@ mod tests {
 
     use super::NetworkPreparedOutputs;
     use crate::{
-        conn::{BackgroundTarget, BrowserContext, CdpConnection, PendingSubresourceFetchRequest},
+        conn::{BrowserContext, CdpConnection, PageTargetHost, PendingSubresourceFetchRequest},
         domains::activity::{ProtocolOutputPayloads, ProtocolOutputProjectionContext},
         testing::{TestContext, wait_until_message, wait_until_messages},
     };
@@ -920,7 +920,7 @@ mod tests {
         let mut bc = BrowserContext::new("BID-1".into());
         bc.set_active_target_id("TID-active");
         bc.attach_active_session("SID-active");
-        bc.background_targets.push(BackgroundTarget::with_url(
+        bc.insert_page_target_host(PageTargetHost::with_url(
             "TID-background".to_owned(),
             Some("SID-background".to_owned()),
             page_url.clone(),

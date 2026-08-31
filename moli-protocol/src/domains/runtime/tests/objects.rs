@@ -619,7 +619,7 @@ async fn runtime_disable_clears_background_child_default_context_emission_cursor
 {
     let mut ctx = TestContext::new();
     let html = "<iframe srcdoc=\"<body>background child</body>\"></iframe>";
-    let background_target = crate::conn::BackgroundTarget::with_url(
+    let background_target = crate::conn::PageTargetHost::with_url(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
         format!("data:text/html,{html}"),
@@ -627,7 +627,7 @@ async fn runtime_disable_clears_background_child_default_context_emission_cursor
     let mut browser_context = crate::conn::BrowserContext::new("BID-1".to_owned());
     browser_context.set_active_target_id("TID-active".to_owned());
     browser_context.attach_active_session("SID-active".to_owned());
-    browser_context.background_targets.push(background_target);
+    browser_context.insert_page_target_host(background_target);
     ctx.conn.browser_context = Some(browser_context);
     ctx.install_navigation_fixture_for_session_owner(
         &format!("data:text/html,{html}"),

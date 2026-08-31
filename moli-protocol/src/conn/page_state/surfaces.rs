@@ -1,8 +1,8 @@
 use super::super::cookie_manager_surface::BrowserContextCookieManagerSurfaceSnapshot;
 use super::super::{
-    BrowserContext, DocumentStartScript, EmulatedDeviceMetrics, EmulatedGeolocationOverrideState,
-    EmulatedNetworkConditions, EmulatedViewportSurface, ParkedPageSessionState, TargetRuntimeSlot,
-    viewport_surface_install_script,
+    BrowserContext, CdpConnection, DocumentStartScript, EmulatedDeviceMetrics,
+    EmulatedGeolocationOverrideState, EmulatedNetworkConditions, EmulatedViewportSurface,
+    TargetPageState, viewport_surface_install_script,
 };
 #[cfg(test)]
 use moli_cookie_jar::{BrowserCookieFacadeContextOverrides, BrowserCookieFacadeOverrides};
@@ -40,7 +40,7 @@ impl SurfaceOverrideInputs {
     }
 
     fn from_parked(
-        state: &ParkedPageSessionState,
+        state: &TargetPageState,
         default_network_conditions: Option<EmulatedNetworkConditions>,
         default_geolocation_override: Option<EmulatedGeolocationOverrideState>,
         default_emulated_device_metrics: Option<EmulatedDeviceMetrics>,
@@ -114,13 +114,13 @@ impl BrowserContext {
             &mut super::super::cookie_manager_surface::BrowserContextCookieManagerSurface,
         ) -> bool,
     ) -> bool {
-        if !mutate(&mut self.document_cookie_manager_surface) {
+        let state = self.active_page_state_mut();
+        if !mutate(&mut state.document_cookie_manager_surface) {
             return false;
         }
-        if let Some(page) = self.active_target.runtime_slot.loaded_page_mut() {
-            self.document_cookie_manager_surface
-                .apply_to_page_async(page)
-                .await;
+        let surface = state.document_cookie_manager_surface.clone();
+        if let Some(page) = state.runtime_slot.loaded_page_mut() {
+            surface.apply_to_page_async(page).await;
         }
         true
     }
@@ -128,30 +128,10 @@ impl BrowserContext {
     pub(crate) fn raw_cookie_manager_surface_snapshot(
         &self,
     ) -> BrowserContextCookieManagerSurfaceSnapshot {
-        self.document_cookie_manager_surface.snapshot()
-    }
-
-    pub(crate) async fn restore_raw_cookie_manager_surface_async(
-        &mut self,
-        snapshot: BrowserContextCookieManagerSurfaceSnapshot,
-    ) {
-        self.restore_raw_cookie_manager_surface_without_loaded_page_sync(snapshot);
-        #[cfg(test)]
-        if let Some(page) = self.active_target.runtime_slot.loaded_page_mut() {
-            self.document_cookie_manager_surface
-                .apply_to_page_async(page)
-                .await;
-        }
-    }
-
-    pub(crate) fn restore_raw_cookie_manager_surface_without_loaded_page_sync(
-        &mut self,
-        snapshot: BrowserContextCookieManagerSurfaceSnapshot,
-    ) {
-        self.document_cookie_manager_surface =
-            super::super::cookie_manager_surface::BrowserContextCookieManagerSurface::from_snapshot(
-                snapshot,
-            );
+        self.page_targets
+            .active()
+            .map(|host| host.document_cookie_manager_surface.snapshot())
+            .unwrap_or_default()
     }
 
     pub fn document_start_script_descriptors(&self) -> Vec<DocumentStartScript> {
@@ -167,9 +147,7 @@ impl BrowserContext {
                 .document_start_scripts
                 .iter()
                 .map(|(identifier, script)| {
-                    script.with_registry_key(Self::target_document_start_script_registry_key(
-                        target_id, identifier,
-                    ))
+                    Self::target_document_start_script_descriptor(target_id, identifier, script)
                 }),
         );
         scripts
@@ -197,6 +175,32 @@ impl BrowserContext {
             Some(target_id) => format!("target:{target_id}:{identifier}"),
             None => format!("target:{identifier}"),
         }
+    }
+
+    pub(crate) fn target_session_document_start_script_registry_key(
+        target_id: Option<&str>,
+        session_id: &str,
+        identifier: &str,
+    ) -> String {
+        match target_id {
+            Some(target_id) => {
+                format!("target:{target_id}:session:{session_id}:{identifier}")
+            }
+            None => format!("target:session:{session_id}:{identifier}"),
+        }
+    }
+
+    pub(crate) fn target_document_start_script_descriptor(
+        target_id: Option<&str>,
+        identifier: &str,
+        script: &DocumentStartScript,
+    ) -> DocumentStartScript {
+        if script.registry_key.is_some() {
+            return script.clone();
+        }
+        script.with_registry_key(Self::target_document_start_script_registry_key(
+            target_id, identifier,
+        ))
     }
 
     pub(crate) fn has_default_bidi_channel_preload_script(&self) -> bool {
@@ -266,10 +270,12 @@ impl BrowserContext {
     }
 
     pub fn effective_extra_headers(&self) -> Vec<(String, String)> {
-        let mut headers =
-            self.merged_extra_headers_for_target_policy(self.network_policy.extra_headers());
-        apply_locale_header_if_absent(&mut headers, self.effective_active_locale_override());
-        headers
+        let target_headers = self
+            .page_targets
+            .active()
+            .map(|target| target.network_policy.extra_headers())
+            .unwrap_or(&[]);
+        self.merged_extra_headers_for_target_policy(target_headers)
     }
 
     pub(crate) fn effective_parked_extra_headers(&self, target_id: &str) -> Vec<(String, String)> {
@@ -277,18 +283,7 @@ impl BrowserContext {
             .parked_page_session_state(target_id)
             .map(|state| state.network_policy.extra_headers())
             .unwrap_or(&[]);
-        let mut headers = self.merged_extra_headers_for_target_policy(target_headers);
-        let locale_override = self.locale_override.as_deref().or_else(|| {
-            self.parked_page_session_state(target_id)
-                .and_then(|state| state.locale_override.as_deref())
-                .or(self.default_locale_override.as_deref())
-        });
-        apply_locale_header_if_absent(&mut headers, locale_override);
-        headers
-    }
-
-    pub fn effective_language(&self) -> &str {
-        self.effective_active_locale_override().unwrap_or("en-US")
+        self.merged_extra_headers_for_target_policy(target_headers)
     }
 
     pub fn viewport_width(&self) -> u32 {
@@ -350,20 +345,13 @@ impl BrowserContext {
         &self,
         target_id: &str,
     ) -> Option<DocumentStartScript> {
-        self.background_target(target_id)?;
-        let default_state;
-        let state = if let Some(state) = self.parked_page_session_state(target_id) {
-            state
-        } else {
-            default_state = ParkedPageSessionState::default();
-            &default_state
-        };
-        self.generated_surface_override_script_for_parked_state(state)
+        let target = self.background_target(target_id)?;
+        self.generated_surface_override_script_for_parked_state(target.state())
     }
 
-    fn generated_surface_override_script_for_parked_state(
+    pub(crate) fn generated_surface_override_script_for_parked_state(
         &self,
-        state: &ParkedPageSessionState,
+        state: &TargetPageState,
     ) -> Option<DocumentStartScript> {
         Self::generated_surface_override_script_from_inputs(&SurfaceOverrideInputs::from_parked(
             state,
@@ -374,22 +362,6 @@ impl BrowserContext {
                 .or_else(|| self.global_geolocation_override.clone()),
             self.default_emulated_device_metrics.clone(),
         ))
-    }
-
-    pub(crate) async fn apply_parked_surface_overrides_to_loaded_page_async(
-        &self,
-        runtime_slot: &mut TargetRuntimeSlot,
-        state: &ParkedPageSessionState,
-    ) -> Result<(), String> {
-        let Some(script) = self.generated_surface_override_script_for_parked_state(state) else {
-            return Ok(());
-        };
-        let Some(page) = runtime_slot.loaded_page_mut() else {
-            return Ok(());
-        };
-        page.run_page_surface_override_script_async(&script.source)
-            .await
-            .map_err(|error| format!("failed to hide demoted page surface: {error}"))
     }
 
     pub(crate) async fn apply_parked_target_surface_overrides_async(
@@ -609,6 +581,7 @@ impl BrowserContext {
 
         Some(DocumentStartScript {
             registry_key: None,
+            devtools_session: None,
             source,
             world_name: None,
             has_bidi_channel_argument: false,
@@ -688,6 +661,76 @@ impl BrowserContext {
     }
 }
 
+impl CdpConnection {
+    pub(crate) async fn remove_document_start_scripts_for_detached_session_best_effort_async(
+        &mut self,
+        session_id: &str,
+    ) {
+        let renderer_inspector_session_id =
+            self.target_renderer_runtime_inspector_session_id_for_session(Some(session_id));
+        let devtools_session = moli_page_types::DevToolsSessionKey::from_wire_session_id(
+            renderer_inspector_session_id.as_deref(),
+        );
+        let registry_keys = self
+            .with_target_owner_state_for_session_mut(Some(session_id), |owner_state| {
+                owner_state.take_document_start_script_registry_keys_for_session(&devtools_session)
+            })
+            .unwrap_or_default();
+        for registry_key in registry_keys {
+            let pending = self
+                .runtime_session_owner_slot_mut(Some(session_id))
+                .ok()
+                .and_then(|slot| slot.loaded_page_mut())
+                .map(|page| page.start_remove_document_start_script_by_registry_key(&registry_key));
+            let Some(pending) = pending else {
+                continue;
+            };
+            let pending = match pending {
+                Ok(pending) => pending,
+                Err(error) => {
+                    tracing::debug!(
+                        %error,
+                        session_id,
+                        registry_key,
+                        "failed to start detached-session document-start script cleanup"
+                    );
+                    continue;
+                }
+            };
+            let completion = match pending.wait().await {
+                Ok(completion) => completion,
+                Err(error) => {
+                    tracing::debug!(
+                        %error,
+                        session_id,
+                        registry_key,
+                        "detached-session document-start script cleanup was canceled"
+                    );
+                    continue;
+                }
+            };
+            let Some(page) = self
+                .runtime_session_owner_slot_mut(Some(session_id))
+                .ok()
+                .and_then(|slot| slot.loaded_page_mut())
+            else {
+                continue;
+            };
+            if let Err(error) = page.finish_unit_runtime_page_command(
+                completion,
+                "remove detached-session document-start script",
+            ) {
+                tracing::debug!(
+                    %error,
+                    session_id,
+                    registry_key,
+                    "failed to finish detached-session document-start script cleanup"
+                );
+            }
+        }
+    }
+}
+
 fn merge_extra_header_layers(layers: &[&[(String, String)]]) -> Vec<(String, String)> {
     let mut headers = Vec::new();
     for layer in layers {
@@ -697,14 +740,4 @@ fn merge_extra_header_layers(layers: &[&[(String, String)]]) -> Vec<(String, Str
         }
     }
     headers
-}
-
-fn apply_locale_header_if_absent(headers: &mut Vec<(String, String)>, locale: Option<&str>) {
-    if let Some(locale) = locale
-        && !headers
-            .iter()
-            .any(|(name, _)| name.eq_ignore_ascii_case("accept-language"))
-    {
-        headers.push(("Accept-Language".to_owned(), locale.to_owned()));
-    }
 }

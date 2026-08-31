@@ -331,7 +331,7 @@ impl TargetBindingCleanupAction {
     fn from_route(route: &CdpSessionRoute) -> Self {
         match route {
             CdpSessionRoute::ActiveTarget { .. } => Self::ActiveTargetPrimaryAutoAttached,
-            CdpSessionRoute::BackgroundTarget { target_id, .. } => {
+            CdpSessionRoute::PageTargetHost { target_id, .. } => {
                 Self::BackgroundTargetPrimaryAutoAttached {
                     target_id: target_id.clone(),
                 }
@@ -572,7 +572,7 @@ mod tests {
         assert_eq!(
             TargetBindingCleanupPlan::from_route(
                 "SID-bg",
-                &CdpSessionRoute::BackgroundTarget {
+                &CdpSessionRoute::PageTargetHost {
                     browser_context_id: "BID-1".to_owned(),
                     target_id: "TID-bg".to_owned(),
                 },

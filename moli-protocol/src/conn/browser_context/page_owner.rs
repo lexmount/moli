@@ -396,7 +396,7 @@ impl TargetSessionOwnerMut<'_> {
                     };
                     replay_session_id.map(|session_id| PageLifecycleReplayTarget { session_id })
                 }
-                Self::BackgroundTarget {
+                Self::PageTargetHost {
                     browser_context,
                     target_id,
                     session_id,
@@ -545,14 +545,13 @@ fn devtools_session_page_domain_enabled(state: &DevToolsSessionState) -> bool {
 }
 
 fn browser_context_has_page_domain_enabled_session(browser_context: &BrowserContext) -> bool {
-    devtools_session_page_domain_enabled(&browser_context.devtools_session_state)
+    browser_context
+        .devtools_sessions
+        .states()
+        .any(devtools_session_page_domain_enabled)
         || browser_context
-            .auxiliary_devtools_session_states
-            .values()
-            .any(devtools_session_page_domain_enabled)
-        || browser_context
-            .target_parking
-            .has_page_domain_enabled_session()
+            .background_targets()
+            .any(|target| target.has_page_domain_enabled_session())
 }
 
 impl CdpConnection {
@@ -1006,19 +1005,24 @@ fn runtime_observable_console_payloads(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::conn::ParkedPageSessionState;
+    use crate::conn::TargetPageState;
 
     fn active_session_state_mut(browser_context: &mut BrowserContext) -> TargetSessionStateMut<'_> {
+        let state = browser_context.active_page_state_mut();
         TargetSessionStateMut::Active {
-            devtools_session_state: &mut browser_context.devtools_session_state,
-            network_policy: &mut browser_context.network_policy,
-            tls_verify_host_override: &mut browser_context.tls_verify_host_override,
+            session_id: None,
+            devtools_session_state: &mut state.devtools_sessions
+                [moli_page_types::DevToolsSessionKey::Primary],
+            network_policy: &mut state.network_policy,
+            tls_verify_host_override: &mut state.tls_verify_host_override,
         }
     }
 
-    fn parked_session_state_mut(state: &mut ParkedPageSessionState) -> TargetSessionStateMut<'_> {
+    fn parked_session_state_mut(state: &mut TargetPageState) -> TargetSessionStateMut<'_> {
         TargetSessionStateMut::Parked {
-            devtools_session_state: &mut state.devtools_session_state,
+            session_id: None,
+            devtools_session_state: &mut state.devtools_sessions
+                [moli_page_types::DevToolsSessionKey::Primary],
             network_policy: &mut state.network_policy,
             tls_verify_host_override: &mut state.tls_verify_host_override,
         }
@@ -1042,46 +1046,44 @@ mod tests {
         );
 
         assert!(
-            active
-                .devtools_session_state
+            active.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .console_output_session_state
                 .console_enabled
         );
-        assert!(active.devtools_session_state.page_session_state.log_enabled);
         assert!(
-            active
-                .devtools_session_state
+            active.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                .page_session_state
+                .log_enabled
+        );
+        assert!(
+            active.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .page_file_chooser_opened_event_enabled
         );
         assert!(
-            active
-                .devtools_session_state
+            active.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .page_bypass_csp_enabled
         );
         assert_eq!(
-            active
-                .devtools_session_state
+            active.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .page_font_families,
             font_families
         );
         assert!(
-            active
-                .devtools_session_state
+            active.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .page_intercept_file_chooser_dialog_enabled
         );
         assert!(
-            active
-                .devtools_session_state
+            active.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .performance
                 .enabled()
         );
 
-        let mut parked = ParkedPageSessionState::default();
+        let mut parked = TargetPageState::default();
         parked_session_state_mut(&mut parked).set_console_enabled(true);
         parked_session_state_mut(&mut parked).set_log_enabled(true);
         parked_session_state_mut(&mut parked).set_page_file_chooser_opened_event_enabled(true);
@@ -1094,40 +1096,38 @@ mod tests {
         );
 
         assert!(
-            parked
-                .devtools_session_state
+            parked.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .console_output_session_state
                 .console_enabled
         );
-        assert!(parked.devtools_session_state.page_session_state.log_enabled);
         assert!(
-            parked
-                .devtools_session_state
+            parked.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                .page_session_state
+                .log_enabled
+        );
+        assert!(
+            parked.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .page_file_chooser_opened_event_enabled
         );
         assert!(
-            parked
-                .devtools_session_state
+            parked.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .page_bypass_csp_enabled
         );
         assert_eq!(
-            parked
-                .devtools_session_state
+            parked.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .page_font_families,
             font_families
         );
         assert!(
-            parked
-                .devtools_session_state
+            parked.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .page_intercept_file_chooser_dialog_enabled
         );
         assert!(
-            parked
-                .devtools_session_state
+            parked.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .performance
                 .enabled()
@@ -1199,7 +1199,7 @@ mod tests {
             conn.browser_context
                 .as_ref()
                 .expect("browser context")
-                .devtools_session_state
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .page_file_chooser_opened_event_enabled
         );
@@ -1210,7 +1210,7 @@ mod tests {
                 .browser_context
                 .as_ref()
                 .expect("browser context")
-                .devtools_session_state
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .page_file_chooser_opened_event_enabled
         );

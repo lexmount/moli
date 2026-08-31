@@ -19,6 +19,7 @@ use crate::domains::runtime::bidi_preload_function_declaration_source;
 
 use super::{PageCommandTaskStep, PendingPageCommandDispatch, PendingPageCommandKind};
 use moli_core::page::{CompletedPageCommand, PendingPageCommand, RendererAgentAttachmentId};
+use moli_page_types::DevToolsSessionKey;
 
 #[derive(Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -274,6 +275,7 @@ fn document_start_script_from_add_preload_command(
     match &command.source {
         DevToolsPreloadScriptSource::RawScript(source) => Ok(DocumentStartScript {
             registry_key: None,
+            devtools_session: None,
             source: source.clone(),
             world_name: command.world_name.clone(),
             has_bidi_channel_argument: false,
@@ -298,6 +300,7 @@ fn document_start_script_from_add_preload_command(
             let has_bidi_channel_argument = !source.channel_handoffs.is_empty();
             Ok(DocumentStartScript {
                 registry_key: None,
+                devtools_session: None,
                 source: source.source,
                 world_name: command.world_name.clone(),
                 has_bidi_channel_argument,
@@ -580,7 +583,8 @@ async fn execute_devtools_single_route_remove_preload_script_command(
     });
     let remove_result = conn.with_target_owner_state_for_session_mut(None, |owner_state| {
         remove_stored_document_start_script_registry_key(
-            &mut owner_state.document_start_scripts,
+            owner_state,
+            None,
             &script_id,
             target_registry_key.clone(),
         )
@@ -589,6 +593,7 @@ async fn execute_devtools_single_route_remove_preload_script_command(
         return Err(preload_missing_owner_error(conn));
     };
     if !removed
+        && protocol == DevToolsProtocol::WebDriverBidi
         && let Some((browser_context_id, _)) = owner_identity.as_ref()
         && let Some(browser_context) = conn.browser_context_by_id_mut(browser_context_id)
         && let Some(default_registry_key) =
@@ -1056,14 +1061,24 @@ fn start_devtools_remove_preload_script_command(
 ) -> PageCommandTaskStep {
     let protocol = command.context.protocol;
     let script_id = command.script_id.into_string();
+    let renderer_inspector_session_id =
+        conn.target_renderer_runtime_inspector_session_id_for_session(command_session_id);
+    let script_owner_session = (protocol == DevToolsProtocol::Cdp).then(|| {
+        DevToolsSessionKey::from_wire_session_id(renderer_inspector_session_id.as_deref())
+    });
     let owner_identity = conn.target_owner_identity_for_session(command_session_id);
     let target_registry_key = owner_identity.as_ref().map(|(_, target_id)| {
-        BrowserContext::target_document_start_script_registry_key(target_id.as_deref(), &script_id)
+        target_document_start_script_registry_key_for_owner(
+            target_id.as_deref(),
+            script_owner_session.as_ref(),
+            &script_id,
+        )
     });
     let remove_result =
         conn.with_target_owner_state_for_session_mut(command_session_id, |owner_state| {
             remove_stored_document_start_script_registry_key(
-                &mut owner_state.document_start_scripts,
+                owner_state,
+                script_owner_session.as_ref(),
                 &script_id,
                 target_registry_key.clone(),
             )
@@ -1086,24 +1101,32 @@ fn start_devtools_remove_preload_script_command(
         removed = true;
         registry_key = Some(default_registry_key);
     }
-    if !removed && protocol == DevToolsProtocol::WebDriverBidi {
-        return PageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, "NoSuchScript"));
+    if !removed {
+        let message = match protocol {
+            DevToolsProtocol::Cdp => "Script not found",
+            DevToolsProtocol::WebDriverClassic | DevToolsProtocol::WebDriverBidi => "NoSuchScript",
+        };
+        return PageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message));
     }
     start_document_start_script_remove(conn, command_id, command_session_id, registry_key)
 }
 
 fn remove_stored_document_start_script_registry_key(
-    scripts: &mut Vec<(String, DocumentStartScript)>,
+    owner_state: &mut crate::conn::TargetOwnerState,
+    owner_session: Option<&DevToolsSessionKey>,
     script_id: &str,
     fallback_registry_key: Option<String>,
 ) -> (bool, Option<String>) {
-    let Some(index) = scripts
+    let Some(index) = owner_state
+        .document_start_scripts
         .iter()
-        .position(|(identifier, _)| identifier == script_id)
+        .position(|(identifier, script)| {
+            identifier == script_id && script.devtools_session.as_ref() == owner_session
+        })
     else {
         return (false, None);
     };
-    let (_, script) = scripts.remove(index);
+    let (_, script) = owner_state.document_start_scripts.remove(index);
     (true, script.registry_key.or(fallback_registry_key))
 }
 
@@ -1409,14 +1432,42 @@ fn restart_create_isolated_world_after_stale_renderer_completion(
 fn record_document_start_script(
     owner_state: &mut crate::conn::TargetOwnerState,
     target_id: Option<&str>,
+    owner_session: Option<&DevToolsSessionKey>,
     script: &DocumentStartScript,
 ) -> RecordedDocumentStartScript {
+    if let Some(owner_session) = owner_session {
+        let identifier = owner_state
+            .document_start_scripts
+            .iter()
+            .filter(|(_, script)| script.devtools_session.as_ref() == Some(owner_session))
+            .filter_map(|(identifier, _)| identifier.parse::<u32>().ok())
+            .max()
+            .unwrap_or(0)
+            .wrapping_add(1)
+            .to_string();
+        let script = script
+            .with_devtools_session(owner_session.clone())
+            .with_registry_key(target_document_start_script_registry_key_for_owner(
+                target_id,
+                Some(owner_session),
+                &identifier,
+            ));
+        owner_state
+            .document_start_scripts
+            .push((identifier.clone(), script.clone()));
+        return RecordedDocumentStartScript {
+            identifier,
+            script,
+            inserted: true,
+        };
+    }
     if owner_state.next_document_start_script_id == 0
         && !owner_state.document_start_scripts.is_empty()
     {
         let max_existing_id = owner_state
             .document_start_scripts
             .iter()
+            .filter(|(_, script)| script.devtools_session.is_none())
             .filter_map(|(identifier, _)| identifier.parse::<u32>().ok())
             .max()
             .unwrap_or(0);
@@ -1426,7 +1477,9 @@ fn record_document_start_script(
                 .document_start_scripts
                 .iter_mut()
                 .find(|(_, existing)| {
-                    existing.source == script.source && existing.world_name == script.world_name
+                    existing.devtools_session.is_none()
+                        && existing.source == script.source
+                        && existing.world_name == script.world_name
                 })
         {
             let registry_key = existing.registry_key.clone().unwrap_or_else(|| {
@@ -1446,9 +1499,14 @@ fn record_document_start_script(
     owner_state.next_document_start_script_id =
         owner_state.next_document_start_script_id.wrapping_add(1);
     let identifier = owner_state.next_document_start_script_id.to_string();
-    let script = script.with_registry_key(
-        BrowserContext::target_document_start_script_registry_key(target_id, &identifier),
-    );
+    let script = owner_session
+        .map(|owner| script.with_devtools_session(owner.clone()))
+        .unwrap_or_else(|| script.clone())
+        .with_registry_key(target_document_start_script_registry_key_for_owner(
+            target_id,
+            owner_session,
+            &identifier,
+        ));
     owner_state
         .document_start_scripts
         .push((identifier.clone(), script.clone()));
@@ -1456,6 +1514,23 @@ fn record_document_start_script(
         identifier,
         script,
         inserted: true,
+    }
+}
+
+fn target_document_start_script_registry_key_for_owner(
+    target_id: Option<&str>,
+    owner_session: Option<&DevToolsSessionKey>,
+    identifier: &str,
+) -> String {
+    match owner_session.and_then(DevToolsSessionKey::wire_session_id) {
+        Some(owner_session_id) => {
+            BrowserContext::target_session_document_start_script_registry_key(
+                target_id,
+                owner_session_id,
+                identifier,
+            )
+        }
+        None => BrowserContext::target_document_start_script_registry_key(target_id, identifier),
     }
 }
 
@@ -1658,11 +1733,21 @@ async fn add_script_to_evaluate_on_new_document_direct_async(
     command_context: &mut CommandDispatchContext,
 ) -> Result<String, DevToolsError> {
     let script = document_start_script_from_add_preload_command(&command)?;
+    let renderer_inspector_session_id =
+        conn.target_renderer_runtime_inspector_session_id_for_session(session_id);
+    let script_owner_session = (command.context.protocol == DevToolsProtocol::Cdp).then(|| {
+        DevToolsSessionKey::from_wire_session_id(renderer_inspector_session_id.as_deref())
+    });
     let target_id = conn
         .target_owner_identity_for_session(session_id)
         .and_then(|(_, target_id)| target_id);
     let Some(recorded) = conn.with_target_owner_state_for_session_mut(session_id, |owner_state| {
-        record_document_start_script(owner_state, target_id.as_deref(), &script)
+        record_document_start_script(
+            owner_state,
+            target_id.as_deref(),
+            script_owner_session.as_ref(),
+            &script,
+        )
     }) else {
         return Err(preload_missing_owner_error(conn));
     };
@@ -1672,8 +1757,7 @@ async fn add_script_to_evaluate_on_new_document_direct_async(
         return Ok(identifier);
     }
     let pending_run_immediately = {
-        let renderer_runtime_inspector_session_id =
-            conn.target_renderer_runtime_inspector_session_id_for_session(session_id);
+        let renderer_runtime_inspector_session_id = renderer_inspector_session_id;
         let slot = match conn.runtime_session_owner_slot_mut(session_id) {
             Ok(slot) => slot,
             Err(error) => return Err(devtools_preload_internal_error(error)),
@@ -1846,50 +1930,60 @@ mod protocol_neutral_tests {
 
     #[test]
     fn target_preload_remove_prefers_stored_registry_key() {
-        let mut scripts = vec![(
-            "1".to_owned(),
-            DocumentStartScript {
-                registry_key: Some("target:legacy-active:1".to_owned()),
-                source: "globalThis.ready = true;".to_owned(),
-                world_name: None,
-                has_bidi_channel_argument: false,
-                bidi_channel_handoffs: Vec::new(),
-            },
-        )];
+        let mut owner_state = TargetOwnerState {
+            document_start_scripts: vec![(
+                "1".to_owned(),
+                DocumentStartScript {
+                    registry_key: Some("target:legacy-active:1".to_owned()),
+                    devtools_session: None,
+                    source: "globalThis.ready = true;".to_owned(),
+                    world_name: None,
+                    has_bidi_channel_argument: false,
+                    bidi_channel_handoffs: Vec::new(),
+                },
+            )],
+            ..Default::default()
+        };
 
         let (removed, registry_key) = super::remove_stored_document_start_script_registry_key(
-            &mut scripts,
+            &mut owner_state,
+            None,
             "1",
             Some("target:TID-current:1".to_owned()),
         );
 
         assert!(removed);
         assert_eq!(registry_key.as_deref(), Some("target:legacy-active:1"));
-        assert!(scripts.is_empty());
+        assert!(owner_state.document_start_scripts.is_empty());
     }
 
     #[test]
     fn target_preload_remove_falls_back_for_legacy_unkeyed_script() {
-        let mut scripts = vec![(
-            "1".to_owned(),
-            DocumentStartScript {
-                registry_key: None,
-                source: "globalThis.ready = true;".to_owned(),
-                world_name: None,
-                has_bidi_channel_argument: false,
-                bidi_channel_handoffs: Vec::new(),
-            },
-        )];
+        let mut owner_state = TargetOwnerState {
+            document_start_scripts: vec![(
+                "1".to_owned(),
+                DocumentStartScript {
+                    registry_key: None,
+                    devtools_session: None,
+                    source: "globalThis.ready = true;".to_owned(),
+                    world_name: None,
+                    has_bidi_channel_argument: false,
+                    bidi_channel_handoffs: Vec::new(),
+                },
+            )],
+            ..Default::default()
+        };
 
         let (removed, registry_key) = super::remove_stored_document_start_script_registry_key(
-            &mut scripts,
+            &mut owner_state,
+            None,
             "1",
             Some("target:TID-current:1".to_owned()),
         );
 
         assert!(removed);
         assert_eq!(registry_key.as_deref(), Some("target:TID-current:1"));
-        assert!(scripts.is_empty());
+        assert!(owner_state.document_start_scripts.is_empty());
     }
 
     #[test]
@@ -1899,6 +1993,7 @@ mod protocol_neutral_tests {
             "1".to_owned(),
             DocumentStartScript {
                 registry_key: None,
+                devtools_session: None,
                 source: "globalThis.ready = true;".to_owned(),
                 world_name: Some("utility".to_owned()),
                 has_bidi_channel_argument: false,
@@ -1907,14 +2002,19 @@ mod protocol_neutral_tests {
         ));
         let script = DocumentStartScript {
             registry_key: None,
+            devtools_session: None,
             source: "globalThis.ready = true;".to_owned(),
             world_name: Some("utility".to_owned()),
             has_bidi_channel_argument: false,
             bidi_channel_handoffs: Vec::new(),
         };
 
-        let recorded =
-            super::record_document_start_script(&mut owner_state, Some("TID-current"), &script);
+        let recorded = super::record_document_start_script(
+            &mut owner_state,
+            Some("TID-current"),
+            None,
+            &script,
+        );
 
         assert!(!recorded.inserted);
         assert_eq!(recorded.identifier, "1");
@@ -1938,6 +2038,7 @@ mod protocol_neutral_tests {
             "1".to_owned(),
             DocumentStartScript {
                 registry_key: Some("target:legacy-active:1".to_owned()),
+                devtools_session: None,
                 source: "globalThis.ready = true;".to_owned(),
                 world_name: None,
                 has_bidi_channel_argument: false,
@@ -1946,14 +2047,19 @@ mod protocol_neutral_tests {
         ));
         let script = DocumentStartScript {
             registry_key: None,
+            devtools_session: None,
             source: "globalThis.ready = true;".to_owned(),
             world_name: None,
             has_bidi_channel_argument: false,
             bidi_channel_handoffs: Vec::new(),
         };
 
-        let recorded =
-            super::record_document_start_script(&mut owner_state, Some("TID-current"), &script);
+        let recorded = super::record_document_start_script(
+            &mut owner_state,
+            Some("TID-current"),
+            None,
+            &script,
+        );
 
         assert!(!recorded.inserted);
         assert_eq!(
@@ -2048,5 +2154,37 @@ mod protocol_neutral_tests {
         plan.emit_into(&mut out, cmd.id, cmd.session_id);
         assert_eq!(out[0]["id"], json!(43));
         assert_eq!(out[0]["error"]["message"], json!("BrowserContextNotLoaded"));
+    }
+
+    #[test]
+    fn primary_cdp_preload_retains_typed_session_ownership() {
+        let mut owner_state = TargetOwnerState::default();
+        let script = DocumentStartScript {
+            registry_key: None,
+            devtools_session: None,
+            source: "globalThis.primaryReady = true;".to_owned(),
+            world_name: Some("utility".to_owned()),
+            has_bidi_channel_argument: false,
+            bidi_channel_handoffs: Vec::new(),
+        };
+        let primary = moli_page_types::DevToolsSessionKey::Primary;
+
+        let recorded = super::record_document_start_script(
+            &mut owner_state,
+            Some("TID-primary"),
+            Some(&primary),
+            &script,
+        );
+
+        assert!(recorded.inserted);
+        assert_eq!(recorded.script.devtools_session.as_ref(), Some(&primary));
+        assert!(
+            owner_state
+                .document_start_scripts
+                .iter()
+                .any(|(identifier, script)| {
+                    identifier == "1" && script.devtools_session.as_ref() == Some(&primary)
+                })
+        );
     }
 }

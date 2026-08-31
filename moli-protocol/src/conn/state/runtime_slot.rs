@@ -13,8 +13,7 @@ use crate::{
         network::{
             CapturedRequestBody, CapturedResponseBody, NetworkBacklogPreferredRequestId,
             PendingNetworkBacklogDeliverySnapshot, RetiringTargetNetworkAgentState,
-            TargetIoStreamRead, TargetNetworkAgentState, TargetNetworkArtifacts,
-            TargetNetworkBacklogPreparedDelivery,
+            TargetIoStreamRead, TargetNetworkAgentState, TargetNetworkBacklogPreparedDelivery,
         },
         observable_output::{
             TargetRuntimeObservableQueueState, TargetRuntimeObservableSourceOutput,
@@ -700,12 +699,6 @@ impl TargetRuntimeSlot {
         page.bind_renderer_agent_attachment(current.id());
     }
 
-    pub(crate) fn prepare_renderer_channel_for_new_target(&mut self) {
-        if self.devtools_renderer_channel.is_closed() {
-            self.devtools_renderer_channel = DevToolsRendererChannel::default();
-        }
-    }
-
     fn transition_renderer_channel_for_page_absence(&mut self, reason: TargetPageAbsenceReason) {
         match reason {
             TargetPageAbsenceReason::TargetClosed => {
@@ -1020,42 +1013,6 @@ impl TargetRuntimeSlot {
             .remove_session_observation_cursor(session_id);
     }
 
-    pub(in crate::conn::state) fn snapshot_network_artifacts(&self) -> TargetNetworkArtifacts {
-        self.network_agent.snapshot_artifacts()
-    }
-
-    pub(in crate::conn::state) fn take_network_artifacts(&mut self) -> TargetNetworkArtifacts {
-        let artifacts = self.snapshot_network_artifacts();
-        self.restore_network_artifacts(Default::default());
-        artifacts
-    }
-
-    pub(in crate::conn::state) fn restore_network_artifacts(
-        &mut self,
-        artifacts: TargetNetworkArtifacts,
-    ) {
-        self.network_agent.restore_artifacts(artifacts);
-    }
-
-    pub(in crate::conn::state) fn snapshot_network_request_counters(
-        &self,
-    ) -> TargetNetworkRequestCounters {
-        self.request_counters
-    }
-
-    pub(in crate::conn::state) fn take_network_request_counters(
-        &mut self,
-    ) -> TargetNetworkRequestCounters {
-        std::mem::take(&mut self.request_counters)
-    }
-
-    pub(in crate::conn::state) fn restore_network_request_counters(
-        &mut self,
-        counters: TargetNetworkRequestCounters,
-    ) {
-        self.request_counters = counters;
-    }
-
     pub(crate) fn request_id_allocator(&mut self) -> TargetNetworkRequestIdAllocator<'_> {
         TargetNetworkRequestIdAllocator { runtime_slot: self }
     }
@@ -1345,13 +1302,12 @@ impl TargetRuntimeSlot {
         subresource_count: usize,
         websocket_count: usize,
     ) {
-        let mut artifacts = self.snapshot_network_artifacts();
-        artifacts.set_session_observation_cursor_at_counts(
-            session_id,
-            subresource_count,
-            websocket_count,
-        );
-        self.restore_network_artifacts(artifacts);
+        self.network_agent
+            .set_session_observation_cursor_at_counts_for_test(
+                session_id,
+                subresource_count,
+                websocket_count,
+            );
     }
 
     #[cfg(test)]
@@ -1359,8 +1315,8 @@ impl TargetRuntimeSlot {
         &self,
         session_id: Option<&str>,
     ) -> usize {
-        self.snapshot_network_artifacts()
-            .emitted_subresource_record_count_for_session(session_id)
+        self.network_agent
+            .emitted_subresource_record_count_for_session_for_test(session_id)
     }
 
     #[cfg(test)]
@@ -1368,8 +1324,14 @@ impl TargetRuntimeSlot {
         &self,
         session_id: Option<&str>,
     ) -> usize {
-        self.snapshot_network_artifacts()
-            .emitted_websocket_event_count_for_session(session_id)
+        self.network_agent
+            .emitted_websocket_event_count_for_session_for_test(session_id)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn network_artifacts_are_default_for_test(&self) -> bool {
+        self.network_agent.artifacts_are_default_for_test()
+            && self.request_counters == TargetNetworkRequestCounters::default()
     }
 
     #[cfg(test)]
@@ -1409,39 +1371,12 @@ impl TargetRuntimeSlot {
 #[cfg(test)]
 mod tests {
     use moli_core::page::{
-        RendererDevToolsAgentToken, RendererDocumentToken, RendererFrameToken,
-        RendererLifecycleEpoch, ScriptNetworkOutputItem, SubresourceRequestInitiatorType,
-        SubresourceRequestStarted, SubresourceResourceType,
+        RendererDocumentToken, RendererFrameToken, RendererLifecycleEpoch, ScriptNetworkOutputItem,
+        SubresourceRequestInitiatorType, SubresourceRequestStarted, SubresourceResourceType,
     };
     use url::Url;
 
     use super::*;
-
-    #[test]
-    fn target_close_is_terminal_until_the_slot_is_assigned_to_a_new_target() {
-        let mut slot = TargetRuntimeSlot::default();
-        let old_agent = RendererDevToolsAgentToken::allocate();
-        slot.devtools_renderer_channel
-            .attach_current(old_agent)
-            .expect("initial target attachment");
-
-        slot.mark_loaded_page_absent(TargetPageAbsenceReason::TargetClosed);
-
-        assert!(slot.devtools_renderer_channel.is_closed());
-        assert_eq!(
-            slot.devtools_renderer_channel.attach_current(old_agent),
-            Err(DevToolsRendererChannelError::Closed),
-            "the old target cannot reopen its terminal renderer channel"
-        );
-
-        slot.prepare_renderer_channel_for_new_target();
-        assert!(
-            slot.devtools_renderer_channel
-                .attach_current(RendererDevToolsAgentToken::allocate())
-                .is_ok(),
-            "reusing the physical active slot for a new target must allocate a fresh channel"
-        );
-    }
 
     #[test]
     fn successor_network_idle_ignores_retained_predecessor_delivery_state() {

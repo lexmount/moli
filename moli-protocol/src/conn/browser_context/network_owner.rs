@@ -35,8 +35,12 @@ impl TargetSessionStateMut<'_> {
         mut self,
         extra_headers: Vec<(String, String)>,
     ) -> Option<Vec<(String, String)>> {
+        let session_id = match &self {
+            Self::Active { session_id, .. } | Self::Parked { session_id, .. } => session_id.clone(),
+            Self::NoLoaded => None,
+        };
         let network_policy = self.network_policy_mut()?;
-        Some(network_policy.replace_extra_headers(extra_headers))
+        Some(network_policy.replace_extra_headers_for_session(session_id.as_deref(), extra_headers))
     }
 
     #[cfg(test)]
@@ -57,12 +61,13 @@ impl TargetSessionStateMut<'_> {
         browser_identity: Option<moli_browser_profile::BrowserIdentityProfile>,
     ) -> bool {
         let should_refresh_active_engine = matches!(self, Self::Active { .. });
+        let session_id = match &self {
+            Self::Active { session_id, .. } | Self::Parked { session_id, .. } => session_id.clone(),
+            Self::NoLoaded => None,
+        };
         if let Some(network_policy) = self.network_policy_mut() {
-            if let Some(browser_identity) = browser_identity {
-                network_policy.set_browser_identity_override(browser_identity);
-            } else {
-                network_policy.clear_browser_identity_override();
-            }
+            network_policy
+                .set_browser_identity_override_for_session(session_id.as_deref(), browser_identity);
         }
         should_refresh_active_engine
     }
@@ -118,7 +123,7 @@ impl<'a> TargetSessionOwnerMut<'a> {
                 browser_context,
                 is_auxiliary_target_session,
             },
-            Self::BackgroundTarget {
+            Self::PageTargetHost {
                 browser_context,
                 target_id,
                 is_auxiliary_target_session,
@@ -166,8 +171,8 @@ impl TargetNetworkListenerOwnerMut<'_> {
                     });
                 }
                 browser_context
-                    .parked_page_session_state(target_id)
-                    .is_some_and(|state| state.network_enabled)
+                    .background_target(target_id)
+                    .is_some_and(|target| target.runtime_slot.primary_network_events_enabled())
             }
             Self::NoLoadedBrowserContext => false,
         }
@@ -188,9 +193,6 @@ impl TargetNetworkListenerOwnerMut<'_> {
                 target_id,
                 ..
             } => {
-                browser_context.mutate_parked_page_session_state(target_id, |state| {
-                    state.network_enabled = enabled;
-                });
                 if let Some(target) = browser_context.background_target_mut(target_id) {
                     target
                         .runtime_slot
@@ -471,7 +473,7 @@ impl TargetSessionOwnerMut<'_> {
                 is_current_active_browser_context,
                 ..
             } => Some(is_current_active_browser_context),
-            Self::BackgroundTarget { .. } => Some(false),
+            Self::PageTargetHost { .. } => Some(false),
             Self::NoLoadedBrowserContext => None,
         }
     }
@@ -485,7 +487,7 @@ impl TargetSessionOwnerMut<'_> {
                 is_current_active_browser_context,
                 ..
             } => Some(is_current_active_browser_context),
-            Self::BackgroundTarget { .. } => Some(false),
+            Self::PageTargetHost { .. } => Some(false),
             Self::NoLoadedBrowserContext => None,
         }
     }
@@ -539,18 +541,15 @@ impl CdpConnection {
                     body.is_visible_to_session(session_id) || body.is_visible_to_session(None)
                 })
                 .or_else(|| {
-                    browser_context
-                        .background_targets
-                        .iter()
-                        .find_map(|target| {
-                            target
-                                .runtime_slot()
-                                .captured_response_body(request_id)
-                                .filter(|body| {
-                                    body.is_visible_to_session(session_id)
-                                        || body.is_visible_to_session(None)
-                                })
-                        })
+                    browser_context.background_targets().find_map(|target| {
+                        target
+                            .runtime_slot()
+                            .captured_response_body(request_id)
+                            .filter(|body| {
+                                body.is_visible_to_session(session_id)
+                                    || body.is_visible_to_session(None)
+                            })
+                    })
                 })
         })
     }
@@ -569,18 +568,15 @@ impl CdpConnection {
                     body.is_visible_to_session(session_id) || body.is_visible_to_session(None)
                 })
                 .or_else(|| {
-                    browser_context
-                        .background_targets
-                        .iter()
-                        .find_map(|target| {
-                            target
-                                .runtime_slot()
-                                .captured_request_body(request_id)
-                                .filter(|body| {
-                                    body.is_visible_to_session(session_id)
-                                        || body.is_visible_to_session(None)
-                                })
-                        })
+                    browser_context.background_targets().find_map(|target| {
+                        target
+                            .runtime_slot()
+                            .captured_request_body(request_id)
+                            .filter(|body| {
+                                body.is_visible_to_session(session_id)
+                                    || body.is_visible_to_session(None)
+                            })
+                    })
                 })
         })
     }
@@ -784,6 +780,12 @@ impl CdpConnection {
 
     pub(crate) fn set_global_cache_disabled(&mut self, cache_disabled: bool) {
         self.global_cache_disabled = cache_disabled;
+        if let Some(browser_context) = self.browser_context.as_mut() {
+            browser_context.global_cache_disabled = cache_disabled;
+        }
+        for browser_context in &mut self.inactive_browser_contexts {
+            browser_context.global_cache_disabled = cache_disabled;
+        }
     }
 
     pub(crate) fn set_global_extra_headers(&mut self, extra_headers: Vec<(String, String)>) {
@@ -946,7 +948,7 @@ impl CdpConnection {
             )
         {
             if let Some(browser_context) = self.browser_context.as_mut() {
-                browser_context.tls_verify_host_override = Some(enabled);
+                browser_context.default_tls_verify_host_override = Some(enabled);
             } else {
                 self.base_tls_verify_host = enabled;
             }
@@ -994,15 +996,11 @@ fn initialize_parked_network_observation_cursor(
     target_id: &str,
     session_id: Option<&str>,
 ) {
-    if let Some(target) = browser_context.background_target_mut(target_id) {
-        target
-            .runtime_slot
-            .initialize_network_session_observation_cursor_at_output_tail(session_id);
-        return;
-    }
-    browser_context.mutate_parked_network_artifacts(target_id, |artifacts| {
-        artifacts.set_session_observation_cursor_at_counts(session_id, 0, 0);
-    });
+    browser_context
+        .background_target_mut(target_id)
+        .expect("background target route must retain its target")
+        .runtime_slot
+        .initialize_network_session_observation_cursor_at_output_tail(session_id);
 }
 
 fn remove_parked_network_observation_cursor(
@@ -1010,15 +1008,11 @@ fn remove_parked_network_observation_cursor(
     target_id: &str,
     session_id: Option<&str>,
 ) {
-    if let Some(target) = browser_context.background_target_mut(target_id) {
-        target
-            .runtime_slot
-            .remove_network_session_observation_cursor(session_id);
-        return;
-    }
-    browser_context.mutate_parked_network_artifacts(target_id, |artifacts| {
-        artifacts.remove_session_observation_cursor(session_id);
-    });
+    browser_context
+        .background_target_mut(target_id)
+        .expect("background target route must retain its target")
+        .runtime_slot
+        .remove_network_session_observation_cursor(session_id);
 }
 
 fn remove_parked_captured_response_body_visibility(
@@ -1026,15 +1020,11 @@ fn remove_parked_captured_response_body_visibility(
     target_id: &str,
     session_id: Option<&str>,
 ) {
-    if let Some(target) = browser_context.background_target_mut(target_id) {
-        target
-            .runtime_slot
-            .remove_captured_response_body_visibility_for_session(session_id);
-        return;
-    }
-    browser_context.mutate_parked_network_artifacts(target_id, |artifacts| {
-        artifacts.remove_captured_response_body_visibility_for_session(session_id);
-    });
+    browser_context
+        .background_target_mut(target_id)
+        .expect("background target route must retain its target")
+        .runtime_slot
+        .remove_captured_response_body_visibility_for_session(session_id);
 }
 
 fn clear_parked_network_observation_artifacts_if_unobserved(
@@ -1047,36 +1037,30 @@ fn clear_parked_network_observation_artifacts_if_unobserved(
         }
         target.runtime_slot.clear_captured_response_bodies();
         target.runtime_slot.clear_websocket_request_ids();
-        return;
     }
-
-    let has_primary_listener = browser_context
-        .parked_page_session_state(target_id)
-        .is_some_and(|state| state.network_enabled);
-    if has_primary_listener {
-        return;
-    }
-    browser_context.mutate_parked_network_artifacts(target_id, |artifacts| {
-        artifacts.clear_captured_response_bodies_and_websocket_request_ids();
-    });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::conn::{BackgroundTarget, ParkedPageSessionState};
+    use crate::conn::{PageTargetHost, TargetPageState};
 
     fn active_session_state_mut(browser_context: &mut BrowserContext) -> TargetSessionStateMut<'_> {
+        let state = browser_context.active_page_state_mut();
         TargetSessionStateMut::Active {
-            devtools_session_state: &mut browser_context.devtools_session_state,
-            network_policy: &mut browser_context.network_policy,
-            tls_verify_host_override: &mut browser_context.tls_verify_host_override,
+            session_id: None,
+            devtools_session_state: &mut state.devtools_sessions
+                [moli_page_types::DevToolsSessionKey::Primary],
+            network_policy: &mut state.network_policy,
+            tls_verify_host_override: &mut state.tls_verify_host_override,
         }
     }
 
-    fn parked_session_state_mut(state: &mut ParkedPageSessionState) -> TargetSessionStateMut<'_> {
+    fn parked_session_state_mut(state: &mut TargetPageState) -> TargetSessionStateMut<'_> {
         TargetSessionStateMut::Parked {
-            devtools_session_state: &mut state.devtools_session_state,
+            session_id: None,
+            devtools_session_state: &mut state.devtools_sessions
+                [moli_page_types::DevToolsSessionKey::Primary],
             network_policy: &mut state.network_policy,
             tls_verify_host_override: &mut state.tls_verify_host_override,
         }
@@ -1085,13 +1069,11 @@ mod tests {
     fn connection_with_background_auxiliary_session() -> CdpConnection {
         let mut conn = CdpConnection::default();
         let mut browser_context = BrowserContext::new("BID-background".to_owned());
-        browser_context
-            .background_targets
-            .push(BackgroundTarget::with_url(
-                "TID-background".to_owned(),
-                Some("SID-background".to_owned()),
-                "https://background.example/".to_owned(),
-            ));
+        browser_context.insert_page_target_host(PageTargetHost::with_url(
+            "TID-background".to_owned(),
+            Some("SID-background".to_owned()),
+            "https://background.example/".to_owned(),
+        ));
         assert!(
             browser_context
                 .assign_auxiliary_session_to_target("TID-background", "SID-aux".to_owned())
@@ -1106,13 +1088,11 @@ mod tests {
         let mut browser_context = BrowserContext::new("BID-mixed".to_owned());
         browser_context.set_active_target_id("TID-active".to_owned());
         browser_context.attach_active_session("SID-active".to_owned());
-        browser_context
-            .background_targets
-            .push(BackgroundTarget::with_url(
-                "TID-background".to_owned(),
-                Some("SID-background".to_owned()),
-                "https://background.example/".to_owned(),
-            ));
+        browser_context.insert_page_target_host(PageTargetHost::with_url(
+            "TID-background".to_owned(),
+            Some("SID-background".to_owned()),
+            "https://background.example/".to_owned(),
+        ));
         conn.browser_context = Some(browser_context);
 
         let (active_fetch_id, active_network_request_id) = conn
@@ -1190,7 +1170,7 @@ mod tests {
             Some("cellular3g")
         );
 
-        let mut parked = ParkedPageSessionState::default();
+        let mut parked = TargetPageState::default();
         parked_session_state_mut(&mut parked).set_cache_disabled(true);
         parked_session_state_mut(&mut parked).set_bypass_service_worker(true);
         let parked_blocked = parked_session_state_mut(&mut parked)

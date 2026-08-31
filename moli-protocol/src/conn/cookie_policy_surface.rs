@@ -17,20 +17,6 @@ pub(crate) struct BrowserContextDocumentCookiePolicySurface {
 }
 
 impl BrowserContextDocumentCookiePolicySurface {
-    pub(crate) fn from_snapshot(
-        snapshot: BrowserContextDocumentCookiePolicySurfaceSnapshot,
-    ) -> Self {
-        let mut overrides = snapshot.overrides;
-        overrides.cookies_enabled = snapshot.cookies_enabled_override;
-        overrides.site_for_cookies_url = snapshot.browser_context_overrides.site_for_cookies_url;
-        overrides.top_frame_origin_url = snapshot.browser_context_overrides.top_frame_origin_url;
-        overrides.storage_access_status = snapshot.browser_context_overrides.storage_access_status;
-        Self {
-            overrides,
-            generation: snapshot.generation,
-        }
-    }
-
     pub(crate) fn snapshot(&self) -> BrowserContextDocumentCookiePolicySurfaceSnapshot {
         BrowserContextDocumentCookiePolicySurfaceSnapshot {
             overrides: self.overrides.clone(),

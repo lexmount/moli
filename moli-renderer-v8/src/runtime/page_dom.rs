@@ -1366,7 +1366,7 @@ impl PageVm {
             )?;
         }
         for binding in stored_runtime_bindings {
-            if session_runtime_bindings.contains(binding) {
+            if binding.devtools_session.is_some() || session_runtime_bindings.contains(binding) {
                 continue;
             }
             self.install_runtime_binding(
@@ -1428,36 +1428,37 @@ impl PageVm {
         name: &str,
         grant_universal_access: bool,
     ) -> Result<i64> {
-        let had_world = match frame_id {
-            Some(frame_id) => self.has_isolated_world_named_for_frame(frame_id, name),
-            None => self.has_isolated_world_named(name),
-        };
+        let devtools_session = DevToolsSessionKey::from_wire_session_id(
+            inspector_session_id.filter(|session_id| !session_id.is_empty()),
+        );
+        let had_world =
+            self.vm()
+                .has_isolated_world_for_owner(Some(&devtools_session), frame_id, name);
         let execution_context_id = match frame_id {
-            Some(frame_id) => {
-                self.create_isolated_world_for_frame(frame_id, name, grant_universal_access)?
-            }
-            None => self.create_isolated_world(name, grant_universal_access)?,
+            Some(frame_id) => self.vm_mut().ensure_isolated_world_for_frame_owner(
+                Some(&devtools_session),
+                frame_id,
+                name,
+                grant_universal_access,
+            )?,
+            None => self.vm_mut().ensure_isolated_world_for_owner(
+                Some(&devtools_session),
+                name,
+                grant_universal_access,
+            )?,
         };
-        let runtime_bindings =
-            self.inspector_session_runtime_bindings_for_world(inspector_session_id, name);
-        for binding in runtime_bindings {
-            if let Err(error) =
-                self.install_runtime_binding(&binding.name, Some(name), Some(execution_context_id))
-            {
-                tracing::debug!(
-                    %error,
-                    execution_context_id,
-                    world_name = name,
-                    binding_name = binding.name.as_str(),
-                    "isolated world binding install failed after context creation"
-                );
-            }
+        for binding in self.inspector_session_runtime_bindings_for_world(inspector_session_id, name)
+        {
+            self.install_runtime_binding(&binding.name, Some(name), Some(execution_context_id))?;
         }
         if !had_world {
             let scripts = self
                 .document_start_scripts
                 .iter()
-                .filter(|script| script.world_name.as_deref() == Some(name))
+                .filter(|script| {
+                    script.world_name.as_deref() == Some(name)
+                        && script.devtools_session.as_ref() == Some(&devtools_session)
+                })
                 .cloned()
                 .collect::<Vec<_>>();
             for script in scripts {
@@ -3771,11 +3772,33 @@ impl PageVm {
 
         let mut created_world_before_script = false;
         if let Some(world_name) = script.world_name.as_deref() {
-            let runtime_bindings =
-                self.inspector_session_runtime_bindings_for_world(inspector_session_id, world_name);
-            if !runtime_bindings.is_empty() && !self.has_isolated_world_named(world_name) {
-                let execution_context_id = self.create_isolated_world(world_name, false)?;
-                created_world_before_script = true;
+            let session_key = DevToolsSessionKey::from_wire_session_id(
+                inspector_session_id.filter(|session_id| !session_id.is_empty()),
+            );
+            let runtime_bindings = if script.devtools_session.as_ref() == Some(&session_key) {
+                self.inspector_session_runtime_bindings_for_world(inspector_session_id, world_name)
+            } else {
+                self.runtime_bindings
+                    .iter()
+                    .filter(|binding| {
+                        binding.devtools_session.as_ref() == script.devtools_session.as_ref()
+                            && binding.execution_context_name.as_deref() == Some(world_name)
+                    })
+                    .cloned()
+                    .collect()
+            };
+            if !runtime_bindings.is_empty() {
+                let had_world = self.vm().has_isolated_world_for_owner(
+                    script.devtools_session.as_ref(),
+                    None,
+                    world_name,
+                );
+                let execution_context_id = self.vm_mut().ensure_isolated_world_for_owner(
+                    script.devtools_session.as_ref(),
+                    world_name,
+                    false,
+                )?;
+                created_world_before_script = !had_world;
                 for binding in runtime_bindings {
                     self.install_runtime_binding(
                         &binding.name,
@@ -3898,12 +3921,16 @@ impl PageVm {
         &mut self,
         inspector_session_id: Option<&str>,
     ) -> bool {
-        let detached = self
-            .vm_mut()
-            .detach_runtime_inspector_session(inspector_session_id);
         let session_key = DevToolsSessionKey::from_wire_session_id(
             inspector_session_id.filter(|session_id| !session_id.is_empty()),
         );
+        self.runtime_bindings
+            .retain(|binding| binding.devtools_session.as_ref() != Some(&session_key));
+        let runtime_bindings = self.runtime_bindings.clone();
+        self.vm_mut().set_stored_runtime_bindings(&runtime_bindings);
+        let detached = self
+            .vm_mut()
+            .detach_runtime_inspector_session(inspector_session_id);
         self.runtime_inspector_protocol_configurations
             .remove(&session_key);
         detached

@@ -198,7 +198,7 @@ async fn close_target_inner_async(
 
     let session_id = match conn.browser_context.as_ref() {
         Some(bc) => {
-            if !bc.has_active_target() && bc.background_targets.is_empty() {
+            if bc.active_target_id().is_none() && bc.has_no_background_targets() {
                 return Err(DevToolsError::new(
                     DevToolsErrorKind::NoSuchTarget,
                     "TargetNotLoaded",

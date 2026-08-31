@@ -56,7 +56,7 @@ impl CdpConnection {
             | CdpSessionRoute::AuxiliaryTarget {
                 browser_context_id, ..
             }
-            | CdpSessionRoute::BackgroundTarget {
+            | CdpSessionRoute::PageTargetHost {
                 browser_context_id, ..
             }
             | CdpSessionRoute::SharedWorkerTarget {

@@ -1326,8 +1326,7 @@ mod tests {
         browser_context.set_active_target_id("FRAME-1");
         browser_context.attach_active_session("SID-nav");
         browser_context.set_target_url("https://example.test/parent".to_owned());
-        browser_context
-            .devtools_session_state
+        browser_context.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_domain_enabled = true;
         let mut conn = CdpConnection::new();

@@ -10,6 +10,7 @@ fn install_two_child_document_start_scripts(page_vm: &mut PageVm) {
     page_vm.vm_mut().set_stored_document_start_scripts(&[
         crate::DocumentStartScript {
             registry_key: Some("realm-completion-first".to_owned()),
+            devtools_session: None,
             source: r#"
 parent.__childRealmCompletionOrder.push("first-body");
 Promise.resolve().then(() => {
@@ -23,6 +24,7 @@ Promise.resolve().then(() => {
         },
         crate::DocumentStartScript {
             registry_key: Some("realm-completion-second".to_owned()),
+            devtools_session: None,
             source: r#"
 parent.__childRealmCompletionOrder.push("second-body");
 "#
@@ -134,6 +136,7 @@ async fn child_realm_materialization_creates_named_preload_world_in_the_selected
 
         page_vm.set_stored_document_start_scripts(&[crate::DocumentStartScript {
             registry_key: Some("child-named-world-script".to_owned()),
+            devtools_session: None,
             source: "globalThis.__childNamedWorldReady = 'ready';".to_owned(),
             world_name: Some("child-utility".to_owned()),
             has_bidi_channel_argument: false,
@@ -141,6 +144,7 @@ async fn child_realm_materialization_creates_named_preload_world_in_the_selected
         }]);
         page_vm.set_stored_runtime_bindings(&[
             crate::protocol_types::RuntimeBindingRegistration {
+                devtools_session: None,
                 name: "childNamedBinding".to_owned(),
                 execution_context_name: Some("child-utility".to_owned()),
             },
@@ -183,6 +187,56 @@ async fn child_realm_materialization_creates_named_preload_world_in_the_selected
     })
     .await
     .expect("child named-world materialization witness should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn detached_session_binding_is_not_installed_in_a_later_child_realm() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let document_url =
+            Url::parse("https://example.com/detached-session-child-binding").unwrap();
+        let (mut page_vm, _resource_source, _owner_wake_rx) =
+            page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
+        let session_a =
+            moli_page_types::DevToolsSessionKey::from_wire_session_id(Some("session-a"));
+        let session_b =
+            moli_page_types::DevToolsSessionKey::from_wire_session_id(Some("session-b"));
+        let binding =
+            |devtools_session, name: &str| crate::protocol_types::RuntimeBindingRegistration {
+                devtools_session: Some(devtools_session),
+                name: name.to_owned(),
+                execution_context_name: None,
+            };
+        let bindings = [
+            binding(session_a, "detachedChildBinding"),
+            binding(session_b, "liveChildBinding"),
+        ];
+        page_vm.set_stored_runtime_bindings(&bindings);
+        page_vm
+            .vm_mut()
+            .ensure_runtime_inspector_session(Some("session-a"));
+
+        assert!(page_vm.detach_runtime_inspector_session(Some("session-a")));
+        queue_child_realm_materialization(&mut page_vm, "post-detach-binding-child")?;
+        page_vm
+            .run_child_realm_materialization_body_for_test()?
+            .expect("the post-detach child realm should materialize");
+
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                r#"JSON.stringify([
+typeof document.getElementById("post-detach-binding-child").contentWindow.detachedChildBinding,
+typeof document.getElementById("post-detach-binding-child").contentWindow.liveChildBinding,
+])"#,
+            )?,
+            r#"["undefined","function"]"#,
+            "a child realm created after detach must receive only live-session bindings",
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("detached-session child binding witness should run");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -245,6 +299,7 @@ async fn child_realm_document_start_reaction_publishes_nested_navigation_before_
             .vm_mut()
             .set_stored_document_start_scripts(&[crate::DocumentStartScript {
                 registry_key: Some("realm-completion-nested-child".to_owned()),
+                devtools_session: None,
                 source: r#"
 Promise.resolve().then(() => {
   const nested = document.createElement("iframe");

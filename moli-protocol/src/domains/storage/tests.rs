@@ -12,7 +12,7 @@ use url::Url;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 
 use crate::{
-    conn::{BackgroundTarget, BrowserContext, CdpCommandTaskStep},
+    conn::{BrowserContext, CdpCommandTaskStep, PageTargetHost},
     domains::page::LOADER_ID,
     testing::{TestContext, wait_until_message, wait_until_renderer_document_load},
 };
@@ -774,7 +774,7 @@ async fn storage_key_targets_loaded_background_owner_without_promotion() {
         .expect("page url should parse")
         .origin()
         .ascii_serialization();
-    let background = BackgroundTarget::with_url(
+    let background = PageTargetHost::with_url(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
         "about:blank".to_owned(),
@@ -783,7 +783,7 @@ async fn storage_key_targets_loaded_background_owner_without_promotion() {
     let mut bc = BrowserContext::new("BID-SK-BG".to_owned());
     bc.set_active_target_id("TID-active".to_owned());
     bc.attach_active_session("SID-active".to_owned());
-    bc.background_targets.push(background);
+    bc.insert_page_target_host(background);
     ctx.conn.browser_context = Some(bc);
     ctx.install_navigation_fixture_for_session_owner(&page_url, Some("SID-background"))
         .await;
@@ -858,7 +858,7 @@ async fn pending_storage_key_keeps_background_owner_route_across_completion() {
         .await
         .expect("background page should load");
 
-    let mut background = BackgroundTarget::with_url(
+    let mut background = PageTargetHost::with_url(
         "TID-storage-background".to_owned(),
         None,
         background_page.final_url().as_str().to_owned(),
@@ -871,7 +871,7 @@ async fn pending_storage_key_keeps_background_owner_route_across_completion() {
     bc.active_target
         .runtime_slot
         .set_loaded_page_for_test(active_page);
-    bc.background_targets.push(background);
+    bc.insert_page_target_host(background);
     ctx.conn.browser_context = Some(bc);
 
     let background_route = ctx

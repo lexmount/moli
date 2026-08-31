@@ -473,7 +473,7 @@ async fn perform_search_selectors_cover_all_frame_documents_and_author_shadow_ro
 #[tokio::test(flavor = "multi_thread")]
 async fn dom_search_targets_loaded_background_owner_without_promotion() {
     let mut ctx = TestContext::new();
-    let background = BackgroundTarget::with_url(
+    let background = PageTargetHost::with_url(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
         "about:blank".to_owned(),
@@ -482,7 +482,7 @@ async fn dom_search_targets_loaded_background_owner_without_promotion() {
     let mut bc = BrowserContext::new("BID-A".to_owned());
     bc.set_active_target_id("TID-active".to_owned());
     bc.attach_active_session("SID-active".to_owned());
-    bc.background_targets.push(background);
+    bc.insert_page_target_host(background);
     ctx.conn.browser_context = Some(bc);
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<!doctype html><html><body><span>one</span><span>two</span></body></html>",

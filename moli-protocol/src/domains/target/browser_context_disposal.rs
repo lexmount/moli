@@ -29,8 +29,7 @@ impl BrowserContextDisposal {
 
         let active_page_target_id = browser_context.active_target_id().map(str::to_owned);
         let mut page_target_ids = browser_context
-            .background_targets
-            .iter()
+            .background_targets()
             .rev()
             .map(|target| target.target_id().to_owned())
             .collect::<Vec<_>>();
@@ -78,7 +77,8 @@ impl BrowserContextDisposal {
             .collect::<Vec<_>>();
 
         let mut pending_inspector_session_owners = browser_context
-            .has_active_target()
+            .active_target_id()
+            .is_some()
             .then_some(None)
             .into_iter()
             .collect::<Vec<_>>();

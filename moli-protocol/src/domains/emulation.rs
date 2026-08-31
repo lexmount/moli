@@ -1,7 +1,8 @@
 use crate::conn::{
     BrowserContext, CdpConnection, CdpSessionRoute, Cmd, CommandOwnerScope, EmulatedDeviceMetrics,
-    EmulatedGeolocationOverrideState, EmulatedViewportSurface, RendererCommandCorrelation,
-    RendererCommandDescriptor, RuntimeInspectorAsyncCompletionReceiver, TargetWindowSurfaceState,
+    EmulatedGeolocationOverrideState, EmulatedViewportSurface, PageTargetHost,
+    RendererCommandCorrelation, RendererCommandDescriptor, RuntimeInspectorAsyncCompletionReceiver,
+    TargetWindowSurfaceState,
 };
 use crate::devtools_runtime::{
     DevToolsCommand, DevToolsCommandResult, DevToolsDevicePixelRatioSetting, DevToolsError,
@@ -457,8 +458,8 @@ fn start_locale_override_command(
     }
     let locale_override = params.locale.clone().filter(|value| !value.is_empty());
     if !conn.mutate_emulation_session_state_for_session_owner(cmd.session_id, |state| {
-        if let Some(state) = state {
-            *state.locale_override = locale_override.clone();
+        if let Some(mut state) = state {
+            state.set_locale_override(locale_override.clone());
         }
     }) {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(
@@ -571,8 +572,8 @@ fn start_timezone_override_command(
         (!trimmed.is_empty()).then(|| trimmed.to_owned())
     };
     if !conn.mutate_emulation_session_state_for_session_owner(cmd.session_id, |state| {
-        if let Some(state) = state {
-            *state.timezone_override = timezone_override.clone();
+        if let Some(mut state) = state {
+            state.set_timezone_override(timezone_override.clone());
         }
     }) {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(
@@ -1771,8 +1772,8 @@ fn start_locale_override_for_current_route(
     locale: Option<String>,
 ) -> Result<Vec<PendingEmulationPageCommand>, DevToolsError> {
     if !conn.mutate_emulation_session_state_for_session_owner(None, |state| {
-        if let Some(state) = state {
-            *state.locale_override = locale.clone();
+        if let Some(mut state) = state {
+            state.set_locale_override(locale.clone());
         }
     }) {
         return Err(devtools_emulation_owner_error(
@@ -1787,13 +1788,13 @@ fn start_locale_update_for_current_route(
     route: &CdpSessionRoute,
 ) -> Result<Vec<PendingEmulationPageCommand>, DevToolsError> {
     let target = pending_emulation_target_for_route(route)?;
-    let Some((headers, locale_override)) = locale_apply_inputs_for_session(conn, None) else {
+    let Some(locale_override) = locale_override_for_session(conn, None) else {
         return Ok(Vec::new());
     };
     let Some(page) = loaded_page_mut_for_session(conn, None) else {
         return Ok(Vec::new());
     };
-    start_locale_override_page_commands(target, page, &headers, locale_override.as_deref())
+    start_locale_override_page_command(target, page, locale_override.as_deref())
         .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, error))
 }
 
@@ -1880,8 +1881,8 @@ fn start_timezone_override_for_current_route(
     timezone: Option<String>,
 ) -> Result<Option<PendingEmulationPageCommand>, DevToolsError> {
     if !conn.mutate_emulation_session_state_for_session_owner(None, |state| {
-        if let Some(state) = state {
-            *state.timezone_override = timezone.clone();
+        if let Some(mut state) = state {
+            state.set_timezone_override(timezone.clone());
         }
     }) {
         return Err(devtools_emulation_owner_error(
@@ -1920,7 +1921,7 @@ fn pending_emulation_target_for_route(
         } => Ok(PendingEmulationPageTarget::BrowserContextActive {
             browser_context_id: browser_context_id.clone(),
         }),
-        CdpSessionRoute::BackgroundTarget {
+        CdpSessionRoute::PageTargetHost {
             browser_context_id,
             target_id,
         } => Ok(PendingEmulationPageTarget::BrowserContextBackground {
@@ -2016,8 +2017,8 @@ fn top_level_target_routes_for_browser_contexts(
                 target_id: None,
             });
         }
-        routes.extend(browser_context.background_targets.iter().map(|target| {
-            CdpSessionRoute::BackgroundTarget {
+        routes.extend(browser_context.background_targets().map(|target| {
+            CdpSessionRoute::PageTargetHost {
                 browser_context_id: browser_context.id.clone(),
                 target_id: target.target_id().to_owned(),
             }
@@ -2276,17 +2277,11 @@ fn is_moli_internal_default_user_context(browser_context_id: &str) -> bool {
 fn browser_context_default_device_metrics_runtime_command_count(
     browser_context: &BrowserContext,
 ) -> usize {
-    let active_count = usize::from(
-        browser_context.emulated_device_metrics.is_none()
-            && browser_context
-                .active_target
-                .runtime_slot
-                .loaded_page()
-                .is_some(),
-    );
+    let active_count = usize::from(browser_context.page_targets.active().is_some_and(|target| {
+        target.emulated_device_metrics.is_none() && target.runtime_slot.loaded_page().is_some()
+    }));
     let background_count = browser_context
-        .background_targets
-        .iter()
+        .background_targets()
         .filter(|target| {
             let target_id = target.target_id();
             browser_context
@@ -2307,8 +2302,9 @@ fn start_browser_context_default_device_metrics_page_commands(
     let browser_context_id = browser_context.id.clone();
     let mut pending = Vec::new();
     let viewport_surface = Some(metrics.viewport_surface().to_page_viewport_surface());
-    if browser_context.emulated_device_metrics.is_none()
-        && let Some(page) = browser_context.active_target.runtime_slot.loaded_page_mut()
+    if let Some(active_target) = browser_context.page_targets.active_mut()
+        && active_target.emulated_device_metrics.is_none()
+        && let Some(page) = active_target.runtime_slot.loaded_page_mut()
     {
         pending.push(PendingEmulationPageCommand {
             target: PendingEmulationPageTarget::BrowserContextActive {
@@ -2339,8 +2335,10 @@ fn start_browser_context_default_device_metrics_page_commands(
             runtime_response_rx,
         });
     }
-    for index in 0..browser_context.background_targets.len() {
-        let target_id = browser_context.background_targets[index]
+    for index in 0..browser_context.background_target_count() {
+        let target_id = browser_context
+            .background_target_at(index)
+            .expect("background target index must remain valid")
             .target_id()
             .to_owned();
         let has_target_override = browser_context
@@ -2349,7 +2347,10 @@ fn start_browser_context_default_device_metrics_page_commands(
         if has_target_override {
             continue;
         }
-        let Some(page) = browser_context.background_targets[index].loaded_page_mut() else {
+        let Some(page) = browser_context
+            .background_target_at_mut(index)
+            .and_then(PageTargetHost::loaded_page_mut)
+        else {
             continue;
         };
         pending.push(PendingEmulationPageCommand {
@@ -2602,7 +2603,7 @@ fn start_context_emulated_media_page_commands(
             runtime_response_rx: None,
         });
     }
-    for target in &mut browser_context.background_targets {
+    for target in browser_context.background_targets_mut() {
         let target_id = target.target_id().to_owned();
         let Some(page) = target.loaded_page_mut() else {
             continue;
@@ -2626,17 +2627,16 @@ fn start_session_locale_override_page_commands(
     conn: &mut CdpConnection,
     session_id: Option<&str>,
 ) -> Result<Vec<PendingEmulationPageCommand>, String> {
-    let Some((headers, locale_override)) = locale_apply_inputs_for_session(conn, session_id) else {
+    let Some(locale_override) = locale_override_for_session(conn, session_id) else {
         return Ok(Vec::new());
     };
     let owner_scope = CommandOwnerScope::capture(conn, session_id);
     let Some(page) = loaded_page_mut_for_session(conn, session_id) else {
         return Ok(Vec::new());
     };
-    start_locale_override_page_commands(
+    start_locale_override_page_command(
         PendingEmulationPageTarget::SessionOwner { owner_scope },
         page,
-        &headers,
         locale_override.as_deref(),
     )
 }
@@ -2651,32 +2651,34 @@ fn start_context_locale_override_page_commands(
         .chain(conn.inactive_browser_contexts.iter_mut())
     {
         let browser_context_id = browser_context.id.clone();
-        let active_headers = browser_context.effective_extra_headers();
         let active_locale = browser_context.effective_active_locale_override_owned();
         if let Some(page) = browser_context.active_target.runtime_slot.loaded_page_mut() {
-            pending.extend(start_locale_override_page_commands(
+            pending.extend(start_locale_override_page_command(
                 PendingEmulationPageTarget::BrowserContextActive {
                     browser_context_id: browser_context_id.clone(),
                 },
                 page,
-                &active_headers,
                 active_locale.as_deref(),
             )?);
         }
-        for index in 0..browser_context.background_targets.len() {
-            let target_id = browser_context.background_targets[index]
+        for index in 0..browser_context.background_target_count() {
+            let target_id = browser_context
+                .background_target_at(index)
+                .expect("background target index must remain valid")
                 .target_id()
                 .to_owned();
-            let Some(page) = browser_context.background_targets[index].loaded_page_mut() else {
+            let Some(page) = browser_context
+                .background_target_at_mut(index)
+                .and_then(PageTargetHost::loaded_page_mut)
+            else {
                 continue;
             };
-            pending.extend(start_locale_override_page_commands(
+            pending.extend(start_locale_override_page_command(
                 PendingEmulationPageTarget::BrowserContextBackground {
                     browser_context_id: browser_context_id.clone(),
                     target_id,
                 },
                 page,
-                &active_headers,
                 active_locale.as_deref(),
             )?);
         }
@@ -2800,69 +2802,34 @@ fn start_surface_override_page_command(
     })
 }
 
-fn start_locale_override_page_commands(
+fn start_locale_override_page_command(
     target: PendingEmulationPageTarget,
     page: &moli_core::page::Page,
-    headers: &[(String, String)],
     locale_override: Option<&str>,
 ) -> Result<Vec<PendingEmulationPageCommand>, String> {
-    let header_update = page
-        .start_set_extra_http_headers(headers)
-        .map_err(|error| format!("failed to update page extra HTTP headers: {error}"))?;
     let locale_update = page
         .start_set_locale_override(locale_override)
         .map_err(|error| format!("failed to update page locale override: {error}"))?;
-    Ok(vec![
-        PendingEmulationPageCommand {
-            target: target.clone(),
-            operation: PendingEmulationPageOperation::SetExtraHttpHeaders,
-            pending: header_update,
-            runtime_response_rx: None,
-        },
-        PendingEmulationPageCommand {
-            target,
-            operation: PendingEmulationPageOperation::SetLocaleOverride,
-            pending: locale_update,
-            runtime_response_rx: None,
-        },
-    ])
+    Ok(vec![PendingEmulationPageCommand {
+        target,
+        operation: PendingEmulationPageOperation::SetLocaleOverride,
+        pending: locale_update,
+        runtime_response_rx: None,
+    }])
 }
 
-fn locale_apply_inputs_for_session(
+fn locale_override_for_session(
     conn: &CdpConnection,
     session_id: Option<&str>,
-) -> Option<(Vec<(String, String)>, Option<String>)> {
+) -> Option<Option<String>> {
     let (browser_context_id, target_id) = conn.target_owner_identity_for_session(session_id)?;
     let browser_context = conn.browser_context_by_id(&browser_context_id)?;
     if let Some(target_id) = target_id
         && browser_context.background_target(&target_id).is_some()
     {
-        return parked_locale_apply_inputs(browser_context, &target_id);
+        return Some(browser_context.effective_parked_locale_override_owned(&target_id));
     }
-    Some((
-        browser_context.effective_extra_headers(),
-        browser_context.effective_active_locale_override_owned(),
-    ))
-}
-
-fn parked_locale_apply_inputs(
-    browser_context: &crate::conn::BrowserContext,
-    target_id: &str,
-) -> Option<(Vec<(String, String)>, Option<String>)> {
-    browser_context.background_target(target_id)?;
-    let mut headers = browser_context
-        .parked_page_session_state(target_id)
-        .map(|state| state.network_policy.extra_headers().to_vec())
-        .unwrap_or_default();
-    let locale_override = browser_context.effective_parked_locale_override_owned(target_id);
-    if let Some(locale) = locale_override.as_deref()
-        && !headers
-            .iter()
-            .any(|(name, _)| name.eq_ignore_ascii_case("accept-language"))
-    {
-        headers.push(("Accept-Language".to_owned(), locale.to_owned()));
-    }
-    Some((headers, locale_override))
+    Some(browser_context.effective_active_locale_override_owned())
 }
 
 fn finish_pending_emulation_page_command(
@@ -2882,19 +2849,19 @@ fn finish_pending_emulation_page_command(
                         completion,
                     );
             }
-            let page =
-                loaded_page_mut_for_session(route_scope.conn_mut(), owner_scope.session_id())
-                    .ok_or_else(|| "NoDocumentLoaded".to_owned())?;
-            finish_emulation_page_operation(page, operation, completion)
+            let page = route_scope
+                .conn_mut()
+                .loaded_page_mut_for_interruptible_protocol_access(owner_scope.session_id())
+                .ok();
+            finish_emulation_page_operation_on_current_attachment(page, operation, completion)
         }
         PendingEmulationPageTarget::BrowserContextActive { browser_context_id } => {
             let page = conn
                 .browser_context_by_id_mut(&browser_context_id)
                 .and_then(|browser_context| {
                     browser_context.active_target.runtime_slot.loaded_page_mut()
-                })
-                .ok_or_else(|| "NoDocumentLoaded".to_owned())?;
-            finish_emulation_page_operation(page, operation, completion)
+                });
+            finish_emulation_page_operation_on_current_attachment(page, operation, completion)
         }
         PendingEmulationPageTarget::BrowserContextBackground {
             browser_context_id,
@@ -2903,11 +2870,39 @@ fn finish_pending_emulation_page_command(
             let page = conn
                 .browser_context_by_id_mut(&browser_context_id)
                 .and_then(|browser_context| browser_context.background_target_mut(&target_id))
-                .and_then(|target| target.loaded_page_mut())
-                .ok_or_else(|| "NoDocumentLoaded".to_owned())?;
-            finish_emulation_page_operation(page, operation, completion)
+                .and_then(|target| target.loaded_page_mut());
+            finish_emulation_page_operation_on_current_attachment(page, operation, completion)
         }
     }
+}
+
+fn finish_emulation_page_operation_on_current_attachment(
+    page: Option<&mut moli_core::page::Page>,
+    operation: PendingEmulationPageOperation,
+    completion: CompletedPageCommand,
+) -> Result<(), String> {
+    let completion_attachment = completion.renderer_agent_attachment_id();
+    if let Some(page) = page
+        && page.renderer_agent_attachment_id() == completion_attachment
+    {
+        return finish_emulation_page_operation(page, operation, completion);
+    }
+
+    // The renderer command has already settled successfully. A cross-Document
+    // navigation may replace its Page before the protocol actor decodes that
+    // frozen completion; do not turn that success into NoDocumentLoaded or
+    // apply the old PageState snapshot to the replacement attachment. The
+    // authoritative emulation state was stored before dispatch and is replayed
+    // while the replacement Page is installed.
+    let output = match operation {
+        PendingEmulationPageOperation::RuntimeProtocolMessage => {
+            completion.into_runtime_protocol_message_command_turn()
+        }
+        _ => completion.into_unit_page_command_turn(),
+    };
+    output
+        .map(drop)
+        .map_err(|error| format!("stale Emulation command returned an unexpected reply: {error}"))
 }
 
 fn finish_emulation_page_operation(

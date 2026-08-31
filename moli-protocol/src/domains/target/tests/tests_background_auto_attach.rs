@@ -102,17 +102,16 @@ async fn set_auto_attach_true_still_reports_transient_no_page_target_like_chromi
         .attach_active_session("SID-active");
     {
         let bc = ctx.conn.browser_context.as_mut().expect("browser context");
-        bc.background_targets
-            .push(crate::conn::BackgroundTarget::new(
-                "TID-background-in-transit".to_owned(),
-                None,
-                crate::conn::TargetIdentityState::new(
-                    "https://example.test/in-transit".to_owned(),
-                    crate::conn::URL_BASE.into(),
-                    "Secure".into(),
-                ),
-                crate::conn::TargetPageSlot::empty_for_test_fixture(),
-            ));
+        bc.insert_page_target_host(crate::conn::PageTargetHost::new(
+            "TID-background-in-transit".to_owned(),
+            None,
+            crate::conn::TargetIdentityState::new(
+                "https://example.test/in-transit".to_owned(),
+                crate::conn::URL_BASE.into(),
+                "Secure".into(),
+            ),
+            crate::conn::TargetPageSlot::empty_for_test_fixture(),
+        ));
     }
 
     ctx.process_async(json!({

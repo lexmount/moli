@@ -542,9 +542,9 @@ async fn rust_cdp_chromium_target_second_create_target_activates_new_target_by_d
 
     let browser_context = ctx.conn.browser_context.as_ref().expect("browser context");
     assert_eq!(browser_context.active_target_id(), Some(target_id.as_str()));
-    assert_eq!(browser_context.background_targets.len(), 1);
+    assert_eq!(browser_context.background_target_count(), 1);
     assert_eq!(
-        browser_context.background_targets[0].target_id(),
+        browser_context.background_target_at(0).unwrap().target_id(),
         "TID-000000000A"
     );
 
@@ -784,19 +784,31 @@ async fn rust_cdp_chromium_target_window_open_auto_attached_popup_materializes_i
 async fn rust_cdp_chromium_target_window_open_waiting_popup_routes_initial_document_after_resume() {
     let fixture = SmokeFixtureServer::start().await;
     let mut ctx = TestContext::new_with_target_discovery(false);
+    ctx.enable_background_navigation_scheduler_for_test();
+    tokio::task::LocalSet::new()
+        .run_until(run_waiting_popup_initial_document_after_resume(
+            &mut ctx, &fixture,
+        ))
+        .await;
+}
+
+async fn run_waiting_popup_initial_document_after_resume(
+    ctx: &mut TestContext,
+    fixture: &SmokeFixtureServer,
+) {
     load_bc_with_titled_page_async(
-        &mut ctx,
+        ctx,
         "BID-popup-wait-route",
         "TID-wait-route-opener",
         "<main>opener</main>",
     )
     .await;
-    set_auto_attach_waiting_for_debugger(&mut ctx, 260_215).await;
+    set_auto_attach_waiting_for_debugger(ctx, 260_215).await;
     ctx.take_all();
 
     let popup_url = fixture.url("/plain?popup=wait-route");
     let messages = open_popup_from_runtime(
-        &mut ctx,
+        ctx,
         260_216,
         &format!("window.open('{popup_url}', '_blank') !== null"),
     )
@@ -816,7 +828,7 @@ async fn rust_cdp_chromium_target_window_open_waiting_popup_routes_initial_docum
         "sessionId": popup_session_id
     }))
     .await;
-    take_response_by_id(&mut ctx, 260_217);
+    take_response_by_id(ctx, 260_217);
     assert!(
         ctx.conn
             .browser_context
@@ -859,7 +871,28 @@ async fn rust_cdp_chromium_target_window_open_waiting_popup_routes_initial_docum
         "sessionId": popup_session_id
     }))
     .await;
-    take_response_by_id(&mut ctx, 260_219);
+    crate::testing::wait_until_scheduler_message(
+        ctx,
+        "popup document request after debugger resume",
+        |message| message["method"] == json!("Fetch.requestPaused"),
+    )
+    .await;
+    let response_index = ctx
+        .sent
+        .iter()
+        .position(|message| message["id"] == json!(260_219))
+        .expect("runIfWaitingForDebugger terminal response");
+    let request_index = ctx
+        .sent
+        .iter()
+        .position(|message| message["method"] == json!("Fetch.requestPaused"))
+        .expect("popup document request");
+    assert!(
+        response_index < request_index,
+        "the debugger-resume response must cross the frontend before its initial navigation can replace about:blank: {:?}",
+        ctx.sent
+    );
+    take_response_by_id(ctx, 260_219);
     let paused = ctx
         .sent
         .iter()
@@ -900,7 +933,7 @@ async fn rust_cdp_chromium_target_window_open_waiting_popup_routes_initial_docum
         }
     }))
     .await;
-    let isolated = take_response_by_id(&mut ctx, 260_220);
+    let isolated = take_response_by_id(ctx, 260_220);
     assert!(
         isolated["result"]["executionContextId"].as_i64().is_some(),
         "createIsolatedWorld should resolve while popup initial document is paused: {isolated:?}"
@@ -928,14 +961,10 @@ async fn rust_cdp_chromium_target_window_open_waiting_popup_routes_initial_docum
     }))
     .await;
     ctx.expect_result(260_221, json!({}), Some(popup_session_id));
-    crate::testing::wait_until_scheduler_message(
-        &mut ctx,
-        "resumed popup load lifecycle",
-        |message| {
-            message["method"] == json!("Page.loadEventFired")
-                && message["sessionId"] == json!(popup_session_id)
-        },
-    )
+    crate::testing::wait_until_scheduler_message(ctx, "resumed popup load lifecycle", |message| {
+        message["method"] == json!("Page.loadEventFired")
+            && message["sessionId"] == json!(popup_session_id)
+    })
     .await;
     assert!(
         ctx.sent.iter().any(|message| {
@@ -958,7 +987,7 @@ async fn rust_cdp_chromium_target_window_open_waiting_popup_routes_initial_docum
     }))
     .await;
     assert_eq!(
-        take_response_by_id(&mut ctx, 260_222)["result"]["result"]["value"],
+        take_response_by_id(ctx, 260_222)["result"]["result"]["value"],
         "routed-popup"
     );
 }
@@ -1190,7 +1219,7 @@ async fn rust_cdp_chromium_target_resetting_opener_clears_popup_opener_reference
         .browser_context
         .as_mut()
         .unwrap()
-        .reset_active_target_slot_to_empty_async()
+        .remove_active_page_target_async()
         .await;
 
     assert!(

@@ -765,9 +765,15 @@ async fn attach_to_target_keeps_background_target_parked() {
 
     let bc = ctx.conn.browser_context.as_ref().unwrap();
     assert_eq!(bc.active_target_id(), Some("TID-000000000A"));
-    assert_eq!(bc.background_targets.len(), 1);
-    assert_eq!(bc.background_targets[0].target_id(), "TID-000000000B");
-    assert_eq!(bc.background_targets[0].session_id(), Some("SID-1"));
+    assert_eq!(bc.background_target_count(), 1);
+    assert_eq!(
+        bc.background_target_at(0).unwrap().target_id(),
+        "TID-000000000B"
+    );
+    assert_eq!(
+        bc.background_target_at(0).unwrap().session_id(),
+        Some("SID-1")
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1264,14 +1270,12 @@ async fn session_route_finds_browser_active_auxiliary_background_and_inactive_se
     let mut inactive = BrowserContext::new("BID-B".to_owned());
     inactive.set_active_target_id("TID-000000000C".to_owned());
     inactive.attach_active_session("SID-inactive");
-    inactive
-        .background_targets
-        .push(crate::conn::BackgroundTarget::new(
-            "TID-000000000D".to_owned(),
-            Some("SID-inactive-background".to_owned()),
-            crate::conn::TargetIdentityState::about_blank(),
-            crate::conn::TargetPageSlot::empty_for_test_fixture(),
-        ));
+    inactive.insert_page_target_host(crate::conn::PageTargetHost::new(
+        "TID-000000000D".to_owned(),
+        Some("SID-inactive-background".to_owned()),
+        crate::conn::TargetIdentityState::about_blank(),
+        crate::conn::TargetPageSlot::empty_for_test_fixture(),
+    ));
     assert!(inactive.assign_auxiliary_session_to_target(
         "TID-000000000D",
         "SID-inactive-aux-background".to_owned()
@@ -1308,7 +1312,7 @@ async fn session_route_finds_browser_active_auxiliary_background_and_inactive_se
     );
     assert_eq!(
         ctx.conn.session_route(Some("SID-background")),
-        Some(CdpSessionRoute::BackgroundTarget {
+        Some(CdpSessionRoute::PageTargetHost {
             browser_context_id: "BID-A".to_owned(),
             target_id: "TID-000000000B".to_owned(),
         })
@@ -1362,8 +1366,7 @@ async fn session_route_finds_browser_active_auxiliary_background_and_inactive_se
             |bc, target_id| {
                 assert_eq!(bc.id, "BID-B");
                 bc.mutate_parked_page_session_state(target_id, |state| {
-                    state
-                        .devtools_session_state
+                    state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                         .console_output_session_state
                         .console_enabled = true;
                 });
@@ -1384,8 +1387,8 @@ async fn session_route_finds_browser_active_auxiliary_background_and_inactive_se
                 assert_eq!(bc.id, "BID-B");
                 let mut console_enabled = false;
                 bc.mutate_parked_page_session_state(target_id, |state| {
-                    console_enabled = state
-                        .devtools_session_state
+                    console_enabled = state.devtools_sessions
+                        [moli_page_types::DevToolsSessionKey::Primary]
                         .console_output_session_state
                         .console_enabled;
                 });
@@ -1533,13 +1536,13 @@ async fn detach_from_target() {
     ctx.expect_result(11, json!({ "sessionId": sid }), None);
 
     let bc = ctx.conn.browser_context.as_mut().unwrap();
-    bc.devtools_session_state
+    bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .page_session_state
         .page_lifecycle_events = true;
-    bc.devtools_session_state
+    bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .runtime_frontend_enabled = true;
-    bc.devtools_session_state
+    bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .inspector_enabled = true;
     bc.active_target
@@ -1567,17 +1570,17 @@ async fn detach_from_target() {
     let bc = ctx.conn.browser_context.as_ref().unwrap();
     assert!(!bc.has_active_session());
     assert!(
-        !bc.devtools_session_state
+        !bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_lifecycle_events
     );
     assert!(
-        !bc.devtools_session_state
+        !bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
             .runtime_frontend_enabled
     );
     assert!(
-        !bc.devtools_session_state
+        !bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
             .inspector_enabled
     );
@@ -1796,6 +1799,181 @@ async fn detach_from_target_drops_only_selected_page_renderer_inspector_session(
     );
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn detach_from_target_removes_only_selected_session_document_start_scripts() {
+    let mut ctx = TestContext::new();
+    load_bc_with_titled_page_async(
+        &mut ctx,
+        "BID-detach-preload",
+        "TID-detach-preload",
+        "<!doctype html><body>detach preload</body>",
+    )
+    .await;
+    {
+        let browser_context = ctx.conn.browser_context.as_mut().unwrap();
+        browser_context.attach_active_session("SID-preload-primary");
+        assert!(browser_context.assign_auxiliary_session_to_target(
+            "TID-detach-preload",
+            "SID-preload-aux".to_owned(),
+        ));
+    }
+    ctx.sent.clear();
+
+    for (id, session_id, source) in [
+        (
+            120_101,
+            "SID-preload-primary",
+            "globalThis.__primaryPreload = 'primary';",
+        ),
+        (
+            120_102,
+            "SID-preload-aux",
+            "globalThis.__auxPreload = 'auxiliary';",
+        ),
+    ] {
+        ctx.process_async(json!({
+            "id": id,
+            "sessionId": session_id,
+            "method": "Page.addScriptToEvaluateOnNewDocument",
+            "params": { "source": source }
+        }))
+        .await;
+        assert_eq!(
+            take_response_by_id(&mut ctx, id)["result"]["identifier"],
+            json!("1"),
+            "each DevTools session must own an independent script identifier namespace"
+        );
+    }
+
+    ctx.process_async(json!({
+        "id": 120_107,
+        "sessionId": "SID-preload-aux",
+        "method": "Page.addScriptToEvaluateOnNewDocument",
+        "params": { "source": "globalThis.__auxSecondPreload = 'auxiliary-2';" }
+    }))
+    .await;
+    ctx.expect_result(
+        120_107,
+        json!({ "identifier": "2" }),
+        Some("SID-preload-aux"),
+    );
+
+    ctx.process_async(json!({
+        "id": 120_108,
+        "sessionId": "SID-preload-aux",
+        "method": "Page.removeScriptToEvaluateOnNewDocument",
+        "params": { "identifier": "1" }
+    }))
+    .await;
+    ctx.expect_result(120_108, json!({}), Some("SID-preload-aux"));
+    ctx.process_async(json!({
+        "id": 120_109,
+        "sessionId": "SID-preload-aux",
+        "method": "Page.removeScriptToEvaluateOnNewDocument",
+        "params": { "identifier": "1" }
+    }))
+    .await;
+    ctx.expect_error(120_109, -32000, "Script not found");
+    {
+        let owner_state = &ctx
+            .conn
+            .browser_context
+            .as_ref()
+            .unwrap()
+            .active_target
+            .owner_state;
+        assert_eq!(owner_state.document_start_scripts.len(), 2);
+        assert!(
+            owner_state
+                .document_start_scripts
+                .iter()
+                .any(|(identifier, script)| {
+                    identifier == "1"
+                        && script.devtools_session
+                            == Some(moli_page_types::DevToolsSessionKey::Primary)
+                })
+        );
+        assert!(
+            owner_state
+                .document_start_scripts
+                .iter()
+                .any(|(identifier, script)| {
+                    identifier == "2"
+                        && script.devtools_session
+                            == Some(moli_page_types::DevToolsSessionKey::Attached(
+                                "SID-preload-aux".to_owned(),
+                            ))
+                })
+        );
+    }
+
+    ctx.process_async(json!({
+        "id": 120_103,
+        "method": "Target.detachFromTarget",
+        "params": {
+            "targetId": "TID-detach-preload",
+            "sessionId": "SID-preload-aux"
+        }
+    }))
+    .await;
+    ctx.expect_result(120_103, json!({}), None);
+    ctx.expect_event(
+        "Target.detachedFromTarget",
+        Some(&json!({
+            "targetId": "TID-detach-preload",
+            "sessionId": "SID-preload-aux"
+        })),
+    );
+
+    {
+        let owner_state = &ctx
+            .conn
+            .browser_context
+            .as_ref()
+            .unwrap()
+            .active_target
+            .owner_state;
+        assert_eq!(owner_state.document_start_scripts.len(), 1);
+        assert_eq!(
+            owner_state
+                .document_start_scripts
+                .iter()
+                .filter_map(|(_, script)| script.devtools_session.clone())
+                .collect::<Vec<_>>(),
+            vec![moli_page_types::DevToolsSessionKey::Primary]
+        );
+    }
+
+    ctx.process_async(json!({
+        "id": 120_105,
+        "sessionId": "SID-preload-primary",
+        "method": "Page.navigate",
+        "params": { "url": "data:text/html,<body>replacement</body>" }
+    }))
+    .await;
+    consume_main_document_navigation_start(&mut ctx);
+    let navigation = take_response_by_id(&mut ctx, 120_105);
+    assert_eq!(navigation["result"]["frameId"], json!("TID-detach-preload"));
+    ctx.take_all();
+
+    ctx.process_async(json!({
+        "id": 120_106,
+        "sessionId": "SID-preload-primary",
+        "method": "Runtime.evaluate",
+        "params": {
+            "expression": "JSON.stringify({ primary: globalThis.__primaryPreload ?? null, auxiliary: globalThis.__auxPreload ?? null })",
+            "returnByValue": true
+        }
+    }))
+    .await;
+    let replacement = take_response_by_id(&mut ctx, 120_106);
+    assert_eq!(
+        replacement["result"]["result"]["value"],
+        json!(r#"{"primary":"primary","auxiliary":null}"#),
+        "only the surviving session script must replay into the replacement Document"
+    );
+}
+
 async fn page_renderer_inspector_session_count(ctx: &mut TestContext) -> u64 {
     let response = ctx
         .conn
@@ -2007,13 +2185,13 @@ async fn set_auto_attach_false_detaches_existing_target() {
     load_bc_with_target(&mut ctx, "BID-9", "TID-000000000D");
     let bc = ctx.conn.browser_context.as_mut().unwrap();
     bc.attach_active_session("SID-1");
-    bc.devtools_session_state
+    bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .page_session_state
         .page_lifecycle_events = true;
-    bc.devtools_session_state
+    bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .runtime_frontend_enabled = true;
-    bc.devtools_session_state
+    bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .inspector_enabled = true;
     bc.active_target
@@ -2073,17 +2251,17 @@ async fn set_auto_attach_false_detaches_existing_target() {
     assert!(!bc.has_active_session());
     assert_eq!(bc.active_target_id(), Some("TID-000000000D"));
     assert!(
-        !bc.devtools_session_state
+        !bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_lifecycle_events
     );
     assert!(
-        !bc.devtools_session_state
+        !bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
             .runtime_frontend_enabled
     );
     assert!(
-        !bc.devtools_session_state
+        !bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
             .inspector_enabled
     );

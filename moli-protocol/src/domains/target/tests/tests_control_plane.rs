@@ -1088,8 +1088,7 @@ async fn set_auto_attach_true_attaches_existing_background_targets() {
         .browser_context
         .as_mut()
         .unwrap()
-        .background_targets
-        .push(crate::conn::BackgroundTarget::new(
+        .insert_page_target_host(crate::conn::PageTargetHost::new(
             "TID-000000000F".into(),
             None,
             crate::conn::TargetIdentityState::new(
@@ -1145,8 +1144,7 @@ async fn set_auto_attach_promotes_existing_background_target_when_active_target_
         .browser_context
         .as_mut()
         .unwrap()
-        .background_targets
-        .push(crate::conn::BackgroundTarget::new(
+        .insert_page_target_host(crate::conn::PageTargetHost::new(
             "TID-000000000F".into(),
             None,
             crate::conn::TargetIdentityState::new(
@@ -1230,28 +1228,26 @@ async fn set_auto_attach_sweep_chain_promotes_multiple_existing_background_targe
     let mut ctx = TestContext::new();
     load_bc_with_target(&mut ctx, "BID-9", "TID-000000000E");
     let bc = ctx.conn.browser_context.as_mut().unwrap();
-    bc.background_targets
-        .push(crate::conn::BackgroundTarget::new(
-            "TID-000000000F".into(),
-            None,
-            crate::conn::TargetIdentityState::new(
-                "about:blank#second".into(),
-                crate::conn::URL_BASE.into(),
-                "Secure".into(),
-            ),
-            crate::conn::TargetPageSlot::empty_for_test_fixture(),
-        ));
-    bc.background_targets
-        .push(crate::conn::BackgroundTarget::new(
-            "TID-0000000010".into(),
-            None,
-            crate::conn::TargetIdentityState::new(
-                "about:blank#third".into(),
-                crate::conn::URL_BASE.into(),
-                "Secure".into(),
-            ),
-            crate::conn::TargetPageSlot::empty_for_test_fixture(),
-        ));
+    bc.insert_page_target_host(crate::conn::PageTargetHost::new(
+        "TID-000000000F".into(),
+        None,
+        crate::conn::TargetIdentityState::new(
+            "about:blank#second".into(),
+            crate::conn::URL_BASE.into(),
+            "Secure".into(),
+        ),
+        crate::conn::TargetPageSlot::empty_for_test_fixture(),
+    ));
+    bc.insert_page_target_host(crate::conn::PageTargetHost::new(
+        "TID-0000000010".into(),
+        None,
+        crate::conn::TargetIdentityState::new(
+            "about:blank#third".into(),
+            crate::conn::URL_BASE.into(),
+            "Secure".into(),
+        ),
+        crate::conn::TargetPageSlot::empty_for_test_fixture(),
+    ));
 
     ctx.process_async(json!({
         "id": 17018,
@@ -1364,17 +1360,16 @@ async fn set_auto_attach_prefers_existing_background_target_with_parked_loaded_r
     load_bc_with_target(&mut ctx, "BID-9", "TID-000000000E");
     {
         let bc = ctx.conn.browser_context.as_mut().unwrap();
-        bc.background_targets
-            .push(crate::conn::BackgroundTarget::new(
-                "TID-000000000F".into(),
-                None,
-                crate::conn::TargetIdentityState::new(
-                    "about:blank#metadata-only".into(),
-                    crate::conn::URL_BASE.into(),
-                    "Secure".into(),
-                ),
-                crate::conn::TargetPageSlot::empty_for_test_fixture(),
-            ));
+        bc.insert_page_target_host(crate::conn::PageTargetHost::new(
+            "TID-000000000F".into(),
+            None,
+            crate::conn::TargetIdentityState::new(
+                "about:blank#metadata-only".into(),
+                crate::conn::URL_BASE.into(),
+                "Secure".into(),
+            ),
+            crate::conn::TargetPageSlot::empty_for_test_fixture(),
+        ));
         bc.stage_active_target_demoting_current(
             "TID-0000000010".into(),
             None,
@@ -1473,8 +1468,7 @@ async fn activate_target_promotes_set_auto_attach_background_session_into_page_r
         .browser_context
         .as_mut()
         .unwrap()
-        .background_targets
-        .push(crate::conn::BackgroundTarget::new(
+        .insert_page_target_host(crate::conn::PageTargetHost::new(
             "TID-000000000F".into(),
             None,
             crate::conn::TargetIdentityState::new(
@@ -1555,28 +1549,26 @@ async fn activate_target_chain_switches_between_multiple_attached_background_tar
     load_bc_with_target(&mut ctx, "BID-9", "TID-000000000E");
     let bc = ctx.conn.browser_context.as_mut().unwrap();
     bc.attach_active_session("SID-active");
-    bc.background_targets
-        .push(crate::conn::BackgroundTarget::new(
-            "TID-000000000F".into(),
-            Some("SID-second".into()),
-            crate::conn::TargetIdentityState::new(
-                "about:blank#second".into(),
-                crate::conn::URL_BASE.into(),
-                "Secure".into(),
-            ),
-            crate::conn::TargetPageSlot::empty_for_test_fixture(),
-        ));
-    bc.background_targets
-        .push(crate::conn::BackgroundTarget::new(
-            "TID-0000000010".into(),
-            Some("SID-third".into()),
-            crate::conn::TargetIdentityState::new(
-                "about:blank#third".into(),
-                crate::conn::URL_BASE.into(),
-                "Secure".into(),
-            ),
-            crate::conn::TargetPageSlot::empty_for_test_fixture(),
-        ));
+    bc.insert_page_target_host(crate::conn::PageTargetHost::new(
+        "TID-000000000F".into(),
+        Some("SID-second".into()),
+        crate::conn::TargetIdentityState::new(
+            "about:blank#second".into(),
+            crate::conn::URL_BASE.into(),
+            "Secure".into(),
+        ),
+        crate::conn::TargetPageSlot::empty_for_test_fixture(),
+    ));
+    bc.insert_page_target_host(crate::conn::PageTargetHost::new(
+        "TID-0000000010".into(),
+        Some("SID-third".into()),
+        crate::conn::TargetIdentityState::new(
+            "about:blank#third".into(),
+            crate::conn::URL_BASE.into(),
+            "Secure".into(),
+        ),
+        crate::conn::TargetPageSlot::empty_for_test_fixture(),
+    ));
 
     ctx.process_async(json!({
         "id": 17030,
@@ -1656,8 +1648,7 @@ async fn set_auto_attach_false_detaches_existing_background_targets() {
         .browser_context
         .as_mut()
         .unwrap()
-        .background_targets
-        .push(crate::conn::BackgroundTarget::new(
+        .insert_page_target_host(crate::conn::PageTargetHost::new(
             "TID-000000000F".into(),
             Some("SID-bg".into()),
             crate::conn::TargetIdentityState::new(

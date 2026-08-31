@@ -2237,20 +2237,31 @@ impl PageVm {
 
     fn ensure_named_world_ready_for_document_start_script(
         &mut self,
-        world_name: &str,
+        script: &DocumentStartScript,
     ) -> Result<i64> {
-        let execution_context_id = self.vm_mut().ensure_isolated_world(world_name, false)?;
+        let world_name = script
+            .world_name
+            .as_deref()
+            .expect("named-world document-start script must carry its world name");
+        let execution_context_id = self.vm_mut().ensure_isolated_world_for_owner(
+            script.devtools_session.as_ref(),
+            world_name,
+            false,
+        )?;
         let matching_bindings = self
             .runtime_bindings
             .iter()
-            .filter(|binding| binding.execution_context_name.as_deref() == Some(world_name))
+            .filter(|binding| {
+                binding.devtools_session.as_ref() == script.devtools_session.as_ref()
+                    && binding.execution_context_name.as_deref() == Some(world_name)
+            })
             .cloned()
             .collect::<Vec<_>>();
         for binding in &matching_bindings {
             self.vm_mut().install_runtime_binding(
                 &binding.name,
                 binding.execution_context_name.as_deref(),
-                None,
+                Some(execution_context_id),
             )?;
         }
         Ok(execution_context_id)
@@ -2262,7 +2273,10 @@ impl PageVm {
             "runtime binding replay must execute on the matching named owner lane"
         );
         let runtime_bindings = self.runtime_bindings.clone();
-        for binding in runtime_bindings {
+        for binding in runtime_bindings
+            .into_iter()
+            .filter(|binding| binding.devtools_session.is_none())
+        {
             self.vm_mut().install_runtime_binding(
                 &binding.name,
                 binding.execution_context_name.as_deref(),
@@ -2354,9 +2368,9 @@ impl PageVm {
         for script in document_start_scripts {
             let script_started = Instant::now();
             match script.world_name.as_deref() {
-                Some(world_name) => {
+                Some(_) => {
                     let execution_context_id =
-                        self.ensure_named_world_ready_for_document_start_script(world_name)?;
+                        self.ensure_named_world_ready_for_document_start_script(script)?;
                     self.vm_mut()
                         .exec_in_execution_context(execution_context_id, &script.source)?;
                 }

@@ -587,7 +587,7 @@ mod tests {
     use url::Url;
 
     use crate::conn::{
-        BackgroundProtocolEvent, BackgroundTarget, BrowserContext, CdpConnection,
+        BackgroundProtocolEvent, BrowserContext, CdpConnection, PageTargetHost,
         PendingSubresourceFetchOwnerKind, PendingSubresourceFetchRequest,
     };
     use crate::devtools_runtime::{AutomationEvent, DevToolsNetworkResourceType};
@@ -863,12 +863,12 @@ mod tests {
     fn prepared_subresource_fetch_pause_can_emit_for_background_owner() {
         let mut conn = CdpConnection::default();
         let mut bc = BrowserContext::new("BID-1".to_owned());
-        let target = BackgroundTarget::with_url(
+        let target = PageTargetHost::with_url(
             "TID-background".to_owned(),
             Some("SID-background".to_owned()),
             "https://example.test/background".to_owned(),
         );
-        bc.background_targets.push(target);
+        bc.insert_page_target_host(target);
         conn.browser_context = Some(bc);
         conn.runtime_session_owner_slot_mut(Some("SID-background"))
             .expect("background test target runtime slot")

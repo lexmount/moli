@@ -248,7 +248,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::conn::{BackgroundTarget, BrowserContext};
+    use crate::conn::{BrowserContext, PageTargetHost};
     use crate::testing::TestContext;
 
     fn batch(session: DevToolsSessionKey) -> RendererRuntimeInspectorMessageBatch {
@@ -267,13 +267,11 @@ mod tests {
         let mut browser_context = BrowserContext::new("BID-route".to_owned());
         browser_context.set_active_target_id("TID-active".to_owned());
         browser_context.attach_active_session("SID-active-primary".to_owned());
-        browser_context
-            .background_targets
-            .push(BackgroundTarget::with_url(
-                "TID-background".to_owned(),
-                Some("SID-background-primary".to_owned()),
-                "about:blank#background".to_owned(),
-            ));
+        browser_context.insert_page_target_host(PageTargetHost::with_url(
+            "TID-background".to_owned(),
+            Some("SID-background-primary".to_owned()),
+            "about:blank#background".to_owned(),
+        ));
         assert!(
             browser_context
                 .assign_auxiliary_session_to_target("TID-active", "SID-active-aux".to_owned(),)
@@ -348,7 +346,7 @@ mod tests {
                 .browser_context
                 .as_ref()
                 .expect("browser context")
-                .devtools_session_state
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .inspector_session_state
                 .v8_state,
             Some(accepted_state.clone())
@@ -373,7 +371,9 @@ mod tests {
                 .browser_context
                 .as_ref()
                 .expect("browser context")
-                .auxiliary_devtools_session_states["SID-state-aux"]
+                .devtools_sessions
+                .attached("SID-state-aux")
+                .expect("auxiliary session state")
                 .inspector_session_state
                 .v8_state,
             Some(auxiliary_state),
@@ -422,7 +422,7 @@ mod tests {
                 .browser_context
                 .as_ref()
                 .expect("browser context")
-                .devtools_session_state
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .inspector_session_state
                 .v8_state,
             Some(route_completed_state)
@@ -452,7 +452,7 @@ mod tests {
                 .browser_context
                 .as_ref()
                 .expect("browser context")
-                .devtools_session_state
+                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .inspector_session_state
                 .v8_state,
             Some(response_state),

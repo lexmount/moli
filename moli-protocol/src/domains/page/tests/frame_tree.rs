@@ -553,7 +553,7 @@ async fn pending_get_frame_tree_after_page_unload_returns_empty_target_tree() {
 async fn get_frame_tree_targets_loaded_background_owner_without_promotion() {
     let mut ctx = TestContext::new();
     let page_url = "data:text/html,<iframe name='background-child'></iframe>";
-    let background = BackgroundTarget::with_url(
+    let background = PageTargetHost::with_url(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
         "about:blank".to_owned(),
@@ -563,7 +563,7 @@ async fn get_frame_tree_targets_loaded_background_owner_without_promotion() {
     bc.set_active_target_id("TID-active".to_owned());
     bc.attach_active_session("SID-active".to_owned());
     bc.set_target_url("data:text/html,<body>active</body>".to_owned());
-    bc.background_targets.push(background);
+    bc.insert_page_target_host(background);
     ctx.conn.browser_context = Some(bc);
     ctx.install_navigation_fixture_for_session_owner(page_url, Some("SID-background"))
         .await;

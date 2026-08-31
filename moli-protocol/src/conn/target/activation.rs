@@ -1,5 +1,3 @@
-use moli_core::runtime::NavigationEngine;
-
 use crate::conn::{BackgroundProtocolEvent, BrowserContext, CdpConnection};
 
 /// The stable Target identities on both sides of one foreground selection.
@@ -91,77 +89,6 @@ impl CdpConnection {
         CompletedTargetActivation::new(protocol_events)
     }
 
-    pub(crate) fn handoff_navigation_engine_for_target_activation(&mut self, target_id: &str) {
-        let Some(browser_context) = self.browser_context.as_ref() else {
-            return;
-        };
-        let browser_context_id = browser_context.id.clone();
-        let renderer_runtime = browser_context.renderer_runtime_owner_access();
-        let navigation_runtime_config = self.engine.runtime_config();
-        let promoted_key = (browser_context_id.clone(), target_id.to_owned());
-        let promoted_engine = self
-            .retained_background_navigation_engines
-            .remove(&promoted_key);
-
-        let active_target_id = browser_context.active_target_id().map(str::to_owned);
-        let active_has_loaded_page = browser_context.has_loaded_page();
-        if let Some(active_target_id) = active_target_id
-            && active_has_loaded_page
-        {
-            let next_engine = promoted_engine.unwrap_or_else(|| {
-                NavigationEngine::new_with_runtime_config_and_browser_context_access(
-                    navigation_runtime_config,
-                    renderer_runtime.clone(),
-                )
-                .expect("active BrowserContext owner must be live")
-            });
-            self.apply_scheduler_senders_to_navigation_engine(&next_engine);
-            let active_engine = self
-                .engine
-                .replace(next_engine)
-                .expect("active target must have a navigation engine");
-            self.retain_background_navigation_engine(
-                browser_context_id,
-                active_target_id,
-                active_engine,
-            )
-            .expect("demoted active engine must retain its exact BrowserContext owner");
-        } else if let Some(promoted_engine) = promoted_engine {
-            self.replace_navigation_engine(promoted_engine);
-        }
-    }
-
-    pub(crate) fn handoff_navigation_engine_for_active_target_demotion(&mut self) {
-        let Some(browser_context) = self.browser_context.as_ref() else {
-            return;
-        };
-        let Some(active_target_id) = browser_context.active_target_id().map(str::to_owned) else {
-            return;
-        };
-        if !browser_context.has_loaded_page() {
-            return;
-        }
-
-        let browser_context_id = browser_context.id.clone();
-        let renderer_runtime = browser_context.renderer_runtime_owner_access();
-        let next_engine = NavigationEngine::new_with_runtime_config_and_browser_context_access(
-            self.engine.runtime_config(),
-            renderer_runtime,
-        )
-        .expect("active BrowserContext owner must be live");
-        self.apply_scheduler_senders_to_navigation_engine(&next_engine);
-        let active_engine = self
-            .engine
-            .replace(next_engine)
-            .expect("active target must have a navigation engine");
-        self.retain_background_navigation_engine(
-            browser_context_id,
-            active_target_id,
-            active_engine,
-        )
-        .expect("demoted active engine must retain its exact BrowserContext owner");
-    }
-
     pub(crate) async fn promote_background_target_to_active_for_connection_async(
         &mut self,
         target_id: &str,
@@ -175,7 +102,6 @@ impl CdpConnection {
             .demoted_target_id()
             .map(|active_target_id| self.page_screencast_session_ids_for_target(active_target_id))
             .unwrap_or_default();
-        self.handoff_navigation_engine_for_target_activation(target_id);
         let Some(browser_context) = self.browser_context.as_mut() else {
             return Err("BrowserContextNotLoaded".to_owned());
         };
