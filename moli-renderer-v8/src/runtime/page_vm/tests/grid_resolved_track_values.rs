@@ -115,3 +115,67 @@ vertical:getComputedStyle(document.getElementById('vertical')).gridTemplateColum
     .await
     .expect("used Grid track CSSOM fixture should run");
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn screenshot_preserves_the_fixed_part_of_cyclic_calc_grid_gaps() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/grid-cyclic-calc-gap.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0}
+.grid{display:inline-grid;grid-template:90px 90px/90px 90px}
+#calc{gap:calc(20px + 5%)}
+#percentage{gap:10%}
+</style>`;
+document.body.innerHTML = `
+  <div class=grid id=calc><div></div><div></div><div></div><div></div></div>
+  <div class=grid id=percentage><div></div><div></div><div></div><div></div></div>`;
+'installed'
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(500, 300, 1.0))?
+            .expect("cyclic Grid gap screenshot layout");
+
+        let geometry = page_vm.vm_mut().eval(
+            r#"JSON.stringify(Object.fromEntries(['calc','percentage'].map(id=>{
+  const grid=document.getElementById(id);
+  const host=grid.getBoundingClientRect();
+  const children=Array.from(grid.children, child=>child.getBoundingClientRect());
+  return [id,{
+    size:[host.width,host.height],
+    second:[children[1].left-host.left,children[1].top-host.top],
+    third:[children[2].left-host.left,children[2].top-host.top]
+  }];
+})))"#,
+        )?;
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&geometry)?,
+            serde_json::json!({
+                "calc": {
+                    "size": [200, 200],
+                    "second": [120, 0],
+                    "third": [0, 120],
+                },
+                "percentage": {
+                    "size": [180, 180],
+                    "second": [108, 0],
+                    "third": [0, 108],
+                },
+            }),
+            "cyclic percentages contribute zero to intrinsic Grid sizing, but a calc gap must retain its fixed component before resolving its percentage against the used content box",
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("cyclic Grid gap fixture should run");
+}
