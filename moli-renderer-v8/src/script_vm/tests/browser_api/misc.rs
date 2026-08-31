@@ -141,6 +141,109 @@ fn date_locale_methods_use_shared_time_formatting_surface() {
 }
 
 #[test]
+fn emulation_defaults_drive_real_intl_and_local_date_operations() {
+    let mut vm = new_storage_test_vm("https://date-locale-emulation-surface.test/");
+    let baseline = vm
+        .eval(
+            r#"
+(() => {
+  const date = new Date('2024-01-01T00:00:00Z');
+  return JSON.stringify([
+    new Intl.NumberFormat().resolvedOptions().locale,
+    new Intl.DateTimeFormat().resolvedOptions().timeZone,
+    date.getTimezoneOffset(),
+    date.getFullYear(),
+    date.getMonth(),
+    date.getDate(),
+    date.getDay(),
+    date.getHours(),
+    date.getMinutes(),
+    date.getSeconds(),
+    date.getMilliseconds(),
+    date.toString(),
+    date.toDateString(),
+    date.toTimeString()
+  ]);
+})()
+"#,
+        )
+        .expect("baseline Intl and Date surfaces should evaluate");
+    vm.set_locale_override_and_sync_surface(Some("fr-FR"))
+        .expect("locale override should sync into the Intl surface");
+    vm.set_timezone_override_and_sync_surface(Some("Europe/Paris"))
+        .expect("timezone override should sync into the Date surface");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const winter = new Date('2024-01-01T00:00:00Z');
+  const summer = new Date('2024-07-01T00:00:00Z');
+  return JSON.stringify({
+    locales: [
+      new Intl.Collator().resolvedOptions().locale,
+      new Intl.DateTimeFormat().resolvedOptions().locale,
+      new Intl.NumberFormat().resolvedOptions().locale,
+      new Intl.PluralRules().resolvedOptions().locale
+    ],
+    timezone: new Intl.DateTimeFormat().resolvedOptions().timeZone,
+    formattedAsFrench: new Intl.NumberFormat().format(1.5).endsWith(',5'),
+    winter: [winter.getTimezoneOffset(), winter.getHours(), winter.getDate()],
+    summer: [summer.getTimezoneOffset(), summer.getHours(), summer.getDate()],
+    strings: [winter.toString(), winter.toDateString(), winter.toTimeString()],
+    explicit: [
+      new Intl.NumberFormat('en-US').resolvedOptions().locale,
+      new Intl.DateTimeFormat('en-US', { timeZone: 'UTC' }).resolvedOptions().timeZone
+    ],
+    invalidOptions: (() => {
+      try { new Intl.DateTimeFormat(undefined, null); return 'accepted'; }
+      catch (error) { return error.name; }
+    })(),
+    navigatorLanguage: navigator.language
+  });
+})()
+"#,
+        )
+        .expect("Intl and Date emulation surfaces should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"locales":["fr-FR","fr-FR","fr-FR","fr-FR"],"timezone":"Europe/Paris","formattedAsFrench":true,"winter":[-60,1,1],"summer":[-120,2,1],"strings":["Mon Jan 01 2024 01:00:00 GMT+0100","Mon Jan 01 2024","01:00:00 GMT+0100"],"explicit":["en-US","UTC"],"invalidOptions":"TypeError","navigatorLanguage":"en-US"}"#
+    );
+
+    vm.set_locale_override_and_sync_surface(None)
+        .expect("clearing locale override should restore the host default");
+    vm.set_timezone_override_and_sync_surface(None)
+        .expect("clearing timezone override should restore native Date methods");
+    let restored = vm
+        .eval(
+            r#"
+(() => {
+  const date = new Date('2024-01-01T00:00:00Z');
+  return JSON.stringify([
+    new Intl.NumberFormat().resolvedOptions().locale,
+    new Intl.DateTimeFormat().resolvedOptions().timeZone,
+    date.getTimezoneOffset(),
+    date.getFullYear(),
+    date.getMonth(),
+    date.getDate(),
+    date.getDay(),
+    date.getHours(),
+    date.getMinutes(),
+    date.getSeconds(),
+    date.getMilliseconds(),
+    date.toString(),
+    date.toDateString(),
+    date.toTimeString()
+  ]);
+})()
+"#,
+        )
+        .expect("restored Intl and Date surfaces should evaluate");
+    assert_eq!(restored, baseline);
+}
+
+#[test]
 fn date_locale_methods_are_declared_on_date_prototype() {
     let mut vm = new_storage_test_vm("https://date-locale-declared.test/");
 
