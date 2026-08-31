@@ -3,6 +3,7 @@ use moli_dom::native::DomHost;
 
 use super::{
     JsContextHost, collections,
+    element::live_frame_owner_content_window_for_handle,
     identity::{CollectionKind, LiveCollectionQueryKind},
     node::node_runtime_and_handle_from_object,
 };
@@ -162,10 +163,20 @@ fn document_named_access_value<'s>(
 ) -> Option<v8::Local<'s, v8::Value>> {
     let (runtime_ptr, document_handle, name, handles) = context;
     match handles.as_slice() {
-        [handle] => unsafe { &mut *runtime_ptr }
-            .native_bridge_mut()
-            .wrap_handle(scope, runtime_ptr, *handle)
-            .map(Into::into),
+        [handle] => {
+            if unsafe { &*runtime_ptr }
+                .dom_host()
+                .is_html_element_named(*handle, "iframe")
+                && let Some(window) =
+                    live_frame_owner_content_window_for_handle(scope, runtime_ptr, *handle)
+            {
+                return Some(window.into());
+            }
+            unsafe { &mut *runtime_ptr }
+                .native_bridge_mut()
+                .wrap_handle(scope, runtime_ptr, *handle)
+                .map(Into::into)
+        }
         _ => build_document_named_items_collection(scope, runtime_ptr, document_handle, &name)
             .map(Into::into),
     }
