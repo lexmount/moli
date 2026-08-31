@@ -11,7 +11,9 @@ use taffy::{
     ResolveOrZero as _, ResolvedAspectRatio, Size, SizingMode,
 };
 
-use crate::{LayoutReplacedKind, ReplacedMetrics, style::resolve_stylo_calc_value};
+use crate::{
+    LayoutReplacedKind, ReplacedMetrics, ReplacedNaturalSizing, style::resolve_stylo_calc_value,
+};
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ReplacedContext {
@@ -23,13 +25,14 @@ pub(crate) struct ReplacedContext {
 impl ReplacedContext {
     pub(crate) fn for_element(kind: LayoutReplacedKind, metrics: Option<ReplacedMetrics>) -> Self {
         let mut metrics = metrics.unwrap_or_default();
-        metrics.intrinsic_width = valid_dimension(metrics.intrinsic_width);
-        metrics.intrinsic_height = valid_dimension(metrics.intrinsic_height);
+        metrics.natural_sizing = metrics.natural_sizing.map(|mut natural| {
+            natural.width = valid_dimension(natural.width);
+            natural.height = valid_dimension(natural.height);
+            natural.ratio = valid_ratio(natural.ratio);
+            natural
+        });
         metrics.attribute_width = valid_dimension(metrics.attribute_width);
         metrics.attribute_height = valid_dimension(metrics.attribute_height);
-        metrics.intrinsic_ratio = metrics
-            .intrinsic_ratio
-            .filter(|ratio| ratio.is_finite() && *ratio > 0.0);
         let default_size = match kind {
             LayoutReplacedKind::FormControl => Size {
                 width: 160.0,
@@ -39,8 +42,9 @@ impl ReplacedContext {
             // no content. Blink and Blitz therefore use 0x0 here; the CSS
             // 300x150 default object size still applies to the other replaced
             // element categories below.
-            LayoutReplacedKind::Image => Size::ZERO,
-            LayoutReplacedKind::Svg
+            LayoutReplacedKind::Image if metrics.natural_sizing.is_none() => Size::ZERO,
+            LayoutReplacedKind::Image
+            | LayoutReplacedKind::Svg
             | LayoutReplacedKind::Canvas
             | LayoutReplacedKind::Embedded
             | LayoutReplacedKind::Frame
@@ -56,39 +60,30 @@ impl ReplacedContext {
         // normalized by the source adapter because a viewBox can provide an
         // intrinsic ratio even when one or both dimensions are absent.
         if kind == LayoutReplacedKind::Canvas {
-            metrics.intrinsic_width = metrics.attribute_width.or(Some(default_size.width));
-            metrics.intrinsic_height = metrics.attribute_height.or(Some(default_size.height));
+            metrics.natural_sizing = Some(ReplacedNaturalSizing {
+                width: metrics.attribute_width.or(Some(default_size.width)),
+                height: metrics.attribute_height.or(Some(default_size.height)),
+                ratio: None,
+            });
             metrics.attribute_width = None;
             metrics.attribute_height = None;
         }
-        let inherent_ratio = metrics
-            .intrinsic_ratio
-            .or_else(|| {
-                metrics
-                    .intrinsic_width
-                    .zip(metrics.intrinsic_height)
-                    .filter(|(_, height)| *height > 0.0)
-                    .map(|(width, height)| width / height)
-            })
-            .or_else(|| {
-                // HTML dimension attributes provide an aspect-ratio hint for
-                // image-like replaced elements before decoded pixels exist.
-                matches!(kind, LayoutReplacedKind::Image | LayoutReplacedKind::Media)
-                    .then(|| {
-                        metrics
-                            .attribute_width
-                            .zip(metrics.attribute_height)
-                            .filter(|(_, height)| *height > 0.0)
-                            .map(|(width, height)| width / height)
-                    })
-                    .flatten()
-            });
-        let inherent_size = concrete_object_size(
-            metrics.intrinsic_width,
-            metrics.intrinsic_height,
-            inherent_ratio,
-            default_size,
-        );
+        let natural = metrics.natural_sizing.unwrap_or_default();
+        let inherent_ratio = natural.ratio.or_else(|| {
+            // HTML dimension attributes provide an aspect-ratio hint for
+            // image-like replaced elements before decoded pixels exist.
+            matches!(kind, LayoutReplacedKind::Image | LayoutReplacedKind::Media)
+                .then(|| {
+                    metrics
+                        .attribute_width
+                        .zip(metrics.attribute_height)
+                        .filter(|(_, height)| *height > 0.0)
+                        .map(|(width, height)| width / height)
+                })
+                .flatten()
+        });
+        let inherent_size =
+            concrete_object_size(natural.width, natural.height, inherent_ratio, default_size);
         let attribute_size = Size {
             width: metrics.attribute_width,
             height: metrics.attribute_height,
@@ -163,6 +158,10 @@ fn concrete_object_size(
 
 fn valid_dimension(value: Option<f32>) -> Option<f32> {
     value.filter(|value| value.is_finite() && *value >= 0.0)
+}
+
+fn valid_ratio(value: Option<f32>) -> Option<f32> {
+    value.filter(|value| value.is_finite() && *value > 0.0)
 }
 
 enum Violation {
@@ -516,12 +515,60 @@ mod tests {
         ReplacedContext::for_element(
             LayoutReplacedKind::Image,
             Some(ReplacedMetrics {
-                intrinsic_width: Some(60.0),
-                intrinsic_height: Some(60.0),
-                intrinsic_ratio: Some(1.0),
+                natural_sizing: Some(ReplacedNaturalSizing {
+                    width: Some(60.0),
+                    height: Some(60.0),
+                    ratio: Some(1.0),
+                }),
                 ..ReplacedMetrics::default()
             }),
         )
+    }
+
+    #[test]
+    fn available_image_natural_sizing_keeps_default_dimensions_out_of_its_ratio() {
+        let width_only = ReplacedContext::for_element(
+            LayoutReplacedKind::Image,
+            Some(ReplacedMetrics {
+                natural_sizing: Some(ReplacedNaturalSizing {
+                    width: Some(20.0),
+                    height: None,
+                    ratio: None,
+                }),
+                ..ReplacedMetrics::default()
+            }),
+        );
+        assert_eq!(
+            width_only.inherent_size,
+            Size {
+                width: 20.0,
+                height: 150.0
+            }
+        );
+        assert_eq!(width_only.inherent_ratio, None);
+
+        let no_dimensions = ReplacedContext::for_element(
+            LayoutReplacedKind::Image,
+            Some(ReplacedMetrics {
+                natural_sizing: Some(ReplacedNaturalSizing::default()),
+                ..ReplacedMetrics::default()
+            }),
+        );
+        assert_eq!(
+            no_dimensions.inherent_size,
+            Size {
+                width: 300.0,
+                height: 150.0
+            }
+        );
+        assert_eq!(no_dimensions.inherent_ratio, None);
+
+        let unavailable = ReplacedContext::for_element(
+            LayoutReplacedKind::Image,
+            Some(ReplacedMetrics::default()),
+        );
+        assert_eq!(unavailable.inherent_size, Size::ZERO);
+        assert_eq!(unavailable.inherent_ratio, None);
     }
 
     fn measure(style: &taffy::Style<Atom>) -> Size<f32> {

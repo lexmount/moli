@@ -4,7 +4,7 @@ use moli_layout::{
     LayoutElementCategory, LayoutElementMetadata, LayoutElementSemantics, LayoutFormControlData,
     LayoutFormControlKind, LayoutImageResource, LayoutInputControlKind, LayoutListData,
     LayoutListRole, LayoutNamespace, LayoutReplacedKind, LayoutSource, LayoutSourceKind,
-    LayoutTableData, LayoutTableRole, LayoutTextSelection, ReplacedMetrics,
+    LayoutTableData, LayoutTableRole, LayoutTextSelection, ReplacedMetrics, ReplacedNaturalSizing,
 };
 
 use crate::{
@@ -142,14 +142,18 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
         }
         let attribute_width = numeric_dimension_attribute(self.host(), node, "width");
         let attribute_height = numeric_dimension_attribute(self.host(), node, "height");
-        let intrinsic = self.runtime.image_resource_intrinsic_size(node);
+        let natural_sizing =
+            self.runtime
+                .image_resource_sizing(node)
+                .map(|sizing| ReplacedNaturalSizing {
+                    width: sizing.natural_width,
+                    height: sizing.natural_height,
+                    ratio: sizing.natural_ratio,
+                });
         Some(ReplacedMetrics {
-            intrinsic_width: intrinsic.map(|(width, _)| width),
-            intrinsic_height: intrinsic.map(|(_, height)| height),
+            natural_sizing,
             attribute_width,
             attribute_height,
-            intrinsic_ratio: intrinsic
-                .and_then(|(width, height)| (height > 0.0).then_some(width / height)),
         })
     }
 
@@ -170,8 +174,8 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
             Some(LayoutReplacedKind::Image) => {
                 let ready = self.runtime.ready_image_for_layout(node)?;
                 Some(LayoutImageResource {
-                    intrinsic_width: ready.intrinsic_width,
-                    intrinsic_height: ready.intrinsic_height,
+                    concrete_width: ready.sizing.concrete_width,
+                    concrete_height: ready.sizing.concrete_height,
                     pixels: ready.pixels,
                     svg: ready.svg,
                 })
@@ -182,8 +186,8 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
             Some(LayoutReplacedKind::Canvas) => {
                 let pixels = self.runtime.canvas_pixels_for_layout(node)?;
                 Some(LayoutImageResource {
-                    intrinsic_width: pixels.width as f32,
-                    intrinsic_height: pixels.height as f32,
+                    concrete_width: pixels.width as f32,
+                    concrete_height: pixels.height as f32,
                     pixels: Some(pixels),
                     svg: None,
                 })
@@ -208,8 +212,8 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
             .runtime
             .ready_css_image_for_layout(self.document?, parsed.as_str())?;
         Some(LayoutImageResource {
-            intrinsic_width: ready.intrinsic_width,
-            intrinsic_height: ready.intrinsic_height,
+            concrete_width: ready.sizing.concrete_width,
+            concrete_height: ready.sizing.concrete_height,
             pixels: ready.pixels,
             svg: ready.svg,
         })

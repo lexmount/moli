@@ -62,8 +62,8 @@ pub(super) fn project_replaced_image<N>(
         areas.content_rect.height.max(0.0),
     );
     let object = LayoutSize::new(
-        resource.intrinsic_width.max(0.0),
-        resource.intrinsic_height.max(0.0),
+        resource.concrete_width.max(0.0),
+        resource.concrete_height.max(0.0),
     );
     if container.width <= 0.0
         || container.height <= 0.0

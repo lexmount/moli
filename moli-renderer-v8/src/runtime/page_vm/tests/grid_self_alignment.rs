@@ -138,3 +138,74 @@ document.body.innerHTML = `
     .await
     .expect("absolute Grid self-alignment fixture should run");
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn screenshot_keeps_svg_default_object_size_out_of_grid_natural_ratio() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let document_url =
+            Url::parse("https://example.com/grid-svg-natural-sizing.html").expect("document URL");
+        let (mut page_vm, _resource_source, _owner_wake_rx) =
+            page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0}
+.grid{display:grid;width:350px;height:250px}
+.grid>img{display:block}
+.align-stretch{align-self:stretch}
+.justify-stretch{justify-self:stretch}
+.both-stretch{place-self:stretch}
+</style>`;
+const source = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyMCIvPg==";
+document.body.innerHTML = `
+<div class=grid id=normal-host><img src="${source}" id=normal-item></div>
+<div class=grid id=align-host><img src="${source}" class=align-stretch id=align-item></div>
+<div class=grid id=justify-host><img src="${source}" class=justify-stretch id=justify-item></div>
+<div class=grid id=both-host><img src="${source}" class=both-stretch id=both-item></div>`;
+'installed'
+"#,
+        )?;
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                "Array.from(document.images, image => [image.complete, image.naturalWidth, image.naturalHeight]).join('|')",
+            )?,
+            "true,20,150|true,20,150|true,20,150|true,20,150",
+            "local SVG resources should expose their concrete natural dimensions before layout",
+        );
+
+        page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(400, 1_000, 1.0))?
+            .expect("Grid SVG natural-sizing screenshot layout");
+
+        let geometry = page_vm.vm_mut().eval(
+            r#"JSON.stringify(Object.fromEntries([
+  ['normal','normal-host','normal-item'],
+  ['alignStretch','align-host','align-item'],
+  ['justifyStretch','justify-host','justify-item'],
+  ['bothStretch','both-host','both-item']
+].map(([name,hostId,itemId])=>{
+  const host=document.getElementById(hostId).getBoundingClientRect();
+  const item=document.getElementById(itemId).getBoundingClientRect();
+  return [name,[item.left-host.left,item.top-host.top,item.width,item.height]];
+})))"#,
+        )?;
+        let geometry: serde_json::Value = serde_json::from_str(&geometry)?;
+        assert_eq!(
+            geometry,
+            serde_json::json!({
+                "normal": [0, 0, 20, 150],
+                "alignStretch": [0, 0, 20, 250],
+                "justifyStretch": [0, 0, 350, 150],
+                "bothStretch": [0, 0, 350, 250],
+            }),
+            "the 300x150 concrete fallback must not manufacture a natural aspect ratio",
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("Grid SVG natural-sizing fixture should run");
+}

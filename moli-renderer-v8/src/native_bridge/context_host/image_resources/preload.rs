@@ -593,7 +593,7 @@ mod tests {
         let ready = resources
             .ready_for_layout(element)
             .expect("the exact element should bind the decoded preload");
-        assert_eq!((ready.intrinsic_width, ready.intrinsic_height), (1.0, 1.0));
+        assert_eq!(ready.sizing.concrete_dimensions(), (1.0, 1.0));
         assert_eq!(
             ready
                 .pixels

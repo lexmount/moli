@@ -503,7 +503,7 @@ use html_elements::{
 };
 pub(crate) use images::{
     apply_authorized_image_load_event_in_context, apply_image_attribute_mutation_plan,
-    image_intrinsic_dimensions, image_selected_request_key, image_selected_source,
+    image_natural_dimensions, image_selected_request_key, image_selected_source,
     plan_image_attribute_mutation, queue_image_load_event_after_document_adoption,
     queue_image_load_event_for_loading_change, queue_image_load_event_if_needed,
     queue_image_load_event_if_needed_with_initiator, queue_image_load_network_terminal_followup,

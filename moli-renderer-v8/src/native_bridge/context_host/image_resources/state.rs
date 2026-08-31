@@ -16,10 +16,24 @@ use crate::document_runtime::DomHandle;
 use crate::native_bridge::context_host::visual_resource_generation::VisualResourceGeneration;
 use crate::types::ImageRequestKey;
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ImageResourceSizing {
+    pub(crate) natural_width: Option<f32>,
+    pub(crate) natural_height: Option<f32>,
+    pub(crate) natural_ratio: Option<f32>,
+    pub(crate) concrete_width: f32,
+    pub(crate) concrete_height: f32,
+}
+
+impl ImageResourceSizing {
+    pub(crate) const fn concrete_dimensions(self) -> (f32, f32) {
+        (self.concrete_width, self.concrete_height)
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct ReadyImageForLayout {
-    pub(crate) intrinsic_width: f32,
-    pub(crate) intrinsic_height: f32,
+    pub(crate) sizing: ImageResourceSizing,
     pub(crate) pixels: Option<Arc<moli_image::RgbaImage>>,
     pub(crate) svg: Option<Arc<moli_image::SvgImage>>,
 }
@@ -274,10 +288,8 @@ impl ImageResourceStore {
         let ImageResourceState::Ready(resource) = &slot.state else {
             return None;
         };
-        let (intrinsic_width, intrinsic_height) = intrinsic_dimensions(resource);
         Some(ReadyImageForLayout {
-            intrinsic_width,
-            intrinsic_height,
+            sizing: resource_sizing(resource),
             pixels: resource.pixels.clone(),
             svg: resource.svg.clone(),
         })
@@ -293,12 +305,12 @@ impl ImageResourceStore {
         self.ready_by_request.contains_live(request_key)
     }
 
-    pub(super) fn intrinsic_dimensions(&self, element: DomHandle) -> Option<(f32, f32)> {
+    pub(super) fn sizing(&self, element: DomHandle) -> Option<ImageResourceSizing> {
         let slot = self.slots.get(&element)?;
         let ImageResourceState::Ready(resource) = &slot.state else {
             return None;
         };
-        Some(intrinsic_dimensions(resource))
+        Some(resource_sizing(resource))
     }
 
     pub(super) fn retire_element(&mut self, element: DomHandle) -> bool {
@@ -336,7 +348,7 @@ impl ImageResourceStore {
     }
 }
 
-pub(super) fn intrinsic_dimensions(resource: &ReadyImageResource) -> (f32, f32) {
+pub(super) fn resource_sizing(resource: &ReadyImageResource) -> ImageResourceSizing {
     let density = if resource.density > 0.0 {
         resource.density as f32
     } else {
@@ -348,16 +360,26 @@ pub(super) fn intrinsic_dimensions(resource: &ReadyImageResource) -> (f32, f32) 
     // has a 300x37.5 concrete object size even though the DOM reports 300x38.
     // Preserve the metadata's fractional concrete size until the DOM getter's
     // explicit integer conversion boundary.
-    let (width, height) = match resource.descriptor.decode_metadata {
-        super::ImageDecodeMetadata::Raster(_) => (
-            resource.descriptor.width as f32,
-            resource.descriptor.height as f32,
-        ),
-        super::ImageDecodeMetadata::Svg(metadata) => {
-            (metadata.concrete_width, metadata.concrete_height)
+    match resource.descriptor.decode_metadata {
+        super::ImageDecodeMetadata::Raster(metadata) => {
+            let natural_width = metadata.width as f32 / density;
+            let natural_height = metadata.height as f32 / density;
+            ImageResourceSizing {
+                natural_width: Some(natural_width),
+                natural_height: Some(natural_height),
+                natural_ratio: (natural_height > 0.0).then_some(natural_width / natural_height),
+                concrete_width: natural_width,
+                concrete_height: natural_height,
+            }
         }
-    };
-    (width / density, height / density)
+        super::ImageDecodeMetadata::Svg(metadata) => ImageResourceSizing {
+            natural_width: metadata.intrinsic_width.map(|width| width / density),
+            natural_height: metadata.intrinsic_height.map(|height| height / density),
+            natural_ratio: metadata.intrinsic_ratio,
+            concrete_width: metadata.concrete_width / density,
+            concrete_height: metadata.concrete_height / density,
+        },
+    }
 }
 
 #[cfg(test)]
@@ -378,18 +400,69 @@ mod tests {
             svg: None,
             _decoded_bytes_permit: None,
         };
-        assert_eq!(intrinsic_dimensions(&resource), (300.0, 37.5));
+        assert_eq!(
+            resource_sizing(&resource),
+            ImageResourceSizing {
+                natural_width: None,
+                natural_height: None,
+                natural_ratio: Some(8.0),
+                concrete_width: 300.0,
+                concrete_height: 37.5,
+            }
+        );
 
         let high_density_resource = ReadyImageResource {
             density: 2.0,
             ..resource
         };
-        assert_eq!(intrinsic_dimensions(&high_density_resource), (150.0, 18.75));
+        assert_eq!(
+            resource_sizing(&high_density_resource),
+            ImageResourceSizing {
+                natural_width: None,
+                natural_height: None,
+                natural_ratio: Some(8.0),
+                concrete_width: 150.0,
+                concrete_height: 18.75,
+            }
+        );
 
         let infinite_density_resource = ReadyImageResource {
             density: f64::INFINITY,
             ..high_density_resource
         };
-        assert_eq!(intrinsic_dimensions(&infinite_density_resource), (0.0, 0.0));
+        assert_eq!(
+            resource_sizing(&infinite_density_resource),
+            ImageResourceSizing {
+                natural_width: None,
+                natural_height: None,
+                natural_ratio: Some(8.0),
+                concrete_width: 0.0,
+                concrete_height: 0.0,
+            }
+        );
+    }
+
+    #[test]
+    fn svg_resource_sizing_keeps_default_concrete_height_out_of_the_natural_ratio() {
+        let metadata =
+            moli_image::svg_image_metadata_from_root_attributes(Some("20px"), None, None);
+        let resource = ReadyImageResource {
+            descriptor: ImageResponseDescriptor::svg(metadata).expect("valid SVG descriptor"),
+            density: 1.0,
+            pixels: None,
+            svg: None,
+            _decoded_bytes_permit: None,
+        };
+
+        assert_eq!(
+            resource_sizing(&resource),
+            ImageResourceSizing {
+                natural_width: Some(20.0),
+                natural_height: None,
+                natural_ratio: None,
+                concrete_width: 20.0,
+                concrete_height: 150.0,
+            }
+        );
     }
 }
