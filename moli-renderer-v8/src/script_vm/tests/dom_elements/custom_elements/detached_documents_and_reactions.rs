@@ -2084,7 +2084,59 @@ async fn child_document_write_custom_element_reaction_queue_wpt_shape() {
 }
 
 #[test]
-fn child_document_write_constructs_predefined_custom_elements_without_a_body() {
+fn child_parser_checkpoints_once_before_adoption_agency_custom_element_construction() {
+    let mut vm = new_storage_test_vm("https://parser-checkpoint.test/");
+
+    vm.eval(
+        r##"
+            (() => {
+              globalThis.__childParserCheckpoint = "pending";
+              const frame = document.createElement("iframe");
+              frame.srcdoc = `<!doctype html><body><script>
+                class ParserCheckpointElement extends HTMLElement {
+                  constructor() {
+                    super();
+                    const nodeLabel = node => node.nodeType === Node.TEXT_NODE
+                      ? "#text:" + node.data
+                      : node.localName;
+                    top.__childParserCheckpoint = JSON.stringify(
+                      recordsList.map(records => records.map(record => [
+                        nodeLabel(record.target),
+                        Array.prototype.map.call(record.addedNodes, nodeLabel).join(",")
+                      ]))
+                    );
+                  }
+                }
+                customElements.define(
+                  "parser-checkpoint-element",
+                  ParserCheckpointElement
+                );
+                const recordsList = [];
+                new MutationObserver(records => recordsList.push(records)).observe(
+                  document.body,
+                  { childList: true, subtree: true }
+                );
+              </script><b><i>hello</b><parser-checkpoint-element>`;
+              (document.body || document.documentElement || document).appendChild(frame);
+              return "scheduled";
+            })()
+            "##,
+    )
+    .expect("child parser checkpoint setup should evaluate");
+    vm.drain_pending_child_frame_work_for_test();
+
+    let result = vm
+        .eval("globalThis.__childParserCheckpoint")
+        .expect("child parser checkpoint result should evaluate");
+
+    assert_eq!(
+        result,
+        r##"[[["body","b"],["b","i"],["i","#text:hello"],["body","i"]]]"##
+    );
+}
+
+#[test]
+fn child_document_write_constructs_and_connects_predefined_custom_elements_without_a_body() {
     // Give the two iframe siblings an element parent instead of an empty Document.
     let mut vm = new_storage_html_test_vm("https://document-write-custom-elements.test/");
 
@@ -2119,6 +2171,7 @@ fn child_document_write_constructs_predefined_custom_elements_without_a_body() {
                 }
                 const registry = childWindow.customElements;
                 let constructorCount = 0;
+                let connectedCount = 0;
                 let errorName = null;
                 childWindow.addEventListener("error", event => {
                   errorName = event.error && event.error.name;
@@ -2128,6 +2181,9 @@ fn child_document_write_constructs_predefined_custom_elements_without_a_body() {
                   constructor() {
                     super();
                     constructorCount++;
+                  }
+                  connectedCallback() {
+                    connectedCount++;
                   }
                 }
                 registry.define(name, DefinedElement);
@@ -2140,6 +2196,7 @@ fn child_document_write_constructs_predefined_custom_elements_without_a_body() {
                   definitionBeforeWrite,
                   definitionAfterWrite: registry.get(name) === DefinedElement,
                   constructorCount,
+                  connectedCount,
                   errorName,
                   htmlElement: element instanceof childWindow.HTMLElement,
                   customElement: element instanceof DefinedElement,
@@ -2159,6 +2216,6 @@ fn child_document_write_constructs_predefined_custom_elements_without_a_body() {
 
     assert_eq!(
         result,
-        r#"{"write":{"registryPreserved":true,"definitionBeforeWrite":true,"definitionAfterWrite":true,"constructorCount":1,"errorName":null,"htmlElement":true,"customElement":true,"ownerDocument":true},"writeln":{"registryPreserved":true,"definitionBeforeWrite":true,"definitionAfterWrite":true,"constructorCount":1,"errorName":null,"htmlElement":true,"customElement":true,"ownerDocument":true}}"#
+        r#"{"write":{"registryPreserved":true,"definitionBeforeWrite":true,"definitionAfterWrite":true,"constructorCount":1,"connectedCount":1,"errorName":null,"htmlElement":true,"customElement":true,"ownerDocument":true},"writeln":{"registryPreserved":true,"definitionBeforeWrite":true,"definitionAfterWrite":true,"constructorCount":1,"connectedCount":1,"errorName":null,"htmlElement":true,"customElement":true,"ownerDocument":true}}"#
     );
 }
