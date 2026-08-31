@@ -8,6 +8,7 @@ use std::{
     sync::OnceLock,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+use temporal_rs::provider::{COMPILED_TZ_PROVIDER, TimeZoneProvider};
 
 mod timers;
 
@@ -18,6 +19,18 @@ pub enum DateLocaleFormatKind {
     DateTime,
     DateOnly,
     TimeOnly,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LocalDateFields {
+    pub year: i32,
+    pub month_zero_based: u8,
+    pub day: u8,
+    pub weekday_sunday_zero: u8,
+    pub hour: u8,
+    pub minute: u8,
+    pub second: u8,
+    pub millisecond: u16,
 }
 
 pub fn unix_epoch_millis() -> f64 {
@@ -69,7 +82,10 @@ pub fn format_date_locale_value(
     let Some(datetime) = offset_datetime_from_unix_millis(timestamp_ms) else {
         return "Invalid Date".to_owned();
     };
-    let datetime = datetime.to_offset(resolve_time_zone_offset(timezone_override));
+    let offset = timezone_override
+        .map(|timezone| resolve_time_zone_offset(datetime, timezone))
+        .unwrap_or(time::UtcOffset::UTC);
+    let datetime = datetime.to_offset(offset);
     let month = u8::from(datetime.month());
     let day = datetime.day();
     let year = datetime.year();
@@ -117,7 +133,7 @@ pub fn format_document_last_modified_value(
         .or_else(|| offset_datetime_from_unix_millis(current_timestamp_ms))
         .unwrap_or(time::OffsetDateTime::UNIX_EPOCH);
     let offset = match timezone_override {
-        Some(timezone) => resolve_time_zone_offset(Some(timezone)),
+        Some(timezone) => resolve_time_zone_offset(datetime, timezone),
         None => time::UtcOffset::local_offset_at(datetime).unwrap_or(time::UtcOffset::UTC),
     };
     let datetime = datetime.to_offset(offset);
@@ -144,12 +160,121 @@ fn offset_datetime_from_unix_millis(timestamp_ms: f64) -> Option<time::OffsetDat
     time::OffsetDateTime::from_unix_timestamp_nanos(nanos as i128).ok()
 }
 
-fn resolve_time_zone_offset(timezone_override: Option<&str>) -> time::UtcOffset {
-    match timezone_override.unwrap_or_default() {
-        "Asia/Shanghai" => time::UtcOffset::from_hms(8, 0, 0).unwrap_or(time::UtcOffset::UTC),
-        "UTC" | "Etc/UTC" | "GMT" => time::UtcOffset::UTC,
-        _ => time::UtcOffset::UTC,
-    }
+fn resolve_time_zone_offset(datetime: time::OffsetDateTime, timezone: &str) -> time::UtcOffset {
+    let Some(offset_seconds) =
+        time_zone_offset_seconds_at(datetime.unix_timestamp_nanos(), timezone)
+    else {
+        return time::UtcOffset::UTC;
+    };
+    time::UtcOffset::from_whole_seconds(offset_seconds).unwrap_or(time::UtcOffset::UTC)
+}
+
+/// Resolves the IANA time-zone offset used by local `Date` operations.
+///
+/// The lookup is timestamp-sensitive, so daylight-saving transitions follow
+/// the same tzdb data used by Temporal instead of a fixed per-zone table.
+pub fn time_zone_offset_seconds(timestamp_ms: f64, timezone: &str) -> Option<i32> {
+    let datetime = offset_datetime_from_unix_millis(timestamp_ms)?;
+    time_zone_offset_seconds_at(datetime.unix_timestamp_nanos(), timezone)
+}
+
+pub fn local_time_zone_offset_seconds(timestamp_ms: f64) -> Option<i32> {
+    let datetime = offset_datetime_from_unix_millis(timestamp_ms)?;
+    Some(
+        time::UtcOffset::local_offset_at(datetime)
+            .unwrap_or(time::UtcOffset::UTC)
+            .whole_seconds(),
+    )
+}
+
+pub fn local_date_fields(timestamp_ms: f64, timezone: Option<&str>) -> Option<LocalDateFields> {
+    let datetime = offset_datetime_from_unix_millis(timestamp_ms)?;
+    let offset = timezone
+        .map(|timezone| resolve_time_zone_offset(datetime, timezone))
+        .unwrap_or_else(|| {
+            time::UtcOffset::local_offset_at(datetime).unwrap_or(time::UtcOffset::UTC)
+        });
+    let datetime = datetime.to_offset(offset);
+    Some(LocalDateFields {
+        year: datetime.year(),
+        month_zero_based: u8::from(datetime.month()).saturating_sub(1),
+        day: datetime.day(),
+        weekday_sunday_zero: datetime.weekday().number_days_from_sunday(),
+        hour: datetime.hour(),
+        minute: datetime.minute(),
+        second: datetime.second(),
+        millisecond: datetime.millisecond(),
+    })
+}
+
+pub fn format_date_local_string(timestamp_ms: f64, timezone: Option<&str>) -> String {
+    let Some(fields) = local_date_fields(timestamp_ms, timezone) else {
+        return "Invalid Date".to_owned();
+    };
+    format!(
+        "{} {} {:02} {:04} {}",
+        weekday_name(fields.weekday_sunday_zero),
+        month_name(fields.month_zero_based),
+        fields.day,
+        fields.year,
+        format_date_local_time_string(timestamp_ms, timezone),
+    )
+}
+
+pub fn format_date_local_date_string(timestamp_ms: f64, timezone: Option<&str>) -> String {
+    let Some(fields) = local_date_fields(timestamp_ms, timezone) else {
+        return "Invalid Date".to_owned();
+    };
+    format!(
+        "{} {} {:02} {:04}",
+        weekday_name(fields.weekday_sunday_zero),
+        month_name(fields.month_zero_based),
+        fields.day,
+        fields.year,
+    )
+}
+
+pub fn format_date_local_time_string(timestamp_ms: f64, timezone: Option<&str>) -> String {
+    let Some(fields) = local_date_fields(timestamp_ms, timezone) else {
+        return "Invalid Date".to_owned();
+    };
+    let offset_seconds = timezone
+        .and_then(|timezone| time_zone_offset_seconds(timestamp_ms, timezone))
+        .or_else(|| local_time_zone_offset_seconds(timestamp_ms))
+        .unwrap_or_default();
+    let sign = if offset_seconds < 0 { '-' } else { '+' };
+    let offset_minutes = offset_seconds.unsigned_abs() / 60;
+    let offset_hours = offset_minutes / 60;
+    let offset_minutes = offset_minutes % 60;
+    format!(
+        "{:02}:{:02}:{:02} GMT{sign}{offset_hours:02}{offset_minutes:02}",
+        fields.hour, fields.minute, fields.second,
+    )
+}
+
+fn weekday_name(weekday_sunday_zero: u8) -> &'static str {
+    ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+        .get(usize::from(weekday_sunday_zero))
+        .copied()
+        .unwrap_or("Invalid")
+}
+
+fn month_name(month_zero_based: u8) -> &'static str {
+    [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ]
+    .get(usize::from(month_zero_based))
+    .copied()
+    .unwrap_or("Invalid")
+}
+
+fn time_zone_offset_seconds_at(epoch_nanoseconds: i128, timezone: &str) -> Option<i32> {
+    let id = COMPILED_TZ_PROVIDER.get(timezone.as_bytes()).ok()?;
+    let seconds = COMPILED_TZ_PROVIDER
+        .transition_nanoseconds_for_utc_epoch_nanoseconds(id, epoch_nanoseconds)
+        .ok()?
+        .0;
+    i32::try_from(seconds).ok()
 }
 
 #[cfg(test)]
@@ -194,6 +319,37 @@ mod tests {
                 Some("Asia/Shanghai")
             ),
             "1/1/1970, 8:00:00 AM"
+        );
+    }
+
+    #[test]
+    fn iana_timezone_offsets_follow_daylight_saving_transitions() {
+        let winter = 1_704_067_200_000.0; // 2024-01-01T00:00:00Z
+        let summer = 1_719_792_000_000.0; // 2024-07-01T00:00:00Z
+
+        assert_eq!(time_zone_offset_seconds(winter, "Europe/Paris"), Some(3600));
+        assert_eq!(time_zone_offset_seconds(summer, "Europe/Paris"), Some(7200));
+        assert_eq!(
+            time_zone_offset_seconds(winter, "America/New_York"),
+            Some(-18_000)
+        );
+        assert_eq!(time_zone_offset_seconds(winter, "Not/AZone"), None);
+        assert_eq!(
+            local_date_fields(winter, Some("Europe/Paris")),
+            Some(LocalDateFields {
+                year: 2024,
+                month_zero_based: 0,
+                day: 1,
+                weekday_sunday_zero: 1,
+                hour: 1,
+                minute: 0,
+                second: 0,
+                millisecond: 0,
+            })
+        );
+        assert_eq!(
+            format_date_local_string(winter, Some("Europe/Paris")),
+            "Mon Jan 01 2024 01:00:00 GMT+0100"
         );
     }
 

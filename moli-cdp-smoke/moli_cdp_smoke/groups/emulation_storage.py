@@ -13,6 +13,7 @@ from ..png_image import decode_png
 async def run_emulation_storage_group(browser: Any, fixture: str, results: list[dict[str, Any]]) -> None:
     await run_playwright_screenshot_clip_surface(browser, fixture, results)
     await run_geolocation_override_smoke(browser, fixture, results)
+    await run_locale_timezone_runtime_surface_smoke(browser, fixture, results)
     await run_storage_and_cookie_isolation_smoke(browser, fixture, results)
     await run_indexeddb_baseline_smoke(browser, fixture, results)
     await run_browser_context_profile_smoke(browser, fixture, results)
@@ -115,6 +116,79 @@ async def _read_geolocation(page: Any) -> dict[str, Any]:
             {timeout: 300, maximumAge: 0}
           );
         })"""
+    )
+
+
+async def run_locale_timezone_runtime_surface_smoke(
+    browser: Any,
+    fixture: str,
+    results: list[dict[str, Any]],
+) -> None:
+    context = await browser.new_context()
+    try:
+        page = await context.new_page()
+        await page.goto(f"{fixture}/plain", wait_until="load", timeout=10_000)
+        baseline = await _read_locale_timezone_runtime(page)
+        cdp = await context.new_cdp_session(page)
+        try:
+            await cdp.send("Emulation.setLocaleOverride", {"locale": "fr-FR"})
+            await cdp.send(
+                "Emulation.setTimezoneOverride",
+                {"timezoneId": "Europe/Paris"},
+            )
+            runtime = await _read_locale_timezone_runtime(page)
+            assert_equal(
+                runtime.get("navigatorLanguage"),
+                baseline.get("navigatorLanguage"),
+                "locale override does not impersonate Accept-Language",
+            )
+            assert_equal(
+                runtime.get("intlLocales"),
+                ["fr-FR", "fr-FR", "fr-FR"],
+                "locale override drives default Intl constructors",
+            )
+            assert_equal(runtime.get("timezone"), "Europe/Paris", "Intl timezone override")
+            assert_equal(runtime.get("frenchDecimal"), True, "Intl locale formatting override")
+            assert_equal(runtime.get("winter"), [-60, 1], "winter Date timezone override")
+            assert_equal(runtime.get("summer"), [-120, 2], "summer Date timezone override")
+            await page.reload(wait_until="load", timeout=10_000)
+            assert_equal(
+                await _read_locale_timezone_runtime(page),
+                runtime,
+                "locale/timezone overrides survive navigation",
+            )
+            await cdp.send("Emulation.setLocaleOverride", {"locale": ""})
+            await cdp.send("Emulation.setTimezoneOverride", {"timezoneId": ""})
+            assert_equal(
+                await _read_locale_timezone_runtime(page),
+                baseline,
+                "clearing locale/timezone overrides restores native defaults",
+            )
+            record(results, "locale_timezone_runtime_surfaces")
+        finally:
+            await cdp.detach()
+    finally:
+        await context.close()
+
+
+async def _read_locale_timezone_runtime(page: Any) -> dict[str, Any]:
+    return await page.evaluate(
+        """() => {
+          const winter = new Date('2024-01-01T00:00:00Z');
+          const summer = new Date('2024-07-01T00:00:00Z');
+          return {
+            navigatorLanguage: navigator.language,
+            intlLocales: [
+              new Intl.Collator().resolvedOptions().locale,
+              new Intl.DateTimeFormat().resolvedOptions().locale,
+              new Intl.NumberFormat().resolvedOptions().locale,
+            ],
+            timezone: new Intl.DateTimeFormat().resolvedOptions().timeZone,
+            frenchDecimal: new Intl.NumberFormat().format(1.5).endsWith(',5'),
+            winter: [winter.getTimezoneOffset(), winter.getHours()],
+            summer: [summer.getTimezoneOffset(), summer.getHours()],
+          };
+        }"""
     )
 
 

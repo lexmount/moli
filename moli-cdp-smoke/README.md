@@ -367,7 +367,7 @@ Runner layout:
   transformed single and nested iframe hover, click, wheel, child-local event
   coordinates, exact used frame viewport propagation, and Moli's nested-frame
   UA scrollbar routing boundary.
-- `groups/emulation_storage.py`: viewport and Playwright screenshot-clip boundary, storage/cookie isolation, IndexedDB baseline, and browser-context profile overrides.
+- `groups/emulation_storage.py`: viewport and Playwright screenshot-clip boundary, geolocation plus locale/timezone runtime overrides, storage/cookie isolation, IndexedDB baseline, and browser-context profile overrides.
 - `groups/target_semantics.py`: raw Target-domain identity, attachment,
   activation, visibility, and lifecycle contracts calibrated against Chromium.
 - `groups/browser_semantics.py`: page/runtime cross-engine contracts calibrated
