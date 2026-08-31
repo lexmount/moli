@@ -5,7 +5,10 @@
 // 300x150 default concrete-object-size algorithm follow Blink's
 // LayoutSVGRoot::UnscaledNaturalSizingInfo and ConcreteObjectSize.
 
-use std::sync::{Arc, LazyLock};
+use std::{
+    ops::Range,
+    sync::{Arc, LazyLock},
+};
 
 /// Maximum encoded SVG body admitted to the static image decoder.
 ///
@@ -179,7 +182,14 @@ pub fn decode_svg_image_with_metadata(
     metadata: SvgImageMetadata,
 ) -> Result<SvgImage, SvgDecodeError> {
     check_encoded_budget(bytes)?;
-    let default_size = usvg::Size::from_wh(metadata.concrete_width, metadata.concrete_height)
+    let has_empty_root_axis =
+        metadata.intrinsic_width == Some(0.0) || metadata.intrinsic_height == Some(0.0);
+    let (default_width, default_height) = if has_empty_root_axis {
+        (DEFAULT_OBJECT_WIDTH, DEFAULT_OBJECT_HEIGHT)
+    } else {
+        (metadata.concrete_width, metadata.concrete_height)
+    };
+    let default_size = usvg::Size::from_wh(default_width, default_height)
         .ok_or(SvgDecodeError::InvalidConcreteSize)?;
     let options = usvg::Options {
         fontdb: SVG_FONT_DATABASE.clone(),
@@ -194,13 +204,59 @@ pub fn decode_svg_image_with_metadata(
         },
         ..Default::default()
     };
-    let tree = usvg::Tree::from_data(bytes, &options)?;
+    let tree = match usvg::Tree::from_data(bytes, &options) {
+        Ok(tree) => tree,
+        // usvg rejects an outer SVG viewport with a zero authored axis. Blink
+        // still paints that document when CSS gives the replaced image a
+        // non-empty used size; its vector image behaves like the 300x150
+        // default image viewport and is then scaled into the destination.
+        // Normalize only the outer root for the immutable paint tree while
+        // retaining the authored zero in `metadata` for layout and CSSOM.
+        Err(usvg::Error::InvalidSize) if has_empty_root_axis => {
+            let source = source_with_default_image_viewport(bytes)?;
+            usvg::Tree::from_data(&source, &options)?
+        }
+        Err(error) => return Err(error.into()),
+    };
     let paint_work_units = tree_work_units(&tree)?;
     Ok(SvgImage {
         tree,
         metadata,
         paint_work_units,
     })
+}
+
+fn source_with_default_image_viewport(bytes: &[u8]) -> Result<Vec<u8>, SvgDecodeError> {
+    let source = std::str::from_utf8(bytes).map_err(|_| SvgDecodeError::InvalidUtf8)?;
+    let attributes = svg_root_attributes(source)?;
+    let root_name_end = attributes.root_name_end;
+    let width_value = attributes.width_value_range;
+    let height_value = attributes.height_value_range;
+    let mut replacements: Vec<(Range<usize>, &[u8])> = Vec::with_capacity(2);
+    if let Some(range) = width_value.clone() {
+        replacements.push((range, b"100%"));
+    }
+    if let Some(range) = height_value.clone() {
+        replacements.push((range, b"100%"));
+    }
+    replacements.sort_unstable_by_key(|(range, _)| range.start);
+
+    let mut resolved = Vec::with_capacity(bytes.len().saturating_add(30));
+    resolved.extend_from_slice(&bytes[..root_name_end]);
+    let mut cursor = root_name_end;
+    if width_value.is_none() {
+        resolved.extend_from_slice(b" width=\"100%\"");
+    }
+    if height_value.is_none() {
+        resolved.extend_from_slice(b" height=\"100%\"");
+    }
+    for (range, value) in replacements {
+        resolved.extend_from_slice(&bytes[cursor..range.start]);
+        resolved.extend_from_slice(value);
+        cursor = range.end;
+    }
+    resolved.extend_from_slice(&bytes[cursor..]);
+    Ok(resolved)
 }
 
 fn tree_work_units(tree: &usvg::Tree) -> Result<usize, SvgDecodeError> {
@@ -314,6 +370,9 @@ struct SvgRootAttributes<'a> {
     width: Option<&'a str>,
     height: Option<&'a str>,
     view_box: Option<&'a str>,
+    root_name_end: usize,
+    width_value_range: Option<Range<usize>>,
+    height_value_range: Option<Range<usize>>,
 }
 
 /// Streams only the XML root start tag. This deliberately avoids constructing
@@ -324,11 +383,12 @@ fn svg_root_attributes(source: &str) -> Result<SvgRootAttributes<'_>, SvgDecodeE
     let mut attributes = SvgRootAttributes::default();
     for token in xmlparser::Tokenizer::from(source) {
         match token.map_err(|error| SvgDecodeError::MalformedXml(error.to_string()))? {
-            xmlparser::Token::ElementStart { local, .. } => {
+            xmlparser::Token::ElementStart { local, span, .. } => {
                 if root_is_svg || local.as_str() != "svg" {
                     return Err(SvgDecodeError::MissingRoot);
                 }
                 root_is_svg = true;
+                attributes.root_name_end = span.end();
             }
             xmlparser::Token::Attribute {
                 prefix,
@@ -336,8 +396,14 @@ fn svg_root_attributes(source: &str) -> Result<SvgRootAttributes<'_>, SvgDecodeE
                 value,
                 ..
             } if root_is_svg && prefix.as_str().is_empty() => match local.as_str() {
-                "width" => attributes.width = Some(value.as_str()),
-                "height" => attributes.height = Some(value.as_str()),
+                "width" => {
+                    attributes.width = Some(value.as_str());
+                    attributes.width_value_range = Some(value.range());
+                }
+                "height" => {
+                    attributes.height = Some(value.as_str());
+                    attributes.height_value_range = Some(value.range());
+                }
                 "viewBox" => attributes.view_box = Some(value.as_str()),
                 _ => {}
             },
@@ -452,6 +518,53 @@ mod tests {
     }
 
     #[test]
+    fn zero_natural_axis_uses_the_default_image_viewport_for_paint() {
+        let svg = decode_svg_image(
+            br#"<svg xmlns="http://www.w3.org/2000/svg" width="0" height="20">
+                <svg width="7" height="7"><rect width="7" height="7" fill="blue"/></svg>
+            </svg>"#,
+        )
+        .expect("an empty natural axis does not make stretched SVG content unavailable");
+        let default_viewport = decode_svg_image(
+            br#"<svg xmlns="http://www.w3.org/2000/svg">
+                <svg width="7" height="7"><rect width="7" height="7" fill="blue"/></svg>
+            </svg>"#,
+        )
+        .unwrap();
+
+        assert_eq!(svg.metadata().intrinsic_width, Some(0.0));
+        assert_eq!(svg.metadata().intrinsic_height, Some(20.0));
+        assert_eq!(svg.metadata().intrinsic_ratio, None);
+        assert_eq!(
+            (svg.tree().size().width(), svg.tree().size().height()),
+            (
+                default_viewport.tree().size().width(),
+                default_viewport.tree().size().height()
+            )
+        );
+        let bounds = first_path_bounds(svg.tree().root()).expect("nested rect should survive");
+        assert_eq!((bounds.width(), bounds.height()), (7.0, 7.0));
+    }
+
+    #[test]
+    fn zero_axis_percentage_geometry_matches_an_omitted_root_size() {
+        let zero_axis = decode_svg_image(
+            br#"<svg xmlns="http://www.w3.org/2000/svg" width="0" height="20"><circle cx="50%" cy="50%" r="50%" fill="blue"/></svg>"#,
+        )
+        .unwrap();
+        let omitted = decode_svg_image(
+            br#"<svg xmlns="http://www.w3.org/2000/svg"><circle cx="50%" cy="50%" r="50%" fill="blue"/></svg>"#,
+        )
+        .unwrap();
+
+        assert_eq!(zero_axis.tree().size(), omitted.tree().size());
+        assert_eq!(
+            first_path_bounds(zero_axis.tree().root()),
+            first_path_bounds(omitted.tree().root())
+        );
+    }
+
+    #[test]
     fn vector_work_budget_includes_definition_subtrees() {
         let svg = decode_svg_image(
             br##"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10">
@@ -507,6 +620,14 @@ mod tests {
             usvg::Node::Group(group) => group_contains_image(group),
             usvg::Node::Image(_) => true,
             usvg::Node::Path(_) | usvg::Node::Text(_) => false,
+        })
+    }
+
+    fn first_path_bounds(group: &usvg::Group) -> Option<usvg::Rect> {
+        group.children().iter().find_map(|node| match node {
+            usvg::Node::Group(group) => first_path_bounds(group),
+            usvg::Node::Path(path) => Some(path.abs_bounding_box()),
+            usvg::Node::Image(_) | usvg::Node::Text(_) => None,
         })
     }
 }

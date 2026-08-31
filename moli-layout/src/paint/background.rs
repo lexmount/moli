@@ -508,26 +508,18 @@ fn css_image_concrete_object_size(
     resource: &LayoutImageResource,
     default_object: LayoutRect,
 ) -> Option<(f32, f32)> {
-    let (width, height) = if let Some(svg) = resource.svg.as_ref() {
-        let metadata = svg.metadata();
-        match (
-            metadata.intrinsic_width,
-            metadata.intrinsic_height,
-            metadata.intrinsic_ratio,
-        ) {
-            (Some(width), Some(height), _) => (width, height),
-            (Some(width), None, Some(ratio)) => (width, width / ratio),
-            (None, Some(height), Some(ratio)) => (height * ratio, height),
-            (Some(width), None, None) => (width, default_object.height),
-            (None, Some(height), None) => (default_object.width, height),
-            (None, None, Some(ratio)) => {
-                let width = default_object.width.min(default_object.height * ratio);
-                (width, width / ratio)
-            }
-            (None, None, None) => (default_object.width, default_object.height),
+    let natural = resource.natural_sizing;
+    let (width, height) = match (natural.width, natural.height, natural.ratio) {
+        (Some(width), Some(height), _) => (width, height),
+        (Some(width), None, Some(ratio)) => (width, width / ratio),
+        (None, Some(height), Some(ratio)) => (height * ratio, height),
+        (Some(width), None, None) => (width, default_object.height),
+        (None, Some(height), None) => (default_object.width, height),
+        (None, None, Some(ratio)) => {
+            let width = default_object.width.min(default_object.height * ratio);
+            (width, width / ratio)
         }
-    } else {
-        (resource.concrete_width, resource.concrete_height)
+        (None, None, None) => (default_object.width, default_object.height),
     };
     (width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0)
         .then_some((width, height))

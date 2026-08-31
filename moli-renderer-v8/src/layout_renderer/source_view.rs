@@ -174,8 +174,11 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
             Some(LayoutReplacedKind::Image) => {
                 let ready = self.runtime.ready_image_for_layout(node)?;
                 Some(LayoutImageResource {
-                    concrete_width: ready.sizing.concrete_width,
-                    concrete_height: ready.sizing.concrete_height,
+                    natural_sizing: ReplacedNaturalSizing {
+                        width: ready.sizing.natural_width,
+                        height: ready.sizing.natural_height,
+                        ratio: ready.sizing.natural_ratio,
+                    },
                     pixels: ready.pixels,
                     svg: ready.svg,
                 })
@@ -185,9 +188,14 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
             }
             Some(LayoutReplacedKind::Canvas) => {
                 let pixels = self.runtime.canvas_pixels_for_layout(node)?;
+                let width = pixels.width as f32;
+                let height = pixels.height as f32;
                 Some(LayoutImageResource {
-                    concrete_width: pixels.width as f32,
-                    concrete_height: pixels.height as f32,
+                    natural_sizing: ReplacedNaturalSizing {
+                        width: Some(width),
+                        height: Some(height),
+                        ratio: (height > 0.0).then_some(width / height),
+                    },
                     pixels: Some(pixels),
                     svg: None,
                 })
@@ -212,8 +220,11 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
             .runtime
             .ready_css_image_for_layout(self.document?, parsed.as_str())?;
         Some(LayoutImageResource {
-            concrete_width: ready.sizing.concrete_width,
-            concrete_height: ready.sizing.concrete_height,
+            natural_sizing: ReplacedNaturalSizing {
+                width: ready.sizing.natural_width,
+                height: ready.sizing.natural_height,
+                ratio: ready.sizing.natural_ratio,
+            },
             pixels: ready.pixels,
             svg: ready.svg,
         })

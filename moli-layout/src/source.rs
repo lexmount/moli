@@ -440,10 +440,12 @@ pub struct ReplacedMetrics {
 /// but this value contains no DOM callback or retained layout state.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LayoutImageResource {
-    /// Concrete source width used when fitting decoded content into its CSS box.
-    pub concrete_width: f32,
-    /// Concrete source height used when fitting decoded content into its CSS box.
-    pub concrete_height: f32,
+    /// Sparse natural dimensions used by CSS Images sizing algorithms.
+    ///
+    /// This is already normalized for image-candidate density by the resource
+    /// owner. Default concrete dimensions never enter this record because
+    /// their constraint rectangle depends on the eventual paint consumer.
+    pub natural_sizing: ReplacedNaturalSizing,
     pub pixels: Option<Arc<moli_image::RgbaImage>>,
     pub svg: Option<Arc<moli_image::SvgImage>>,
 }

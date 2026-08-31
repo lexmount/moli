@@ -209,3 +209,131 @@ document.body.innerHTML = `
     .await
     .expect("Grid SVG natural-sizing fixture should run");
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn screenshot_renders_zero_axis_svg_in_the_stretched_grid_content_viewport() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        loader.set_image_fetch_enabled(true);
+        let document_url =
+            Url::parse("https://example.com/grid-zero-axis-svg.html").expect("document URL");
+        let (mut page_vm, _resource_source, _owner_wake_rx) =
+            page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0}
+.grid{display:grid;width:350px;height:250px;background:gray}
+.grid>img{display:block}
+.align-stretch{align-self:stretch}
+.justify-stretch{justify-self:stretch}
+.both-stretch{place-self:stretch}
+</style>`;
+const source = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIwIiBoZWlnaHQ9IjIwIj48Y2lyY2xlIGN4PSI1MCUiIGN5PSI1MCUiIHI9IjUwJSIgZmlsbD0iYmx1ZSIvPjwvc3ZnPg==";
+document.body.innerHTML = `
+<div class=grid id=both-host><img src="${source}" class=both-stretch id=both-item></div>
+<div class=grid id=align-host><img src="${source}" class=align-stretch id=align-item></div>
+<div class=grid id=justify-host><img src="${source}" class=justify-stretch id=justify-item></div>
+<div class=grid id=normal-host><img src="${source}" id=normal-item></div>`;
+'installed'
+"#,
+        )?;
+        for _ in 0..4 {
+            let task = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+                loop {
+                    if let Some(task) = page_vm.take_dom_manipulation_body_task_for_test(
+                        PageDomManipulationTestFamily::ImageLoadEvent,
+                    ) {
+                        break task;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("each local SVG decode should publish an image-load task");
+            let crate::page_task_queue::RendererPageDomManipulationTask::ImageLoadEvent(
+                image_task,
+            ) = task
+            else {
+                unreachable!("exact image-load selection preserves its task variant")
+            };
+            assert_eq!(
+                image_task.kind(),
+                crate::page_task_queue::RendererPageImageLoadEventKind::Load,
+                "zero-axis SVG decoding must finish as an available image",
+            );
+            page_vm
+                .run_claimed_dom_manipulation_task_through_selected_dispatcher_for_test(
+                    crate::page_task_queue::RendererPageDomManipulationTask::ImageLoadEvent(
+                        image_task,
+                    ),
+                    &loader,
+                )
+                .await?;
+        }
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                "Array.from(document.images, image => [image.complete, image.naturalWidth, image.naturalHeight]).join('|')",
+            )?,
+            "true,0,20|true,0,20|true,0,20|true,0,20",
+        );
+
+        page_vm.vm_mut().sync_live_document_style_sources();
+        let snapshot = page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(400, 1_000, 1.0))?
+            .expect("zero-axis SVG Grid screenshot layout");
+        let geometry = page_vm.vm_mut().eval(
+            r#"JSON.stringify(Object.fromEntries([
+  ['bothStretch','both-host','both-item'],
+  ['alignStretch','align-host','align-item'],
+  ['justifyStretch','justify-host','justify-item'],
+  ['normal','normal-host','normal-item']
+].map(([name,hostId,itemId])=>{
+  const host=document.getElementById(hostId).getBoundingClientRect();
+  const item=document.getElementById(itemId).getBoundingClientRect();
+  return [name,[item.left-host.left,item.top-host.top,item.width,item.height]];
+})))"#,
+        )?;
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&geometry)?,
+            serde_json::json!({
+                "bothStretch": [0, 0, 350, 250],
+                "alignStretch": [0, 0, 0, 250],
+                "justifyStretch": [0, 0, 350, 20],
+                "normal": [0, 0, 0, 20],
+            }),
+        );
+
+        let svg_destinations = snapshot
+            .fragments
+            .iter()
+            .filter_map(|fragment| match fragment {
+                moli_layout::PaintFragment::SvgImage(image) => Some(image.destination),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            svg_destinations,
+            [
+                moli_layout::LayoutRect::new(0.0, 0.0, 350.0, 250.0),
+                moli_layout::LayoutRect::new(0.0, 500.0, 350.0, 20.0),
+            ],
+            "only nonempty stretched SVG boxes should enter the paint snapshot",
+        );
+
+        let raster = moli_paint::raster_snapshot(&snapshot)?;
+        let pixel = |x: u32, y: u32| -> [u8; 4] {
+            let offset = ((y * raster.width + x) * 4) as usize;
+            raster.rgba[offset..offset + 4].try_into().unwrap()
+        };
+        assert_eq!(pixel(175, 125), [0, 0, 255, 255]);
+        assert_eq!(pixel(175, 375), [128, 128, 128, 255]);
+        assert_eq!(pixel(175, 510), [0, 0, 255, 255]);
+        assert_eq!(pixel(175, 760), [128, 128, 128, 255]);
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("zero-axis SVG Grid fixture should run");
+}

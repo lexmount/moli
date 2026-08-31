@@ -1014,8 +1014,11 @@ fn fractional_replaced_images_project_contiguous_pre_transform_destinations() {
         .expect("fixture SVG should parse"),
     );
     let image = LayoutImageResource {
-        concrete_width: 96.0,
-        concrete_height: 12.0,
+        natural_sizing: ReplacedNaturalSizing {
+            width: None,
+            height: None,
+            ratio: Some(8.0),
+        },
         pixels: None,
         svg: Some(svg),
     };

@@ -19,7 +19,7 @@ use crate::{
     LayoutBoxId, LayoutPoint, LayoutRect, LayoutReplacedKind, LayoutSize, PaintBorderColors,
     PaintBorderStyle, PaintBorderStyles, PaintColor, PaintCornerRadii, PaintDiagnostic,
     PaintDiagnosticSeverity, PaintEdgeSizes, PaintFragment, PaintImage, PaintImageSampling,
-    PaintSnapshot, PaintSvgImage, projection::OutputProjection,
+    PaintSnapshot, PaintSvgImage, ReplacedNaturalSizing, projection::OutputProjection,
 };
 
 pub(super) fn project_replaced_image<N>(
@@ -61,14 +61,8 @@ pub(super) fn project_replaced_image<N>(
         areas.content_rect.width.max(0.0),
         areas.content_rect.height.max(0.0),
     );
-    let object = LayoutSize::new(
-        resource.concrete_width.max(0.0),
-        resource.concrete_height.max(0.0),
-    );
     if container.width <= 0.0
         || container.height <= 0.0
-        || object.width <= 0.0
-        || object.height <= 0.0
         || resource
             .pixels
             .as_ref()
@@ -86,7 +80,10 @@ pub(super) fn project_replaced_image<N>(
     } else {
         computed.map_or(ObjectFit::Fill, |style| style.clone_object_fit())
     };
-    let painted = compute_object_fit(container, object, fit);
+    let painted = compute_object_fit(container, resource.natural_sizing, fit);
+    if painted.width <= 0.0 || painted.height <= 0.0 {
+        return;
+    }
     let free = LayoutSize::new(
         container.width - painted.width,
         container.height - painted.height,
@@ -199,33 +196,73 @@ fn project_unavailable_image<N>(
     });
 }
 
-fn compute_object_fit(container: LayoutSize, object: LayoutSize, fit: ObjectFit) -> LayoutSize {
+/// Resolves `object-fit` from sparse natural sizing rather than a manufactured
+/// 300x150 source ratio. This follows Blink's
+/// `LayoutReplaced::ComputeObjectFitAndPositionRect`: content with an empty
+/// natural size and no natural ratio uses the replaced element's content box.
+fn compute_object_fit(
+    container: LayoutSize,
+    sizing: ReplacedNaturalSizing,
+    fit: ObjectFit,
+) -> LayoutSize {
+    let natural = LayoutSize::new(sizing.width.unwrap_or(0.0), sizing.height.unwrap_or(0.0));
+    let natural_is_empty = natural.width <= 0.0 || natural.height <= 0.0;
+    if natural_is_empty && sizing.ratio.is_none() {
+        return container;
+    }
+
     match fit {
-        ObjectFit::None => object,
         ObjectFit::Fill => container,
-        ObjectFit::Contain => scale_to_ratio(container, object, f32::min),
-        ObjectFit::Cover => scale_to_ratio(container, object, f32::max),
+        ObjectFit::Contain => sizing
+            .ratio
+            .map_or(container, |ratio| fit_to_ratio(container, ratio, false)),
+        ObjectFit::Cover => sizing
+            .ratio
+            .map_or(container, |ratio| fit_to_ratio(container, ratio, true)),
         ObjectFit::ScaleDown => {
-            let contain = scale_to_ratio(container, object, f32::min);
-            if object.width <= contain.width && object.height <= contain.height {
-                object
+            let contain = sizing
+                .ratio
+                .map_or(container, |ratio| fit_to_ratio(container, ratio, false));
+            let none = if natural_is_empty {
+                concrete_object_size(sizing, container)
+            } else {
+                natural
+            };
+            if none.width <= contain.width && none.height <= contain.height {
+                none
             } else {
                 contain
+            }
+        }
+        ObjectFit::None => {
+            if natural_is_empty {
+                concrete_object_size(sizing, container)
+            } else {
+                natural
             }
         }
     }
 }
 
-fn scale_to_ratio(
-    container: LayoutSize,
-    object: LayoutSize,
-    select: fn(f32, f32) -> f32,
-) -> LayoutSize {
-    let ratio = select(
-        container.width / object.width,
-        container.height / object.height,
-    );
-    LayoutSize::new(object.width * ratio, object.height * ratio)
+fn fit_to_ratio(container: LayoutSize, ratio: f32, cover: bool) -> LayoutSize {
+    let width_at_container_height = container.height * ratio;
+    if (width_at_container_height <= container.width) != cover {
+        LayoutSize::new(width_at_container_height, container.height)
+    } else {
+        LayoutSize::new(container.width, container.width / ratio)
+    }
+}
+
+fn concrete_object_size(sizing: ReplacedNaturalSizing, default: LayoutSize) -> LayoutSize {
+    match (sizing.width, sizing.height, sizing.ratio) {
+        (Some(width), Some(height), _) => LayoutSize::new(width, height),
+        (Some(width), None, Some(ratio)) => LayoutSize::new(width, width / ratio),
+        (Some(width), None, None) => LayoutSize::new(width, default.height),
+        (None, Some(height), Some(ratio)) => LayoutSize::new(height * ratio, height),
+        (None, Some(height), None) => LayoutSize::new(default.width, height),
+        (None, None, Some(ratio)) => fit_to_ratio(default, ratio, false),
+        (None, None, None) => default,
+    }
 }
 
 #[cfg(test)]
@@ -233,21 +270,53 @@ mod tests {
     use super::*;
 
     #[test]
-    fn object_fit_preserves_the_blitz_contain_and_cover_contract() {
+    fn object_fit_uses_natural_ratio_for_contain_and_cover() {
         let container = LayoutSize::new(100.0, 100.0);
-        let object = LayoutSize::new(200.0, 100.0);
+        let sizing = ReplacedNaturalSizing {
+            width: Some(200.0),
+            height: Some(100.0),
+            ratio: Some(2.0),
+        };
         assert_eq!(
-            compute_object_fit(container, object, ObjectFit::Contain),
+            compute_object_fit(container, sizing, ObjectFit::Contain),
             LayoutSize::new(100.0, 50.0)
         );
         assert_eq!(
-            compute_object_fit(container, object, ObjectFit::Cover),
+            compute_object_fit(container, sizing, ObjectFit::Cover),
             LayoutSize::new(200.0, 100.0)
         );
         assert_eq!(
-            compute_object_fit(container, object, ObjectFit::None),
-            object
+            compute_object_fit(container, sizing, ObjectFit::None),
+            LayoutSize::new(200.0, 100.0)
         );
+    }
+
+    #[test]
+    fn empty_natural_size_without_ratio_uses_the_content_box() {
+        let container = LayoutSize::new(350.0, 250.0);
+        for sizing in [
+            ReplacedNaturalSizing {
+                width: Some(0.0),
+                height: Some(20.0),
+                ratio: None,
+            },
+            ReplacedNaturalSizing {
+                width: Some(20.0),
+                height: None,
+                ratio: None,
+            },
+            ReplacedNaturalSizing::default(),
+        ] {
+            for fit in [
+                ObjectFit::Fill,
+                ObjectFit::Contain,
+                ObjectFit::Cover,
+                ObjectFit::None,
+                ObjectFit::ScaleDown,
+            ] {
+                assert_eq!(compute_object_fit(container, sizing, fit), container);
+            }
+        }
     }
 
     #[test]
