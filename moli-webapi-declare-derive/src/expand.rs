@@ -15,6 +15,7 @@ struct WebApiFieldKey {
     display_name_literal: Option<LitStr>,
     property_key: proc_macro2::TokenStream,
     function_name: Option<proc_macro2::TokenStream>,
+    shared_template_method_name: Option<proc_macro2::TokenStream>,
 }
 
 pub(crate) fn expand_webapi_interface(
@@ -710,12 +711,11 @@ fn expand_function_template_static_method_field(
 ) -> Result<proc_macro2::TokenStream, Error> {
     let key = webapi_field_key(field, attrs, rename_all)?;
     let name = key.display_name;
-    let property_key = key.property_key;
-    let set_function_name = key.function_name.map(|function_name| {
-        quote! {
-            #binding.set_class_name(#function_name);
-        }
-    });
+    let (property_key, function_name) = expand_template_method_key(
+        key.property_key,
+        key.function_name,
+        key.shared_template_method_name,
+    );
     let Some(callback) = attrs.callback.as_ref() else {
         return Err(Error::new(
             field.span(),
@@ -724,12 +724,13 @@ fn expand_function_template_static_method_field(
     };
     let length = attrs.length.unwrap_or(0);
     let attributes = template_property_attributes(attrs);
-    let build_function = expand_template_function_builder(
+    let member = expand_template_function_member(
         callback,
         length,
         attrs.data.as_ref(),
         template_name,
         &name,
+        function_name,
     );
     let field_read = field
         .ident
@@ -737,11 +738,13 @@ fn expand_function_template_static_method_field(
         .map(|ident| quote!(let _ = ::std::stringify!(#ident);));
     Ok(quote! {
         #field_read
-        let #binding = #build_function;
-        #set_function_name
-        template.set_with_attr(
-            #property_key,
-            #binding.into(),
+        #property_key
+        let __webapi_member = #member;
+        let #binding = ::moli_webapi_declare::__private::install_function_template_static_method(
+            scope,
+            template,
+            __webapi_property_key,
+            __webapi_member,
             #attributes,
         );
         let _ = #name;
@@ -757,12 +760,11 @@ fn expand_function_template_method_field(
 ) -> Result<proc_macro2::TokenStream, Error> {
     let key = webapi_field_key(field, attrs, rename_all)?;
     let name = key.display_name;
-    let property_key = key.property_key;
-    let set_function_name = key.function_name.map(|function_name| {
-        quote! {
-            #binding.set_class_name(#function_name);
-        }
-    });
+    let (property_key, function_name) = expand_template_method_key(
+        key.property_key,
+        key.function_name,
+        key.shared_template_method_name,
+    );
     let Some(callback) = attrs.callback.as_ref() else {
         return Err(Error::new(
             field.span(),
@@ -771,12 +773,13 @@ fn expand_function_template_method_field(
     };
     let length = attrs.length.unwrap_or(0);
     let attributes = template_property_attributes(attrs);
-    let build_function = expand_template_function_builder(
+    let member = expand_template_function_member(
         callback,
         length,
         attrs.data.as_ref(),
         template_name,
         &name,
+        function_name,
     );
     let field_read = field
         .ident
@@ -784,15 +787,50 @@ fn expand_function_template_method_field(
         .map(|ident| quote!(let _ = ::std::stringify!(#ident);));
     Ok(quote! {
         #field_read
-        let #binding = #build_function;
-        #set_function_name
-        prototype.set_with_attr(
-            #property_key,
-            #binding.into(),
+        #property_key
+        let __webapi_member = #member;
+        let #binding = ::moli_webapi_declare::__private::install_function_template_method(
+            scope,
+            prototype,
+            __webapi_property_key,
+            __webapi_member,
             #attributes,
         );
         let _ = #name;
     })
+}
+
+fn expand_template_method_key(
+    property_key: proc_macro2::TokenStream,
+    function_name: Option<proc_macro2::TokenStream>,
+    shared_name: Option<proc_macro2::TokenStream>,
+) -> (proc_macro2::TokenStream, proc_macro2::TokenStream) {
+    if let Some(shared_name) = shared_name {
+        return (
+            quote! {
+                let __webapi_property_name =
+                    ::moli_webapi_declare::__private::v8str(scope, #shared_name);
+                let __webapi_property_key: ::moli_webapi_declare::v8::Local<
+                    's,
+                    ::moli_webapi_declare::v8::Name,
+                > = __webapi_property_name.into();
+            },
+            quote!(::std::option::Option::Some(__webapi_property_name)),
+        );
+    }
+
+    let function_name = function_name
+        .map(|function_name| quote!(::std::option::Option::Some(#function_name)))
+        .unwrap_or_else(|| quote!(::std::option::Option::None));
+    (
+        quote! {
+            let __webapi_property_key: ::moli_webapi_declare::v8::Local<
+                's,
+                ::moli_webapi_declare::v8::Name,
+            > = #property_key;
+        },
+        function_name,
+    )
 }
 
 fn expand_function_template_accessor_property_field(
@@ -809,15 +847,11 @@ fn expand_function_template_accessor_property_field(
     }
     let key = webapi_field_key(field, attrs, rename_all)?;
     let getter_class_name = expand_template_accessor_class_name(
-        &format_ident!("__webapi_getter"),
-        &format_ident!("__webapi_getter_name"),
         "get",
         &key.display_name,
         key.display_name_literal.as_ref(),
     );
     let setter_class_name = expand_template_accessor_class_name(
-        &format_ident!("__webapi_setter"),
-        &format_ident!("__webapi_setter_name"),
         "set",
         &key.display_name,
         key.display_name_literal.as_ref(),
@@ -830,24 +864,25 @@ fn expand_function_template_accessor_property_field(
             "`accessor_property` field requires #[webapi(getter = path)]",
         ));
     };
-    let getter_builder = expand_template_accessor_function_builder(
+    let getter_member = expand_template_function_member(
         getter,
         0,
         attrs.data.as_ref(),
         template_name,
         &name,
+        quote!(#getter_class_name),
     );
     let setter = attrs.setter.as_ref().map(|setter| {
         let setter_data = attrs.setter_data.as_ref().or(attrs.data.as_ref());
-        let setter_builder =
-            expand_template_accessor_function_builder(setter, 1, setter_data, template_name, &name);
-        quote! {
-            {
-                let __webapi_setter = #setter_builder;
-                #setter_class_name
-                ::std::option::Option::Some(__webapi_setter)
-            }
-        }
+        let setter_member = expand_template_function_member(
+            setter,
+            1,
+            setter_data,
+            template_name,
+            &name,
+            quote!(#setter_class_name),
+        );
+        quote!(::std::option::Option::Some(#setter_member))
     });
     let setter = setter.unwrap_or_else(|| quote!(::std::option::Option::None));
     let attributes = accessor_property_attributes(attrs);
@@ -857,12 +892,19 @@ fn expand_function_template_accessor_property_field(
         .map(|ident| quote!(let _ = ::std::stringify!(#ident);));
     Ok(quote! {
         #field_read
-        let __webapi_getter = #getter_builder;
-        #getter_class_name
-        let __webapi_setter = #setter;
-        prototype.set_accessor_property(
-            #property_key,
-            ::std::option::Option::Some(__webapi_getter),
+        let __webapi_property_key: ::moli_webapi_declare::v8::Local<
+            's,
+            ::moli_webapi_declare::v8::Name,
+        > = #property_key;
+        let __webapi_getter = #getter_member;
+        let __webapi_setter: ::std::option::Option<
+            ::moli_webapi_declare::__private::FunctionTemplateMember<'s>,
+        > = #setter;
+        ::moli_webapi_declare::__private::install_function_template_accessor(
+            scope,
+            prototype,
+            __webapi_property_key,
+            __webapi_getter,
             __webapi_setter,
             #attributes,
         );
@@ -871,8 +913,6 @@ fn expand_function_template_accessor_property_field(
 }
 
 fn expand_template_accessor_class_name(
-    binding: &Ident,
-    variable: &Ident,
     prefix: &str,
     display_name: &proc_macro2::TokenStream,
     display_name_literal: Option<&LitStr>,
@@ -882,22 +922,14 @@ fn expand_template_accessor_class_name(
             &format!("{prefix} {}", display_name_literal.value()),
             display_name_literal.span(),
         );
-        return quote! {
-            if let ::std::option::Option::Some(#variable) =
-                ::moli_webapi_declare::v8::String::new(scope, #class_name)
-            {
-                #binding.set_class_name(#variable);
-            }
-        };
+        return quote!(::moli_webapi_declare::v8::String::new(scope, #class_name));
     }
 
     let format_string = LitStr::new(&format!("{prefix} {{}}"), proc_macro2::Span::call_site());
     quote! {
-        let #variable = ::std::format!(#format_string, #display_name);
-        if let ::std::option::Option::Some(#variable) =
-            ::moli_webapi_declare::v8::String::new(scope, &#variable)
         {
-            #binding.set_class_name(#variable);
+            let __webapi_accessor_name = ::std::format!(#format_string, #display_name);
+            ::moli_webapi_declare::v8::String::new(scope, &__webapi_accessor_name)
         }
     }
 }
@@ -1774,14 +1806,15 @@ fn expand_method_function_builder(
     }
 }
 
-fn expand_template_function_builder(
+fn expand_template_function_member(
     callback: &syn::Path,
     length: i32,
     data: Option<&syn::Expr>,
     template_name: &LitStr,
     display_name: &proc_macro2::TokenStream,
+    class_name: proc_macro2::TokenStream,
 ) -> proc_macro2::TokenStream {
-    match data {
+    let data = match data {
         Some(data) => quote! {
             {
                 let __webapi_callback_data = (#data);
@@ -1797,66 +1830,20 @@ fn expand_template_function_builder(
                             #display_name,
                         )
                     });
-                ::moli_webapi_declare::v8::FunctionTemplate::builder(#callback)
-                    .length(#length)
-                    .data(__webapi_callback_data)
-                    .constructor_behavior(
-                        ::moli_webapi_declare::v8::ConstructorBehavior::Throw,
-                    )
-                    .build(scope)
+                ::std::option::Option::Some(__webapi_callback_data)
             }
         },
-        None => quote! {
-            ::moli_webapi_declare::v8::FunctionTemplate::builder(#callback)
-                .length(#length)
-                .constructor_behavior(
-                    ::moli_webapi_declare::v8::ConstructorBehavior::Throw,
-                )
-                .build(scope)
-        },
-    }
-}
-
-fn expand_template_accessor_function_builder(
-    callback: &syn::Path,
-    length: i32,
-    data: Option<&syn::Expr>,
-    template_name: &LitStr,
-    display_name: &proc_macro2::TokenStream,
-) -> proc_macro2::TokenStream {
-    match data {
-        Some(data) => quote! {
-            {
-                let __webapi_callback_data = (#data);
-                let __webapi_callback_data =
-                    ::moli_webapi_declare::WebApiTemplateValue::to_v8_template_value(
-                        &__webapi_callback_data,
-                        scope,
-                    )
-                    .unwrap_or_else(|| {
-                        panic!(
-                            "failed to convert Web API `{}` member `{}` template callback data",
-                            #template_name,
-                            #display_name,
-                        )
-                    });
-                ::moli_webapi_declare::v8::FunctionTemplate::builder(#callback)
-                    .length(#length)
-                    .data(__webapi_callback_data)
-                    .constructor_behavior(
-                        ::moli_webapi_declare::v8::ConstructorBehavior::Throw,
-                    )
-                    .build(scope)
-            }
-        },
-        None => quote! {
-            ::moli_webapi_declare::v8::FunctionTemplate::builder(#callback)
-                .length(#length)
-                .constructor_behavior(
-                    ::moli_webapi_declare::v8::ConstructorBehavior::Throw,
-                )
-                .build(scope)
-        },
+        None => quote!(::std::option::Option::None),
+    };
+    quote! {
+        ::moli_webapi_declare::__private::FunctionTemplateMember {
+            callback: ::moli_webapi_declare::v8::MapFnTo::<
+                ::moli_webapi_declare::v8::FunctionCallback,
+            >::map_fn_to(#callback),
+            length: #length,
+            data: #data,
+            class_name: #class_name,
+        }
     }
 }
 
@@ -1942,12 +1929,14 @@ fn webapi_field_key(
             function_name: Some(quote!(
                 ::moli_webapi_declare::__private::v8str(scope, #name)
             )),
+            shared_template_method_name: Some(name),
         }
     };
     if let Some(function_name) = attrs.function_name.as_ref() {
         key.function_name = Some(quote!(
             ::moli_webapi_declare::__private::v8str(scope, #function_name)
         ));
+        key.shared_template_method_name = None;
     }
     Ok(key)
 }
@@ -1961,6 +1950,7 @@ fn webapi_symbol_field_key(symbol: &LitStr) -> Result<WebApiFieldKey, Error> {
                 display_name_literal: Some(display_name),
                 property_key: quote!(::moli_webapi_declare::v8::Symbol::get_iterator(scope).into()),
                 function_name: None,
+                shared_template_method_name: None,
             })
         }
         "asyncIterator" => {
@@ -1972,6 +1962,7 @@ fn webapi_symbol_field_key(symbol: &LitStr) -> Result<WebApiFieldKey, Error> {
                     ::moli_webapi_declare::v8::Symbol::get_async_iterator(scope).into()
                 ),
                 function_name: None,
+                shared_template_method_name: None,
             })
         }
         "toStringTag" => {
@@ -1983,6 +1974,7 @@ fn webapi_symbol_field_key(symbol: &LitStr) -> Result<WebApiFieldKey, Error> {
                     ::moli_webapi_declare::v8::Symbol::get_to_string_tag(scope).into()
                 ),
                 function_name: None,
+                shared_template_method_name: None,
             })
         }
         _ => Err(Error::new(symbol.span(), "unsupported Web API symbol key")),
@@ -2536,6 +2528,8 @@ mod tests {
         assert!(tokens.contains("String :: new (scope , \"get value\")"));
         assert!(tokens.contains("String :: new (scope , \"get named\")"));
         assert!(tokens.contains("String :: new (scope , \"set named\")"));
+        assert!(tokens.contains("install_function_template_accessor"));
+        assert_eq!(tokens.matches("FunctionTemplate :: builder").count(), 1);
         assert!(!tokens.contains("format ! (\"get {}\""));
         assert!(!tokens.contains("format ! (\"set {}\""));
     }
