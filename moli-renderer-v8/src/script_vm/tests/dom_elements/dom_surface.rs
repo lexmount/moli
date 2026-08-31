@@ -8656,6 +8656,38 @@ fn window_named_properties_use_the_chromium_prototype_layer() {
 }
 
 #[test]
+fn window_named_properties_exposes_webidl_class_string() {
+    let mut vm = new_storage_test_vm("https://window-named-properties.test/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+                const namedProperties = Object.getPrototypeOf(Window.prototype);
+                const descriptor = Object.getOwnPropertyDescriptor(
+                    namedProperties,
+                    Symbol.toStringTag
+                );
+                return JSON.stringify({
+                    own: Object.hasOwn(namedProperties, Symbol.toStringTag),
+                    value: descriptor && descriptor.value,
+                    configurable: descriptor && descriptor.configurable,
+                    enumerable: descriptor && descriptor.enumerable,
+                    writable: descriptor && descriptor.writable,
+                    classString: Object.prototype.toString.call(namedProperties)
+                });
+            })()
+            "#,
+        )
+        .expect("WindowProperties class string probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"own":true,"value":"WindowProperties","configurable":true,"enumerable":false,"writable":false,"classString":"[object WindowProperties]"}"#
+    );
+}
+
+#[test]
 fn window_named_properties_respect_later_prototype_properties_and_descriptor_flags() {
     let mut vm = new_storage_test_vm("https://window-named-properties.test/");
 

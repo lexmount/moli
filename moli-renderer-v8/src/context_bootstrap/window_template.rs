@@ -13,8 +13,10 @@ use super::{
     window_runtime::*,
 };
 use crate::{
-    network_host, queue_microtask::window_queue_microtask_callback,
-    util::global_constructor_prototype, window_host,
+    network_host,
+    queue_microtask::window_queue_microtask_callback,
+    util::{global_constructor_prototype, v8str},
+    window_host,
 };
 use anyhow::{Result, anyhow};
 use moli_webapi_declare::WebApiFunctionTemplate;
@@ -361,6 +363,11 @@ pub(super) fn install_window_named_properties_object(
     // means ordinary Window properties (especially the hot `document` getter)
     // resolve before named DOM access is considered.
     let named_properties_template = v8::ObjectTemplate::new(scope);
+    named_properties_template.set_with_attr(
+        v8::Symbol::get_to_string_tag(scope).into(),
+        v8str(scope, "WindowProperties").into(),
+        v8::PropertyAttribute::DONT_ENUM | v8::PropertyAttribute::READ_ONLY,
+    );
     named_properties_template.set_named_property_handler(
         v8::NamedPropertyHandlerConfiguration::new()
             .getter(window_named_property_getter)
