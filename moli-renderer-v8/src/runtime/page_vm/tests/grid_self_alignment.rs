@@ -140,6 +140,111 @@ document.body.innerHTML = `
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn screenshot_uses_grid_static_position_when_an_ancestor_is_the_containing_block() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/grid-out-of-flow-static-position.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0}
+.lead{height:30px}
+.grid{
+  display:grid;
+  box-sizing:content-box;
+  margin-left:10px;
+  width:100px;
+  height:80px;
+  border:5px solid;
+  padding:7px 11px 13px 17px;
+  grid-template-columns:40px 60px;
+  grid-template-rows:30px 50px;
+  justify-items:start;
+  align-items:start;
+}
+.item{position:absolute;width:20px;height:10px}
+.center{justify-self:center;align-self:center}
+.end{justify-self:end;align-self:end}
+.placed{grid-column:2;grid-row:2}
+.explicit{left:25px;top:15px}
+.margin-center{justify-self:center;align-self:center;margin:0 6px 0 2px}
+.safe-center{justify-self:safe center;width:120px}
+.rtl{direction:rtl}
+.vertical{writing-mode:vertical-rl}
+</style>`;
+document.body.innerHTML = `
+<div class=lead></div>
+<div class=grid id=ltr-grid>
+  <div class=item id=start></div>
+  <div class="item center" id=center></div>
+  <div class="item end" id=end></div>
+  <div class="item placed" id=placed></div>
+  <div class="item explicit" id=explicit></div>
+  <div class="item margin-center" id=margin-center></div>
+  <div class="item safe-center" id=safe-center></div>
+</div>
+<div class="grid rtl" id=rtl-grid>
+  <div class=item id=rtl-start></div>
+  <div class="item center" id=rtl-center></div>
+  <div class="item end" id=rtl-end></div>
+</div>
+<div class="grid vertical" id=vertical-grid>
+  <div class=item id=vertical-start></div>
+  <div class="item center" id=vertical-center></div>
+  <div class="item end" id=vertical-end></div>
+</div>`;
+'installed'
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(800, 600, 1.0))?
+            .expect("out-of-flow Grid static-position screenshot layout");
+
+        let geometry = page_vm.vm_mut().eval(
+            r#"JSON.stringify(Object.fromEntries([
+  'start','center','end','placed','explicit','margin-center','safe-center',
+  'rtl-start','rtl-center','rtl-end','vertical-start','vertical-center','vertical-end'
+].map(id=>{const r=document.getElementById(id).getBoundingClientRect();return [id,[r.x,r.y,r.width,r.height]]})))"#,
+        )?;
+        let geometry: serde_json::Value = serde_json::from_str(&geometry)?;
+        assert_eq!(
+            geometry,
+            serde_json::json!({
+                "start": [32, 42, 20, 10],
+                "center": [72, 77, 20, 10],
+                "end": [112, 112, 20, 10],
+                // Explicit Grid placement is ignored when Grid does not
+                // generate the out-of-flow box's containing block.
+                "placed": [32, 42, 20, 10],
+                // Non-auto insets remain relative to the actual ICB.
+                "explicit": [25, 15, 20, 10],
+                "margin-center": [70, 77, 20, 10],
+                // Safety is evaluated in the actual containing block, not
+                // prematurely against Grid's static-position rectangle.
+                "safe-center": [22, 42, 120, 10],
+                "rtl-start": [112, 152, 20, 10],
+                "rtl-center": [72, 187, 20, 10],
+                "rtl-end": [32, 222, 20, 10],
+                "vertical-start": [112, 262, 20, 10],
+                "vertical-center": [72, 297, 20, 10],
+                "vertical-end": [32, 332, 20, 10],
+            }),
+            "Grid must retain a typed static anchor while the actual containing block owns final out-of-flow sizing",
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("out-of-flow Grid static-position fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn screenshot_keeps_svg_default_object_size_out_of_grid_natural_ratio() {
     run_page_vm_async_test(async move {
         let loader =
