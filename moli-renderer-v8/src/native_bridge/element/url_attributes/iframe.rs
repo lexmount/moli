@@ -1,5 +1,5 @@
 use crate::document_runtime::DomHandle;
-use crate::util::get_private_value;
+use crate::util::{get_private_value, v8_string};
 use url::Url;
 
 use super::super::super::PageScriptHost;
@@ -112,6 +112,45 @@ pub(in crate::native_bridge::element) fn iframe_has_inactive_child_context(
         .child_browsing_context_document_handle(handle)
         .is_some()
         && !runtime.child_browsing_context_is_live(handle)
+}
+
+pub(in crate::native_bridge) fn live_frame_owner_content_window_for_handle<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    runtime_ptr: *mut PageScriptHost,
+    handle: DomHandle,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let runtime = unsafe { &mut *runtime_ptr };
+    runtime.refresh_child_browsing_context(scope, handle);
+    let exposes_same_origin_wrapper = runtime.frame_owner_can_access_content_document(handle);
+    let window = if exposes_same_origin_wrapper {
+        runtime.child_browsing_context_window_wrapper(scope, handle)
+    } else {
+        runtime.child_browsing_context_window_proxy_for_accessing_context(scope, handle)
+    };
+    if window.is_some() {
+        runtime.mark_child_browsing_context_window_wrapper_exposed_to_top(handle);
+    }
+    if exposes_same_origin_wrapper && window.is_some() {
+        runtime.request_child_frame_realm_materialization(handle);
+    }
+    if exposes_same_origin_wrapper && let Some(window) = window {
+        runtime.set_cached_detached_iframe_content_window(scope, handle, window);
+    }
+    let window = window?;
+    let context = scope.get_current_context();
+    let window = match crate::native_bridge::window_in_wrapper_world(scope, window, context) {
+        Ok(projected) => projected.unwrap_or(window),
+        Err(error) => {
+            if let Some(message) =
+                v8_string(scope, &format!("Window world projection failed: {error}"))
+            {
+                let exception = v8::Exception::error(scope, message);
+                scope.throw_exception(exception);
+            }
+            return None;
+        }
+    };
+    Some(window)
 }
 
 pub(in crate::native_bridge::element) fn iframe_is_inside_its_own_child_context_document(
