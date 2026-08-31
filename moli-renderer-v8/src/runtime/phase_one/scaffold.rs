@@ -116,9 +116,10 @@ async fn run_phase_one_creation_session_on_execution_context(
                     return Ok(
                         match owner_step_progress_after_current_document_stop(&runtime.page_vm) {
                             OwnerStepProgress::TriggeredNavigation => {
+                                let stage = runtime.stage;
                                 ParseTimeOwnerCompletion::TriggeredNavigation {
-                                    page_vm: Box::new(runtime.page_vm),
-                                    stage: runtime.stage,
+                                    page_vm: Box::new(runtime.into_navigation_triggered_page_vm()),
+                                    stage,
                                 }
                             }
                             OwnerStepProgress::DocumentReplaced => {

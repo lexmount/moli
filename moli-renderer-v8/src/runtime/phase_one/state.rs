@@ -188,6 +188,17 @@ impl ConcurrentParseTimeRuntime {
         self.page_vm
     }
 
+    /// Leave phase one after script requested a top-level navigation.
+    ///
+    /// The current `PageVm` stays live while the navigation is fetched, but
+    /// the phase-one driver is consumed by this transition. Retire its parser
+    /// continuation before returning the Page so an already-queued Networking
+    /// task cannot grant an admission to a driver that no longer exists.
+    pub(super) fn into_navigation_triggered_page_vm(mut self) -> PageVm {
+        drop(self.retire_main_parser_continuation());
+        self.page_vm
+    }
+
     pub(super) fn new_parser_owner(
         loader: ResourceRequestClient,
         stage: PageVmInitStage,
