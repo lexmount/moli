@@ -79,6 +79,10 @@ impl CustomElementReactionCoordinator {
         self.stack.last_mut()?.next()
     }
 
+    pub(super) fn current_element_queue_is_empty(&self) -> bool {
+        self.stack.last().is_some_and(ElementQueue::is_empty)
+    }
+
     pub(super) fn next_backup_element(&mut self) -> Option<DomHandle> {
         self.backup_queue.next()
     }
