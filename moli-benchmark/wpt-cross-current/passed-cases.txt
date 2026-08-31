@@ -3747,6 +3747,7 @@ domparsing/innerhtml-06.html
 domparsing/innerhtml-07.html
 domparsing/innerhtml-li-autoclosing.html
 domparsing/insert-adjacent.html
+domparsing/insert_adjacent_html.html
 domparsing/outerhtml-01.html
 domparsing/outerhtml-02.html
 domparsing/style_attribute_html.html
