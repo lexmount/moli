@@ -1,8 +1,10 @@
 use super::shared::WINDOW_NAVIGATOR_SLOT;
 use crate::util::{
     callback_data_index_value, context_host_ptr_from_context_slot,
-    context_host_ptr_from_window_object, get_private_value, throw_type_error,
+    context_host_ptr_from_window_object, get_private_value, set_private_value, throw_type_error,
 };
+
+const WINDOW_BRAND_SLOT: &str = "__moliWindowBrand";
 
 /// Recognizes a native Window receiver for WebIDL brand checks.
 ///
@@ -15,12 +17,24 @@ pub(crate) fn is_window_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
-    if is_live_window_receiver(scope, receiver) {
+    if is_live_window_receiver(scope, receiver)
+        || get_private_value(scope, receiver, WINDOW_BRAND_SLOT).is_some()
+    {
         return true;
     }
     let current_context = scope.get_current_context();
     receiver.strict_equals(current_context.global(scope).into())
         && context_host_ptr_from_context_slot(current_context).is_some()
+}
+
+/// Marks a Window-shaped native object that intentionally has no execution
+/// context, such as an iframe owned by a DOMParser-created Document.
+pub(crate) fn mark_window_receiver(
+    scope: &mut v8::PinScope<'_, '_>,
+    receiver: v8::Local<'_, v8::Object>,
+) {
+    let branded = v8::Boolean::new(scope, true);
+    set_private_value(scope, receiver, WINDOW_BRAND_SLOT, branded.into());
 }
 
 /// Recognizes a Window whose V8 object still exposes its live realm markers.
