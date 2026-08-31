@@ -112,6 +112,10 @@ fn blob_size_attribute_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if !is_blob_object(scope, args.this()) {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    }
     let size = blob_bytes_from_object(scope, args.this())
         .map(|bytes| bytes.len() as f64)
         .unwrap_or(0.0);
@@ -123,6 +127,10 @@ fn blob_type_attribute_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if !is_blob_object(scope, args.this()) {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    }
     let mime_type = blob_mime_type_from_object(scope, args.this()).unwrap_or_default();
     if let Some(value) = v8_string(scope, &mime_type) {
         rv.set(value.into());
@@ -136,6 +144,10 @@ pub(super) fn blob_text_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if !is_blob_object(scope, args.this()) {
+        set_rejected_type_error_promise(scope, &mut rv, "Illegal invocation");
+        return;
+    }
     let text = blob_bytes_from_object(scope, args.this())
         .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
         .unwrap_or_default();
@@ -151,6 +163,10 @@ pub(super) fn blob_array_buffer_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if !is_blob_object(scope, args.this()) {
+        set_rejected_type_error_promise(scope, &mut rv, "Illegal invocation");
+        return;
+    }
     let bytes = blob_bytes_from_object(scope, args.this()).unwrap_or_default();
     let value = array_buffer_from_bytes(scope, bytes)
         .map(|buffer| buffer.into())
@@ -163,6 +179,10 @@ pub(super) fn blob_bytes_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if !is_blob_object(scope, args.this()) {
+        set_rejected_type_error_promise(scope, &mut rv, "Illegal invocation");
+        return;
+    }
     let bytes = blob_bytes_from_object(scope, args.this()).unwrap_or_default();
     let value = new_uint8_array_from_bytes(scope, bytes)
         .map(|array| array.into())
@@ -175,6 +195,10 @@ pub(super) fn blob_stream_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if !is_blob_object(scope, args.this()) {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    }
     let Some(bytes) = blob_bytes_from_object(scope, args.this()) else {
         rv.set(v8::undefined(scope).into());
         return;
@@ -198,6 +222,10 @@ pub(super) fn blob_slice_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if !is_blob_object(scope, args.this()) {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    }
     let bytes = blob_bytes_from_object(scope, args.this()).unwrap_or_default();
     let size = bytes.len();
     let start = clamped_long_long_arg(scope, &args, 0).unwrap_or(0);
@@ -936,5 +964,21 @@ fn set_resolved_promise(
     };
     let promise = resolver.get_promise(scope);
     let _ = resolver.resolve(scope, value);
+    rv.set(promise.into());
+}
+
+fn set_rejected_type_error_promise(
+    scope: &mut v8::PinScope<'_, '_>,
+    rv: &mut v8::ReturnValue<'_, v8::Value>,
+    message: &str,
+) {
+    let Some(resolver) = v8::PromiseResolver::new(scope) else {
+        rv.set(v8::undefined(scope).into());
+        return;
+    };
+    let promise = resolver.get_promise(scope);
+    let message = v8_string(scope, message).unwrap_or_else(|| v8::String::empty(scope));
+    let reason = v8::Exception::type_error(scope, message);
+    let _ = resolver.reject(scope, reason);
     rv.set(promise.into());
 }
