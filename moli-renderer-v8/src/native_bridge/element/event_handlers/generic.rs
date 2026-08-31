@@ -559,6 +559,22 @@ fn event_handler_event_type(name: &str) -> Option<&str> {
         .map(canonical_event_handler_event_type)
 }
 
+fn legacy_lenient_this_event_handler(name: &str) -> bool {
+    matches!(name, "onmouseenter" | "onmouseleave" | "onreadystatechange")
+}
+
+fn handle_invalid_event_handler_receiver<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    rv: &mut v8::ReturnValue<'s, v8::Value>,
+    handler_name: &str,
+) {
+    if legacy_lenient_this_event_handler(handler_name) {
+        rv.set_undefined();
+    } else {
+        throw_type_error(scope, "Illegal invocation");
+    }
+}
+
 pub(crate) fn canonical_event_handler_event_type(event_type: &str) -> &str {
     match event_type {
         "webkitanimationend" => "webkitAnimationEnd",
