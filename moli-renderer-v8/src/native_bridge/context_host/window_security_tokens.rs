@@ -139,6 +139,33 @@ impl JsContextHost {
         top.can_access(&child)
     }
 
+    /// Compares the Window's origin with its top-level origin without applying
+    /// `document.domain` relaxation. Algorithms that require "same origin"
+    /// use this rather than the broader Window access check.
+    pub(crate) fn child_window_has_same_origin_with_its_top_level_origin(
+        &self,
+        handle: DomHandle,
+    ) -> bool {
+        let mut top_child = handle;
+        for _ in 0..=self.child_browsing_contexts.len() {
+            let Some(parent) = self.child_browsing_context_parent_handle(top_child) else {
+                break;
+            };
+            top_child = parent;
+        }
+        let top = match self.child_browsing_context_popup_owner_id(top_child) {
+            Some(popup_id) => self.lightweight_popup_window_access_origin(popup_id),
+            None => self.main_window_access_origin(),
+        };
+        let Some(top) = top else {
+            return false;
+        };
+        let Some(child) = self.child_window_access_origin(handle) else {
+            return false;
+        };
+        top.has_same_origin(&child)
+    }
+
     pub(in crate::native_bridge::context_host) fn child_window_can_access_lightweight_popup(
         &self,
         handle: DomHandle,
@@ -385,6 +412,30 @@ impl WindowAccessOrigin {
         }
     }
 
+    fn has_same_origin(&self, target: &Self) -> bool {
+        match (self, target) {
+            (
+                Self::Opaque {
+                    identity: Some(origin),
+                },
+                Self::Opaque {
+                    identity: Some(target_origin),
+                },
+            ) => origin == target_origin,
+            (
+                Self::Tuple {
+                    serialized_origin: origin,
+                    ..
+                },
+                Self::Tuple {
+                    serialized_origin: target_origin,
+                    ..
+                },
+            ) => origin == target_origin,
+            _ => false,
+        }
+    }
+
     pub(in crate::native_bridge::context_host) fn serialized_origin(&self) -> String {
         match self {
             Self::Opaque { .. } => "null".to_owned(),
@@ -484,6 +535,29 @@ mod tests {
 
         assert!(accessing.can_access(&target));
         assert!(!accessing.can_access(&target_without_domain));
+    }
+
+    #[test]
+    fn same_origin_check_does_not_use_document_domain_relaxation() {
+        let original = WindowAccessOrigin::from_serialized_origin(
+            "https://www.example.test:8443".to_owned(),
+            None,
+        )
+        .expect("original origin");
+        let original_with_domain = WindowAccessOrigin::from_serialized_origin(
+            "https://www.example.test:8443".to_owned(),
+            Some("example.test".to_owned()),
+        )
+        .expect("original origin with document.domain");
+        let relaxed_peer = WindowAccessOrigin::from_serialized_origin(
+            "https://sub.example.test:9443".to_owned(),
+            Some("example.test".to_owned()),
+        )
+        .expect("relaxed peer origin");
+
+        assert!(original.has_same_origin(&original_with_domain));
+        assert!(!original_with_domain.has_same_origin(&relaxed_peer));
+        assert!(original_with_domain.can_access(&relaxed_peer));
     }
 
     #[test]
