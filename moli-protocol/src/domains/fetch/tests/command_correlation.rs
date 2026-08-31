@@ -4,6 +4,9 @@ use crate::conn::{
     PendingSubresourceFetchAuthRequest, PendingSubresourceFetchOwnerKind,
     PendingSubresourceFetchRequest, PendingSubresourceFetchResponseRequest,
 };
+use crate::domains::fetch::{
+    PendingFetchCommandDispatch, PendingFetchCommandKind, PendingFetchCommandOperation,
+};
 use moli_core::page::SubresourceResourceType;
 
 async fn context_with_loaded_fetch_page() -> TestContext {
@@ -145,6 +148,37 @@ async fn assert_correlation_lifetime(
             .in_flight_subresource_fetch_request_id_for_session_owner(Some("SID-1"), internal_id,),
         None,
         "failed renderer completion must roll back prepared correlation state"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn deferred_fetch_command_keeps_its_exact_page_for_implicit_work() {
+    let mut ctx = TestContext::new();
+    let mut browser_context = BrowserContext::new("BID-1".to_owned());
+    browser_context.set_active_target_id("TID-active".to_owned());
+    browser_context.attach_active_session("SID-active".to_owned());
+    browser_context.insert_page_target_host(PageTargetHost::with_url(
+        "TID-background".to_owned(),
+        Some("SID-background".to_owned()),
+        "https://example.test/background".to_owned(),
+    ));
+    ctx.conn.browser_context = Some(browser_context);
+
+    let completed = PendingFetchCommandDispatch::new(
+        &ctx.conn,
+        Some(70),
+        Some("SID-background"),
+        PendingFetchCommandKind::GetResponseBody,
+        PendingFetchCommandOperation::Ready,
+    )
+    .wait()
+    .await;
+    let mut scope = completed.owner_scope.enter(&mut ctx.conn);
+
+    assert_eq!(
+        scope.conn_mut().target_owner_identity_for_session(None),
+        Some(("BID-1".to_owned(), Some("TID-background".to_owned()))),
+        "protocol-neutral completion work must stay on the Page that issued the Fetch command"
     );
 }
 

@@ -377,6 +377,7 @@ fn start_devtools_continue_intercepted_request_command(
         }
         pending.request_cookie_report = page::navigation_cookie_access_report(
             conn,
+            command_session_id,
             &pending.navigation.requested_url,
             &pending.navigation.request_method,
             None,

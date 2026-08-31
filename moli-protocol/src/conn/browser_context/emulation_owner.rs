@@ -92,9 +92,16 @@ impl TargetSessionOwnerMut<'_> {
         .unwrap_or(Err("BrowserContextNotLoaded"))
     }
 
-    fn set_base_locale_override(&mut self, locale_override: Option<String>) -> bool {
+    fn set_base_locale_override(
+        &mut self,
+        locale_override: Option<String>,
+        fallback_identity: &moli_browser_profile::BrowserIdentityProfile,
+    ) -> bool {
         self.mutate_page_state(|state, _is_auxiliary_target_session, _session_id| {
-            state.set_base_locale_override(locale_override);
+            state.set_base_locale_override(locale_override.clone());
+            state
+                .network_policy
+                .set_base_accept_language_override(locale_override, fallback_identity);
         })
         .is_some()
     }
@@ -162,8 +169,11 @@ impl CdpConnection {
         session_id: Option<&str>,
         locale_override: Option<String>,
     ) -> bool {
+        let fallback_identity = self.base_browser_identity.clone();
         self.target_session_owner_mut(session_id)
-            .is_some_and(|mut owner| owner.set_base_locale_override(locale_override))
+            .is_some_and(|mut owner| {
+                owner.set_base_locale_override(locale_override, &fallback_identity)
+            })
     }
 
     pub(crate) fn set_base_timezone_override_for_session_owner(

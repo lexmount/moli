@@ -1,6 +1,7 @@
 mod attachment_identity;
 mod bounds;
 mod browser_context;
+mod browser_identity;
 mod dedicated_worker_target;
 mod devtools_renderer_channel;
 mod devtools_session;
@@ -32,6 +33,7 @@ mod tests;
 // Re-export everything so `use super::state::*` paths continue to work.
 
 pub(crate) use attachment_identity::{NavigationRequestId, TargetPageAttachmentId};
+pub(crate) use browser_identity::BaseBrowserIdentityOverrideState;
 pub use identity::TargetPageResidenceIdentity as DevToolsPageResidenceIdentity;
 pub use identity::URL_BASE;
 pub(crate) use identity::{

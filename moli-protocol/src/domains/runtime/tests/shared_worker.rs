@@ -605,7 +605,7 @@ onconnect = event => {
     assert_eq!(
         isolate_scope["loadedDocumentRendererOwnerCount"],
         json!(1),
-        "active and background documents loaded through the same browser context should share one renderer owner: {response:?}"
+        "this accounting fixture deliberately reuses the active engine for both document snapshots: {response:?}"
     );
     assert_eq!(
         isolate_scope["estimatedDocumentIsolateCount"],
@@ -770,8 +770,8 @@ onconnect = event => {
     assert_eq!(isolate_scope["loadedDocumentPageCount"], json!(2));
     assert_eq!(
         isolate_scope["loadedDocumentRendererOwnerCount"],
-        json!(1),
-        "opener and popup should share one renderer owner: {response:?}"
+        json!(2),
+        "opener and popup must remain independently schedulable: {response:?}"
     );
     assert_eq!(
         isolate_scope["estimatedDocumentIsolateCount"],

@@ -68,14 +68,9 @@ struct CompletedBrowserPageCommand {
 }
 
 #[derive(Clone)]
-enum PendingBrowserPageTarget {
-    BrowserContextActive {
-        browser_context_id: String,
-    },
-    BrowserContextBackground {
-        browser_context_id: String,
-        target_id: String,
-    },
+struct PendingBrowserPageTarget {
+    browser_context_id: String,
+    target_id: String,
 }
 
 impl PendingBrowserCommandDispatch {
@@ -690,25 +685,13 @@ fn start_loaded_page_permission_override_commands(
                 embedded_origin: entry.embedded_origin.clone(),
             })
             .collect::<Vec<_>>();
-        if let Some(page) = browser_context.active_target.runtime_slot.loaded_page_mut() {
-            pending.push(PendingBrowserPageCommand {
-                target: PendingBrowserPageTarget::BrowserContextActive {
-                    browser_context_id: browser_context_id.clone(),
-                },
-                pending: page
-                    .start_set_permission_overrides(&effective_overrides)
-                    .map_err(|error| {
-                        format!("failed to update page permission overrides: {error}")
-                    })?,
-            });
-        }
-        for target in browser_context.background_targets_mut() {
+        for target in browser_context.page_targets.iter_mut() {
             let target_id = target.target_id().to_owned();
             let Some(page) = target.loaded_page_mut() else {
                 continue;
             };
             pending.push(PendingBrowserPageCommand {
-                target: PendingBrowserPageTarget::BrowserContextBackground {
+                target: PendingBrowserPageTarget {
                     browser_context_id: browser_context_id.clone(),
                     target_id,
                 },
@@ -761,21 +744,11 @@ fn finish_pending_permission_override_command(
     target: PendingBrowserPageTarget,
     completion: CompletedPageCommand,
 ) -> Result<(), String> {
-    let page = match target {
-        PendingBrowserPageTarget::BrowserContextActive { browser_context_id } => conn
-            .browser_context_by_id_mut(&browser_context_id)
-            .and_then(|browser_context| {
-                browser_context.active_target.runtime_slot.loaded_page_mut()
-            }),
-        PendingBrowserPageTarget::BrowserContextBackground {
-            browser_context_id,
-            target_id,
-        } => conn
-            .browser_context_by_id_mut(&browser_context_id)
-            .and_then(|browser_context| browser_context.background_target_mut(&target_id))
-            .and_then(|target| target.loaded_page_mut()),
-    }
-    .ok_or_else(|| "NoDocumentLoaded".to_owned())?;
+    let page = conn
+        .browser_context_by_id_mut(&target.browser_context_id)
+        .and_then(|browser_context| browser_context.page_target_mut(&target.target_id))
+        .and_then(|target| target.loaded_page_mut())
+        .ok_or_else(|| "NoDocumentLoaded".to_owned())?;
     page.finish_set_permission_overrides(completion)
         .map_err(|error| error.to_string())
 }

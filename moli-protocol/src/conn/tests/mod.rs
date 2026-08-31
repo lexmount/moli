@@ -738,11 +738,12 @@ async fn memory_diagnostics_reports_page_vm_document_isolate_model() {
     );
     assert_eq!(
         diagnostics["isolateScope"]["estimatedRendererOwnerCount"],
-        json!(1)
+        json!(2)
     );
     assert_eq!(
         diagnostics["isolateScope"]["loadedDocumentRendererOwnerCount"],
-        json!(1)
+        json!(2),
+        "each loaded PageTargetHost owns an independently schedulable renderer owner"
     );
     assert_eq!(
         diagnostics["isolateScope"]["estimatedDocumentIsolateCount"],
@@ -952,17 +953,17 @@ async fn memory_diagnostics_excludes_empty_page_hosts_from_document_isolates() {
     );
     assert_eq!(
         diagnostics["isolateScope"]["pageNavigationEngineRendererOwnerCount"],
-        json!(1)
+        json!(2)
     );
     assert_eq!(
         diagnostics["isolateScope"]["estimatedRendererOwnerCount"],
-        json!(2),
-        "the empty Page host still contributes renderer owner fixed cost"
+        json!(3),
+        "the isolated empty Page host still contributes renderer owner fixed cost"
     );
     assert_eq!(
         diagnostics["isolateScope"]["loadedDocumentRendererOwnerCount"],
-        json!(1),
-        "the two loaded pages still share one renderer owner"
+        json!(2),
+        "the two loaded pages remain independently schedulable"
     );
     assert_eq!(
         diagnostics["isolateScope"]["estimatedDocumentIsolateCount"],
@@ -1116,7 +1117,7 @@ async fn memory_diagnostics_counts_different_browser_context_document_isolates_s
 }
 
 #[test]
-fn memory_diagnostics_counts_page_engines_by_renderer_owner() {
+fn memory_diagnostics_counts_isolated_page_engines_by_renderer_owner() {
     let mut conn = CdpConnection::new();
     let mut browser_context = BrowserContext::new("BID-shared-diagnostics".to_owned());
     browser_context.set_active_target_id("TID-shared-diagnostics-active");
@@ -1136,8 +1137,8 @@ fn memory_diagnostics_counts_page_engines_by_renderer_owner() {
         .and_then(|context| context.page_navigation_engine("TID-shared-diagnostics-bg"))
         .expect("background PageTargetHost must own an engine");
     assert!(
-        background.shares_renderer_owner_with(active),
-        "same-context PageTargetHost engines must share one renderer owner"
+        !background.shares_renderer_owner_with(active),
+        "same-context PageTargetHost engines must remain independently schedulable"
     );
 
     let diagnostics = conn.moli_memory_diagnostics();
@@ -1149,12 +1150,12 @@ fn memory_diagnostics_counts_page_engines_by_renderer_owner() {
     );
     assert_eq!(
         diagnostics["isolateScope"]["pageNavigationEngineRendererOwnerCount"],
-        json!(0),
-        "same-context Page engines must not count as another renderer owner"
+        json!(1),
+        "the background Page engine must count as another renderer owner"
     );
     assert_eq!(
         diagnostics["isolateScope"]["estimatedRendererOwnerCount"],
-        json!(1)
+        json!(2)
     );
 }
 

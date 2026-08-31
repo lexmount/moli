@@ -2442,81 +2442,31 @@ impl CdpConnection {
         object_id: &str,
     ) -> bool {
         for browser_context in self.browser_contexts() {
-            let active_is_current_owner = matches!(
-                owner,
-                RuntimeRemoteObjectOwnerIdentity::Page {
-                    browser_context_id,
-                    target_id,
-                    ..
-                } if browser_context_id == &browser_context.id
-                    && target_id
-                        .as_deref()
-                        .is_none_or(|target_id| browser_context.is_active_target(target_id))
-            );
-            if active_is_current_owner {
-                let current_devtools_session_id = match owner {
-                    RuntimeRemoteObjectOwnerIdentity::Page {
-                        devtools_session_id,
-                        ..
-                    } => devtools_session_id.as_deref(),
-                    RuntimeRemoteObjectOwnerIdentity::SharedWorker { .. }
-                    | RuntimeRemoteObjectOwnerIdentity::DedicatedWorker { .. }
-                    | RuntimeRemoteObjectOwnerIdentity::ServiceWorker { .. } => None,
-                };
-                if current_devtools_session_id.is_some()
-                    && browser_context
-                        .devtools_sessions
-                        .primary()
-                        .has_runtime_remote_object_id(object_id)
-                {
-                    return true;
-                }
-                for (session_id, state) in browser_context.devtools_sessions.attached_entries() {
-                    if Some(session_id) != current_devtools_session_id
-                        && state.has_runtime_remote_object_id(object_id)
-                    {
-                        return true;
-                    }
-                }
-            } else if browser_context
-                .devtools_sessions
-                .primary()
-                .has_runtime_remote_object_id(object_id)
-                || browser_context
-                    .devtools_sessions
-                    .attached_states()
-                    .any(|state| state.has_runtime_remote_object_id(object_id))
-            {
-                return true;
-            }
-
-            let parked_has_different_owner = match owner {
+            let current_page_owner = match owner {
                 RuntimeRemoteObjectOwnerIdentity::Page {
                     browser_context_id,
                     target_id,
                     devtools_session_id,
-                } if browser_context_id == &browser_context.id => match target_id.as_deref() {
-                    Some(target_id) if !browser_context.is_active_target(target_id) => {
-                        browser_context.background_targets().any(|target| {
-                            if target.is_target(target_id) {
-                                target.has_runtime_remote_object_id_for_different_session(
-                                    devtools_session_id.as_deref(),
-                                    object_id,
-                                )
-                            } else {
-                                target.has_runtime_remote_object_id(object_id)
-                            }
-                        })
-                    }
-                    Some(_) | None => browser_context
-                        .background_targets()
-                        .any(|target| target.has_runtime_remote_object_id(object_id)),
-                },
-                _ => browser_context
-                    .background_targets()
-                    .any(|target| target.has_runtime_remote_object_id(object_id)),
+                } if browser_context_id == &browser_context.id => Some((
+                    target_id
+                        .as_deref()
+                        .or_else(|| browser_context.active_target_id()),
+                    devtools_session_id.as_deref(),
+                )),
+                _ => None,
             };
-            if parked_has_different_owner {
+            if browser_context.page_targets.iter().any(|target| {
+                if current_page_owner
+                    .is_some_and(|(target_id, _)| target_id == Some(target.target_id()))
+                {
+                    target.has_runtime_remote_object_id_for_different_session(
+                        current_page_owner.and_then(|(_, session_id)| session_id),
+                        object_id,
+                    )
+                } else {
+                    target.has_runtime_remote_object_id(object_id)
+                }
+            }) {
                 return true;
             }
 
@@ -6400,6 +6350,21 @@ mod tests {
             ),
             Err("Cannot find object with given id".to_owned()),
             "an id known only to another session must remain inaccessible"
+        );
+    }
+
+    #[test]
+    fn runtime_remote_object_validation_tolerates_an_empty_browser_context() {
+        let mut conn = connection_with_bidi_page_session();
+        conn.insert_browser_context(BrowserContext::new("BID-empty".to_owned()));
+
+        assert!(
+            conn.validate_runtime_remote_object_ids_for_session_owner(
+                Some("SID-active"),
+                &["unregistered-wire-id".to_owned()],
+            )
+            .is_ok(),
+            "an unrelated BrowserContext without a Page target must not be dereferenced as active"
         );
     }
 

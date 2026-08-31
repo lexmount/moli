@@ -63,8 +63,7 @@ pub struct BrowserContext {
     pub(crate) service_worker_domain_sessions: BTreeSet<Option<String>>,
     pub(crate) default_extra_headers: Vec<(String, String)>,
     pub(crate) global_extra_headers: Vec<(String, String)>,
-    pub(crate) default_browser_identity_override:
-        Option<moli_browser_profile::BrowserIdentityProfile>,
+    default_browser_identity: super::BaseBrowserIdentityOverrideState,
     pub(crate) default_locale_override: Option<String>,
     pub(crate) default_timezone_override: Option<String>,
     pub(crate) default_network_conditions: Option<EmulatedNetworkConditions>,
@@ -534,7 +533,7 @@ impl BrowserContext {
             service_worker_domain_sessions: BTreeSet::new(),
             default_extra_headers: Vec::new(),
             global_extra_headers: Vec::new(),
-            default_browser_identity_override: None,
+            default_browser_identity: super::BaseBrowserIdentityOverrideState::default(),
             default_locale_override: None,
             default_timezone_override: None,
             default_network_conditions: None,
@@ -563,20 +562,11 @@ impl BrowserContext {
         &self,
         config: NavigationRuntimeConfig,
     ) -> NavigationEngine {
-        let engine = if let Some(source) = self
-            .page_targets
-            .iter()
-            .find_map(PageTargetHost::navigation_engine)
-        {
-            NavigationEngine::new_with_runtime_config_and_shared_renderer_owner(config, source)
-                .expect("live PageTargetHost renderer owner must accept another page engine")
-        } else {
-            NavigationEngine::new_with_runtime_config_and_browser_context_access(
-                config,
-                self.renderer_runtime_owner_access(),
-            )
-            .expect("live BrowserContext owner must accept a page engine")
-        };
+        let engine = NavigationEngine::new_with_runtime_config_and_browser_context_access(
+            config,
+            self.renderer_runtime_owner_access(),
+        )
+        .expect("live BrowserContext owner must accept a page engine");
         if let Some(sender) = self.renderer_output_transport_sender.clone() {
             engine.set_renderer_output_transport_sender(sender);
         }
@@ -591,34 +581,20 @@ impl BrowserContext {
         self.page_navigation_runtime_config = Some(config.clone());
         self.renderer_output_transport_sender = renderer_output_transport_sender;
 
-        let mut shared_source = self
-            .page_targets
-            .iter()
-            .find_map(PageTargetHost::navigation_engine)
-            .cloned();
         let renderer_runtime = self.renderer_runtime_owner_access();
         let sender = self.renderer_output_transport_sender.clone();
         for host in self.page_targets.iter_mut() {
             if host.navigation_engine().is_some() {
                 continue;
             }
-            let engine = if let Some(source) = shared_source.as_ref() {
-                NavigationEngine::new_with_runtime_config_and_shared_renderer_owner(
-                    config.clone(),
-                    source,
-                )
-                .expect("live PageTargetHost renderer owner must accept another page engine")
-            } else {
-                NavigationEngine::new_with_runtime_config_and_browser_context_access(
-                    config.clone(),
-                    renderer_runtime.clone(),
-                )
-                .expect("live BrowserContext owner must accept a page engine")
-            };
+            let engine = NavigationEngine::new_with_runtime_config_and_browser_context_access(
+                config.clone(),
+                renderer_runtime.clone(),
+            )
+            .expect("live BrowserContext owner must accept a page engine");
             if let Some(sender) = sender.clone() {
                 engine.set_renderer_output_transport_sender(sender);
             }
-            shared_source = Some(engine.clone());
             let replaced = host.replace_navigation_engine(engine);
             debug_assert!(replaced.is_none());
         }
@@ -1649,13 +1625,52 @@ impl BrowserContext {
         self.page_targets
             .active()
             .and_then(|host| host.network_policy.browser_identity_override())
-            .or(self.default_browser_identity_override.as_ref())
+            .or_else(|| self.default_browser_identity.profile())
     }
 
     pub(crate) fn effective_active_browser_identity_override_owned(
         &self,
     ) -> Option<moli_browser_profile::BrowserIdentityProfile> {
         self.effective_active_browser_identity_override().cloned()
+    }
+
+    pub(crate) fn default_browser_identity_override(
+        &self,
+    ) -> Option<&moli_browser_profile::BrowserIdentityProfile> {
+        self.default_browser_identity.profile()
+    }
+
+    pub(crate) fn default_browser_identity_override_owned(
+        &self,
+    ) -> Option<moli_browser_profile::BrowserIdentityProfile> {
+        self.default_browser_identity.profile_owned()
+    }
+
+    pub(crate) fn set_default_user_agent_override(
+        &mut self,
+        user_agent: Option<String>,
+        fallback: &moli_browser_profile::BrowserIdentityProfile,
+    ) {
+        self.default_browser_identity
+            .set_user_agent(user_agent, fallback);
+    }
+
+    pub(crate) fn set_default_locale_override(
+        &mut self,
+        locale: Option<String>,
+        fallback: &moli_browser_profile::BrowserIdentityProfile,
+    ) {
+        self.default_locale_override = locale.clone();
+        self.default_browser_identity
+            .set_accept_language(locale, fallback);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn replace_default_browser_identity_override_for_test(
+        &mut self,
+        identity: moli_browser_profile::BrowserIdentityProfile,
+    ) {
+        self.default_browser_identity.replace_profile(identity);
     }
 
     pub(crate) fn effective_active_locale_override_owned(&self) -> Option<String> {

@@ -616,7 +616,7 @@ pub(crate) struct TargetNetworkPolicyState {
     emulated_download_throughput: f64,
     emulated_upload_throughput: f64,
     emulated_connection_type: Option<String>,
-    base_browser_identity_override: Option<moli_browser_profile::BrowserIdentityProfile>,
+    base_browser_identity: super::BaseBrowserIdentityOverrideState,
     devtools_browser_identity_override: Option<moli_browser_profile::BrowserIdentityProfile>,
     // Target-scoped headers contributed by WebDriver BiDi.
     base_extra_headers: Vec<(String, String)>,
@@ -639,7 +639,7 @@ impl Default for TargetNetworkPolicyState {
             emulated_download_throughput: -1.0,
             emulated_upload_throughput: -1.0,
             emulated_connection_type: None,
-            base_browser_identity_override: None,
+            base_browser_identity: super::BaseBrowserIdentityOverrideState::default(),
             devtools_browser_identity_override: None,
             base_extra_headers: Vec::new(),
             devtools_extra_headers: Vec::new(),
@@ -660,11 +660,11 @@ impl TargetNetworkPolicyState {
     pub(crate) fn clear_session_scoped_state(&mut self) {
         let base_cache_disabled = self.base_cache_disabled;
         let base_extra_headers = std::mem::take(&mut self.base_extra_headers);
-        let base_browser_identity_override = self.base_browser_identity_override.take();
+        let base_browser_identity = std::mem::take(&mut self.base_browser_identity);
         *self = Self::default();
         self.base_cache_disabled = base_cache_disabled;
         self.base_extra_headers = base_extra_headers;
-        self.base_browser_identity_override = base_browser_identity_override;
+        self.base_browser_identity = base_browser_identity;
         self.refresh_extra_headers();
     }
 
@@ -751,7 +751,7 @@ impl TargetNetworkPolicyState {
     ) -> Option<&moli_browser_profile::BrowserIdentityProfile> {
         self.devtools_browser_identity_override
             .as_ref()
-            .or(self.base_browser_identity_override.as_ref())
+            .or_else(|| self.base_browser_identity.profile())
     }
 
     #[cfg(test)]
@@ -778,11 +778,29 @@ impl TargetNetworkPolicyState {
         &mut self,
         browser_identity: moli_browser_profile::BrowserIdentityProfile,
     ) {
-        self.base_browser_identity_override = Some(browser_identity);
+        self.base_browser_identity.replace_profile(browser_identity);
     }
 
     pub(crate) fn clear_browser_identity_override(&mut self) {
-        self.base_browser_identity_override = None;
+        self.base_browser_identity = super::BaseBrowserIdentityOverrideState::default();
+    }
+
+    pub(crate) fn set_base_user_agent_override(
+        &mut self,
+        user_agent: Option<String>,
+        fallback: &moli_browser_profile::BrowserIdentityProfile,
+    ) {
+        self.base_browser_identity
+            .set_user_agent(user_agent, fallback);
+    }
+
+    pub(crate) fn set_base_accept_language_override(
+        &mut self,
+        accept_language: Option<String>,
+        fallback: &moli_browser_profile::BrowserIdentityProfile,
+    ) {
+        self.base_browser_identity
+            .set_accept_language(accept_language, fallback);
     }
 
     #[cfg(test)]

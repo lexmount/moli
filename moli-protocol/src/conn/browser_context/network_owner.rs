@@ -570,9 +570,10 @@ impl TargetSessionOwnerMut<'_> {
         Some(refresh_active_engine)
     }
 
-    fn set_base_browser_identity_override(
+    fn set_base_user_agent_override(
         &mut self,
-        browser_identity: Option<moli_browser_profile::BrowserIdentityProfile>,
+        user_agent: Option<String>,
+        fallback_identity: &moli_browser_profile::BrowserIdentityProfile,
     ) -> Option<bool> {
         let refresh_active_engine = matches!(
             self,
@@ -582,13 +583,9 @@ impl TargetSessionOwnerMut<'_> {
             }
         );
         self.mutate_page_state(|state, _is_auxiliary_target_session, _session_id| {
-            if let Some(browser_identity) = browser_identity {
-                state
-                    .network_policy
-                    .set_browser_identity_override(browser_identity);
-            } else {
-                state.network_policy.clear_browser_identity_override();
-            }
+            state
+                .network_policy
+                .set_base_user_agent_override(user_agent, fallback_identity);
         })?;
         Some(refresh_active_engine)
     }
@@ -1039,10 +1036,26 @@ impl CdpConnection {
                 self.base_browser_identity.accept_language(),
             )
         });
-        self.start_set_base_browser_identity_override_for_session_owner(
-            session_id,
-            browser_identity,
-        )
+        if let Some(result) =
+            self.start_set_non_page_browser_identity_override(session_id, browser_identity)
+        {
+            return result;
+        }
+
+        let fallback_identity = self.base_browser_identity.clone();
+        let Some(mut owner) = self.target_session_owner_mut(session_id) else {
+            return Err("BrowserContextNotLoaded".to_owned());
+        };
+        let Some(refresh_active_engine) =
+            owner.set_base_user_agent_override(user_agent, &fallback_identity)
+        else {
+            return Err("BrowserContextNotLoaded".to_owned());
+        };
+        if refresh_active_engine {
+            self.apply_active_engine_fetch_overrides();
+            return self.start_rebuild_resource_runtime_for_session_owner(session_id);
+        }
+        Ok(None)
     }
 
     fn start_set_non_page_browser_identity_override(
@@ -1098,32 +1111,6 @@ impl CdpConnection {
         let mut owner = owner;
         let Some(refresh_active_engine) =
             owner.set_devtools_browser_identity_override(browser_identity)
-        else {
-            return Err("BrowserContextNotLoaded".to_owned());
-        };
-        if refresh_active_engine {
-            self.apply_active_engine_fetch_overrides();
-            return self.start_rebuild_resource_runtime_for_session_owner(session_id);
-        }
-        Ok(None)
-    }
-
-    pub(crate) fn start_set_base_browser_identity_override_for_session_owner(
-        &mut self,
-        session_id: Option<&str>,
-        browser_identity: Option<moli_browser_profile::BrowserIdentityProfile>,
-    ) -> Result<Option<PendingPageCommand>, String> {
-        if let Some(result) =
-            self.start_set_non_page_browser_identity_override(session_id, browser_identity.clone())
-        {
-            return result;
-        }
-
-        let Some(mut owner) = self.target_session_owner_mut(session_id) else {
-            return Err("BrowserContextNotLoaded".to_owned());
-        };
-        let Some(refresh_active_engine) =
-            owner.set_base_browser_identity_override(browser_identity)
         else {
             return Err("BrowserContextNotLoaded".to_owned());
         };

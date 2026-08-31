@@ -21,9 +21,9 @@ use serde_json::{Value, json};
 use url::Url;
 
 use crate::conn::{
-    BackgroundNavigationLoadJob, BackgroundProtocolEvent, BrowserContext, CapturedBody,
-    CdpConnection, CdpSessionRoute, Cmd, CommandDispatchContext, DocumentNavigationToken,
-    FetchRequestStage, NavigationDispatchState, NavigationLoadOutcome, NavigationRequestLoadPolicy,
+    BackgroundNavigationLoadJob, BackgroundProtocolEvent, CapturedBody, CdpConnection,
+    CdpSessionRoute, Cmd, CommandDispatchContext, DocumentNavigationToken, FetchRequestStage,
+    NavigationDispatchState, NavigationLoadOutcome, NavigationRequestLoadPolicy,
     NavigationResultProjection, NavigationSourceDocumentSecurityContext, PendingFetchNavigation,
     ResponseStageUrlMatchPolicy, monotonic_timestamp_seconds,
 };
@@ -686,34 +686,22 @@ impl BackgroundNavigationCompletion {
     }
 }
 
-pub(crate) fn current_navigation_initiator_url(browser_context: &BrowserContext) -> Option<Url> {
-    if let Some(loaded_page) = browser_context.loaded_page() {
-        let url = loaded_page.final_url().clone();
-        if url.host_str().is_some() {
-            return Some(url);
-        }
-    }
-
-    let url = Url::parse(browser_context.target_url()).ok()?;
-    url.host_str().is_some().then_some(url)
-}
-
 pub(crate) fn navigation_cookie_access_report(
     conn: &CdpConnection,
+    owner_session_id: Option<&str>,
     request_url: &Url,
     method: &str,
     previous_request_url: Option<&Url>,
     _request_load_policy: NavigationRequestLoadPolicy,
     initiator_url_override: Option<&Url>,
 ) -> Option<StoredCookieQueryReport> {
-    let browser_context = conn.browser_context.as_ref()?;
     // Once a navigation commits, the target identity and loaded page already point
     // at the destination document. Redirect diagnostics still need the
     // pre-commit initiator, so callers may override it with a snapshot taken
     // before mutating browser context state.
     let initiator_url = initiator_url_override
         .cloned()
-        .or_else(|| current_navigation_initiator_url(browser_context));
+        .or_else(|| conn.navigation_initiator_url_for_session_owner(owner_session_id));
     let request_context = network::navigation_cookie_request_context(
         request_url,
         method,
@@ -2989,6 +2977,7 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
         if fetch_request_stage == FetchRequestStage::Request {
             pending.request_cookie_report = navigation_cookie_access_report(
                 conn,
+                pending.navigation.navigate_session_id.as_deref(),
                 &pending.navigation.requested_url,
                 &pending.navigation.request_method,
                 None,
@@ -3019,6 +3008,7 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
         if pending.navigation.request_id.is_some() {
             pending.request_cookie_report = navigation_cookie_access_report(
                 conn,
+                pending.navigation.navigate_session_id.as_deref(),
                 &pending.navigation.requested_url,
                 &pending.navigation.request_method,
                 None,
@@ -3048,6 +3038,7 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
         let body_progress_source = if navigation_state.request_id.is_some() {
             let request_cookie_report = navigation_cookie_access_report(
                 conn,
+                navigation_state.navigate_session_id.as_deref(),
                 &navigation_state.requested_url,
                 &navigation_state.request_method,
                 None,
@@ -3125,6 +3116,7 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
     let body_progress_source = if navigation_state.request_id.is_some() {
         let request_cookie_report = navigation_cookie_access_report(
             conn,
+            navigation_state.navigate_session_id.as_deref(),
             &navigation_state.requested_url,
             &navigation_state.request_method,
             None,

@@ -1587,17 +1587,13 @@ async fn execute_devtools_set_user_agent_override_for_browser_contexts(
     command: DevToolsSetUserAgentOverrideCommand,
 ) -> Result<DevToolsCommandResult, DevToolsError> {
     let browser_context_ids = resolve_bidi_browser_context_ids(conn, &command.browser_context_ids)?;
-    let browser_identity = command.user_agent.as_ref().map(|user_agent| {
-        moli_browser_profile::BrowserIdentityProfile::new(
-            user_agent.clone(),
-            conn.fetch_config().browser_identity().accept_language(),
-        )
-    });
+    let fallback_identity = conn.base_browser_identity().clone();
     for browser_context_id in &browser_context_ids {
         let browser_context = conn
             .browser_context_by_id_mut(browser_context_id)
             .expect("resolved browser context must remain addressable");
-        browser_context.default_browser_identity_override = browser_identity.clone();
+        browser_context
+            .set_default_user_agent_override(command.user_agent.clone(), &fallback_identity);
     }
     let routes = top_level_target_routes_for_browser_contexts(conn, Some(&browser_context_ids));
     execute_user_agent_loader_updates_for_routes(
@@ -1739,11 +1735,12 @@ async fn execute_devtools_set_locale_override_for_browser_contexts(
     command: DevToolsSetLocaleOverrideCommand,
 ) -> Result<DevToolsCommandResult, DevToolsError> {
     let browser_context_ids = resolve_bidi_browser_context_ids(conn, &command.browser_context_ids)?;
+    let fallback_identity = conn.base_browser_identity().clone();
     for browser_context_id in &browser_context_ids {
         let browser_context = conn
             .browser_context_by_id_mut(browser_context_id)
             .expect("resolved browser context must remain addressable");
-        browser_context.default_locale_override = command.locale.clone();
+        browser_context.set_default_locale_override(command.locale.clone(), &fallback_identity);
     }
     let routes = top_level_target_routes_for_browser_contexts(conn, Some(&browser_context_ids));
     execute_locale_updates_for_routes(conn, devtools_command_session_id(&command.context), routes)
@@ -1783,15 +1780,22 @@ fn start_locale_update_for_current_route(
     conn: &mut CdpConnection,
     route: &CdpSessionRoute,
 ) -> Result<Vec<PendingEmulationPageCommand>, DevToolsError> {
+    let mut pending = Vec::new();
+    if let Some(identity_update) = start_user_agent_loader_update_for_current_route(conn, route)? {
+        pending.push(identity_update);
+    }
     let target = pending_emulation_target_for_route(route)?;
     let Some(locale_override) = locale_override_for_session(conn, None) else {
-        return Ok(Vec::new());
+        return Ok(pending);
     };
     let Some(page) = loaded_page_mut_for_session(conn, None) else {
-        return Ok(Vec::new());
+        return Ok(pending);
     };
-    start_locale_override_page_command(target, page, locale_override.as_deref())
-        .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, error))
+    pending.extend(
+        start_locale_override_page_command(target, page, locale_override.as_deref())
+            .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, error))?,
+    );
+    Ok(pending)
 }
 
 async fn execute_devtools_set_timezone_override_command_async(

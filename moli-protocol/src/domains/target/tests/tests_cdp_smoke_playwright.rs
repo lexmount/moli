@@ -7,13 +7,6 @@ async fn attached_smoke_session(ctx: &mut TestContext, base: u64) -> AttachedPag
     create_attached_page_session_async(ctx, base, base + 1, base + 2, base + 3, base + 4).await
 }
 
-fn event<'a>(messages: &'a [Value], method: &str) -> &'a Value {
-    messages
-        .iter()
-        .find(|message| message["method"] == json!(method))
-        .unwrap_or_else(|| panic!("missing {method} event in {messages:?}"))
-}
-
 fn paused_request_id(ctx: &mut TestContext, resource_type: &str) -> String {
     let paused = ctx
         .sent
@@ -60,8 +53,12 @@ async fn open_popup_from_session(
         }
     }))
     .await;
-    let messages = ctx.take_all();
-    let created = event(&messages, "Target.targetCreated");
+    let evaluated = take_response_by_id(ctx, id);
+    assert_eq!(evaluated["result"]["result"]["value"], true);
+    let created = ctx.take_first_matching("popup Target.targetCreated", |message| {
+        message["method"] == json!("Target.targetCreated")
+            && message["params"]["targetInfo"]["openerId"].is_string()
+    });
     let target_id = created["params"]["targetInfo"]["targetId"]
         .as_str()
         .expect("popup target id")
@@ -70,7 +67,10 @@ async fn open_popup_from_session(
         .as_str()
         .expect("popup browser context id")
         .to_owned();
-    let attached = event(&messages, "Target.attachedToTarget");
+    let attached = ctx.take_first_matching("popup Target.attachedToTarget", |message| {
+        message["method"] == json!("Target.attachedToTarget")
+            && message["params"]["targetInfo"]["targetId"] == json!(target_id)
+    });
     let popup_session_id = attached["params"]["sessionId"]
         .as_str()
         .expect("popup session id")
@@ -158,7 +158,12 @@ async fn fulfill_popup_document_and_evaluate(
                 && message["params"]["resourceType"] == json!("Document")
         })
         .cloned()
-        .unwrap_or_else(|| panic!("missing popup document pause: {:?}", ctx.sent));
+        .unwrap_or_else(|| {
+            panic!(
+                "missing popup document pause for session {popup_session_id}: {:?}",
+                ctx.sent
+            )
+        });
     assert_eq!(paused["params"]["request"]["url"], popup_url);
     assert!(
         ctx.sent.iter().any(|message| {
@@ -577,4 +582,57 @@ async fn rust_cdp_playwright_multi_context_popup_route_and_evaluate_contract() {
         message["sessionId"] == json!(second_popup_session_id)
             && message["params"]["request"]["url"] == json!(first_popup_url)
     }));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn rust_cdp_playwright_concurrent_popup_routes_keep_their_navigation_owners() {
+    let fixture = SmokeFixtureServer::start().await;
+    let mut ctx = TestContext::new();
+    let opener = attached_smoke_session(&mut ctx, 88_000).await;
+
+    set_auto_attach_waiting_for_debugger(&mut ctx, 88_100).await;
+    ctx.take_all();
+
+    let first_popup_url = fixture.url("/plain?popup=concurrent-first");
+    let (first_popup_target_id, first_popup_session_id, first_popup_context_id) =
+        open_popup_from_session(&mut ctx, 88_101, &opener.session_id, &first_popup_url).await;
+    assert_eq!(first_popup_context_id, opener.browser_context_id);
+    arm_popup_route(
+        &mut ctx,
+        88_110,
+        &first_popup_target_id,
+        &first_popup_session_id,
+    )
+    .await;
+
+    let second_popup_url = fixture.url("/plain?popup=concurrent-second");
+    let (second_popup_target_id, second_popup_session_id, second_popup_context_id) =
+        open_popup_from_session(&mut ctx, 88_201, &opener.session_id, &second_popup_url).await;
+    assert_eq!(second_popup_context_id, opener.browser_context_id);
+    arm_popup_route(
+        &mut ctx,
+        88_210,
+        &second_popup_target_id,
+        &second_popup_session_id,
+    )
+    .await;
+
+    fulfill_popup_document_and_evaluate(
+        &mut ctx,
+        88_220,
+        &second_popup_target_id,
+        &second_popup_session_id,
+        &second_popup_url,
+        "second-popup-routed",
+    )
+    .await;
+    fulfill_popup_document_and_evaluate(
+        &mut ctx,
+        88_230,
+        &first_popup_target_id,
+        &first_popup_session_id,
+        &first_popup_url,
+        "first-popup-routed",
+    )
+    .await;
 }

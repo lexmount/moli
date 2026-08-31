@@ -452,6 +452,26 @@ fn renderer_runtime_inspector_session_id(
 }
 
 impl<'a> TargetSessionOwnerRef<'a> {
+    fn navigation_initiator_url(&self) -> Option<Url> {
+        match self {
+            Self::ActiveTarget {
+                browser_context, ..
+            } => target_navigation_initiator_url(
+                browser_context.target_url(),
+                browser_context.loaded_page(),
+            ),
+            Self::PageTargetHost {
+                browser_context,
+                target_id,
+                ..
+            } => {
+                let target = browser_context.background_target(target_id)?;
+                target_navigation_initiator_url(target.target_url(), target.loaded_page())
+            }
+            Self::NoLoadedBrowserContext => None,
+        }
+    }
+
     pub(super) fn devtools_session_state(&self) -> Option<&'a DevToolsSessionState> {
         match self {
             Self::ActiveTarget {
@@ -784,7 +804,7 @@ impl<'a> TargetSessionOwnerRef<'a> {
                     browser_identity_override: page_state
                         .network_policy
                         .browser_identity_override_owned()
-                        .or_else(|| browser_context.default_browser_identity_override.clone()),
+                        .or_else(|| browser_context.default_browser_identity_override_owned()),
                     http_proxy_override: page_state
                         .http_proxy_override
                         .clone()
@@ -1858,7 +1878,7 @@ impl<'a> TargetSessionOwnerMut<'a> {
                     .merged_extra_headers_for_target_policy(network_policy.extra_headers());
                 let user_agent = network_policy
                     .browser_identity_override()
-                    .or(browser_context.default_browser_identity_override.as_ref())
+                    .or_else(|| browser_context.default_browser_identity_override())
                     .unwrap_or(fallback_browser_identity)
                     .user_agent();
                 apply_user_agent_header(&mut request_headers, user_agent);
@@ -2275,6 +2295,14 @@ impl CdpConnection {
                 self.effective_permission_overrides_for_browser_context_id(browser_context_id);
         }
         inputs
+    }
+
+    pub(crate) fn navigation_initiator_url_for_session_owner(
+        &self,
+        session_id: Option<&str>,
+    ) -> Option<Url> {
+        self.target_session_owner_ref(session_id)
+            .and_then(|owner| owner.navigation_initiator_url())
     }
 
     pub(crate) fn prepare_navigation_request_for_session_owner(
@@ -4073,8 +4101,9 @@ mod tests {
         parked
             .network_policy
             .set_browser_identity_override(test_browser_identity("Active-Only-UA"));
-        parked.default_browser_identity_override =
-            Some(test_browser_identity("Browser-Context-Default-UA"));
+        parked.replace_default_browser_identity_override_for_test(test_browser_identity(
+            "Browser-Context-Default-UA",
+        ));
         parked.insert_page_target_host(crate::conn::PageTargetHost::with_url(
             "TID-parked".to_owned(),
             Some("SID-parked".to_owned()),

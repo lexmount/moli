@@ -281,8 +281,8 @@ async fn popup_target_diagnostics_report_distinct_page_vm_document_isolates() {
     assert_eq!(isolate_scope["loadedDocumentPageCount"], json!(2));
     assert_eq!(
         isolate_scope["loadedDocumentRendererOwnerCount"],
-        json!(1),
-        "opener and loaded popup target should share one renderer owner: {diagnostics:?}"
+        json!(2),
+        "opener and loaded popup target must remain independently schedulable: {diagnostics:?}"
     );
     assert_eq!(
         isolate_scope["estimatedDocumentIsolateCount"],

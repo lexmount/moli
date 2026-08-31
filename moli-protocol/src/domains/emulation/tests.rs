@@ -5,7 +5,8 @@ use crate::conn::{
 };
 use crate::devtools_runtime::{
     DevToolsBrowserContextId, DevToolsCommand, DevToolsCommandContext, DevToolsCommandResult,
-    DevToolsProtocol, DevToolsSessionId, DevToolsSetExtraHeadersCommand, DevToolsTargetId,
+    DevToolsProtocol, DevToolsSessionId, DevToolsSetExtraHeadersCommand,
+    DevToolsSetLocaleOverrideCommand, DevToolsSetUserAgentOverrideCommand, DevToolsTargetId,
 };
 use crate::testing::{TestContext, wait_until_message};
 use axum::{Router, extract::State, http::HeaderMap, response::IntoResponse, routing::get};
@@ -2210,6 +2211,77 @@ async fn locale_override_updates_intl_without_mutating_language_surfaces() {
     let html = loaded_page_html_for_test(&mut ctx).await;
     assert!(
         html.contains(">fr-FR|en-US|en-US,en|en-US,en;q=0.9<"),
+        "got {html}"
+    );
+
+    server.abort();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn bidi_user_context_locale_composes_with_user_agent_on_all_identity_surfaces() {
+    async fn handler(headers: HeaderMap) -> impl IntoResponse {
+        let user_agent = headers
+            .get(axum::http::header::USER_AGENT)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("");
+        let accept_language = headers
+            .get(axum::http::header::ACCEPT_LANGUAGE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("");
+        format!(
+            "<!doctype html><html><body data-user-agent=\"{user_agent}\" data-accept-language=\"{accept_language}\"><script>document.body.textContent = [navigator.userAgent, Intl.DateTimeFormat().resolvedOptions().locale, navigator.language, navigator.languages.join(','), document.body.dataset.acceptLanguage].join('|');</script></body></html>"
+        )
+    }
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, Router::new().route("/page", get(handler)))
+            .await
+            .unwrap();
+    });
+
+    let mut ctx = TestContext::new();
+    let mut bc = BrowserContext::new("BID-1".into());
+    bc.set_active_target_id("TID-1");
+    bc.attach_active_session("SID-1");
+    ctx.conn.browser_context = Some(bc);
+
+    for command in [
+        DevToolsCommand::SetUserAgentOverride(DevToolsSetUserAgentOverrideCommand {
+            context: bidi_command_context(),
+            target_ids: Vec::new(),
+            browser_context_ids: vec![DevToolsBrowserContextId::from("BID-1")],
+            user_agent: Some("MoliBiDi/1.0".to_owned()),
+        }),
+        DevToolsCommand::SetLocaleOverride(DevToolsSetLocaleOverrideCommand {
+            context: bidi_command_context(),
+            target_ids: Vec::new(),
+            browser_context_ids: vec![DevToolsBrowserContextId::from("BID-1")],
+            locale: Some("fr-FR".to_owned()),
+        }),
+    ] {
+        let outcome = ctx.conn.execute_devtools_command(command).await;
+        let (result, events, protocol_events, renderer_output_predecessor) =
+            outcome.into_complete_parts();
+        assert!(matches!(result, Ok(DevToolsCommandResult::Empty)));
+        assert!(events.is_empty());
+        assert!(protocol_events.is_empty());
+        assert!(renderer_output_predecessor.is_none());
+    }
+
+    ctx.process_async(json!({
+        "id": 155,
+        "method": "Page.navigate",
+        "sessionId": "SID-1",
+        "params": { "url": format!("http://{addr}/page") }
+    }))
+    .await;
+
+    let _ = ctx.take_all();
+    let html = loaded_page_html_for_test(&mut ctx).await;
+    assert!(
+        html.contains(">MoliBiDi/1.0|fr-FR|fr-FR|fr-FR|fr-FR<"),
         "got {html}"
     );
 
