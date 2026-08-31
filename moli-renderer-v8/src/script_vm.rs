@@ -2559,6 +2559,21 @@ impl ScriptVm {
             // sampled geometry.
             tracing::warn!(?error, "failed to admit lazy images after layout refresh");
         }
+        if matches!(&result, Ok(Some(_)))
+            && let Err(error) = self.with_default_context_scope(|scope, runtime_ptr| {
+                let host = unsafe { &*runtime_ptr };
+                if let Some(cycle) = host.complete_document_web_font_cycle_after_layout() {
+                    crate::native_bridge::document::settle_document_font_face_set_load_cycle_for_document(
+                        scope,
+                        document,
+                        cycle,
+                    );
+                }
+                Ok(())
+            })
+        {
+            tracing::warn!(?error, "failed to settle document fonts after layout refresh");
+        }
         result
     }
 

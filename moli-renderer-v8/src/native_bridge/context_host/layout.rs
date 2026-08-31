@@ -11,7 +11,7 @@ use crate::{
     css_resource_urls::{CompletedStylesheetWebFont, StylesheetLoadBlockingResource},
     document_runtime::DomHandle,
     native_bridge::element::iframe_handle_viewport,
-    script_vm::web_fonts::DocumentWebFontCompletion,
+    script_vm::web_fonts::{DocumentWebFontCompletion, DocumentWebFontLoadCycleId},
     style_engine::{StyleViewport, StyloStyleEnvironment},
 };
 
@@ -556,6 +556,49 @@ impl JsContextHost {
         self.document_layout_state
             .borrow_mut()
             .retain_active_slots(resources);
+    }
+
+    /// Observes the current authored font sources without starting network
+    /// work. This lets `document.fonts.ready` become pending before the next
+    /// task-boundary resource reconciliation admits concrete requests.
+    pub(crate) fn observe_document_web_font_ready_cycle(
+        &self,
+    ) -> Option<DocumentWebFontLoadCycleId> {
+        let font_fetch_enabled =
+            self.current_main_document_resource_loader()
+                .is_some_and(|loader| {
+                    loader.request_client().optional_resource_fetch_enabled(
+                        crate::types::SubresourceResourceType::Font,
+                    )
+                });
+        let resources = if font_fetch_enabled && self.layout_policy().uses_real_layout() {
+            self.dom_host()
+                .document_element_handle()
+                .and_then(|root| {
+                    crate::layout_renderer::current_native_stylesheet_resources(self, root)
+                })
+                .map(|snapshot| snapshot.web_fonts().to_vec())
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        self.document_layout_state
+            .borrow_mut()
+            .observe_web_font_ready(resources.iter())
+    }
+
+    pub(crate) fn active_document_web_font_load_cycle(&self) -> Option<DocumentWebFontLoadCycleId> {
+        self.document_layout_state
+            .borrow()
+            .active_web_font_load_cycle()
+    }
+
+    pub(crate) fn complete_document_web_font_cycle_after_layout(
+        &self,
+    ) -> Option<DocumentWebFontLoadCycleId> {
+        self.document_layout_state
+            .borrow_mut()
+            .complete_web_font_cycle_after_layout()
     }
 
     pub(crate) fn admit_document_web_font(

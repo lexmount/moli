@@ -91,6 +91,7 @@ from moli_benchmark.wpt_cross.runner import (
     _normalized_navigation_url,
     _run_async,
     _run_one_case,
+    _wait_for_reftest_ready,
     _write_reftest_failure_artifacts,
     CapturedScreenshot,
     CaseResult,
@@ -153,6 +154,85 @@ clear_current_proxy_env()
 
 
 class WptCrossTests(unittest.TestCase):
+    def test_reftest_readiness_renders_before_awaiting_web_fonts(self) -> None:
+        class FakeClient:
+            def __init__(self) -> None:
+                self.commands: list[tuple[str, dict | None, str | None]] = []
+                self.location_evaluations = 0
+
+            async def send(
+                self,
+                method: str,
+                params: dict | None = None,
+                *,
+                session_id: str | None = None,
+            ) -> int:
+                self.commands.append((method, params, session_id))
+                return len(self.commands)
+
+            async def recv_until_id(
+                self, command_id: int, *, timeout: float
+            ) -> tuple[dict, list[dict]]:
+                method, params, _ = self.commands[command_id - 1]
+                if method == "Page.captureScreenshot":
+                    return ({"result": {"data": "discarded"}}, [])
+                if method != "Runtime.evaluate" or params is None:
+                    raise AssertionError((method, params))
+                expression = str(params.get("expression", ""))
+                if "expectedUrl" in expression:
+                    self.location_evaluations += 1
+                    value = {
+                        "href": "http://localhost/case.html",
+                        "expectedHref": "http://localhost/case.html",
+                        "readyState": (
+                            "interactive"
+                            if self.location_evaluations == 1
+                            else "complete"
+                        ),
+                    }
+                else:
+                    value = {
+                        "href": "http://localhost/case.html",
+                        "readyState": "complete",
+                        "width": 800,
+                        "height": 600,
+                        "deviceScaleFactor": 1,
+                    }
+                return ({"result": {"result": {"value": value}}}, [])
+
+        client = FakeClient()
+        identity = _navigation_identity(
+            {
+                "sessionId": "SESSION-1",
+                "result": {"frameId": "FRAME-1", "loaderId": "LOADER-1"},
+            },
+            session_id="SESSION-1",
+            expected_url="http://localhost/case.html",
+        )
+
+        ready, _ = asyncio.run(
+            _wait_for_reftest_ready(
+                client,  # type: ignore[arg-type]
+                "SESSION-1",
+                "http://localhost/case.html",
+                1.0,
+                identity,
+                True,
+            )
+        )
+
+        self.assertEqual(ready["readyState"], "complete")
+        self.assertEqual(
+            [method for method, _, _ in client.commands],
+            [
+                "Runtime.evaluate",
+                "Runtime.evaluate",
+                "Page.captureScreenshot",
+                "Runtime.evaluate",
+            ],
+        )
+        self.assertTrue((client.commands[-1][1] or {}).get("awaitPromise"))
+
     def test_cdp_command_failure_marks_page_session_unusable(self) -> None:
         navigation_response = {
             "result": {"frameId": "FRAME-1", "loaderId": "LOADER-1"},
@@ -438,6 +518,100 @@ class WptCrossTests(unittest.TestCase):
         self.assertEqual(
             sum(command[0] == "Runtime.evaluate" for command in client.commands),
             2,
+        )
+
+    def test_layout_testharness_renders_while_document_fonts_are_loading(self) -> None:
+        class FakeClient:
+            def __init__(self) -> None:
+                self.commands: list[tuple[str, dict | None, str | None]] = []
+                self.evaluations = 0
+
+            async def send(
+                self,
+                method: str,
+                params: dict | None = None,
+                *,
+                session_id: str | None = None,
+            ) -> int:
+                self.commands.append((method, params, session_id))
+                return len(self.commands)
+
+            async def recv_until_id(
+                self, command_id: int, *, timeout: float
+            ) -> tuple[dict, list[dict]]:
+                method = self.commands[command_id - 1][0]
+                if method == "Page.navigate":
+                    return (
+                        {
+                            "sessionId": "SESSION-1",
+                            "result": {
+                                "frameId": "FRAME-1",
+                                "loaderId": "LOADER-1",
+                            },
+                        },
+                        [
+                            {
+                                "method": "Page.frameNavigated",
+                                "sessionId": "SESSION-1",
+                                "params": {
+                                    "frame": {
+                                        "id": "FRAME-1",
+                                        "loaderId": "LOADER-1",
+                                        "url": "http://localhost/font-case.html",
+                                    }
+                                },
+                            }
+                        ],
+                    )
+                if method == "Page.captureScreenshot":
+                    return ({"result": {"data": "discarded"}}, [])
+                self.evaluations += 1
+                payload = None
+                if self.evaluations == 2:
+                    payload = {
+                        "case_path": "/font-case.html",
+                        "source": "completion-callback",
+                        "harness": {"status": 0},
+                        "tests": [{"name": "uses loaded font", "status": 0}],
+                    }
+                return (
+                    {
+                        "result": {
+                            "result": {
+                                "value": {
+                                    "bridgeInstalled": True,
+                                    "fontStatus": (
+                                        "loading" if self.evaluations == 1 else "loaded"
+                                    ),
+                                    "payload": payload,
+                                }
+                            }
+                        }
+                    },
+                    [],
+                )
+
+        client = FakeClient()
+        result = asyncio.run(
+            _run_one_case(
+                client=client,  # type: ignore[arg-type]
+                session_id="SESSION-1",
+                case_path="font-case.html",
+                url="http://localhost/font-case.html",
+                timeout_seconds=1.0,
+                render_pending_fonts=True,
+            )
+        )
+
+        self.assertEqual(result.status, "pass")
+        self.assertEqual(
+            [method for method, _, _ in client.commands],
+            [
+                "Page.navigate",
+                "Runtime.evaluate",
+                "Page.captureScreenshot",
+                "Runtime.evaluate",
+            ],
         )
 
     def test_close_page_disposes_context_with_all_auxiliary_targets(self) -> None:

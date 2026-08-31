@@ -6,7 +6,9 @@ use super::layout_snapshot::LatestLayoutTreeCache;
 use crate::{
     css_resource_urls::{CompletedStylesheetWebFont, StylesheetLoadBlockingResource},
     document_runtime::DomHandle,
-    script_vm::web_fonts::{DocumentWebFontCompletion, DocumentWebFontState},
+    script_vm::web_fonts::{
+        DocumentWebFontCompletion, DocumentWebFontLoadCycleId, DocumentWebFontState,
+    },
     style_engine::{StyleViewport, StylesheetResourceGeneration, StyloStyleEnvironment},
 };
 
@@ -237,6 +239,24 @@ impl DocumentLayoutState {
         resource: StylesheetLoadBlockingResource,
     ) -> Option<StylesheetLoadBlockingResource> {
         self.web_fonts.admit(resource, &mut self.services)
+    }
+
+    pub(super) fn observe_web_font_ready<'a>(
+        &mut self,
+        resources: impl IntoIterator<Item = &'a StylesheetLoadBlockingResource>,
+    ) -> Option<DocumentWebFontLoadCycleId> {
+        self.web_fonts.observe_ready(resources)
+    }
+
+    pub(super) fn active_web_font_load_cycle(&self) -> Option<DocumentWebFontLoadCycleId> {
+        self.web_fonts.active_load_cycle()
+    }
+
+    pub(super) fn complete_web_font_cycle_after_layout(
+        &mut self,
+    ) -> Option<DocumentWebFontLoadCycleId> {
+        let cycle = self.web_fonts.cycle_ready_for_layout()?;
+        self.web_fonts.complete_after_layout(cycle).then_some(cycle)
     }
 
     pub(super) fn complete(
