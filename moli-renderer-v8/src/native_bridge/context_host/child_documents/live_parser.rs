@@ -250,7 +250,9 @@ impl ParserMutationEffectConsumer for ChildFrameLiveParserOwner<'_, '_, '_> {
     }
 
     fn finish_parser_dom_mutations(&mut self) -> std::ops::ControlFlow<()> {
-        if std::mem::take(&mut self.mutation_effects.reaction_queue_active) {
+        if std::mem::take(&mut self.mutation_effects.reaction_queue_active)
+            && !custom_elements::discard_empty_parser_custom_element_reaction_queue(self.host)
+        {
             custom_elements::flush_parser_custom_element_reaction_queue(self.scope, self.host);
         }
         if !self.targets_current_document()
