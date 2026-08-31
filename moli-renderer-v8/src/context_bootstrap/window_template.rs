@@ -74,11 +74,11 @@ struct WindowEarlyTemplateMethodsDeclaration {
     #[webapi(receiver_access_check = false)]
     close: (),
 
-    #[webapi(method, length = 0, callback = window_noop_callback)]
+    #[webapi(method, length = 0, callback = window_focus_callback)]
     #[webapi(receiver_access_check = false)]
     focus: (),
 
-    #[webapi(method, length = 0, callback = window_noop_callback)]
+    #[webapi(method, length = 0, callback = window_blur_callback)]
     #[webapi(receiver_access_check = false)]
     blur: (),
 
