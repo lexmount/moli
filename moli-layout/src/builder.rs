@@ -52,6 +52,35 @@ where
     viewport_body_candidate: Option<ViewportBodyCandidate<S::NodeId>>,
 }
 
+/// Selects both the generated wrapper and its whitespace-suppression rule.
+/// Mixed block/inline flow follows `white-space-collapse`; Flex and Grid omit
+/// an all-CSS-whitespace text sequence before generating an anonymous item,
+/// even when the inherited whitespace mode preserves those characters.
+#[derive(Clone, Copy)]
+enum AnonymousInlineRunRole {
+    MixedFlow,
+    FlexItem,
+    GridItem,
+}
+
+impl AnonymousInlineRunRole {
+    fn box_kind(self) -> LayoutBoxKind {
+        match self {
+            Self::MixedFlow => LayoutBoxKind::AnonymousBlock,
+            Self::FlexItem => LayoutBoxKind::AnonymousFlexItem,
+            Self::GridItem => LayoutBoxKind::AnonymousGridItem,
+        }
+    }
+
+    fn reason(self) -> LayoutAnonymousReason {
+        match self {
+            Self::MixedFlow => LayoutAnonymousReason::MixedFlowInlineRun,
+            Self::FlexItem => LayoutAnonymousReason::FlexTextRun,
+            Self::GridItem => LayoutAnonymousReason::GridTextRun,
+        }
+    }
+}
+
 impl<'a, S, R> BoxBuilder<'a, S, R>
 where
     S: LayoutSource,
@@ -561,7 +590,7 @@ where
                 owner,
                 parent_style,
                 children,
-                LayoutBoxKind::AnonymousFlexItem,
+                AnonymousInlineRunRole::FlexItem,
             )?
         } else if parent_style.display().is_grid_container() {
             self.normalize_item_children(
@@ -569,7 +598,7 @@ where
                 owner,
                 parent_style,
                 children,
-                LayoutBoxKind::AnonymousGridItem,
+                AnonymousInlineRunRole::GridItem,
             )?
         } else {
             self.normalize_flow_children(world, owner, parent_style, children)?
@@ -737,7 +766,7 @@ where
                     world,
                     owner,
                     parent_style,
-                    LayoutBoxKind::AnonymousBlock,
+                    AnonymousInlineRunRole::MixedFlow,
                     &mut output,
                     &mut inline_run,
                 )?;
@@ -754,7 +783,7 @@ where
                     world,
                     owner,
                     parent_style,
-                    LayoutBoxKind::AnonymousBlock,
+                    AnonymousInlineRunRole::MixedFlow,
                     &mut output,
                     &mut inline_run,
                 )?;
@@ -765,7 +794,7 @@ where
             world,
             owner,
             parent_style,
-            LayoutBoxKind::AnonymousBlock,
+            AnonymousInlineRunRole::MixedFlow,
             &mut output,
             &mut inline_run,
         )?;
@@ -778,7 +807,7 @@ where
         owner: S::NodeId,
         parent_style: &ResolvedLayoutStyle,
         children: Vec<LayoutBoxId>,
-        anonymous_kind: LayoutBoxKind,
+        run_role: AnonymousInlineRunRole,
     ) -> Result<Vec<LayoutBoxId>, LayoutError> {
         let mut output = Vec::new();
         let mut text_run = Vec::new();
@@ -794,7 +823,7 @@ where
                 world,
                 owner,
                 parent_style,
-                anonymous_kind,
+                run_role,
                 &mut output,
                 &mut text_run,
             )?;
@@ -809,7 +838,7 @@ where
             world,
             owner,
             parent_style,
-            anonymous_kind,
+            run_role,
             &mut output,
             &mut text_run,
         )?;
@@ -821,7 +850,7 @@ where
         world: &mut LayoutWorld<S::NodeId>,
         owner: S::NodeId,
         parent_style: &ResolvedLayoutStyle,
-        anonymous_kind: LayoutBoxKind,
+        run_role: AnonymousInlineRunRole,
         output: &mut Vec<LayoutBoxId>,
         run: &mut Vec<LayoutBoxId>,
     ) -> Result<(), LayoutError> {
@@ -830,33 +859,14 @@ where
         }
         if run
             .iter()
-            .all(|id| self.is_ignorable_whitespace_text(world, *id))
+            .all(|id| self.is_ignorable_text_for_anonymous_run(world, *id, run_role))
         {
             run.clear();
             return Ok(());
         }
-        let (reason, display) = match anonymous_kind {
-            LayoutBoxKind::AnonymousBlock => (
-                LayoutAnonymousReason::MixedFlowInlineRun,
-                LayoutDisplay::Block,
-            ),
-            LayoutBoxKind::AnonymousFlexItem => {
-                (LayoutAnonymousReason::FlexTextRun, LayoutDisplay::Block)
-            }
-            LayoutBoxKind::AnonymousGridItem => {
-                (LayoutAnonymousReason::GridTextRun, LayoutDisplay::Block)
-            }
-            _ => {
-                return Err(LayoutError::source_contract(
-                    self.source.label(owner),
-                    format!(
-                        "box kind {} cannot be constructed as an anonymous inline-run wrapper",
-                        anonymous_kind.debug_name()
-                    ),
-                ));
-            }
-        };
-        let style = self.styles.anonymous_style(owner, parent_style, display)?;
+        let style = self
+            .styles
+            .anonymous_style(owner, parent_style, LayoutDisplay::Block)?;
         let mut anonymous = LayoutWorld::new_box(
             None,
             Some(owner),
@@ -864,8 +874,8 @@ where
             format!("anonymous({})", self.source.label(owner)),
             Some(self.source.label(owner)),
             None,
-            Some(reason),
-            anonymous_kind,
+            Some(run_role.reason()),
+            run_role.box_kind(),
             style,
             None,
         );
@@ -1206,13 +1216,26 @@ where
         world: &LayoutWorld<S::NodeId>,
         id: LayoutBoxId,
     ) -> bool {
+        self.is_ignorable_text_for_anonymous_run(world, id, AnonymousInlineRunRole::MixedFlow)
+    }
+
+    fn is_ignorable_text_for_anonymous_run(
+        &self,
+        world: &LayoutWorld<S::NodeId>,
+        id: LayoutBoxId,
+        run_role: AnonymousInlineRunRole,
+    ) -> bool {
         world.box_by_id(id).is_some_and(|layout_box| {
             layout_box.kind.is_text()
                 && !layout_box
                     .capability_diagnostics
                     .contains(&LayoutCapabilityDiagnostic::GeneratedContentUnsupported)
                 && layout_box.text.as_deref().is_none_or(|text| {
-                    whitespace_text_is_ignorable(text, layout_box.style.white_space_collapse())
+                    text_is_ignorable_in_anonymous_run(
+                        text,
+                        layout_box.style.white_space_collapse(),
+                        run_role,
+                    )
                 })
         })
     }
@@ -1343,10 +1366,7 @@ fn whitespace_text_is_ignorable(text: &str, mode: InlineWhiteSpaceCollapse) -> b
     if text.is_empty() {
         return true;
     }
-    if !text
-        .chars()
-        .all(|character| matches!(character, ' ' | '\t' | '\n' | '\r' | '\u{000C}'))
-    {
+    if !text_contains_only_css_whitespace(text) {
         return false;
     }
     match mode {
@@ -1355,6 +1375,24 @@ fn whitespace_text_is_ignorable(text: &str, mode: InlineWhiteSpaceCollapse) -> b
             .chars()
             .any(|character| matches!(character, '\n' | '\r' | '\u{000C}')),
         InlineWhiteSpaceCollapse::Preserve | InlineWhiteSpaceCollapse::BreakSpaces => false,
+    }
+}
+
+fn text_contains_only_css_whitespace(text: &str) -> bool {
+    text.chars()
+        .all(|character| matches!(character, ' ' | '\t' | '\n' | '\r' | '\u{000C}'))
+}
+
+fn text_is_ignorable_in_anonymous_run(
+    text: &str,
+    mode: InlineWhiteSpaceCollapse,
+    run_role: AnonymousInlineRunRole,
+) -> bool {
+    match run_role {
+        AnonymousInlineRunRole::MixedFlow => whitespace_text_is_ignorable(text, mode),
+        AnonymousInlineRunRole::FlexItem | AnonymousInlineRunRole::GridItem => {
+            text_contains_only_css_whitespace(text)
+        }
     }
 }
 
@@ -1456,7 +1494,10 @@ fn push_diagnostic(
 
 #[cfg(test)]
 mod tests {
-    use super::{InlineWhiteSpaceCollapse, whitespace_text_is_ignorable};
+    use super::{
+        AnonymousInlineRunRole, InlineWhiteSpaceCollapse, text_contains_only_css_whitespace,
+        text_is_ignorable_in_anonymous_run, whitespace_text_is_ignorable,
+    };
 
     #[test]
     fn only_collapsible_whitespace_is_ignorable_during_box_construction() {
@@ -1483,6 +1524,39 @@ mod tests {
         assert!(!whitespace_text_is_ignorable(
             "\u{00a0}",
             InlineWhiteSpaceCollapse::Collapse,
+        ));
+    }
+
+    #[test]
+    fn flex_and_grid_item_runs_ignore_css_whitespace_independently_of_collapse_mode() {
+        assert!(text_contains_only_css_whitespace(" \t\n\r\u{000C}"));
+        assert!(!text_contains_only_css_whitespace("\u{00a0}"));
+
+        for role in [
+            AnonymousInlineRunRole::FlexItem,
+            AnonymousInlineRunRole::GridItem,
+        ] {
+            assert!(text_is_ignorable_in_anonymous_run(
+                " \t\n\r\u{000C}",
+                InlineWhiteSpaceCollapse::Preserve,
+                role,
+            ));
+            assert!(!text_is_ignorable_in_anonymous_run(
+                "\u{00a0}",
+                InlineWhiteSpaceCollapse::Collapse,
+                role,
+            ));
+            assert!(!text_is_ignorable_in_anonymous_run(
+                " text ",
+                InlineWhiteSpaceCollapse::Preserve,
+                role,
+            ));
+        }
+
+        assert!(!text_is_ignorable_in_anonymous_run(
+            " \n",
+            InlineWhiteSpaceCollapse::Preserve,
+            AnonymousInlineRunRole::MixedFlow,
         ));
     }
 }

@@ -587,6 +587,43 @@ fn grid_direct_text_uses_one_anonymous_grid_item_and_keeps_text_boundaries() {
 }
 
 #[test]
+fn flex_and_grid_distinguish_css_whitespace_from_non_breaking_space_items() {
+    let cases = [
+        (LayoutDisplay::Flex, LayoutBoxKind::AnonymousFlexItem),
+        (LayoutDisplay::Grid, LayoutBoxKind::AnonymousGridItem),
+    ];
+
+    for (container_display, anonymous_kind) in cases {
+        let source = TestSource {
+            root: 0,
+            nodes: vec![
+                TestNode::element("root", vec![1, 2, 3]),
+                TestNode::text("css-whitespace", " \t\n"),
+                TestNode::element("item", Vec::new()),
+                TestNode::text("non-breaking-space", "\u{00a0}"),
+            ],
+        };
+        let mut styles = TestStyles::default();
+        styles.primary.insert(0, style(container_display));
+        styles.primary.insert(2, style(LayoutDisplay::Block));
+
+        let world = build_layout_world(&source, &mut styles).unwrap();
+        let root = world.box_by_id(world.root()).unwrap();
+        assert_eq!(root.children().len(), 2, "display={container_display:?}");
+        assert_eq!(world.source_box(1), None, "display={container_display:?}");
+        assert_eq!(
+            world.box_by_id(root.children()[1]).unwrap().kind(),
+            anonymous_kind,
+            "display={container_display:?}",
+        );
+        assert!(
+            world.source_box(3).is_some(),
+            "display={container_display:?}"
+        );
+    }
+}
+
+#[test]
 fn contents_text_is_an_item_of_the_flattened_flex_or_grid_container() {
     let cases = [
         (
