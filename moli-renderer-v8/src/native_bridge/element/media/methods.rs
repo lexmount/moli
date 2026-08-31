@@ -83,12 +83,18 @@ pub(in crate::native_bridge) fn media_load_callback<'s>(
     };
     let runtime = unsafe { &mut *runtime_ptr };
     let _ = runtime.cancel_pending_media_load_sequence(handle);
+    let error_changed = runtime.set_media_error_code(handle, None);
     let paused_changed = runtime.set_media_paused(handle, true);
     let time_changed = runtime.set_media_current_time(handle, 0.0);
     let seeking_changed = runtime.set_media_seeking(handle, false);
     let ready_changed = runtime.set_media_ready_state(handle, 0);
     let network_changed = runtime.set_media_network_state(handle, 0);
-    if (paused_changed || time_changed || seeking_changed || ready_changed || network_changed)
+    if (error_changed
+        || paused_changed
+        || time_changed
+        || seeking_changed
+        || ready_changed
+        || network_changed)
         && let Some(event) = construct_simple_event(scope, "emptied", false, false, false)
     {
         let _ = dispatch_public_event(scope, runtime_ptr, handle, event);

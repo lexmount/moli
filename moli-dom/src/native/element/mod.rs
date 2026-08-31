@@ -912,6 +912,10 @@ impl Element {
         self.control_state().media_network_state().unwrap_or(0)
     }
 
+    pub fn media_error_code(&self) -> Option<u32> {
+        self.control_state().media_error_code()
+    }
+
     pub fn scroll_top(&self) -> f64 {
         self.control_state().scroll_top().unwrap_or(0.0)
     }
@@ -1033,6 +1037,13 @@ impl Element {
         }
         self.control_state_mut()
             .set_media_network_state(network_state)
+    }
+
+    pub fn set_media_error_code(&mut self, error_code: Option<u32>) -> bool {
+        if !self.is_html_media() {
+            return false;
+        }
+        self.control_state_mut().set_media_error_code(error_code)
     }
 
     pub fn option_value(&self, dom: &NativeDom, handle: NativeNodeId) -> String {

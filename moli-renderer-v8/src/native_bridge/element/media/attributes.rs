@@ -458,6 +458,7 @@ fn start_media_load(
     };
     super::apply_default_text_track_modes_for_media(scope, runtime_ptr, handle);
     super::queue_media_selection_text_track_loads(scope, runtime_ptr, handle, pending.id());
+    let _ = unsafe { &mut *runtime_ptr }.set_media_error_code(handle, None);
     let _ = unsafe { &mut *runtime_ptr }.set_media_ready_state(handle, 0);
     let _ = unsafe { &mut *runtime_ptr }.set_media_network_state(handle, 2);
     if !queue_media_load_event_phase(
@@ -619,6 +620,7 @@ pub(crate) fn dispatch_media_load_event_phase(
             let _ = unsafe { &mut *runtime_ptr }.set_media_network_state(handle, 1);
         }
         MediaLoadEventPhase::Error => {
+            let _ = unsafe { &mut *runtime_ptr }.set_media_error_code(handle, Some(4));
             let _ = unsafe { &mut *runtime_ptr }.set_media_ready_state(handle, 0);
             let _ = unsafe { &mut *runtime_ptr }.set_media_network_state(handle, 3);
         }

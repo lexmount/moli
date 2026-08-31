@@ -579,6 +579,7 @@ impl DomHost {
         let _ = clone_element.set_media_ready_state(element.media_ready_state());
         let _ = clone_element.set_media_network_state(u32::MAX);
         let _ = clone_element.set_media_network_state(element.media_network_state());
+        let _ = clone_element.set_media_error_code(element.media_error_code());
     }
 }
 

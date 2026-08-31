@@ -22,6 +22,8 @@ const TEXT_TRACK_CUE_ALIGN_SLOT: &str = "__moliTextTrackCueAlign";
 const TEXT_TRACK_CUE_ONENTER_SLOT: &str = "__moliTextTrackCueOnEnter";
 const TEXT_TRACK_CUE_ONEXIT_SLOT: &str = "__moliTextTrackCueOnExit";
 const TEXT_TRACK_CUE_TEXT_SLOT: &str = "__moliTextTrackCueText";
+const MEDIA_ERROR_CODE_SLOT: &str = "__moliMediaErrorCode";
+const MEDIA_ERROR_MESSAGE_SLOT: &str = "__moliMediaErrorMessage";
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "VTTCue")]
@@ -201,6 +203,75 @@ struct MediaErrorConstantsDeclaration {
     media_err_decode: (),
     #[webapi(constant = "MEDIA_ERR_SRC_NOT_SUPPORTED", value = 4u32)]
     media_err_src_not_supported: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(name = "MediaError", enumerable)]
+struct MediaErrorPrototypeDeclaration {
+    #[webapi(
+        accessor_property,
+        getter = media_error_code_getter_callback,
+        enumerable
+    )]
+    code: (),
+    #[webapi(
+        accessor_property,
+        getter = media_error_message_getter_callback,
+        enumerable
+    )]
+    message: (),
+}
+
+fn media_error_code_getter_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let Some(code) = get_private_value(scope, args.this(), MEDIA_ERROR_CODE_SLOT) else {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    };
+    rv.set(code);
+}
+
+fn media_error_message_getter_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let Some(message) = get_private_value(scope, args.this(), MEDIA_ERROR_MESSAGE_SLOT) else {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    };
+    rv.set(message);
+}
+
+pub(crate) fn new_media_error_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    code: u32,
+    message: &str,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let global = scope.get_current_context().global(scope);
+    let constructor = global.get(scope, v8str(scope, "MediaError").into())?;
+    let constructor = v8::Local::<v8::Object>::try_from(constructor).ok()?;
+    let prototype = constructor.get(scope, v8str(scope, "prototype").into())?;
+    let object = v8::Object::new(scope);
+    if object.set_prototype(scope, prototype) != Some(true) {
+        return None;
+    }
+    set_private_value(
+        scope,
+        object,
+        MEDIA_ERROR_CODE_SLOT,
+        v8::Integer::new_from_unsigned(scope, code).into(),
+    );
+    set_private_value(
+        scope,
+        object,
+        MEDIA_ERROR_MESSAGE_SLOT,
+        v8_string(scope, message)?.into(),
+    );
+    Some(object)
 }
 
 pub(super) fn text_track_cue_constructor_callback<'s>(
@@ -1091,6 +1162,7 @@ pub(super) fn install_media_cue_template_bindings<'s>(
         "MediaError" => {
             MediaErrorConstantsDeclaration::initialize_template(scope, template);
             MediaErrorConstantsDeclaration::initialize_prototype_template(scope, prototype);
+            MediaErrorPrototypeDeclaration::initialize_prototype_template(scope, prototype);
         }
         "TextTrackCue" => {
             TextTrackCueTemplateDeclaration::initialize_prototype_template(scope, prototype)
