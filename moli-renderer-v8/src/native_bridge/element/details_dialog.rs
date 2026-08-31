@@ -150,6 +150,54 @@ pub(super) fn node_is_hidden_by_closed_details(runtime: &JsContextHost, handle: 
     false
 }
 
+pub(super) fn closed_details_ancestors_to_reveal(
+    runtime: &JsContextHost,
+    target: DomHandle,
+) -> Vec<DomHandle> {
+    let mut ancestors = Vec::new();
+    let mut branch = target;
+    while let Some(parent) = details_reveal_flat_tree_parent(runtime, branch) {
+        if runtime.dom_host().is_html_element_named(parent, "details")
+            && !element_has_attribute(runtime, parent, "open")
+            && main_summary_child(runtime, parent) != Some(branch)
+        {
+            ancestors.push(parent);
+        }
+        branch = parent;
+    }
+    ancestors
+}
+
+fn details_reveal_flat_tree_parent(
+    runtime: &JsContextHost,
+    handle: DomHandle,
+) -> Option<DomHandle> {
+    if let Some(slot) = runtime.dom_host().assigned_slot_for_node(handle) {
+        return Some(slot);
+    }
+    let parent = runtime.dom_host().parent_node(handle)?;
+    if runtime.dom_host().is_shadow_root(parent) {
+        return runtime.dom_host().shadow_root_host(parent);
+    }
+    if runtime.dom_host().is_html_element_named(parent, "slot")
+        && !runtime
+            .dom_host()
+            .assigned_nodes_for_slot_with_options(parent, false)
+            .is_empty()
+    {
+        return None;
+    }
+    if runtime.dom_host().shadow_root_handle(parent).is_some()
+        && runtime
+            .dom_host()
+            .node(handle)
+            .is_some_and(|node| node.is_element() || node.is_text())
+    {
+        return None;
+    }
+    Some(parent)
+}
+
 fn main_summary_details_handle(runtime: &JsContextHost, summary: DomHandle) -> Option<DomHandle> {
     let summary_element = runtime
         .dom_host()
