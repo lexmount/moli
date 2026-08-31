@@ -1751,6 +1751,76 @@ document.body.innerHTML = `<div id=stage>
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn grid_cyclic_percentage_minimums_resolve_before_final_item_percentages() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/grid-percentage-minimums.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0;padding:0}
+#grid{
+  display:grid;
+  width:10px;
+  height:10px;
+  grid-template-columns:3px auto 4px;
+  grid-template-rows:1px auto 2px;
+  justify-items:start;
+  align-items:start;
+}
+#item{
+  grid-column:2;
+  grid-row:2;
+  width:100%;
+  height:100%;
+  min-width:100%;
+  min-height:100%;
+}
+#content{width:30px;height:30px}
+#tail{grid-column:3;grid-row:3;width:1px;height:1px}
+</style>`;
+document.body.innerHTML = `<div id=grid><div id=item><div id=content></div></div><div id=tail></div></div>`;
+'installed'
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(20, 20, 1.0))?
+            .expect("grid percentage minimum fixture should have a document element");
+
+        let geometry = page_vm.vm_mut().eval(
+            r#"JSON.stringify(Object.fromEntries(['grid','item','tail'].map(id=>{const r=document.getElementById(id).getBoundingClientRect();return [id,[r.x,r.y,r.width,r.height]]})))"#,
+        )?;
+        let geometry: serde_json::Value = serde_json::from_str(&geometry)?;
+        for (id, expected) in [
+            ("grid", [0.0, 0.0, 10.0, 10.0]),
+            ("item", [3.0, 1.0, 3.0, 7.0]),
+            ("tail", [6.0, 8.0, 1.0, 1.0]),
+        ] {
+            let actual = geometry[id]
+                .as_array()
+                .unwrap_or_else(|| panic!("missing geometry for {id}: {geometry}"));
+            for (index, expected) in expected.into_iter().enumerate() {
+                let actual = actual[index].as_f64().expect("numeric geometry") as f32;
+                assert!(
+                    (actual - expected).abs() <= 0.05,
+                    "{id}[{index}]: expected {expected}, got {actual}; geometry={geometry}"
+                );
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("grid percentage minimum fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn absolute_content_based_block_constraints_match_chromium_across_formatting_contexts() {
     run_page_vm_async_test(async move {
         let loader =
