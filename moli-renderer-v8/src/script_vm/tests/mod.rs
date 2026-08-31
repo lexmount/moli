@@ -5838,6 +5838,79 @@ fn embedded_frame_owners_create_child_contexts_only_for_document_content() {
 }
 
 #[test]
+fn frame_owner_content_accessors_live_on_exact_owner_prototypes() {
+    let mut vm = new_storage_test_vm("https://frame-owner-content-accessors.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const root = document.body || document.documentElement || document;
+  const frame = document.createElement("frame");
+  frame.src = "about:blank";
+  const iframe = document.createElement("iframe");
+  iframe.src = "about:blank";
+  const object = document.createElement("object");
+  object.type = "text/html";
+  object.data = "about:blank";
+
+  const owners = [
+    [HTMLFrameElement.prototype, frame],
+    [HTMLIFrameElement.prototype, iframe],
+    [HTMLObjectElement.prototype, object]
+  ];
+  for (const [, element] of owners) {
+    root.appendChild(element);
+  }
+
+  const properties = ["contentDocument", "contentWindow"];
+  const descriptors = owners.map(([prototype]) =>
+    Object.fromEntries(properties.map(property => {
+      const descriptor = Object.getOwnPropertyDescriptor(prototype, property);
+      return [property, {
+        get: typeof descriptor.get,
+        set: typeof descriptor.set,
+        enumerable: descriptor.enumerable,
+        configurable: descriptor.configurable
+      }];
+    }))
+  );
+  const sameOriginValues = owners.map(([, element]) =>
+    element.contentDocument !== null &&
+      element.contentWindow !== null &&
+      element.contentDocument === element.contentWindow.document
+  );
+  const brandErrors = owners.map(([prototype], index) =>
+    properties.map(property => {
+      const getter = Object.getOwnPropertyDescriptor(prototype, property).get;
+      try {
+        getter.call(owners[(index + 1) % owners.length][1]);
+        return "accepted";
+      } catch (error) {
+        return error.name;
+      }
+    })
+  );
+
+  return JSON.stringify({
+    descriptors,
+    sameOriginValues,
+    brandErrors,
+    absentFromBase: properties.every(property =>
+      !Object.hasOwn(HTMLElement.prototype, property))
+  });
+})()
+"#,
+        )
+        .expect("frame owner content accessors should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"descriptors":[{"contentDocument":{"get":"function","set":"undefined","enumerable":true,"configurable":true},"contentWindow":{"get":"function","set":"undefined","enumerable":true,"configurable":true}},{"contentDocument":{"get":"function","set":"undefined","enumerable":true,"configurable":true},"contentWindow":{"get":"function","set":"undefined","enumerable":true,"configurable":true}},{"contentDocument":{"get":"function","set":"undefined","enumerable":true,"configurable":true},"contentWindow":{"get":"function","set":"undefined","enumerable":true,"configurable":true}}],"sameOriginValues":[true,true,true],"brandErrors":[["TypeError","TypeError"],["TypeError","TypeError"],["TypeError","TypeError"]],"absentFromBase":true}"#
+    );
+}
+
+#[test]
 fn frame_owner_get_svg_document_methods_share_content_document_semantics_and_enforce_brands() {
     let mut vm = new_storage_test_vm("https://frame-owner-get-svg-document.test/");
 
