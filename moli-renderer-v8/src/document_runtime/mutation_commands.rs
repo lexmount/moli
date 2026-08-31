@@ -1895,6 +1895,7 @@ impl DocumentRuntime {
 
 pub(crate) struct RuntimeMutationApplyResult {
     changed: bool,
+    document_followups_deferred_to_parser_owner: bool,
     meta_refresh_candidates: Vec<super::meta_refresh::MetaRefreshMutationCandidate>,
     devtools_dom_mutations: Vec<super::devtools_mutations::DevToolsDomMutationFact>,
     runtime_script_start_candidates: Vec<crate::mutation_coordinator::RuntimeScriptStartCandidate>,
@@ -1937,6 +1938,7 @@ pub(super) fn finish_runtime_mutation_effects(
 ) -> bool {
     let RuntimeMutationApplyResult {
         changed,
+        document_followups_deferred_to_parser_owner,
         meta_refresh_candidates,
         devtools_dom_mutations,
         runtime_script_start_candidates,
@@ -1949,7 +1951,9 @@ pub(super) fn finish_runtime_mutation_effects(
 
     runtime.queue_devtools_dom_mutations(devtools_dom_mutations);
 
-    runtime.finish_meta_refresh_mutation_candidates(scope, host_ptr, meta_refresh_candidates);
+    if !document_followups_deferred_to_parser_owner {
+        runtime.finish_meta_refresh_mutation_candidates(scope, host_ptr, meta_refresh_candidates);
+    }
 
     for candidate in runtime_script_start_candidates {
         finish_runtime_script_start_candidate(runtime, scope, host_ptr, candidate);
@@ -1960,17 +1964,22 @@ pub(super) fn finish_runtime_mutation_effects(
     }
     unsafe { &mut *host_ptr }.queue_slotchange_events(scope, &changed_slots);
 
-    if changed {
-        runtime.apply_style_csp_mutation_followups(
-            scope,
-            host_ptr,
-            &inline_style_attribute_csp_mutations,
-            &connected_style_csp_roots,
-            &stylesheet_owner_changes,
-        );
+    if !document_followups_deferred_to_parser_owner {
+        if changed {
+            runtime.apply_style_csp_mutation_followups(
+                scope,
+                host_ptr,
+                &inline_style_attribute_csp_mutations,
+                &connected_style_csp_roots,
+                &stylesheet_owner_changes,
+            );
+        }
+        runtime.apply_pending_stylesheet_source_css_projections(scope, host_ptr);
     }
-    runtime.apply_pending_stylesheet_source_css_projections(scope, host_ptr);
-    if changed && !stylesheet_owner_changes.is_empty() {
+    if changed
+        && !document_followups_deferred_to_parser_owner
+        && !stylesheet_owner_changes.is_empty()
+    {
         let mut prime_result = ConnectedStyleLoadPrimeResult::default();
         let prepared_owner_changes =
             runtime.prepare_stylesheet_owner_runtime_changes(&stylesheet_owner_changes);
@@ -2210,12 +2219,22 @@ pub(super) fn prepare_runtime_mutation_effects(
     effects: &DomMutationEffects,
     options: RuntimeMutationOptions,
 ) -> RuntimeMutationApplyResult {
-    let stylesheet_owner_changes = effects.stylesheet_owners().changes().to_vec();
-    let meta_refresh_candidates = super::meta_refresh::meta_refresh_navigations_from_mutation(
-        dom_host,
-        effects,
-        document_url,
-    );
+    let document_followups_deferred_to_parser_owner =
+        options.defer_document_followups_to_parser_owner;
+    let stylesheet_owner_changes = if document_followups_deferred_to_parser_owner {
+        Vec::new()
+    } else {
+        effects.stylesheet_owners().changes().to_vec()
+    };
+    let meta_refresh_candidates = if document_followups_deferred_to_parser_owner {
+        Vec::new()
+    } else {
+        super::meta_refresh::meta_refresh_navigations_from_mutation(
+            dom_host,
+            effects,
+            document_url,
+        )
+    };
     let inline_style_attribute_csp_mutations = if options.check_inline_style_csp {
         effects
             .style()
@@ -2255,6 +2274,7 @@ pub(super) fn prepare_runtime_mutation_effects(
         super::devtools_mutations::capture_devtools_dom_mutation_facts(dom_host, effects);
     RuntimeMutationApplyResult {
         changed: effects.did_change(),
+        document_followups_deferred_to_parser_owner,
         meta_refresh_candidates,
         devtools_dom_mutations,
         runtime_script_start_candidates: Vec::new(),
