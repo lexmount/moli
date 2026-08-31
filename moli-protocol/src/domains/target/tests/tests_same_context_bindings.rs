@@ -472,6 +472,7 @@ async fn same_context_targets_remove_only_their_own_pre_document_script_identifi
             .expect("active browser context");
         assert!(
             active
+                .active_page_state()
                 .active_target
                 .owner_state
                 .document_start_scripts
@@ -625,6 +626,7 @@ async fn same_context_targets_remove_only_their_own_utility_pre_document_script_
             .expect("active browser context");
         assert!(
             active
+                .active_page_state()
                 .active_target
                 .owner_state
                 .document_start_scripts
@@ -821,7 +823,8 @@ async fn same_context_targets_remove_only_their_own_utility_binding_definition_a
             .as_ref()
             .expect("active browser context");
         assert!(
-            active.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+            active.active_page_state().devtools_sessions
+                [moli_page_types::DevToolsSessionKey::Primary]
                 .runtime_bindings
                 .iter()
                 .any(|binding| {
@@ -1014,7 +1017,8 @@ async fn same_context_targets_remove_only_their_own_main_world_binding_definitio
             .as_ref()
             .expect("active browser context");
         assert!(
-            active.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+            active.active_page_state().devtools_sessions
+                [moli_page_types::DevToolsSessionKey::Primary]
                 .runtime_bindings
                 .iter()
                 .any(|binding| {
@@ -1239,7 +1243,7 @@ async fn same_context_targets_remove_only_their_own_dual_world_binding_definitio
             .expect("active browser context");
         assert!(
             active
-                .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                .active_page_state().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
 
                 .runtime_bindings
                 .iter()

@@ -579,6 +579,7 @@ mod tests {
             .browser_context
             .as_ref()
             .expect("browser context")
+            .active_page_state()
             .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .performance;
@@ -658,6 +659,7 @@ mod tests {
             .browser_context
             .as_ref()
             .expect("browser context")
+            .active_page_state()
             .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .performance;
@@ -892,12 +894,14 @@ mod tests {
 
         let browser_context = ctx.conn.browser_context.as_ref().expect("browser context");
         assert!(
-            !browser_context.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+            !browser_context.active_page_state().devtools_sessions
+                [moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .performance
                 .enabled()
         );
         let auxiliary = browser_context
+            .active_page_state()
             .devtools_sessions
             .attached("SID-aux")
             .expect("auxiliary session state")
@@ -1198,7 +1202,8 @@ mod tests {
         ctx.expect_result(5, json!({}), Some("SID-background"));
         let active = ctx.conn.browser_context.as_ref().expect("browser context");
         assert!(
-            !active.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+            !active.active_page_state().devtools_sessions
+                [moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .performance
                 .enabled()

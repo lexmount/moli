@@ -1776,8 +1776,12 @@ async fn continue_request_returns_before_delayed_subresource_response() {
     let api_url = format!("http://{addr}/api");
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &page_url, "SID-1", "TID-1").await;
-    ctx.conn.browser_context.as_mut().unwrap().devtools_sessions
-        [moli_page_types::DevToolsSessionKey::Primary]
+    ctx.conn
+        .browser_context
+        .as_mut()
+        .unwrap()
+        .active_page_state_mut()
+        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .inspector_enabled = true;
     ctx.sent.clear();
@@ -5461,8 +5465,12 @@ async fn runtime_fetch_subresource_pauses_until_continue_request_then_resolves_p
     let api_url = format!("http://{addr}/api");
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &page_url, "SID-1", "TID-1").await;
-    ctx.conn.browser_context.as_mut().unwrap().devtools_sessions
-        [moli_page_types::DevToolsSessionKey::Primary]
+    ctx.conn
+        .browser_context
+        .as_mut()
+        .unwrap()
+        .active_page_state_mut()
+        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .inspector_enabled = true;
     ctx.sent.clear();
@@ -5611,8 +5619,12 @@ async fn runtime_fetch_subresource_continue_request_fails_when_network_offline()
         "TID-1",
     )
     .await;
-    ctx.conn.browser_context.as_mut().unwrap().devtools_sessions
-        [moli_page_types::DevToolsSessionKey::Primary]
+    ctx.conn
+        .browser_context
+        .as_mut()
+        .unwrap()
+        .active_page_state_mut()
+        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .inspector_enabled = true;
     ctx.sent.clear();
@@ -5738,8 +5750,12 @@ async fn runtime_fetch_subresource_request_animation_frame_pauses_until_continue
     let api_url = format!("http://{addr}/api");
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &page_url, "SID-1", "TID-1").await;
-    ctx.conn.browser_context.as_mut().unwrap().devtools_sessions
-        [moli_page_types::DevToolsSessionKey::Primary]
+    ctx.conn
+        .browser_context
+        .as_mut()
+        .unwrap()
+        .active_page_state_mut()
+        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .inspector_enabled = true;
     ctx.sent.clear();
@@ -5915,8 +5931,12 @@ async fn runtime_fetch_subresource_queue_microtask_pauses_until_continue_request
     let api_url = format!("http://{addr}/api");
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &page_url, "SID-1", "TID-1").await;
-    ctx.conn.browser_context.as_mut().unwrap().devtools_sessions
-        [moli_page_types::DevToolsSessionKey::Primary]
+    ctx.conn
+        .browser_context
+        .as_mut()
+        .unwrap()
+        .active_page_state_mut()
+        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .inspector_enabled = true;
     ctx.sent.clear();
@@ -7742,8 +7762,12 @@ async fn close_aborts_paused_runtime_fetch_subresource() {
     let api_url = format!("http://{addr}/api");
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &page_url, "SID-1", "TID-1").await;
-    ctx.conn.browser_context.as_mut().unwrap().devtools_sessions
-        [moli_page_types::DevToolsSessionKey::Primary]
+    ctx.conn
+        .browser_context
+        .as_mut()
+        .unwrap()
+        .active_page_state_mut()
+        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .inspector_enabled = true;
     ctx.sent.clear();

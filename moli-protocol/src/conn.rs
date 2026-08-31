@@ -3543,19 +3543,6 @@ impl CdpConnection {
         tab_target_id
     }
 
-    pub(crate) fn register_worker_target_host(
-        &mut self,
-        target_id: &str,
-        kind: DevToolsTargetKind,
-    ) {
-        self.target_control
-            .register_worker(target_id.to_owned(), kind);
-    }
-
-    pub(crate) fn remove_worker_target_host(&mut self, target_id: &str) -> bool {
-        self.target_control.remove_worker(target_id)
-    }
-
     #[doc(hidden)]
     pub fn tab_target_id_for_page_target_id(&self, page_target_id: &str) -> Option<&str> {
         self.target_control
@@ -3997,7 +3984,15 @@ impl CdpConnection {
 
     #[cfg(test)]
     pub(crate) fn target_registry_host_kind(&self, target_id: &str) -> Option<DevToolsTargetKind> {
-        self.target_control.host_kind(target_id)
+        self.devtools_target_info(target_id)
+            .map(|target| target.kind)
+    }
+
+    fn has_registered_target_id(&self, target_id: &str) -> bool {
+        self.target_control.contains_tab_or_page_relation(target_id)
+            || self
+                .browser_contexts()
+                .any(|context| context.devtools_target_info(target_id).is_some())
     }
 
     pub fn install_default_browser_target(&mut self) {
@@ -4039,7 +4034,10 @@ impl CdpConnection {
                 }
             }
         }
-        if self.target_control.host_kind(&default_target_id).is_none() {
+        if !self
+            .target_control
+            .contains_tab_or_page_relation(&default_target_id)
+        {
             self.register_top_level_page_target(&default_target_id);
         }
         self.default_target_lifecycle.mark_live();
@@ -4080,13 +4078,7 @@ impl CdpConnection {
             // Never let a later worker/page allocation alias such a target:
             // looking it up would otherwise return the pre-existing target's
             // kind and state even though the renderer record names a worker.
-            let target_id_is_live = self.target_control.host_kind(&target_id).is_some()
-                || self
-                    .browser_context
-                    .iter()
-                    .chain(self.inactive_browser_contexts.iter())
-                    .any(|context| context.devtools_target_info(&target_id).is_some());
-            if !target_id_is_live {
+            if !self.has_registered_target_id(&target_id) {
                 return target_id;
             }
         }
@@ -4109,7 +4101,7 @@ impl CdpConnection {
                 u64::from(self.next_tab_target_id)
             };
             let target_id = format!("TAB-{id}");
-            if self.target_control.host_kind(&target_id).is_none() {
+            if !self.has_registered_target_id(&target_id) {
                 return target_id;
             }
         }

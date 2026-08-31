@@ -25,9 +25,10 @@ pub(super) fn cancel_dragging_command_output_plan(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,
 ) -> CommandOutputPlan {
-    let Some(browser_context) = browser_context_mut_for_session_owner(conn, cmd.session_id) else {
+    if !conn.mutate_target_page_state_for_session(cmd.session_id, |state| {
+        state.input_drag_intercepted = false;
+    }) {
         return CommandOutputPlan::error(-32000, "NoBrowserContext");
-    };
-    browser_context.input_drag_intercepted = false;
+    }
     CommandOutputPlan::success()
 }

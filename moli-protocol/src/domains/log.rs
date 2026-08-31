@@ -665,7 +665,8 @@ mod tests {
         ctx.expect_result(1, json!({}), Some("SID-background"));
         let active = ctx.conn.browser_context.as_ref().expect("browser context");
         assert!(
-            !active.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+            !active.active_page_state().devtools_sessions
+                [moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .log_enabled
         );
@@ -858,6 +859,7 @@ mod tests {
             .browser_context
             .as_ref()
             .expect("browser context")
+            .active_page_state()
             .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .console_output_session_state
             .log_violation_thresholds;
@@ -875,6 +877,7 @@ mod tests {
                 .browser_context
                 .as_ref()
                 .expect("browser context")
+                .active_page_state()
                 .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .console_output_session_state
                 .log_violation_thresholds

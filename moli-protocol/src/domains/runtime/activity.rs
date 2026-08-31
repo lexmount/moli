@@ -598,6 +598,7 @@ mod tests {
             .await
             .expect("test page should load");
         let _ = bc
+            .active_page_state_mut()
             .active_target
             .runtime_slot
             .replace_loaded_page(Some(page));
@@ -613,6 +614,7 @@ mod tests {
         browser_context.set_active_target_id("TID-1");
         browser_context.attach_active_session("SID-1");
         browser_context
+            .active_page_state_mut()
             .active_target
             .runtime_slot
             .set_page_attachment_id_for_test(1);
@@ -847,13 +849,16 @@ mod tests {
             .browser_context
             .as_mut()
             .expect("browser context should be loaded");
-        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+        bc.active_page_state_mut().devtools_sessions
+            [moli_page_types::DevToolsSessionKey::Primary]
             .console_output_session_state
             .console_enabled = true;
-        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+        bc.active_page_state_mut().devtools_sessions
+            [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .log_enabled = true;
-        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+        bc.active_page_state_mut().devtools_sessions
+            [moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
             .runtime_frontend_enabled = true;
         ctx.conn

@@ -208,6 +208,7 @@ impl TargetNetworkAgentState {
         self.primary_enabled = enabled;
     }
 
+    #[cfg(test)]
     pub(crate) fn enable_primary_events(&mut self) {
         self.set_primary_events_enabled(true);
     }

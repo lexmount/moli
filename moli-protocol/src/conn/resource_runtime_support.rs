@@ -283,10 +283,12 @@ impl CdpConnection {
             self.session_route(session_id),
             Some(super::CdpSessionRoute::Browser)
         ) {
-            return self
-                .browser_context
-                .as_mut()
-                .and_then(|bc| bc.active_target.runtime_slot.loaded_page_mut());
+            return self.browser_context.as_mut().and_then(|bc| {
+                bc.active_page_target_mut()
+                    .active_target
+                    .runtime_slot
+                    .loaded_page_mut()
+            });
         }
         self.loaded_page_mut_for_target_configuration(session_id)
             .ok()
@@ -301,10 +303,12 @@ impl CdpConnection {
             session_id.and_then(|session_id| self.session_route(Some(session_id))),
             Some(super::CdpSessionRoute::Browser)
         ) {
-            return self
-                .browser_context
-                .as_mut()
-                .and_then(|bc| bc.active_target.runtime_slot.loaded_page_mut());
+            return self.browser_context.as_mut().and_then(|bc| {
+                bc.active_page_target_mut()
+                    .active_target
+                    .runtime_slot
+                    .loaded_page_mut()
+            });
         }
         self.loaded_page_mut_for_target_configuration_for_route(session_id, owner_route)
             .ok()

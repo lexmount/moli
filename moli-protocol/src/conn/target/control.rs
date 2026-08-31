@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use super::graph::TabTarget;
+use super::graph::{TabTarget, TargetGraph};
 use crate::devtools_runtime::{
     DevToolsSessionId, DevToolsTargetFilterEntry, DevToolsTargetId, DevToolsTargetInfo,
     DevToolsTargetKind, TargetAttachmentEvent, TargetDetachmentEvent,
@@ -8,47 +8,37 @@ use crate::devtools_runtime::{
 
 use super::{
     CommittedAttachSession, DetachedTargetSession, PreparedAttachSession, TargetClosureCleanupPlan,
-    TargetClosurePlan, TargetEventPlan, TargetHandlerStore, TargetHostDelta, TargetRegistry,
-    TargetSessionRegistry,
+    TargetClosurePlan, TargetEventPlan, TargetHandlerStore, TargetHostDelta, TargetSessionRegistry,
 };
 use crate::conn::{BackgroundProtocolEvent, CdpSessionRoute, CdpTargetFilter};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct TargetControlPlane {
     sessions: TargetSessionRegistry,
-    registry: TargetRegistry,
+    graph: TargetGraph,
     handlers: TargetHandlerStore,
 }
 
 impl TargetControlPlane {
     pub(crate) fn register_tab(&mut self, tab_target_id: String, primary_page_target_id: String) {
-        self.registry
+        self.graph
             .register_tab(tab_target_id, primary_page_target_id);
     }
 
-    pub(crate) fn register_worker(&mut self, target_id: String, kind: DevToolsTargetKind) {
-        self.registry.register_worker(target_id, kind);
-    }
-
-    pub(crate) fn remove_worker(&mut self, target_id: &str) -> bool {
-        self.registry.remove_worker(target_id).is_some()
-    }
-
     pub(crate) fn tab_target_id_for_page_target_id(&self, page_target_id: &str) -> Option<&str> {
-        self.registry
-            .tab_target_id_for_page_target_id(page_target_id)
+        self.graph.tab_target_id_for_page_target_id(page_target_id)
     }
 
     pub(crate) fn primary_page_target_id_for_tab_target_id(
         &self,
         tab_target_id: &str,
     ) -> Option<&str> {
-        self.registry
+        self.graph
             .primary_page_target_id_for_tab_target_id(tab_target_id)
     }
 
     pub(crate) fn primary_session_id_for_tab_target_id(&self, tab_target_id: &str) -> Option<&str> {
-        self.registry
+        self.graph
             .primary_session_id_for_tab_target_id(tab_target_id)
     }
 
@@ -58,23 +48,25 @@ impl TargetControlPlane {
         session_id: String,
         auxiliary: bool,
     ) -> bool {
-        self.registry
+        self.graph
             .assign_session_to_tab_target(tab_target_id, session_id, auxiliary)
     }
 
     pub(crate) fn remove_tab_session(&mut self, session_id: &str) -> Option<String> {
-        self.registry.remove_tab_session(session_id)
+        self.graph.remove_tab_session(session_id)
     }
 
     pub(crate) fn remove_tab_by_page_target_id(
         &mut self,
         page_target_id: &str,
     ) -> Option<TargetClosurePlan> {
-        self.registry.remove_tab_by_page_target_id(page_target_id)
+        self.graph
+            .remove_tab_by_page_target_id(page_target_id)
+            .map(TargetClosurePlan::from_tab_target)
     }
 
     pub(crate) fn tab_target_id_for_session_id(&self, session_id: &str) -> Option<&str> {
-        self.registry.tab_target_id_for_session_id(session_id)
+        self.graph.tab_target_id_for_session_id(session_id)
     }
 
     pub(crate) fn tab_target_info_for_page_target_info(
@@ -85,7 +77,7 @@ impl TargetControlPlane {
             return None;
         }
         let page_target_id = page_target_info.target_id.as_ref()?.as_str();
-        let target = self.registry.tab_for_page_target_id(page_target_id)?;
+        let target = self.graph.tab_for_page_target_id(page_target_id)?;
         Some(super::projection::tab_target_info_from_page_target_info(
             target,
             page_target_info,
@@ -99,14 +91,14 @@ impl TargetControlPlane {
         let target = target_info
             .target_id
             .as_ref()
-            .and_then(|target_id| self.registry.tab_for_page_target_id(target_id.as_str()));
+            .and_then(|target_id| self.graph.tab_for_page_target_id(target_id.as_str()));
         super::projection::project_page_tab_target_infos_for_destruction(target, target_info)
     }
 
     fn paired_tab_target(&self, target_id: &str) -> Option<&TabTarget> {
-        self.registry
+        self.graph
             .tab_for_page_target_id(target_id)
-            .or_else(|| self.registry.tab(target_id))
+            .or_else(|| self.graph.tab(target_id))
     }
 
     pub(crate) fn target_created_deltas(&self, target_id: &str) -> Vec<TargetHostDelta> {
@@ -537,11 +529,11 @@ impl TargetControlPlane {
 
     #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
-        self.registry.len()
+        self.graph.len()
     }
 
-    pub(crate) fn host_kind(&self, target_id: &str) -> Option<DevToolsTargetKind> {
-        self.registry.host(target_id).map(|host| host.kind())
+    pub(crate) fn contains_tab_or_page_relation(&self, target_id: &str) -> bool {
+        self.graph.contains_target_id(target_id)
     }
 }
 

@@ -71,6 +71,7 @@ impl CdpConnection {
         );
         if let Some(browser_context) = self.browser_context.as_mut() {
             browser_context
+                .active_page_target_mut()
                 .network_policy
                 .set_browser_identity_override(browser_identity);
         } else {

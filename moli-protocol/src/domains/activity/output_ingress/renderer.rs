@@ -262,6 +262,7 @@ mod tests {
             )
         );
         browser_context
+            .active_page_state_mut()
             .active_target
             .runtime_slot
             .set_page_attachment_id_for_test(1);

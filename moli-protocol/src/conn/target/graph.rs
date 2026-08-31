@@ -1,5 +1,40 @@
 use std::collections::{HashMap, HashSet};
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum TargetHostDelta {
+    Created { target_id: String },
+    InfoChanged { target_id: String },
+    Destroyed { target_id: String },
+}
+
+impl TargetHostDelta {
+    pub(crate) fn created(target_id: impl Into<String>) -> Self {
+        Self::Created {
+            target_id: target_id.into(),
+        }
+    }
+
+    pub(crate) fn info_changed(target_id: impl Into<String>) -> Self {
+        Self::InfoChanged {
+            target_id: target_id.into(),
+        }
+    }
+
+    pub(crate) fn destroyed(target_id: impl Into<String>) -> Self {
+        Self::Destroyed {
+            target_id: target_id.into(),
+        }
+    }
+
+    pub(crate) fn target_id(&self) -> &str {
+        match self {
+            Self::Created { target_id }
+            | Self::InfoChanged { target_id }
+            | Self::Destroyed { target_id } => target_id,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct TargetSessionSet {
     primary_session_id: Option<String>,
@@ -87,6 +122,37 @@ impl TabTarget {
     /// The primary Page host goes away before the WebContents-backed Tab host.
     pub(crate) fn target_ids_in_destruction_order(&self) -> [&str; 2] {
         [self.primary_page_target_id(), self.id()]
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct TargetClosurePlan {
+    tab_target: TabTarget,
+    deltas: Vec<TargetHostDelta>,
+}
+
+impl TargetClosurePlan {
+    pub(super) fn from_tab_target(target: TabTarget) -> Self {
+        let deltas = target
+            .target_ids_in_destruction_order()
+            .into_iter()
+            .map(TargetHostDelta::destroyed)
+            .collect();
+        Self {
+            tab_target: target,
+            deltas,
+        }
+    }
+
+    pub(crate) fn tab_target(&self) -> &TabTarget {
+        &self.tab_target
+    }
+
+    pub(crate) fn destroyed_target_ids(&self) -> impl Iterator<Item = &str> {
+        self.deltas.iter().filter_map(|delta| match delta {
+            TargetHostDelta::Destroyed { target_id } => Some(target_id.as_str()),
+            TargetHostDelta::Created { .. } | TargetHostDelta::InfoChanged { .. } => None,
+        })
     }
 }
 
@@ -179,6 +245,10 @@ impl TargetGraph {
 
     pub(crate) fn tab(&self, tab_target_id: &str) -> Option<&TabTarget> {
         self.tabs.get(tab_target_id)
+    }
+
+    pub(crate) fn contains_target_id(&self, target_id: &str) -> bool {
+        self.tabs.contains_key(target_id) || self.page_to_tab.contains_key(target_id)
     }
 
     #[cfg(test)]

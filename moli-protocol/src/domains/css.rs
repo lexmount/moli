@@ -799,6 +799,7 @@ mod tests {
             .browser_context
             .as_mut()
             .expect("browser context")
+            .active_page_state_mut()
             .active_target
             .runtime_slot
             .loaded_page_mut()
@@ -1211,12 +1212,26 @@ mod tests {
 
         ctx.process_async(json!({"id": 101, "method": "CSS.enable"}))
             .await;
-        assert!(ctx.conn.browser_context.as_ref().unwrap().css_enabled);
+        assert!(
+            ctx.conn
+                .browser_context
+                .as_ref()
+                .unwrap()
+                .active_page_state()
+                .css_enabled
+        );
         ctx.expect_result(101, json!({}), None);
 
         ctx.process_async(json!({"id": 102, "method": "CSS.disable"}))
             .await;
-        assert!(!ctx.conn.browser_context.as_ref().unwrap().css_enabled);
+        assert!(
+            !ctx.conn
+                .browser_context
+                .as_ref()
+                .unwrap()
+                .active_page_state()
+                .css_enabled
+        );
         ctx.expect_result(102, json!({}), None);
     }
 
@@ -1406,7 +1421,14 @@ mod tests {
         }))
         .await;
         ctx.expect_result(116, json!({}), Some("SID-1"));
-        assert!(ctx.conn.browser_context.as_ref().unwrap().css_enabled);
+        assert!(
+            ctx.conn
+                .browser_context
+                .as_ref()
+                .unwrap()
+                .active_page_state()
+                .css_enabled
+        );
 
         ctx.process_async(json!({
             "id": 117,
@@ -1415,7 +1437,14 @@ mod tests {
         }))
         .await;
         ctx.expect_result(117, json!({}), Some("SID-1"));
-        assert!(!ctx.conn.browser_context.as_ref().unwrap().css_enabled);
+        assert!(
+            !ctx.conn
+                .browser_context
+                .as_ref()
+                .unwrap()
+                .active_page_state()
+                .css_enabled
+        );
     }
 
     #[tokio::test]
@@ -1640,6 +1669,7 @@ mod tests {
         let mut browser_context = BrowserContext::new("BID-css-owner-route".to_owned());
         browser_context.set_active_target_id("TID-css-active".to_owned());
         browser_context
+            .active_page_state_mut()
             .active_target
             .runtime_slot
             .set_loaded_page_for_test(active_page);

@@ -293,6 +293,7 @@ impl CdpConnection {
             .map(|(_, target_id)| target_id)
     }
 
+    #[cfg(test)]
     pub(crate) fn background_target_route(
         &self,
         session_id: Option<&str>,

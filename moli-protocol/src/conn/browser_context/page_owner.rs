@@ -373,36 +373,13 @@ impl TargetSessionOwnerMut<'_> {
             None
         } else {
             match &self {
-                Self::ActiveTarget {
-                    browser_context,
-                    session_id,
-                    is_auxiliary_target_session,
-                    ..
-                } => {
-                    if browser_context.loaded_page().is_none() {
-                        return PageLifecycleEventsEnableResult::Handled {
-                            replay_target: None,
-                        };
-                    }
-                    let Some(_frame_id) = browser_context.active_target_id() else {
-                        return PageLifecycleEventsEnableResult::Handled {
-                            replay_target: None,
-                        };
-                    };
-                    let replay_session_id = if *is_auxiliary_target_session {
-                        session_id.clone()
-                    } else {
-                        browser_context.active_session_id_owned()
-                    };
-                    replay_session_id.map(|session_id| PageLifecycleReplayTarget { session_id })
-                }
-                Self::PageTargetHost {
+                Self::PageTarget {
                     browser_context,
                     target_id,
                     session_id,
                     is_auxiliary_target_session,
                 } => browser_context
-                    .background_target(target_id)
+                    .page_target(target_id)
                     .filter(|target| target.has_loaded_page())
                     .and_then(|target| {
                         let replay_session_id = if *is_auxiliary_target_session {
@@ -546,6 +523,7 @@ fn devtools_session_page_domain_enabled(state: &DevToolsSessionState) -> bool {
 
 fn browser_context_has_page_domain_enabled_session(browser_context: &BrowserContext) -> bool {
     browser_context
+        .active_page_target()
         .devtools_sessions
         .states()
         .any(devtools_session_page_domain_enabled)
@@ -1007,7 +985,7 @@ mod tests {
 
     fn active_session_state_mut(browser_context: &mut BrowserContext) -> TargetSessionStateMut<'_> {
         let state = browser_context.active_page_state_mut();
-        TargetSessionStateMut::Active {
+        TargetSessionStateMut::Loaded {
             devtools_session_state: &mut state.devtools_sessions
                 [moli_page_types::DevToolsSessionKey::Primary],
             network_policy: &mut state.network_policy,
@@ -1016,7 +994,7 @@ mod tests {
     }
 
     fn parked_session_state_mut(state: &mut TargetPageState) -> TargetSessionStateMut<'_> {
-        TargetSessionStateMut::Parked {
+        TargetSessionStateMut::Loaded {
             devtools_session_state: &mut state.devtools_sessions
                 [moli_page_types::DevToolsSessionKey::Primary],
             network_policy: &mut state.network_policy,
@@ -1042,38 +1020,45 @@ mod tests {
         );
 
         assert!(
-            active.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+            active.active_page_state().devtools_sessions
+                [moli_page_types::DevToolsSessionKey::Primary]
                 .console_output_session_state
                 .console_enabled
         );
         assert!(
-            active.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+            active.active_page_state().devtools_sessions
+                [moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .log_enabled
         );
         assert!(
-            active.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+            active.active_page_state().devtools_sessions
+                [moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .page_file_chooser_opened_event_enabled
         );
         assert!(
-            active.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+            active.active_page_state().devtools_sessions
+                [moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .page_bypass_csp_enabled
         );
         assert_eq!(
-            active.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+            active.active_page_state().devtools_sessions
+                [moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .page_font_families,
             font_families
         );
         assert!(
-            active.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+            active.active_page_state().devtools_sessions
+                [moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .page_intercept_file_chooser_dialog_enabled
         );
         assert!(
-            active.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+            active.active_page_state().devtools_sessions
+                [moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .performance
                 .enabled()
@@ -1195,6 +1180,7 @@ mod tests {
             conn.browser_context
                 .as_ref()
                 .expect("browser context")
+                .active_page_state()
                 .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .page_file_chooser_opened_event_enabled
@@ -1206,6 +1192,7 @@ mod tests {
                 .browser_context
                 .as_ref()
                 .expect("browser context")
+                .active_page_state()
                 .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .page_file_chooser_opened_event_enabled

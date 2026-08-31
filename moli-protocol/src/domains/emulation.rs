@@ -489,7 +489,7 @@ fn start_locale_override_command(
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(code, message));
     }
     let pending = if emulation_command_is_context_wide(conn, cmd.session_id) {
-        match start_context_locale_override_page_commands(conn) {
+        match start_context_locale_override_page_commands(conn, locale_override.as_deref()) {
             Ok(pending) => pending,
             Err(error) => {
                 return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(-32000, error));
@@ -2689,24 +2689,8 @@ fn start_context_emulated_media_page_commands(
         return Ok(Vec::new());
     };
     let browser_context_id = browser_context.id.clone();
-    let active_target_id = browser_context.active_target_id_owned();
     let mut pending = Vec::new();
-    if let Some(active_target_id) = active_target_id
-        && let Some(page) = browser_context.active_target.runtime_slot.loaded_page_mut()
-    {
-        pending.push(PendingEmulationPageCommand {
-            target: PendingEmulationPageTarget::BrowserContextTarget {
-                browser_context_id: browser_context_id.clone(),
-                target_id: active_target_id,
-            },
-            operation: PendingEmulationPageOperation::SetEmulatedMedia,
-            pending: page
-                .start_set_emulated_media(overrides)
-                .map_err(|error| error.to_string())?,
-            runtime_response_rx: None,
-        });
-    }
-    for target in browser_context.background_targets_mut() {
+    for target in browser_context.page_targets.iter_mut() {
         let target_id = target.target_id().to_owned();
         let Some(page) = target.loaded_page_mut() else {
             continue;
@@ -2746,6 +2730,7 @@ fn start_session_locale_override_page_commands(
 
 fn start_context_locale_override_page_commands(
     conn: &mut CdpConnection,
+    locale_override: Option<&str>,
 ) -> Result<Vec<PendingEmulationPageCommand>, String> {
     let mut pending = Vec::new();
     for browser_context in conn
@@ -2754,30 +2739,9 @@ fn start_context_locale_override_page_commands(
         .chain(conn.inactive_browser_contexts.iter_mut())
     {
         let browser_context_id = browser_context.id.clone();
-        let active_target_id = browser_context.active_target_id_owned();
-        let active_locale = browser_context.effective_active_locale_override_owned();
-        if let Some(active_target_id) = active_target_id
-            && let Some(page) = browser_context.active_target.runtime_slot.loaded_page_mut()
-        {
-            pending.extend(start_locale_override_page_command(
-                PendingEmulationPageTarget::BrowserContextTarget {
-                    browser_context_id: browser_context_id.clone(),
-                    target_id: active_target_id,
-                },
-                page,
-                active_locale.as_deref(),
-            )?);
-        }
-        for index in 0..browser_context.background_target_count() {
-            let target_id = browser_context
-                .background_target_at(index)
-                .expect("background target index must remain valid")
-                .target_id()
-                .to_owned();
-            let Some(page) = browser_context
-                .background_target_at_mut(index)
-                .and_then(PageTargetHost::loaded_page_mut)
-            else {
+        for target in browser_context.page_targets.iter_mut() {
+            let target_id = target.target_id().to_owned();
+            let Some(page) = target.loaded_page_mut() else {
                 continue;
             };
             pending.extend(start_locale_override_page_command(
@@ -2786,7 +2750,7 @@ fn start_context_locale_override_page_commands(
                     target_id,
                 },
                 page,
-                active_locale.as_deref(),
+                locale_override,
             )?);
         }
     }
@@ -2811,7 +2775,12 @@ fn start_geolocation_surface_override_page_commands(
     let Some(target_id) = browser_context.active_target_id_owned() else {
         return Ok(Vec::new());
     };
-    let Some(page) = browser_context.active_target.runtime_slot.loaded_page_mut() else {
+    let Some(page) = browser_context
+        .active_page_target_mut()
+        .active_target
+        .runtime_slot
+        .loaded_page_mut()
+    else {
         return Ok(Vec::new());
     };
     start_surface_override_page_command(

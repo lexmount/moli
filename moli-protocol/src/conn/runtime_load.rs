@@ -1999,15 +1999,18 @@ impl CdpConnection {
         {
             if browser_context.active_target_id() == Some(owner.target_id.as_str()) {
                 if browser_context
+                    .active_page_target()
                     .active_target
                     .runtime_slot
                     .has_initial_document_page_build_in_progress()
                 {
                     browser_context
+                        .active_page_target_mut()
                         .active_target
                         .runtime_slot
                         .fail_initial_document_page_build(message.clone());
                     browser_context
+                        .active_page_target_mut()
                         .active_target
                         .runtime_slot
                         .mark_loaded_page_absent(
@@ -2052,6 +2055,7 @@ impl CdpConnection {
         if let Some(browser_context) = self.browser_context_by_id_mut(&owner.browser_context_id) {
             if browser_context.active_target_id() == Some(owner.target_id.as_str()) {
                 browser_context
+                    .active_page_target_mut()
                     .active_target
                     .runtime_slot
                     .complete_initial_document_page_build();
@@ -2085,7 +2089,10 @@ impl CdpConnection {
     ) {
         if let Some(browser_context) = self.browser_context_by_id_mut(&owner.browser_context_id) {
             if browser_context.active_target_id() == Some(owner.target_id.as_str()) {
-                let runtime_slot = &mut browser_context.active_target.runtime_slot;
+                let runtime_slot = &mut browser_context
+                    .active_page_target_mut()
+                    .active_target
+                    .runtime_slot;
                 if runtime_slot.has_initial_document_page_build_in_progress() {
                     runtime_slot.fail_initial_document_page_build(message);
                     runtime_slot.mark_loaded_page_absent(

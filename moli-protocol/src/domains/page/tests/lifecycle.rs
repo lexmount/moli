@@ -102,19 +102,22 @@ fn page_owner_state_commands_complete_through_command_dispatch() {
 
     let browser_context = ctx.conn.browser_context.as_ref().expect("browser context");
     assert!(
-        browser_context.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+        browser_context.active_page_state().devtools_sessions
+            [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_bypass_csp_enabled
     );
     assert_eq!(
-        browser_context.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+        browser_context.active_page_state().devtools_sessions
+            [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_font_families
             .get("standard"),
         Some(&json!("Times New Roman"))
     );
     assert!(
-        browser_context.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+        browser_context.active_page_state().devtools_sessions
+            [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_intercept_file_chooser_dialog_enabled
     );
@@ -124,7 +127,7 @@ fn page_owner_state_commands_complete_through_command_dispatch() {
         browser_context
             .renderer_runtime()
             .set_javascript_dialog_handler_enabled(true);
-        let page_session_state = &mut browser_context.devtools_sessions
+        let page_session_state = &mut browser_context.active_page_state_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state;
         page_session_state.page_domain_enabled = true;
@@ -151,7 +154,8 @@ fn page_owner_state_commands_complete_through_command_dispatch() {
 
     let browser_context = ctx.conn.browser_context.as_ref().expect("browser context");
     assert_page_domain_disabled(
-        &browser_context.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+        &browser_context.active_page_state().devtools_sessions
+            [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state,
     );
     assert!(
@@ -278,6 +282,7 @@ async fn install_runtime_document_replacement_test_page(ctx: &mut TestContext) -
         .browser_context
         .as_mut()
         .expect("runtime replacement fixture browser context")
+        .active_page_state_mut()
         .active_target
         .runtime_slot
         .set_loaded_page_for_test(navigation.page);
@@ -419,6 +424,7 @@ async fn lifecycle_events_enable_without_renderer_binding_does_not_synthesize_re
         .browser_context
         .as_mut()
         .expect("browser context")
+        .active_page_state_mut()
         .active_target
         .runtime_slot
         .set_loaded_page_for_test(page);
@@ -480,7 +486,11 @@ async fn assert_page_enable_uses_fresh_initial_document_without_adapter(target_u
         ctx.conn
             .browser_context
             .as_ref()
-            .and_then(|bc| bc.active_target.runtime_slot.loaded_page())
+            .and_then(|bc| bc
+                .active_page_state()
+                .active_target
+                .runtime_slot
+                .loaded_page())
             .is_some_and(|page| page.final_url().as_str() == target_url),
         "Target.createTarget should install the initial about:blank owner page"
     );
@@ -507,7 +517,11 @@ async fn assert_page_enable_uses_fresh_initial_document_without_adapter(target_u
         ctx.conn
             .browser_context
             .as_ref()
-            .and_then(|bc| bc.active_target.runtime_slot.loaded_page())
+            .and_then(|bc| bc
+                .active_page_state()
+                .active_target
+                .runtime_slot
+                .loaded_page())
             .is_some_and(|page| page.final_url().as_str() == target_url),
         "Page.enable should keep using the target-lifecycle initial about:blank page"
     );
@@ -547,6 +561,7 @@ async fn enable_succeeds_without_legacy_materialization_adapter_when_page_missin
             .browser_context
             .as_ref()
             .expect("browser context")
+            .active_page_state()
             .active_target
             .runtime_slot
             .has_loaded_page(),
@@ -656,7 +671,11 @@ async fn enable_non_blank_initial_url_loads_through_pending_navigation_path() {
         ctx.conn
             .browser_context
             .as_ref()
-            .and_then(|bc| bc.active_target.runtime_slot.loaded_page())
+            .and_then(|bc| bc
+                .active_page_state()
+                .active_target
+                .runtime_slot
+                .loaded_page())
             .is_some_and(|page| page.final_url().as_str() == page_url),
         "Page.enable pending path should install the initial non-blank document"
     );
@@ -673,7 +692,7 @@ async fn enable_accepts_enable_file_chooser_opened_event_param() {
     .await;
     ctx.expect_result(101, json!({}), None);
     assert!(ctx.conn.browser_context.as_ref().is_some_and(|bc| {
-        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+        bc.active_page_state().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_file_chooser_opened_event_enabled
     }));
@@ -804,8 +823,12 @@ async fn set_lifecycle_events_enabled_sets_flag() {
         .await;
     ctx.expect_result(1, json!({}), None);
     assert!(
-        ctx.conn.browser_context.as_ref().unwrap().devtools_sessions
-            [moli_page_types::DevToolsSessionKey::Primary]
+        ctx.conn
+            .browser_context
+            .as_ref()
+            .unwrap()
+            .active_page_state()
+            .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_lifecycle_events
     );
@@ -831,6 +854,7 @@ async fn set_lifecycle_events_enabled_replays_loaded_page_events() {
         .browser_context
         .as_mut()
         .unwrap()
+        .active_page_state_mut()
         .active_target
         .runtime_slot
         .set_loaded_page_for_test(navigation.page);
@@ -905,6 +929,7 @@ async fn set_lifecycle_events_enabled_replays_only_protocol_visible_load_state()
         .browser_context
         .as_mut()
         .unwrap()
+        .active_page_state_mut()
         .active_target
         .runtime_slot
         .set_loaded_page_for_test(navigation.page);
@@ -1006,6 +1031,7 @@ async fn set_lifecycle_events_enabled_is_session_local_for_active_auxiliary_sess
     let artifacts = navigation.page_creation_artifacts;
     let browser_context = ctx.conn.browser_context.as_mut().unwrap();
     browser_context
+        .active_page_state_mut()
         .active_target
         .runtime_slot
         .set_loaded_page_for_test(navigation.page);
@@ -1055,7 +1081,8 @@ async fn set_lifecycle_events_enabled_is_session_local_for_active_auxiliary_sess
 
     let browser_context = ctx.conn.browser_context.as_ref().unwrap();
     assert!(
-        !browser_context.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+        !browser_context.active_page_state().devtools_sessions
+            [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_lifecycle_events,
         "primary page session should stay disabled"
@@ -1153,7 +1180,8 @@ async fn page_disable_clears_page_handler_state_for_active_auxiliary_session() {
     );
     let browser_context = ctx.conn.browser_context.as_mut().unwrap();
     mark_page_domain_enabled(
-        &mut browser_context.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+        &mut browser_context.active_page_state_mut().devtools_sessions
+            [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state,
     );
     assert!(browser_context.assign_auxiliary_session_to_target("TID-active", "SID-aux".to_owned()));
@@ -1175,7 +1203,8 @@ async fn page_disable_clears_page_handler_state_for_active_auxiliary_session() {
 
     let browser_context = ctx.conn.browser_context.as_ref().unwrap();
     assert_page_domain_enabled(
-        &browser_context.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+        &browser_context.active_page_state().devtools_sessions
+            [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state,
     );
     assert_page_domain_disabled(
@@ -2019,6 +2048,7 @@ async fn add_script_run_immediately_creates_top_level_world_even_when_child_worl
         .expect("page should load");
     let bc = ctx.conn.browser_context.as_mut().expect("browser context");
     let _ = bc
+        .active_page_state_mut()
         .active_target
         .runtime_slot
         .replace_loaded_page(Some(page));
@@ -2306,6 +2336,7 @@ async fn bare_isolated_worlds_do_not_persist_across_navigation() {
         .expect("page should load");
     let bc = ctx.conn.browser_context.as_mut().expect("browser context");
     let _ = bc
+        .active_page_state_mut()
         .active_target
         .runtime_slot
         .replace_loaded_page(Some(page));
@@ -2396,6 +2427,7 @@ async fn network_navigations_use_unique_document_loader_ids() {
         .browser_context
         .as_mut()
         .unwrap()
+        .active_page_state_mut()
         .active_target
         .runtime_slot
         .enable_primary_network_events();
@@ -2547,6 +2579,7 @@ async fn crash_notifies_all_attached_sessions_and_marks_browser_context_crashed(
     let bc = ctx.conn.browser_context.as_mut().unwrap();
     assert!(bc.assign_auxiliary_session_to_target("TID-1", "SID-aux".into()));
     let _ = bc
+        .active_page_state_mut()
         .active_target
         .runtime_slot
         .replace_loaded_page(Some(page));
@@ -2574,14 +2607,21 @@ async fn crash_notifies_all_attached_sessions_and_marks_browser_context_crashed(
     assert_eq!(auxiliary_inspector["sessionId"], "SID-aux");
 
     let bc = ctx.conn.browser_context.as_ref().unwrap();
-    assert!(bc.active_target.owner_state.target_crash_state.is_crashed());
     assert!(
-        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+        bc.active_page_state()
+            .active_target
+            .owner_state
+            .target_crash_state
+            .is_crashed()
+    );
+    assert!(
+        bc.active_page_state().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
             .inspector_target_crashed_delivered()
     );
     assert!(
-        bc.devtools_sessions
+        bc.active_page_state()
+            .devtools_sessions
             .attached("SID-aux")
             .is_some_and(|state| state
                 .runtime_session_state
@@ -2620,6 +2660,7 @@ async fn crash_notifies_all_attached_sessions_and_marks_browser_context_crashed(
             .browser_context
             .as_ref()
             .expect("browser context")
+            .active_page_state()
             .active_target
             .owner_state
             .target_crash_state
@@ -2703,7 +2744,8 @@ async fn crash_aborts_paused_request_stage_navigation() {
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
     let bc = ctx.conn.browser_context.as_mut().unwrap();
-    bc.active_target
+    bc.active_page_state_mut()
+        .active_target
         .runtime_slot
         .enable_primary_network_events();
 
@@ -2867,7 +2909,8 @@ async fn crash_aborts_paused_response_stage_navigation() {
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
     let bc = ctx.conn.browser_context.as_mut().unwrap();
-    bc.active_target
+    bc.active_page_state_mut()
+        .active_target
         .runtime_slot
         .enable_primary_network_events();
 
@@ -2935,39 +2978,46 @@ async fn close_clears_loaded_page_state_and_emits_detached_events() {
         .await
         .expect("page should load");
     let bc = ctx.conn.browser_context.as_mut().unwrap();
-    bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+    bc.active_page_state_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .page_session_state
         .page_lifecycle_events = true;
-    bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+    bc.active_page_state_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .runtime_frontend_enabled = true;
-    bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+    bc.active_page_state_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .inspector_enabled = true;
-    bc.active_target
+    bc.active_page_state_mut()
+        .active_target
         .runtime_slot
         .enable_primary_network_events();
-    bc.mutate_devtools_network_session_state(false, None, |network| {
-        network.network_enabled = true;
-        network.cache_disabled = true;
-        network.bypass_service_worker = true;
-        network.extra_headers = vec![("X-Test".into(), "1".into())];
-    });
-    bc.css_enabled = true;
-    bc.active_target.fetch_owner.configure(
-        None,
-        true,
-        vec![FetchInterceptionPattern {
-            url_pattern: "*".into(),
-            resource_type_filter: None,
-            request_stage: FetchRequestStage::Response,
-        }],
-    );
-    bc.active_target
+    bc.active_page_state_mut()
+        .mutate_devtools_network_session_state(false, None, |network| {
+            network.network_enabled = true;
+            network.cache_disabled = true;
+            network.bypass_service_worker = true;
+            network.extra_headers = vec![("X-Test".into(), "1".into())];
+        });
+    bc.active_page_state_mut().css_enabled = true;
+    bc.active_page_state_mut()
+        .active_target
+        .fetch_owner
+        .configure(
+            None,
+            true,
+            vec![FetchInterceptionPattern {
+                url_pattern: "*".into(),
+                resource_type_filter: None,
+                request_stage: FetchRequestStage::Response,
+            }],
+        );
+    bc.active_page_state_mut()
+        .active_target
         .owner_state
         .target_crash_state
         .mark_crashed();
     let _ = bc
+        .active_page_state_mut()
         .active_target
         .runtime_slot
         .replace_loaded_page(Some(page));
@@ -2981,7 +3031,8 @@ async fn close_clears_loaded_page_state_and_emits_detached_events() {
     bc.set_next_network_request_sequence_for_test(41);
     bc.set_subresource_network_emitted_record_count_for_test(12);
     bc.set_next_io_stream_sequence_for_test(7);
-    bc.active_target
+    bc.active_page_state_mut()
+        .active_target
         .runtime_slot
         .set_next_subresource_fetch_request_id_for_test(5);
     assert!(bc.assign_auxiliary_session_to_target("TID-1", "SID-aux".into()));
@@ -3036,10 +3087,11 @@ async fn close_aborts_paused_request_stage_navigation_and_clears_state() {
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
     let bc = ctx.conn.browser_context.as_mut().unwrap();
-    bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+    bc.active_page_state_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .inspector_enabled = true;
-    bc.active_target
+    bc.active_page_state_mut()
+        .active_target
         .runtime_slot
         .enable_primary_network_events();
 
@@ -3279,10 +3331,11 @@ async fn close_aborts_paused_auth_navigation_and_clears_state() {
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
     let bc = ctx.conn.browser_context.as_mut().unwrap();
-    bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+    bc.active_page_state_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .inspector_enabled = true;
-    bc.active_target
+    bc.active_page_state_mut()
+        .active_target
         .runtime_slot
         .enable_primary_network_events();
 
@@ -3502,7 +3555,7 @@ async fn set_bypass_csp_accepts_valid_params_and_returns_empty_result() {
     .await;
     ctx.expect_result(2, json!({}), None);
     assert!(ctx.conn.browser_context.as_ref().is_some_and(|bc| {
-        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+        bc.active_page_state().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_bypass_csp_enabled
     }));
@@ -3536,14 +3589,16 @@ async fn set_font_families_accepts_object_params_and_returns_empty_result() {
     ctx.expect_result(4, json!({}), None);
     let browser_context = ctx.conn.browser_context.as_ref().expect("browser context");
     assert_eq!(
-        browser_context.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+        browser_context.active_page_state().devtools_sessions
+            [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_font_families
             .get("standard"),
         Some(&json!("Times New Roman"))
     );
     assert_eq!(
-        browser_context.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+        browser_context.active_page_state().devtools_sessions
+            [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_font_families
             .get("fixed"),
@@ -3584,7 +3639,7 @@ async fn set_intercept_file_chooser_dialog_accepts_valid_params_and_returns_empt
     .await;
     ctx.expect_result(51, json!({}), None);
     assert!(ctx.conn.browser_context.as_ref().is_some_and(|bc| {
-        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+        bc.active_page_state().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_intercept_file_chooser_dialog_enabled
     }));
@@ -3999,7 +4054,8 @@ async fn start_screencast_is_session_local_for_active_auxiliary_session() {
 
     let browser_context = ctx.conn.browser_context.as_ref().unwrap();
     assert!(
-        !browser_context.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+        !browser_context.active_page_state().devtools_sessions
+            [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_screencast
             .is_active(),

@@ -5803,6 +5803,7 @@ async fn playwright_over_cdp_target_document_start_script_does_not_leak_to_new_t
     assert_eq!(active.active_session_id(), Some(second_session_id.as_str()));
     assert_eq!(
         active
+            .active_page_state()
             .active_target
             .owner_state
             .document_start_scripts
@@ -5948,13 +5949,16 @@ async fn playwright_over_cdp_context_profile_surfaces_permissions_tls_and_metric
     assert_eq!(active.id, browser_context_id);
     assert_eq!(active.active_target_id(), Some(target_id.as_str()));
     assert_eq!(active.active_session_id(), Some(session_id.as_str()));
-    assert_eq!(active.tls_verify_host_override, Some(false));
     assert_eq!(
-        active.emulated_device_metrics.as_ref().map(|metrics| (
-            metrics.width,
-            metrics.height,
-            metrics.device_scale_factor
-        )),
+        active.active_page_state().tls_verify_host_override,
+        Some(false)
+    );
+    assert_eq!(
+        active
+            .active_page_state()
+            .emulated_device_metrics
+            .as_ref()
+            .map(|metrics| (metrics.width, metrics.height, metrics.device_scale_factor)),
         Some((1280, 720, 2.0))
     );
 
@@ -6135,7 +6139,13 @@ async fn playwright_over_cdp_script_execution_disabled_blocks_page_scripts_but_n
     ctx.conn
         .browser_context
         .as_mut()
-        .and_then(|browser_context| browser_context.active_target.runtime_slot.loaded_page_mut())
+        .and_then(|browser_context| {
+            browser_context
+                .active_page_state_mut()
+                .active_target
+                .runtime_slot
+                .loaded_page_mut()
+        })
         .expect("script-disabled loaded page")
         .refresh_script_execution_report_async()
         .await
@@ -6146,8 +6156,9 @@ async fn playwright_over_cdp_script_execution_disabled_blocks_page_scripts_but_n
         .browser_context
         .as_ref()
         .expect("active browser context");
-    assert!(active.script_execution_disabled);
+    assert!(active.active_page_state().script_execution_disabled);
     let script_runs = active
+        .active_page_state()
         .active_target
         .runtime_slot
         .loaded_page()

@@ -48,6 +48,7 @@ mod tests {
             .browser_context
             .as_mut()
             .expect("browser context")
+            .active_page_state_mut()
             .active_target
             .runtime_slot
             .replace_loaded_page(Some(page));

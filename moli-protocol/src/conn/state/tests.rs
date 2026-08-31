@@ -974,36 +974,62 @@ fn active_target_state_groups_runtime_fetch_and_owner_state() {
     let mut context =
         BrowserContext::new_with_page_for_test("BID-active-owner", "TID-active-owner");
 
-    assert!(!context.active_target.runtime_slot.has_loaded_page());
-    assert!(!context.active_target.fetch_owner.is_enabled());
-    assert!(context.active_target.owner_state.is_default());
+    assert!(
+        !context
+            .active_page_state()
+            .active_target
+            .runtime_slot
+            .has_loaded_page()
+    );
+    assert!(
+        !context
+            .active_page_state()
+            .active_target
+            .fetch_owner
+            .is_enabled()
+    );
+    assert!(
+        context
+            .active_page_state()
+            .active_target
+            .owner_state
+            .is_default()
+    );
 
     context
+        .active_page_state_mut()
         .active_target
         .runtime_slot
         .enable_primary_network_events();
-    context.active_target.fetch_owner.configure(
-        Some("FETCH-SID".to_owned()),
-        false,
-        vec![FetchInterceptionPattern {
-            url_pattern: "*".to_owned(),
-            resource_type_filter: Some(FetchResourceTypeFilter::Document),
-            request_stage: FetchRequestStage::Response,
-        }],
-    );
     context
+        .active_page_state_mut()
+        .active_target
+        .fetch_owner
+        .configure(
+            Some("FETCH-SID".to_owned()),
+            false,
+            vec![FetchInterceptionPattern {
+                url_pattern: "*".to_owned(),
+                resource_type_filter: Some(FetchResourceTypeFilter::Document),
+                request_stage: FetchRequestStage::Response,
+            }],
+        );
+    context
+        .active_page_state_mut()
         .active_target
         .owner_state
         .next_document_start_script_id = 7;
 
     assert!(
         context
+            .active_page_state()
             .active_target
             .runtime_slot
             .primary_network_events_enabled()
     );
     assert_eq!(
         context
+            .active_page_state()
             .active_target
             .fetch_owner
             .matching_document_request_stage(&Url::parse("https://example.test/").unwrap()),
@@ -1011,6 +1037,7 @@ fn active_target_state_groups_runtime_fetch_and_owner_state() {
     );
     assert_eq!(
         context
+            .active_page_state()
             .active_target
             .owner_state
             .next_document_start_script_id,
@@ -1516,7 +1543,11 @@ fn active_target_initial_empty_document_record_tracks_navigation_lifecycle() {
     context.begin_active_target_initial_empty_document("about:blank#active".to_owned());
 
     assert_eq!(
-        context.active_target.runtime_slot.moli_memory_diagnostics()["loadedPageAbsenceReason"],
+        context
+            .active_page_state()
+            .active_target
+            .runtime_slot
+            .moli_memory_diagnostics()["loadedPageAbsenceReason"],
         json!("initial-document-page-build-pending"),
         "active initial document target should make the missing Page reason explicit"
     );
@@ -1527,6 +1558,7 @@ fn active_target_initial_empty_document_record_tracks_navigation_lifecycle() {
     );
 
     let initial = context
+        .active_page_state()
         .active_target
         .owner_state
         .initial_empty_document_state()
@@ -1540,6 +1572,7 @@ fn active_target_initial_empty_document_record_tracks_navigation_lifecycle() {
     context.mark_target_initial_empty_document_materialized("TID-initial-active");
     assert!(
         context
+            .active_page_state()
             .active_target
             .owner_state
             .initial_empty_document_state()
@@ -1551,6 +1584,7 @@ fn active_target_initial_empty_document_record_tracks_navigation_lifecycle() {
         .start_document_navigation_for_active_target("LOADER-initial-active".to_owned())
         .expect("active target should start document navigation");
     let pending = context
+        .active_page_state()
         .active_target
         .owner_state
         .initial_empty_document_state()
@@ -1563,6 +1597,7 @@ fn active_target_initial_empty_document_record_tracks_navigation_lifecycle() {
         "LOADER-initial-active",
     );
     let cleared = context
+        .active_page_state()
         .active_target
         .owner_state
         .initial_empty_document_state()
@@ -1575,6 +1610,7 @@ fn active_target_initial_empty_document_record_tracks_navigation_lifecycle() {
         .expect("active target should restart document navigation");
     context.commit_document_navigation_if_matches(&committed);
     let exited = context
+        .active_page_state()
         .active_target
         .owner_state
         .initial_empty_document_state()

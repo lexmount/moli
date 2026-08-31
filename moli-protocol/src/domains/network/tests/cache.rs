@@ -691,7 +691,8 @@ async fn clear_browser_cache_keeps_pending_response_navigation_transfer() {
 
     let bc = ctx.conn.browser_context.as_ref().unwrap();
     assert!(
-        bc.active_target
+        bc.active_page_state()
+            .active_target
             .fetch_owner
             .pending_fetch_response_transfer_is_pending_for_test("INT-1")
     );
@@ -744,6 +745,7 @@ async fn set_cache_disabled_updates_browser_context_state() {
             .browser_context
             .as_ref()
             .unwrap()
+            .active_page_state()
             .network_policy
             .cache_disabled()
     );
@@ -760,6 +762,7 @@ async fn set_cache_disabled_updates_browser_context_state() {
             .browser_context
             .as_ref()
             .unwrap()
+            .active_page_state()
             .network_policy
             .cache_disabled()
     );
@@ -804,7 +807,7 @@ async fn devtools_set_cache_behavior_global_updates_existing_targets_and_default
     );
 
     let bc = ctx.conn.browser_context.as_ref().expect("browser context");
-    assert!(bc.network_policy.cache_disabled());
+    assert!(bc.active_page_state().network_policy.cache_disabled());
     assert!(
         bc.parked_page_session_state("TID-background")
             .expect("background state")
@@ -854,7 +857,7 @@ async fn devtools_set_cache_behavior_contexts_only_updates_requested_targets() {
         .expect("context-scoped BiDi cache behavior should succeed");
 
     let bc = ctx.conn.browser_context.as_ref().expect("browser context");
-    assert!(!bc.network_policy.cache_disabled());
+    assert!(!bc.active_page_state().network_policy.cache_disabled());
     assert!(
         bc.parked_page_session_state("TID-background")
             .expect("background state")
@@ -980,6 +983,7 @@ async fn set_bypass_service_worker_updates_browser_context_state() {
             .browser_context
             .as_ref()
             .unwrap()
+            .active_page_state()
             .network_policy
             .bypass_service_worker()
     );
@@ -996,6 +1000,7 @@ async fn set_bypass_service_worker_updates_browser_context_state() {
             .browser_context
             .as_ref()
             .unwrap()
+            .active_page_state()
             .network_policy
             .bypass_service_worker()
     );

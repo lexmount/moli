@@ -1208,6 +1208,7 @@ mod devtools_runtime_entry_tests {
             conn.browser_context
                 .as_ref()
                 .expect("browser context")
+                .active_page_state()
                 .active_target
                 .runtime_slot
                 .has_loaded_page()
@@ -1276,6 +1277,7 @@ mod devtools_runtime_entry_tests {
         conn.browser_context
             .as_mut()
             .expect("browser context")
+            .active_page_state_mut()
             .active_target
             .runtime_slot
             .set_loaded_page_for_test(page);

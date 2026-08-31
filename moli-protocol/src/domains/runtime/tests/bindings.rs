@@ -62,6 +62,7 @@ async fn runtime_disable_clears_stored_binding_definitions_when_enabled() {
             .browser_context
             .as_ref()
             .expect("browser context should exist")
+            .active_page_state()
             .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .runtime_bindings
             .iter()
@@ -80,6 +81,7 @@ async fn runtime_disable_clears_stored_binding_definitions_when_enabled() {
             .browser_context
             .as_ref()
             .expect("browser context should exist")
+            .active_page_state()
             .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .runtime_bindings
             .is_empty(),
@@ -279,6 +281,7 @@ async fn add_binding_can_complete_through_multi_phase_pending_command_task() {
             .browser_context
             .as_ref()
             .expect("browser context should exist")
+            .active_page_state()
             .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .runtime_bindings
             .iter()
@@ -433,6 +436,7 @@ async fn add_binding_rejects_execution_context_id_with_context_name() {
             .browser_context
             .as_ref()
             .expect("browser context should exist")
+            .active_page_state()
             .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .runtime_bindings
             .iter()
@@ -478,6 +482,7 @@ async fn remove_binding_deactivates_current_page_binding_and_removes_persisted_d
             .browser_context
             .as_ref()
             .expect("browser context should exist")
+            .active_page_state()
             .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .runtime_bindings
             .iter()
@@ -542,6 +547,7 @@ async fn remove_binding_can_complete_through_multi_phase_pending_command_task() 
             .browser_context
             .as_ref()
             .expect("browser context should exist")
+            .active_page_state()
             .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .runtime_bindings
             .iter()
@@ -827,6 +833,7 @@ async fn add_binding_without_runtime_enable_installs_current_main_world_and_pers
             .browser_context
             .as_ref()
             .expect("browser context should exist")
+            .active_page_state()
             .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .runtime_bindings
             .iter()
@@ -936,6 +943,7 @@ async fn add_binding_with_execution_context_id_targets_existing_isolated_world()
             .browser_context
             .as_ref()
             .expect("browser context should exist")
+            .active_page_state()
             .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .runtime_bindings
             .iter()
@@ -1023,6 +1031,7 @@ async fn add_binding_execution_context_id_completes_through_pending_command_task
             .browser_context
             .as_ref()
             .expect("browser context should exist")
+            .active_page_state()
             .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .runtime_bindings
             .iter()
@@ -1300,6 +1309,7 @@ async fn patchright_style_pre_document_add_binding_persists_until_navigation() {
             .browser_context
             .as_ref()
             .expect("browser context should exist")
+            .active_page_state()
             .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .runtime_bindings
             .iter()
@@ -1379,6 +1389,7 @@ async fn pre_document_add_binding_completes_through_command_task_without_live_pa
             .browser_context
             .as_ref()
             .expect("browser context should exist")
+            .active_page_state()
             .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .runtime_bindings
             .iter()
@@ -1441,6 +1452,7 @@ async fn patchright_style_pre_document_remove_binding_succeeds_before_navigation
             .browser_context
             .as_ref()
             .expect("browser context should exist")
+            .active_page_state()
             .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .runtime_bindings
             .iter()
@@ -1528,6 +1540,7 @@ async fn pre_document_remove_binding_completes_through_command_task_without_live
             .browser_context
             .as_ref()
             .expect("browser context should exist")
+            .active_page_state()
             .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .runtime_bindings
             .iter()

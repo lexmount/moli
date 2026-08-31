@@ -382,6 +382,7 @@ async fn get_resource_tree_reports_observed_frame_subresources() {
         .browser_context
         .as_mut()
         .expect("browser context")
+        .active_page_state_mut()
         .active_target
         .runtime_slot
         .set_loaded_page_for_test(page);
@@ -580,6 +581,7 @@ async fn frame_and_resource_trees_report_main_document_response_mime() {
         .browser_context
         .as_mut()
         .expect("browser context")
+        .active_page_state_mut()
         .active_target
         .runtime_slot
         .set_loaded_page_for_test(page);

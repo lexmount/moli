@@ -24,11 +24,11 @@ use moli_shared_worker::SharedWorkerInstanceId;
 use serde_json::json;
 use url::Url;
 
-use crate::devtools_runtime::{
-    DevToolsNetworkResourceType, DevToolsTargetKind, RuntimeExecutionContextsClearedEvent,
-};
+use crate::devtools_runtime::{DevToolsNetworkResourceType, RuntimeExecutionContextsClearedEvent};
 #[cfg(test)]
-use crate::devtools_runtime::{DevToolsTargetInfo, RuntimeExecutionContextEvent};
+use crate::devtools_runtime::{
+    DevToolsTargetInfo, DevToolsTargetKind, RuntimeExecutionContextEvent,
+};
 use crate::{
     conn::{
         BackgroundProtocolEvent, CdpConnection, PreparedTargetAttach, PreparedTargetHostDelta,
@@ -738,7 +738,6 @@ fn register_dedicated_worker_target(
             .then(|| context.devtools_target_info(&target_id))
             .flatten()
     };
-    conn.register_worker_target_host(&target_id, DevToolsTargetKind::Worker);
     if let Some(target_info) = created_snapshot {
         outputs.push(WorkerTargetLifecycleOutput::DedicatedWorkerCreated {
             browser_context_id: browser_context_id.to_owned(),
@@ -1273,7 +1272,6 @@ async fn commit_dedicated_worker_retirement_output_async(
             if removed.is_none() {
                 return Ok(events);
             }
-            conn.remove_worker_target_host(&target_id);
             if let Some(target_delta) = target_delta {
                 events.extend(conn.prepared_target_host_delta_event_plan(target_delta));
             }
@@ -1320,8 +1318,6 @@ fn commit_failed_dedicated_worker_retirement_sync(
     if removed.is_none() {
         return Vec::new();
     }
-    conn.remove_worker_target_host(&target_id);
-
     let mut events = Vec::new();
     for output in outputs.worker_target_lifecycle_outputs {
         match output {
@@ -1589,7 +1585,6 @@ fn register_shared_worker_target(
             ));
         }
     }
-    conn.register_worker_target_host(&target_id, DevToolsTargetKind::SharedWorker);
     if let Some(target_info) = created_snapshot {
         outputs.push(WorkerTargetLifecycleOutput::SharedWorkerCreated {
             target_delta: PreparedTargetHostDelta::created(target_id.clone(), Some(target_info)),
@@ -1710,7 +1705,6 @@ fn register_service_worker_target_with_active_run(
             attached_outputs.push((attachment, prepared_attach));
         }
     }
-    conn.register_worker_target_host(&target_id, DevToolsTargetKind::ServiceWorker);
     if let Some(target_info) = created_snapshot {
         outputs.push(WorkerTargetLifecycleOutput::ServiceWorkerCreated {
             version: version.clone(),
@@ -2015,7 +2009,6 @@ fn remove_shared_worker_target_with_reason(
     else {
         return outputs;
     };
-    conn.remove_worker_target_host(&target_id);
     let session_ids = target.session_ids();
     let mut pending_await_direct_outputs = Vec::new();
     let mut pending_await_claimed_outputs = Vec::new();
@@ -2161,7 +2154,6 @@ fn remove_service_worker_target_with_reason(
         .version_identity(browser_context_id)
         .expect("removed service-worker target must retain its exact version identity");
     let run_retirement = target.take_current_run_retirement(browser_context_id);
-    conn.remove_worker_target_host(&target_id);
     let deleted_events = service_worker::deleted_target_events(
         &target,
         registration_deleted,
@@ -3712,6 +3704,7 @@ mod tests {
         let mut context = BrowserContext::new("BID-1".to_owned());
         context.set_active_target_id("TID-page");
         let page_attachment_id = context
+            .active_page_state_mut()
             .active_target
             .runtime_slot
             .set_page_attachment_id_for_test(1);
@@ -4688,11 +4681,10 @@ mod tests {
                 String::new(),
                 Vec::new(),
             ));
-        conn.register_worker_target_host(&retained_target_id, DevToolsTargetKind::Worker);
-
         conn.browser_context
             .as_mut()
             .unwrap()
+            .active_page_state_mut()
             .active_target
             .runtime_slot
             .replace_page_attachment_id_for_test();

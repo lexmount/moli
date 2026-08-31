@@ -50,6 +50,7 @@ async fn set_blocked_urls_updates_browser_context_state() {
             .browser_context
             .as_ref()
             .unwrap()
+            .active_page_state()
             .network_policy
             .blocked_url_patterns(),
         vec![
@@ -70,6 +71,7 @@ async fn set_blocked_urls_updates_browser_context_state() {
             .browser_context
             .as_ref()
             .unwrap()
+            .active_page_state()
             .network_policy
             .blocked_url_patterns()
             .is_empty()
@@ -93,6 +95,7 @@ async fn set_blocked_urls_contribution_activates_with_network_handler() {
             .browser_context
             .as_ref()
             .unwrap()
+            .active_page_state()
             .network_policy
             .blocked_url_patterns()
             .is_empty(),
@@ -105,6 +108,7 @@ async fn set_blocked_urls_contribution_activates_with_network_handler() {
             .browser_context
             .as_ref()
             .unwrap()
+            .active_page_state()
             .network_policy
             .blocked_url_patterns(),
         ["*without-enable*".to_owned()],
@@ -118,7 +122,8 @@ async fn set_blocked_urls_navigation_fails_with_blocked_by_client() {
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    bc.active_target
+    bc.active_page_state_mut()
+        .active_target
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -160,7 +165,8 @@ async fn set_blocked_urls_runtime_fetch_emits_loading_failed() {
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    bc.active_target
+    bc.active_page_state_mut()
+        .active_target
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -848,7 +854,8 @@ async fn emulate_network_conditions_offline_worker_fetch_emits_loading_failed() 
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    bc.active_target
+    bc.active_page_state_mut()
+        .active_target
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -964,7 +971,8 @@ async fn emulate_network_conditions_offline_worker_xhr_emits_loading_failed() {
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    bc.active_target
+    bc.active_page_state_mut()
+        .active_target
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -1076,7 +1084,8 @@ async fn set_blocked_urls_runtime_xhr_emits_loading_failed() {
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    bc.active_target
+    bc.active_page_state_mut()
+        .active_target
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -1165,7 +1174,8 @@ async fn set_blocked_urls_runtime_websocket_emits_loading_failed() {
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    bc.active_target
+    bc.active_page_state_mut()
+        .active_target
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -1312,12 +1322,29 @@ async fn emulate_network_conditions_updates_browser_context_state() {
     ctx.expect_result(30, json!({}), None);
 
     let bc = ctx.conn.browser_context.as_ref().unwrap();
-    assert!(bc.network_policy.network_offline());
-    assert_eq!(bc.network_policy.emulated_network_latency(), 150.0);
-    assert_eq!(bc.network_policy.emulated_download_throughput(), 1024.0);
-    assert_eq!(bc.network_policy.emulated_upload_throughput(), 512.0);
+    assert!(bc.active_page_state().network_policy.network_offline());
     assert_eq!(
-        bc.network_policy.emulated_connection_type(),
+        bc.active_page_state()
+            .network_policy
+            .emulated_network_latency(),
+        150.0
+    );
+    assert_eq!(
+        bc.active_page_state()
+            .network_policy
+            .emulated_download_throughput(),
+        1024.0
+    );
+    assert_eq!(
+        bc.active_page_state()
+            .network_policy
+            .emulated_upload_throughput(),
+        512.0
+    );
+    assert_eq!(
+        bc.active_page_state()
+            .network_policy
+            .emulated_connection_type(),
         Some("cellular3g")
     );
 }
@@ -1327,7 +1354,8 @@ async fn emulate_network_conditions_offline_navigation_fails_before_completion_e
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    bc.active_target
+    bc.active_page_state_mut()
+        .active_target
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -1369,7 +1397,8 @@ async fn emulate_network_conditions_offline_runtime_fetch_emits_loading_failed()
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    bc.active_target
+    bc.active_page_state_mut()
+        .active_target
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);

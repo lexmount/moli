@@ -502,6 +502,7 @@ fn page_request_client_for_navigation_inputs_inherits_service_worker_bypass() {
     browser_context.set_active_target_id("TID-1");
     browser_context.attach_active_session("SID-1");
     browser_context
+        .active_page_state_mut()
         .network_policy
         .set_bypass_service_worker(true);
     conn.browser_context = Some(browser_context);
@@ -705,6 +706,7 @@ async fn reset_resource_runtime_clears_loaded_page_cookie_backend() {
     conn.browser_context
         .as_mut()
         .unwrap()
+        .active_page_state_mut()
         .active_target
         .runtime_slot
         .set_loaded_page_for_test(navigation.page);
@@ -713,6 +715,7 @@ async fn reset_resource_runtime_clears_loaded_page_cookie_backend() {
         .browser_context
         .as_mut()
         .unwrap()
+        .active_page_state_mut()
         .active_target
         .runtime_slot
         .loaded_page_mut()
@@ -729,6 +732,7 @@ async fn reset_resource_runtime_clears_loaded_page_cookie_backend() {
         .browser_context
         .as_mut()
         .unwrap()
+        .active_page_state_mut()
         .active_target
         .runtime_slot
         .loaded_page_mut()
@@ -970,6 +974,7 @@ async fn user_agent_override_rebinds_live_document_after_engine_runtime_invalida
     conn.browser_context
         .as_mut()
         .unwrap()
+        .active_page_state_mut()
         .active_target
         .runtime_slot
         .set_loaded_page_for_test(navigation.page);
@@ -984,6 +989,7 @@ async fn user_agent_override_rebinds_live_document_after_engine_runtime_invalida
         .browser_context
         .as_mut()
         .unwrap()
+        .active_page_state_mut()
         .active_target
         .runtime_slot
         .loaded_page_mut()
@@ -1015,6 +1021,7 @@ async fn tls_and_proxy_overrides_rebind_live_document_after_engine_runtime_inval
     conn.browser_context
         .as_mut()
         .unwrap()
+        .active_page_state_mut()
         .active_target
         .runtime_slot
         .set_loaded_page_for_test(navigation.page);
@@ -1027,6 +1034,7 @@ async fn tls_and_proxy_overrides_rebind_live_document_after_engine_runtime_inval
         .browser_context
         .as_mut()
         .unwrap()
+        .active_page_state_mut()
         .active_target
         .runtime_slot
         .loaded_page_mut()
@@ -1044,6 +1052,7 @@ async fn tls_and_proxy_overrides_rebind_live_document_after_engine_runtime_inval
         .browser_context
         .as_mut()
         .unwrap()
+        .active_page_state_mut()
         .active_target
         .runtime_slot
         .loaded_page_mut()
@@ -1097,12 +1106,14 @@ async fn loader_uses_active_browser_context_user_agent_override() {
     let mut conn = CdpConnection::new();
     let mut first = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
     first
+        .active_page_state_mut()
         .network_policy
         .set_user_agent_override("Moli/Context-A".into());
     conn.browser_context = Some(first);
 
     let mut second = BrowserContext::new_with_page_for_test("BID-2", "TID-2");
     second
+        .active_page_state_mut()
         .network_policy
         .set_user_agent_override("Moli/Context-B".into());
     conn.inactive_browser_contexts.push(second);
@@ -1127,11 +1138,11 @@ async fn loader_uses_active_browser_context_user_agent_override() {
 async fn loader_uses_active_browser_context_http_proxy_override() {
     let mut conn = CdpConnection::new();
     let mut first = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
-    first.http_proxy_override = Some("http://proxy-a.test:8080".into());
+    first.active_page_state_mut().http_proxy_override = Some("http://proxy-a.test:8080".into());
     conn.browser_context = Some(first);
 
     let mut second = BrowserContext::new_with_page_for_test("BID-2", "TID-2");
-    second.http_proxy_override = Some("http://proxy-b.test:8080".into());
+    second.active_page_state_mut().http_proxy_override = Some("http://proxy-b.test:8080".into());
     conn.inactive_browser_contexts.push(second);
 
     assert_eq!(
@@ -1154,11 +1165,11 @@ async fn loader_uses_active_browser_context_http_proxy_override() {
 async fn loader_uses_active_browser_context_http_no_proxy_override() {
     let mut conn = CdpConnection::new();
     let mut first = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
-    first.http_no_proxy_override = Some("localhost,127.0.0.1".into());
+    first.active_page_state_mut().http_no_proxy_override = Some("localhost,127.0.0.1".into());
     conn.browser_context = Some(first);
 
     let mut second = BrowserContext::new_with_page_for_test("BID-2", "TID-2");
-    second.http_no_proxy_override = Some("::1,.example.com".into());
+    second.active_page_state_mut().http_no_proxy_override = Some("::1,.example.com".into());
     conn.inactive_browser_contexts.push(second);
 
     assert_eq!(
@@ -1181,11 +1192,11 @@ async fn loader_uses_active_browser_context_http_no_proxy_override() {
 async fn loader_uses_active_browser_context_tls_verify_host_override() {
     let mut conn = CdpConnection::new();
     let mut first = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
-    first.tls_verify_host_override = Some(false);
+    first.active_page_state_mut().tls_verify_host_override = Some(false);
     conn.browser_context = Some(first);
 
     let mut second = BrowserContext::new_with_page_for_test("BID-2", "TID-2");
-    second.tls_verify_host_override = Some(true);
+    second.active_page_state_mut().tls_verify_host_override = Some(true);
     conn.inactive_browser_contexts.push(second);
 
     assert!(
@@ -1209,18 +1220,21 @@ async fn removing_an_inactive_browser_context_keeps_the_previously_active_contex
 
     let mut first = BrowserContext::new_with_page_for_test("BID-A", "TID-A");
     first
+        .active_page_state_mut()
         .network_policy
         .set_user_agent_override("Moli/Context-A".into());
     conn.browser_context = Some(first);
 
     let mut second = BrowserContext::new_with_page_for_test("BID-B", "TID-B");
     second
+        .active_page_state_mut()
         .network_policy
         .set_user_agent_override("Moli/Context-B".into());
     conn.inactive_browser_contexts.push(second);
 
     let mut third = BrowserContext::new_with_page_for_test("BID-C", "TID-C");
     third
+        .active_page_state_mut()
         .network_policy
         .set_user_agent_override("Moli/Context-C".into());
     conn.inactive_browser_contexts.push(third);
@@ -1259,12 +1273,14 @@ async fn manual_browser_context_restore_reselects_original_context_after_switch(
 
     let mut first = BrowserContext::new_with_page_for_test("BID-A", "TID-A");
     first
+        .active_page_state_mut()
         .network_policy
         .set_user_agent_override("Moli/Context-A".into());
     conn.browser_context = Some(first);
 
     let mut second = BrowserContext::new_with_page_for_test("BID-B", "TID-B");
     second
+        .active_page_state_mut()
         .network_policy
         .set_user_agent_override("Moli/Context-B".into());
     conn.inactive_browser_contexts.push(second);
@@ -1334,6 +1350,7 @@ async fn session_scoped_process_message_restores_previously_active_context_after
         .expect("session browser context should remain inactive after dispatch");
     assert!(
         inactive
+            .active_page_state()
             .active_target
             .runtime_slot
             .primary_network_events_enabled()
@@ -1373,6 +1390,7 @@ async fn session_scoped_process_message_async_restores_previously_active_context
         .expect("session browser context should remain inactive after async dispatch");
     assert!(
         inactive
+            .active_page_state()
             .active_target
             .runtime_slot
             .primary_network_events_enabled()
@@ -1408,6 +1426,7 @@ async fn direct_network_enable_routes_to_inactive_active_owner_without_promoting
         .expect("inactive owner must remain parked");
     assert!(
         inactive
+            .active_page_state()
             .active_target
             .runtime_slot
             .primary_network_events_enabled()
@@ -1421,7 +1440,8 @@ async fn direct_runtime_evaluate_routes_to_inactive_active_owner_without_promoti
     let mut inactive = BrowserContext::new("BID-B".into());
     inactive.set_active_target_id("TID-B".to_owned());
     inactive.attach_active_session("SID-B");
-    inactive.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+    inactive.active_page_state_mut().devtools_sessions
+        [moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .runtime_frontend_enabled = true;
     ctx.conn.inactive_browser_contexts.push(inactive);
@@ -1463,13 +1483,16 @@ async fn direct_runtime_evaluate_document_replacement_lifecycle_uses_inactive_ow
     let mut inactive = BrowserContext::new("BID-document-replacement".into());
     inactive.set_active_target_id("TID-document-replacement".to_owned());
     inactive.attach_active_session("SID-document-replacement");
-    inactive.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+    inactive.active_page_state_mut().devtools_sessions
+        [moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .runtime_frontend_enabled = true;
-    inactive.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+    inactive.active_page_state_mut().devtools_sessions
+        [moli_page_types::DevToolsSessionKey::Primary]
         .dom_session_state
         .enabled = true;
-    inactive.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+    inactive.active_page_state_mut().devtools_sessions
+        [moli_page_types::DevToolsSessionKey::Primary]
         .page_session_state
         .page_lifecycle_events = true;
     ctx.conn.inactive_browser_contexts.push(inactive);
@@ -1538,6 +1561,7 @@ fn devtools_document_lifecycle_wait_key_observes_interruption_and_target_loss() 
     browser_context.set_active_target_id("TID-lifecycle-wait".to_owned());
     browser_context.attach_active_session("SID-lifecycle-wait");
     browser_context
+        .active_page_state_mut()
         .active_target
         .runtime_slot
         .set_page_attachment_id_for_test(901);
@@ -1669,6 +1693,7 @@ fn devtools_document_lifecycle_wait_key_observes_interruption_and_target_loss() 
     replacement_context.set_active_target_id("TID-other".to_owned());
     replacement_context.attach_active_session("SID-lifecycle-wait");
     replacement_context
+        .active_page_state_mut()
         .active_target
         .runtime_slot
         .set_page_attachment_id_for_test(902);
@@ -1713,6 +1738,7 @@ fn devtools_target_context_resolves_background_page_without_ambient_route() {
     let mut browser_context = BrowserContext::new("BID-explicit-owner".into());
     browser_context.set_active_target_id("TID-active");
     browser_context
+        .active_page_state_mut()
         .active_target
         .runtime_slot
         .set_page_attachment_id_for_test(1001);
@@ -1768,7 +1794,8 @@ async fn direct_runtime_evaluate_same_document_navigation_updates_inactive_owner
     let mut inactive = BrowserContext::new("BID-same-document".into());
     inactive.set_active_target_id("TID-same-document".to_owned());
     inactive.attach_active_session("SID-same-document");
-    inactive.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+    inactive.active_page_state_mut().devtools_sessions
+        [moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .runtime_frontend_enabled = true;
     inactive.set_target_url(initial_url.clone());
@@ -2160,7 +2187,8 @@ async fn direct_runtime_evaluate_routes_to_inactive_auxiliary_owner_without_prom
     inactive.set_active_target_id("TID-B".to_owned());
     inactive.attach_active_session("SID-primary");
     assert!(inactive.assign_auxiliary_session_to_target("TID-B", "SID-aux".to_owned()));
-    inactive.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+    inactive.active_page_state_mut().devtools_sessions
+        [moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .runtime_frontend_enabled = true;
     ctx.conn.inactive_browser_contexts.push(inactive);
@@ -2226,6 +2254,7 @@ async fn direct_network_enable_disable_routes_to_inactive_auxiliary_owner_withou
         .expect("inactive owner must remain parked");
     assert!(
         !inactive
+            .active_page_state()
             .active_target
             .runtime_slot
             .primary_network_events_enabled(),
@@ -2233,6 +2262,7 @@ async fn direct_network_enable_disable_routes_to_inactive_auxiliary_owner_withou
     );
     assert!(
         inactive
+            .active_page_state()
             .active_target
             .runtime_slot
             .has_auxiliary_network_events_for_session("SID-aux")
@@ -2258,6 +2288,7 @@ async fn direct_network_enable_disable_routes_to_inactive_auxiliary_owner_withou
         .expect("inactive owner must remain parked");
     assert!(
         !inactive
+            .active_page_state()
             .active_target
             .runtime_slot
             .has_auxiliary_network_events_for_session("SID-aux")
@@ -2626,7 +2657,8 @@ async fn direct_background_command_does_not_emit_active_observable_output_under_
     let mut active = BrowserContext::new("BID-A".into());
     active.set_active_target_id("TID-active".to_owned());
     active.attach_active_session("SID-active");
-    active.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+    active.active_page_state_mut().devtools_sessions
+        [moli_page_types::DevToolsSessionKey::Primary]
         .console_output_session_state
         .console_enabled = true;
     active.replace_loaded_page(Some(active_page));
@@ -2699,12 +2731,14 @@ async fn direct_console_routes_to_inactive_active_owner_without_promoting_slot()
         .find(|bc| bc.id == "BID-B")
         .expect("inactive owner must remain parked");
     assert!(
-        inactive.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+        inactive.active_page_state().devtools_sessions
+            [moli_page_types::DevToolsSessionKey::Primary]
             .console_output_session_state
             .console_enabled
     );
     assert_eq!(
         inactive
+            .active_page_state()
             .active_target
             .owner_state
             .console_output_state
@@ -2751,12 +2785,14 @@ async fn direct_console_routes_to_inactive_active_owner_without_promoting_slot()
         .find(|bc| bc.id == "BID-B")
         .expect("inactive owner must remain parked");
     assert!(
-        !inactive.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+        !inactive.active_page_state().devtools_sessions
+            [moli_page_types::DevToolsSessionKey::Primary]
             .console_output_session_state
             .console_enabled
     );
     assert_eq!(
         inactive
+            .active_page_state()
             .active_target
             .owner_state
             .console_output_state
@@ -2993,12 +3029,14 @@ async fn direct_log_enable_routes_to_inactive_active_owner_without_promoting_slo
         .find(|bc| bc.id == "BID-B")
         .expect("inactive owner must remain parked");
     assert!(
-        inactive.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+        inactive.active_page_state().devtools_sessions
+            [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .log_enabled
     );
     assert_eq!(
-        inactive.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+        inactive.active_page_state().devtools_sessions
+            [moli_page_types::DevToolsSessionKey::Primary]
             .console_output_session_state
             .log_lifecycle_entries,
         0,
@@ -3122,7 +3160,8 @@ async fn direct_log_disable_routes_to_inactive_active_owner_without_promoting_sl
     let mut inactive = BrowserContext::new("BID-B".into());
     inactive.set_active_target_id("TID-B".to_owned());
     inactive.attach_active_session("SID-B");
-    inactive.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+    inactive.active_page_state_mut().devtools_sessions
+        [moli_page_types::DevToolsSessionKey::Primary]
         .page_session_state
         .log_enabled = true;
     ctx.conn.inactive_browser_contexts.push(inactive);
@@ -3152,12 +3191,14 @@ async fn direct_log_disable_routes_to_inactive_active_owner_without_promoting_sl
         .find(|bc| bc.id == "BID-B")
         .expect("inactive owner must remain parked");
     assert!(
-        !inactive.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+        !inactive.active_page_state().devtools_sessions
+            [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .log_enabled
     );
     assert_eq!(
-        inactive.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+        inactive.active_page_state().devtools_sessions
+            [moli_page_types::DevToolsSessionKey::Primary]
             .console_output_session_state
             .log_lifecycle_entries,
         0,
@@ -3251,29 +3292,63 @@ async fn direct_network_policy_routes_to_inactive_active_owner_without_promoting
         .iter()
         .find(|bc| bc.id == "BID-B")
         .expect("inactive owner must remain parked");
-    assert!(inactive.network_policy.cache_disabled());
-    assert!(inactive.network_policy.bypass_service_worker());
+    assert!(inactive.active_page_state().network_policy.cache_disabled());
+    assert!(
+        inactive
+            .active_page_state()
+            .network_policy
+            .bypass_service_worker()
+    );
     assert_eq!(
-        inactive.network_policy.blocked_url_patterns(),
+        inactive
+            .active_page_state()
+            .network_policy
+            .blocked_url_patterns(),
         vec!["*://blocked.test/*".to_owned()]
     );
     assert_eq!(
-        inactive.network_policy.extra_headers(),
+        inactive.active_page_state().network_policy.extra_headers(),
         vec![("X-Test".to_owned(), "direct".to_owned())]
     );
     assert_eq!(
-        inactive.network_policy.user_agent_override(),
+        inactive
+            .active_page_state()
+            .network_policy
+            .user_agent_override(),
         Some("Moli/Direct-UA")
     );
-    assert!(inactive.network_policy.network_offline());
-    assert_eq!(inactive.network_policy.emulated_network_latency(), 25.0);
+    assert!(
+        inactive
+            .active_page_state()
+            .network_policy
+            .network_offline()
+    );
     assert_eq!(
-        inactive.network_policy.emulated_download_throughput(),
+        inactive
+            .active_page_state()
+            .network_policy
+            .emulated_network_latency(),
+        25.0
+    );
+    assert_eq!(
+        inactive
+            .active_page_state()
+            .network_policy
+            .emulated_download_throughput(),
         1024.0
     );
-    assert_eq!(inactive.network_policy.emulated_upload_throughput(), 256.0);
     assert_eq!(
-        inactive.network_policy.emulated_connection_type(),
+        inactive
+            .active_page_state()
+            .network_policy
+            .emulated_upload_throughput(),
+        256.0
+    );
+    assert_eq!(
+        inactive
+            .active_page_state()
+            .network_policy
+            .emulated_connection_type(),
         Some("cellular3g")
     );
 }
@@ -3316,9 +3391,13 @@ async fn direct_network_policy_invalid_params_return_owner_plan_error_without_pr
         .iter()
         .find(|bc| bc.id == "BID-B")
         .expect("inactive owner must remain parked");
-    assert!(!inactive.network_policy.cache_disabled());
+    assert!(!inactive.active_page_state().network_policy.cache_disabled());
     assert!(
-        inactive.network_policy.extra_headers().is_empty(),
+        inactive
+            .active_page_state()
+            .network_policy
+            .extra_headers()
+            .is_empty(),
         "invalid direct output-plan commands must not mutate owner policy"
     );
 }

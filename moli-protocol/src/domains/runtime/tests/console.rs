@@ -518,6 +518,7 @@ async fn deferred_heap_profiler_state_follows_renderer_owned_document_navigation
         .browser_context
         .as_ref()
         .expect("browser context")
+        .active_page_state()
         .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .inspector_session_state;
     assert!(

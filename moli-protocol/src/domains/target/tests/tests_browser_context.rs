@@ -112,7 +112,7 @@ async fn dispose_browser_context_emits_detached_events_for_attached_target() {
     let mut bc = BrowserContext::new("BID-20".into());
     bc.set_active_target_id("TID-000000000A");
     bc.attach_active_session("SID-000000000A");
-    bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+    bc.active_page_state_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .inspector_enabled = true;
     ctx.conn.browser_context = Some(bc);
@@ -784,10 +784,11 @@ async fn dispose_browser_context_aborts_paused_request_stage_navigation() {
     let mut bc = BrowserContext::new("BID-9".into());
     bc.set_active_target_id("TID-000000000A");
     bc.attach_active_session("SID-1");
-    bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+    bc.active_page_state_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .inspector_enabled = true;
-    bc.active_target
+    bc.active_page_state_mut()
+        .active_target
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -866,7 +867,8 @@ async fn dispose_browser_context_aborts_root_session_navigation_without_target_s
     let mut ctx = TestContext::new();
     let mut bc = BrowserContext::new("BID-root-dispose".into());
     bc.set_active_target_id("TID-root-dispose");
-    bc.active_target
+    bc.active_page_state_mut()
+        .active_target
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);

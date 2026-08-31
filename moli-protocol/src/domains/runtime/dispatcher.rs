@@ -11421,6 +11421,7 @@ mod protocol_neutral_tests {
             .browser_context
             .as_mut()
             .expect("browser context")
+            .active_page_state_mut()
             .active_target
             .runtime_slot
             .set_loaded_page_for_test(page);

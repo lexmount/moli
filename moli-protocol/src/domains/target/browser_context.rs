@@ -221,22 +221,12 @@ pub(in crate::domains) fn devtools_client_window_info_for_target(
         .as_ref()
         .map(|context| context.id.as_str());
     for browser_context in conn.browser_contexts() {
-        if browser_context.active_target_id() == Some(target_id.as_str()) {
-            let active = active_browser_context_id == Some(browser_context.id.as_str());
+        if let Some(target) = browser_context.page_target(target_id.as_str()) {
             return Some(devtools_client_window_info_from_owner_state(
                 target_id.clone(),
-                active,
-                Some(&browser_context.active_target.owner_state),
-            ));
-        }
-        if browser_context
-            .background_targets()
-            .any(|target| target.target_id() == target_id.as_str())
-        {
-            return Some(devtools_client_window_info_from_owner_state(
-                target_id.clone(),
-                false,
-                browser_context.parked_target_owner_state(target_id.as_str()),
+                active_browser_context_id == Some(browser_context.id.as_str())
+                    && browser_context.is_active_target(target_id.as_str()),
+                Some(&target.owner_state),
             ));
         }
     }

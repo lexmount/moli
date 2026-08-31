@@ -550,8 +550,14 @@ fn collect_moli_diagnostics_pending_snapshots(
     browser_context: &mut BrowserContext,
     pending: &mut Vec<PendingMoliDiagnosticsPageSnapshot>,
 ) -> Result<(), String> {
-    if browser_context.active_target.runtime_slot.has_loaded_page() {
+    if browser_context
+        .active_page_target()
+        .active_target
+        .runtime_slot
+        .has_loaded_page()
+    {
         let pending_snapshot = browser_context
+            .active_page_target()
             .active_target
             .runtime_slot
             .loaded_page()
@@ -3680,7 +3686,10 @@ impl CdpConnection {
             .browser_context_by_id_mut(&route.browser_context_id)
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?;
         let slot = if browser_context.active_target_id() == route.target_id.as_deref() {
-            &mut browser_context.active_target.runtime_slot
+            &mut browser_context
+                .active_page_target_mut()
+                .active_target
+                .runtime_slot
         } else {
             let target_id = route
                 .target_id
@@ -4116,7 +4125,11 @@ impl CdpConnection {
                             .background_target_mut(target_id)
                             .and_then(|target| target.loaded_page_mut())
                     } else {
-                        browser_context.active_target.runtime_slot.loaded_page_mut()
+                        browser_context
+                            .active_page_target_mut()
+                            .active_target
+                            .runtime_slot
+                            .loaded_page_mut()
                     }
                 })
             else {
@@ -6066,6 +6079,7 @@ mod tests {
         browser_context.set_active_target_id("TID-active");
         browser_context.attach_active_session("SID-active".to_owned());
         browser_context
+            .active_page_state_mut()
             .active_target
             .runtime_slot
             .set_page_attachment_id_for_test(1);
@@ -7180,7 +7194,8 @@ mod tests {
         {
             let browser_context = conn.browser_context.as_ref().expect("browser context");
             assert!(
-                browser_context.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                browser_context.active_page_state().devtools_sessions
+                    [moli_page_types::DevToolsSessionKey::Primary]
                     .has_pending_inspector_awaits(),
                 "active DevTools session should physically store its pending await"
             );
@@ -7369,6 +7384,7 @@ mod tests {
         browser_context.set_active_target_id("TID-listener-cancel".to_owned());
         browser_context.attach_active_session("SID-listener-cancel".to_owned());
         browser_context
+            .active_page_state_mut()
             .active_target
             .runtime_slot
             .set_page_attachment_id_for_test(1);

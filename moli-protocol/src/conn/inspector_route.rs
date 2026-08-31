@@ -324,6 +324,7 @@ mod tests {
         );
         browser_context.set_loaded_page_async(page).await;
         let current = browser_context
+            .active_page_state()
             .active_target
             .runtime_slot
             .current_renderer_attachment()
@@ -346,6 +347,7 @@ mod tests {
                 .browser_context
                 .as_ref()
                 .expect("browser context")
+                .active_page_state()
                 .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .inspector_session_state
                 .v8_state,
@@ -371,6 +373,7 @@ mod tests {
                 .browser_context
                 .as_ref()
                 .expect("browser context")
+                .active_page_state()
                 .devtools_sessions
                 .attached("SID-state-aux")
                 .expect("auxiliary session state")
@@ -422,6 +425,7 @@ mod tests {
                 .browser_context
                 .as_ref()
                 .expect("browser context")
+                .active_page_state()
                 .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .inspector_session_state
                 .v8_state,
@@ -450,6 +454,7 @@ mod tests {
                 .browser_context
                 .as_ref()
                 .expect("browser context")
+                .active_page_state()
                 .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .inspector_session_state
                 .v8_state,

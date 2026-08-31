@@ -251,10 +251,11 @@ async fn dispose_browser_context_aborts_paused_request_stage_navigation() {
     let mut bc = BrowserContext::new("BID-9".into());
     bc.set_active_target_id("TID-000000000A");
     bc.attach_active_session("SID-1");
-    bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+    bc.active_page_state_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .inspector_enabled = true;
-    bc.active_target
+    bc.active_page_state_mut()
+        .active_target
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -1625,10 +1626,12 @@ async fn same_context_targets_do_not_replay_bare_isolated_worlds_after_switching
     {
         let bc = ctx.conn.browser_context.as_mut().expect("browser context");
         let _ = bc
+            .active_page_state_mut()
             .active_target
             .runtime_slot
             .replace_loaded_page(Some(first_page));
-        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+        bc.active_page_state_mut().devtools_sessions
+            [moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
             .runtime_frontend_enabled = true;
     }
@@ -1718,8 +1721,12 @@ async fn same_context_targets_do_not_replay_bare_isolated_worlds_after_switching
         second_promote["result"]["result"]["value"],
         json!("second-target")
     );
-    ctx.conn.browser_context.as_mut().unwrap().devtools_sessions
-        [moli_page_types::DevToolsSessionKey::Primary]
+    ctx.conn
+        .browser_context
+        .as_mut()
+        .unwrap()
+        .active_page_state_mut()
+        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .runtime_frontend_enabled = true;
 
@@ -1752,8 +1759,12 @@ async fn same_context_targets_do_not_replay_bare_isolated_worlds_after_switching
             .is_empty(),
         "target activation must not turn a document-scoped world into persistent state"
     );
-    ctx.conn.browser_context.as_mut().unwrap().devtools_sessions
-        [moli_page_types::DevToolsSessionKey::Primary]
+    ctx.conn
+        .browser_context
+        .as_mut()
+        .unwrap()
+        .active_page_state_mut()
+        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .runtime_frontend_enabled = true;
     let target_a_replay_url =
@@ -1813,8 +1824,12 @@ async fn same_context_targets_do_not_replay_bare_isolated_worlds_after_switching
     }))
     .await;
     ctx.expect_result(104157, json!({}), None);
-    ctx.conn.browser_context.as_mut().unwrap().devtools_sessions
-        [moli_page_types::DevToolsSessionKey::Primary]
+    ctx.conn
+        .browser_context
+        .as_mut()
+        .unwrap()
+        .active_page_state_mut()
+        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .runtime_frontend_enabled = true;
 

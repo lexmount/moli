@@ -472,8 +472,12 @@ async fn runtime_child_frame_fetch_subresource_interception_uses_child_frame_att
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &top_url, "SID-1", "TID-1").await;
     ctx.enable_page_events_for_test(Some("SID-1"));
-    ctx.conn.browser_context.as_mut().unwrap().devtools_sessions
-        [moli_page_types::DevToolsSessionKey::Primary]
+    ctx.conn
+        .browser_context
+        .as_mut()
+        .unwrap()
+        .active_page_state_mut()
+        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .inspector_enabled = true;
     ctx.sent.clear();
@@ -5183,8 +5187,12 @@ async fn close_aborts_paused_response_stage_runtime_xhr_subresource() {
     let xhr_url = format!("http://{addr}/xhr");
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &page_url, "SID-1", "TID-1").await;
-    ctx.conn.browser_context.as_mut().unwrap().devtools_sessions
-        [moli_page_types::DevToolsSessionKey::Primary]
+    ctx.conn
+        .browser_context
+        .as_mut()
+        .unwrap()
+        .active_page_state_mut()
+        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .inspector_enabled = true;
     ctx.sent.clear();
@@ -5517,8 +5525,12 @@ async fn close_aborts_paused_runtime_xhr_auth_subresource() {
     let protected_url = format!("http://{addr}/protected");
     let mut ctx = TestContext::new();
     with_loaded_http_document(&mut ctx, &page_url, "SID-1", "TID-1").await;
-    ctx.conn.browser_context.as_mut().unwrap().devtools_sessions
-        [moli_page_types::DevToolsSessionKey::Primary]
+    ctx.conn
+        .browser_context
+        .as_mut()
+        .unwrap()
+        .active_page_state_mut()
+        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .inspector_enabled = true;
     ctx.sent.clear();
@@ -5761,7 +5773,13 @@ async fn crash_aborts_paused_runtime_fetch_subresource() {
     ctx.expect_error(905, -32000, "RequestNotFound");
 
     let bc = ctx.conn.browser_context.as_ref().expect("browser context");
-    assert!(bc.active_target.owner_state.target_crash_state.is_crashed());
+    assert!(
+        bc.active_page_state()
+            .active_target
+            .owner_state
+            .target_crash_state
+            .is_crashed()
+    );
     assert!(!bc.has_loaded_page());
 
     server.abort();
@@ -5905,7 +5923,13 @@ async fn crash_aborts_paused_response_stage_runtime_xhr_subresource() {
     ctx.expect_error(912, -32000, "RequestNotFound");
 
     let bc = ctx.conn.browser_context.as_ref().expect("browser context");
-    assert!(bc.active_target.owner_state.target_crash_state.is_crashed());
+    assert!(
+        bc.active_page_state()
+            .active_target
+            .owner_state
+            .target_crash_state
+            .is_crashed()
+    );
     assert!(!bc.has_loaded_page());
 
     server.abort();
@@ -6082,7 +6106,13 @@ async fn crash_aborts_paused_runtime_xhr_auth_subresource() {
     ctx.expect_error(919, -32000, "RequestNotFound");
 
     let bc = ctx.conn.browser_context.as_ref().expect("browser context");
-    assert!(bc.active_target.owner_state.target_crash_state.is_crashed());
+    assert!(
+        bc.active_page_state()
+            .active_target
+            .owner_state
+            .target_crash_state
+            .is_crashed()
+    );
     assert!(!bc.has_loaded_page());
 
     server.abort();

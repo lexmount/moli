@@ -102,18 +102,8 @@ fn fetch_body_stream_owner_for_target_mut<'a>(
     browser_context: &'a mut BrowserContext,
     target_id: &str,
 ) -> Option<SessionFetchBodyStreamOwner<'a>> {
-    let is_active_target = browser_context.active_target_id() == Some(target_id);
-    if is_active_target {
-        let owner_key = fetch_stream_owner_key(&browser_context.id, target_id);
-        let active_target = &mut browser_context.active_target;
-        return Some(SessionFetchBodyStreamOwner {
-            owner_key,
-            fetch_owner: &mut active_target.fetch_owner,
-            runtime_slot: &mut active_target.runtime_slot,
-        });
-    }
     let owner_key = fetch_stream_owner_key(&browser_context.id, target_id);
-    let target = browser_context.background_target_mut(target_id)?;
+    let target = browser_context.page_target_mut(target_id)?;
     let active_target = &mut target.state_mut().active_target;
     Some(SessionFetchBodyStreamOwner {
         owner_key,
@@ -126,41 +116,21 @@ fn runtime_slot_for_target_scoped_stream_mut<'a>(
     browser_context: &'a mut BrowserContext,
     target_id: &str,
 ) -> Option<&'a mut TargetRuntimeSlot> {
-    let is_active_target = browser_context.active_target_id() == Some(target_id)
-        || (target_id == "active" && browser_context.active_target_id().is_none());
-    if is_active_target {
-        return Some(&mut browser_context.active_target.runtime_slot);
-    }
     browser_context
-        .background_target_mut(target_id)
+        .page_target_mut(target_id)
         .map(|target| &mut target.runtime_slot)
 }
 
 impl TargetSessionOwnerMut<'_> {
     fn open_scoped_io_stream_body_source(&mut self, body: CapturedBody) -> Result<String, String> {
         match self {
-            Self::ActiveTarget {
-                browser_context, ..
-            } => {
-                let target_id = browser_context
-                    .active_target_id_owned()
-                    .unwrap_or_else(|| "active".to_owned());
-                let owner_key = fetch_stream_owner_key(&browser_context.id, &target_id);
-                let runtime_slot = &mut browser_context.active_target.runtime_slot;
-                let handle = target_scoped_stream_handle(
-                    &owner_key,
-                    runtime_slot.allocate_io_stream_handle(),
-                );
-                runtime_slot.insert_io_stream_body_source(handle.clone(), body, 0);
-                Ok(handle)
-            }
-            Self::PageTargetHost {
+            Self::PageTarget {
                 browser_context,
                 target_id,
                 ..
             } => {
                 let owner_key = fetch_stream_owner_key(&browser_context.id, target_id);
-                let Some(target) = browser_context.background_target_mut(target_id) else {
+                let Some(target) = browser_context.page_target_mut(target_id) else {
                     return Err("NoDocumentLoaded".to_owned());
                 };
                 let handle = target_scoped_stream_handle(
@@ -225,16 +195,17 @@ fn remove_network_intercept_from_browser_context(
     browser_context: &mut BrowserContext,
     intercept_id: &str,
 ) -> Result<Option<Option<moli_core::page::PendingPageCommand>>, String> {
-    if browser_context
+    let target = browser_context.active_page_target_mut();
+    if target
         .active_target
         .fetch_owner
         .remove_network_intercept(intercept_id)
     {
-        let (subresource_enabled, subresource_resource_type) = browser_context
+        let (subresource_enabled, subresource_resource_type) = target
             .active_target
             .fetch_owner
             .subresource_interception_config();
-        let Some(page) = browser_context.active_target.runtime_slot.loaded_page_mut() else {
+        let Some(page) = target.active_target.runtime_slot.loaded_page_mut() else {
             return Ok(Some(None));
         };
         return page
@@ -1187,19 +1158,7 @@ fn pending_fetch_request_route(
     browser_context: &BrowserContext,
     request_id: &str,
 ) -> Option<CdpSessionRoute> {
-    if browser_context
-        .active_target
-        .fetch_owner
-        .contains_pending_request(request_id)
-    {
-        return Some(CdpSessionRoute::PageTarget {
-            browser_context_id: browser_context.id.clone(),
-            target_id: browser_context.active_target_id_owned()?,
-            is_attached_session: false,
-        });
-    }
-
-    browser_context.background_targets().find_map(|target| {
+    browser_context.page_targets.iter().find_map(|target| {
         target
             .fetch_owner
             .contains_pending_request(request_id)
@@ -1214,28 +1173,19 @@ fn pending_fetch_request_route(
 impl TargetSessionOwnerMut<'_> {
     fn session_id(&self) -> Option<&str> {
         match self {
-            Self::ActiveTarget { session_id, .. } | Self::PageTargetHost { session_id, .. } => {
-                session_id.as_deref()
-            }
+            Self::PageTarget { session_id, .. } => session_id.as_deref(),
             Self::NoLoadedBrowserContext => None,
         }
     }
 
     fn pending_fetch_owner_mut(&mut self) -> Option<SessionPendingFetchOwner<'_>> {
         match self {
-            Self::ActiveTarget {
-                browser_context, ..
-            } => Some(SessionPendingFetchOwner(
-                &mut browser_context.active_target.fetch_owner,
-            )),
-            Self::PageTargetHost {
+            Self::PageTarget {
                 browser_context,
                 target_id,
                 ..
             } => Some(SessionPendingFetchOwner(
-                &mut browser_context
-                    .background_target_mut(target_id)?
-                    .fetch_owner,
+                &mut browser_context.page_target_mut(target_id)?.fetch_owner,
             )),
             Self::NoLoadedBrowserContext => None,
         }
@@ -1243,15 +1193,7 @@ impl TargetSessionOwnerMut<'_> {
 
     fn fetch_body_stream_owner_mut(&mut self) -> Option<SessionFetchBodyStreamOwner<'_>> {
         match self {
-            Self::ActiveTarget {
-                browser_context, ..
-            } => {
-                let target_id = browser_context
-                    .active_target_id_owned()
-                    .unwrap_or_else(|| "active".to_owned());
-                fetch_body_stream_owner_for_target_mut(browser_context, &target_id)
-            }
-            Self::PageTargetHost {
+            Self::PageTarget {
                 browser_context,
                 target_id,
                 ..

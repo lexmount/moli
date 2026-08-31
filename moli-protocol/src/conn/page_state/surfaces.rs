@@ -25,14 +25,16 @@ impl SurfaceOverrideInputs {
             network_conditions: browser_context.effective_active_network_conditions(),
             geolocation_override: browser_context.effective_active_geolocation_override(),
             emulated_device_metrics: browser_context.effective_active_emulated_device_metrics(),
-            touch_emulation_enabled: browser_context.touch_emulation_enabled,
-            focus_emulation_enabled: browser_context.focus_emulation_enabled,
+            touch_emulation_enabled: browser_context.active_page_target().touch_emulation_enabled,
+            focus_emulation_enabled: browser_context.active_page_target().focus_emulation_enabled,
             active_target_surface: true,
             window_document_hidden: browser_context
+                .active_page_target()
                 .active_target
                 .owner_state
                 .window_document_hidden(),
             window_fullscreen: browser_context
+                .active_page_target()
                 .active_target
                 .owner_state
                 .window_fullscreen(),
@@ -146,7 +148,8 @@ impl BrowserContext {
         scripts.extend(self.default_document_start_script_descriptors());
         let target_id = self.active_target_id();
         scripts.extend(
-            self.active_target
+            self.active_page_target()
+                .active_target
                 .owner_state
                 .document_start_scripts
                 .iter()
@@ -324,7 +327,11 @@ impl BrowserContext {
     }
 
     pub fn max_touch_points(&self) -> u32 {
-        if self.touch_emulation_enabled { 1 } else { 0 }
+        if self.active_page_target().touch_emulation_enabled {
+            1
+        } else {
+            0
+        }
     }
 
     pub fn document_has_focus(&self) -> bool {
@@ -599,7 +606,12 @@ impl BrowserContext {
         let Some(script) = self.generated_surface_override_script() else {
             return Ok(());
         };
-        let Some(page) = self.active_target.runtime_slot.loaded_page_mut() else {
+        let Some(page) = self
+            .active_page_target_mut()
+            .active_target
+            .runtime_slot
+            .loaded_page_mut()
+        else {
             return Ok(());
         };
         page.run_page_surface_override_script_async(&script.source)

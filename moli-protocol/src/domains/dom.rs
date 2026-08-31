@@ -203,8 +203,13 @@ fn cached_dom_remote_object_node_for_session(
     session_id: Option<&str>,
     object_id: &str,
 ) -> Option<Value> {
-    let (browser_context_id, _) = conn.target_owner_identity_for_session(session_id)?;
-    conn.browser_context_by_id(&browser_context_id)?
+    let (browser_context_id, target_id) = conn.target_owner_identity_for_session(session_id)?;
+    let browser_context = conn.browser_context_by_id(&browser_context_id)?;
+    let target_id = target_id
+        .as_deref()
+        .or_else(|| browser_context.active_target_id())?;
+    browser_context
+        .page_target(target_id)?
         .dom_remote_object_node_cache
         .get(object_id)
         .cloned()
@@ -216,12 +221,18 @@ fn cache_dom_remote_object_node_for_session(
     object_id: String,
     node: Value,
 ) {
-    let Some((browser_context_id, _)) = conn.target_owner_identity_for_session(session_id) else {
+    let Some((browser_context_id, target_id)) = conn.target_owner_identity_for_session(session_id)
+    else {
         return;
     };
     if let Some(browser_context) = conn.browser_context_by_id_mut(&browser_context_id) {
-        browser_context
-            .dom_remote_object_node_cache
-            .insert(object_id, node);
+        let target_id = target_id.or_else(|| browser_context.active_target_id_owned());
+        let Some(target) = target_id
+            .as_deref()
+            .and_then(|target_id| browser_context.page_target_mut(target_id))
+        else {
+            return;
+        };
+        target.dom_remote_object_node_cache.insert(object_id, node);
     }
 }

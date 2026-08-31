@@ -72,7 +72,12 @@ async fn loaded_page_html_for_test(ctx: &mut TestContext) -> String {
         .conn
         .browser_context
         .as_mut()
-        .and_then(|bc| bc.active_target.runtime_slot.loaded_page_mut())
+        .and_then(|bc| {
+            bc.active_page_state_mut()
+                .active_target
+                .runtime_slot
+                .loaded_page_mut()
+        })
         .expect("loaded page");
     page.serialize_html_async()
         .await
@@ -178,13 +183,15 @@ async fn same_context_background_session_can_stage_its_own_pre_document_state_be
             script_id
         );
         assert!(
-            active.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+            active.active_page_state().devtools_sessions
+                [moli_page_types::DevToolsSessionKey::Primary]
                 .runtime_bindings
                 .is_empty(),
             "active target DevTools session must not inherit staged target binding"
         );
         assert!(
             active
+                .active_page_state()
                 .active_target
                 .owner_state
                 .document_start_scripts
@@ -385,13 +392,15 @@ async fn same_context_background_session_can_stage_its_own_utility_pre_document_
             script_id
         );
         assert!(
-            active.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+            active.active_page_state().devtools_sessions
+                [moli_page_types::DevToolsSessionKey::Primary]
                 .runtime_bindings
                 .is_empty(),
             "active target DevTools session must not inherit staged target binding"
         );
         assert!(
             active
+                .active_page_state()
                 .active_target
                 .owner_state
                 .document_start_scripts
@@ -1290,7 +1299,14 @@ async fn same_context_background_session_can_stage_its_own_emulated_media_before
             .as_ref()
             .expect("active browser context");
         assert_eq!(active.active_target_id(), Some("TID-000000000PM"));
-        assert_eq!(active.emulated_media.color_scheme.as_deref(), Some("dark"));
+        assert_eq!(
+            active
+                .active_page_state()
+                .emulated_media
+                .color_scheme
+                .as_deref(),
+            Some("dark")
+        );
         let staged = active
             .parked_page_session_state(&second_target_id)
             .expect("second target should have staged parked page session state");
@@ -1422,7 +1438,11 @@ async fn same_context_background_session_can_clear_its_own_emulated_media_before
             .expect("active browser context");
         assert_eq!(active.active_target_id(), Some("TID-000000000PMC"));
         assert!(
-            active.emulated_media.color_scheme.is_none(),
+            active
+                .active_page_state()
+                .emulated_media
+                .color_scheme
+                .is_none(),
             "active target should keep its default emulated media",
         );
         assert!(
@@ -1556,8 +1576,14 @@ async fn same_context_background_session_can_stage_its_own_network_conditions_be
             .as_ref()
             .expect("active browser context");
         assert_eq!(active.active_target_id(), Some("TID-000000000PN"));
-        assert!(!active.network_policy.network_offline());
-        assert_eq!(active.network_policy.emulated_network_latency(), 10.0);
+        assert!(!active.active_page_state().network_policy.network_offline());
+        assert_eq!(
+            active
+                .active_page_state()
+                .network_policy
+                .emulated_network_latency(),
+            10.0
+        );
         let staged = active
             .parked_page_session_state(&second_target_id)
             .expect("second target should have staged parked page session state");
@@ -1607,15 +1633,38 @@ async fn same_context_background_session_can_stage_its_own_network_conditions_be
             promoted.active_session_id(),
             Some(second_session_id.as_str())
         );
-        assert!(promoted.network_policy.network_offline());
-        assert_eq!(promoted.network_policy.emulated_network_latency(), 25.0);
+        assert!(
+            promoted
+                .active_page_state()
+                .network_policy
+                .network_offline()
+        );
         assert_eq!(
-            promoted.network_policy.emulated_download_throughput(),
+            promoted
+                .active_page_state()
+                .network_policy
+                .emulated_network_latency(),
+            25.0
+        );
+        assert_eq!(
+            promoted
+                .active_page_state()
+                .network_policy
+                .emulated_download_throughput(),
             1024.0
         );
-        assert_eq!(promoted.network_policy.emulated_upload_throughput(), 256.0);
         assert_eq!(
-            promoted.network_policy.emulated_connection_type(),
+            promoted
+                .active_page_state()
+                .network_policy
+                .emulated_upload_throughput(),
+            256.0
+        );
+        assert_eq!(
+            promoted
+                .active_page_state()
+                .network_policy
+                .emulated_connection_type(),
             Some("cellular3g")
         );
     }
@@ -1695,7 +1744,11 @@ async fn same_context_background_session_can_stage_its_own_blocked_urls_before_p
             .as_ref()
             .expect("active browser context");
         assert!(
-            active.network_policy.blocked_url_patterns().is_empty(),
+            active
+                .active_page_state()
+                .network_policy
+                .blocked_url_patterns()
+                .is_empty(),
             "active target should keep its own block list"
         );
         let staged = active
@@ -1733,7 +1786,11 @@ async fn same_context_background_session_can_stage_its_own_blocked_urls_before_p
             .expect("promoted browser context");
         assert_eq!(promoted.active_target_id(), Some(second_target_id.as_str()));
         assert!(
-            promoted.network_policy.blocked_url_patterns().is_empty(),
+            promoted
+                .active_page_state()
+                .network_policy
+                .blocked_url_patterns()
+                .is_empty(),
             "promotion must not activate a disabled Network handler"
         );
     }
@@ -1750,6 +1807,7 @@ async fn same_context_background_session_can_stage_its_own_blocked_urls_before_p
             .browser_context
             .as_ref()
             .expect("promoted browser context")
+            .active_page_state()
             .network_policy
             .blocked_url_patterns(),
         ["http://example.test/blocked/*".to_owned()],
@@ -1857,7 +1915,7 @@ async fn same_context_background_session_can_reset_its_own_network_conditions_be
             .expect("active browser context");
         assert_eq!(active.active_target_id(), Some("TID-000000000PR"));
         assert!(
-            !active.network_policy.network_offline(),
+            !active.active_page_state().network_policy.network_offline(),
             "active target should keep its default online state",
         );
         let staged = active
@@ -1905,12 +1963,38 @@ async fn same_context_background_session_can_reset_its_own_network_conditions_be
     {
         let promoted = ctx.conn.browser_context.as_ref().expect("browser context");
         assert_eq!(promoted.active_target_id(), Some(second_target_id.as_str()));
-        assert!(!promoted.network_policy.network_offline());
-        assert_eq!(promoted.network_policy.emulated_network_latency(), 0.0);
-        assert_eq!(promoted.network_policy.emulated_download_throughput(), -1.0);
-        assert_eq!(promoted.network_policy.emulated_upload_throughput(), -1.0);
+        assert!(
+            !promoted
+                .active_page_state()
+                .network_policy
+                .network_offline()
+        );
         assert_eq!(
-            promoted.network_policy.emulated_connection_type(),
+            promoted
+                .active_page_state()
+                .network_policy
+                .emulated_network_latency(),
+            0.0
+        );
+        assert_eq!(
+            promoted
+                .active_page_state()
+                .network_policy
+                .emulated_download_throughput(),
+            -1.0
+        );
+        assert_eq!(
+            promoted
+                .active_page_state()
+                .network_policy
+                .emulated_upload_throughput(),
+            -1.0
+        );
+        assert_eq!(
+            promoted
+                .active_page_state()
+                .network_policy
+                .emulated_connection_type(),
             Some("none")
         );
     }
@@ -2044,7 +2128,7 @@ async fn same_context_background_session_can_stage_its_own_extra_headers_before_
             .as_ref()
             .expect("active browser context");
         assert_eq!(
-            active.network_policy.extra_headers(),
+            active.active_page_state().network_policy.extra_headers(),
             vec![("X-Target".into(), "A".into())]
         );
         let staged = active
@@ -2249,7 +2333,7 @@ async fn same_context_background_session_can_clear_its_own_extra_headers_before_
             .as_ref()
             .expect("active browser context");
         assert_eq!(
-            active.network_policy.extra_headers(),
+            active.active_page_state().network_policy.extra_headers(),
             vec![("X-Target".into(), "A".into())]
         );
         let staged = active
@@ -2418,7 +2502,10 @@ async fn same_context_background_session_can_stage_its_own_user_agent_before_pro
             .as_ref()
             .expect("active browser context");
         assert_eq!(
-            active.network_policy.user_agent_override(),
+            active
+                .active_page_state()
+                .network_policy
+                .user_agent_override(),
             Some("Moli/Stage-A")
         );
         let staged = active
@@ -2620,7 +2707,11 @@ async fn same_context_background_session_can_clear_its_own_user_agent_before_pro
             .as_ref()
             .expect("active browser context");
         assert!(
-            active.network_policy.user_agent_override().is_none(),
+            active
+                .active_page_state()
+                .network_policy
+                .user_agent_override()
+                .is_none(),
             "active target should keep its default user agent override",
         );
         let staged = active
@@ -2794,8 +2885,14 @@ async fn same_context_background_session_stages_locale_without_changing_request_
             .browser_context
             .as_ref()
             .expect("active browser context");
-        assert_eq!(active.locale_override.as_deref(), Some("en-GB"));
-        assert_eq!(active.timezone_override.as_deref(), Some("UTC"));
+        assert_eq!(
+            active.active_page_state().locale_override.as_deref(),
+            Some("en-GB")
+        );
+        assert_eq!(
+            active.active_page_state().timezone_override.as_deref(),
+            Some("UTC")
+        );
         let staged = active
             .parked_page_session_state(&second_target_id)
             .expect("second target should have staged parked page session state");
@@ -2990,7 +3087,7 @@ async fn same_context_background_session_can_clear_its_own_locale_before_promoti
             .as_ref()
             .expect("active browser context");
         assert!(
-            active.locale_override.is_none(),
+            active.active_page_state().locale_override.is_none(),
             "active target should keep its default locale override",
         );
         assert!(
@@ -3149,7 +3246,7 @@ async fn same_context_background_session_can_clear_its_own_timezone_before_promo
             .as_ref()
             .expect("active browser context");
         assert!(
-            active.timezone_override.is_none(),
+            active.active_page_state().timezone_override.is_none(),
             "active target should keep its default timezone override",
         );
         assert!(
@@ -3342,17 +3439,21 @@ async fn same_context_background_session_can_stage_its_own_emulation_overrides_b
             .as_ref()
             .expect("active browser context");
         assert_eq!(
-            active.emulated_device_metrics.as_ref().map(|metrics| (
-                metrics.width,
-                metrics.height,
-                metrics.device_scale_factor,
-                metrics.screen_width,
-                metrics.screen_height
-            )),
+            active
+                .active_page_state()
+                .emulated_device_metrics
+                .as_ref()
+                .map(|metrics| (
+                    metrics.width,
+                    metrics.height,
+                    metrics.device_scale_factor,
+                    metrics.screen_width,
+                    metrics.screen_height
+                )),
             Some((1280, 720, 2.0, 1440, 900))
         );
-        assert!(active.touch_emulation_enabled);
-        assert!(active.focus_emulation_enabled);
+        assert!(active.active_page_state().touch_emulation_enabled);
+        assert!(active.active_page_state().focus_emulation_enabled);
 
         let staged = active
             .parked_page_session_state(&second_target_id)
@@ -3592,26 +3693,26 @@ async fn same_context_background_session_can_stage_its_own_page_settings_before_
         .expect("promoted browser context");
     assert_eq!(active.active_target_id(), Some(second_target_id.as_str()));
     assert!(
-        active.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+        active.active_page_state().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_bypass_csp_enabled
     );
     assert_eq!(
-        active.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+        active.active_page_state().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_font_families
             .get("standard"),
         Some(&json!("Georgia"))
     );
     assert_eq!(
-        active.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+        active.active_page_state().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_font_families
             .get("fixed"),
         Some(&json!("Fira Code"))
     );
     assert!(
-        active.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+        active.active_page_state().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_intercept_file_chooser_dialog_enabled
     );
@@ -3693,7 +3794,7 @@ async fn same_context_background_session_can_clear_its_own_device_metrics_before
             .as_ref()
             .expect("active browser context");
         assert!(
-            active.emulated_device_metrics.is_none(),
+            active.active_page_state().emulated_device_metrics.is_none(),
             "active target should keep its default device metrics",
         );
         assert!(
@@ -3865,11 +3966,11 @@ async fn same_context_background_session_can_clear_its_own_touch_and_focus_befor
             .as_ref()
             .expect("active browser context");
         assert!(
-            !active.touch_emulation_enabled,
+            !active.active_page_state().touch_emulation_enabled,
             "active target should keep default touch emulation"
         );
         assert!(
-            !active.focus_emulation_enabled,
+            !active.active_page_state().focus_emulation_enabled,
             "active target should keep default focus emulation"
         );
         assert!(
@@ -4015,7 +4116,7 @@ async fn same_context_background_session_can_stage_its_own_script_execution_disa
             .browser_context
             .as_ref()
             .expect("active browser context");
-        assert!(!active.script_execution_disabled);
+        assert!(!active.active_page_state().script_execution_disabled);
         let staged = active
             .parked_page_session_state(&second_target_id)
             .expect("second target should have staged parked page session state");
@@ -4090,7 +4191,7 @@ async fn same_context_background_session_can_stage_its_own_script_execution_disa
             .browser_context
             .as_ref()
             .expect("promoted browser context");
-        assert!(promoted.script_execution_disabled);
+        assert!(promoted.active_page_state().script_execution_disabled);
     }
 
     ctx.process_async(json!({
@@ -4181,7 +4282,7 @@ async fn same_context_background_session_can_reenable_its_own_script_execution_b
             .browser_context
             .as_ref()
             .expect("active browser context");
-        assert!(!active.script_execution_disabled);
+        assert!(!active.active_page_state().script_execution_disabled);
         // A completed renderer call may retain its monotonic correlation
         // allocator in the parked session; only the effective setting must
         // collapse back to the default.
@@ -4262,7 +4363,7 @@ async fn same_context_background_session_can_reenable_its_own_script_execution_b
             .browser_context
             .as_ref()
             .expect("promoted browser context");
-        assert!(!promoted.script_execution_disabled);
+        assert!(!promoted.active_page_state().script_execution_disabled);
     }
 
     ctx.process_async(json!({
@@ -4353,7 +4454,8 @@ async fn same_context_background_session_can_stage_its_own_lifecycle_events_befo
             .as_ref()
             .expect("active browser context");
         assert!(
-            !active.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+            !active.active_page_state().devtools_sessions
+                [moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .page_lifecycle_events
         );
@@ -4529,7 +4631,8 @@ async fn same_context_background_session_can_disable_its_own_lifecycle_events_be
             .as_ref()
             .expect("active browser context");
         assert!(
-            !active.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+            !active.active_page_state().devtools_sessions
+                [moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .page_lifecycle_events
         );
@@ -4666,7 +4769,8 @@ async fn same_context_background_session_can_stage_its_own_runtime_enable_before
             .as_ref()
             .expect("active browser context");
         assert!(
-            !active.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+            !active.active_page_state().devtools_sessions
+                [moli_page_types::DevToolsSessionKey::Primary]
                 .runtime_session_state
                 .runtime_frontend_enabled
         );
@@ -5592,7 +5696,8 @@ async fn same_context_background_session_can_disable_its_own_runtime_before_prom
             .as_ref()
             .expect("active browser context");
         assert!(
-            !active.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+            !active.active_page_state().devtools_sessions
+                [moli_page_types::DevToolsSessionKey::Primary]
                 .runtime_session_state
                 .runtime_frontend_enabled
         );
@@ -5683,6 +5788,7 @@ async fn same_context_background_session_can_stage_its_own_inspector_enable_befo
         .browser_context
         .as_mut()
         .unwrap()
+        .active_page_state_mut()
         .active_target
         .owner_state
         .target_crash_state
@@ -5733,13 +5839,15 @@ async fn same_context_background_session_can_stage_its_own_inspector_enable_befo
             .expect("active browser context");
         assert!(
             active
+                .active_page_state()
                 .active_target
                 .owner_state
                 .target_crash_state
                 .is_crashed()
         );
         assert!(
-            !active.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+            !active.active_page_state().devtools_sessions
+                [moli_page_types::DevToolsSessionKey::Primary]
                 .runtime_session_state
                 .inspector_enabled
         );
@@ -5805,6 +5913,7 @@ async fn same_context_background_session_can_stage_its_own_inspector_enable_befo
             .browser_context
             .as_ref()
             .expect("browser context")
+            .active_page_state()
             .active_target
             .owner_state
             .target_crash_state
@@ -5880,7 +5989,8 @@ async fn same_context_background_session_can_disable_its_own_inspector_before_pr
             .as_ref()
             .expect("active browser context");
         assert!(
-            !active.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+            !active.active_page_state().devtools_sessions
+                [moli_page_types::DevToolsSessionKey::Primary]
                 .runtime_session_state
                 .inspector_enabled
         );
@@ -5905,6 +6015,7 @@ async fn same_context_background_session_can_disable_its_own_inspector_before_pr
         .browser_context
         .as_mut()
         .unwrap()
+        .active_page_state_mut()
         .active_target
         .owner_state
         .target_crash_state
@@ -5934,6 +6045,7 @@ async fn same_context_background_session_can_disable_its_own_inspector_before_pr
             .browser_context
             .as_ref()
             .expect("browser context")
+            .active_page_state()
             .active_target
             .owner_state
             .target_crash_state
@@ -6001,7 +6113,7 @@ async fn same_context_background_session_can_stage_its_own_css_enable_before_pro
             .browser_context
             .as_ref()
             .expect("active browser context");
-        assert!(!active.css_enabled);
+        assert!(!active.active_page_state().css_enabled);
         let staged = active
             .parked_page_session_state(&second_target_id)
             .expect("second target should have staged parked page session state");
@@ -6023,7 +6135,7 @@ async fn same_context_background_session_can_stage_its_own_css_enable_before_pro
             .as_ref()
             .expect("promoted browser context");
         assert_eq!(active.active_target_id(), Some(second_target_id.as_str()));
-        assert!(active.css_enabled);
+        assert!(active.active_page_state().css_enabled);
     }
 
     ctx.process_async(json!({
@@ -6047,6 +6159,7 @@ async fn same_context_background_session_can_stage_its_own_css_enable_before_pro
             .browser_context
             .as_ref()
             .expect("browser context")
+            .active_page_state()
             .css_enabled
     );
 }
@@ -6118,7 +6231,7 @@ async fn same_context_background_session_can_disable_its_own_css_before_promotio
             .browser_context
             .as_ref()
             .expect("active browser context");
-        assert!(!active.css_enabled);
+        assert!(!active.active_page_state().css_enabled);
         assert!(
             active
                 .parked_page_session_state(&second_target_id)
@@ -6142,7 +6255,7 @@ async fn same_context_background_session_can_disable_its_own_css_before_promotio
             .as_ref()
             .expect("promoted browser context");
         assert_eq!(active.active_target_id(), Some(second_target_id.as_str()));
-        assert!(!active.css_enabled);
+        assert!(!active.active_page_state().css_enabled);
     }
 
     ctx.process_async(json!({
@@ -6166,6 +6279,7 @@ async fn same_context_background_session_can_disable_its_own_css_before_promotio
             .browser_context
             .as_ref()
             .expect("browser context")
+            .active_page_state()
             .css_enabled
     );
 }
@@ -6256,9 +6370,16 @@ async fn same_context_background_session_can_stage_its_own_fetch_enable_before_p
             .browser_context
             .as_ref()
             .expect("active browser context");
-        assert!(!active.active_target.fetch_owner.is_enabled());
+        assert!(
+            !active
+                .active_page_state()
+                .active_target
+                .fetch_owner
+                .is_enabled()
+        );
         assert!(
             active
+                .active_page_state()
                 .active_target
                 .fetch_owner
                 .config_snapshot()
@@ -6598,7 +6719,13 @@ async fn same_context_background_session_can_stage_its_own_fetch_auth_handling_b
             .browser_context
             .as_ref()
             .expect("active browser context");
-        assert!(!active.active_target.fetch_owner.is_enabled());
+        assert!(
+            !active
+                .active_page_state()
+                .active_target
+                .fetch_owner
+                .is_enabled()
+        );
         let staged = active
             .parked_page_session_state(&second_target_id)
             .expect("second target should have staged parked page session state");
@@ -6794,9 +6921,16 @@ async fn same_context_background_session_can_disable_its_own_fetch_before_promot
             .browser_context
             .as_ref()
             .expect("active browser context");
-        assert!(!active.active_target.fetch_owner.is_enabled());
+        assert!(
+            !active
+                .active_page_state()
+                .active_target
+                .fetch_owner
+                .is_enabled()
+        );
         assert!(
             active
+                .active_page_state()
                 .active_target
                 .fetch_owner
                 .config_snapshot()
@@ -6950,6 +7084,7 @@ async fn same_context_background_session_can_stage_its_own_network_enable_before
             .expect("active browser context");
         assert!(
             !active
+                .active_page_state()
                 .active_target
                 .runtime_slot
                 .primary_network_events_enabled()
@@ -7143,6 +7278,7 @@ async fn same_context_background_session_can_disable_its_own_network_before_prom
             .expect("active browser context");
         assert!(
             !active
+                .active_page_state()
                 .active_target
                 .runtime_slot
                 .primary_network_events_enabled()
@@ -7339,12 +7475,18 @@ async fn same_context_background_session_can_stage_its_own_cache_and_service_wor
             .expect("active browser context");
         assert!(
             !active
+                .active_page_state()
                 .active_target
                 .runtime_slot
                 .primary_network_events_enabled()
         );
-        assert!(!active.network_policy.cache_disabled());
-        assert!(!active.network_policy.bypass_service_worker());
+        assert!(!active.active_page_state().network_policy.cache_disabled());
+        assert!(
+            !active
+                .active_page_state()
+                .network_policy
+                .bypass_service_worker()
+        );
         let staged = active
             .parked_page_session_state(&second_target_id)
             .expect("second target should have staged parked page session state");
@@ -7394,12 +7536,17 @@ async fn same_context_background_session_can_stage_its_own_cache_and_service_wor
             .expect("promoted browser context");
         assert_eq!(bc.active_target_id(), Some(second_target_id.as_str()));
         assert!(
-            bc.active_target
+            bc.active_page_state()
+                .active_target
                 .runtime_slot
                 .primary_network_events_enabled()
         );
-        assert!(bc.network_policy.cache_disabled());
-        assert!(bc.network_policy.bypass_service_worker());
+        assert!(bc.active_page_state().network_policy.cache_disabled());
+        assert!(
+            bc.active_page_state()
+                .network_policy
+                .bypass_service_worker()
+        );
     }
 
     ctx.process_async(json!({
@@ -7580,12 +7727,18 @@ async fn same_context_background_session_can_disable_its_own_cache_and_service_w
             .expect("active browser context");
         assert!(
             !active
+                .active_page_state()
                 .active_target
                 .runtime_slot
                 .primary_network_events_enabled()
         );
-        assert!(!active.network_policy.cache_disabled());
-        assert!(!active.network_policy.bypass_service_worker());
+        assert!(!active.active_page_state().network_policy.cache_disabled());
+        assert!(
+            !active
+                .active_page_state()
+                .network_policy
+                .bypass_service_worker()
+        );
         let staged = active
             .parked_page_session_state(&second_target_id)
             .expect("second target should have staged parked page session state");
@@ -7635,12 +7788,17 @@ async fn same_context_background_session_can_disable_its_own_cache_and_service_w
             .expect("promoted browser context");
         assert_eq!(bc.active_target_id(), Some(second_target_id.as_str()));
         assert!(
-            bc.active_target
+            bc.active_page_state()
+                .active_target
                 .runtime_slot
                 .primary_network_events_enabled()
         );
-        assert!(!bc.network_policy.cache_disabled());
-        assert!(!bc.network_policy.bypass_service_worker());
+        assert!(!bc.active_page_state().network_policy.cache_disabled());
+        assert!(
+            !bc.active_page_state()
+                .network_policy
+                .bypass_service_worker()
+        );
     }
 
     ctx.process_async(json!({

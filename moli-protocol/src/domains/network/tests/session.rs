@@ -14,6 +14,7 @@ async fn install_network_session_page(ctx: &mut TestContext, url: &str) {
         .browser_context
         .as_mut()
         .unwrap()
+        .active_page_state_mut()
         .active_target
         .runtime_slot
         .set_loaded_page_for_test(page);
@@ -40,6 +41,7 @@ async fn enable_with_bc_succeeds() {
             .browser_context
             .as_ref()
             .unwrap()
+            .active_page_state()
             .active_target
             .runtime_slot
             .primary_network_events_enabled()
@@ -118,6 +120,7 @@ async fn network_configuration_commands_succeed_while_the_target_is_changing_doc
             .browser_context
             .as_ref()
             .unwrap()
+            .active_page_state()
             .active_target
             .runtime_slot
             .primary_network_events_enabled()
@@ -196,6 +199,7 @@ async fn network_configuration_completion_does_not_restore_a_replaced_document()
         .browser_context
         .as_mut()
         .unwrap()
+        .active_page_state_mut()
         .active_target
         .runtime_slot
         .loaded_page_mut()
@@ -273,7 +277,8 @@ async fn auxiliary_network_enable_does_not_enable_primary_session() {
 
     let bc = ctx.conn.browser_context.as_ref().unwrap();
     assert!(
-        !bc.active_target
+        !bc.active_page_state()
+            .active_target
             .runtime_slot
             .primary_network_events_enabled(),
         "auxiliary Network.enable must not enable the primary session"
@@ -364,7 +369,13 @@ async fn page_network_policy_aggregates_enabled_sessions_like_chromium_handlers(
         ctx.expect_result(id, json!({}), Some(session_id));
     }
 
-    let policy = &ctx.conn.browser_context.as_ref().unwrap().network_policy;
+    let policy = &ctx
+        .conn
+        .browser_context
+        .as_ref()
+        .unwrap()
+        .active_page_state()
+        .network_policy;
     assert!(policy.cache_disabled());
     assert!(policy.bypass_service_worker());
     assert_eq!(
@@ -393,7 +404,13 @@ async fn page_network_policy_aggregates_enabled_sessions_like_chromium_handlers(
     .await;
     ctx.expect_result(20_009, json!({}), Some("SID-primary"));
 
-    let policy = &ctx.conn.browser_context.as_ref().unwrap().network_policy;
+    let policy = &ctx
+        .conn
+        .browser_context
+        .as_ref()
+        .unwrap()
+        .active_page_state()
+        .network_policy;
     assert!(!policy.cache_disabled());
     assert!(!policy.bypass_service_worker());
     assert_eq!(
@@ -417,7 +434,13 @@ async fn page_network_policy_aggregates_enabled_sessions_like_chromium_handlers(
     .await;
     ctx.expect_result(20_010, json!({}), Some("SID-primary"));
 
-    let policy = &ctx.conn.browser_context.as_ref().unwrap().network_policy;
+    let policy = &ctx
+        .conn
+        .browser_context
+        .as_ref()
+        .unwrap()
+        .active_page_state()
+        .network_policy;
     assert!(!policy.cache_disabled());
     assert!(!policy.bypass_service_worker());
     assert_eq!(
@@ -485,6 +508,7 @@ async fn enable_after_page_load_does_not_replay_historical_subresource_events() 
         .browser_context
         .as_mut()
         .unwrap()
+        .active_page_state_mut()
         .active_target
         .runtime_slot
         .set_loaded_page_for_test(page);
@@ -660,7 +684,8 @@ async fn websocket_runtime_activity_broadcasts_to_auxiliary_network_session() {
     let socket_literal = serde_json::to_string(&socket_url).unwrap();
     let mut ctx = TestContext::new();
     let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
-    bc.active_target
+    bc.active_page_state_mut()
+        .active_target
         .runtime_slot
         .enable_primary_network_events();
     bc.attach_active_session("SID-primary".to_owned());
@@ -766,7 +791,8 @@ async fn auxiliary_network_enable_after_websocket_activity_does_not_replay_histo
     let mut ctx = TestContext::new();
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1".to_owned());
-    bc.active_target
+    bc.active_page_state_mut()
+        .active_target
         .runtime_slot
         .enable_primary_network_events();
     bc.attach_active_session("SID-primary".to_owned());
@@ -871,7 +897,8 @@ async fn fetch_runtime_activity_broadcasts_to_auxiliary_network_session() {
     let mut ctx = TestContext::new();
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1".to_owned());
-    bc.active_target
+    bc.active_page_state_mut()
+        .active_target
         .runtime_slot
         .enable_primary_network_events();
     bc.attach_active_session("SID-primary".to_owned());
@@ -1091,7 +1118,8 @@ async fn main_document_navigation_broadcasts_to_auxiliary_network_session() {
     let mut ctx = TestContext::new();
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1".to_owned());
-    bc.active_target
+    bc.active_page_state_mut()
+        .active_target
         .runtime_slot
         .enable_primary_network_events();
     bc.attach_active_session("SID-primary".to_owned());
@@ -1214,7 +1242,8 @@ async fn network_disable_removes_session_response_body_visibility() {
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1".to_owned());
     bc.attach_active_session("SID-primary".to_owned());
-    bc.active_target
+    bc.active_page_state_mut()
+        .active_target
         .runtime_slot
         .enable_primary_network_events();
     assert!(bc.assign_auxiliary_session_to_target("TID-1", "SID-aux".to_owned()));
@@ -1283,7 +1312,8 @@ async fn network_disable_removes_session_response_body_visibility() {
 async fn disable_clears_enabled_flag_and_captured_bodies() {
     let mut ctx = TestContext::new();
     let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
-    bc.active_target
+    bc.active_page_state_mut()
+        .active_target
         .runtime_slot
         .enable_primary_network_events();
     bc.record_captured_response_body("REQ-1".to_owned(), "body".to_owned(), [None]);
@@ -1295,7 +1325,8 @@ async fn disable_clears_enabled_flag_and_captured_bodies() {
 
     let bc = ctx.conn.browser_context.as_ref().unwrap();
     assert!(
-        !bc.active_target
+        !bc.active_page_state()
+            .active_target
             .runtime_slot
             .primary_network_events_enabled()
     );
@@ -1307,7 +1338,8 @@ async fn primary_network_disable_preserves_auxiliary_network_session() {
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1".to_owned());
     bc.attach_active_session("SID-primary".to_owned());
-    bc.active_target
+    bc.active_page_state_mut()
+        .active_target
         .runtime_slot
         .enable_primary_network_events();
     assert!(bc.assign_auxiliary_session_to_target("TID-1", "SID-aux".to_owned()));
@@ -1329,13 +1361,15 @@ async fn primary_network_disable_preserves_auxiliary_network_session() {
 
     let bc = ctx.conn.browser_context.as_ref().unwrap();
     assert!(
-        !bc.active_target
+        !bc.active_page_state()
+            .active_target
             .runtime_slot
             .primary_network_events_enabled()
     );
     assert!(bc.has_network_event_listeners());
     assert!(
-        bc.active_target
+        bc.active_page_state()
+            .active_target
             .runtime_slot
             .has_auxiliary_network_events_for_session("SID-aux")
     );

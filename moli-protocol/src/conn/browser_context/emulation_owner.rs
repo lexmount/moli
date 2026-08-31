@@ -23,10 +23,18 @@ impl TargetSessionOwnerMut<'_> {
         f: impl FnOnce(Option<TargetEmulationSessionStateMut<'_>>),
     ) -> bool {
         match &mut self {
-            Self::ActiveTarget {
-                browser_context, ..
+            Self::PageTarget {
+                browser_context,
+                target_id,
+                ..
             } => {
-                let state = browser_context.active_page_state_mut();
+                let Some(state) = browser_context
+                    .page_target_mut(target_id)
+                    .map(|target| target.state_mut())
+                else {
+                    f(None);
+                    return false;
+                };
                 f(Some(TargetEmulationSessionStateMut {
                     network_conditions: &mut state.network_conditions,
                     geolocation_override: &mut state.geolocation_override,
@@ -39,23 +47,6 @@ impl TargetSessionOwnerMut<'_> {
                     script_execution_disabled: &mut state.script_execution_disabled,
                 }))
             }
-            Self::PageTargetHost {
-                browser_context,
-                target_id,
-                ..
-            } => browser_context.mutate_parked_page_session_state(target_id, |state| {
-                f(Some(TargetEmulationSessionStateMut {
-                    network_conditions: &mut state.network_conditions,
-                    geolocation_override: &mut state.geolocation_override,
-                    emulated_media: &mut state.emulated_media,
-                    emulated_device_metrics: &mut state.emulated_device_metrics,
-                    cpu_throttling_rate: &mut state.cpu_throttling_rate,
-                    touch_emulation_enabled: &mut state.touch_emulation_enabled,
-                    emit_touch_events_for_mouse: &mut state.emit_touch_events_for_mouse,
-                    focus_emulation_enabled: &mut state.focus_emulation_enabled,
-                    script_execution_disabled: &mut state.script_execution_disabled,
-                }))
-            }),
             Self::NoLoadedBrowserContext => {
                 f(None);
                 return false;
@@ -117,15 +108,13 @@ impl TargetSessionOwnerMut<'_> {
 impl TargetSessionOwnerRef<'_> {
     fn emit_touch_events_for_mouse(&self) -> Option<bool> {
         match self {
-            Self::ActiveTarget {
-                browser_context, ..
-            } => Some(browser_context.emit_touch_events_for_mouse),
-            Self::PageTargetHost {
+            Self::PageTarget {
                 browser_context,
                 target_id,
                 ..
             } => browser_context
-                .parked_page_session_state(target_id)
+                .page_target(target_id)
+                .map(|target| target.state())
                 .map(|state| state.emit_touch_events_for_mouse),
             Self::NoLoadedBrowserContext => None,
         }
@@ -197,17 +186,9 @@ impl CdpConnection {
 
 impl BrowserContext {
     pub(crate) fn effective_active_emulated_device_metrics(&self) -> Option<EmulatedDeviceMetrics> {
-        self.emulated_device_metrics
+        self.active_page_target()
+            .emulated_device_metrics
             .clone()
-            .or_else(|| self.default_emulated_device_metrics.clone())
-    }
-
-    pub(crate) fn effective_parked_emulated_device_metrics(
-        &self,
-        target_id: &str,
-    ) -> Option<EmulatedDeviceMetrics> {
-        self.parked_page_session_state(target_id)
-            .and_then(|state| state.emulated_device_metrics.clone())
             .or_else(|| self.default_emulated_device_metrics.clone())
     }
 }

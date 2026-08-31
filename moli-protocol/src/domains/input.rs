@@ -1515,19 +1515,6 @@ pub(super) fn loaded_page_mut<'a>(
     conn.loaded_page_mut_for_protocol_access(session_id).ok()
 }
 
-pub(super) fn browser_context_mut_for_session_owner<'a>(
-    conn: &'a mut CdpConnection,
-    session_id: Option<&str>,
-) -> Option<&'a mut crate::conn::BrowserContext> {
-    let browser_context_id = conn
-        .session_route(session_id)
-        .and_then(|route| route.browser_context_id().map(str::to_owned));
-    if let Some(browser_context_id) = browser_context_id {
-        return conn.browser_context_by_id_mut(&browser_context_id);
-    }
-    conn.browser_context.as_mut()
-}
-
 #[derive(Debug, Default, Eq, PartialEq)]
 pub(crate) struct InputPreparedOutputs {
     download_activations: Vec<RendererPendingDownloadActivation>,
@@ -2198,7 +2185,8 @@ mod producer_tests {
         let mut conn = CdpConnection::default();
         let mut bc = BrowserContext::new_with_page_for_test("BID-typed", "TID-typed");
         bc.attach_active_session("SID-typed");
-        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+        bc.active_page_state_mut().devtools_sessions
+            [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_file_chooser_opened_event_enabled = true;
         conn.browser_context = Some(bc);
@@ -2281,7 +2269,8 @@ mod producer_tests {
         let mut bc = BrowserContext::new("BID-document-collision".into());
         bc.set_active_target_id("TID-document-collision");
         bc.attach_active_session("SID-document-collision");
-        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+        bc.active_page_state_mut().devtools_sessions
+            [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_file_chooser_opened_event_enabled = true;
         conn.browser_context = Some(bc);
@@ -2351,7 +2340,8 @@ mod producer_tests {
         let mut bc = BrowserContext::new("BID-page-replacement".into());
         bc.set_active_target_id("TID-page-replacement");
         bc.attach_active_session("SID-page-replacement");
-        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+        bc.active_page_state_mut().devtools_sessions
+            [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_file_chooser_opened_event_enabled = true;
         conn.browser_context = Some(bc);
@@ -2465,7 +2455,8 @@ mod producer_tests {
         let mut conn = CdpConnection::default();
         let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
         bc.attach_active_session("SID-1");
-        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+        bc.active_page_state_mut().devtools_sessions
+            [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_file_chooser_opened_event_enabled = true;
         conn.browser_context = Some(bc);
@@ -2512,7 +2503,8 @@ mod producer_tests {
         let mut conn = CdpConnection::default();
         let mut bc = BrowserContext::new_with_page_for_test("BID-context", "TID-context");
         bc.attach_active_session("SID-context");
-        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+        bc.active_page_state_mut().devtools_sessions
+            [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_file_chooser_opened_event_enabled = true;
         conn.browser_context = Some(bc);

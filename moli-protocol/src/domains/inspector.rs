@@ -86,6 +86,7 @@ mod tests {
                 .browser_context
                 .as_ref()
                 .expect("browser context")
+                .active_page_state()
                 .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .runtime_session_state
                 .inspector_enabled
@@ -99,6 +100,7 @@ mod tests {
                 .browser_context
                 .as_ref()
                 .expect("browser context")
+                .active_page_state()
                 .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .runtime_session_state
                 .inspector_enabled
@@ -110,7 +112,8 @@ mod tests {
         let mut ctx = TestContext::new();
         let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
         bc.attach_active_session("SID-1");
-        bc.active_target
+        bc.active_page_state_mut()
+            .active_target
             .owner_state
             .target_crash_state
             .mark_crashed();
@@ -137,7 +140,8 @@ mod tests {
         bc.set_active_target_id("TID-1");
         bc.attach_active_session("SID-primary");
         assert!(bc.assign_auxiliary_session_to_target("TID-1", "SID-aux".into()));
-        bc.active_target
+        bc.active_page_state_mut()
+            .active_target
             .owner_state
             .target_crash_state
             .mark_crashed();
@@ -268,7 +272,8 @@ mod tests {
             ),
             crate::conn::TargetPageSlot::empty_for_test_fixture(),
         ));
-        bc.active_target
+        bc.active_page_state_mut()
+            .active_target
             .owner_state
             .target_crash_state
             .mark_crashed();
@@ -286,7 +291,8 @@ mod tests {
         {
             let bc = ctx.conn.browser_context.as_ref().expect("browser context");
             assert!(
-                !bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                !bc.active_page_state().devtools_sessions
+                    [moli_page_types::DevToolsSessionKey::Primary]
                     .runtime_session_state
                     .inspector_enabled
             );
@@ -302,7 +308,7 @@ mod tests {
         ctx.expect_result(5, json!({}), Some("SID-B"));
         let bc = ctx.conn.browser_context.as_ref().expect("browser context");
         assert!(
-            !bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+            !bc.active_page_state().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .runtime_session_state
                 .inspector_enabled
         );

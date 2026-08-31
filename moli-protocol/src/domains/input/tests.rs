@@ -316,7 +316,11 @@ async fn completed_mouse_event_does_not_restore_replaced_page_state() {
         ctx.conn
             .browser_context
             .as_ref()
-            .and_then(|context| context.active_target.runtime_slot.loaded_page())
+            .and_then(|context| context
+                .active_page_state()
+                .active_target
+                .runtime_slot
+                .loaded_page())
             .is_some_and(|page| page.final_url().as_str() == replacement_url),
         "settling the original input command must not install its Page state into the replacement"
     );
@@ -783,6 +787,7 @@ async fn cancel_dragging_clears_reachable_drag_state_and_succeeds_when_idle() {
         .browser_context
         .as_mut()
         .expect("browser context")
+        .active_page_state_mut()
         .input_drag_intercepted = true;
 
     ctx.process_async(json!({
@@ -796,6 +801,7 @@ async fn cancel_dragging_clears_reachable_drag_state_and_succeeds_when_idle() {
             .browser_context
             .as_ref()
             .expect("browser context")
+            .active_page_state()
             .input_drag_intercepted
     );
 
@@ -1682,6 +1688,7 @@ async fn coordinate_touch_commands_complete_through_pending_layout_dispatch() {
         .browser_context
         .as_mut()
         .expect("loaded browser context")
+        .active_page_state_mut()
         .emit_touch_events_for_mouse = true;
     for (id, event_type, buttons) in [(4107, "mousePressed", 1), (4108, "mouseReleased", 0)] {
         ctx.process_async(json!({

@@ -82,7 +82,12 @@ async fn loaded_page_html_for_test(ctx: &mut TestContext) -> String {
         .conn
         .browser_context
         .as_mut()
-        .and_then(|bc| bc.active_target.runtime_slot.loaded_page_mut())
+        .and_then(|bc| {
+            bc.active_page_state_mut()
+                .active_target
+                .runtime_slot
+                .loaded_page_mut()
+        })
         .expect("loaded page");
     page.serialize_html_async()
         .await

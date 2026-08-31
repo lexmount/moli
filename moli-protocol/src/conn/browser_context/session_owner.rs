@@ -1,11 +1,9 @@
-use crate::conn::{BrowserContext, CdpConnection, CdpSessionRoute, TargetPageState};
+#[cfg(test)]
+use crate::conn::BrowserContext;
+use crate::conn::{CdpConnection, CdpSessionRoute, TargetPageState};
 
 pub(super) enum TargetSessionOwner {
-    ActiveTarget {
-        browser_context_id: String,
-        is_auxiliary_target_session: bool,
-    },
-    PageTargetHost {
+    PageTarget {
         browser_context_id: String,
         target_id: String,
         is_auxiliary_target_session: bool,
@@ -14,6 +12,7 @@ pub(super) enum TargetSessionOwner {
 }
 
 impl CdpConnection {
+    #[cfg(test)]
     pub(crate) fn with_background_target_session<R>(
         &mut self,
         session_id: Option<&str>,
@@ -24,15 +23,14 @@ impl CdpConnection {
         Some(f(browser_context, &target_id))
     }
 
-    pub(crate) fn mutate_background_target_page_session_state(
+    pub(crate) fn mutate_target_page_state_for_session(
         &mut self,
         session_id: Option<&str>,
         f: impl FnOnce(&mut TargetPageState),
     ) -> bool {
-        self.with_background_target_session(session_id, |browser_context, target_id| {
-            browser_context.mutate_parked_page_session_state(target_id, f);
-        })
-        .is_some()
+        self.target_session_owner_mut(session_id)
+            .and_then(|mut owner| owner.mutate_page_state(|state, _, _| f(state)))
+            .is_some()
     }
 
     pub(super) fn target_session_owner(
@@ -62,11 +60,12 @@ impl CdpConnection {
                     let Some(browser_context) = self.browser_context.as_ref() else {
                         return Some(TargetSessionOwner::NoLoadedBrowserContext);
                     };
-                    if !browser_context.has_active_target() {
+                    let Some(target_id) = browser_context.active_target_id() else {
                         return Some(TargetSessionOwner::NoLoadedBrowserContext);
-                    }
-                    return Some(TargetSessionOwner::ActiveTarget {
+                    };
+                    return Some(TargetSessionOwner::PageTarget {
                         browser_context_id: browser_context.id.clone(),
+                        target_id: target_id.to_owned(),
                         is_auxiliary_target_session: false,
                     });
                 }
@@ -77,19 +76,23 @@ impl CdpConnection {
             CdpSessionRoute::Browser => Some(
                 self.browser_context
                     .as_ref()
-                    .filter(|browser_context| browser_context.has_active_target())
-                    .map(|browser_context| TargetSessionOwner::ActiveTarget {
-                        browser_context_id: browser_context.id.clone(),
-                        is_auxiliary_target_session: false,
+                    .and_then(|browser_context| {
+                        Some(TargetSessionOwner::PageTarget {
+                            browser_context_id: browser_context.id.clone(),
+                            target_id: browser_context.active_target_id()?.to_owned(),
+                            is_auxiliary_target_session: false,
+                        })
                     })
                     .unwrap_or(TargetSessionOwner::NoLoadedBrowserContext),
             ),
             CdpSessionRoute::BrowserContext { browser_context_id } => Some(
                 self.browser_context_by_id(&browser_context_id)
-                    .filter(|browser_context| browser_context.has_active_target())
-                    .map(|_| TargetSessionOwner::ActiveTarget {
-                        browser_context_id,
-                        is_auxiliary_target_session: false,
+                    .and_then(|browser_context| {
+                        Some(TargetSessionOwner::PageTarget {
+                            browser_context_id,
+                            target_id: browser_context.active_target_id()?.to_owned(),
+                            is_auxiliary_target_session: false,
+                        })
                     })
                     .unwrap_or(TargetSessionOwner::NoLoadedBrowserContext),
             ),
@@ -99,13 +102,8 @@ impl CdpConnection {
                 is_attached_session,
             } => {
                 let browser_context = self.browser_context_by_id(&browser_context_id)?;
-                if browser_context.is_active_target(&target_id) {
-                    Some(TargetSessionOwner::ActiveTarget {
-                        browser_context_id,
-                        is_auxiliary_target_session: is_attached_session,
-                    })
-                } else if browser_context.page_target(&target_id).is_some() {
-                    Some(TargetSessionOwner::PageTargetHost {
+                if browser_context.page_target(&target_id).is_some() {
+                    Some(TargetSessionOwner::PageTarget {
                         browser_context_id,
                         target_id,
                         is_auxiliary_target_session: is_attached_session,

@@ -122,14 +122,9 @@ pub(super) fn get_style_sheet_command_output_plan(
 }
 
 fn set_css_enabled(conn: &mut CdpConnection, cmd: &Cmd<'_>, enabled: bool) {
-    if conn.mutate_background_target_page_session_state(cmd.session_id, |state| {
+    conn.mutate_target_page_state_for_session(cmd.session_id, |state| {
         state.css_enabled = enabled;
-    }) {
-        return;
-    }
-    if let Some(bc) = conn.browser_context.as_mut() {
-        bc.css_enabled = enabled;
-    }
+    });
 }
 
 fn style_sheet_header_value(frame_id: &str, header: &RendererStyleSheetHeader) -> Value {

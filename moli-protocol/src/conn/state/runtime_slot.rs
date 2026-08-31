@@ -923,6 +923,7 @@ impl TargetRuntimeSlot {
         self.network_agent.set_primary_events_enabled(enabled);
     }
 
+    #[cfg(test)]
     pub(crate) fn enable_primary_network_events(&mut self) {
         self.network_agent.enable_primary_events();
     }

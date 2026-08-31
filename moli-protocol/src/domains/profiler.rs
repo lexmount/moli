@@ -49,6 +49,7 @@ mod tests {
             .as_mut()
             .expect("browser context should exist");
         let _ = browser_context
+            .active_page_state_mut()
             .active_target
             .runtime_slot
             .replace_loaded_page(Some(page));
@@ -94,6 +95,7 @@ mod tests {
             .as_mut()
             .expect("browser context should exist");
         let _ = browser_context
+            .active_page_state_mut()
             .active_target
             .runtime_slot
             .replace_loaded_page(Some(page));
@@ -137,7 +139,12 @@ mod tests {
             .conn
             .browser_context
             .as_mut()
-            .and_then(|bc| bc.active_target.runtime_slot.loaded_page_mut())
+            .and_then(|bc| {
+                bc.active_page_state_mut()
+                    .active_target
+                    .runtime_slot
+                    .loaded_page_mut()
+            })
             .expect("active target should still have a loaded page")
             .runtime_heap_usage_async()
             .await
@@ -869,7 +876,10 @@ mod tests {
             let browser_context = ctx.conn.browser_context.as_ref().expect("browser context");
             assert_eq!(browser_context.active_session_id(), None);
             assert!(
-                browser_context.devtools_sessions.attached_is_empty(),
+                browser_context
+                    .active_page_state()
+                    .devtools_sessions
+                    .attached_is_empty(),
                 "detaching the primary target session must drop active auxiliary inspector session state"
             );
         }
@@ -1579,6 +1589,7 @@ mod tests {
             .browser_context
             .as_ref()
             .expect("browser context")
+            .active_page_state()
             .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .inspector_session_state;
         assert!(
@@ -1993,6 +2004,7 @@ mod tests {
             .as_mut()
             .expect("browser context should exist");
         let _ = browser_context
+            .active_page_state_mut()
             .active_target
             .runtime_slot
             .replace_loaded_page(Some(page));
@@ -2193,6 +2205,7 @@ mod tests {
             .as_mut()
             .expect("browser context should exist after reload");
         let _ = browser_context
+            .active_page_state_mut()
             .active_target
             .runtime_slot
             .replace_loaded_page(Some(page));

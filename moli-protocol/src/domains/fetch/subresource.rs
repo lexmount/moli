@@ -693,6 +693,7 @@ mod tests {
         let mut conn = CdpConnection::default();
         let mut browser_context = BrowserContext::new_with_page_for_test("BID-1", "TID-active");
         browser_context
+            .active_page_state_mut()
             .active_target
             .runtime_slot
             .set_page_attachment_id_for_test(1);
@@ -755,12 +756,14 @@ mod tests {
 
         let bc = conn.browser_context.as_ref().unwrap();
         assert!(
-            bc.active_target
+            bc.active_page_state()
+                .active_target
                 .fetch_owner
                 .has_pending_subresource_fetch_for_test("FETCH-1")
         );
         assert!(
-            bc.active_target
+            bc.active_page_state()
+                .active_target
                 .fetch_owner
                 .has_pending_subresource_fetch_for_test("FETCH-2")
         );
@@ -771,6 +774,7 @@ mod tests {
         let mut conn = CdpConnection::default();
         let mut browser_context = BrowserContext::new_with_page_for_test("BID-1", "TID-active");
         browser_context
+            .active_page_state_mut()
             .active_target
             .runtime_slot
             .set_page_attachment_id_for_test(1);
@@ -815,6 +819,7 @@ mod tests {
         let mut conn = CdpConnection::default();
         let mut browser_context = BrowserContext::new_with_page_for_test("BID-1", "TID-active");
         browser_context
+            .active_page_state_mut()
             .active_target
             .runtime_slot
             .set_page_attachment_id_for_test(1);
@@ -825,6 +830,7 @@ mod tests {
         conn.browser_context
             .as_mut()
             .expect("browser context should remain installed")
+            .active_page_state_mut()
             .active_target
             .runtime_slot
             .replace_page_attachment_id_for_test();
@@ -852,6 +858,7 @@ mod tests {
                 .browser_context
                 .as_ref()
                 .expect("browser context should remain installed")
+                .active_page_state()
                 .active_target
                 .fetch_owner
                 .has_pending_subresource_fetch_for_test("FETCH-1"),
@@ -908,7 +915,8 @@ mod tests {
                 .is_some_and(|state| state.has_pending_subresource_fetch_for_test("FETCH-1"))
         );
         assert!(
-            !bc.active_target
+            !bc.active_page_state()
+                .active_target
                 .fetch_owner
                 .has_pending_subresource_fetch_for_test("FETCH-1"),
             "background owner emission must not register the pause on the active target"

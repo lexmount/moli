@@ -34,6 +34,7 @@ async fn browser_context_document_cookie_snapshots_reflect_live_page_state() {
         .browser_context
         .as_mut()
         .unwrap()
+        .active_page_state_mut()
         .active_target
         .runtime_slot
         .loaded_page_mut()
@@ -75,6 +76,7 @@ async fn browser_context_document_cookie_snapshots_reflect_live_page_state() {
         .browser_context
         .as_mut()
         .unwrap()
+        .active_page_state_mut()
         .active_target
         .runtime_slot
         .loaded_page_mut()

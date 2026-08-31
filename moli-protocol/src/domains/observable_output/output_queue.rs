@@ -1127,7 +1127,11 @@ mod tests {
         );
 
         let prepared = queue
-            .runtime_source_prepared_items(true, true, &bc.active_target.owner_state)
+            .runtime_source_prepared_items(
+                true,
+                true,
+                &bc.active_page_state().active_target.owner_state,
+            )
             .expect("queue should produce RuntimeObservable prepared items");
         let (items, cursor) = prepared.into_output_emission_parts_for_test();
 
@@ -1162,23 +1166,33 @@ mod tests {
                 && *exception_index == 0
         ));
 
-        bc.active_target
+        bc.active_page_state_mut()
+            .active_target
             .owner_state
             .runtime_observable_state
             .mark_emitted_console_counts(std::collections::HashMap::from([(5, 1)]));
-        bc.active_target
+        bc.active_page_state_mut()
+            .active_target
             .owner_state
             .runtime_observable_state
             .mark_emitted_exception_entries(1);
         assert!(
             queue
-                .runtime_source_prepared_items(true, true, &bc.active_target.owner_state)
+                .runtime_source_prepared_items(
+                    true,
+                    true,
+                    &bc.active_page_state().active_target.owner_state
+                )
                 .is_none(),
             "owner cursor should suppress source output already emitted from this queue item"
         );
         assert!(
             queue
-                .runtime_source_prepared_items(false, true, &bc.active_target.owner_state)
+                .runtime_source_prepared_items(
+                    false,
+                    true,
+                    &bc.active_page_state().active_target.owner_state
+                )
                 .is_none(),
             "disabled Runtime should not produce RuntimeObservable prepared items"
         );
@@ -1203,7 +1217,11 @@ mod tests {
         );
 
         let prepared = queue
-            .runtime_source_prepared_items(true, true, &bc.active_target.owner_state)
+            .runtime_source_prepared_items(
+                true,
+                true,
+                &bc.active_page_state().active_target.owner_state,
+            )
             .expect(
                 "contextless lifecycle source should still advance the RuntimeObservable cursor",
             );
@@ -1245,7 +1263,11 @@ mod tests {
         );
 
         let prepared = queue
-            .runtime_source_prepared_items(true, true, &bc.active_target.owner_state)
+            .runtime_source_prepared_items(
+                true,
+                true,
+                &bc.active_page_state().active_target.owner_state,
+            )
             .expect("renderer producer source item should materialize RuntimeObservable output");
         let (items, cursor) = prepared.into_output_emission_parts_for_test();
 
@@ -1317,7 +1339,11 @@ mod tests {
             &second_snapshot,
         );
         let prepared = queue
-            .runtime_source_prepared_items(true, true, &bc.active_target.owner_state)
+            .runtime_source_prepared_items(
+                true,
+                true,
+                &bc.active_page_state().active_target.owner_state,
+            )
             .expect("combined source deltas should produce the full RuntimeObservable tail");
         let (items, cursor) = prepared.into_output_emission_parts_for_test();
 
@@ -1334,13 +1360,18 @@ mod tests {
             "source materialization should combine append-time source deltas for an owner cursor before the first delta"
         );
 
-        bc.active_target
+        bc.active_page_state_mut()
+            .active_target
             .owner_state
             .runtime_observable_state
             .mark_emitted_console_counts(std::collections::HashMap::from([(5, 1)]));
 
         let prepared = queue
-            .runtime_source_prepared_items(true, true, &bc.active_target.owner_state)
+            .runtime_source_prepared_items(
+                true,
+                true,
+                &bc.active_page_state().active_target.owner_state,
+            )
             .expect("latest appended source item should produce the new RuntimeObservable tail");
         let (items, cursor) = prepared.into_output_emission_parts_for_test();
 
@@ -1384,7 +1415,11 @@ mod tests {
 
         let queue = TargetObservableOutputQueue::from_runtime_slot_source_outputs(&runtime_slot);
         let prepared = queue
-            .runtime_source_prepared_items(true, true, &bc.active_target.owner_state)
+            .runtime_source_prepared_items(
+                true,
+                true,
+                &bc.active_page_state().active_target.owner_state,
+            )
             .expect("stored queue source should materialize RuntimeObservable items");
         let (items, cursor) = prepared.into_output_emission_parts_for_test();
 
@@ -1396,13 +1431,18 @@ mod tests {
                 if text == "stored source"
         ));
 
-        bc.active_target
+        bc.active_page_state_mut()
+            .active_target
             .owner_state
             .runtime_observable_state
             .mark_emitted_console_counts(std::collections::HashMap::from([(5, 1)]));
         assert!(
             queue
-                .runtime_source_prepared_items(true, true, &bc.active_target.owner_state)
+                .runtime_source_prepared_items(
+                    true,
+                    true,
+                    &bc.active_page_state().active_target.owner_state
+                )
                 .is_none(),
             "stored source output must still respect owner RuntimeObservable cursor state"
         );
@@ -1606,10 +1646,12 @@ mod tests {
     fn observable_backlog_queue_reports_console_and_log_ranges_from_owner_cursors() {
         let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
         bc.set_target_url("http://example.test/observable".to_owned());
-        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+        bc.active_page_state_mut().devtools_sessions
+            [moli_page_types::DevToolsSessionKey::Primary]
             .console_output_session_state
             .console_enabled = true;
-        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+        bc.active_page_state_mut().devtools_sessions
+            [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .log_enabled = true;
         let queue = TargetObservableOutputQueue {
@@ -1624,15 +1666,15 @@ mod tests {
         let mut prepared = queue.console_log_backlog_ranges(
             bc.target_url(),
             page_attachment_id(1),
-            bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+            bc.active_page_state().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .console_output_session_state
                 .console_enabled,
-            bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+            bc.active_page_state().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .log_enabled,
             true,
-            &bc.active_target.owner_state,
-            &bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+            &bc.active_page_state().active_target.owner_state,
+            &bc.active_page_state().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .console_output_session_state,
             None,
         );
@@ -1677,10 +1719,12 @@ mod tests {
     fn observable_backlog_queue_filters_single_raw_queue_by_kind_cursor() {
         let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
         bc.set_target_url("http://example.test/observable".to_owned());
-        bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+        bc.active_page_state_mut().devtools_sessions
+            [moli_page_types::DevToolsSessionKey::Primary]
             .console_output_session_state
             .console_enabled = true;
-        bc.active_target
+        bc.active_page_state_mut()
+            .active_target
             .owner_state
             .console_output_state
             .advance_console_domain_to_current(1, 0);
@@ -1697,15 +1741,15 @@ mod tests {
         let mut prepared = queue.console_log_backlog_ranges(
             bc.target_url(),
             page_attachment_id(1),
-            bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+            bc.active_page_state().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .console_output_session_state
                 .console_enabled,
-            bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+            bc.active_page_state().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .log_enabled,
             true,
-            &bc.active_target.owner_state,
-            &bc.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+            &bc.active_page_state().active_target.owner_state,
+            &bc.active_page_state().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .console_output_session_state,
             None,
         );

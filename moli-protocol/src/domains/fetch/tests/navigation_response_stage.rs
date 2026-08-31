@@ -28,7 +28,8 @@ async fn response_stage_pause_happens_before_navigation_body_eof() {
 
     let mut ctx = TestContext::new();
     let mut bc = attached_browser_context();
-    bc.active_target
+    bc.active_page_state_mut()
+        .active_target
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -77,7 +78,8 @@ async fn response_stage_pause_happens_before_navigation_body_eof() {
         .browser_context
         .as_ref()
         .and_then(|bc| {
-            bc.active_target
+            bc.active_page_state()
+                .active_target
                 .fetch_owner
                 .pending_fetch_response_prepared_renderer_agent_for_test(&response_request_id)
         })
@@ -166,7 +168,8 @@ async fn assert_empty_http_error_response_stage(ctx: &mut TestContext, url: &str
             .browser_context
             .as_ref()
             .and_then(|bc| {
-                bc.active_target
+                bc.active_page_state()
+                    .active_target
                     .fetch_owner
                     .pending_fetch_response_prepared_renderer_agent_for_test(&request_id)
             })
@@ -272,7 +275,8 @@ async fn empty_http_error_response_stage_commits_browser_error_document_after_co
 
     let mut ctx = TestContext::new();
     let mut bc = attached_browser_context();
-    bc.active_target
+    bc.active_page_state_mut()
+        .active_target
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -313,7 +317,8 @@ lateBinding("author-script");
 
     let mut ctx = TestContext::new();
     let mut bc = attached_browser_context();
-    bc.active_target
+    bc.active_page_state_mut()
+        .active_target
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -327,6 +332,7 @@ lateBinding("author-script");
         .browser_context
         .as_mut()
         .expect("browser context should remain installed")
+        .active_page_state_mut()
         .active_target
         .runtime_slot
         .replace_loaded_page(Some(initial_page));
@@ -500,7 +506,8 @@ async fn response_stage_xml_commit_uses_live_configuration_before_first_author_s
 
     let mut ctx = TestContext::new();
     let mut bc = attached_browser_context();
-    bc.active_target
+    bc.active_page_state_mut()
+        .active_target
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -515,6 +522,7 @@ async fn response_stage_xml_commit_uses_live_configuration_before_first_author_s
         .browser_context
         .as_mut()
         .expect("browser context should remain installed")
+        .active_page_state_mut()
         .active_target
         .runtime_slot
         .replace_loaded_page(Some(initial_page));
@@ -705,6 +713,7 @@ async fn fulfill_request_commit_uses_configuration_added_while_paused_before_aut
         .browser_context
         .as_mut()
         .expect("browser context should remain installed")
+        .active_page_state_mut()
         .active_target
         .runtime_slot
         .replace_loaded_page(Some(initial_page));
@@ -886,7 +895,8 @@ async fn interleaved_response_heads_only_commit_the_current_prepared_document() 
 
     let mut ctx = TestContext::new();
     let mut bc = attached_browser_context();
-    bc.active_target
+    bc.active_page_state_mut()
+        .active_target
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -923,7 +933,8 @@ async fn interleaved_response_heads_only_commit_the_current_prepared_document() 
         .browser_context
         .as_ref()
         .and_then(|bc| {
-            bc.active_target
+            bc.active_page_state()
+                .active_target
                 .fetch_owner
                 .pending_fetch_response_prepared_renderer_agent_for_test(&first_request_id)
         })
@@ -946,18 +957,20 @@ async fn interleaved_response_heads_only_commit_the_current_prepared_document() 
         .browser_context
         .as_ref()
         .and_then(|bc| {
-            bc.active_target
+            bc.active_page_state()
+                .active_target
                 .fetch_owner
                 .pending_fetch_response_prepared_renderer_agent_for_test(&second_request_id)
         })
         .expect("second response head should reserve a renderer agent");
     assert_ne!(first_agent, second_agent);
 
-    let attachment_before_continue = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .and_then(|bc| bc.active_target.runtime_slot.current_renderer_attachment());
+    let attachment_before_continue = ctx.conn.browser_context.as_ref().and_then(|bc| {
+        bc.active_page_state()
+            .active_target
+            .runtime_slot
+            .current_renderer_attachment()
+    });
     ctx.process_async(json!({
         "id": 367,
         "method": "Fetch.continueResponse",
@@ -973,10 +986,11 @@ async fn interleaved_response_heads_only_commit_the_current_prepared_document() 
         "renderer channel navigation was superseded by a newer navigation"
     );
     assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .and_then(|bc| bc.active_target.runtime_slot.current_renderer_attachment()),
+        ctx.conn.browser_context.as_ref().and_then(|bc| bc
+            .active_page_state()
+            .active_target
+            .runtime_slot
+            .current_renderer_attachment()),
         attachment_before_continue,
         "a superseded response head must not switch the renderer channel"
     );
@@ -1025,7 +1039,8 @@ async fn interleaved_response_heads_only_commit_the_current_prepared_document() 
 async fn response_stage_continue_request_rejects_data_url_override_without_consuming_pause() {
     let mut ctx = TestContext::new();
     let mut bc = attached_browser_context();
-    bc.active_target
+    bc.active_page_state_mut()
+        .active_target
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -1072,12 +1087,14 @@ async fn response_stage_continue_request_rejects_data_url_override_without_consu
         .as_ref()
         .expect("browser context should remain active");
     assert!(
-        bc.active_target
+        bc.active_page_state()
+            .active_target
             .fetch_owner
             .has_pending_fetch_request_id_for_test(&request_id)
     );
     assert!(
-        bc.active_target
+        bc.active_page_state()
+            .active_target
             .fetch_owner
             .has_pending_fetch_navigation_for_test(&request_id)
     );
@@ -1091,7 +1108,8 @@ async fn response_stage_continue_request_rejects_data_url_override_without_consu
 async fn response_stage_continue_request_rejects_file_url_override_without_consuming_pause() {
     let mut ctx = TestContext::new();
     let mut bc = attached_browser_context();
-    bc.active_target
+    bc.active_page_state_mut()
+        .active_target
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -1136,12 +1154,14 @@ async fn response_stage_continue_request_rejects_file_url_override_without_consu
         .as_ref()
         .expect("browser context should remain active");
     assert!(
-        bc.active_target
+        bc.active_page_state()
+            .active_target
             .fetch_owner
             .has_pending_fetch_request_id_for_test(&request_id)
     );
     assert!(
-        bc.active_target
+        bc.active_page_state()
+            .active_target
             .fetch_owner
             .has_pending_fetch_navigation_for_test(&request_id)
     );
@@ -1170,7 +1190,8 @@ async fn response_stage_continue_response_streams_network_events_through_backgro
 
     let mut ctx = TestContext::new();
     let mut bc = attached_browser_context();
-    bc.active_target
+    bc.active_page_state_mut()
+        .active_target
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -1290,7 +1311,8 @@ async fn continue_response_can_override_status_and_headers() {
 
     let mut ctx = TestContext::new();
     let mut bc = attached_browser_context();
-    bc.active_target
+    bc.active_page_state_mut()
+        .active_target
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -1754,7 +1776,8 @@ async fn fail_request_at_response_stage_aborts_navigation() {
 
     let mut ctx = TestContext::new();
     let mut bc = attached_browser_context();
-    bc.active_target
+    bc.active_page_state_mut()
+        .active_target
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -1793,17 +1816,19 @@ async fn fail_request_at_response_stage_aborts_navigation() {
         .as_str()
         .expect("response-stage request id")
         .to_owned();
-    let attachment_before_cancel = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .and_then(|bc| bc.active_target.runtime_slot.current_renderer_attachment());
+    let attachment_before_cancel = ctx.conn.browser_context.as_ref().and_then(|bc| {
+        bc.active_page_state()
+            .active_target
+            .runtime_slot
+            .current_renderer_attachment()
+    });
     assert!(
         ctx.conn
             .browser_context
             .as_ref()
             .and_then(|bc| {
-                bc.active_target
+                bc.active_page_state()
+                    .active_target
                     .fetch_owner
                     .pending_fetch_response_prepared_renderer_agent_for_test(&response_request_id)
             })
@@ -1827,6 +1852,7 @@ async fn fail_request_at_response_stage_aborts_navigation() {
     assert!(browser_context.loaded_page().is_none());
     assert_eq!(
         browser_context
+            .active_page_state()
             .active_target
             .runtime_slot
             .current_renderer_attachment(),
@@ -1856,7 +1882,8 @@ async fn fulfill_request_at_response_stage_replaces_the_network_candidate_once()
 
     let mut ctx = TestContext::new();
     let mut bc = attached_browser_context();
-    bc.active_target
+    bc.active_page_state_mut()
+        .active_target
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -1893,7 +1920,8 @@ async fn fulfill_request_at_response_stage_replaces_the_network_candidate_once()
         .browser_context
         .as_ref()
         .and_then(|bc| {
-            bc.active_target
+            bc.active_page_state()
+                .active_target
                 .fetch_owner
                 .pending_fetch_response_prepared_renderer_agent_for_test(&request_id)
         })
@@ -2372,6 +2400,7 @@ async fn get_response_body_does_not_consume_active_response_body_stream() {
             .browser_context
             .as_ref()
             .unwrap()
+            .active_page_state()
             .active_target
             .fetch_owner
             .active_fetch_response_body_stream_request_id_for_test("BID-1:TID-1:STREAM-1"),
@@ -2398,6 +2427,7 @@ async fn get_response_body_does_not_consume_active_response_body_stream() {
             .browser_context
             .as_ref()
             .unwrap()
+            .active_page_state()
             .active_target
             .fetch_owner
             .active_fetch_response_body_stream_request_id_for_test("BID-1:TID-1:STREAM-1"),
@@ -2417,6 +2447,7 @@ async fn get_response_body_does_not_consume_active_response_body_stream() {
             .browser_context
             .as_ref()
             .unwrap()
+            .active_page_state()
             .active_target
             .fetch_owner
             .active_fetch_response_body_stream_request_id_for_test("BID-1:TID-1:STREAM-1"),
@@ -2444,6 +2475,7 @@ async fn get_response_body_does_not_consume_active_response_body_stream() {
             .browser_context
             .as_ref()
             .unwrap()
+            .active_page_state()
             .active_target
             .fetch_owner
             .active_fetch_response_body_stream_request_id_for_test("BID-1:TID-1:STREAM-1")
@@ -2727,6 +2759,7 @@ async fn clear_browser_cache_cancels_active_response_body_stream_without_stale_r
             .browser_context
             .as_ref()
             .unwrap()
+            .active_page_state()
             .active_target
             .fetch_owner
             .active_fetch_response_body_stream_request_id_for_test("BID-1:TID-1:STREAM-1")
@@ -2815,7 +2848,8 @@ async fn fail_request_finishes_pending_navigation_with_error() {
 async fn fulfill_request_completes_navigation_with_synthetic_response() {
     let mut ctx = TestContext::new();
     let mut bc = attached_browser_context();
-    bc.active_target
+    bc.active_page_state_mut()
+        .active_target
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -2908,7 +2942,8 @@ async fn fulfill_request_completes_navigation_with_synthetic_response() {
 async fn fulfill_request_navigation_get_response_body_preserves_binary_bytes() {
     let mut ctx = TestContext::new();
     let mut bc = attached_browser_context();
-    bc.active_target
+    bc.active_page_state_mut()
+        .active_target
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -2986,7 +3021,8 @@ async fn fulfill_request_navigation_get_response_body_preserves_binary_bytes() {
 async fn fulfill_request_document_body_uses_phase_one_parser_semantics() {
     let mut ctx = TestContext::new();
     let mut bc = attached_browser_context();
-    bc.active_target
+    bc.active_page_state_mut()
+        .active_target
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -3056,7 +3092,8 @@ async fn fulfill_request_document_body_uses_phase_one_parser_semantics() {
 async fn fulfill_request_accepts_binary_response_headers() {
     let mut ctx = TestContext::new();
     let mut bc = attached_browser_context();
-    bc.active_target
+    bc.active_page_state_mut()
+        .active_target
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -3147,7 +3184,8 @@ async fn continue_request_applies_url_method_headers_and_post_data() {
     let continued_url = format!("http://{addr}/continued");
     let mut ctx = TestContext::new();
     let mut bc = attached_browser_context();
-    bc.active_target
+    bc.active_page_state_mut()
+        .active_target
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
