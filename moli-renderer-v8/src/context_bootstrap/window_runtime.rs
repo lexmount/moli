@@ -15,6 +15,7 @@ pub(super) use base64::{window_atob_callback, window_btoa_callback};
 pub(super) use date_locale::{
     current_date_locale_overrides, date_to_locale_date_string_callback,
     date_to_locale_string_callback, date_to_locale_time_string_callback,
+    preserve_original_date_locale_methods,
 };
 pub(crate) use date_locale::{
     set_date_locale_override_for_current_context, set_date_timezone_override_for_current_context,

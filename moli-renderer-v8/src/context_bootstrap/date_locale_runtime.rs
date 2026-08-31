@@ -1,6 +1,7 @@
 use super::window_runtime::{
     current_date_locale_overrides, date_to_locale_date_string_callback,
     date_to_locale_string_callback, date_to_locale_time_string_callback,
+    preserve_original_date_locale_methods,
 };
 use super::*;
 use crate::util::{call_script_visible_function, get_private_value, set_private_value};
@@ -49,6 +50,7 @@ pub(super) fn install_date_locale_runtime_state<'s>(
         return Ok(());
     };
 
+    preserve_original_date_locale_methods(scope, global, date_proto);
     DateLocalePrototypeDeclaration::default()
         .initialize(scope, date_proto)
         .map_err(|err| anyhow!("failed to initialize Date locale methods: {err}"))?;
