@@ -4973,9 +4973,8 @@ async fn worker_fetch_dns_failure_rejects_and_reports_subresource_failure() {
             record.outcome()
         );
     };
-    let lower_error = error_text.to_ascii_lowercase();
     assert!(
-        lower_error.contains("resolv") || lower_error.contains("timed out"),
+        error_text.to_ascii_lowercase().contains("resolv"),
         "expected DNS-resolution error text, got {error_text:?}"
     );
     assert_eq!(

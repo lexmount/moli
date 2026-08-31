@@ -4,7 +4,7 @@ use std::{
         Arc, OnceLock,
         atomic::{AtomicBool, Ordering},
     },
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result, anyhow};
@@ -23,7 +23,7 @@ use super::{
     residence::{
         CurlActiveTransfer, CurlOwnerState, CurlPendingJob, active_origin_count,
         completed_transfers, enqueue_existing_pending_job, enqueue_pending_job, job_is_eligible,
-        pending_origin_count, take_transfers_in_notification_order,
+        pending_origin_count, take_expired_pending_jobs, take_transfers_in_notification_order,
     },
 };
 
@@ -39,6 +39,7 @@ pub(super) enum CurlRuntimeCommand<H: Handler, C> {
 enum CurlOwnerEvent<H: Handler, C> {
     Command(std::result::Result<CurlRuntimeCommand<H, C>, crossbeam_channel::RecvError>),
     Dns(std::result::Result<CurlDnsOwnerCompletion<CurlTransferId>, crossbeam_channel::RecvError>),
+    Deadline,
 }
 
 pub(super) struct CurlRuntimeOwner<H: Handler + Send + 'static, C: Send + 'static> {
@@ -85,6 +86,7 @@ impl<H: Handler + Send + 'static, C: Send + 'static> CurlRuntimeOwner<H, C> {
         loop {
             self.drain_commands(&mut state, &mut multi);
             self.drain_dns_completions(&mut state);
+            self.expire_waiting_jobs(&mut state);
             self.start_eligible_jobs(&mut state, &mut multi);
             self.process_completed_transfers(&mut state, &mut multi);
 
@@ -99,7 +101,7 @@ impl<H: Handler + Send + 'static, C: Send + 'static> CurlRuntimeOwner<H, C> {
             if state.active.is_empty() && state.pending.is_empty() {
                 self.wait_for_next_owner_event(&mut state, &mut multi);
             } else if !state.active.is_empty() {
-                self.wait_for_curl_progress(&multi);
+                self.wait_for_curl_progress(&multi, &state);
             }
         }
     }
@@ -128,9 +130,20 @@ impl<H: Handler + Send + 'static, C: Send + 'static> CurlRuntimeOwner<H, C> {
             }
             return;
         }
-        let event = crossbeam_channel::select! {
-            recv(self.command_rx) -> command => CurlOwnerEvent::Command(command),
-            recv(state.dns.completion_receiver()) -> completion => CurlOwnerEvent::Dns(completion),
+        let event = if let Some(deadline) = state.dns.next_deadline(|pending| pending.job.deadline)
+        {
+            let deadline_rx =
+                crossbeam_channel::after(deadline.saturating_duration_since(Instant::now()));
+            crossbeam_channel::select! {
+                recv(self.command_rx) -> command => CurlOwnerEvent::Command(command),
+                recv(state.dns.completion_receiver()) -> completion => CurlOwnerEvent::Dns(completion),
+                recv(deadline_rx) -> _ => CurlOwnerEvent::Deadline,
+            }
+        } else {
+            crossbeam_channel::select! {
+                recv(self.command_rx) -> command => CurlOwnerEvent::Command(command),
+                recv(state.dns.completion_receiver()) -> completion => CurlOwnerEvent::Dns(completion),
+            }
         };
         match event {
             CurlOwnerEvent::Command(command) => match command {
@@ -142,6 +155,7 @@ impl<H: Handler + Send + 'static, C: Send + 'static> CurlRuntimeOwner<H, C> {
                     self.claim_dns_completion(state, completion);
                 }
             }
+            CurlOwnerEvent::Deadline => {}
         }
     }
 
@@ -302,6 +316,10 @@ impl<H: Handler + Send + 'static, C: Send + 'static> CurlRuntimeOwner<H, C> {
             });
             return;
         }
+        if pending.deadline_reached(Instant::now()) {
+            self.complete_timed_out_job(pending, "while waiting for DNS");
+            return;
+        }
         match ready.result {
             Ok(addresses) => {
                 if let Err(error) = pending
@@ -342,10 +360,34 @@ impl<H: Handler + Send + 'static, C: Send + 'static> CurlRuntimeOwner<H, C> {
         multi: &mut Multi,
         pending: CurlPendingJob<H, C>,
     ) {
+        if pending.deadline_reached(Instant::now()) {
+            self.complete_timed_out_job(pending, "while waiting to start");
+            return;
+        }
         let transfer_id = pending.transfer_id;
         let queued_for = pending.enqueued_at.elapsed();
-        let job = pending.job;
+        let mut job = pending.job;
         let label = job.label.clone();
+        if let Some(deadline) = job.deadline {
+            let Some(remaining) = curl_timeout_for_deadline(deadline, Instant::now()) else {
+                self.send_completion(CurlMultiCompletion {
+                    transfer_id,
+                    easy: Some(job.easy),
+                    context: job.context,
+                    result: Err(curl_runtime_timeout_error("while waiting to start")),
+                });
+                return;
+            };
+            if let Err(error) = job.easy.timeout(remaining) {
+                self.send_completion(CurlMultiCompletion {
+                    transfer_id,
+                    easy: Some(job.easy),
+                    context: job.context,
+                    result: Err(error).context("failed to apply remaining curl request deadline"),
+                });
+                return;
+            }
+        }
         match multi
             .add2(job.easy)
             .with_context(|| anyhow!("failed to add curl easy handle for {label}"))
@@ -422,6 +464,28 @@ impl<H: Handler + Send + 'static, C: Send + 'static> CurlRuntimeOwner<H, C> {
                 result.map_err(Into::into),
             );
         }
+    }
+
+    fn expire_waiting_jobs(&self, state: &mut CurlOwnerState<H, C>) {
+        let now = Instant::now();
+        for pending in take_expired_pending_jobs(&mut state.pending, now) {
+            self.complete_timed_out_job(pending, "while waiting in the scheduler");
+        }
+        for pending in state.dns.take_expired(now, |pending| pending.job.deadline) {
+            self.complete_timed_out_job(pending, "while waiting for DNS");
+        }
+    }
+
+    fn complete_timed_out_job(&self, pending: CurlPendingJob<H, C>, stage: &'static str) {
+        let CurlPendingJob {
+            transfer_id, job, ..
+        } = pending;
+        self.send_completion(CurlMultiCompletion {
+            transfer_id,
+            easy: Some(job.easy),
+            context: job.context,
+            result: Err(curl_runtime_timeout_error(stage)),
+        });
     }
 
     fn finish_active_transfer(
@@ -517,9 +581,12 @@ impl<H: Handler + Send + 'static, C: Send + 'static> CurlRuntimeOwner<H, C> {
         });
     }
 
-    fn wait_for_curl_progress(&self, multi: &Multi) {
-        let wait_timeout = runtime_wait_timeout(multi, self.config.poll_interval)
+    fn wait_for_curl_progress(&self, multi: &Multi, state: &CurlOwnerState<H, C>) {
+        let mut wait_timeout = runtime_wait_timeout(multi, self.config.poll_interval)
             .unwrap_or(self.config.poll_interval);
+        if let Some(deadline) = state.next_waiting_deadline() {
+            wait_timeout = wait_timeout.min(deadline.saturating_duration_since(Instant::now()));
+        }
         if wait_timeout.is_zero() {
             return;
         }
@@ -531,6 +598,18 @@ impl<H: Handler + Send + 'static, C: Send + 'static> CurlRuntimeOwner<H, C> {
     fn send_completion(&self, completion: CurlMultiCompletion<H, C>) {
         let _ = self.completion_tx.send(completion);
     }
+}
+
+fn curl_runtime_timeout_error(stage: &str) -> anyhow::Error {
+    anyhow!("curl multi runtime request timed out {stage}")
+}
+
+fn curl_timeout_for_deadline(deadline: Instant, now: Instant) -> Option<Duration> {
+    let remaining = deadline.saturating_duration_since(now);
+    // curl-rust converts CURLOPT_TIMEOUT_MS with `Duration::as_millis()`. A
+    // positive sub-millisecond value would therefore become zero, which
+    // libcurl interprets as disabling the timeout entirely.
+    (remaining >= Duration::from_millis(1)).then_some(remaining)
 }
 
 fn curl_runtime_trace_enabled() -> bool {
@@ -545,4 +624,22 @@ fn env_flag_enabled(name: &str) -> bool {
         let value = value.trim();
         !value.is_empty() && value != "0" && !value.eq_ignore_ascii_case("false")
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sub_millisecond_deadline_never_disables_the_libcurl_timeout() {
+        let now = Instant::now();
+        assert_eq!(
+            curl_timeout_for_deadline(now + Duration::from_micros(999), now),
+            None
+        );
+        assert_eq!(
+            curl_timeout_for_deadline(now + Duration::from_millis(1), now),
+            Some(Duration::from_millis(1))
+        );
+    }
 }

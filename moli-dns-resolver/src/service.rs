@@ -56,6 +56,14 @@ impl DnsResolverService {
         target: DnsTarget,
         completion: impl FnOnce(DnsLookupResult) + Send + 'static,
     ) {
+        if target_is_reserved_invalid(&target) {
+            completion(Err(Arc::from(format!(
+                "failed to resolve {}:{}: reserved .invalid domain",
+                target.host(),
+                target.port()
+            ))));
+            return;
+        }
         let key = DnsLookupKey { partition, target };
         let admission = {
             let mut state = self.state.lock();
@@ -94,6 +102,18 @@ impl DnsResolverService {
             positive_cache_ttl,
         })
     }
+}
+
+/// `.invalid` is a special-use top-level domain whose names are guaranteed not
+/// to exist. Resolve it locally so a deterministic negative answer cannot be
+/// delayed behind blocking host-resolver work or depend on the machine's DNS
+/// configuration.
+fn target_is_reserved_invalid(target: &DnsTarget) -> bool {
+    let host = target.host().trim_end_matches('.');
+    host.eq_ignore_ascii_case("invalid")
+        || host
+            .get(host.len().saturating_sub(".invalid".len())..)
+            .is_some_and(|suffix| suffix.eq_ignore_ascii_case(".invalid"))
 }
 
 fn shared_dns_worker_count() -> NonZeroUsize {

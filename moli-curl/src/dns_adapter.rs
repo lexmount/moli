@@ -1,4 +1,4 @@
-use std::{collections::HashMap, hash::Hash, net::IpAddr};
+use std::{collections::HashMap, hash::Hash, net::IpAddr, time::Instant};
 
 use anyhow::{Context, Result, anyhow};
 use crossbeam_channel::{Receiver, Sender};
@@ -179,6 +179,39 @@ where
         }
     }
 
+    pub(crate) fn next_deadline(
+        &self,
+        mut deadline_for: impl FnMut(&P) -> Option<Instant>,
+    ) -> Option<Instant> {
+        self.waiting.values().filter_map(&mut deadline_for).min()
+    }
+
+    /// Retires expired requests from the owner residence.
+    ///
+    /// The resolver may still publish a late completion because a blocking
+    /// system lookup cannot be cancelled safely. Exact request identity makes
+    /// that completion harmless: [`Self::claim`] ignores it after this method
+    /// removes the waiting entry.
+    pub(crate) fn take_expired(
+        &mut self,
+        now: Instant,
+        mut deadline_for: impl FnMut(&P) -> Option<Instant>,
+    ) -> Vec<P> {
+        let expired_ids = self
+            .waiting
+            .iter()
+            .filter_map(|(request_id, pending)| {
+                deadline_for(pending)
+                    .is_some_and(|deadline| deadline <= now)
+                    .then_some(*request_id)
+            })
+            .collect::<Vec<_>>();
+        expired_ids
+            .into_iter()
+            .filter_map(|request_id| self.waiting.remove(&request_id))
+            .collect()
+    }
+
     pub(crate) fn drain(&mut self) -> impl Iterator<Item = P> + '_ {
         self.waiting.drain().map(|(_, pending)| pending)
     }
@@ -235,6 +268,29 @@ mod tests {
                 })
                 .is_none(),
             "late duplicate completion must not recover retired work"
+        );
+    }
+
+    #[test]
+    fn expired_dns_residence_rejects_a_late_completion() {
+        let mut residence = CurlDnsOwnerResidence::<u64, _>::default();
+        let request_id = 11;
+        let now = Instant::now();
+        residence.waiting.insert(request_id, ("pending", Some(now)));
+
+        assert_eq!(residence.next_deadline(|pending| pending.1), Some(now));
+        assert_eq!(
+            residence.take_expired(now, |pending| pending.1),
+            [("pending", Some(now))]
+        );
+        assert!(
+            residence
+                .claim(CurlDnsOwnerCompletion {
+                    request_id,
+                    result: test_result(),
+                })
+                .is_none(),
+            "a resolver completion must not recover a timed-out transfer"
         );
     }
 

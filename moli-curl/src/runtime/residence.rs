@@ -33,6 +33,16 @@ impl<H: Handler, C> Default for CurlOwnerState<H, C> {
     }
 }
 
+impl<H: Handler, C> CurlOwnerState<H, C> {
+    pub(super) fn next_waiting_deadline(&self) -> Option<Instant> {
+        self.pending
+            .iter()
+            .filter_map(|pending| pending.job.deadline)
+            .chain(self.dns.next_deadline(|pending| pending.job.deadline))
+            .min()
+    }
+}
+
 pub(super) struct CurlActiveTransfer<H: Handler, C> {
     pub(super) handle: Easy2Handle<H>,
     pub(super) context: C,
@@ -47,6 +57,29 @@ pub(super) struct CurlPendingJob<H: Handler, C> {
     pub(super) transfer_id: CurlTransferId,
     pub(super) job: CurlMultiJob<H, C>,
     pub(super) enqueued_at: Instant,
+}
+
+impl<H: Handler, C> CurlPendingJob<H, C> {
+    pub(super) fn deadline_reached(&self, now: Instant) -> bool {
+        self.job.deadline.is_some_and(|deadline| deadline <= now)
+    }
+}
+
+pub(super) fn take_expired_pending_jobs<H: Handler, C>(
+    pending: &mut VecDeque<CurlPendingJob<H, C>>,
+    now: Instant,
+) -> Vec<CurlPendingJob<H, C>> {
+    let mut retained = VecDeque::with_capacity(pending.len());
+    let mut expired = Vec::new();
+    while let Some(job) = pending.pop_front() {
+        if job.deadline_reached(now) {
+            expired.push(job);
+        } else {
+            retained.push_back(job);
+        }
+    }
+    *pending = retained;
+    expired
 }
 
 pub(super) fn enqueue_pending_job<H: Handler, C>(
@@ -176,6 +209,7 @@ mod tests {
             easy: Easy2::new(TestHandler),
             context: label.to_owned(),
             origin,
+            deadline: None,
             dns_resolution: CurlDnsResolution::curl_managed(),
             priority,
             label: label.to_owned(),
@@ -234,6 +268,59 @@ mod tests {
                 (2, "low"),
             ]
         );
+    }
+
+    #[test]
+    fn expired_pending_jobs_are_removed_without_reordering_live_jobs() {
+        let now = Instant::now();
+        let mut expired = test_job("expired", 2, None);
+        expired.deadline = Some(now);
+        let mut live_high = test_job("live-high", 2, None);
+        live_high.deadline = now.checked_add(Duration::from_secs(1));
+        let live_low = test_job("live-low", 1, None);
+        let mut pending = VecDeque::new();
+        enqueue_pending_job(&mut pending, test_transfer_id(1), expired);
+        enqueue_pending_job(&mut pending, test_transfer_id(2), live_high);
+        enqueue_pending_job(&mut pending, test_transfer_id(3), live_low);
+
+        let expired = take_expired_pending_jobs(&mut pending, now);
+
+        assert_eq!(
+            expired
+                .iter()
+                .map(|pending| pending.job.label.as_str())
+                .collect::<Vec<_>>(),
+            ["expired"]
+        );
+        assert_eq!(
+            pending
+                .iter()
+                .map(|pending| pending.job.label.as_str())
+                .collect::<Vec<_>>(),
+            ["live-high", "live-low"]
+        );
+    }
+
+    #[test]
+    fn active_transfer_wait_is_capped_by_the_earliest_queued_deadline() {
+        let now = Instant::now();
+        let later = now + Duration::from_secs(2);
+        let earlier = now + Duration::from_secs(1);
+        let mut later_job = test_job("later", 1, None);
+        later_job.deadline = Some(later);
+        let mut earlier_job = test_job("earlier", 1, None);
+        earlier_job.deadline = Some(earlier);
+        let mut pending = VecDeque::new();
+        enqueue_pending_job(&mut pending, test_transfer_id(1), later_job);
+        enqueue_pending_job(&mut pending, test_transfer_id(2), earlier_job);
+        let state = CurlOwnerState {
+            closed: false,
+            pending,
+            dns: CurlDnsOwnerResidence::default(),
+            active: HashMap::new(),
+        };
+
+        assert_eq!(state.next_waiting_deadline(), Some(earlier));
     }
 
     #[test]

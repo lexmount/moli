@@ -10,6 +10,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
     thread,
+    time::Instant,
 };
 
 use anyhow::{Context, Result, anyhow};
@@ -41,6 +42,13 @@ pub struct CurlMultiJob<H: Handler, C> {
     pub easy: Easy2<H>,
     pub context: C,
     pub origin: Option<CurlOriginKey>,
+    /// Absolute deadline for the whole scheduler-owned transfer attempt.
+    ///
+    /// libcurl cannot account for time spent in Moli's priority queue or in
+    /// the shared DNS residence because both happen before the easy handle is
+    /// added to the multi handle. The owner enforces this deadline in those
+    /// residences and gives libcurl only the remaining duration.
+    pub deadline: Option<Instant>,
     /// DNS ownership chosen by the caller before this transfer enters curl.
     ///
     /// A curl-managed policy preserves libcurl's resolver behavior. A shared
@@ -56,6 +64,7 @@ impl<H: Handler, C> fmt::Debug for CurlMultiJob<H, C> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CurlMultiJob")
             .field("origin", &self.origin)
+            .field("deadline", &self.deadline)
             .field("dns_resolution", &self.dns_resolution)
             .field("priority", &self.priority)
             .field("label", &self.label)
@@ -277,6 +286,7 @@ mod tests {
                 easy,
                 context: "matching-context".to_owned(),
                 origin: None,
+                deadline: None,
                 dns_resolution: CurlDnsResolution::curl_managed(),
                 priority: 1,
                 label: "identity-test".to_owned(),

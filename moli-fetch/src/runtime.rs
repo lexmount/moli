@@ -14,7 +14,7 @@ use std::{
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result, anyhow};
@@ -65,6 +65,15 @@ const RUNTIME_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const CURLINFO_HTTP_VERSION: curl_sys::CURLINFO = curl_sys::CURLINFO_LONG + 46;
 static NEXT_FETCH_RUNTIME_ID: AtomicU64 = AtomicU64::new(0);
 static INSTALL_FETCH_RUNTIME_PANIC_HOOK: Once = Once::new();
+
+fn curl_runtime_deadline(request: &Request, config: &FetchConfig) -> Option<Instant> {
+    let timeout = request.effective_request_timeout(config);
+    if timeout.is_zero() {
+        None
+    } else {
+        Instant::now().checked_add(timeout)
+    }
+}
 
 thread_local! {
     /// Panic diagnostics are opt-in per semantic owner thread. The process-wide
@@ -920,6 +929,7 @@ impl RuntimeOwner {
         let curl_job = CurlMultiJob {
             easy,
             origin: context.job.origin_key.clone(),
+            deadline: curl_runtime_deadline(&context.job.request, &self.config),
             dns_resolution,
             priority: request_fetch_priority_rank(&context.job.request),
             label,
@@ -1105,6 +1115,7 @@ impl RuntimeOwner {
         let curl_job = CurlMultiJob {
             easy,
             origin: context.job.origin_key.clone(),
+            deadline: curl_runtime_deadline(&context.job.request, &self.config),
             dns_resolution,
             priority: request_fetch_priority_rank(&context.job.request),
             label,
@@ -1303,6 +1314,7 @@ impl RuntimeOwner {
         let curl_job = CurlMultiJob {
             easy,
             origin: context.job.origin_key.clone(),
+            deadline: curl_runtime_deadline(&context.job.request, &self.config),
             dns_resolution,
             priority: request_fetch_priority_rank(&context.job.request),
             label,

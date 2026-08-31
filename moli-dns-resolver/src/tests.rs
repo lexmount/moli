@@ -183,3 +183,33 @@ fn cache_answers_do_not_cross_runtime_partitions() {
 
     assert_eq!(lookup_count.load(Ordering::SeqCst), 2);
 }
+
+#[test]
+fn reserved_invalid_names_fail_synchronously_without_consuming_a_worker() {
+    let lookup_count = Arc::new(AtomicUsize::new(0));
+    let service = test_service(1, {
+        let lookup_count = Arc::clone(&lookup_count);
+        move |_| {
+            lookup_count.fetch_add(1, Ordering::SeqCst);
+            test_result()
+        }
+    });
+    let (completion_tx, completion_rx) = crossbeam_channel::bounded(1);
+
+    service.resolve(
+        DnsCachePartition::fresh(),
+        DnsTarget::new("Moli-Failure.INVALID.", 80),
+        move |result| {
+            completion_tx
+                .send(result)
+                .expect("reserved-name completion should be observed");
+        },
+    );
+
+    let error = completion_rx
+        .try_recv()
+        .expect("reserved-name failure should complete on the caller")
+        .expect_err("a reserved .invalid name cannot resolve");
+    assert!(error.contains("reserved .invalid domain"));
+    assert_eq!(lookup_count.load(Ordering::SeqCst), 0);
+}
