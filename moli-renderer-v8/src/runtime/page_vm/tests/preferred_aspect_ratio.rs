@@ -192,3 +192,59 @@ document.body.innerHTML = `
     .await
     .expect("intrinsic ratio contribution fixture should run");
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn screenshot_exposes_definite_block_geometry_to_intrinsic_width_measurements() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/intrinsic-percentage-constraint-space.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0}
+#target{width:min-content;height:200px}
+#percentage-parent,#ratio-child{height:100%}
+#ratio-child{aspect-ratio:1/1}
+</style>`;
+document.body.innerHTML = `<div id="target"><div id="percentage-parent"><div id="ratio-child"></div></div></div>`;
+'installed'
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+
+        let read_geometry = |page_vm: &mut PageVm| -> anyhow::Result<serde_json::Value> {
+            let geometry = page_vm.vm_mut().eval(
+                r#"JSON.stringify(Object.fromEntries([...document.querySelectorAll('[id]')].map(element=>{const rect=element.getBoundingClientRect();return [element.id,[rect.width,rect.height]]})))"#,
+            )?;
+            Ok(serde_json::from_str(&geometry)?)
+        };
+
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(640, 480, 1.0))?
+            .expect("initial intrinsic percentage fixture must retain a layout root");
+        let initial = read_geometry(&mut page_vm)?;
+        for id in ["target", "percentage-parent", "ratio-child"] {
+            assert_eq!(initial[id], serde_json::json!([200, 200]), "initial geometry mismatch for {id}: {initial}");
+        }
+
+        page_vm.vm_mut().eval("document.querySelector('#target').style.height='100px';'updated'")?;
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(640, 480, 1.0))?
+            .expect("updated intrinsic percentage fixture must retain a layout root");
+        let updated = read_geometry(&mut page_vm)?;
+        for id in ["target", "percentage-parent", "ratio-child"] {
+            assert_eq!(updated[id], serde_json::json!([100, 100]), "updated geometry mismatch for {id}: {updated}");
+        }
+
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("intrinsic percentage constraint-space fixture should run");
+}
