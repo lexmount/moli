@@ -96,9 +96,25 @@ fn date_locale_methods_use_shared_time_formatting_surface() {
     environment.set_timezone(Some("UTC")).unwrap();
 
     let us = vm
-        .eval("new Date(0).toLocaleString()")
+        .eval(
+            r#"
+(() => {
+  const date = new Date(0);
+  const expected = new Intl.DateTimeFormat(undefined, {
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    hour: "numeric",
+    minute: "numeric",
+    second: "numeric"
+  }).format(date);
+  return JSON.stringify([date.toLocaleString(), expected]);
+})()
+"#,
+        )
         .expect("default Date locale formatting should evaluate");
-    assert_eq!(us, "1/1/1970, 12:00:00 AM");
+    let values: Vec<String> = serde_json::from_str(&us).expect("locale output pair should decode");
+    assert_eq!(values[0], values[1]);
 
     environment.set_locale(Some("fr-FR")).unwrap();
     environment.set_timezone(Some("Asia/Shanghai")).unwrap();
@@ -402,6 +418,69 @@ document.body.appendChild(iframe);
 }
 
 #[test]
+fn date_locale_methods_forward_explicit_locales_and_options_without_emulation_overrides() {
+    let mut vm = new_storage_test_vm("https://date-locale-arguments.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const date = new Date("2022-03-31T23:59:42Z");
+  const toLocaleString = Date.prototype.toLocaleString;
+  const localeMarker = {};
+  const optionsMarker = {};
+  const localeFailure = {
+    get length() {
+      throw localeMarker;
+    }
+  };
+  const optionsFailure = {
+    get dateStyle() {
+      throw optionsMarker;
+    }
+  };
+  const probe = callback => {
+    try {
+      callback();
+      return false;
+    } catch (error) {
+      return error;
+    }
+  };
+
+  const values = {
+    caDefault: toLocaleString.call(date, "en-CA", { timeZone: "UTC" }),
+    caShort: toLocaleString.call(date, "en-CA", {
+      dateStyle: "short",
+      timeZone: "UTC"
+    }),
+    svDate: date.toLocaleDateString("sv-SE", { timeZone: "UTC" }),
+    usTime: date.toLocaleTimeString("en-US", {
+      hour12: false,
+      timeZone: "UTC"
+    }),
+    localeError: probe(() => toLocaleString.call(date, localeFailure)) === localeMarker,
+    optionsError: probe(() => toLocaleString.call(date, "en-US", optionsFailure)) === optionsMarker
+  };
+
+  globalThis.Date = function Date() {};
+  values.afterDateTamper = toLocaleString.call(date, "en-CA", {
+    dateStyle: "short",
+    timeZone: "UTC"
+  });
+  return JSON.stringify(values);
+})()
+"#,
+        )
+        .expect("Date locale methods should forward standard arguments to V8");
+
+    assert_eq!(
+        result,
+        r#"{"caDefault":"2022-03-31, 11:59:42 p.m.","caShort":"2022-03-31","svDate":"2022-03-31","usTime":"23:59:42","localeError":true,"optionsError":true,"afterDateTamper":"2022-03-31"}"#
+    );
+}
+
+#[test]
 fn date_locale_methods_are_declared_on_date_prototype() {
     let environment = moli_v8_platform::ProcessEnvironmentOwner::default();
     let mut vm = new_storage_test_vm("https://date-locale-declared.test/");
@@ -426,12 +505,20 @@ fn date_locale_methods_are_declared_on_date_prototype() {
     ].join(":");
   };
   const date = new Date(0);
+  const nativeDefault = new Intl.DateTimeFormat(undefined, {
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    hour: "numeric",
+    minute: "numeric",
+    second: "numeric"
+  }).format(date);
   return [
     Object.keys(Date.prototype).includes("toLocaleString"),
     summarize("toLocaleString"),
     summarize("toLocaleDateString"),
     summarize("toLocaleTimeString"),
-    Date.prototype.toLocaleString.call(date)
+    Date.prototype.toLocaleString.call(date) === nativeDefault
   ].join("|");
 })()
 "#,
@@ -440,7 +527,7 @@ fn date_locale_methods_are_declared_on_date_prototype() {
 
     assert_eq!(
         result,
-        "false|toLocaleString:true:false:true:true:function:toLocaleString:0|toLocaleDateString:true:false:true:true:function:toLocaleDateString:0|toLocaleTimeString:true:false:true:true:function:toLocaleTimeString:0|1/1/1970, 12:00:00 AM"
+        "false|toLocaleString:true:false:true:true:function:toLocaleString:0|toLocaleDateString:true:false:true:true:function:toLocaleDateString:0|toLocaleTimeString:true:false:true:true:function:toLocaleTimeString:0|true"
     );
 }
 
