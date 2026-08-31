@@ -61,3 +61,108 @@ document.body.innerHTML = `
     .await
     .expect("intrinsic calc-margin fixture should run");
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn screenshot_keeps_percentage_max_height_indefinite_during_grid_intrinsic_measurement() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/grid-intrinsic-percentage-max-height.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0}
+.case{display:grid;width:180px;height:200px;margin-bottom:20px}
+.sidebar{display:flex;flex:1;flex-direction:row;height:100%}
+.controlled{display:flex;overflow:auto}
+.wrapper{display:grid;grid-template-columns:100px;grid-template-rows:50px 1fr;overflow:hidden}
+.contents{grid-row:2/3;overflow:auto;max-height:100%}
+.contents>div{height:400px}
+#without-max .contents{max-height:none}
+#definite-wrapper .wrapper{height:200px}
+#auto-app{height:auto}
+</style>`;
+document.body.innerHTML = `
+<div class=case id=original><div class=sidebar><div class=controlled><div class=wrapper><div></div><div class=contents><div></div></div></div></div></div></div>
+<div class=case id=without-max><div class=sidebar><div class=controlled><div class=wrapper><div></div><div class=contents><div></div></div></div></div></div></div>
+<div class=case id=definite-wrapper><div class=sidebar><div class=controlled><div class=wrapper><div></div><div class=contents><div></div></div></div></div></div></div>
+<div class=case id=auto-app><div class=sidebar><div class=controlled><div class=wrapper><div></div><div class=contents><div></div></div></div></div></div></div>`;
+'installed'
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(800, 1_200, 1.0))?
+            .expect("intrinsic percentage max-height screenshot layout");
+
+        let geometry = page_vm.vm_mut().eval(
+            r#"JSON.stringify(Object.fromEntries(['original','without-max','definite-wrapper','auto-app'].map(id=>{const c=document.getElementById(id),height=e=>e.getBoundingClientRect().height;return [id,{case:height(c),sidebar:height(c.querySelector('.sidebar')),controlled:height(c.querySelector('.controlled')),wrapper:height(c.querySelector('.wrapper')),contents:height(c.querySelector('.contents'))}]})))"#,
+        )?;
+        let geometry: serde_json::Value = serde_json::from_str(&geometry)?;
+        assert_eq!(
+            geometry,
+            serde_json::json!({
+                "original": {"case": 200, "sidebar": 450, "controlled": 450, "wrapper": 450, "contents": 400},
+                "without-max": {"case": 200, "sidebar": 450, "controlled": 450, "wrapper": 450, "contents": 400},
+                "definite-wrapper": {"case": 200, "sidebar": 200, "controlled": 200, "wrapper": 200, "contents": 150},
+                "auto-app": {"case": 450, "sidebar": 450, "controlled": 450, "wrapper": 450, "contents": 400},
+            }),
+            "an unresolved percentage max-height must not cap an intrinsic contribution, but must resolve once its containing block is definite",
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("intrinsic percentage max-height fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn screenshot_reflows_an_orthogonal_grid_item_against_the_final_block_size() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/grid-orthogonal-dynamic.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>html,body{margin:0}</style>`;
+document.body.innerHTML = `<div id=target style="display:inline-grid;background:green"><div id=item style="writing-mode:vertical-lr;line-height:0"><span id=first style="display:inline-block;height:100px;width:50px"></span><span id=second style="display:inline-block;height:50px;width:50px"></span></div></div>`;
+document.body.offsetTop;
+document.getElementById('target').style.height = '100px';
+'installed'
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(800, 600, 1.0))?
+            .expect("orthogonal grid screenshot layout");
+
+        let geometry = page_vm.vm_mut().eval(
+            r#"JSON.stringify({...Object.fromEntries(['target','item','first','second'].map(id=>{const r=document.getElementById(id).getBoundingClientRect();return [id,{x:r.x,y:r.y,width:r.width,height:r.height}]})),columns:getComputedStyle(target).gridTemplateColumns,rows:getComputedStyle(target).gridTemplateRows})"#,
+        )?;
+        let geometry: serde_json::Value = serde_json::from_str(&geometry)?;
+        assert_eq!(
+            geometry,
+            serde_json::json!({
+                "target": {"x": 0, "y": 0, "width": 100, "height": 100},
+                "item": {"x": 0, "y": 0, "width": 100, "height": 100},
+                "first": {"x": 0, "y": 0, "width": 50, "height": 100},
+                "second": {"x": 50, "y": 0, "width": 50, "height": 50},
+                "columns": "100px",
+                "rows": "100px",
+            }),
+            "an orthogonal grid item must recompute its block contribution from the final inline grid area",
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("orthogonal grid dynamic fixture should run");
+}
