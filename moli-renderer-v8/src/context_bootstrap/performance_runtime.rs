@@ -52,6 +52,7 @@ pub(super) use super::performance_observer_runtime::{
     performance_observer_constructor_callback, performance_observer_disconnect_callback,
     performance_observer_observe_callback, performance_observer_take_records_callback,
 };
+pub(crate) use entries::is_performance_entry_object;
 use entries::{
     append_performance_entry, create_performance_entry, initialize_resource_timing_slots,
     push_performance_entry,
@@ -358,6 +359,19 @@ impl ResourcePerformanceEntry {
             render_blocking_status: "non-blocking".to_owned(),
             response_status: 0.0,
             content_type: String::new(),
+        }
+    }
+
+    pub(crate) fn mark_aborted(&mut self, transfer_complete: bool) {
+        self.response_status = 0.0;
+        self.content_type.clear();
+        self.content_encoding.clear();
+        if !transfer_complete {
+            self.encoded_body_size = 0.0;
+            self.decoded_body_size = 0.0;
+            if self.transfer_size > 0.0 {
+                self.transfer_size = 300.0;
+            }
         }
     }
 }
