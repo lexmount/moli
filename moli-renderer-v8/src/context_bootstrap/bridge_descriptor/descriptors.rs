@@ -113,6 +113,7 @@ const NODE_BRIDGE_DESCRIPTORS: &[BridgeDescriptor] = &[
         SpecializedTemplateInstaller::None,
         SVG_GEOMETRY_RUNTIME_INSTALL_GROUPS,
     ),
+    descriptor("SVGClipPathElement", Some("SVGElement"), ELEMENT_GROUPS),
     descriptor("SVGDefsElement", Some("SVGGraphicsElement"), ELEMENT_GROUPS),
     descriptor("SVGDescElement", Some("SVGElement"), ELEMENT_GROUPS),
     specialized_descriptor(
@@ -122,6 +123,7 @@ const NODE_BRIDGE_DESCRIPTORS: &[BridgeDescriptor] = &[
         SpecializedTemplateInstaller::None,
         SVG_GEOMETRY_RUNTIME_INSTALL_GROUPS,
     ),
+    descriptor("SVGFilterElement", Some("SVGElement"), ELEMENT_GROUPS),
     descriptor(
         "SVGForeignObjectElement",
         Some("SVGGraphicsElement"),
@@ -154,6 +156,7 @@ const NODE_BRIDGE_DESCRIPTORS: &[BridgeDescriptor] = &[
             svg_gradient_transform: true,
         },
     ),
+    descriptor("SVGMaskElement", Some("SVGElement"), ELEMENT_GROUPS),
     descriptor("SVGMetadataElement", Some("SVGElement"), ELEMENT_GROUPS),
     descriptor("SVGScriptElement", Some("SVGElement"), ELEMENT_GROUPS),
     descriptor("SVGStyleElement", Some("SVGElement"), ELEMENT_GROUPS),
@@ -248,6 +251,7 @@ const NODE_BRIDGE_DESCRIPTORS: &[BridgeDescriptor] = &[
     ),
     descriptor("SVGTitleElement", Some("SVGElement"), ELEMENT_GROUPS),
     descriptor("SVGUseElement", Some("SVGGraphicsElement"), ELEMENT_GROUPS),
+    descriptor("SVGViewElement", Some("SVGElement"), ELEMENT_GROUPS),
     specialized_descriptor(
         "SVGRectElement",
         Some("SVGGeometryElement"),

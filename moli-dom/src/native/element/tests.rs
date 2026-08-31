@@ -180,9 +180,11 @@ fn html_element_interface_name_covers_replay_tags() {
 fn svg_element_interface_name_specializes_standard_elements() {
     assert_eq!(svg_element_interface_name("a"), "SVGAElement");
     assert_eq!(svg_element_interface_name("circle"), "SVGCircleElement");
+    assert_eq!(svg_element_interface_name("clipPath"), "SVGClipPathElement");
     assert_eq!(svg_element_interface_name("defs"), "SVGDefsElement");
     assert_eq!(svg_element_interface_name("desc"), "SVGDescElement");
     assert_eq!(svg_element_interface_name("ellipse"), "SVGEllipseElement");
+    assert_eq!(svg_element_interface_name("filter"), "SVGFilterElement");
     assert_eq!(
         svg_element_interface_name("foreignObject"),
         "SVGForeignObjectElement"
@@ -195,6 +197,7 @@ fn svg_element_interface_name_specializes_standard_elements() {
         "SVGLinearGradientElement"
     );
     assert_eq!(svg_element_interface_name("metadata"), "SVGMetadataElement");
+    assert_eq!(svg_element_interface_name("mask"), "SVGMaskElement");
     assert_eq!(svg_element_interface_name("path"), "SVGPathElement");
     assert_eq!(svg_element_interface_name("pattern"), "SVGPatternElement");
     assert_eq!(svg_element_interface_name("polygon"), "SVGPolygonElement");
@@ -211,6 +214,7 @@ fn svg_element_interface_name_specializes_standard_elements() {
     assert_eq!(svg_element_interface_name("title"), "SVGTitleElement");
     assert_eq!(svg_element_interface_name("tspan"), "SVGTSpanElement");
     assert_eq!(svg_element_interface_name("use"), "SVGUseElement");
+    assert_eq!(svg_element_interface_name("view"), "SVGViewElement");
     assert_eq!(svg_element_interface_name("style"), "SVGStyleElement");
     assert_eq!(svg_element_interface_name("custom"), "SVGElement");
 }

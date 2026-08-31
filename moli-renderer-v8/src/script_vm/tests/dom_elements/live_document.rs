@@ -1114,6 +1114,56 @@ fn svg_specialized_accessors_live_on_owner_prototypes() {
 }
 
 #[test]
+fn svg_historical_interfaces_keep_current_element_constructors_only() {
+    let mut vm = new_parsed_test_vm(
+        "https://svg-historical-interfaces.test/",
+        "<!doctype html><html><head></head><body></body></html>",
+    );
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const assert = (condition, message) => {
+                if (!condition) throw new Error(message);
+              };
+              const ns = "http://www.w3.org/2000/svg";
+              const interfaces = [
+                ["clipPath", "SVGClipPathElement"],
+                ["filter", "SVGFilterElement"],
+                ["mask", "SVGMaskElement"],
+                ["view", "SVGViewElement"],
+              ];
+              const removedUnitTypeConstants = [
+                "SVG_UNIT_TYPE_UNKNOWN",
+                "SVG_UNIT_TYPE_USERSPACEONUSE",
+                "SVG_UNIT_TYPE_OBJECTBOUNDINGBOX",
+              ];
+
+              for (const [localName, interfaceName] of interfaces) {
+                const constructor = globalThis[interfaceName];
+                assert(typeof constructor === "function", `${interfaceName} constructor`);
+                assert(Object.getPrototypeOf(constructor.prototype) === SVGElement.prototype,
+                  `${interfaceName} prototype parent`);
+                assert(document.createElementNS(ns, localName) instanceof constructor,
+                  `${localName} interface`);
+                for (const constant of removedUnitTypeConstants) {
+                  assert(!(constant in constructor), `${interfaceName}.${constant} removed`);
+                }
+              }
+
+              assert(!("viewTarget" in SVGViewElement.prototype),
+                "SVGViewElement.prototype.viewTarget removed");
+              return "ok";
+            })()
+            "#,
+        )
+        .expect("SVG historical interface probe should evaluate");
+
+    assert_eq!(result, "ok");
+}
+
+#[test]
 fn svg_geometry_queries_use_computed_paths_live_tree_and_kurbo_bounds() {
     let mut vm = new_parsed_test_vm(
         "https://svg-geometry-wiring.test/",
