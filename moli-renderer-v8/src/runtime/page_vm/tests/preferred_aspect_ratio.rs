@@ -120,3 +120,75 @@ document.body.innerHTML = `
     .await
     .expect("preferred aspect-ratio fixture should run");
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn screenshot_resolves_intrinsic_keywords_from_ratio_dependent_content_contributions() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/intrinsic-ratio-contributions.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0}
+.item{display:block;flex:none;align-self:flex-start;justify-self:start}
+.ratio-preferred{width:min-content;height:100px;aspect-ratio:1/1}
+.host{width:300px;height:150px}
+.flex{display:flex}
+.grid{display:grid}
+.absolute-host{position:relative}
+.absolute-host>.item{position:absolute;left:0;top:0}
+#minimum{width:auto;min-width:min-content;height:25px;aspect-ratio:4/1}
+#minimum>div{width:150px}
+#maximum{width:200px;max-width:max-content;height:25px;aspect-ratio:4/1}
+#maximum>div{width:150px}
+#clamped-opposite{width:min-content;height:300px;max-height:25px;aspect-ratio:4/1}
+#content-box{box-sizing:content-box;width:min-content;height:100px;padding:10px;aspect-ratio:1/1}
+</style>`;
+document.body.innerHTML = `
+<div class="item ratio-preferred" id="block"></div>
+<div class="item" id="minimum"><div></div></div>
+<div class="item" id="maximum"><div></div></div>
+<div class="item" id="clamped-opposite"></div>
+<div class="item" id="content-box"></div>
+<div class="host flex"><div class="item ratio-preferred" id="flex"></div></div>
+<div class="host grid"><div class="item ratio-preferred" id="grid"></div></div>
+<div class="host absolute-host"><div class="item ratio-preferred" id="absolute"></div></div>`;
+'installed'
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(640, 1_000, 1.0))?
+            .expect("intrinsic ratio fixture must retain a layout root");
+
+        let geometry = page_vm.vm_mut().eval(
+            r#"JSON.stringify(Object.fromEntries([...document.querySelectorAll('[id]')].map(element=>{const rect=element.getBoundingClientRect();return [element.id,[rect.width,rect.height]]})))"#,
+        )?;
+        let geometry: serde_json::Value = serde_json::from_str(&geometry)?;
+        for (id, expected) in [
+            ("block", [100, 100]),
+            ("minimum", [100, 25]),
+            ("maximum", [100, 25]),
+            ("clamped-opposite", [100, 25]),
+            ("content-box", [120, 120]),
+            ("flex", [100, 100]),
+            ("grid", [100, 100]),
+            ("absolute", [100, 100]),
+        ] {
+            assert_eq!(
+                geometry[id],
+                serde_json::json!(expected),
+                "Chromium-calibrated intrinsic ratio geometry mismatch for {id}: {geometry}"
+            );
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("intrinsic ratio contribution fixture should run");
+}
