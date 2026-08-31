@@ -471,7 +471,9 @@ fn cross_realm_window_members_apply_global_interface_receiver_semantics() {
   ].every(throwsOtherTypeError);
 
   const invalidOperations = [
+    () => Object.create(other).focus(),
     () => other.clearInterval.call(notWindow, timerValue),
+    () => Reflect.apply(other.blur, notWindow, []),
     () => new Proxy(other, {}).removeEventListener("foo", () => {})
   ].every(throwsOtherTypeError);
 
@@ -488,6 +490,9 @@ fn cross_realm_window_members_apply_global_interface_receiver_semantics() {
     Reflect.set(other, "name", "newName", undefined);
   statusDescriptor.set.call(null, "ready");
 
+  const extractedFocus = other.focus;
+  extractedFocus();
+
   let caughtEvent;
   const eventListener = event => {
     caughtEvent = event;
@@ -496,6 +501,7 @@ fn cross_realm_window_members_apply_global_interface_receiver_semantics() {
   const dispatchedEvent = new other.Event("global-receiver");
   const extractedDispatch = other.dispatchEvent;
   const dispatchResult = extractedDispatch(dispatchedEvent);
+  const focusedChild = document.activeElement === frame;
   frame.remove();
   let detachedCleanup = true;
   try {
@@ -513,6 +519,7 @@ fn cross_realm_window_members_apply_global_interface_receiver_semantics() {
     other.self === newSelf,
     other.name === "newName",
     statusDescriptor.get.call(null) === "ready",
+    focusedChild,
     dispatchResult,
     caughtEvent === dispatchedEvent,
     detachedCleanup
@@ -524,7 +531,7 @@ fn cross_realm_window_members_apply_global_interface_receiver_semantics() {
 
     assert_eq!(
         result,
-        std::iter::repeat_n("true", 11)
+        std::iter::repeat_n("true", 12)
             .collect::<Vec<_>>()
             .join("|")
     );
