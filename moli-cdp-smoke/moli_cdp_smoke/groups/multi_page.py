@@ -12,6 +12,7 @@ from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from ..assertions import SmokeError, assert_equal, record, wait_until
 from ..helpers import attach_cdp_event_collector, run_worker_command
 from .multi_page_contracts import run_multi_page_contracts
+from .multi_page_isolation_contracts import run_multi_page_isolation_contracts
 
 
 async def run_multi_page_group(
@@ -32,6 +33,7 @@ async def run_multi_page_group(
     await _background_tasks_workers_and_screenshots(browser, fixture, results)
     await _context_teardown_with_pending_commands(browser, fixture, results)
     await run_multi_page_contracts(browser, fixture, results)
+    await run_multi_page_isolation_contracts(browser, fixture, results)
 
 
 async def _page_churn_and_session_reattach(

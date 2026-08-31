@@ -1393,6 +1393,15 @@ class FixtureServer:
                         "userAgent": self.headers.get("User-Agent"),
                         "acceptLanguage": self.headers.get("Accept-Language"),
                         "extraHeader": self.headers.get("x-moli-profile-smoke"),
+                        "sessionHeaderFirst": self.headers.get(
+                            "x-moli-session-first"
+                        ),
+                        "sessionHeaderSecond": self.headers.get(
+                            "x-moli-session-second"
+                        ),
+                        "sessionHeaderPeer": self.headers.get(
+                            "x-moli-session-peer"
+                        ),
                         "referer": self.headers.get("Referer"),
                     }
                     self._send_html("<!doctype html><main>profile headers</main>")
