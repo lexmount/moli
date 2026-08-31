@@ -1673,6 +1673,94 @@ fn inline_block_propagates_scroll_block_end_baseline_through_block_children() {
 }
 
 #[test]
+fn inline_block_skips_orthogonal_block_children_when_exporting_last_baseline() {
+    let source = Source(vec![
+        Node::element(
+            "root",
+            "div",
+            LayoutElementCategory::Generic,
+            None,
+            vec![1, 3, 6],
+        ),
+        Node::element(
+            "control",
+            "span",
+            LayoutElementCategory::Generic,
+            None,
+            vec![2],
+        ),
+        Node::text("control-text", "aaa"),
+        Node::element(
+            "visible-orthogonal",
+            "span",
+            LayoutElementCategory::Generic,
+            None,
+            vec![4, 5],
+        ),
+        Node::text("visible-text", "bbb"),
+        Node::element(
+            "visible-child",
+            "div",
+            LayoutElementCategory::Generic,
+            None,
+            Vec::new(),
+        ),
+        Node::element(
+            "scroll-orthogonal",
+            "span",
+            LayoutElementCategory::Generic,
+            None,
+            vec![7, 8],
+        ),
+        Node::text("scroll-text", "ccc"),
+        Node::element(
+            "scroll-child",
+            "div",
+            LayoutElementCategory::Generic,
+            None,
+            Vec::new(),
+        ),
+    ]);
+    let mut styles = Styles::default();
+    styles.primary.insert(
+        0,
+        style(LayoutDisplay::Block, PaintColor::TRANSPARENT)
+            .tap_taffy(|taffy| taffy.size.width = Dimension::length(200.0))
+            .with_text_metrics(16.0, 20.0),
+    );
+    for (node, color) in [(1, RED), (3, GREEN), (6, BLUE)] {
+        styles.primary.insert(
+            node,
+            style(LayoutDisplay::InlineBlock, color).with_text_metrics(16.0, 20.0),
+        );
+    }
+    styles.primary.insert(
+        5,
+        sized(LayoutDisplay::Block, 20.0, 30.0, PaintColor::TRANSPARENT)
+            .with_writing_mode(taffy::WritingMode::VerticalRl),
+    );
+    styles.primary.insert(
+        8,
+        sized(LayoutDisplay::Block, 20.0, 30.0, PaintColor::TRANSPARENT)
+            .tap_taffy(|taffy| {
+                taffy.overflow = Point {
+                    x: Overflow::Hidden,
+                    y: Overflow::Hidden,
+                };
+            })
+            .with_writing_mode(taffy::WritingMode::VerticalRl),
+    );
+
+    let snapshot = render(&source, &mut styles, 200, 100);
+    let control = rect(&snapshot, RED);
+    let visible_orthogonal = rect(&snapshot, GREEN);
+    let scroll_orthogonal = rect(&snapshot, BLUE);
+
+    assert_close(visible_orthogonal.y, control.y);
+    assert_close(scroll_orthogonal.y, control.y);
+}
+
+#[test]
 fn phantom_inline_line_does_not_supply_an_inline_block_baseline() {
     let source = Source(vec![
         Node::element(

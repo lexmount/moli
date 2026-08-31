@@ -872,6 +872,54 @@ html,body{margin:0;padding:0} html{scrollbar-width:none}
     }
 
     #[test]
+    fn layout_renderer_skips_orthogonal_block_children_when_exporting_inline_block_baselines() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0} html{scrollbar-width:none}
+body{font-size:16px;line-height:20px}
+.ib{display:inline-block}
+#control{background:rgb(31,32,33)}
+#visible{background:rgb(34,35,36)}
+#scroll{background:rgb(37,38,39)}
+.orthogonal{writing-mode:vertical-rl;color:transparent}
+#visible-child{background:rgb(40,41,42)}
+#scroll-child{background:rgb(43,44,45)}
+.scroll{overflow:hidden}
+</style></head><body><div id=control class=ib>aaa</div><div id=visible class=ib>bbb<div id=visible-child class=orthogonal>vvv</div></div><div id=scroll class=ib>ccc<div id=scroll-child class="orthogonal scroll">vvv</div></div></body></html>"#,
+            )
+            .await;
+
+            let control = solid_paint_rect(&snapshot, rgb(31, 32, 33));
+            let visible = solid_paint_rect(&snapshot, rgb(34, 35, 36));
+            let scroll = solid_paint_rect(&snapshot, rgb(37, 38, 39));
+            let visible_child = solid_paint_rect(&snapshot, rgb(40, 41, 42));
+            let scroll_child = solid_paint_rect(&snapshot, rgb(43, 44, 45));
+            assert!(
+                (visible.y - control.y).abs() <= 0.01,
+                "orthogonal child changed the inline-block baseline: {control:?} vs {visible:?}"
+            );
+            assert!(
+                (scroll.y - control.y).abs() <= 0.01,
+                "orthogonal scroll child changed the inline-block baseline: {control:?} vs {scroll:?}"
+            );
+            assert!(
+                visible_child.height < 100.0 && scroll_child.height < 100.0,
+                "orthogonal auto inline sizes must remain content-sized: {visible_child:?}, {scroll_child:?}"
+            );
+            assert!(
+                (visible_child.height - scroll_child.height).abs() <= 0.01,
+                "overflow must not change the orthogonal auto inline size: {visible_child:?}, {scroll_child:?}"
+            );
+        }));
+    }
+
+    #[test]
     fn layout_renderer_computes_phase_two_grid_calc_and_positioned_geometry_from_stylo() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
