@@ -53,9 +53,15 @@ impl AtomicPaintEntry {
     }
 }
 
+/// Paint level inherited while traversing a CSS atomic pseudo-context.
+///
+/// Floats, positioned boxes, and inline-level atomic boxes keep their
+/// non-stacking descendants together at one parent-context paint level. Real
+/// stacking contexts are still hoisted before this grouping is applied.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum AtomicGroup {
-    Normal,
+enum PaintGroup {
+    NormalFlow,
+    AtomicInline,
     Float,
     Positioned,
 }
@@ -160,18 +166,15 @@ fn emit_context<N>(
 fn collect_subtree<N>(
     world: &LayoutWorld<N>,
     id: LayoutBoxId,
-    inherited_group: Option<AtomicGroup>,
+    inherited_atomic_group: Option<PaintGroup>,
     sequence: &mut usize,
     collection: &mut ContextCollection,
 ) where
     N: Copy + Debug + Eq + Hash,
 {
     let layout_box = &world.boxes[id.index()];
-    let parent_is_flex_or_grid = layout_box.parent.is_some_and(|parent| {
-        let display = world.boxes[parent.index()].style.display();
-        display.is_flex_container() || display.is_grid_container()
-    });
-    if layout_box.creates_stacking_context(false, parent_is_flex_or_grid) {
+    let is_flex_or_grid_item = is_flex_or_grid_item(world, id);
+    if layout_box.creates_stacking_context(false, is_flex_or_grid_item) {
         let context = ChildContext {
             id,
             z_index: layout_box.style.explicit_z_index().unwrap_or(0),
@@ -187,15 +190,27 @@ fn collect_subtree<N>(
         return;
     }
 
-    let group = inherited_group.unwrap_or_else(|| {
-        if layout_box.style.position() != LayoutPosition::Static {
-            AtomicGroup::Positioned
-        } else if layout_box.style.is_floated() {
-            AtomicGroup::Float
-        } else {
-            AtomicGroup::Normal
-        }
-    });
+    // Positioned descendants escape the pseudo-context of an atomic inline or
+    // float and participate in the nearest real stacking context. Resolve
+    // that level before inheriting the atomic group; ordinary descendants
+    // remain inside their atomic ancestor.
+    let group = if layout_box.style.position() != LayoutPosition::Static {
+        PaintGroup::Positioned
+    } else {
+        inherited_atomic_group.unwrap_or_else(|| {
+            if is_flex_or_grid_item {
+                // CSS Flexbox/Grid paint each item as an atomic inline-level box.
+                // Chromium carries the same boundary as IsPaintedAtomically on
+                // the item's constraint space. Floats do not apply to flex/grid
+                // items, so this classification precedes the float level.
+                PaintGroup::AtomicInline
+            } else if layout_box.style.is_floated() {
+                PaintGroup::Float
+            } else {
+                PaintGroup::NormalFlow
+            }
+        })
+    };
     push_unit(
         collection,
         group,
@@ -207,64 +222,68 @@ fn collect_subtree<N>(
     );
     push_unit(
         collection,
-        if group == AtomicGroup::Normal {
-            AtomicGroup::Normal
-        } else {
-            group
-        },
+        group,
         PaintUnit {
             id,
             kind: UnitKind::Contents,
             sequence: next_sequence(sequence),
         },
     );
-    // Floats and positioned descendants are painted atomically at their
-    // ancestor's paint level. Ordinary in-flow descendants are not: each child
-    // must still classify itself as normal, floating, or positioned. Carrying
-    // `Normal` down here would incorrectly bury a positioned grandchild in the
-    // block-background/inline-content buckets.
+    // Atomic pseudo-context descendants inherit their ancestor's paint level.
+    // Ordinary in-flow descendants do not: each child must classify itself as
+    // normal, floating, atomic-inline, or positioned. Positioned descendants
+    // override an inherited pseudo-context at the start of this function.
     let descendant_group = match group {
-        AtomicGroup::Normal => None,
-        AtomicGroup::Float | AtomicGroup::Positioned => Some(group),
+        PaintGroup::NormalFlow => None,
+        PaintGroup::AtomicInline | PaintGroup::Float | PaintGroup::Positioned => Some(group),
     };
     for child in ordered_children(world, id) {
         collect_subtree(world, child, descendant_group, sequence, collection);
     }
     if layout_box.collapsed_table_borders.is_some() {
-        let unit = PaintUnit {
+        push_unit(
+            collection,
+            group,
+            PaintUnit {
+                id,
+                kind: UnitKind::TableCollapsedBorders,
+                sequence: next_sequence(sequence),
+            },
+        );
+    }
+    push_unit(
+        collection,
+        group,
+        PaintUnit {
             id,
-            kind: UnitKind::TableCollapsedBorders,
+            kind: UnitKind::Outline,
             sequence: next_sequence(sequence),
-        };
-        match group {
-            AtomicGroup::Normal => collection.table_collapsed_borders.push(unit),
-            AtomicGroup::Float => collection.floats.push(unit),
-            AtomicGroup::Positioned => collection.positioned.push(AtomicPaintEntry::Unit(unit)),
-        }
-    }
-    let outline = PaintUnit {
-        id,
-        kind: UnitKind::Outline,
-        sequence: next_sequence(sequence),
-    };
-    match group {
-        AtomicGroup::Normal => collection.outlines.push(outline),
-        AtomicGroup::Float => collection.floats.push(outline),
-        AtomicGroup::Positioned => collection.positioned.push(AtomicPaintEntry::Unit(outline)),
-    }
+        },
+    );
 }
 
-fn push_unit(collection: &mut ContextCollection, group: AtomicGroup, unit: PaintUnit) {
+fn push_unit(collection: &mut ContextCollection, group: PaintGroup, unit: PaintUnit) {
     match group {
-        AtomicGroup::Normal => match unit.kind {
+        PaintGroup::NormalFlow => match unit.kind {
             UnitKind::Background => collection.block_backgrounds.push(unit),
             UnitKind::TableCollapsedBorders => collection.table_collapsed_borders.push(unit),
             UnitKind::Contents => collection.inline_contents.push(unit),
             UnitKind::Outline => collection.outlines.push(unit),
         },
-        AtomicGroup::Float => collection.floats.push(unit),
-        AtomicGroup::Positioned => collection.positioned.push(AtomicPaintEntry::Unit(unit)),
+        PaintGroup::AtomicInline => collection.inline_contents.push(unit),
+        PaintGroup::Float => collection.floats.push(unit),
+        PaintGroup::Positioned => collection.positioned.push(AtomicPaintEntry::Unit(unit)),
     }
+}
+
+fn is_flex_or_grid_item<N>(world: &LayoutWorld<N>, id: LayoutBoxId) -> bool
+where
+    N: Copy + Debug + Eq + Hash,
+{
+    world.boxes[id.index()].parent.is_some_and(|parent| {
+        let display = world.boxes[parent.index()].style.display();
+        display.is_flex_container() || display.is_grid_container()
+    })
 }
 
 fn emit_units(units: Vec<PaintUnit>, events: &mut Vec<PaintOrderEvent>) {
