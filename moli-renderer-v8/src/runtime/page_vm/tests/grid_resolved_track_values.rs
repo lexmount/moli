@@ -1,4 +1,5 @@
 use super::*;
+use base64::Engine as _;
 
 #[tokio::test(flavor = "current_thread")]
 async fn computed_style_serializes_used_grid_tracks_from_the_frozen_layout_tree() {
@@ -114,6 +115,105 @@ vertical:getComputedStyle(document.getElementById('vertical')).gridTemplateColum
     })
     .await
     .expect("used Grid track CSSOM fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn screenshot_distributes_fit_content_growth_limits_for_spanning_items() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        loader.set_optional_resource_fetch_mask(
+            crate::protocol_types::OptionalResourceFetchMask::FONT,
+        );
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/grid-fit-content-growth-limits.html")?,
+        );
+        let font = base64::engine::general_purpose::STANDARD.encode(include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../moli-layout/tests/fixtures/moli-ahem.woff2"
+        )));
+        page_vm.vm_mut().eval(&format!(
+            r#"
+document.head.innerHTML = `<style>
+@font-face {{ font-family:MoliAhem; src:url(data:font/woff2;base64,{font}) format('woff2') }}
+html,body {{ margin:0 }}
+.grid {{ display:grid; justify-content:start; align-content:start; font:10px/1 MoliAhem }}
+.column {{ width:100px; grid-template-rows:10px 10px; column-gap:5px }}
+.column .span {{ grid-column:1 / -1 }}
+#column-finite {{ grid-template-columns:fit-content(110px) fit-content(40px) }}
+#column-finite .item {{ grid-column:2 }}
+#column-shared {{ grid-template-columns:auto fit-content(110px) auto }}
+.row {{ width:40px; height:100px; grid-template-columns:10px 10px; row-gap:5px }}
+.row > * {{ writing-mode:vertical-lr }}
+.row .span {{ grid-row:1 / -1 }}
+#row-finite {{ grid-template-rows:fit-content(110px) fit-content(40px) }}
+#row-finite .item {{ grid-row:2 }}
+#row-shared {{ grid-template-rows:auto fit-content(110px) auto }}
+</style>`;
+document.body.innerHTML = `
+  <div class="grid column" id=column-finite>
+    <div class=item>XX</div><div class=span>XXX XXX</div>
+  </div>
+  <div class="grid column" id=column-shared>
+    <div class=span>XXXX XXXX XXXX XXXX</div><div class=span>XXX XXX</div>
+  </div>
+  <div class="grid row" id=row-finite>
+    <div class=item>XX</div><div class=span>XXX XXX</div>
+  </div>
+  <div class="grid row" id=row-shared>
+    <div class=span>XXXX XXXX XXXX XXXX</div><div class=span>XXX XXX</div>
+  </div>`;
+'installed'
+"#,
+        ))?;
+        page_vm
+            .vm_mut()
+            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(400, 300, 1.0))?
+            .expect("fit-content growth-limit screenshot layout");
+
+        let tracks = page_vm.vm_mut().eval(
+            r#"JSON.stringify((()=>{
+const read=(id,property)=>getComputedStyle(document.getElementById(id))[property].split(' ').map(parseFloat);
+return {
+  columnFinite:read('column-finite','gridTemplateColumns'),
+  columnShared:read('column-shared','gridTemplateColumns'),
+  rowFinite:read('row-finite','gridTemplateRows'),
+  rowShared:read('row-shared','gridTemplateRows')
+};
+})())"#,
+        )?;
+        let tracks: serde_json::Value = serde_json::from_str(&tracks)?;
+        for (name, expected) in [
+            ("columnFinite", &[25.0, 12.0][..]),
+            ("columnShared", &[30.0, 30.0, 30.0][..]),
+            ("rowFinite", &[25.0, 12.0][..]),
+            ("rowShared", &[30.0, 30.0, 30.0][..]),
+        ] {
+            let actual = tracks[name]
+                .as_array()
+                .unwrap_or_else(|| panic!("missing {name} tracks: {tracks}"));
+            assert_eq!(
+                actual.len(),
+                expected.len(),
+                "unexpected {name} track count: {tracks}"
+            );
+            for (index, expected) in expected.iter().copied().enumerate() {
+                let actual = actual[index].as_f64().expect("numeric track size");
+                assert!(
+                    (actual - expected).abs() <= 0.05,
+                    "{name}[{index}]: expected {expected}, got {actual}; tracks={tracks}"
+                );
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("Grid fit-content growth-limit fixture should run");
 }
 
 #[tokio::test(flavor = "current_thread")]
