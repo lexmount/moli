@@ -149,6 +149,11 @@ impl ResourceRequestClient {
             .shares_state_with(&other.page_network_policy)
     }
 
+    pub fn shares_memory_cache_partition_with(&self, other: &Self) -> bool {
+        self.page_network_policy
+            .shares_memory_cache_partition_with(&other.page_network_policy)
+    }
+
     /// Creates a target-owned adapter that shares only transport/cache state.
     pub fn fork_with_isolated_page_network_policy(&self) -> Self {
         Self::from_browser_resource_runtime_with_page_network_policy(
@@ -157,12 +162,20 @@ impl ResourceRequestClient {
         )
     }
 
+    /// Creates a Document-owned adapter inside this client's Page target.
+    pub(crate) fn fork_with_isolated_document_network_policy(&self) -> Self {
+        Self::from_browser_resource_runtime_with_page_network_policy(
+            self.resource_runtime.clone(),
+            self.page_network_policy.isolated_same_page_copy(),
+        )
+    }
+
     /// Creates a Worker-owned adapter while retaining the creator Document's
     /// browser-site context for cookie and Fetch Metadata decisions.
     pub(crate) fn fork_with_isolated_worker_network_policy(&self) -> Self {
         let mut client = Self::from_browser_resource_runtime_with_page_network_policy(
             self.resource_runtime.clone(),
-            self.page_network_policy.isolated_copy(),
+            self.page_network_policy.isolated_same_page_copy(),
         );
         client.browser_site_context = self.browser_site_context.clone();
         client
@@ -304,22 +317,26 @@ impl ResourceRequestClient {
             return result;
         }
 
+        let page_cache_partition_id = self.page_network_policy.memory_cache_partition_id();
         if let Some(url) = timing_url.as_deref() {
             tracing::info!(
                 target: "moli_cdp_nav_timing",
                 url,
                 cacheable = true,
+                page_cache_partition_id,
                 credentials_mode = request.credentials_mode.as_ref(),
                 cookie_context = ?request.cookie_context,
                 stage = "script_text_cache_lookup",
             );
         }
-        let key = script_text_cache_key(&request);
+        let key = script_text_cache_key(&request).for_page_cache_partition(page_cache_partition_id);
         let lookup = {
-            self.resource_runtime
-                .memory_cache()
-                .lock()
-                .lookup_script_text(key.clone())
+            let mut cache = self.resource_runtime.memory_cache().lock();
+            if request.cache_mode().allows_memory_cache_lookup() {
+                cache.lookup_script_text(key.clone())
+            } else {
+                cache.replace_script_text(key.clone())
+            }
         };
 
         let load = match lookup {
@@ -480,22 +497,26 @@ impl ResourceRequestClient {
             return started_fetch;
         }
 
+        let page_cache_partition_id = self.page_network_policy.memory_cache_partition_id();
         if let Some(url) = timing_url.as_deref() {
             tracing::info!(
                 target: "moli_cdp_nav_timing",
                 url,
                 cacheable = true,
+                page_cache_partition_id,
                 credentials_mode = request.credentials_mode.as_ref(),
                 cookie_context = ?request.cookie_context,
                 stage = "script_text_cache_lookup_callback",
             );
         }
-        let key = script_text_cache_key(&request);
+        let key = script_text_cache_key(&request).for_page_cache_partition(page_cache_partition_id);
         let lookup = {
-            self.resource_runtime
-                .memory_cache()
-                .lock()
-                .lookup_script_text(key.clone())
+            let mut cache = self.resource_runtime.memory_cache().lock();
+            if request.cache_mode().allows_memory_cache_lookup() {
+                cache.lookup_script_text(key.clone())
+            } else {
+                cache.replace_script_text(key.clone())
+            }
         };
 
         let (load, owns_transport) = match lookup {
@@ -659,8 +680,11 @@ impl ResourceRequestClient {
             return streaming_raw_response_from_local_response(response?);
         }
 
-        let cache_key = raw_subresource_memory_cache_key(&request);
-        if let Some(cache_key) = cache_key.as_ref()
+        let cache_key = raw_subresource_memory_cache_key(&request).map(|key| {
+            key.for_page_cache_partition(self.page_network_policy.memory_cache_partition_id())
+        });
+        if request.cache_mode().allows_memory_cache_lookup()
+            && let Some(cache_key) = cache_key.as_ref()
             && let Some(cached) = self
                 .resource_runtime
                 .memory_cache()
@@ -694,8 +718,11 @@ impl ResourceRequestClient {
             ));
         }
 
-        let cache_key = raw_subresource_memory_cache_key(&request);
-        if let Some(cache_key) = cache_key.as_ref()
+        let cache_key = raw_subresource_memory_cache_key(&request).map(|key| {
+            key.for_page_cache_partition(self.page_network_policy.memory_cache_partition_id())
+        });
+        if request.cache_mode().allows_memory_cache_lookup()
+            && let Some(cache_key) = cache_key.as_ref()
             && let Some(cached) = self
                 .resource_runtime
                 .memory_cache()

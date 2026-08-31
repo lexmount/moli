@@ -147,12 +147,14 @@ impl Page {
         extra_http_headers: &[(String, String)],
         bypass_service_worker: bool,
         cache_disabled: bool,
+        blocked_url_patterns: &[String],
     ) -> Result<()> {
         self.dispatch_unit_page_command_async(
             RendererPageCommand::SetNetworkRequestPolicy {
                 extra_http_headers: extra_http_headers.to_vec(),
                 bypass_service_worker,
                 cache_disabled,
+                blocked_url_patterns: blocked_url_patterns.to_vec(),
             },
             "set network request policy",
         )
@@ -164,11 +166,13 @@ impl Page {
         extra_http_headers: &[(String, String)],
         bypass_service_worker: bool,
         cache_disabled: bool,
+        blocked_url_patterns: &[String],
     ) -> Result<PendingPageCommand> {
         self.start_page_command(RendererPageCommand::SetNetworkRequestPolicy {
             extra_http_headers: extra_http_headers.to_vec(),
             bypass_service_worker,
             cache_disabled,
+            blocked_url_patterns: blocked_url_patterns.to_vec(),
         })
     }
 

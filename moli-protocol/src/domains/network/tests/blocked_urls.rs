@@ -1,5 +1,14 @@
 use super::*;
 
+async fn enable_network_domain(ctx: &mut TestContext, id: u64, session_id: Option<&str>) {
+    let mut command = json!({"id": id, "method": "Network.enable"});
+    if let Some(session_id) = session_id {
+        command["sessionId"] = json!(session_id);
+    }
+    ctx.process_async(command).await;
+    ctx.expect_result(id, json!({}), session_id);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn set_blocked_urls_requires_browser_context() {
     let mut ctx = TestContext::new();
@@ -27,6 +36,7 @@ async fn set_blocked_urls_rejects_invalid_params() {
 async fn set_blocked_urls_updates_browser_context_state() {
     let mut ctx = TestContext::new();
     ctx.conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+    enable_network_domain(&mut ctx, 28_020, None).await;
 
     ctx.process_async(json!({
         "id": 2802,
@@ -65,6 +75,43 @@ async fn set_blocked_urls_updates_browser_context_state() {
             .is_empty()
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn set_blocked_urls_contribution_activates_with_network_handler() {
+    let mut ctx = TestContext::new();
+    ctx.conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+
+    ctx.process_async(json!({
+        "id": 28_021,
+        "method": "Network.setBlockedURLs",
+        "params": { "urls": ["*without-enable*"] }
+    }))
+    .await;
+    ctx.expect_result(28_021, json!({}), None);
+    assert!(
+        ctx.conn
+            .browser_context
+            .as_ref()
+            .unwrap()
+            .network_policy
+            .blocked_url_patterns()
+            .is_empty(),
+        "Chromium does not instrument blocked URLs until the Network handler is enabled"
+    );
+
+    enable_network_domain(&mut ctx, 28_022, None).await;
+    assert_eq!(
+        ctx.conn
+            .browser_context
+            .as_ref()
+            .unwrap()
+            .network_policy
+            .blocked_url_patterns(),
+        ["*without-enable*".to_owned()],
+        "Network.enable activates the handler's retained blocked URL contribution"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn set_blocked_urls_navigation_fails_with_blocked_by_client() {
     let mut ctx = TestContext::new();
@@ -75,6 +122,7 @@ async fn set_blocked_urls_navigation_fails_with_blocked_by_client() {
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
+    enable_network_domain(&mut ctx, 28_040, Some("SID-1")).await;
 
     ctx.process_async(json!({
         "id": 2804,
@@ -116,6 +164,7 @@ async fn set_blocked_urls_runtime_fetch_emits_loading_failed() {
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
+    enable_network_domain(&mut ctx, 28_060, Some("SID-1")).await;
 
     ctx.process_async(json!({
         "id": 2806,
@@ -1031,6 +1080,7 @@ async fn set_blocked_urls_runtime_xhr_emits_loading_failed() {
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
+    enable_network_domain(&mut ctx, 28_110, Some("SID-1")).await;
 
     ctx.process_async(json!({
         "id": 2811,
@@ -1119,6 +1169,7 @@ async fn set_blocked_urls_runtime_websocket_emits_loading_failed() {
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
+    enable_network_domain(&mut ctx, 28_160, Some("SID-1")).await;
 
     ctx.process_async(json!({
         "id": 2816,

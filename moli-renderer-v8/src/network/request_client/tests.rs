@@ -55,6 +55,11 @@ fn page_loader_fork_shares_backend_but_isolates_mutable_policy() {
 
     assert!(parent.shares_resource_runtime_with(&page));
     assert!(!parent.shares_page_network_policy_with(&page));
+    assert_ne!(
+        parent.page_network_policy().memory_cache_partition_id(),
+        page.page_network_policy().memory_cache_partition_id(),
+        "a new Page target must own a distinct renderer memory-cache partition"
+    );
     assert!(page.browser_site_context().is_none());
 
     page.set_network_offline(true);
@@ -62,6 +67,20 @@ fn page_loader_fork_shares_backend_but_isolates_mutable_policy() {
 
     assert!(!parent.page_network_policy().snapshot().network_offline());
     assert!(page.page_network_policy().snapshot().network_offline());
+}
+
+#[test]
+fn document_loader_fork_keeps_page_memory_cache_ownership() {
+    let owner = ResourceRequestClient::new(&FetchConfig::default()).expect("Page loader");
+    let document = owner.fork_with_isolated_document_network_policy();
+
+    assert!(owner.shares_resource_runtime_with(&document));
+    assert!(!owner.shares_page_network_policy_with(&document));
+    assert_eq!(
+        owner.page_network_policy().memory_cache_partition_id(),
+        document.page_network_policy().memory_cache_partition_id(),
+        "replacement Documents must retain their Page's memory-cache partition"
+    );
 }
 
 #[test]
@@ -78,6 +97,7 @@ fn worker_loader_fork_preserves_creator_browser_site_context() {
 
     assert!(parent.shares_resource_runtime_with(&worker));
     assert!(!parent.shares_page_network_policy_with(&worker));
+    assert!(parent.shares_memory_cache_partition_with(&worker));
     assert_eq!(worker.browser_site_context(), Some(&context));
 }
 
@@ -741,6 +761,73 @@ async fn script_text_fetch_uses_shared_memory_resource_cache_with_fresh_cache_he
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn cache_bypass_replaces_script_text_memory_entry() -> Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let addr = listener.local_addr()?;
+    let server = tokio::spawn(async move {
+        for body in [
+            "window.cacheGeneration = 1;",
+            "window.cacheGeneration = 1;",
+            "window.cacheGeneration = 2;",
+        ] {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            read_http_request_head(&mut stream).await.unwrap();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/javascript\r\nCache-Control: max-age=60\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+        }
+        assert!(
+            timeout(Duration::from_millis(100), listener.accept())
+                .await
+                .is_err(),
+            "normal loading after bypass should retain both Page-local script entries"
+        );
+    });
+
+    let loader = ResourceRequestClient::new(&FetchConfig::default())?;
+    let peer = loader.fork_with_isolated_page_network_policy();
+    let url = format!("http://{addr}/app.js");
+    let request = || {
+        Request::get(&url).map(|request| {
+            request
+                .with_page_network_policy()
+                .with_script_fetch_metadata(ScriptFetchRequestMetadata::default())
+        })
+    };
+
+    let first = loader
+        .fetch_cacheable_script_text_stream(request()?)
+        .await?;
+    let peer_first = peer.fetch_cacheable_script_text_stream(request()?).await?;
+    loader.set_cache_disabled(true);
+    let bypassed = loader
+        .fetch_cacheable_script_text_stream(request()?)
+        .await?;
+    loader.set_cache_disabled(false);
+    let restored = loader
+        .fetch_cacheable_script_text_stream(request()?)
+        .await?;
+    let peer_restored = peer.fetch_cacheable_script_text_stream(request()?).await?;
+
+    assert_eq!(first.body_text(), "window.cacheGeneration = 1;");
+    assert_eq!(peer_first.body_text(), "window.cacheGeneration = 1;");
+    assert_eq!(bypassed.body_text(), "window.cacheGeneration = 2;");
+    assert_eq!(restored.body_text(), "window.cacheGeneration = 2;");
+    assert_eq!(peer_restored.body_text(), "window.cacheGeneration = 1;");
+    assert!(!first.from_cache);
+    assert!(!peer_first.from_cache);
+    assert!(!bypassed.from_cache);
+    assert!(restored.from_cache);
+    assert!(peer_restored.from_cache);
+
+    server.await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn unique_script_text_fetches_stay_within_one_loader_memory_budget() -> Result<()> {
     const SCRIPT_COUNT: usize = 40;
     const SCRIPT_BYTES: usize = 256 * 1024;
@@ -1108,6 +1195,95 @@ async fn image_raw_stream_uses_shared_memory_resource_cache_without_http_cache_d
 
     assert_eq!(first_body, b"cached-image-body");
     assert_eq!(second_body, b"cached-image-body");
+
+    server.await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cache_bypass_replaces_raw_subresource_memory_entry() -> Result<()> {
+    async fn body(mut response: StreamingRawResponse) -> Result<(Vec<u8>, bool)> {
+        let from_cache = response.from_cache;
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response.next_chunk().await {
+            bytes.extend_from_slice(&chunk);
+        }
+        response.finish().await?;
+        Ok((bytes, from_cache))
+    }
+
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let addr = listener.local_addr()?;
+    let server = tokio::spawn(async move {
+        for payload in [
+            b"image-v1".as_slice(),
+            b"image-v1".as_slice(),
+            b"image-v2".as_slice(),
+        ] {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            read_http_request_head(&mut stream).await.unwrap();
+            let response_head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nCache-Control: max-age=60\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                payload.len()
+            );
+            stream.write_all(response_head.as_bytes()).await.unwrap();
+            stream.write_all(payload).await.unwrap();
+        }
+        assert!(
+            timeout(Duration::from_millis(100), listener.accept())
+                .await
+                .is_err(),
+            "normal loading after bypass should retain both Page-local image entries"
+        );
+    });
+
+    let loader = ResourceRequestClient::new(&FetchConfig::default())?;
+    let peer = loader.fork_with_isolated_page_network_policy();
+    let url = format!("http://{addr}/cached.png");
+    let request = || {
+        Request::get(&url).map(|request| {
+            request
+                .with_page_network_policy()
+                .with_resource_type(RequestResourceType::Image)
+        })
+    };
+
+    let first = body(
+        loader
+            .fetch_raw_stream_with_cancel(request()?, FetchCancelHandle::new())
+            .await?,
+    )
+    .await?;
+    let peer_first = body(
+        peer.fetch_raw_stream_with_cancel(request()?, FetchCancelHandle::new())
+            .await?,
+    )
+    .await?;
+    loader.set_cache_disabled(true);
+    let bypassed = body(
+        loader
+            .fetch_raw_stream_with_cancel(request()?, FetchCancelHandle::new())
+            .await?,
+    )
+    .await?;
+    loader.set_cache_disabled(false);
+    let restored = body(
+        loader
+            .fetch_raw_stream_with_cancel(request()?, FetchCancelHandle::new())
+            .await?,
+    )
+    .await?;
+    let peer_restored = body(
+        peer.fetch_raw_stream_with_cancel(request()?, FetchCancelHandle::new())
+            .await?,
+    )
+    .await?;
+
+    assert_eq!(first, (b"image-v1".to_vec(), false));
+    assert_eq!(peer_first, (b"image-v1".to_vec(), false));
+    assert_eq!(bypassed, (b"image-v2".to_vec(), false));
+    assert_eq!(restored, (b"image-v2".to_vec(), true));
+    assert_eq!(peer_restored, (b"image-v1".to_vec(), true));
 
     server.await?;
     Ok(())

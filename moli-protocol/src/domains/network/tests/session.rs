@@ -324,6 +324,12 @@ async fn page_network_policy_aggregates_enabled_sessions_like_chromium_handlers(
             json!({"headers": {"X-Primary": "primary", "X-Shared": "primary"}}),
         ),
         (
+            20_011,
+            "SID-primary",
+            "Network.setBlockedURLs",
+            json!({"urls": ["*primary-only*", "*shared-pattern*"]}),
+        ),
+        (
             20_006,
             "SID-aux",
             "Network.setCacheDisabled",
@@ -340,6 +346,12 @@ async fn page_network_policy_aggregates_enabled_sessions_like_chromium_handlers(
             "SID-aux",
             "Network.setExtraHTTPHeaders",
             json!({"headers": {"X-Aux": "aux", "x-shared": "aux"}}),
+        ),
+        (
+            20_012,
+            "SID-aux",
+            "Network.setBlockedURLs",
+            json!({"urls": ["*aux-only*", "*shared-pattern*"]}),
         ),
     ] {
         ctx.process_async(json!({
@@ -363,6 +375,15 @@ async fn page_network_policy_aggregates_enabled_sessions_like_chromium_handlers(
             ("X-Aux".to_owned(), "aux".to_owned()),
         ]
     );
+    assert_eq!(
+        policy.blocked_url_patterns(),
+        [
+            "*primary-only*".to_owned(),
+            "*shared-pattern*".to_owned(),
+            "*aux-only*".to_owned(),
+        ],
+        "enabled Network handlers contribute the union of blocked URL patterns"
+    );
 
     ctx.process_async(json!({
         "id": 20_009,
@@ -381,6 +402,11 @@ async fn page_network_policy_aggregates_enabled_sessions_like_chromium_handlers(
             ("X-Aux".to_owned(), "aux".to_owned()),
             ("x-shared".to_owned(), "aux".to_owned()),
         ]
+    );
+    assert_eq!(
+        policy.blocked_url_patterns(),
+        ["*aux-only*".to_owned(), "*shared-pattern*".to_owned()],
+        "Network.disable removes only the disabled handler's blocked URL contribution"
     );
 
     ctx.process_async(json!({
@@ -401,6 +427,11 @@ async fn page_network_policy_aggregates_enabled_sessions_like_chromium_handlers(
             ("x-shared".to_owned(), "aux".to_owned()),
         ],
         "Network.disable must clear the disabled session's policy state"
+    );
+    assert_eq!(
+        policy.blocked_url_patterns(),
+        ["*aux-only*".to_owned(), "*shared-pattern*".to_owned()],
+        "re-enabling a cleared handler must not restore its old blocked URLs"
     );
 }
 #[tokio::test(flavor = "multi_thread")]

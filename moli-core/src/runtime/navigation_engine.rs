@@ -638,6 +638,22 @@ impl NavigationEngine {
         })
     }
 
+    /// Creates an isolated navigation-attempt engine for an existing target.
+    ///
+    /// The attempt owns mutable Page policy until commit, while retaining the
+    /// stable target's renderer memory-cache capability across navigation.
+    pub fn new_for_target_navigation_with_shared_renderer_owner(
+        config: NavigationRuntimeConfig,
+        renderer_owner_source: &Self,
+    ) -> Result<Self> {
+        let mut engine =
+            Self::new_with_runtime_config_and_shared_renderer_owner(config, renderer_owner_source)?;
+        engine
+            .page_network_policy
+            .adopt_memory_cache_partition_from(&renderer_owner_source.page_network_policy);
+        Ok(engine)
+    }
+
     pub fn new_with_page_vm_document_isolate_for_diagnostics() -> Self {
         Self::new()
     }
@@ -2596,6 +2612,7 @@ mod tests {
 
         assert!(left_loader.shares_resource_runtime_with(&right_loader));
         assert!(!left_loader.shares_page_network_policy_with(&right_loader));
+        assert!(!left_loader.shares_memory_cache_partition_with(&right_loader));
 
         left_loader.set_network_offline(true);
         assert!(
@@ -2603,6 +2620,31 @@ mod tests {
                 .page_network_policy()
                 .snapshot()
                 .network_offline()
+        );
+    }
+
+    #[test]
+    fn target_navigation_attempt_keeps_page_memory_cache_capability() {
+        let mut resident = NavigationEngine::new();
+        resident.set_cache_disabled(true);
+        let resident_loader = resident
+            .resource_request_client()
+            .expect("resident target request client");
+        let attempt = NavigationEngine::new_for_target_navigation_with_shared_renderer_owner(
+            resident.runtime_config(),
+            &resident,
+        )
+        .expect("target navigation attempt should share a live renderer owner");
+        let attempt_loader = attempt
+            .resource_request_client()
+            .expect("navigation attempt request client");
+
+        assert!(resident_loader.shares_resource_runtime_with(&attempt_loader));
+        assert!(!resident_loader.shares_page_network_policy_with(&attempt_loader));
+        assert!(resident_loader.shares_memory_cache_partition_with(&attempt_loader));
+        assert!(
+            !attempt_loader.page_network_policy().cache_disabled(),
+            "a navigation attempt must receive policy from captured load inputs, not stale engine state"
         );
     }
 

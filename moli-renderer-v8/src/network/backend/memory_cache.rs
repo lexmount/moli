@@ -2,7 +2,9 @@
 //!
 //! The cache deliberately outlives individual Document and Worker loaders. Its
 //! retained-byte budget is shared by every consumer of one browser resource
-//! runtime and must never be multiplied per execution context.
+//! runtime and must never be multiplied per execution context. Entries retain
+//! the owning Page cache partition, so a DevTools cache bypass can replace one
+//! Page's retained resource without rewriting a live peer Page's resource.
 
 use std::sync::{Arc, Weak};
 
@@ -41,6 +43,7 @@ type ScriptTextLoadCallback = Box<dyn FnOnce(ScriptTextLoadResult) + Send + 'sta
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(in crate::network) struct ScriptTextCacheKey {
+    page_cache_partition_id: u64,
     url: String,
     credentials_mode: String,
     site_context: String,
@@ -54,6 +57,7 @@ pub(in crate::network) struct ScriptTextCacheKey {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(in crate::network) struct RawSubresourceCacheKey {
+    page_cache_partition_id: u64,
     url: String,
     resource_type: &'static str,
     credentials_mode: String,
@@ -65,6 +69,20 @@ pub(in crate::network) struct RawSubresourceCacheKey {
 enum MemoryCacheKey {
     ScriptText(ScriptTextCacheKey),
     RawSubresource(RawSubresourceCacheKey),
+}
+
+impl ScriptTextCacheKey {
+    pub(in crate::network) fn for_page_cache_partition(mut self, partition_id: u64) -> Self {
+        self.page_cache_partition_id = partition_id;
+        self
+    }
+}
+
+impl RawSubresourceCacheKey {
+    pub(in crate::network) fn for_page_cache_partition(mut self, partition_id: u64) -> Self {
+        self.page_cache_partition_id = partition_id;
+        self
+    }
 }
 
 enum MemoryCacheEntry {
@@ -329,6 +347,15 @@ impl SharedMemoryResourceCache {
         self.insert_pending_script(cache_key)
     }
 
+    pub(in crate::network) fn replace_script_text(
+        &mut self,
+        key: ScriptTextCacheKey,
+    ) -> ScriptTextCacheLookup {
+        let cache_key = MemoryCacheKey::ScriptText(key);
+        self.remove_entry(&cache_key);
+        self.insert_pending_script(cache_key)
+    }
+
     fn insert_pending_script(&mut self, key: MemoryCacheKey) -> ScriptTextCacheLookup {
         let load = ScriptTextLoad::pending();
         self.insert_entry(
@@ -547,7 +574,7 @@ impl SharedMemoryResourceCache {
 }
 
 pub(in crate::network) fn script_text_request_is_memory_cacheable(request: &Request) -> bool {
-    request.cache_mode().allows_memory_cache_lookup()
+    request.cache_mode().allows_memory_cache_store()
         && request.subresource_request_metadata().is_some()
         && request.method.eq_ignore_ascii_case("GET")
         && request.body.is_none()
@@ -558,6 +585,7 @@ pub(in crate::network) fn script_text_request_is_memory_cacheable(request: &Requ
 pub(in crate::network) fn script_text_cache_key(request: &Request) -> ScriptTextCacheKey {
     let browser_context = &request.cookie_context.browser_context;
     ScriptTextCacheKey {
+        page_cache_partition_id: 0,
         url: request.url.as_str().to_owned(),
         credentials_mode: request.credentials_mode.as_ref().to_owned(),
         site_context: format!("{:?}", request.cookie_context.site_context),
@@ -593,6 +621,7 @@ pub(in crate::network) fn raw_subresource_memory_cache_key(
         return None;
     }
     Some(RawSubresourceCacheKey {
+        page_cache_partition_id: 0,
         url: request.url.as_str().to_owned(),
         resource_type: raw_subresource_cache_resource_type_key(request.resource_type),
         credentials_mode: request.credentials_mode.as_ref().to_owned(),
@@ -618,7 +647,7 @@ fn raw_subresource_cache_resource_type_key(resource_type: RequestResourceType) -
 }
 
 fn raw_subresource_request_is_memory_cacheable(request: &Request) -> bool {
-    request.cache_mode().allows_memory_cache_lookup()
+    request.cache_mode().allows_memory_cache_store()
         && raw_subresource_memory_cacheable_resource_type(request)
         && request.method.eq_ignore_ascii_case("GET")
         && request.body.is_none()

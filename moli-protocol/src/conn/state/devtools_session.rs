@@ -62,7 +62,6 @@ pub(crate) struct DevToolsSessionState {
 pub(crate) struct DevToolsSessionRegistry {
     states: BTreeMap<DevToolsSessionKey, DevToolsSessionState>,
     attached_order: Vec<String>,
-    browser_identity_activation_order: Vec<DevToolsSessionKey>,
 }
 
 impl Default for DevToolsSessionRegistry {
@@ -73,7 +72,6 @@ impl Default for DevToolsSessionRegistry {
                 DevToolsSessionState::default(),
             )]),
             attached_order: Vec::new(),
-            browser_identity_activation_order: Vec::new(),
         }
     }
 }
@@ -141,8 +139,6 @@ impl DevToolsSessionRegistry {
         if removed.is_some() {
             self.attached_order
                 .retain(|attached| attached != session_id);
-            self.browser_identity_activation_order
-                .retain(|candidate| candidate != &key);
         }
         removed
     }
@@ -151,8 +147,6 @@ impl DevToolsSessionRegistry {
         self.states
             .retain(|key, _state| matches!(key, DevToolsSessionKey::Primary));
         self.attached_order.clear();
-        self.browser_identity_activation_order
-            .retain(|key| matches!(key, DevToolsSessionKey::Primary));
     }
 
     pub(crate) fn attached_len(&self) -> usize {
@@ -198,6 +192,11 @@ impl DevToolsSessionRegistry {
             }
             aggregate.cache_disabled |= network.cache_disabled;
             aggregate.bypass_service_worker |= network.bypass_service_worker;
+            for pattern in &network.blocked_url_patterns {
+                if !aggregate.blocked_url_patterns.contains(pattern) {
+                    aggregate.blocked_url_patterns.push(pattern.clone());
+                }
+            }
             for (name, value) in &network.extra_headers {
                 if let Some(index) = aggregate
                     .extra_headers
@@ -228,24 +227,13 @@ impl DevToolsSessionRegistry {
 
     /// Resolves the identity exposed by the live renderer Document.
     ///
-    /// Chromium's renderer agents enter the instrumenting-agent list when a
-    /// session first enables a non-empty UA override. Updating that session
-    /// does not move it in the list, so this order intentionally differs from
-    /// the browser-side attachment order used for navigation request headers.
+    /// Chromium applies the same session attachment precedence to renderer
+    /// agents and browser-side navigation handlers. Setter order does not
+    /// change the winner on either surface.
     pub(crate) fn effective_renderer_browser_identity_override(
         &self,
     ) -> Option<moli_browser_profile::BrowserIdentityProfile> {
-        Self::aggregate_browser_identity_overrides(
-            self.browser_identity_activation_order
-                .iter()
-                .filter_map(|key| self.states.get(key))
-                .filter_map(|state| {
-                    state
-                        .emulation_session_state
-                        .browser_identity_override
-                        .as_ref()
-                }),
-        )
+        self.effective_network_browser_identity_override()
     }
 
     fn aggregate_browser_identity_overrides<'a>(
@@ -293,12 +281,6 @@ impl DevToolsSessionRegistry {
         session_id: Option<&str>,
         browser_identity_override: Option<DevToolsBrowserIdentityOverride>,
     ) {
-        let key = Self::routed_key(is_attached_session, session_id);
-        if browser_identity_override.is_some()
-            && !self.browser_identity_activation_order.contains(&key)
-        {
-            self.browser_identity_activation_order.push(key);
-        }
         let state = self.routed_mut_or_insert(is_attached_session, session_id);
         state.emulation_session_state.browser_identity_override = browser_identity_override;
     }
@@ -384,8 +366,6 @@ impl DevToolsSessionRegistry {
         if let Some(state) = self.states.get_mut(&key) {
             state.emulation_session_state = DevToolsEmulationSessionState::default();
         }
-        self.browser_identity_activation_order
-            .retain(|candidate| candidate != &key);
     }
 
     pub(crate) fn states_mut(&mut self) -> impl Iterator<Item = &mut DevToolsSessionState> {
@@ -394,8 +374,6 @@ impl DevToolsSessionRegistry {
 
     pub(crate) fn reset(&mut self, preserve_attached_sessions: bool) {
         *self.primary_mut() = DevToolsSessionState::default();
-        self.browser_identity_activation_order
-            .retain(|key| !matches!(key, DevToolsSessionKey::Primary));
         if !preserve_attached_sessions {
             self.clear_attached();
         }
@@ -662,6 +640,7 @@ pub(crate) struct DevToolsNetworkSessionState {
     pub(crate) network_enabled: bool,
     pub(crate) cache_disabled: bool,
     pub(crate) bypass_service_worker: bool,
+    pub(crate) blocked_url_patterns: Vec<String>,
     pub(crate) extra_headers: Vec<(String, String)>,
     pub(crate) service_worker_fetch_diagnostic_entries: usize,
 }
@@ -724,6 +703,7 @@ impl DevToolsBrowserIdentityOverride {
 pub(crate) struct DevToolsNetworkPolicyAggregate {
     pub(crate) cache_disabled: bool,
     pub(crate) bypass_service_worker: bool,
+    pub(crate) blocked_url_patterns: Vec<String>,
     pub(crate) extra_headers: Vec<(String, String)>,
 }
 
@@ -1257,7 +1237,7 @@ mod tests {
     }
 
     #[test]
-    fn browser_identity_uses_distinct_network_and_renderer_agent_order() {
+    fn browser_identity_uses_attachment_order_on_network_and_renderer_surfaces() {
         let mut sessions = DevToolsSessionRegistry::default();
         sessions.ensure_attached("SID-later");
         sessions.set_browser_identity_override(
@@ -1273,8 +1253,8 @@ mod tests {
         assert_eq!(effective_identity(&sessions).user_agent(), "Moli/Later-1");
         assert_eq!(
             effective_renderer_identity(&sessions).user_agent(),
-            "Moli/Primary-1",
-            "the renderer follows agent activation order, not attachment order"
+            "Moli/Later-1",
+            "the later-attached session wins even when it set its override first"
         );
 
         sessions.set_browser_identity_override(
@@ -1289,8 +1269,8 @@ mod tests {
         );
         assert_eq!(
             effective_renderer_identity(&sessions).user_agent(),
-            "Moli/Primary-1",
-            "updating an enabled renderer agent must not reorder it"
+            "Moli/Later-2",
+            "updating the later-attached renderer agent preserves its precedence"
         );
 
         sessions.set_browser_identity_override(
@@ -1301,7 +1281,7 @@ mod tests {
         assert_eq!(effective_identity(&sessions).user_agent(), "Moli/Later-2");
         assert_eq!(
             effective_renderer_identity(&sessions).user_agent(),
-            "Moli/Primary-2"
+            "Moli/Later-2"
         );
 
         sessions.set_browser_identity_override(false, None, None);
@@ -1318,7 +1298,7 @@ mod tests {
         );
         assert_eq!(effective_identity(&sessions).user_agent(), "Moli/Later-2");
         let renderer_identity = effective_renderer_identity(&sessions);
-        assert_eq!(renderer_identity.user_agent(), "Moli/Primary-3");
+        assert_eq!(renderer_identity.user_agent(), "Moli/Later-2");
         assert_eq!(renderer_identity.accept_language(), "fr-FR");
         assert_eq!(renderer_identity.navigator_platform(), "PrimaryPlatform");
 

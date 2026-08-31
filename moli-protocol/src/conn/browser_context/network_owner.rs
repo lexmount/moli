@@ -11,14 +11,6 @@ use crate::domains::network::{
 use moli_core::page::PendingPageCommand;
 
 impl TargetSessionStateMut<'_> {
-    fn set_blocked_url_patterns(
-        mut self,
-        blocked_url_patterns: Vec<String>,
-    ) -> Option<Vec<String>> {
-        let network_policy = self.network_policy_mut()?;
-        Some(network_policy.replace_blocked_url_patterns(blocked_url_patterns))
-    }
-
     fn set_tls_verify_host_override(mut self, enabled: bool) -> bool {
         let should_refresh_active_engine = matches!(self, Self::Active { .. });
         if let Some(tls_verify_host_override) = self.tls_verify_host_override_mut() {
@@ -437,14 +429,21 @@ impl TargetSessionOwnerMut<'_> {
         mut self,
         blocked_url_patterns: Vec<String>,
     ) -> Result<Option<PendingPageCommand>, String> {
-        if matches!(self, Self::NoLoadedBrowserContext) {
+        if self
+            .mutate_network_policy_session_state(|state| {
+                state.blocked_url_patterns = blocked_url_patterns;
+            })
+            .is_none()
+        {
             return Err("BrowserContextNotLoaded".to_owned());
         }
-        let Some(effective_patterns) = self
-            .mutate_session_state_ref(|state| state.set_blocked_url_patterns(blocked_url_patterns))
-        else {
-            return Ok(None);
-        };
+        let effective_patterns = self
+            .mutate_session_state_ref(|mut state| {
+                state
+                    .network_policy_mut()
+                    .map(|policy| policy.blocked_url_patterns().to_vec())
+            })
+            .unwrap_or_default();
         let Some(page) = self
             .runtime_slot_mut()
             .and_then(|runtime_slot| runtime_slot.loaded_page_mut())
@@ -522,13 +521,14 @@ impl TargetSessionOwnerMut<'_> {
         if matches!(self, Self::NoLoadedBrowserContext) {
             return Err("BrowserContextNotLoaded".to_owned());
         }
-        let (headers, bypass_service_worker, cache_disabled) = self
+        let (headers, bypass_service_worker, cache_disabled, blocked_url_patterns) = self
             .mutate_session_state_ref(|mut state| {
                 state.network_policy_mut().map(|policy| {
                     (
                         policy.extra_headers().to_vec(),
                         policy.bypass_service_worker(),
                         policy.cache_disabled(),
+                        policy.blocked_url_patterns().to_vec(),
                     )
                 })
             })
@@ -544,6 +544,7 @@ impl TargetSessionOwnerMut<'_> {
             &effective_headers,
             bypass_service_worker,
             cache_disabled,
+            &blocked_url_patterns,
         )
         .map(Some)
         .map_err(|error| format!("failed to replay page network request policy: {error}"))
@@ -1310,11 +1311,10 @@ mod tests {
             network.network_enabled = true;
             network.cache_disabled = true;
             network.bypass_service_worker = true;
+            network.blocked_url_patterns = vec!["*://blocked.test/*".to_owned()];
             network.extra_headers = vec![("X-Test".to_owned(), "active".to_owned())];
         }
         active.refresh_devtools_network_policy();
-        let active_blocked = active_session_state_mut(&mut active)
-            .set_blocked_url_patterns(vec!["*://blocked.test/*".to_owned()]);
         let active_offline = active_session_state_mut(&mut active).set_emulated_network_conditions(
             true,
             25.0,
@@ -1325,7 +1325,6 @@ mod tests {
 
         assert!(active.network_policy.cache_disabled());
         assert!(active.network_policy.bypass_service_worker());
-        assert_eq!(active_blocked, Some(vec!["*://blocked.test/*".to_owned()]));
         assert_eq!(
             active.network_policy.blocked_url_patterns(),
             vec!["*://blocked.test/*"]
@@ -1350,11 +1349,10 @@ mod tests {
             network.network_enabled = true;
             network.cache_disabled = true;
             network.bypass_service_worker = true;
+            network.blocked_url_patterns = vec!["*://parked-blocked.test/*".to_owned()];
             network.extra_headers = vec![("X-Test".to_owned(), "parked".to_owned())];
         }
         parked.refresh_devtools_network_policy();
-        let parked_blocked = parked_session_state_mut(&mut parked)
-            .set_blocked_url_patterns(vec!["*://parked-blocked.test/*".to_owned()]);
         let parked_offline = parked_session_state_mut(&mut parked).set_emulated_network_conditions(
             true,
             50.0,
@@ -1365,10 +1363,6 @@ mod tests {
 
         assert!(parked.network_policy.cache_disabled());
         assert!(parked.network_policy.bypass_service_worker());
-        assert_eq!(
-            parked_blocked,
-            Some(vec!["*://parked-blocked.test/*".to_owned()])
-        );
         assert_eq!(
             parked.network_policy.blocked_url_patterns(),
             vec!["*://parked-blocked.test/*"]

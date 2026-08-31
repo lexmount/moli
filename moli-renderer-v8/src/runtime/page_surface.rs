@@ -5223,6 +5223,7 @@ pub enum RendererPageCommand {
         extra_http_headers: Vec<(String, String)>,
         bypass_service_worker: bool,
         cache_disabled: bool,
+        blocked_url_patterns: Vec<String>,
     },
     SetPermissionOverrides(Vec<crate::protocol_types::PermissionOverrideRegistration>),
     SetIdleOverride(Option<crate::protocol_types::EmulatedIdleOverride>),

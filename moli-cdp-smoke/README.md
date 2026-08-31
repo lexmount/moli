@@ -117,6 +117,23 @@ Chromium source revision `a03603fe9af6` was also inspected to explain the
 access-mode and auto-attach machinery; the executable probe remains the
 behavioral authority.
 
+The expanded `multi-page` group was calibrated again on 2026-08-31 against
+Debian `/usr/bin/chromium` 145.0.7632.116 and local Chromium source revision
+`a03603fe9af6`. Five new executable contracts cover target-local Debugger
+pause/resume, same-origin localStorage fan-out versus target-local
+sessionStorage, target-owned navigation-history entry ids, attachment-ordered
+union and detach cleanup for `Network.setBlockedURLs`, and OR aggregation for
+`Network.setCacheDisabled`. The cache probe also records Chromium's two cache
+layers: a bypass load replaces the owning Page's retained resource and the
+shared HTTP-cache entry, an already-live peer Page retains its earlier
+resource, and a newly created Page sees the replacement. The exact same full
+group passed three consecutive fresh Chromium profiles and ten fresh Moli
+server processes, with the Moli runs scheduled four at a time to expose
+cross-target ownership races. This calibration also corrected two older
+assumptions: wire and live UA overrides both follow session attachment order,
+and an activation-churn preload probe must enable the Page agent before
+registering its new-Document script.
+
 ## Current Coverage
 
 The current suite is a strong core smoke gate, not a complete Playwright compatibility suite.

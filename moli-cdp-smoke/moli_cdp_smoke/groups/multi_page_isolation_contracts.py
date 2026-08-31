@@ -499,8 +499,8 @@ async def _same_target_session_policies_follow_chromium(
         assert_equal(
             owner_runtime_before,
             {
-                "userAgent": "MultiPageFirstSetLast/1.0",
-                "language": "fr-FR",
+                "userAgent": "MultiPageAttachmentSecond/1.0",
+                "language": "ja-JP",
                 "timezone": "Europe/Paris",
             },
             "same-target live renderer policy before detach",
@@ -601,8 +601,8 @@ async def _same_target_session_policies_follow_chromium(
             "multi_page_same_target_session_policy_aggregation",
             contract=(
                 "Enabled Network sessions merge non-conflicting headers and select wire "
-                "identity by attachment order; live renderer identity follows renderer-agent "
-                "activation order, locale/timezone use exclusive claims, and detach "
+                "and live renderer identity by attachment order; locale/timezone use "
+                "exclusive claims, and detach "
                 "recomputes only the owning target."
             ),
             source="Chromium NetworkHandler and InspectorEmulationAgent executable oracle",
@@ -652,7 +652,10 @@ async def _activation_churn_preserves_target_ownership(
         )
         sessions = [await context.new_cdp_session(page) for page in pages]
         for index, session in enumerate(sessions):
-            await session.send("Network.enable")
+            await asyncio.gather(
+                session.send("Page.enable"),
+                session.send("Network.enable"),
+            )
             await session.send(
                 "Network.setExtraHTTPHeaders",
                 {"headers": {"x-moli-profile-smoke": f"activation-{index}"}},
@@ -815,6 +818,7 @@ async def _activation_churn_preserves_target_ownership(
                 "Target.activateTarget x6",
                 "Runtime.evaluate",
                 "Page.getFrameTree",
+                "Page.enable x4",
                 "Page.addScriptToEvaluateOnNewDocument",
                 "Network.setExtraHTTPHeaders",
                 "Target.closeTarget",

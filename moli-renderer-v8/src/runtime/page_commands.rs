@@ -1096,10 +1096,12 @@ impl PageVm {
                 extra_http_headers,
                 bypass_service_worker,
                 cache_disabled,
+                blocked_url_patterns,
             } => {
                 self.set_extra_http_headers(&extra_http_headers);
                 self.set_bypass_service_worker(bypass_service_worker);
                 self.set_cache_disabled(cache_disabled);
+                self.set_blocked_url_patterns(&blocked_url_patterns);
                 Ok(RendererPageReply::Unit)
             }
             RendererPageCommand::SetPermissionOverrides(overrides) => {

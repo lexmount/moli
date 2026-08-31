@@ -1150,21 +1150,20 @@ fn page_turn_trigger_log_label(trigger: PageTurnTrigger) -> &'static str {
     }
 }
 
-fn loader_for_new_page(
+fn loader_for_new_document(
     loader: &ResourceRequestClient,
     extra_http_headers: &[(String, String)],
     network_offline: bool,
     blocked_url_patterns: &[String],
 ) -> ResourceRequestClient {
-    // A new target/Page may reuse the browser transport and memory cache, but
-    // it must never inherit another Page's mutable policy by Arc identity.
-    // Child Documents are created below this boundary and continue to clone
-    // the resulting Page adapter intentionally.
-    let page_loader = loader.fork_with_isolated_page_network_policy();
-    page_loader.set_extra_http_headers(extra_http_headers);
-    page_loader.set_network_offline(network_offline);
-    page_loader.set_blocked_url_patterns(blocked_url_patterns);
-    page_loader
+    // The NavigationEngine already supplies a target-owned loader. A new
+    // Document isolates mutable request policy while retaining that stable
+    // target's renderer memory-cache partition across navigation.
+    let document_loader = loader.fork_with_isolated_document_network_policy();
+    document_loader.set_extra_http_headers(extra_http_headers);
+    document_loader.set_network_offline(network_offline);
+    document_loader.set_blocked_url_patterns(blocked_url_patterns);
+    document_loader
 }
 
 impl RendererOwnerHandle {
@@ -6867,7 +6866,7 @@ impl RendererOwnerHandle {
             ))
             .into();
         }
-        let loader = loader_for_new_page(
+        let loader = loader_for_new_document(
             &loader,
             &extra_http_headers,
             network_offline,
@@ -7177,7 +7176,7 @@ impl RendererOwnerHandle {
             ))
             .into();
         }
-        let loader = loader_for_new_page(
+        let loader = loader_for_new_document(
             &loader,
             &extra_http_headers,
             network_offline,

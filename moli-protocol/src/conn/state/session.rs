@@ -698,6 +698,7 @@ impl TargetNetworkPolicyState {
     ) {
         self.devtools_cache_disabled = aggregate.cache_disabled;
         self.bypass_service_worker = aggregate.bypass_service_worker;
+        self.blocked_url_patterns = aggregate.blocked_url_patterns;
         self.devtools_extra_headers = aggregate.extra_headers;
         self.refresh_extra_headers();
     }
@@ -713,14 +714,6 @@ impl TargetNetworkPolicyState {
 
     pub(crate) fn blocked_url_patterns(&self) -> &[String] {
         &self.blocked_url_patterns
-    }
-
-    pub(crate) fn replace_blocked_url_patterns(
-        &mut self,
-        blocked_url_patterns: Vec<String>,
-    ) -> Vec<String> {
-        self.blocked_url_patterns = blocked_url_patterns;
-        self.blocked_url_patterns.clone()
     }
 
     #[cfg(test)]

@@ -1135,8 +1135,8 @@ async fn multi_session_browser_identity_uses_attachment_order_and_field_contribu
             .effective_renderer_browser_identity_override_owned()
             .expect("renderer identity")
             .user_agent(),
-        "Moli/Primary-2",
-        "renderer agents use first-enable order rather than browser attachment order"
+        "Moli/Aux-1",
+        "renderer agents use attachment order rather than setter order"
     );
 
     expect_session_command_result(

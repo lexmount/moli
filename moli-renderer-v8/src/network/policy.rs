@@ -1,4 +1,7 @@
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 
 use anyhow::{Result, anyhow};
 use http::HeaderName;
@@ -9,6 +12,14 @@ use parking_lot::Mutex;
 use crate::{protocol_types::OptionalResourceFetchMask, types::SubresourceResourceType};
 
 const BLOCKED_BY_CLIENT_ERROR_TEXT: &str = "net::ERR_BLOCKED_BY_CLIENT";
+static NEXT_MEMORY_CACHE_PARTITION_ID: AtomicU64 = AtomicU64::new(0);
+
+fn next_memory_cache_partition_id() -> u64 {
+    NEXT_MEMORY_CACHE_PARTITION_ID
+        .fetch_add(1, Ordering::Relaxed)
+        .checked_add(1)
+        .expect("Page memory-cache partition id exhausted")
+}
 
 type SharedHeaderList = Arc<[(Box<str>, Box<str>)]>;
 type SharedPatternList = Arc<[Box<str>]>;
@@ -16,6 +27,7 @@ type SharedPatternList = Arc<[Box<str>]>;
 #[derive(Debug, Clone)]
 struct PageNetworkPolicyState {
     revision: u64,
+    memory_cache_partition_id: u64,
     extra_http_headers: SharedHeaderList,
     blocked_url_patterns: SharedPatternList,
     optional_resource_fetch_mask: OptionalResourceFetchMask,
@@ -37,6 +49,7 @@ impl Default for PageNetworkPolicyState {
     fn default() -> Self {
         Self {
             revision: 0,
+            memory_cache_partition_id: next_memory_cache_partition_id(),
             extra_http_headers: Arc::from([]),
             blocked_url_patterns: Arc::from([]),
             optional_resource_fetch_mask: OptionalResourceFetchMask::NONE,
@@ -111,10 +124,40 @@ impl PageNetworkPolicy {
         Self::from_snapshot(self.snapshot())
     }
 
+    /// Returns a Document-owned mutable view within the same Page target.
+    ///
+    /// Renderer Documents need independent request-policy state, but resource
+    /// reuse across top-level navigation remains owned by the stable Page.
+    pub fn isolated_same_page_copy(&self) -> Self {
+        Self::from_snapshot_with_memory_cache_partition(
+            self.snapshot(),
+            self.memory_cache_partition_id(),
+        )
+    }
+
+    pub fn shares_memory_cache_partition_with(&self, other: &Self) -> bool {
+        self.memory_cache_partition_id() == other.memory_cache_partition_id()
+    }
+
+    /// Keeps this policy's current state while adopting another Page policy's
+    /// stable renderer memory-cache capability.
+    pub fn adopt_memory_cache_partition_from(&mut self, source: &Self) {
+        let source_partition_id = source.memory_cache_partition_id();
+        self.state.lock().memory_cache_partition_id = source_partition_id;
+    }
+
     pub fn from_snapshot(snapshot: PageNetworkPolicySnapshot) -> Self {
+        Self::from_snapshot_with_memory_cache_partition(snapshot, next_memory_cache_partition_id())
+    }
+
+    fn from_snapshot_with_memory_cache_partition(
+        snapshot: PageNetworkPolicySnapshot,
+        memory_cache_partition_id: u64,
+    ) -> Self {
         Self {
             state: Arc::new(Mutex::new(PageNetworkPolicyState {
                 revision: snapshot.configuration_revision,
+                memory_cache_partition_id,
                 extra_http_headers: snapshot.extra_http_headers,
                 blocked_url_patterns: snapshot.blocked_url_patterns,
                 optional_resource_fetch_mask: snapshot.optional_resource_fetch_mask,
@@ -141,6 +184,7 @@ impl PageNetworkPolicy {
         Self {
             state: Arc::new(Mutex::new(PageNetworkPolicyState {
                 revision: snapshot.configuration_revision,
+                memory_cache_partition_id: self.memory_cache_partition_id(),
                 extra_http_headers: snapshot.extra_http_headers,
                 blocked_url_patterns: snapshot.blocked_url_patterns,
                 optional_resource_fetch_mask: snapshot.optional_resource_fetch_mask,
@@ -150,6 +194,10 @@ impl PageNetworkPolicy {
             })),
             network_conditions: Arc::clone(&self.network_conditions),
         }
+    }
+
+    pub(crate) fn memory_cache_partition_id(&self) -> u64 {
+        self.state.lock().memory_cache_partition_id
     }
 
     pub fn shares_state_with(&self, other: &Self) -> bool {

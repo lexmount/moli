@@ -84,6 +84,10 @@ impl RequestCacheMode {
         matches!(self, Self::Default)
     }
 
+    pub fn allows_memory_cache_store(self) -> bool {
+        !matches!(self, Self::NoStore)
+    }
+
     pub fn allows_http_cache(self) -> bool {
         !matches!(self, Self::NoStore)
     }

@@ -1701,9 +1701,18 @@ async fn same_context_background_session_can_stage_its_own_blocked_urls_before_p
         let staged = active
             .parked_page_session_state(&second_target_id)
             .expect("second target should have staged parked page session state");
+        assert!(
+            staged.network_policy.blocked_url_patterns().is_empty(),
+            "a disabled Network handler must not contribute to effective target policy"
+        );
         assert_eq!(
-            staged.network_policy.blocked_url_patterns(),
-            vec!["http://example.test/blocked/*".to_owned()]
+            staged
+                .devtools_sessions
+                .primary()
+                .network_session_state
+                .blocked_url_patterns,
+            ["http://example.test/blocked/*".to_owned()],
+            "the disabled handler must retain its staged contribution until enable"
         );
     }
 
@@ -1723,9 +1732,9 @@ async fn same_context_background_session_can_stage_its_own_blocked_urls_before_p
             .as_ref()
             .expect("promoted browser context");
         assert_eq!(promoted.active_target_id(), Some(second_target_id.as_str()));
-        assert_eq!(
-            promoted.network_policy.blocked_url_patterns(),
-            vec!["http://example.test/blocked/*".to_owned()]
+        assert!(
+            promoted.network_policy.blocked_url_patterns().is_empty(),
+            "promotion must not activate a disabled Network handler"
         );
     }
 
@@ -1736,6 +1745,16 @@ async fn same_context_background_session_can_stage_its_own_blocked_urls_before_p
     }))
     .await;
     ctx.expect_result(10419461, json!({}), Some(&second_session_id));
+    assert_eq!(
+        ctx.conn
+            .browser_context
+            .as_ref()
+            .expect("promoted browser context")
+            .network_policy
+            .blocked_url_patterns(),
+        ["http://example.test/blocked/*".to_owned()],
+        "Network.enable must activate the staged background-session contribution"
+    );
 
     ctx.process_async(json!({
         "id": 10419462,

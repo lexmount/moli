@@ -373,6 +373,7 @@ impl BrowserContext {
         let previous_headers = state.network_policy.extra_headers().to_vec();
         let previous_bypass = state.network_policy.bypass_service_worker();
         let previous_cache_disabled = state.network_policy.cache_disabled();
+        let previous_blocked_url_patterns = state.network_policy.blocked_url_patterns().to_vec();
         let previous_browser_identity = state.network_policy.browser_identity_override_owned();
         let previous_renderer_browser_identity =
             state.effective_renderer_browser_identity_override_owned();
@@ -386,6 +387,8 @@ impl BrowserContext {
             previous_bypass != state.network_policy.bypass_service_worker();
         let cache_disabled_changed =
             previous_cache_disabled != state.network_policy.cache_disabled();
+        let blocked_url_patterns_changed =
+            previous_blocked_url_patterns != state.network_policy.blocked_url_patterns();
         let browser_identity_changed =
             previous_browser_identity != state.network_policy.browser_identity_override_owned();
         let renderer_browser_identity_changed = previous_renderer_browser_identity
@@ -398,6 +401,7 @@ impl BrowserContext {
         if !extra_headers_changed
             && !bypass_service_worker_changed
             && !cache_disabled_changed
+            && !blocked_url_patterns_changed
             && !locale_changed
             && !timezone_changed
         {
@@ -408,6 +412,7 @@ impl BrowserContext {
             effective_headers,
             effective_bypass,
             effective_cache_disabled,
+            effective_blocked_url_patterns,
             effective_locale,
             effective_timezone,
         ) = if self.is_active_target(&target_id) {
@@ -415,6 +420,7 @@ impl BrowserContext {
                 self.effective_extra_headers(),
                 self.network_policy.bypass_service_worker(),
                 self.network_policy.cache_disabled(),
+                self.network_policy.blocked_url_patterns().to_vec(),
                 self.effective_active_locale_override_owned(),
                 self.effective_active_timezone_override_owned(),
             )
@@ -424,6 +430,9 @@ impl BrowserContext {
                 self.effective_parked_extra_headers(&target_id),
                 page_state.is_some_and(|state| state.network_policy.bypass_service_worker()),
                 page_state.is_some_and(|state| state.network_policy.cache_disabled()),
+                page_state
+                    .map(|state| state.network_policy.blocked_url_patterns().to_vec())
+                    .unwrap_or_default(),
                 page_state
                     .and_then(|state| state.locale_override.clone())
                     .or_else(|| self.default_locale_override.clone()),
@@ -441,11 +450,16 @@ impl BrowserContext {
         let Some(page) = page else {
             return Ok(any_browser_identity_changed);
         };
-        if extra_headers_changed || bypass_service_worker_changed || cache_disabled_changed {
+        if extra_headers_changed
+            || bypass_service_worker_changed
+            || cache_disabled_changed
+            || blocked_url_patterns_changed
+        {
             page.set_network_request_policy_async(
                 &effective_headers,
                 effective_bypass,
                 effective_cache_disabled,
+                &effective_blocked_url_patterns,
             )
             .await
             .map_err(|error| {
@@ -523,6 +537,10 @@ impl BrowserContext {
         let cache_disabled = self
             .parked_page_session_state(&target_id)
             .is_some_and(|state| state.network_policy.cache_disabled());
+        let blocked_url_patterns = self
+            .parked_page_session_state(&target_id)
+            .map(|state| state.network_policy.blocked_url_patterns().to_vec())
+            .unwrap_or_default();
 
         if let Some(page) = self
             .background_target_mut(&target_id)
@@ -532,15 +550,13 @@ impl BrowserContext {
                 &effective_headers,
                 effective_bypass,
                 cache_disabled,
+                &blocked_url_patterns,
             )
             .await
             .map_err(|error| format!("failed to clear page network request policy: {error}"))?;
             page.set_network_offline_async(false)
                 .await
                 .map_err(|error| format!("failed to clear page offline state: {error}"))?;
-            page.set_blocked_url_patterns_async(&[])
-                .await
-                .map_err(|error| format!("failed to clear page blocked URLs: {error}"))?;
             page.set_script_execution_disabled_async(false)
                 .await
                 .map_err(|error| {

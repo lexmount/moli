@@ -2553,7 +2553,7 @@ impl CdpConnection {
     ) -> NavigationEngine {
         let mut engine =
             if let Some(source) = self.page_navigation_engine_for_load_inputs(load_inputs) {
-                NavigationEngine::new_with_runtime_config_and_shared_renderer_owner(
+                NavigationEngine::new_for_target_navigation_with_shared_renderer_owner(
                     self.navigation_runtime_config_for_load_inputs(load_inputs),
                     source,
                 )
