@@ -244,28 +244,14 @@ async fn blob_iframe_inherits_secure_origin_for_opfs_handle_messages() {
         .expect("blob iframe OPFS clone setup should evaluate");
     assert_eq!(setup, "queued");
 
-    for _ in 0..16 {
-        vm.drain_ready_page_task_executor_turns_for_setup(&loader, 128)
-            .await
-            .expect("child setup should use the selected-task dispatcher");
-        if vm
-            .eval("String(globalThis.__opfsBlobFrameCloneProbe)")
-            .expect("blob iframe OPFS clone status should evaluate")
-            != "pending"
-        {
-            break;
-        }
-        let _ = vm
-            .run_one_oldest_ready_page_task_executor_turn(&loader)
-            .await
-            .expect("blob iframe OPFS clone should advance");
-    }
-
-    assert_eq!(
-        vm.eval("String(globalThis.__opfsBlobFrameCloneProbe)")
-            .expect("blob iframe OPFS clone result should evaluate"),
-        r#"{"kind":"result","secure":true,"interfaceExposed":true,"directoryInterfaceExposed":true,"directoryBrand":true,"rootName":""}"#
-    );
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(globalThis.__opfsBlobFrameCloneProbe)",
+        r#"{"kind":"result","secure":true,"interfaceExposed":true,"directoryInterfaceExposed":true,"directoryBrand":true,"rootName":""}"#,
+        "blob iframe OPFS clone",
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -357,28 +343,14 @@ async fn sandboxed_blob_iframe_keeps_opaque_storage_context_for_opfs_messages() 
         .expect("sandboxed blob iframe setup should evaluate");
     assert_eq!(setup, "queued");
 
-    for _ in 0..16 {
-        vm.drain_ready_page_task_executor_turns_for_setup(&loader, 128)
-            .await
-            .expect("child setup should use the selected-task dispatcher");
-        if vm
-            .eval("String(globalThis.__sandboxedBlobFrameProbe)")
-            .expect("sandboxed blob iframe status should evaluate")
-            != "pending"
-        {
-            break;
-        }
-        let _ = vm
-            .run_one_oldest_ready_page_task_executor_turn(&loader)
-            .await
-            .expect("sandboxed blob iframe should advance");
-    }
-
-    assert_eq!(
-        vm.eval("String(globalThis.__sandboxedBlobFrameProbe)")
-            .expect("sandboxed blob iframe result should evaluate"),
-        r#"{"rejectionCount":2,"origin":"null","secure":true,"interfaceExposed":true,"storageExposed":true,"getDirectory":"SecurityError","sourceStillUsable":true}"#
-    );
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(globalThis.__sandboxedBlobFrameProbe)",
+        r#"{"rejectionCount":2,"origin":"null","secure":true,"interfaceExposed":true,"storageExposed":true,"getDirectory":"SecurityError","sourceStillUsable":true}"#,
+        "sandboxed blob iframe OPFS rejection",
+    )
+    .await;
 }
 
 #[test]
