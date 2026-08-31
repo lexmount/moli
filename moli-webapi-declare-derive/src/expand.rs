@@ -12,6 +12,7 @@ use crate::attrs::{
 
 struct WebApiFieldKey {
     display_name: proc_macro2::TokenStream,
+    display_name_literal: Option<LitStr>,
     property_key: proc_macro2::TokenStream,
     function_name: Option<proc_macro2::TokenStream>,
 }
@@ -807,6 +808,20 @@ fn expand_function_template_accessor_property_field(
         ));
     }
     let key = webapi_field_key(field, attrs, rename_all)?;
+    let getter_class_name = expand_template_accessor_class_name(
+        &format_ident!("__webapi_getter"),
+        &format_ident!("__webapi_getter_name"),
+        "get",
+        &key.display_name,
+        key.display_name_literal.as_ref(),
+    );
+    let setter_class_name = expand_template_accessor_class_name(
+        &format_ident!("__webapi_setter"),
+        &format_ident!("__webapi_setter_name"),
+        "set",
+        &key.display_name,
+        key.display_name_literal.as_ref(),
+    );
     let name = key.display_name;
     let property_key = key.property_key;
     let Some(getter) = attrs.getter.as_ref() else {
@@ -829,16 +844,7 @@ fn expand_function_template_accessor_property_field(
         quote! {
             {
                 let __webapi_setter = #setter_builder;
-                let __webapi_setter_name =
-                    ::std::format!("set {}", #name);
-                if let ::std::option::Option::Some(__webapi_setter_name) =
-                    ::moli_webapi_declare::v8::String::new(
-                        scope,
-                        &__webapi_setter_name,
-                    )
-                {
-                    __webapi_setter.set_class_name(__webapi_setter_name);
-                }
+                #setter_class_name
                 ::std::option::Option::Some(__webapi_setter)
             }
         }
@@ -852,15 +858,7 @@ fn expand_function_template_accessor_property_field(
     Ok(quote! {
         #field_read
         let __webapi_getter = #getter_builder;
-        let __webapi_getter_name = ::std::format!("get {}", #name);
-        if let ::std::option::Option::Some(__webapi_getter_name) =
-            ::moli_webapi_declare::v8::String::new(
-                scope,
-                &__webapi_getter_name,
-            )
-        {
-            __webapi_getter.set_class_name(__webapi_getter_name);
-        }
+        #getter_class_name
         let __webapi_setter = #setter;
         prototype.set_accessor_property(
             #property_key,
@@ -870,6 +868,38 @@ fn expand_function_template_accessor_property_field(
         );
         let _ = #name;
     })
+}
+
+fn expand_template_accessor_class_name(
+    binding: &Ident,
+    variable: &Ident,
+    prefix: &str,
+    display_name: &proc_macro2::TokenStream,
+    display_name_literal: Option<&LitStr>,
+) -> proc_macro2::TokenStream {
+    if let Some(display_name_literal) = display_name_literal {
+        let class_name = LitStr::new(
+            &format!("{prefix} {}", display_name_literal.value()),
+            display_name_literal.span(),
+        );
+        return quote! {
+            if let ::std::option::Option::Some(#variable) =
+                ::moli_webapi_declare::v8::String::new(scope, #class_name)
+            {
+                #binding.set_class_name(#variable);
+            }
+        };
+    }
+
+    let format_string = LitStr::new(&format!("{prefix} {{}}"), proc_macro2::Span::call_site());
+    quote! {
+        let #variable = ::std::format!(#format_string, #display_name);
+        if let ::std::option::Option::Some(#variable) =
+            ::moli_webapi_declare::v8::String::new(scope, &#variable)
+        {
+            #binding.set_class_name(#variable);
+        }
+    }
 }
 
 fn expand_function_template_native_data_property_field(
@@ -1904,8 +1934,10 @@ fn webapi_field_key(
         webapi_symbol_field_key(symbol)?
     } else {
         let name = webapi_field_name(field, attrs.name.as_ref(), rename_all)?;
+        let name_literal = webapi_field_name_literal(field, attrs.name.as_ref(), rename_all)?;
         WebApiFieldKey {
             display_name: name.clone(),
+            display_name_literal: name_literal,
             property_key: quote!(::moli_webapi_declare::__private::v8str(scope, #name).into()),
             function_name: Some(quote!(
                 ::moli_webapi_declare::__private::v8str(scope, #name)
@@ -1926,6 +1958,7 @@ fn webapi_symbol_field_key(symbol: &LitStr) -> Result<WebApiFieldKey, Error> {
             let display_name = LitStr::new("[Symbol.iterator]", symbol.span());
             Ok(WebApiFieldKey {
                 display_name: quote!(#display_name),
+                display_name_literal: Some(display_name),
                 property_key: quote!(::moli_webapi_declare::v8::Symbol::get_iterator(scope).into()),
                 function_name: None,
             })
@@ -1934,6 +1967,7 @@ fn webapi_symbol_field_key(symbol: &LitStr) -> Result<WebApiFieldKey, Error> {
             let display_name = LitStr::new("[Symbol.asyncIterator]", symbol.span());
             Ok(WebApiFieldKey {
                 display_name: quote!(#display_name),
+                display_name_literal: Some(display_name),
                 property_key: quote!(
                     ::moli_webapi_declare::v8::Symbol::get_async_iterator(scope).into()
                 ),
@@ -1944,6 +1978,7 @@ fn webapi_symbol_field_key(symbol: &LitStr) -> Result<WebApiFieldKey, Error> {
             let display_name = LitStr::new("[Symbol.toStringTag]", symbol.span());
             Ok(WebApiFieldKey {
                 display_name: quote!(#display_name),
+                display_name_literal: Some(display_name),
                 property_key: quote!(
                     ::moli_webapi_declare::v8::Symbol::get_to_string_tag(scope).into()
                 ),
@@ -2495,7 +2530,30 @@ mod tests {
                 named: (),
             }
         };
-        expand_webapi_function_template(input).expect("template accessors should expand");
+        let tokens = expand_webapi_function_template(input)
+            .expect("template accessors should expand")
+            .to_string();
+        assert!(tokens.contains("String :: new (scope , \"get value\")"));
+        assert!(tokens.contains("String :: new (scope , \"get named\")"));
+        assert!(tokens.contains("String :: new (scope , \"set named\")"));
+        assert!(!tokens.contains("format ! (\"get {}\""));
+        assert!(!tokens.contains("format ! (\"set {}\""));
+    }
+
+    #[test]
+    fn function_template_dynamic_accessor_names_are_formatted_at_runtime() {
+        let input = syn::parse_quote! {
+            #[webapi(name = "Sample")]
+            struct SampleTemplate {
+                #[webapi(accessor_property = DYNAMIC_NAME, getter = sample_getter, setter = sample_setter)]
+                value: (),
+            }
+        };
+        let tokens = expand_webapi_function_template(input)
+            .expect("dynamic template accessor should expand")
+            .to_string();
+        assert!(tokens.contains("format ! (\"get {}\" , DYNAMIC_NAME)"));
+        assert!(tokens.contains("format ! (\"set {}\" , DYNAMIC_NAME)"));
     }
 
     #[test]
