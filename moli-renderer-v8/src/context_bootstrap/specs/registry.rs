@@ -961,7 +961,7 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
     },
     ConstructorSpec {
         interface: web_api_interfaces::FileList::DESCRIPTOR,
-        kind: ConstructorKind::FileList,
+        kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
         interface: web_api_interfaces::FileSystem::DESCRIPTOR,

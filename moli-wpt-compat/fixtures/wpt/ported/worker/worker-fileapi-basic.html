@@ -42,11 +42,10 @@ promise_test(async function () {
     assert_equals(message.data.ctorOwn, true, "worker should expose FileList");
     assert_equals(message.data.ctorType, "function", "FileList constructor type");
     assert_equals(message.data.ctorName, "FileList", "FileList constructor name");
-    assert_equals(message.data.tag, "[object FileList]", "FileList object brand");
-    assert_equals(message.data.instanceofFileList, true, "FileList instanceof");
-    assert_equals(message.data.length, 1, "FileList length");
-    assert_equals(message.data.firstName, "note.txt", "FileList.item(0)");
-    assert_equals(message.data.indexName, "note.txt", "FileList index getter");
+    assert_equals(message.data.constructError, "TypeError", "FileList is not constructible");
+    assert_equals(message.data.itemType, "function", "FileList.item is exposed");
+    assert_equals(message.data.lengthGetterType, "function", "FileList.length is exposed");
+    assert_equals(message.data.iterType, "function", "FileList iterator is exposed");
   } finally {
     worker.terminate();
   }

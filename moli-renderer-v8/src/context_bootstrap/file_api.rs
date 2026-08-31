@@ -36,8 +36,8 @@ pub(crate) use file_entry_file::{
     FileEntryFileCallbackTask, FileEntryFileCallbackTaskEffect,
     file_system_file_entry_file_callback,
 };
+pub(super) use file_list::file_list_item_callback;
 pub(crate) use file_list::{build_file_list_object, sync_file_list_contents};
-pub(super) use file_list::{file_list_constructor_callback, file_list_item_callback};
 pub(crate) use file_reader::flush_one_pending_file_reader;
 pub(super) use file_reader::{
     file_reader_abort_callback, file_reader_add_event_listener_callback,

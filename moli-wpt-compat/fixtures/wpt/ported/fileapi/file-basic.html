@@ -14,6 +14,14 @@ function assert_throws_name(expectedName, callback, description) {
   throw new Error(description || "expected exception");
 }
 
+function file_list(files) {
+  const transfer = new DataTransfer();
+  for (const file of files) {
+    transfer.items.add(file);
+  }
+  return transfer.files;
+}
+
 promise_test(async function () {
   const file = new File(["hello ", new Uint8Array([0xe2, 0x99, 0xa5])], "note.txt", {
     type: "TEXT/PLAIN",
@@ -33,7 +41,8 @@ test(function () {
   const file = new File(["hello"], "note.txt");
   const second = new File(["second"], "second.txt");
   const third = new File(["third"], "third.txt");
-  const list = new FileList([file, second, third]);
+  assert_throws_name("TypeError", () => new FileList(), "FileList is not constructible");
+  const list = file_list([file, second, third]);
 
   assert_true(list instanceof FileList, "FileList instance");
   assert_equals(list.length, 3, "FileList length");

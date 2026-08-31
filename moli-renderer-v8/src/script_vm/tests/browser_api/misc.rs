@@ -1113,6 +1113,9 @@ fn file_reader_backing_state_is_not_own_property_surface() {
     ].join(":");
   };
   const reader = new FileReader();
+  const eventHandlerNames = [
+    "onloadstart", "onprogress", "onload", "onabort", "onerror", "onloadend"
+  ];
   const leaked = () => Object.getOwnPropertyNames(reader)
     .filter(name => name.startsWith("__lmFileReader") ||
                     name.startsWith("__moliFileReader"))
@@ -1125,6 +1128,19 @@ fn file_reader_backing_state_is_not_own_property_surface() {
     __lmFileReaderResult: "spoofed",
     __lmFileReaderError: "spoofed"
   };
+  const throwsTypeError = callback => {
+    try {
+      callback();
+      return false;
+    } catch (error) {
+      return error instanceof TypeError;
+    }
+  };
+  const handler = () => {};
+  reader.onload = handler;
+  const handlerRoundTrips = reader.onload === handler;
+  reader.onload = {};
+  const nonCallableHandlerBecomesNull = reader.onload === null;
   const before = leaked();
   reader.addEventListener("load", () => {});
   reader.readAsText(new Blob(["abc"]));
@@ -1133,7 +1149,8 @@ fn file_reader_backing_state_is_not_own_property_surface() {
     descriptors: [
       descriptorReport("readyState"),
       descriptorReport("result"),
-      descriptorReport("error")
+      descriptorReport("error"),
+      ...eventHandlerNames.map(descriptorReport)
     ],
     constructorConstants: ["EMPTY", "LOADING", "DONE"].map(name =>
       constantDescriptor(FileReader, name)
@@ -1144,12 +1161,18 @@ fn file_reader_backing_state_is_not_own_property_surface() {
     readerOwnConstants: ["EMPTY", "LOADING", "DONE"].filter(name =>
       Object.prototype.hasOwnProperty.call(reader, name)
     ),
+    readerOwnHandlers: eventHandlerNames.filter(name =>
+      Object.prototype.hasOwnProperty.call(reader, name)
+    ),
     before,
     during,
     resultIsNull: reader.result === null,
-    fakeReadyState: readyStateDescriptor.get.call(fake),
-    fakeResult: String(resultDescriptor.get.call(fake)),
-    fakeError: String(errorDescriptor.get.call(fake))
+    handlerRoundTrips,
+    nonCallableHandlerBecomesNull,
+    fakeReadyStateThrows: throwsTypeError(() => readyStateDescriptor.get.call(fake)),
+    fakeResultThrows: throwsTypeError(() => resultDescriptor.get.call(fake)),
+    fakeErrorThrows: throwsTypeError(() => errorDescriptor.get.call(fake)),
+    fakeAbortThrows: throwsTypeError(() => FileReader.prototype.abort.call(fake))
   });
 })()
 "#,
@@ -1158,7 +1181,7 @@ fn file_reader_backing_state_is_not_own_property_surface() {
 
     assert_eq!(
         result,
-        r#"{"descriptors":["readyState:function:get readyState:0:undefined:true:true","result:function:get result:0:undefined:true:true","error:function:get error:0:undefined:true:true"],"constructorConstants":["EMPTY:0:true:false:false","LOADING:1:true:false:false","DONE:2:true:false:false"],"prototypeConstants":["EMPTY:0:true:false:false","LOADING:1:true:false:false","DONE:2:true:false:false"],"readerOwnConstants":[],"before":[],"during":[],"resultIsNull":true,"fakeReadyState":0,"fakeResult":"null","fakeError":"null"}"#
+        r#"{"descriptors":["readyState:function:get readyState:0:undefined:true:true","result:function:get result:0:undefined:true:true","error:function:get error:0:undefined:true:true","onloadstart:function:get onloadstart:0:function:true:true","onprogress:function:get onprogress:0:function:true:true","onload:function:get onload:0:function:true:true","onabort:function:get onabort:0:function:true:true","onerror:function:get onerror:0:function:true:true","onloadend:function:get onloadend:0:function:true:true"],"constructorConstants":["EMPTY:0:true:false:false","LOADING:1:true:false:false","DONE:2:true:false:false"],"prototypeConstants":["EMPTY:0:true:false:false","LOADING:1:true:false:false","DONE:2:true:false:false"],"readerOwnConstants":[],"readerOwnHandlers":[],"before":[],"during":[],"resultIsNull":true,"handlerRoundTrips":true,"nonCallableHandlerBecomesNull":true,"fakeReadyStateThrows":true,"fakeResultThrows":true,"fakeErrorThrows":true,"fakeAbortThrows":true}"#
     );
 }
 
@@ -3058,6 +3081,66 @@ fn blob_internal_id_is_not_page_visible_or_forgeable() {
     assert_eq!(
         result,
         r#"{"hasVisibleSlot":false,"visibleOwnNames":[],"objectUrl":"TypeError"}"#
+    );
+}
+
+#[test]
+fn blob_members_enforce_webidl_receiver_contracts() {
+    let mut vm = new_storage_test_vm("https://blob-receiver-brand.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const throwsTypeError = callback => {
+    try {
+      callback();
+      return false;
+    } catch (error) {
+      return error instanceof TypeError;
+    }
+  };
+  const rejectionName = callback => {
+    try {
+      return Promise.resolve(callback()).then(
+        () => "resolved",
+        error => error && error.name,
+      );
+    } catch (error) {
+      return Promise.resolve("threw:" + (error && error.name));
+    }
+  };
+  const sizeGetter = Object.getOwnPropertyDescriptor(Blob.prototype, "size").get;
+  const typeGetter = Object.getOwnPropertyDescriptor(Blob.prototype, "type").get;
+  globalThis.__blobReceiverProbe = {
+    syncThrows: [
+      throwsTypeError(() => sizeGetter.call({})),
+      throwsTypeError(() => typeGetter.call({})),
+      throwsTypeError(() => Blob.prototype.slice.call(null)),
+      throwsTypeError(() => Blob.prototype.stream.call(null)),
+    ],
+  };
+  Promise.all([
+    rejectionName(() => Blob.prototype.text.call(null)),
+    rejectionName(() => Blob.prototype.arrayBuffer.call(null)),
+    rejectionName(() => Blob.prototype.bytes.call(null)),
+  ]).then(names => {
+    __blobReceiverProbe.promiseRejections = names;
+  });
+  return "scheduled";
+})()
+"#,
+        )
+        .expect("Blob receiver contract probe should evaluate");
+
+    assert_eq!(result, "scheduled");
+    vm.eval("0")
+        .expect("Blob receiver rejection microtasks should drain");
+
+    assert_eq!(
+        vm.eval("JSON.stringify(globalThis.__blobReceiverProbe)")
+            .expect("Blob receiver contract result should evaluate"),
+        r#"{"syncThrows":[true,true,true,true],"promiseRejections":["TypeError","TypeError","TypeError"]}"#
     );
 }
 
