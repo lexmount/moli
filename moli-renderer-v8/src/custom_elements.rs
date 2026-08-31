@@ -19,6 +19,7 @@ mod definition_error;
 mod definition_extends;
 mod definition_lookup;
 mod definition_registry;
+pub(crate) use definition_registry::define_custom_element_for_registry;
 mod definition_sequence;
 mod definition_state;
 mod definition_upgrade;

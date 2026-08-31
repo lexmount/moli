@@ -156,10 +156,14 @@ pub(in crate::context_bootstrap) fn custom_elements_define_callback<'s>(
     let extends_local_name = parsed.options.extends;
     let is_autonomous_definition = extends_local_name.is_none();
     let registry_key = custom_elements::registry_store_key(scope, args.this());
-    let disables_shadow = match unsafe { &mut *host_ptr }
-        .custom_elements_mut_for_registry_key(registry_key)
-        .define(scope, &parsed.name, parsed.constructor, extends_local_name)
-    {
+    let disables_shadow = match custom_elements::define_custom_element_for_registry(
+        scope,
+        host_ptr,
+        registry_key,
+        &parsed.name,
+        parsed.constructor,
+        extends_local_name,
+    ) {
         Ok(disables_shadow) => disables_shadow,
         Err(err) => {
             if err.is_pending_exception() {

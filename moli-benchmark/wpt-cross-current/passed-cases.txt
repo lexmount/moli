@@ -3261,6 +3261,7 @@ css/selectors/selectors-case-sensitive-001.html
 css/selectors/x-pseudo-element.html
 custom-elements/CustomElementRegistry-constructor-and-callbacks-are-held-strongly.html
 custom-elements/CustomElementRegistry-getName.html
+custom-elements/CustomElementRegistry.html
 custom-elements/Document-createElement-customized-builtins.html
 custom-elements/Document-createElement.html
 custom-elements/Document-createElementNS-customized-builtins.html

@@ -2557,7 +2557,6 @@ css/selectors/parsing/parse-part.html
 css/selectors/parsing/parse-slotted.html
 css/selectors/selectors-4/lang-singleton-subtag-matching.html
 css/selectors/webkit-pseudo-element.html
-custom-elements/CustomElementRegistry.html
 custom-elements/parser/parser-uses-registry-of-owner-document.html
 custom-elements/perform-microtask-checkpoint-before-construction.html
 custom-elements/reactions/Document.html

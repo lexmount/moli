@@ -268,6 +268,60 @@ fn custom_elements_define_validates_definition_inputs_in_spec_order() {
 }
 
 #[test]
+fn custom_elements_define_reentrant_proxy_stops_before_constructor_properties() {
+    let mut vm = new_storage_test_vm("https://example.com/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const calls = [];
+              const InnerElement = new Proxy(class extends HTMLElement {}, {
+                get(target, property, receiver) {
+                  calls.push(`inner:${String(property)}`);
+                  return Reflect.get(target, property, receiver);
+                }
+              });
+              const OuterElement = new Proxy(class extends HTMLElement {}, {
+                get(target, property, receiver) {
+                  calls.push(`outer:${String(property)}`);
+                  if (property === "prototype") {
+                    customElements.define("wpt-reentrant-inner", InnerElement);
+                  }
+                  return Reflect.get(target, property, receiver);
+                }
+              });
+
+              let errorName = "no-throw";
+              try {
+                customElements.define("wpt-reentrant-outer", OuterElement);
+              } catch (error) {
+                errorName = error.name;
+              }
+
+              class DefinitionAfterFailure extends HTMLElement {}
+              customElements.define("wpt-after-reentrant-failure", DefinitionAfterFailure);
+
+              return JSON.stringify({
+                errorName,
+                calls,
+                innerRegistered: customElements.get("wpt-reentrant-inner") !== undefined,
+                outerRegistered: customElements.get("wpt-reentrant-outer") !== undefined,
+                flagCleared:
+                  customElements.get("wpt-after-reentrant-failure") === DefinitionAfterFailure
+              });
+            })()
+            "#,
+        )
+        .expect("reentrant customElements.define proxy probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"errorName":"NotSupportedError","calls":["outer:prototype"],"innerRegistered":false,"outerRegistered":false,"flagCleared":true}"#
+    );
+}
+
+#[test]
 fn parent_node_replace_children_flushes_custom_element_reactions_after_operation() {
     let mut vm = new_storage_test_vm("https://example.com/");
 
