@@ -2393,6 +2393,80 @@ fn same_realm_onerror_throw_does_not_reenter_error_reporting() {
 }
 
 #[test]
+fn report_error_uses_the_receiver_realm_without_observing_exception_getters() {
+    let mut vm = new_storage_test_vm("https://report-error-receiver-realm.test/");
+
+    vm.eval(
+        r#"
+        (() => {
+          const frame = document.createElement("iframe");
+          (document.body || document.documentElement || document).appendChild(frame);
+          globalThis.__reportErrorRealmFrame = frame;
+          return "ready";
+        })()
+        "#,
+    )
+    .expect("reportError receiver Realm setup should evaluate");
+    vm.drain_pending_child_frame_work_for_test();
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const child = globalThis.__reportErrorRealmFrame.contentWindow;
+              const childEvents = [];
+              let topEvents = 0;
+              let getterCalls = 0;
+              window.addEventListener("error", () => topEvents++);
+              child.addEventListener("error", event => childEvents.push(event));
+
+              const error = new TypeError("receiver failure");
+              window.reportError.call(child, error);
+
+              const opaqueReason = {};
+              for (const name of ["name", "message", "fileName", "lineNumber", "columnNumber"]) {
+                Object.defineProperty(opaqueReason, name, {
+                  get() {
+                    getterCalls++;
+                    throw new Error(`unexpected ${name} getter`);
+                  }
+                });
+              }
+              window.reportError.call(child, opaqueReason);
+
+              let missingArgumentError = null;
+              try {
+                window.reportError();
+              } catch (exception) {
+                missingArgumentError = exception.name;
+              }
+
+              globalThis.__reportErrorRealmFrame.remove();
+              child.reportError("detached failure");
+              const detachedCallCompleted = true;
+
+              return JSON.stringify({
+                topEvents,
+                eventCount: childEvents.length,
+                exactErrors: [childEvents[0].error === error, childEvents[1].error === opaqueReason],
+                receiverRealm: childEvents.every(event => event instanceof child.ErrorEvent),
+                messagesAreNonEmpty: childEvents.every(event => event.message.length > 0),
+                getterCalls,
+                missingArgumentError,
+                detachedCallCompleted
+              });
+            })()
+            "#,
+        )
+        .expect("cross-Realm reportError probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"topEvents":0,"eventCount":2,"exactErrors":[true,true],"receiverRealm":true,"messagesAreNonEmpty":true,"getterCalls":0,"missingArgumentError":"TypeError","detachedCallCompleted":true}"#,
+    );
+}
+
+#[test]
 fn host_event_microtasks_observe_current_window_event_until_checkpoint_cleanup() {
     let mut vm = new_storage_test_vm("https://host-event-microtasks.test/");
 
