@@ -401,9 +401,29 @@ impl ParserDomMutationConsumer for ChildFrameLiveParserOwner<'_, '_, '_> {
 impl ParserElementCreationConsumer for ChildFrameLiveParserOwner<'_, '_, '_> {
     fn create_parser_element(
         &mut self,
-        _request: ParserElementCreationRequest<'_>,
+        request: ParserElementCreationRequest<'_>,
     ) -> Option<DomHandle> {
-        None
+        let host_ptr: *mut JsContextHost = self.host;
+        crate::custom_elements::create_and_construct_parser_custom_element_direct_for_document(
+            self.scope,
+            host_ptr,
+            request.document_handle,
+            request.local_name,
+            request.namespace,
+            request.prefix,
+            request.attributes,
+            request.intended_parent,
+            |document_handle, local_name, namespace, prefix| {
+                unsafe { &mut *host_ptr }
+                    .dom_host_mut()
+                    .create_parser_element_without_attributes_for_document(
+                        document_handle,
+                        local_name,
+                        namespace,
+                        prefix,
+                    )
+            },
+        )
     }
 }
 

@@ -8027,3 +8027,77 @@ async fn child_document_write_custom_element_reaction_queue_wpt_shape() {
 
     assert_eq!(result, expected);
 }
+
+#[test]
+fn child_document_write_constructs_predefined_custom_elements_without_a_body() {
+    let mut vm = new_storage_test_vm("https://document-write-custom-elements.test/");
+
+    vm.eval(
+        r#"
+            (() => {
+              const target = document.body || document.documentElement || document;
+              window.__writeCustomElementFrames = ["write", "writeln"].map(() => {
+                const frame = document.createElement("iframe");
+                target.appendChild(frame);
+                frame.srcdoc = "";
+                return frame;
+              });
+              return "scheduled";
+            })()
+            "#,
+    )
+    .expect("child document.write predefined custom element setup should evaluate");
+    vm.drain_pending_child_frame_work_for_test();
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const exercise = (frame, method, name) => {
+                const childWindow = frame.contentWindow;
+                const childDocument = frame.contentDocument;
+                const registry = childWindow.customElements;
+                let constructorCount = 0;
+                let errorName = null;
+                childWindow.addEventListener("error", event => {
+                  errorName = event.error && event.error.name;
+                  event.preventDefault();
+                }, { once: true });
+                class DefinedElement extends childWindow.HTMLElement {
+                  constructor() {
+                    super();
+                    constructorCount++;
+                  }
+                }
+                registry.define(name, DefinedElement);
+                const definitionBeforeWrite = registry.get(name) === DefinedElement;
+
+                childDocument[method](`<${name}></${name}>`);
+                const element = childDocument.querySelector(name);
+                return {
+                  registryPreserved: childWindow.customElements === registry,
+                  definitionBeforeWrite,
+                  definitionAfterWrite: registry.get(name) === DefinedElement,
+                  constructorCount,
+                  errorName,
+                  htmlElement: element instanceof childWindow.HTMLElement,
+                  customElement: element instanceof DefinedElement,
+                  ownerDocument: element.ownerDocument === childDocument
+                };
+              };
+
+              const [writeFrame, writelnFrame] = window.__writeCustomElementFrames;
+              return JSON.stringify({
+                write: exercise(writeFrame, "write", "write-defined-element"),
+                writeln: exercise(writelnFrame, "writeln", "writeln-defined-element")
+              });
+            })()
+            "#,
+        )
+        .expect("child document.write predefined custom element result should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"write":{"registryPreserved":true,"definitionBeforeWrite":true,"definitionAfterWrite":true,"constructorCount":1,"errorName":null,"htmlElement":true,"customElement":true,"ownerDocument":true},"writeln":{"registryPreserved":true,"definitionBeforeWrite":true,"definitionAfterWrite":true,"constructorCount":1,"errorName":null,"htmlElement":true,"customElement":true,"ownerDocument":true}}"#
+    );
+}

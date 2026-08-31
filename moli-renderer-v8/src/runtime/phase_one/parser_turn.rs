@@ -339,13 +339,9 @@ impl ParserElementCreationConsumer for PhaseOneParserOwner<'_> {
         &mut self,
         request: ParserElementCreationRequest<'_>,
     ) -> Option<NativeNodeId> {
-        let document_has_body = self
-            .document_body_handle_for_document(request.document_handle)
-            .is_some();
         self.vm
             .create_and_construct_parser_custom_element_direct_in_default_context(
                 request.document_handle,
-                document_has_body,
                 request.local_name,
                 request.namespace,
                 request.prefix,

@@ -282,15 +282,11 @@ impl ParserElementCreationConsumer for DocumentWriteParserMutationOwner<'_, '_, 
         &mut self,
         request: ParserElementCreationRequest<'_>,
     ) -> Option<DomHandle> {
-        let document_has_body = self
-            .document_body_handle_for_document(request.document_handle)
-            .is_some();
         let runtime = &mut *self.runtime;
         custom_elements::create_and_construct_parser_custom_element_direct_for_document(
             self.scope,
             self.host_ptr,
             request.document_handle,
-            document_has_body,
             request.local_name,
             request.namespace,
             request.prefix,
