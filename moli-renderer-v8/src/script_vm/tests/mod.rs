@@ -6411,6 +6411,47 @@ async fn pending_child_navigation_does_not_materialize_initial_empty_preload_rea
 }
 
 #[tokio::test]
+async fn empty_named_preload_materializes_child_isolated_world() {
+    let mut vm = new_storage_test_vm("https://child-empty-named-preload.test/");
+    vm.set_stored_document_start_scripts(&[crate::DocumentStartScript {
+        registry_key: Some("empty-utility-world".to_owned()),
+        devtools_session: None,
+        source: String::new(),
+        world_name: Some("playwright-utility".to_owned()),
+        has_bidi_channel_argument: false,
+        bidi_channel_handoffs: Vec::new(),
+    }]);
+
+    vm.eval(
+        r#"
+(() => {
+  const frame = document.createElement("iframe");
+  frame.srcdoc = "<!doctype html><body>child</body>";
+  (document.body || document.documentElement || document).appendChild(frame);
+})()
+"#,
+    )
+    .expect("empty named preload child setup should evaluate");
+
+    run_child_navigation_commit_and_host_load_for_test(
+        &mut vm,
+        "empty named preload child document",
+    )
+    .await;
+    let frame_id = {
+        let host = vm._context_host.borrow();
+        let handles = host.child_browsing_context_handles_in_document_order();
+        assert_eq!(handles.len(), 1, "expected one child browsing context");
+        host.child_browsing_context_frame_id_by_owner_node_id(handles[0])
+            .expect("child browsing context should have a frame id")
+    };
+    assert!(
+        vm.has_isolated_world_named_for_frame(&frame_id, "playwright-utility"),
+        "an empty world-scoped preload must still declare the child isolated world"
+    );
+}
+
+#[tokio::test]
 async fn child_body_onload_materializes_default_context_at_host_load() {
     let mut vm = new_storage_test_vm("https://child-body-onload-lazy.test/");
 

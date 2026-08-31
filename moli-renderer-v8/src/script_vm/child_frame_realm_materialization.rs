@@ -517,9 +517,6 @@ impl ScriptVm {
             .into_iter()
             .filter(|script| script.world_name.is_some())
         {
-            if script.source.trim().is_empty() {
-                continue;
-            }
             if !self.child_materialization_owner_is_current(handle, owner) {
                 break;
             }
@@ -550,6 +547,13 @@ impl ScriptVm {
                     continue;
                 }
             };
+            // Chromium uses an empty world-scoped script as a declaration
+            // that the isolated world must exist in every new document.
+            // Playwright relies on that contract for its utility world, so
+            // creating the context cannot be conditional on script contents.
+            if script.source.trim().is_empty() {
+                continue;
+            }
             activity = ChildRealmMaterializationBodyActivity::DocumentStartScript;
             if let Err(error) = self.exec_in_execution_context(execution_context_id, &script.source)
             {
