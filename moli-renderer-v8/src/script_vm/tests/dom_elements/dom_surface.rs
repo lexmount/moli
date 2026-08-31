@@ -9522,6 +9522,151 @@ fn main_and_child_window_proxies_have_immutable_prototypes() {
 }
 
 #[test]
+fn window_named_properties_implement_webidl_exotic_object_operations() {
+    let mut vm = new_storage_test_vm("https://window-named-properties.test/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+                "use strict";
+                if (!document.documentElement) {
+                    document.appendChild(document.createElement("html"));
+                }
+                if (!document.body) {
+                    document.documentElement.appendChild(document.createElement("body"));
+                }
+
+                const frame = document.createElement("iframe");
+                document.body.appendChild(frame);
+                const w = frame.contentWindow;
+                const wp = Object.getPrototypeOf(w.Window.prototype);
+                const originalPrototype = Object.getPrototypeOf(wp);
+
+                const named = w.document.createElement("div");
+                named.id = "a";
+                w.document.body.appendChild(named);
+                const indexed = w.document.createElement("div");
+                indexed.id = "0";
+                w.document.body.appendChild(indexed);
+
+                let differentPrototypeThrows = false;
+                let childPrototypeSetterThrows = false;
+                let preventExtensionsThrows = false;
+                let directSetThrows = false;
+                try {
+                    Object.setPrototypeOf(wp, {});
+                } catch (error) {
+                    differentPrototypeThrows = error instanceof TypeError;
+                }
+                try {
+                    wp.__proto__ = null;
+                } catch (error) {
+                    childPrototypeSetterThrows = error instanceof w.TypeError;
+                }
+                try {
+                    Object.preventExtensions(wp);
+                } catch (error) {
+                    preventExtensionsThrows = error instanceof TypeError;
+                }
+                try {
+                    wp.a = 1;
+                } catch (error) {
+                    directSetThrows = error instanceof TypeError;
+                }
+
+                let setterThis;
+                let directSetterThis;
+                Object.defineProperty(w.Object.prototype, "setterProbe", {
+                    configurable: true,
+                    set() { setterThis = this; }
+                });
+                Object.defineProperty(w.Object.prototype, "directSetterProbe", {
+                    configurable: true,
+                    set() { directSetterThis = this; }
+                });
+                Object.defineProperty(w.EventTarget.prototype, "blockedProbe", {
+                    configurable: true,
+                    value: 1,
+                    writable: false
+                });
+                const receiver = Object.create(wp);
+                const namedDescriptor = Object.getOwnPropertyDescriptor(wp, "a");
+                const indexedDescriptor = Reflect.getOwnPropertyDescriptor(wp, 0);
+
+                const observations = {
+                    prototype: [
+                        Reflect.setPrototypeOf(wp, originalPrototype),
+                        !Reflect.setPrototypeOf(wp, w.Object.prototype),
+                        Object.getPrototypeOf(wp) === originalPrototype,
+                        differentPrototypeThrows,
+                        childPrototypeSetterThrows
+                    ],
+                    extensibility: [
+                        !Reflect.preventExtensions(wp),
+                        Object.isExtensible(wp),
+                        preventExtensionsThrows
+                    ],
+                    properties: [
+                        wp.a === named,
+                        wp[0] === indexed,
+                        "a" in wp,
+                        Reflect.has(wp, 0),
+                        namedDescriptor.value === named,
+                        namedDescriptor.writable && !namedDescriptor.enumerable &&
+                            namedDescriptor.configurable,
+                        indexedDescriptor.value === indexed,
+                        indexedDescriptor.writable && !indexedDescriptor.enumerable &&
+                            indexedDescriptor.configurable
+                    ],
+                    directMutation: [
+                        !Reflect.defineProperty(wp, "a", {}),
+                        !Reflect.defineProperty(wp, Symbol(), {}),
+                        !Reflect.set(wp, "a", 1),
+                        !Reflect.set(wp, "missing", 1),
+                        !Reflect.set(wp, Symbol(), 1),
+                        directSetThrows,
+                        !Reflect.deleteProperty(wp, "a"),
+                        !Reflect.deleteProperty(wp, "missing"),
+                        !Reflect.deleteProperty(wp, Symbol.toStringTag),
+                        Reflect.set(wp, "directSetterProbe", 50),
+                        directSetterThis === wp
+                    ],
+                    receiverSet: [
+                        Reflect.set(wp, "a", 10, receiver),
+                        Reflect.set(wp, 0, 20, receiver),
+                        Reflect.set(wp, "setterProbe", 30, receiver),
+                        !Reflect.set(wp, "blockedProbe", 40, receiver),
+                        receiver.a === 10,
+                        receiver[0] === 20,
+                        setterThis === receiver,
+                        !Object.hasOwn(receiver, "setterProbe"),
+                        !Object.hasOwn(receiver, "blockedProbe")
+                    ],
+                    keys: [
+                        Object.getOwnPropertyNames(wp).length === 0,
+                        Reflect.ownKeys(wp).length === 1,
+                        Reflect.ownKeys(wp)[0] === Symbol.toStringTag
+                    ]
+                };
+
+                delete w.Object.prototype.setterProbe;
+                delete w.Object.prototype.directSetterProbe;
+                delete w.EventTarget.prototype.blockedProbe;
+                frame.remove();
+                return JSON.stringify(observations);
+            })()
+            "#,
+        )
+        .expect("WindowProperties exotic object operations should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"prototype":[true,true,true,true,true],"extensibility":[true,true,true],"properties":[true,true,true,true,true,true,true,true],"directMutation":[true,true,true,true,true,true,true,true,true,true,true],"receiverSet":[true,true,true,true,true,true,true,true,true],"keys":[true,true,true]}"#
+    );
+}
+
+#[test]
 fn window_internal_child_context_identity_is_not_read_from_web_properties() {
     let mut vm = new_storage_test_vm("https://window-private-identity.test/");
 

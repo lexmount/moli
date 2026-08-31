@@ -16,11 +16,41 @@ use crate::web_api_interfaces;
 use crate::{
     network_host,
     queue_microtask::window_queue_microtask_callback,
-    util::{global_constructor_prototype, v8str},
+    util::{
+        call_script_visible_function, get_private_value, global_constructor_prototype,
+        set_private_value, v8str,
+    },
     window_host,
 };
 use anyhow::{Result, anyhow};
-use moli_webapi_declare::WebApiFunctionTemplate;
+use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
+
+const WINDOW_NAMED_PROPERTIES_REFLECT_SET_SLOT: &str = "__moliWindowNamedPropertiesReflectSet";
+
+#[derive(WebApiObject)]
+#[webapi(interface = "Object")]
+struct WindowNamedPropertiesProxyHandlerDeclaration {
+    #[webapi(method, length = 4, callback = window_named_properties_proxy_set_callback)]
+    set: (),
+    #[webapi(
+        method,
+        length = 2,
+        callback = window_named_properties_proxy_set_prototype_of_callback
+    )]
+    set_prototype_of: (),
+    #[webapi(
+        method,
+        length = 3,
+        callback = window_named_properties_proxy_reject_callback
+    )]
+    define_property: (),
+    #[webapi(
+        method,
+        length = 2,
+        callback = window_named_properties_proxy_reject_callback
+    )]
+    delete_property: (),
+}
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::Window, enumerable)]
@@ -361,6 +391,55 @@ pub(crate) fn install_window_own_template_bindings<'s>(
     WindowMediaTemplateMethodsDeclaration::initialize_prototype_template(scope, window_template);
 }
 
+fn window_named_properties_proxy_set_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Ok(target) = v8::Local::<v8::Object>::try_from(args.get(0)) else {
+        rv.set(v8::Boolean::new(scope, false).into());
+        return;
+    };
+    let receiver = args.get(3);
+    let Some(reflect_set) =
+        get_private_value(scope, args.this(), WINDOW_NAMED_PROPERTIES_REFLECT_SET_SLOT)
+            .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
+    else {
+        rv.set(v8::Boolean::new(scope, false).into());
+        return;
+    };
+    let undefined = v8::undefined(scope).into();
+    if let Some(set) = call_script_visible_function(
+        scope,
+        reflect_set,
+        undefined,
+        &[target.into(), args.get(1), args.get(2), receiver],
+        "WindowProperties [[Set]]",
+    ) {
+        rv.set(set);
+    }
+}
+
+fn window_named_properties_proxy_set_prototype_of_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let unchanged = v8::Local::<v8::Object>::try_from(args.get(0))
+        .ok()
+        .and_then(|target| target.get_prototype(scope))
+        .is_some_and(|prototype| prototype.strict_equals(args.get(1)));
+    rv.set(v8::Boolean::new(scope, unchanged).into());
+}
+
+fn window_named_properties_proxy_reject_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    _args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    rv.set(v8::Boolean::new(scope, false).into());
+}
+
 pub(super) fn install_window_named_properties_object(
     scope: &mut v8::PinScope<'_, '_>,
 ) -> Result<()> {
@@ -392,10 +471,15 @@ pub(super) fn install_window_named_properties_object(
                     | v8::PropertyHandlerFlags::ONLY_INTERCEPT_STRINGS,
             ),
     );
-    let named_properties = named_properties_template
+    named_properties_template.set_indexed_property_handler(
+        v8::IndexedPropertyHandlerConfiguration::new()
+            .getter(window_named_properties_indexed_property_getter)
+            .query(window_named_properties_indexed_property_query),
+    );
+    let named_properties_target = named_properties_template
         .new_instance(scope)
         .ok_or_else(|| anyhow!("failed to create Window named properties object"))?;
-    if !named_properties
+    if !named_properties_target
         .set_prototype(scope, event_target_prototype.into())
         .unwrap_or(false)
     {
@@ -403,6 +487,31 @@ pub(super) fn install_window_named_properties_object(
             "failed to link Window named properties object to EventTarget.prototype"
         ));
     }
+    let handler = WindowNamedPropertiesProxyHandlerDeclaration {
+        set: (),
+        set_prototype_of: (),
+        define_property: (),
+        delete_property: (),
+    }
+    .bind(scope)
+    .map_err(|error| anyhow!("failed to create Window named properties proxy handler: {error}"))?;
+    let global = scope.get_current_context().global(scope);
+    let reflect = global
+        .get(scope, v8str(scope, "Reflect").into())
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+        .ok_or_else(|| anyhow!("missing Reflect for Window named properties proxy"))?;
+    let reflect_set = reflect
+        .get(scope, v8str(scope, "set").into())
+        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
+        .ok_or_else(|| anyhow!("missing Reflect.set for Window named properties proxy"))?;
+    set_private_value(
+        scope,
+        handler,
+        WINDOW_NAMED_PROPERTIES_REFLECT_SET_SLOT,
+        reflect_set.into(),
+    );
+    let named_properties = v8::Proxy::new(scope, named_properties_target, handler)
+        .ok_or_else(|| anyhow!("failed to create Window named properties proxy"))?;
     if !window_prototype
         .set_prototype(scope, named_properties.into())
         .unwrap_or(false)
