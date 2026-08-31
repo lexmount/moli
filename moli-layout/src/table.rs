@@ -52,6 +52,19 @@ struct TableRow {
     group: Option<LayoutBoxId>,
     index: usize,
     track: taffy::TrackSizingFunction,
+    percent: Option<f32>,
+    is_constrained: bool,
+    has_rowspan_start: bool,
+}
+
+#[derive(Clone, Copy)]
+struct TableSection {
+    start_row: usize,
+    row_count: usize,
+    fixed_block_size: Option<f32>,
+    percent: Option<f32>,
+    is_constrained: bool,
+    is_tbody: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -126,6 +139,7 @@ struct TableContext {
     style: Style<Atom>,
     cells: Vec<TableCell>,
     rows: Vec<TableRow>,
+    sections: Vec<TableSection>,
     columns: Vec<TableColumn>,
     captions: Vec<LayoutBoxId>,
     detailed: Option<DetailedGridInfo>,
@@ -134,6 +148,7 @@ struct TableContext {
     column_constraints: Vec<TableColumnConstraint>,
     layout_mode: TableLayoutMode,
     inline_border_spacing: f32,
+    block_border_spacing: f32,
     writing_mode: WritingMode,
 }
 
@@ -243,13 +258,12 @@ where
     let mut context = build_table_context(world, root);
     context.collect_cell_inline_constraints(world);
     let grid_inputs = context.resolve_column_tracks(inputs);
-    let mut output = {
-        let mut wrapper = TableTreeWrapper {
-            world,
-            context: &mut context,
-        };
-        compute_grid_layout(&mut wrapper, NodeId::from(0usize), grid_inputs)
-    };
+    let mut output = run_table_grid(world, &mut context, grid_inputs);
+
+    if inputs.run_mode == RunMode::PerformLayout && context.resolve_row_tracks(output.size) {
+        context.detailed = None;
+        output = run_table_grid(world, &mut context, grid_inputs);
+    }
 
     if inputs.run_mode == RunMode::PerformLayout {
         let caption_parent_writing_mode = world.boxes[root.index()].style.writing_mode();
@@ -295,6 +309,18 @@ where
     output
 }
 
+fn run_table_grid<N>(
+    world: &mut LayoutWorld<N>,
+    context: &mut TableContext,
+    inputs: LayoutInput,
+) -> LayoutOutput
+where
+    N: Copy + Debug + Eq + Hash,
+{
+    let mut wrapper = TableTreeWrapper { world, context };
+    compute_grid_layout(&mut wrapper, NodeId::from(0usize), inputs)
+}
+
 fn build_table_context<N>(world: &LayoutWorld<N>, root: LayoutBoxId) -> TableContext
 where
     N: Copy + Debug + Eq + Hash,
@@ -309,6 +335,10 @@ where
     let mut style = root_style.taffy.clone();
     style.display = Display::Grid;
     style.item_is_table = true;
+    // CSS table row distribution is not Grid's align-content: stretch. The
+    // table algorithm measures row minima and distributes the table's used
+    // block size according to row and section constraints below.
+    style.align_content = Some(taffy::AlignContent::START);
     style.grid_auto_flow = GridAutoFlow::RowDense;
     style.grid_auto_columns.clear();
     style.grid_auto_rows.clear();
@@ -316,6 +346,7 @@ where
     let grouped_children = TableGroupedChildren::collect(world, root);
     let mut cells = Vec::new();
     let mut rows = Vec::new();
+    let mut sections = Vec::new();
     let mut columns = Vec::new();
     let mut max_columns = 0usize;
     let mut column_tracks = Vec::new();
@@ -329,7 +360,31 @@ where
         collect_columns(world, column, None, &mut columns, &mut column_tracks);
     }
     for section in grouped_children.sections() {
-        collect_rows(world, section, None, &mut rows, &mut cells);
+        let start_row = rows.len();
+        collect_rows(world, section, None, writing_mode, &mut rows, &mut cells);
+        let row_count = rows.len() - start_row;
+        if row_count == 0 {
+            continue;
+        }
+        clamp_section_row_percentages(&mut rows[start_row..]);
+        let section_kind = world.boxes[section.index()].kind;
+        let section_dimension = writing_mode
+            .to_logical(world.boxes[section.index()].style.taffy.size)
+            .block_size;
+        let (fixed_block_size, percent, is_constrained) = table_block_constraint(section_dimension);
+        let is_row_group = !matches!(
+            section_kind,
+            LayoutBoxKind::TableRow | LayoutBoxKind::AnonymousTableRow
+        );
+        sections.push(TableSection {
+            start_row,
+            row_count,
+            fixed_block_size: is_row_group.then_some(fixed_block_size).flatten(),
+            percent: is_row_group.then_some(percent).flatten(),
+            is_constrained: is_row_group && is_constrained,
+            is_tbody: grouped_children.header != Some(section)
+                && grouped_children.footer != Some(section),
+        });
     }
     place_table_cells(&mut cells, &rows, &mut max_columns);
     max_columns = max_columns.max(column_tracks.len()).max(1);
@@ -373,6 +428,7 @@ where
         style,
         cells,
         rows,
+        sections,
         columns,
         captions: grouped_children.captions,
         detailed: None,
@@ -381,6 +437,7 @@ where
         column_constraints: column_tracks,
         layout_mode,
         inline_border_spacing: spacing.width,
+        block_border_spacing: spacing.height,
         writing_mode,
     }
 }
@@ -605,6 +662,409 @@ impl TableContext {
             fixed_grid_min_inline_size(&self.column_constraints) + inline_insets + internal_spacing,
         )
     }
+
+    /// Convert Grid's intrinsic row measurements into CSS table row sizes.
+    ///
+    /// Grid owns cell measurement and placement, but its `align-content:
+    /// stretch` rule distributes free block space equally across auto tracks.
+    /// CSS tables instead classify rows and row groups as percentage, fixed,
+    /// or automatic, then distribute excess block size by that hierarchy.
+    /// The first Grid pass runs with start alignment to expose row minima; a
+    /// second pass consumes the final fixed tracks produced here.
+    fn resolve_row_tracks(&mut self, grid_size: Size<f32>) -> bool {
+        let Some(detailed) = self.detailed.as_ref() else {
+            return false;
+        };
+        if detailed.rows.sizes.len() != self.rows.len() || self.rows.is_empty() {
+            return false;
+        }
+
+        let percentage_basis = Some(grid_size.width);
+        let padding = self
+            .style
+            .padding
+            .resolve_or_zero(percentage_basis, resolve_stylo_calc_value);
+        let border = self
+            .style
+            .border
+            .resolve_or_zero(percentage_basis, resolve_stylo_calc_value);
+        let grid_block_size =
+            (grid_size.height - padding.top - padding.bottom - border.top - border.bottom).max(0.0);
+        let mut row_sizes = detailed.rows.sizes.clone();
+        let original_row_sizes = row_sizes.clone();
+
+        for section in &self.sections {
+            let Some(fixed_block_size) = section.fixed_block_size else {
+                continue;
+            };
+            let current = row_range_block_size(
+                &row_sizes,
+                section.start_row,
+                section.row_count,
+                self.block_border_spacing,
+            );
+            if fixed_block_size > current {
+                distribute_excess_block_size_to_rows(
+                    section.start_row,
+                    section.row_count,
+                    fixed_block_size,
+                    false,
+                    self.block_border_spacing,
+                    Some(fixed_block_size),
+                    &self.rows,
+                    &mut row_sizes,
+                );
+            }
+        }
+
+        distribute_table_block_size_to_sections(
+            self.block_border_spacing,
+            grid_block_size,
+            &self.sections,
+            &self.rows,
+            &mut row_sizes,
+        );
+
+        let changed = original_row_sizes
+            .iter()
+            .zip(&row_sizes)
+            .any(|(before, after)| (before - after).abs() > f32::EPSILON);
+        if changed {
+            self.style.grid_template_rows = row_sizes
+                .into_iter()
+                .map(|size| {
+                    let track: taffy::TrackSizingFunction = style_helpers::length(size.max(0.0));
+                    track.into()
+                })
+                .collect();
+        }
+        changed
+    }
+}
+
+fn row_range_block_size(
+    row_sizes: &[f32],
+    start_row: usize,
+    row_count: usize,
+    border_spacing: f32,
+) -> f32 {
+    let end_row = start_row.saturating_add(row_count).min(row_sizes.len());
+    if start_row >= end_row {
+        return 0.0;
+    }
+    row_sizes[start_row..end_row].iter().sum::<f32>()
+        + border_spacing.max(0.0) * (end_row - start_row - 1) as f32
+}
+
+#[allow(clippy::too_many_arguments)]
+fn distribute_excess_block_size_to_rows(
+    start_row: usize,
+    row_count: usize,
+    desired_block_size: f32,
+    is_rowspan_distribution: bool,
+    border_spacing: f32,
+    percentage_resolution_block_size: Option<f32>,
+    rows: &[TableRow],
+    row_sizes: &mut [f32],
+) {
+    if row_count == 0 || start_row >= rows.len() || start_row >= row_sizes.len() {
+        return;
+    }
+    let end_row = start_row
+        .saturating_add(row_count)
+        .min(rows.len())
+        .min(row_sizes.len());
+    let row_count = end_row - start_row;
+    let target_row_sum = (desired_block_size.max(0.0)
+        - border_spacing.max(0.0) * row_count.saturating_sub(1) as f32)
+        .max(0.0);
+    let mut total_block_size = row_sizes[start_row..end_row].iter().sum::<f32>();
+    let mut distributable = target_row_sum - total_block_size;
+    if distributable <= 0.0 {
+        return;
+    }
+
+    let mut rows_with_originating_rowspan = Vec::new();
+    let mut percent_rows_with_deficit = Vec::new();
+    let mut percent_deficits = Vec::new();
+    let mut unconstrained_non_empty_rows = Vec::new();
+    let mut empty_rows = Vec::new();
+    let mut unconstrained_empty_rows = Vec::new();
+    let mut non_empty_rows = Vec::new();
+    let mut constrained_non_empty_row_count = 0usize;
+
+    for index in start_row..end_row {
+        let row = &rows[index];
+        if is_rowspan_distribution && index != start_row && row.has_rowspan_start {
+            rows_with_originating_rowspan.push(index);
+        }
+
+        let mut is_empty = row_sizes[index] == 0.0;
+        if let (Some(percent), Some(percentage_basis)) =
+            (row.percent, percentage_resolution_block_size)
+        {
+            let deficit = (percent * percentage_basis - row_sizes[index]).max(0.0);
+            if percent != 0.0 && deficit > 0.0 {
+                percent_rows_with_deficit.push(index);
+                percent_deficits.push(deficit);
+                is_empty = false;
+            }
+        }
+
+        let is_constrained = row.is_constrained
+            && (row.percent.is_none() || percentage_resolution_block_size.is_some());
+        if is_empty {
+            empty_rows.push(index);
+            if !is_constrained {
+                unconstrained_empty_rows.push(index);
+            }
+        } else {
+            non_empty_rows.push(index);
+            if is_constrained {
+                constrained_non_empty_row_count += 1;
+            } else {
+                unconstrained_non_empty_rows.push(index);
+            }
+        }
+    }
+
+    if !percent_rows_with_deficit.is_empty() {
+        let total_deficit = percent_deficits.iter().sum::<f32>();
+        let percent_distributable = distributable.min(total_deficit);
+        let distributed = grow_weighted(
+            row_sizes,
+            &percent_rows_with_deficit,
+            &percent_deficits,
+            percent_distributable,
+        );
+        distributable -= distributed;
+        total_block_size += distributed;
+        if distributable <= 0.0 {
+            return;
+        }
+    }
+
+    if !rows_with_originating_rowspan.is_empty() {
+        grow_evenly(row_sizes, &rows_with_originating_rowspan, distributable);
+        return;
+    }
+
+    if !unconstrained_non_empty_rows.is_empty() {
+        let weights = unconstrained_non_empty_rows
+            .iter()
+            .map(|index| row_sizes[*index])
+            .collect::<Vec<_>>();
+        grow_weighted(
+            row_sizes,
+            &unconstrained_non_empty_rows,
+            &weights,
+            distributable,
+        );
+        return;
+    }
+
+    if !empty_rows.is_empty() {
+        let has_only_empty_rows = empty_rows.len() == row_count;
+        if is_rowspan_distribution && has_only_empty_rows {
+            row_sizes[*empty_rows.last().expect("non-empty row index list")] += distributable;
+            return;
+        }
+        if !is_rowspan_distribution
+            && (has_only_empty_rows
+                || empty_rows.len() + constrained_non_empty_row_count == row_count)
+        {
+            let rows_to_grow = if unconstrained_empty_rows.is_empty() {
+                &empty_rows
+            } else {
+                &unconstrained_empty_rows
+            };
+            grow_evenly(row_sizes, rows_to_grow, distributable);
+            return;
+        }
+    }
+
+    if !non_empty_rows.is_empty() {
+        let weights = non_empty_rows
+            .iter()
+            .map(|index| row_sizes[*index])
+            .collect::<Vec<_>>();
+        let weight_sum = weights.iter().sum::<f32>();
+        if weight_sum > 0.0 {
+            grow_weighted(row_sizes, &non_empty_rows, &weights, distributable);
+        } else if total_block_size == 0.0 {
+            grow_evenly(row_sizes, &non_empty_rows, distributable);
+        }
+    }
+}
+
+fn distribute_table_block_size_to_sections(
+    border_spacing: f32,
+    table_grid_block_size: f32,
+    sections: &[TableSection],
+    rows: &[TableRow],
+    row_sizes: &mut [f32],
+) {
+    if sections.is_empty() {
+        return;
+    }
+
+    let border_spacing = border_spacing.max(0.0);
+    let target_section_sum = (table_grid_block_size.max(0.0)
+        - border_spacing * sections.len().saturating_sub(1) as f32)
+        .max(0.0);
+    let mut section_sizes = sections
+        .iter()
+        .map(|section| {
+            row_range_block_size(
+                row_sizes,
+                section.start_row,
+                section.row_count,
+                border_spacing,
+            )
+        })
+        .collect::<Vec<_>>();
+    let minimum_size = section_sizes.iter().sum::<f32>();
+    if target_section_sum <= minimum_size {
+        return;
+    }
+
+    let mut remaining = target_section_sum - minimum_size;
+    let percent_indices = sections
+        .iter()
+        .enumerate()
+        .filter_map(|(index, section)| section.percent.map(|_| index))
+        .collect::<Vec<_>>();
+    if !percent_indices.is_empty() {
+        let percent_deficits = percent_indices
+            .iter()
+            .map(|index| {
+                let section = &sections[*index];
+                (section.percent.unwrap_or(0.0) * target_section_sum - section_sizes[*index])
+                    .max(0.0)
+            })
+            .collect::<Vec<_>>();
+        let total_deficit = percent_deficits.iter().sum::<f32>();
+        if total_deficit > 0.0 {
+            let distributed = grow_weighted(
+                &mut section_sizes,
+                &percent_indices,
+                &percent_deficits,
+                remaining.min(total_deficit),
+            );
+            remaining -= distributed;
+        }
+    }
+
+    if remaining > 0.0 {
+        let has_tbody = sections.iter().any(|section| section.is_tbody);
+        let eligible = |section: &TableSection| !has_tbody || section.is_tbody;
+        let automatic = sections
+            .iter()
+            .enumerate()
+            .filter_map(|(index, section)| {
+                (eligible(section) && section.percent.is_none() && !section.is_constrained)
+                    .then_some(index)
+            })
+            .collect::<Vec<_>>();
+        let fixed = sections
+            .iter()
+            .enumerate()
+            .filter_map(|(index, section)| {
+                (eligible(section) && section.percent.is_none() && section.is_constrained)
+                    .then_some(index)
+            })
+            .collect::<Vec<_>>();
+        let percentage = sections
+            .iter()
+            .enumerate()
+            .filter_map(|(index, section)| {
+                (eligible(section) && section.percent.is_some()).then_some(index)
+            })
+            .collect::<Vec<_>>();
+        let recipients = if !automatic.is_empty() {
+            automatic
+        } else if !fixed.is_empty() {
+            fixed
+        } else {
+            percentage
+        };
+        if !recipients.is_empty() {
+            let weights = recipients
+                .iter()
+                .map(|index| section_sizes[*index])
+                .collect::<Vec<_>>();
+            if weights.iter().sum::<f32>() > 0.0 {
+                grow_weighted(&mut section_sizes, &recipients, &weights, remaining);
+            } else {
+                grow_evenly(&mut section_sizes, &recipients, remaining);
+            }
+        }
+    }
+
+    for (section, desired_block_size) in sections.iter().zip(section_sizes) {
+        let current = row_range_block_size(
+            row_sizes,
+            section.start_row,
+            section.row_count,
+            border_spacing,
+        );
+        if desired_block_size > current {
+            distribute_excess_block_size_to_rows(
+                section.start_row,
+                section.row_count,
+                desired_block_size,
+                false,
+                border_spacing,
+                Some(desired_block_size),
+                rows,
+                row_sizes,
+            );
+        }
+    }
+}
+
+fn grow_weighted(sizes: &mut [f32], indices: &[usize], weights: &[f32], amount: f32) -> f32 {
+    if amount <= 0.0 || indices.is_empty() || indices.len() != weights.len() {
+        return 0.0;
+    }
+    let total_weight = weights.iter().sum::<f32>();
+    if total_weight <= 0.0 {
+        return grow_evenly(sizes, indices, amount);
+    }
+
+    let mut remaining = amount;
+    for (position, (index, weight)) in indices.iter().zip(weights).enumerate() {
+        let delta = if position + 1 == indices.len() {
+            remaining
+        } else {
+            amount * weight.max(0.0) / total_weight
+        };
+        if let Some(size) = sizes.get_mut(*index) {
+            *size += delta;
+            remaining -= delta;
+        }
+    }
+    amount - remaining
+}
+
+fn grow_evenly(sizes: &mut [f32], indices: &[usize], amount: f32) -> f32 {
+    if amount <= 0.0 || indices.is_empty() {
+        return 0.0;
+    }
+    let share = amount / indices.len() as f32;
+    let mut remaining = amount;
+    for (position, index) in indices.iter().enumerate() {
+        let delta = if position + 1 == indices.len() {
+            remaining
+        } else {
+            share
+        };
+        if let Some(size) = sizes.get_mut(*index) {
+            *size += delta;
+            remaining -= delta;
+        }
+    }
+    amount - remaining
 }
 
 fn collect_columns<N>(
@@ -654,6 +1114,7 @@ fn collect_rows<N>(
     world: &LayoutWorld<N>,
     current: LayoutBoxId,
     group: Option<LayoutBoxId>,
+    table_writing_mode: WritingMode,
     rows: &mut Vec<TableRow>,
     cells: &mut Vec<TableCell>,
 ) where
@@ -665,19 +1126,16 @@ fn collect_rows<N>(
         | LayoutBoxKind::TableFooterGroup
         | LayoutBoxKind::AnonymousTableRowGroup => {
             for child in world.boxes[current.index()].children.iter().copied() {
-                collect_rows(world, child, Some(current), rows, cells);
+                collect_rows(world, child, Some(current), table_writing_mode, rows, cells);
             }
         }
         LayoutBoxKind::TableRow | LayoutBoxKind::AnonymousTableRow => {
             let row_index = rows.len();
-            rows.push(TableRow {
-                id: current,
-                group,
-                index: row_index,
-                track: minimum_dimension_track(
-                    world.boxes[current.index()].style.taffy.size.height,
-                ),
-            });
+            let row_dimension = table_writing_mode
+                .to_logical(world.boxes[current.index()].style.taffy.size)
+                .block_size;
+            let (_, mut row_percent, mut is_constrained) = table_block_constraint(row_dimension);
+            let mut has_rowspan_start = false;
             for cell in world.boxes[current.index()].children.iter().copied() {
                 if !matches!(
                     world.boxes[cell.index()].kind,
@@ -690,6 +1148,15 @@ fn collect_rows<N>(
                 let row_span = usize::from(data.row_span.max(1));
                 let authored_style = &world.boxes[cell.index()].style;
                 let mut cell_style = authored_style.taffy.clone();
+                let cell_block_size = table_writing_mode.to_logical(cell_style.size).block_size;
+                let (_, cell_percent, cell_is_constrained) =
+                    table_block_constraint(cell_block_size);
+                if row_span == 1 {
+                    is_constrained |= cell_is_constrained;
+                    row_percent = max_optional(row_percent, cell_percent);
+                } else {
+                    has_rowspan_start = true;
+                }
                 cell_style.margin = Rect::ZERO.map(style_helpers::length);
                 if cell_style.align_content.is_none() {
                     cell_style.align_content = match authored_style.vertical_align().kind {
@@ -710,6 +1177,15 @@ fn collect_rows<N>(
                     column_span,
                 });
             }
+            rows.push(TableRow {
+                id: current,
+                group,
+                index: row_index,
+                track: minimum_dimension_track(row_dimension),
+                percent: row_percent,
+                is_constrained,
+                has_rowspan_start,
+            });
         }
         _ => {}
     }
@@ -813,6 +1289,34 @@ fn minimum_dimension_track(dimension: Dimension) -> taffy::TrackSizingFunction {
             style_helpers::auto(),
         ),
         _ => style_helpers::auto(),
+    }
+}
+
+fn table_block_constraint(dimension: Dimension) -> (Option<f32>, Option<f32>, bool) {
+    match dimension.tag() {
+        taffy::CompactLength::LENGTH_TAG => (Some(dimension.value().max(0.0)), None, true),
+        taffy::CompactLength::PERCENT_TAG => (None, Some(dimension.value().max(0.0)), true),
+        _ => (None, None, false),
+    }
+}
+
+fn max_optional(left: Option<f32>, right: Option<f32>) -> Option<f32> {
+    match (left, right) {
+        (Some(left), Some(right)) => Some(left.max(right)),
+        (Some(value), None) | (None, Some(value)) => Some(value),
+        (None, None) => None,
+    }
+}
+
+fn clamp_section_row_percentages(rows: &mut [TableRow]) {
+    let mut claimed = 0.0f32;
+    for row in rows {
+        let Some(percent) = row.percent else {
+            continue;
+        };
+        let percent = percent.min((1.0 - claimed).max(0.0));
+        row.percent = Some(percent);
+        claimed += percent;
     }
 }
 
@@ -1448,5 +1952,123 @@ where
 
     fn set_detailed_grid_info(&mut self, _node_id: NodeId, detailed_grid_info: DetailedGridInfo) {
         self.context.detailed = Some(detailed_grid_info);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row(percent: Option<f32>, is_constrained: bool) -> TableRow {
+        TableRow {
+            id: LayoutBoxId::from_index(0),
+            group: None,
+            index: 0,
+            track: style_helpers::auto(),
+            percent,
+            is_constrained,
+            has_rowspan_start: false,
+        }
+    }
+
+    fn assert_sizes(actual_sizes: &[f32], expected_sizes: &[f32]) {
+        assert_eq!(actual_sizes.len(), expected_sizes.len());
+        for (actual, expected) in actual_sizes.iter().zip(expected_sizes) {
+            assert!(
+                (actual - expected).abs() < 0.001,
+                "expected {expected}, got {actual}; sizes={actual_sizes:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn row_distribution_prefers_percentage_then_unconstrained_rows() {
+        let rows = [row(Some(0.3), true), row(None, false)];
+        let mut sizes = [10.0, 10.0];
+        distribute_excess_block_size_to_rows(
+            0,
+            2,
+            100.0,
+            false,
+            0.0,
+            Some(100.0),
+            &rows,
+            &mut sizes,
+        );
+        assert_sizes(&sizes, &[30.0, 70.0]);
+    }
+
+    #[test]
+    fn row_distribution_grows_only_auto_rows_before_fixed_rows() {
+        let rows = [row(None, true), row(None, false)];
+        let mut sizes = [30.0, 20.0];
+        distribute_excess_block_size_to_rows(
+            0,
+            2,
+            100.0,
+            false,
+            0.0,
+            Some(100.0),
+            &rows,
+            &mut sizes,
+        );
+        assert_sizes(&sizes, &[30.0, 70.0]);
+    }
+
+    #[test]
+    fn row_distribution_grows_all_fixed_rows_proportionally_as_last_resort() {
+        let rows = [row(None, true), row(None, true)];
+        let mut sizes = [20.0, 40.0];
+        distribute_excess_block_size_to_rows(
+            0,
+            2,
+            120.0,
+            false,
+            0.0,
+            Some(120.0),
+            &rows,
+            &mut sizes,
+        );
+        assert_sizes(&sizes, &[40.0, 80.0]);
+    }
+
+    #[test]
+    fn table_distribution_prefers_tbody_sections_and_redistributes_fixed_groups() {
+        let rows = [
+            row(None, true),
+            row(None, false),
+            row(None, false),
+            row(None, false),
+        ];
+        let sections = [
+            TableSection {
+                start_row: 0,
+                row_count: 1,
+                fixed_block_size: None,
+                percent: None,
+                is_constrained: false,
+                is_tbody: false,
+            },
+            TableSection {
+                start_row: 1,
+                row_count: 2,
+                fixed_block_size: Some(60.0),
+                percent: None,
+                is_constrained: true,
+                is_tbody: true,
+            },
+            TableSection {
+                start_row: 3,
+                row_count: 1,
+                fixed_block_size: None,
+                percent: None,
+                is_constrained: false,
+                is_tbody: true,
+            },
+        ];
+        let mut sizes = [20.0, 10.0, 10.0, 10.0];
+        distribute_excess_block_size_to_rows(1, 2, 60.0, false, 0.0, Some(60.0), &rows, &mut sizes);
+        distribute_table_block_size_to_sections(0.0, 120.0, &sections, &rows, &mut sizes);
+        assert_sizes(&sizes, &[20.0, 30.0, 30.0, 40.0]);
     }
 }

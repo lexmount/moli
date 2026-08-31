@@ -163,6 +163,7 @@ mod service_worker_internal;
 mod shared_worker_client_event;
 mod storage_event_delivery;
 mod stylesheet_task;
+mod table_row_distribution;
 mod text_track_default_mode;
 mod text_track_load;
 mod timer;
