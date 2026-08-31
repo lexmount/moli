@@ -211,6 +211,127 @@ document.body.innerHTML = `
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn screenshot_resolves_replaced_grid_stretch_before_natural_aspect_ratio() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        loader.set_image_fetch_enabled(true);
+        let document_url =
+            Url::parse("https://example.com/grid-replaced-stretch-ratio.html").expect("document URL");
+        let (mut page_vm, _resource_source, _owner_wake_rx) =
+            page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0}
+.grid{display:grid;grid-template:100% / 100%;width:350px;height:250px}
+.align{align-self:stretch}
+.justify{justify-self:stretch}
+</style>`;
+const sources = {
+  heightOnly: '<svg xmlns="http://www.w3.org/2000/svg" height="20px" viewBox="0 0 50 100"></svg>',
+  widthOnly: '<svg xmlns="http://www.w3.org/2000/svg" width="20px" viewBox="0 0 50 100"></svg>',
+  zeroWidth: '<svg xmlns="http://www.w3.org/2000/svg" width="0px" height="20px" viewBox="0 0 50 100"></svg>',
+  zeroHeight: '<svg xmlns="http://www.w3.org/2000/svg" width="20px" height="0px" viewBox="0 0 50 100"></svg>',
+};
+const alignments = {
+  both: 'align justify',
+  block: 'align',
+  inline: 'justify',
+  normal: '',
+};
+globalThis.__gridStretchEntries = [];
+for (const [sourceName, source] of Object.entries(sources)) {
+  for (const [alignmentName, className] of Object.entries(alignments)) {
+    const host = document.createElement('div');
+    host.className = 'grid';
+    const image = document.createElement('img');
+    image.className = className;
+    image.src = `data:image/svg+xml,${encodeURIComponent(source)}`;
+    host.append(image);
+    document.body.append(host);
+    __gridStretchEntries.push([`${sourceName}/${alignmentName}`, host, image]);
+  }
+}
+'installed'
+"#,
+        )?;
+
+        for _ in 0..16 {
+            let task = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+                loop {
+                    if let Some(task) = page_vm.take_dom_manipulation_body_task_for_test(
+                        PageDomManipulationTestFamily::ImageLoadEvent,
+                    ) {
+                        break task;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("each local SVG decode should publish an image-load task");
+            let crate::page_task_queue::RendererPageDomManipulationTask::ImageLoadEvent(
+                image_task,
+            ) = task
+            else {
+                unreachable!("exact image-load selection preserves its task variant")
+            };
+            assert_eq!(
+                image_task.kind(),
+                crate::page_task_queue::RendererPageImageLoadEventKind::Load,
+                "each preferred-ratio SVG should become available",
+            );
+            page_vm
+                .run_claimed_dom_manipulation_task_through_selected_dispatcher_for_test(
+                    crate::page_task_queue::RendererPageDomManipulationTask::ImageLoadEvent(
+                        image_task,
+                    ),
+                    &loader,
+                )
+                .await?;
+        }
+
+        page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(400, 4_000, 1.0))?
+            .expect("replaced Grid stretch screenshot layout");
+        let geometry = page_vm.vm_mut().eval(
+            r#"JSON.stringify(Object.fromEntries(__gridStretchEntries.map(([name,host,image])=>{
+  const hostRect=host.getBoundingClientRect();
+  const imageRect=image.getBoundingClientRect();
+  return [name,[imageRect.left-hostRect.left,imageRect.top-hostRect.top,imageRect.width,imageRect.height]];
+})))"#,
+        )?;
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&geometry)?,
+            serde_json::json!({
+                "heightOnly/both": [0, 0, 350, 250],
+                "heightOnly/block": [0, 0, 125, 250],
+                "heightOnly/inline": [0, 0, 350, 700],
+                "heightOnly/normal": [0, 0, 10, 20],
+                "widthOnly/both": [0, 0, 350, 250],
+                "widthOnly/block": [0, 0, 125, 250],
+                "widthOnly/inline": [0, 0, 350, 700],
+                "widthOnly/normal": [0, 0, 20, 40],
+                "zeroWidth/both": [0, 0, 350, 250],
+                "zeroWidth/block": [0, 0, 125, 250],
+                "zeroWidth/inline": [0, 0, 350, 700],
+                "zeroWidth/normal": [0, 0, 0, 0],
+                "zeroHeight/both": [0, 0, 350, 250],
+                "zeroHeight/block": [0, 0, 125, 250],
+                "zeroHeight/inline": [0, 0, 350, 700],
+                "zeroHeight/normal": [0, 0, 20, 40],
+            }),
+            "explicit Grid stretch must own its axis before preferred-ratio transfer",
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("replaced Grid stretch fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn screenshot_renders_zero_axis_svg_in_the_stretched_grid_content_viewport() {
     run_page_vm_async_test(async move {
         let loader =

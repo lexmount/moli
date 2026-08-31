@@ -121,11 +121,16 @@ fn concrete_object_size(
     default_size: Size<f32>,
 ) -> Size<f32> {
     match (width, height, ratio) {
-        (Some(width), Some(height), _) => Size { width, height },
-        (Some(width), None, Some(ratio)) => Size {
+        // Natural dimensions and the preferred ratio are independent inputs.
+        // When both are present Blink normalizes the block size from the
+        // inline size, even when either authored SVG axis is zero. Keeping the
+        // raw dimensions in ReplacedNaturalSizing still lets DOM APIs expose
+        // them unchanged; only the layout-facing natural size is normalized.
+        (Some(width), _, Some(ratio)) => Size {
             width,
             height: width / ratio,
         },
+        (Some(width), Some(height), None) => Size { width, height },
         (Some(width), None, None) => Size {
             width,
             height: default_size.height,
@@ -569,6 +574,37 @@ mod tests {
         );
         assert_eq!(unavailable.inherent_size, Size::ZERO);
         assert_eq!(unavailable.inherent_ratio, None);
+    }
+
+    #[test]
+    fn preferred_ratio_normalizes_degenerate_natural_block_sizes_for_layout() {
+        let context = |width, height| {
+            ReplacedContext::for_element(
+                LayoutReplacedKind::Image,
+                Some(ReplacedMetrics {
+                    natural_sizing: Some(ReplacedNaturalSizing {
+                        width: Some(width),
+                        height: Some(height),
+                        ratio: Some(0.5),
+                    }),
+                    ..ReplacedMetrics::default()
+                }),
+            )
+        };
+
+        let zero_width = context(0.0, 20.0);
+        assert_eq!(zero_width.inherent_size, Size::ZERO);
+        assert_eq!(zero_width.inherent_ratio, Some(0.5));
+
+        let zero_height = context(20.0, 0.0);
+        assert_eq!(
+            zero_height.inherent_size,
+            Size {
+                width: 20.0,
+                height: 40.0
+            }
+        );
+        assert_eq!(zero_height.inherent_ratio, Some(0.5));
     }
 
     fn measure(style: &taffy::Style<Atom>) -> Size<f32> {

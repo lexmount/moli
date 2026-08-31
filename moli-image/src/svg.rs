@@ -154,10 +154,16 @@ pub fn svg_image_metadata_from_root_attributes(
     let view_box_ratio = view_box
         .and_then(svg_view_box)
         .map(|(width, height)| width / height);
-    let intrinsic_ratio = intrinsic_width
+    let dimension_ratio = intrinsic_width
         .zip(intrinsic_height)
         .filter(|(_, height)| *height > 0.0)
         .map(|(width, height)| width / height)
+        .filter(|ratio| ratio.is_finite() && *ratio > 0.0);
+    // A degenerate natural dimension does not erase a usable viewBox ratio.
+    // Blink keeps these as separate inputs: for example, width=0/height=20
+    // still exposes 0x20 through HTMLImageElement while layout can use the
+    // viewBox ratio when another sizing rule supplies a non-degenerate axis.
+    let intrinsic_ratio = dimension_ratio
         .or(view_box_ratio)
         .filter(|ratio| ratio.is_finite() && *ratio > 0.0);
     let (concrete_width, concrete_height) =
@@ -487,6 +493,18 @@ mod tests {
         assert_eq!(ratio_only.intrinsic_height, None);
         assert_eq!(ratio_only.intrinsic_ratio, Some(1.0));
         assert_eq!(ratio_only.concrete_dimensions(), Some((150, 150)));
+
+        let zero_width_with_view_box = probe_svg_image(
+            br#"<svg xmlns="http://www.w3.org/2000/svg" width="0" height="20" viewBox="0 0 50 100"/>"#,
+        )
+        .unwrap();
+        assert_eq!(zero_width_with_view_box.intrinsic_width, Some(0.0));
+        assert_eq!(zero_width_with_view_box.intrinsic_height, Some(20.0));
+        assert_eq!(zero_width_with_view_box.intrinsic_ratio, Some(0.5));
+        assert_eq!(
+            zero_width_with_view_box.concrete_dimensions(),
+            Some((0, 20))
+        );
 
         let no_natural_size =
             probe_svg_image(br#"<svg xmlns="http://www.w3.org/2000/svg"/>"#).unwrap();
