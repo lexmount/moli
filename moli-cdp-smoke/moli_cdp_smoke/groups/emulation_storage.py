@@ -4,9 +4,9 @@ import json
 import time
 import urllib.parse
 import urllib.request
-from typing import Any
+from typing import Any, Awaitable
 
-from ..assertions import SmokeError, assert_equal, record
+from ..assertions import SmokeError, assert_equal, record, record_contract
 from ..png_image import decode_png
 
 
@@ -144,13 +144,112 @@ async def run_locale_timezone_runtime_surface_smoke(
             )
             assert_equal(
                 runtime.get("intlLocales"),
-                ["fr-FR", "fr-FR", "fr-FR"],
+                {
+                    "Collator": "fr-FR",
+                    "DateTimeFormat": "fr-FR",
+                    "ListFormat": "fr-FR",
+                    "NumberFormat": "fr-FR",
+                    "PluralRules": "fr-FR",
+                    "RelativeTimeFormat": "fr-FR",
+                    "Segmenter": "fr-FR",
+                },
                 "locale override drives default Intl constructors",
             )
             assert_equal(runtime.get("timezone"), "Europe/Paris", "Intl timezone override")
             assert_equal(runtime.get("frenchDecimal"), True, "Intl locale formatting override")
-            assert_equal(runtime.get("winter"), [-60, 1], "winter Date timezone override")
-            assert_equal(runtime.get("summer"), [-120, 2], "summer Date timezone override")
+            assert_equal(
+                runtime.get("winter"),
+                [-60, 2024, 0, 1, 1, 1, 0, 0, 0],
+                "winter Date timezone override",
+            )
+            assert_equal(
+                runtime.get("summer"),
+                [-120, 2024, 6, 1, 1, 2],
+                "summer Date timezone override",
+            )
+            assert_equal(
+                runtime.get("dateBoundary"),
+                [2024, 0, 1, 1, 0, 30],
+                "timezone override crosses the local calendar boundary",
+            )
+            assert_equal(
+                runtime.get("localeDateStrings"),
+                ["01/01/2024 01:00:00", "01/01/2024", "01:00:00"],
+                "Date locale methods consume both overrides",
+            )
+            assert_equal(
+                runtime.get("explicitOptions"),
+                ["en-US", "UTC"],
+                "explicit Intl options win over emulation defaults",
+            )
+            assert_equal(
+                runtime.get("invalidOptions"),
+                "TypeError",
+                "Intl option validation survives default injection",
+            )
+            date_strings = runtime.get("dateStrings")
+            if not isinstance(date_strings, list) or len(date_strings) != 3:
+                raise SmokeError(f"Date string override returned an invalid shape: {date_strings!r}")
+            expected_prefixes = (
+                "Mon Jan 01 2024 01:00:00 GMT+0100",
+                "Mon Jan 01 2024",
+                "01:00:00 GMT+0100",
+            )
+            for value, prefix in zip(date_strings, expected_prefixes, strict=True):
+                if not isinstance(value, str) or not value.startswith(prefix):
+                    raise SmokeError(
+                        f"Date string override: expected prefix {prefix!r}, got {value!r}"
+                    )
+
+            invalid_timezone_error = await _expect_protocol_error(
+                cdp.send(
+                    "Emulation.setTimezoneOverride",
+                    {"timezoneId": "Mars/Olympus"},
+                ),
+                "invalid timezone override",
+            )
+            if "invalid timezone" not in invalid_timezone_error.lower():
+                raise SmokeError(
+                    "invalid timezone returned an unexpected protocol error: "
+                    f"{invalid_timezone_error}"
+                )
+            assert_equal(
+                await _read_locale_timezone_runtime(page),
+                runtime,
+                "rejected timezone override leaves the active state unchanged",
+            )
+
+            await cdp.send("Emulation.setLocaleOverride", {"locale": ""})
+            locale_cleared = await _read_locale_timezone_runtime(page)
+            assert_equal(
+                locale_cleared.get("intlLocales"),
+                baseline.get("intlLocales"),
+                "locale override can be cleared independently",
+            )
+            assert_equal(
+                [locale_cleared.get("timezone"), locale_cleared.get("winter")],
+                ["Europe/Paris", runtime.get("winter")],
+                "clearing locale preserves timezone Date semantics",
+            )
+
+            await cdp.send("Emulation.setLocaleOverride", {"locale": "fr-FR"})
+            await cdp.send("Emulation.setTimezoneOverride", {"timezoneId": ""})
+            timezone_cleared = await _read_locale_timezone_runtime(page)
+            assert_equal(
+                timezone_cleared.get("intlLocales"),
+                runtime.get("intlLocales"),
+                "clearing timezone preserves locale defaults",
+            )
+            assert_equal(
+                [timezone_cleared.get("timezone"), timezone_cleared.get("winter")],
+                [baseline.get("timezone"), baseline.get("winter")],
+                "timezone override can be cleared independently",
+            )
+
+            await cdp.send(
+                "Emulation.setTimezoneOverride",
+                {"timezoneId": "Europe/Paris"},
+            )
             await page.reload(wait_until="load", timeout=10_000)
             assert_equal(
                 await _read_locale_timezone_runtime(page),
@@ -164,7 +263,29 @@ async def run_locale_timezone_runtime_surface_smoke(
                 baseline,
                 "clearing locale/timezone overrides restores native defaults",
             )
-            record(results, "locale_timezone_runtime_surfaces")
+            record_contract(
+                results,
+                "locale_timezone_runtime_surfaces",
+                contract=(
+                    "Locale and timezone overrides drive default Intl and local Date "
+                    "surfaces, survive navigation, remain independently clearable, and "
+                    "reject an invalid timezone without changing the prior state."
+                ),
+                source="Debian Chromium 145 CDP executable oracle",
+                commands=[
+                    "Emulation.setLocaleOverride",
+                    "Emulation.setTimezoneOverride",
+                    "Runtime.evaluate",
+                    "Page.reload",
+                ],
+                observed={
+                    "locale": "fr-FR",
+                    "timezone": "Europe/Paris",
+                    "winterOffsetMinutes": -60,
+                    "summerOffsetMinutes": -120,
+                    "invalidTimezoneRejected": True,
+                },
+            )
         finally:
             await cdp.detach()
     finally:
@@ -176,20 +297,85 @@ async def _read_locale_timezone_runtime(page: Any) -> dict[str, Any]:
         """() => {
           const winter = new Date('2024-01-01T00:00:00Z');
           const summer = new Date('2024-07-01T00:00:00Z');
+          const dateBoundary = new Date('2023-12-31T23:30:00Z');
+          const intlConstructors = [
+            'Collator',
+            'DateTimeFormat',
+            'ListFormat',
+            'NumberFormat',
+            'PluralRules',
+            'RelativeTimeFormat',
+            'Segmenter',
+          ];
           return {
             navigatorLanguage: navigator.language,
-            intlLocales: [
-              new Intl.Collator().resolvedOptions().locale,
-              new Intl.DateTimeFormat().resolvedOptions().locale,
-              new Intl.NumberFormat().resolvedOptions().locale,
-            ],
+            intlLocales: Object.fromEntries(intlConstructors.map(name => [
+              name,
+              new Intl[name]().resolvedOptions().locale,
+            ])),
             timezone: new Intl.DateTimeFormat().resolvedOptions().timeZone,
             frenchDecimal: new Intl.NumberFormat().format(1.5).endsWith(',5'),
-            winter: [winter.getTimezoneOffset(), winter.getHours()],
-            summer: [summer.getTimezoneOffset(), summer.getHours()],
+            winter: [
+              winter.getTimezoneOffset(),
+              winter.getFullYear(),
+              winter.getMonth(),
+              winter.getDate(),
+              winter.getDay(),
+              winter.getHours(),
+              winter.getMinutes(),
+              winter.getSeconds(),
+              winter.getMilliseconds(),
+            ],
+            summer: [
+              summer.getTimezoneOffset(),
+              summer.getFullYear(),
+              summer.getMonth(),
+              summer.getDate(),
+              summer.getDay(),
+              summer.getHours(),
+            ],
+            dateBoundary: [
+              dateBoundary.getFullYear(),
+              dateBoundary.getMonth(),
+              dateBoundary.getDate(),
+              dateBoundary.getDay(),
+              dateBoundary.getHours(),
+              dateBoundary.getMinutes(),
+            ],
+            dateStrings: [
+              winter.toString(),
+              winter.toDateString(),
+              winter.toTimeString(),
+            ],
+            localeDateStrings: [
+              winter.toLocaleString(),
+              winter.toLocaleDateString(),
+              winter.toLocaleTimeString(),
+            ],
+            explicitOptions: [
+              new Intl.NumberFormat('en-US').resolvedOptions().locale,
+              new Intl.DateTimeFormat('en-US', {timeZone: 'UTC'})
+                .resolvedOptions().timeZone,
+            ],
+            invalidOptions: (() => {
+              try {
+                new Intl.DateTimeFormat(undefined, null);
+                return 'accepted';
+              } catch (error) {
+                return error.name;
+              }
+            })(),
           };
         }"""
     )
+
+
+async def _expect_protocol_error(awaitable: Awaitable[Any], label: str) -> str:
+    try:
+        await awaitable
+    except Exception as error:  # Playwright exposes protocol failures as Error.
+        return str(error)
+    raise SmokeError(f"{label}: expected a protocol error")
 
 
 async def run_storage_and_cookie_isolation_smoke(browser: Any, fixture: str, results: list[dict[str, Any]]) -> None:

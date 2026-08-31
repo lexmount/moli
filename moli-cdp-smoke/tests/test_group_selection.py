@@ -31,6 +31,7 @@ class GroupSelectionTests(unittest.TestCase):
         self.assertIn("file-chooser", DEFAULT_GROUP_NAMES)
         self.assertIn("inspector-routing", DEFAULT_GROUP_NAMES)
         self.assertIn("navigation-outcomes", DEFAULT_GROUP_NAMES)
+        self.assertIn("font-face", DEFAULT_GROUP_NAMES)
         self.assertIn("media-error", DEFAULT_GROUP_NAMES)
         self.assertIn("webgl-viewport", DEFAULT_GROUP_NAMES)
         self.assertIn("svg-rect", DEFAULT_GROUP_NAMES)
