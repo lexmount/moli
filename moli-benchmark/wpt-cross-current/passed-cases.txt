@@ -6458,6 +6458,8 @@ html/syntax/serializing-html-fragments/serializing-cdata-in-html-document.html
 html/syntax/serializing-html-fragments/serializing-lt-gt.html
 html/syntax/serializing-html-fragments/serializing.html
 html/syntax/serializing-html-fragments/template.html
+html/syntax/xmldecl/xmldecl-1.html
+html/syntax/xmldecl/xmldecl-2.html
 html/webappapis/animation-frames/callback-cross-realm-report-exception.html
 html/webappapis/animation-frames/callback-exception.html
 html/webappapis/animation-frames/callback-handle.html

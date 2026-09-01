@@ -149,7 +149,7 @@ impl HtmlDocumentStreamingDecoder {
         if let Some(encoding) = self.transport_encoding {
             return Some(encoding);
         }
-        if let Some(encoding) = encoding_for_document_xml_declaration(&self.sniff_buffer) {
+        if let Some(encoding) = encoding_for_document_utf16_xml_prefix(&self.sniff_buffer) {
             return Some(encoding);
         }
         let meta_scan = self.feed_meta_charset_prescan(finishing);
@@ -157,14 +157,16 @@ impl HtmlDocumentStreamingDecoder {
             return Some(encoding);
         }
         match meta_scan {
-            HtmlMetaCharsetScanResult::NotFound => self
-                .detected_legacy_content_encoding()
-                .or(Some(self.fallback_encoding)),
-            HtmlMetaCharsetScanResult::Pending if finishing => self
-                .detected_legacy_content_encoding()
-                .or(Some(self.fallback_encoding)),
+            HtmlMetaCharsetScanResult::NotFound => Some(self.encoding_after_prescan()),
+            HtmlMetaCharsetScanResult::Pending if finishing => Some(self.encoding_after_prescan()),
             HtmlMetaCharsetScanResult::Pending | HtmlMetaCharsetScanResult::Found(_) => None,
         }
+    }
+
+    fn encoding_after_prescan(&self) -> &'static Encoding {
+        encoding_for_document_xml_declaration(&self.sniff_buffer)
+            .or_else(|| self.detected_legacy_content_encoding())
+            .unwrap_or(self.fallback_encoding)
     }
 
     fn detected_legacy_content_encoding(&self) -> Option<&'static Encoding> {
@@ -283,7 +285,7 @@ fn encoding_for_document_bom(bytes: &[u8]) -> Option<&'static Encoding> {
 ///   UTF-16BE: 00 3C 00 3F 00 78  ("\<?x")
 ///
 /// These match the start of `<?xml` without requiring a BOM or transport charset.
-fn encoding_for_document_xml_declaration(bytes: &[u8]) -> Option<&'static Encoding> {
+fn encoding_for_document_utf16_xml_prefix(bytes: &[u8]) -> Option<&'static Encoding> {
     if bytes.starts_with(UTF16LE_XML_PREFIX) {
         return Some(encoding_rs::UTF_16LE);
     }
@@ -291,4 +293,60 @@ fn encoding_for_document_xml_declaration(bytes: &[u8]) -> Option<&'static Encodi
         return Some(encoding_rs::UTF_16BE);
     }
     None
+}
+
+/// Applies the HTML prescan's compatibility parser for an ASCII-compatible
+/// XML encoding declaration at the very start of a `text/html` byte stream.
+///
+/// This deliberately implements the permissive "get an XML encoding"
+/// algorithm rather than XML syntax. In particular, only `<?xml` and the
+/// lowercase `encoding` keyword are fixed syntax, control bytes are accepted
+/// around `=`, and the declaration ends at the first `>` byte.
+///
+/// <https://html.spec.whatwg.org/multipage/parsing.html#concept-get-xml-encoding>
+fn encoding_for_document_xml_declaration(bytes: &[u8]) -> Option<&'static Encoding> {
+    if !bytes.starts_with(b"<?xml") {
+        return None;
+    }
+
+    let declaration_end = bytes.iter().position(|byte| *byte == b'>')?;
+    let declaration = &bytes[..declaration_end];
+    let keyword_offset = declaration
+        .windows(b"encoding".len())
+        .position(|window| window == b"encoding")?;
+    let mut position = keyword_offset + b"encoding".len();
+
+    while declaration.get(position).is_some_and(|byte| *byte <= 0x20) {
+        position += 1;
+    }
+    if declaration.get(position) != Some(&b'=') {
+        return None;
+    }
+    position += 1;
+    while declaration.get(position).is_some_and(|byte| *byte <= 0x20) {
+        position += 1;
+    }
+
+    let quote = *declaration.get(position)?;
+    if !matches!(quote, b'\'' | b'"') {
+        return None;
+    }
+    position += 1;
+    let label_end = declaration[position..]
+        .iter()
+        .position(|byte| *byte == quote)
+        .map(|offset| position + offset)?;
+    let label = &declaration[position..label_end];
+    if label.iter().any(|byte| *byte <= 0x20) {
+        return None;
+    }
+
+    let encoding = Encoding::for_label(label)?;
+    Some(
+        if encoding == encoding_rs::UTF_16BE || encoding == encoding_rs::UTF_16LE {
+            encoding_rs::UTF_8
+        } else {
+            encoding
+        },
+    )
 }
