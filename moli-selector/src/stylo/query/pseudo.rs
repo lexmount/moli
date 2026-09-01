@@ -739,7 +739,12 @@ pub(crate) fn html_auto_directionality_invalidation_root(
 fn auto_direction_for_element(host: &DomHost, root: NodeId) -> Option<CssDirection> {
     if let Some(element) = host.node(root).and_then(Node::as_element) {
         if element.is_html_textarea() {
-            return first_strong_text_direction(&element.input_value());
+            let value = if element.input_value_dirty() {
+                element.input_value()
+            } else {
+                host.direct_text_content(root).unwrap_or_default()
+            };
+            return first_strong_text_direction(&value);
         }
         if element.is_html_input() {
             return input_auto_direction(element);
