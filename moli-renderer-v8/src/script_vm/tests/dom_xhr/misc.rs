@@ -610,6 +610,62 @@ fn child_document_content_type_uses_resource_mime() {
 
     assert_eq!(result, "text/html|image/png");
 }
+
+#[test]
+fn child_plain_text_document_uses_pre_and_standards_mode() {
+    let mut vm = new_storage_test_vm("https://child-plain-text-document.test/");
+
+    vm.eval(
+        r#"
+(() => {
+  const root = document.documentElement || document.appendChild(document.createElement('html'));
+  const body = document.body || root.appendChild(document.createElement('body'));
+  const frame = document.createElement('iframe');
+  frame.id = 'plain';
+  frame.src = 'data:text/plain,alpha%3Cb%3E%26amp%3B%3C%2Fb%3E%0D%0Abeta';
+  body.appendChild(frame);
+})()
+"#,
+    )
+    .expect("plain-text child document setup should evaluate");
+    vm.drain_pending_child_frame_work_for_test();
+    let child_context_id = vm
+        .live_child_default_runtime_realm_inventory()
+        .into_iter()
+        .map(|realm| realm.context_id)
+        .next()
+        .expect("plain-text child default realm should materialize");
+
+    let result = vm
+        .eval_in_child_default_context(
+            child_context_id,
+            r#"
+(() => {
+  const doc = document;
+  const pre = doc.body.firstChild;
+  return [
+    doc.compatMode,
+    doc.contentType,
+    doc.doctype === null,
+    doc.childNodes.length,
+    doc.documentElement.children.length,
+    doc.head.tagName,
+    doc.body.tagName,
+    doc.body.childNodes.length,
+    pre.tagName,
+    pre.children.length,
+    pre.firstChild.data
+  ].join('|');
+})()
+"#,
+        )
+        .expect("plain-text child document should evaluate");
+
+    assert_eq!(
+        result,
+        "CSS1Compat|text/plain|true|1|2|HEAD|BODY|1|PRE|0|alpha<b>&amp;</b>\nbeta"
+    );
+}
 #[test]
 fn node_move_before_parent_node_surface_and_validation() {
     let mut vm = new_storage_test_vm("https://node-move-before.test/");

@@ -170,8 +170,16 @@ impl JsContextHost {
         navigation_loader: Option<crate::network::navigation::NavigationResourceLoader>,
         is_xml_document: bool,
     ) -> Option<ChildDocumentInstallResult> {
+        let is_plain_text_document = snapshot
+            .content_type
+            .as_deref()
+            .is_some_and(|mime| mime.eq_ignore_ascii_case("text/plain"));
         let source = if is_xml_document {
             std::borrow::Cow::Borrowed(snapshot.markup.as_str())
+        } else if is_plain_text_document {
+            std::borrow::Cow::Owned(crate::dom_parser::plain_text_document_parser_input(
+                &snapshot.markup,
+            ))
         } else {
             crate::dom_parser::preserve_decoded_bom_only_browsing_context_body(
                 &snapshot.markup,

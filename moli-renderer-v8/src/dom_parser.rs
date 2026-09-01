@@ -1,4 +1,5 @@
 use crate::web_api_interfaces;
+use html5ever::tree_builder::QuirksMode;
 use moli_web_mime::{is_dom_parser_xml_mime, is_html_document_mime};
 use moli_webapi_declare::WebApiFunctionTemplate;
 use url::Url;
@@ -484,10 +485,33 @@ fn parse_browsing_context_document_snapshot(
             DetachedDocumentKind::Xml,
         );
     }
+    if content_type.is_some_and(|mime| mime.eq_ignore_ascii_case("text/plain")) {
+        let mut document =
+            html_parser.parse_dom_host(document_url, plain_text_document_parser_input(source));
+        // Text documents are HTML Documents whose mode is explicitly no-quirks,
+        // despite having no doctype that would select that mode through parsing.
+        document.set_html_quirks_mode_for_parser(QuirksMode::NoQuirks);
+        return (document, DetachedDocumentKind::Html);
+    }
     (
         html_parser.parse_dom_host(document_url, source.to_owned()),
         DetachedDocumentKind::Html,
     )
+}
+
+pub(crate) fn plain_text_document_parser_input(source: &str) -> String {
+    let mut input = String::with_capacity(source.len().saturating_add(64));
+    input.push_str("<html><head></head><body><pre>");
+    for character in source.chars() {
+        match character {
+            '&' => input.push_str("&amp;"),
+            '<' => input.push_str("&lt;"),
+            '\0' => input.push('\u{fffd}'),
+            _ => input.push(character),
+        }
+    }
+    input.push_str("</pre></body></html>");
+    input
 }
 
 fn child_document_url_is_xml_like(url: &Url) -> bool {
@@ -656,5 +680,43 @@ mod tests {
 
         let disabled = parse(HtmlParser::SCRIPTING_DISABLED);
         assert!(disabled.element_handle_by_id("fallback").is_some());
+    }
+
+    #[test]
+    fn child_plain_text_document_uses_pre_and_no_quirks_mode() {
+        let (document, kind) = parse_browsing_context_document_snapshot(
+            Url::parse("https://example.test/sample.txt").expect("test URL"),
+            "alpha<&amp;\r\nbeta\rgamma\0",
+            Some("text/plain"),
+            HtmlParser::SCRIPTING_ENABLED,
+        );
+        let document_handle = document.document_handle();
+        let document_children = document.child_handles(document_handle).collect::<Vec<_>>();
+
+        assert_eq!(kind, DetachedDocumentKind::Html);
+        assert_eq!(document_children.len(), 1);
+        assert!(document_children.iter().all(|child| {
+            document
+                .node(*child)
+                .is_none_or(|node| node.as_document_type().is_none())
+        }));
+        assert_eq!(
+            document.document_quirks_mode_for_handle(document_handle),
+            Some(selectors::matching::QuirksMode::NoQuirks)
+        );
+
+        let html = document_children[0];
+        let html_children = document.child_handles(html).collect::<Vec<_>>();
+        assert_eq!(html_children.len(), 2);
+        assert!(document.is_html_element_named(html_children[0], "head"));
+        assert!(document.is_html_element_named(html_children[1], "body"));
+
+        let body_children = document.child_handles(html_children[1]).collect::<Vec<_>>();
+        assert_eq!(body_children.len(), 1);
+        assert!(document.is_html_element_named(body_children[0], "pre"));
+        assert_eq!(
+            document.text_content(body_children[0]).as_deref(),
+            Some("alpha<&amp;\nbeta\ngamma\u{fffd}")
+        );
     }
 }

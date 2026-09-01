@@ -917,6 +917,14 @@ impl JsContextHost {
         let _ = parser.admit_delayed_finish_at_local_owner_boundary();
         let finish_signals =
             self.with_live_child_parser_step(scope, document_handle, |owner| parser.finish(owner));
+        if self
+            .dom_host()
+            .document_content_type_for_handle(document_handle)
+            .is_some_and(|mime| mime.eq_ignore_ascii_case("text/plain"))
+        {
+            self.dom_host_mut()
+                .set_html_quirks_mode_for_parser_document(document_handle, QuirksMode::NoQuirks);
+        }
         let host_ptr = self as *mut JsContextHost;
         self.run_pending_child_parser_post_step_runtime_work(scope, host_ptr);
         self.queue_live_child_parser_discovery_signals(
