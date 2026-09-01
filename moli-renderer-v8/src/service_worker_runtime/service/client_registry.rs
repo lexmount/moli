@@ -23,6 +23,7 @@ impl ServiceWorkerRuntimeService {
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn register_client_with_storage_key(
         &self,
         document_url: Url,
@@ -31,15 +32,41 @@ impl ServiceWorkerRuntimeService {
         document_owner: Option<crate::window_document_identity::WindowDocumentOwner>,
         completion_tx: RendererPageServiceWorkerTaskSender,
     ) -> ServiceWorkerClientId {
-        let client_id = self.register_window_client_with_storage_key(
+        let client_id = self.inner.client_id_allocator.allocate();
+        let inserted = self.register_window_client_with_storage_key(
+            client_id,
             document_url,
             storage_key,
             frame_type,
             document_owner,
             ServiceWorkerClientEndpoint::Page(completion_tx),
         );
+        debug_assert!(inserted, "new ServiceWorker client id must be unused");
         self.mark_client_execution_ready(client_id);
         client_id
+    }
+
+    pub(crate) fn register_allocated_client_with_storage_key(
+        &self,
+        client_id: ServiceWorkerClientId,
+        document_url: Url,
+        storage_key: String,
+        frame_type: ServiceWorkerClientFrameType,
+        document_owner: Option<crate::window_document_identity::WindowDocumentOwner>,
+        completion_tx: RendererPageServiceWorkerTaskSender,
+    ) -> bool {
+        if !self.register_window_client_with_storage_key(
+            client_id,
+            document_url,
+            storage_key,
+            frame_type,
+            document_owner,
+            ServiceWorkerClientEndpoint::Page(completion_tx),
+        ) {
+            return false;
+        }
+        self.mark_client_execution_ready(client_id);
+        true
     }
 
     pub(crate) fn register_reserved_client_with_storage_key(
@@ -82,7 +109,9 @@ impl ServiceWorkerRuntimeService {
         document_owner: Option<crate::window_document_identity::WindowDocumentOwner>,
         bypass_service_worker: bool,
     ) -> ServiceWorkerClientId {
-        self.register_window_client_with_storage_key(
+        let client_id = self.inner.client_id_allocator.allocate();
+        let inserted = self.register_window_client_with_storage_key(
+            client_id,
             document_url,
             storage_key,
             frame_type,
@@ -90,7 +119,12 @@ impl ServiceWorkerRuntimeService {
             ServiceWorkerClientEndpoint::ReservedPage {
                 bypass_service_worker,
             },
-        )
+        );
+        debug_assert!(
+            inserted,
+            "new reserved ServiceWorker client id must be unused"
+        );
+        client_id
     }
 
     pub(crate) fn register_worker_client_with_storage_key(
@@ -105,8 +139,7 @@ impl ServiceWorkerRuntimeService {
             client_type,
             ServiceWorkerClientType::DedicatedWorker | ServiceWorkerClientType::SharedWorker
         ));
-        let client_id =
-            ServiceWorkerClientId(self.inner.next_client_id.fetch_add(1, Ordering::Relaxed));
+        let client_id = self.inner.client_id_allocator.allocate();
         let current_script_url = service_worker_current_url_for_creation_url(&script_url);
         {
             let mut state = self.inner.state.lock();
@@ -159,8 +192,7 @@ impl ServiceWorkerRuntimeService {
             client_type,
             ServiceWorkerClientType::DedicatedWorker | ServiceWorkerClientType::SharedWorker
         ));
-        let client_id =
-            ServiceWorkerClientId(self.inner.next_client_id.fetch_add(1, Ordering::Relaxed));
+        let client_id = self.inner.client_id_allocator.allocate();
         let current_script_url = service_worker_current_url_for_creation_url(&script_url);
         {
             let mut state = self.inner.state.lock();
@@ -250,8 +282,7 @@ impl ServiceWorkerRuntimeService {
                     .map(|registration| registration.id)
             })
             .flatten();
-        let client_id =
-            ServiceWorkerClientId(self.inner.next_client_id.fetch_add(1, Ordering::Relaxed));
+        let client_id = self.inner.client_id_allocator.allocate();
         state.live_clients.insert(
             client_id,
             ServiceWorkerClient {
@@ -304,14 +335,13 @@ impl ServiceWorkerRuntimeService {
 
     fn register_window_client_with_storage_key(
         &self,
+        client_id: ServiceWorkerClientId,
         document_url: Url,
         storage_key: String,
         frame_type: ServiceWorkerClientFrameType,
         document_owner: Option<crate::window_document_identity::WindowDocumentOwner>,
         endpoint: ServiceWorkerClientEndpoint,
-    ) -> ServiceWorkerClientId {
-        let client_id =
-            ServiceWorkerClientId(self.inner.next_client_id.fetch_add(1, Ordering::Relaxed));
+    ) -> bool {
         let current_document_url = service_worker_current_url_for_creation_url(&document_url);
         let bypass_service_worker = matches!(
             &endpoint,
@@ -321,6 +351,9 @@ impl ServiceWorkerRuntimeService {
         );
         {
             let mut state = self.inner.state.lock();
+            if state.live_clients.contains_key(&client_id) {
+                return false;
+            }
             self.restore_stored_registrations_for_document_url_locked(
                 &mut state,
                 &current_document_url,
@@ -356,7 +389,7 @@ impl ServiceWorkerRuntimeService {
                 state.record_target_version_updated(version_id);
             }
         }
-        client_id
+        true
     }
 
     fn mark_client_execution_ready(&self, client_id: ServiceWorkerClientId) {

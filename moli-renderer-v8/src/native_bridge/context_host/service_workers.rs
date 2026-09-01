@@ -117,6 +117,63 @@ impl JsContextHost {
         self.service_worker_task_tx.clone()
     }
 
+    fn ensure_service_worker_client_for_request_context(
+        &mut self,
+        request_context: &ServiceWorkerWindowRequestContext,
+    ) -> ServiceWorkerClientId {
+        let dispatch_scope = request_context.owner().dispatch_scope();
+        let client_id = match dispatch_scope {
+            OwnerDispatchScope::Top => self.service_worker_client_id,
+            OwnerDispatchScope::Child(handle) => {
+                if let Some(client_id) = self
+                    .child_browsing_contexts
+                    .get(&handle)
+                    .and_then(|entry| entry.service_worker_client_id())
+                {
+                    client_id
+                } else {
+                    let client_id = self
+                        .browser_context_runtime
+                        .allocate_service_worker_client_id();
+                    if let Some(entry) = self.child_browsing_contexts.get_mut(&handle) {
+                        entry.set_service_worker_client_id(client_id);
+                    }
+                    self.set_frame_owner_child_service_worker_client_id(handle, Some(client_id));
+                    client_id
+                }
+            }
+            OwnerDispatchScope::LightweightPopup(popup_id) => {
+                if let Some(client_id) = self.service_worker_popup_clients.get(&popup_id).copied() {
+                    client_id
+                } else {
+                    let client_id = self
+                        .browser_context_runtime
+                        .allocate_service_worker_client_id();
+                    self.service_worker_popup_clients
+                        .insert(popup_id, client_id);
+                    client_id
+                }
+            }
+        };
+        let frame_type = match dispatch_scope {
+            OwnerDispatchScope::Child(_) => ServiceWorkerClientFrameType::Nested,
+            OwnerDispatchScope::Top | OwnerDispatchScope::LightweightPopup(_) => {
+                ServiceWorkerClientFrameType::TopLevel
+            }
+        };
+        let document_owner = Some(request_context.owner().window_document_owner());
+        self.browser_context_runtime
+            .register_allocated_service_worker_client(
+                client_id,
+                request_context.document_url().clone(),
+                request_context.serialized_storage_key(),
+                frame_type,
+                document_owner,
+                self.service_worker_task_sender(),
+            );
+        client_id
+    }
+
     fn service_worker_window_owner_for_dispatch_scope(
         &self,
         dispatch_scope: OwnerDispatchScope,
@@ -571,6 +628,7 @@ impl JsContextHost {
         register_document_owner: WindowDocumentOwner,
         register_completion_tx: crate::page_task_queue::RendererPageServiceWorkerTaskSender,
     ) {
+        self.ensure_service_worker_client_for_request_context(request_context);
         let creator_secure_context =
             moli_url::is_potentially_trustworthy_url(request_context.document_url());
         let network_policy = WorkerNetworkPolicy {
@@ -616,6 +674,7 @@ impl JsContextHost {
         let requests = self.pending_service_worker_ready_requests();
         let mut attached_any = false;
         for (request_id, request_context, completion_tx) in requests {
+            self.ensure_service_worker_client_for_request_context(&request_context);
             if self
                 .browser_context_runtime
                 .watch_service_worker_ready_registration(
@@ -990,7 +1049,11 @@ impl JsContextHost {
         &mut self,
         document_url: &Url,
     ) -> Option<ServiceWorkerClientId> {
-        if !matches!(document_url.scheme(), "http" | "https") {
+        if !matches!(document_url.scheme(), "http" | "https")
+            || !self
+                .browser_context_runtime
+                .ensure_service_worker_runtime_for_navigation()
+        {
             return None;
         }
         let storage_key = service_worker_first_party_storage_key(document_url);
@@ -1154,6 +1217,13 @@ impl JsContextHost {
         document_url: &Url,
     ) {
         if !matches!(document_url.scheme(), "http" | "https") {
+            self.clear_pending_service_worker_child_client(handle);
+            return;
+        }
+        if !self
+            .browser_context_runtime
+            .ensure_service_worker_runtime_for_navigation()
+        {
             self.clear_pending_service_worker_child_client(handle);
             return;
         }
@@ -1537,10 +1607,11 @@ impl JsContextHost {
     }
 
     pub(crate) fn service_worker_registration_for_client(
-        &self,
+        &mut self,
         request_context: &ServiceWorkerWindowRequestContext,
         client_url: &Url,
     ) -> Option<ServiceWorkerRegistrationSnapshot> {
+        self.ensure_service_worker_client_for_request_context(request_context);
         self.browser_context_runtime
             .service_worker_registration_for_client(
                 client_url,
@@ -1549,9 +1620,10 @@ impl JsContextHost {
     }
 
     pub(crate) fn service_worker_registrations(
-        &self,
+        &mut self,
         request_context: &ServiceWorkerWindowRequestContext,
     ) -> Vec<ServiceWorkerRegistrationSnapshot> {
+        self.ensure_service_worker_client_for_request_context(request_context);
         self.browser_context_runtime.service_worker_registrations(
             request_context.document_url(),
             &request_context.serialized_storage_key(),

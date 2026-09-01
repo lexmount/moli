@@ -52,8 +52,11 @@ pub(crate) use loading::{
     SharedWorkerExecutionPolicy, SharedWorkerLaunchContext, SharedWorkerLaunchParams,
     SharedWorkerScriptLoad, SharedWorkerScriptRequestPolicy,
 };
+pub(crate) use matching::SharedWorkerClientOwnerIdAllocator;
 pub(crate) use owner_wake::{
     SharedWorkerRuntimeOwnerWake, SharedWorkerRuntimeOwnerWakeSender,
     shared_worker_owner_wake_channel,
 };
-pub(crate) use service::{SharedWorkerRuntimeService, new_shared_worker_runtime_service};
+pub(crate) use service::{
+    SharedWorkerRuntimeService, new_shared_worker_runtime_service_with_client_owner_id_allocator,
+};

@@ -1,4 +1,7 @@
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 
 use moli_shared_worker::{
     SharedWorkerClientId, SharedWorkerClientOwnerId, SharedWorkerClientRemoval,
@@ -12,14 +15,47 @@ use super::{
     host::SharedRendererSharedWorkerHost,
 };
 
+#[derive(Clone, Debug)]
+pub(crate) struct SharedWorkerClientOwnerIdAllocator {
+    next: Arc<AtomicU64>,
+}
+
+impl Default for SharedWorkerClientOwnerIdAllocator {
+    fn default() -> Self {
+        Self {
+            next: Arc::new(AtomicU64::new(0)),
+        }
+    }
+}
+
+impl SharedWorkerClientOwnerIdAllocator {
+    pub(crate) fn allocate(&self) -> SharedWorkerClientOwnerId {
+        let id = self.next.fetch_add(1, Ordering::Relaxed).saturating_add(1);
+        SharedWorkerClientOwnerId::from_u64(id)
+    }
+}
+
 #[derive(Default)]
 pub(super) struct SharedWorkerMatchingStore {
     registry: SharedWorkerRegistry<SharedRendererSharedWorkerHost>,
     client_owner_lifecycle: SharedWorkerClientOwnerLifecycleStore,
-    next_client_owner_id: AtomicU64,
+    client_owner_id_allocator: SharedWorkerClientOwnerIdAllocator,
 }
 
 impl SharedWorkerMatchingStore {
+    pub(super) fn with_client_owner_id_allocator(
+        client_owner_id_allocator: SharedWorkerClientOwnerIdAllocator,
+    ) -> Self {
+        Self {
+            client_owner_id_allocator,
+            ..Self::default()
+        }
+    }
+
+    pub(super) fn client_owner_id_allocator(&self) -> SharedWorkerClientOwnerIdAllocator {
+        self.client_owner_id_allocator.clone()
+    }
+
     pub(super) fn connect(
         &self,
         key: SharedWorkerKey,
@@ -100,12 +136,9 @@ impl SharedWorkerMatchingStore {
         self.registry.loading_clients_for_instance(instance_id)
     }
 
+    #[cfg(test)]
     pub(super) fn next_client_owner_id(&self) -> SharedWorkerClientOwnerId {
-        let id = self
-            .next_client_owner_id
-            .fetch_add(1, Ordering::Relaxed)
-            .saturating_add(1);
-        SharedWorkerClientOwnerId::from_u64(id)
+        self.client_owner_id_allocator.allocate()
     }
 
     fn consume_observed_action<T>(&self, observed: SharedWorkerObservedAction<T>) -> T {

@@ -17,7 +17,7 @@ use crate::runtime::RendererOwnerLocalHostId;
 use super::{
     host::SharedRendererSharedWorkerHost,
     instances::SharedWorkerHostStore,
-    matching::SharedWorkerMatchingStore,
+    matching::{SharedWorkerClientOwnerIdAllocator, SharedWorkerMatchingStore},
     owner_wake::{
         SharedWorkerOwnerWake, SharedWorkerRuntimeOwnerWake, SharedWorkerRuntimeOwnerWakeSender,
     },
@@ -25,8 +25,17 @@ use super::{
     target_output_streams::SharedWorkerTargetOutputStreams,
 };
 
-pub(crate) fn new_shared_worker_runtime_service() -> SharedWorkerRuntimeService {
-    SharedWorkerRuntimeService::default()
+pub(crate) fn new_shared_worker_runtime_service_with_client_owner_id_allocator(
+    client_owner_id_allocator: SharedWorkerClientOwnerIdAllocator,
+) -> SharedWorkerRuntimeService {
+    SharedWorkerRuntimeService {
+        inner: Arc::new(SharedWorkerRuntimeInner {
+            matching: Arc::new(SharedWorkerMatchingStore::with_client_owner_id_allocator(
+                client_owner_id_allocator,
+            )),
+            ..SharedWorkerRuntimeInner::default()
+        }),
+    }
 }
 
 #[derive(Clone)]
@@ -50,6 +59,10 @@ struct SharedWorkerRuntimeInner {
 }
 
 impl SharedWorkerRuntimeService {
+    pub(crate) fn client_owner_id_allocator(&self) -> SharedWorkerClientOwnerIdAllocator {
+        self.inner.matching.client_owner_id_allocator()
+    }
+
     pub(crate) fn configure_target_output_streams(
         &self,
         browser_context_runtime_id: crate::runtime::RendererBrowserContextRuntimeId,
@@ -136,6 +149,7 @@ impl SharedWorkerRuntimeService {
         self.inner.owner_wake.signal_service_lane_wake()
     }
 
+    #[cfg(test)]
     pub(crate) fn next_client_owner_id(&self) -> SharedWorkerClientOwnerId {
         self.inner.matching.next_client_owner_id()
     }

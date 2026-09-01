@@ -78,6 +78,17 @@ impl RendererBrowserContextRuntime {
                 response: None,
             });
         }
+        if self
+            .inner
+            .service_worker_runtime
+            .get_or_init_for_navigation()
+            .is_none()
+        {
+            return Ok(RendererServiceWorkerMainResourceFetch {
+                reserved_client: None,
+                response: None,
+            });
+        }
 
         let storage_key =
             moli_storage_key::MoliStorageKey::first_party_from_url(&request.url, None)
@@ -340,8 +351,7 @@ impl RendererBrowserContextRuntime {
         scope_url: &Url,
     ) -> Option<tokio::sync::oneshot::Receiver<()>> {
         let (_, receiver) = self
-            .inner
-            .service_worker_runtime
+            .service_worker_runtime()
             .devtools_force_update_registration_for_page_load(scope_url, self.clone());
         receiver
     }
@@ -354,8 +364,7 @@ impl RendererBrowserContextRuntime {
         resource_task_runner: RendererResourceTaskRunner,
         destination: ServiceWorkerRequestDestination,
     ) -> Result<Option<crate::protocol_types::NavigationResponse>> {
-        self.inner
-            .service_worker_runtime
+        self.service_worker_runtime()
             .fetch_main_resource_for_worker_client(
                 client_id,
                 request,
@@ -376,15 +385,40 @@ impl RendererBrowserContextRuntime {
         document_owner: Option<crate::window_document_identity::WindowDocumentOwner>,
         completion_tx: crate::page_task_queue::RendererPageServiceWorkerTaskSender,
     ) -> ServiceWorkerClientId {
-        self.inner
-            .service_worker_runtime
-            .register_client_with_storage_key(
-                document_url,
-                storage_key,
-                frame_type,
-                document_owner,
-                completion_tx,
-            )
+        let client_id = self.inner.service_worker_runtime.allocate_client_id();
+        let inserted = self.inner.service_worker_runtime.register_window_client(
+            client_id,
+            document_url,
+            storage_key,
+            frame_type,
+            document_owner,
+            completion_tx,
+        );
+        debug_assert!(inserted, "new Service Worker client id must be unused");
+        client_id
+    }
+
+    pub(crate) fn register_allocated_service_worker_client(
+        &self,
+        client_id: ServiceWorkerClientId,
+        document_url: Url,
+        storage_key: String,
+        frame_type: ServiceWorkerClientFrameType,
+        document_owner: Option<crate::window_document_identity::WindowDocumentOwner>,
+        completion_tx: crate::page_task_queue::RendererPageServiceWorkerTaskSender,
+    ) -> bool {
+        self.inner.service_worker_runtime.register_window_client(
+            client_id,
+            document_url,
+            storage_key,
+            frame_type,
+            document_owner,
+            completion_tx,
+        )
+    }
+
+    pub(crate) fn allocate_service_worker_client_id(&self) -> ServiceWorkerClientId {
+        self.inner.service_worker_runtime.allocate_client_id()
     }
 
     pub(crate) fn register_reserved_service_worker_client(
@@ -394,8 +428,7 @@ impl RendererBrowserContextRuntime {
         frame_type: ServiceWorkerClientFrameType,
         document_owner: Option<crate::window_document_identity::WindowDocumentOwner>,
     ) -> ServiceWorkerClientId {
-        self.inner
-            .service_worker_runtime
+        self.service_worker_runtime()
             .register_reserved_client_with_storage_key(
                 document_url,
                 storage_key,
@@ -411,8 +444,7 @@ impl RendererBrowserContextRuntime {
         frame_type: ServiceWorkerClientFrameType,
         document_owner: Option<crate::window_document_identity::WindowDocumentOwner>,
     ) -> ServiceWorkerClientId {
-        self.inner
-            .service_worker_runtime
+        self.service_worker_runtime()
             .register_reserved_client_with_storage_key_bypassing_service_worker(
                 document_url,
                 storage_key,
@@ -428,8 +460,7 @@ impl RendererBrowserContextRuntime {
         client_type: ServiceWorkerClientType,
         secure_context: bool,
     ) -> ServiceWorkerClientId {
-        self.inner
-            .service_worker_runtime
+        self.service_worker_runtime()
             .register_reserved_worker_client_with_storage_key(
                 script_url,
                 storage_key,
@@ -446,8 +477,7 @@ impl RendererBrowserContextRuntime {
         secure_context: bool,
         parent_client_id: ServiceWorkerClientId,
     ) -> Option<ServiceWorkerClientId> {
-        self.inner
-            .service_worker_runtime
+        self.service_worker_runtime_if_initialized()?
             .register_reserved_worker_client_inheriting_controller_from_client(
                 script_url,
                 storage_key,
@@ -471,15 +501,14 @@ impl RendererBrowserContextRuntime {
         frame_type: ServiceWorkerClientFrameType,
         document_owner: Option<crate::window_document_identity::WindowDocumentOwner>,
     ) -> bool {
-        self.inner
-            .service_worker_runtime
-            .update_client_document_with_storage_key(
-                client_id,
-                document_url,
-                storage_key,
-                frame_type,
-                document_owner,
-            )
+        self.inner.service_worker_runtime.update_window_client(
+            client_id,
+            document_url,
+            storage_key,
+            frame_type,
+            document_owner,
+            None,
+        )
     }
 
     pub(crate) fn update_service_worker_client_document_and_page_endpoint(
@@ -491,16 +520,14 @@ impl RendererBrowserContextRuntime {
         document_owner: Option<crate::window_document_identity::WindowDocumentOwner>,
         completion_tx: crate::page_task_queue::RendererPageServiceWorkerTaskSender,
     ) -> bool {
-        self.inner
-            .service_worker_runtime
-            .update_client_document_with_storage_key_and_completion_sender(
-                client_id,
-                document_url,
-                storage_key,
-                frame_type,
-                document_owner,
-                completion_tx,
-            )
+        self.inner.service_worker_runtime.update_window_client(
+            client_id,
+            document_url,
+            storage_key,
+            frame_type,
+            document_owner,
+            Some(completion_tx),
+        )
     }
 
     pub(crate) fn unregister_service_worker_scope(
@@ -511,8 +538,7 @@ impl RendererBrowserContextRuntime {
         document_owner: crate::window_document_identity::WindowDocumentOwner,
         completion_tx: crate::page_task_queue::RendererPageServiceWorkerTaskSender,
     ) -> ServiceWorkerUnregisterStart {
-        self.inner
-            .service_worker_runtime
+        self.service_worker_runtime()
             .start_unregistration_with_storage_key(
                 scope_url,
                 storage_key,
@@ -527,8 +553,7 @@ impl RendererBrowserContextRuntime {
         client_url: &Url,
         storage_key: &str,
     ) -> Option<ServiceWorkerRegistrationSnapshot> {
-        self.inner
-            .service_worker_runtime
+        self.service_worker_runtime()
             .matching_registration_for_client_with_storage_key(client_url, storage_key)
     }
 
@@ -537,8 +562,7 @@ impl RendererBrowserContextRuntime {
         document_url: &Url,
         storage_key: &str,
     ) -> Vec<ServiceWorkerRegistrationSnapshot> {
-        self.inner
-            .service_worker_runtime
+        self.service_worker_runtime()
             .all_registrations_with_storage_key(document_url, storage_key)
     }
 
@@ -546,8 +570,7 @@ impl RendererBrowserContextRuntime {
         &self,
         scope_url: &Url,
     ) -> Option<ServiceWorkerNavigationPreloadState> {
-        self.inner
-            .service_worker_runtime
+        self.service_worker_runtime()
             .navigation_preload_state_for_scope(scope_url)
     }
 
@@ -556,8 +579,7 @@ impl RendererBrowserContextRuntime {
         scope_url: &Url,
         enabled: bool,
     ) -> Result<(), ServiceWorkerNavigationPreloadStateError> {
-        self.inner
-            .service_worker_runtime
+        self.service_worker_runtime()
             .set_navigation_preload_enabled_for_scope(scope_url, enabled)
     }
 
@@ -566,8 +588,7 @@ impl RendererBrowserContextRuntime {
         scope_url: &Url,
         header_value: String,
     ) -> Result<(), ServiceWorkerNavigationPreloadStateError> {
-        self.inner
-            .service_worker_runtime
+        self.service_worker_runtime()
             .set_navigation_preload_header_value_for_scope(scope_url, header_value)
     }
 
@@ -579,8 +600,7 @@ impl RendererBrowserContextRuntime {
         document_owner: crate::window_document_identity::WindowDocumentOwner,
         completion_tx: crate::page_task_queue::RendererPageServiceWorkerTaskSender,
     ) -> bool {
-        self.inner
-            .service_worker_runtime
+        self.service_worker_runtime()
             .watch_ready_registration_with_storage_key(
                 document_url,
                 storage_key,
@@ -597,18 +617,20 @@ impl RendererBrowserContextRuntime {
         document_owner: crate::window_document_identity::WindowDocumentOwner,
         completion_tx: crate::page_task_queue::RendererPageServiceWorkerTaskSender,
     ) {
-        self.inner
-            .service_worker_runtime
-            .watch_registration_lifecycle(scope_url, storage_key, document_owner, completion_tx)
+        self.service_worker_runtime().watch_registration_lifecycle(
+            scope_url,
+            storage_key,
+            document_owner,
+            completion_tx,
+        )
     }
 
     pub(crate) fn service_worker_controller_for_client(
         &self,
         client_id: ServiceWorkerClientId,
     ) -> Option<ServiceWorkerControlState> {
-        self.inner
-            .service_worker_runtime
-            .matching_controller_for_client(client_id)
+        self.service_worker_runtime_if_initialized()
+            .and_then(|runtime| runtime.matching_controller_for_client(client_id))
     }
 
     pub(crate) fn service_worker_controller_for_fetch(
@@ -616,24 +638,23 @@ impl RendererBrowserContextRuntime {
         client_id: ServiceWorkerClientId,
         request_url: &Url,
     ) -> Option<ServiceWorkerControlState> {
-        self.inner
-            .service_worker_runtime
-            .matching_controller_for_client_fetch(client_id, request_url)
+        self.service_worker_runtime_if_initialized()
+            .and_then(|runtime| {
+                runtime.matching_controller_for_client_fetch(client_id, request_url)
+            })
     }
 
     pub(crate) fn dispatch_service_worker_fetch(
         &self,
         dispatch: ServiceWorkerFetchDispatch,
     ) -> bool {
-        self.inner
-            .service_worker_runtime
-            .dispatch_controlled_fetch(dispatch)
+        self.service_worker_runtime_if_initialized()
+            .is_some_and(|runtime| runtime.dispatch_controlled_fetch(dispatch))
     }
 
     pub(crate) fn abort_service_worker_fetch(&self, internal_id: u64) -> bool {
-        self.inner
-            .service_worker_runtime
-            .abort_controlled_fetch(internal_id)
+        self.service_worker_runtime_if_initialized()
+            .is_some_and(|runtime| runtime.abort_controlled_fetch(internal_id))
     }
 
     pub(crate) fn abort_service_worker_fetch_with_reason(
@@ -641,9 +662,8 @@ impl RendererBrowserContextRuntime {
         internal_id: u64,
         reason: Option<V8StructuredClonePayload>,
     ) -> bool {
-        self.inner
-            .service_worker_runtime
-            .abort_controlled_fetch_with_reason(internal_id, reason)
+        self.service_worker_runtime_if_initialized()
+            .is_some_and(|runtime| runtime.abort_controlled_fetch_with_reason(internal_id, reason))
     }
 
     pub(crate) fn dispatch_service_worker_message(
@@ -653,9 +673,15 @@ impl RendererBrowserContextRuntime {
         source_origin: Option<String>,
         payload: V8StructuredClonePayload,
     ) -> bool {
-        self.inner
-            .service_worker_runtime
-            .dispatch_message_to_version(version_id, source_client_id, source_origin, payload)
+        self.service_worker_runtime_if_initialized()
+            .is_some_and(|runtime| {
+                runtime.dispatch_message_to_version(
+                    version_id,
+                    source_client_id,
+                    source_origin,
+                    payload,
+                )
+            })
     }
 
     pub fn dispatch_service_worker_notification_click(
@@ -664,8 +690,7 @@ impl RendererBrowserContextRuntime {
         title: impl Into<String>,
         action: impl Into<String>,
     ) -> bool {
-        self.inner
-            .service_worker_runtime
+        self.service_worker_runtime()
             .dispatch_notification_click_for_scope(scope_url, title.into(), action.into())
     }
 
@@ -674,33 +699,27 @@ impl RendererBrowserContextRuntime {
         scope_url: &Url,
         title: impl Into<String>,
     ) -> bool {
-        self.inner
-            .service_worker_runtime
+        self.service_worker_runtime()
             .dispatch_notification_close_for_scope(scope_url, title.into())
     }
 
     pub fn dispatch_service_worker_push(&self, scope_url: &Url, data: Option<Vec<u8>>) -> bool {
-        self.inner
-            .service_worker_runtime
+        self.service_worker_runtime()
             .dispatch_push_for_scope(scope_url, data)
     }
 
     pub fn dispatch_service_worker_periodic_sync(&self, scope_url: &Url, tag: &str) -> bool {
-        self.inner
-            .service_worker_runtime
+        self.service_worker_runtime()
             .dispatch_periodic_sync_for_scope(scope_url, tag)
     }
 
     pub(crate) fn register_service_worker_sync(&self, scope_url: &Url, tag: String) -> bool {
-        self.inner
-            .service_worker_runtime
+        self.service_worker_runtime()
             .register_sync_for_scope(scope_url, tag)
     }
 
     pub(crate) fn service_worker_sync_tags(&self, scope_url: &Url) -> Vec<String> {
-        self.inner
-            .service_worker_runtime
-            .sync_tags_for_scope(scope_url)
+        self.service_worker_runtime().sync_tags_for_scope(scope_url)
     }
 
     pub(crate) fn register_service_worker_periodic_sync(
@@ -709,14 +728,12 @@ impl RendererBrowserContextRuntime {
         tag: String,
         min_interval_ms: u64,
     ) -> bool {
-        self.inner
-            .service_worker_runtime
+        self.service_worker_runtime()
             .register_periodic_sync_for_scope(scope_url, tag, min_interval_ms)
     }
 
     pub(crate) fn service_worker_periodic_sync_tags(&self, scope_url: &Url) -> Vec<String> {
-        self.inner
-            .service_worker_runtime
+        self.service_worker_runtime()
             .periodic_sync_tags_for_scope(scope_url)
     }
 
@@ -725,8 +742,7 @@ impl RendererBrowserContextRuntime {
         scope_url: &Url,
         tag: &str,
     ) -> bool {
-        self.inner
-            .service_worker_runtime
+        self.service_worker_runtime()
             .unregister_periodic_sync_for_scope(scope_url, tag)
     }
 
@@ -735,8 +751,7 @@ impl RendererBrowserContextRuntime {
         scope_url: &Url,
         user_visible_only: bool,
     ) -> Option<ServiceWorkerPushSubscriptionSnapshot> {
-        self.inner
-            .service_worker_runtime
+        self.service_worker_runtime()
             .subscribe_push_for_scope(scope_url, user_visible_only)
     }
 
@@ -744,14 +759,12 @@ impl RendererBrowserContextRuntime {
         &self,
         scope_url: &Url,
     ) -> Option<ServiceWorkerPushSubscriptionSnapshot> {
-        self.inner
-            .service_worker_runtime
+        self.service_worker_runtime()
             .push_subscription_for_scope(scope_url)
     }
 
     pub(crate) fn unsubscribe_service_worker_push(&self, scope_url: &Url) -> bool {
-        self.inner
-            .service_worker_runtime
+        self.service_worker_runtime()
             .unsubscribe_push_for_scope(scope_url)
     }
 
@@ -764,16 +777,14 @@ impl RendererBrowserContextRuntime {
         actions: Vec<ServiceWorkerNotificationAction>,
         data: V8StructuredClonePayload,
     ) -> bool {
-        self.inner
-            .service_worker_runtime
-            .show_notification_for_scope(
-                scope_url,
-                title.into(),
-                tag.into(),
-                metadata,
-                actions,
-                data,
-            )
+        self.service_worker_runtime().show_notification_for_scope(
+            scope_url,
+            title.into(),
+            tag.into(),
+            metadata,
+            actions,
+            data,
+        )
     }
 
     pub(crate) fn service_worker_notifications(
@@ -781,8 +792,7 @@ impl RendererBrowserContextRuntime {
         scope_url: &Url,
         tag: Option<&str>,
     ) -> Vec<crate::runtime::ServiceWorkerNotificationSnapshot> {
-        self.inner
-            .service_worker_runtime
+        self.service_worker_runtime()
             .notifications_for_scope(scope_url, tag)
     }
 
@@ -791,15 +801,13 @@ impl RendererBrowserContextRuntime {
         registration_id: crate::runtime::ServiceWorkerRegistrationId,
         notification_id: u64,
     ) -> bool {
-        self.inner
-            .service_worker_runtime
+        self.service_worker_runtime()
             .close_notification(registration_id, notification_id)
     }
 
     #[cfg(test)]
     pub(crate) fn stop_service_worker_hosts_for_test(&self) {
-        self.inner
-            .service_worker_runtime
+        self.service_worker_runtime()
             .stop_all_running_hosts_for_test();
     }
 }

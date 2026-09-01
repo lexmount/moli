@@ -1,3 +1,8 @@
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub(crate) struct ServiceWorkerRegistrationId(pub(super) u64);
 
@@ -49,6 +54,25 @@ impl ServiceWorkerClientId {
     #[cfg(test)]
     pub(crate) fn from_u64_for_test(value: u64) -> Self {
         Self(value)
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ServiceWorkerClientIdAllocator {
+    next: Arc<AtomicU64>,
+}
+
+impl Default for ServiceWorkerClientIdAllocator {
+    fn default() -> Self {
+        Self {
+            next: Arc::new(AtomicU64::new(1)),
+        }
+    }
+}
+
+impl ServiceWorkerClientIdAllocator {
+    pub(crate) fn allocate(&self) -> ServiceWorkerClientId {
+        ServiceWorkerClientId(self.next.fetch_add(1, Ordering::Relaxed))
     }
 }
 

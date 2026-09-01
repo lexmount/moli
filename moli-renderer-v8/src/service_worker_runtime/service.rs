@@ -299,6 +299,7 @@ pub(crate) fn new_service_worker_runtime_service_with_resource_store_and_browser
     resource_store: SharedServiceWorkerResourceStore,
     restored_worker_context_runtime: RendererWorkerContextRuntime,
     browser_resource_runtime: crate::network::BrowserResourceRuntimeBinding,
+    client_id_allocator: super::ids::ServiceWorkerClientIdAllocator,
     browser_context_runtime_id: crate::runtime::RendererBrowserContextRuntimeId,
     output_transport: crate::runtime::RendererOutputTransportSenderSlot,
 ) -> ServiceWorkerRuntimeService {
@@ -308,6 +309,7 @@ pub(crate) fn new_service_worker_runtime_service_with_resource_store_and_browser
             resource_store,
             restored_worker_context_runtime,
             browser_resource_runtime,
+            client_id_allocator,
             browser_context_runtime_id,
             output_transport,
         )),
@@ -801,9 +803,7 @@ mod tests {
         let controlled_client_ids = controlled_client_documents
             .into_iter()
             .map(|document_url| {
-                let client_id = ServiceWorkerClientId(
-                    service.inner.next_client_id.fetch_add(1, Ordering::Relaxed),
-                );
+                let client_id = service.inner.client_id_allocator.allocate();
                 let current_document_url =
                     service_worker_current_url_for_creation_url(&document_url);
                 let storage_key =
@@ -1143,8 +1143,7 @@ mod tests {
                 worker_tx,
             );
         }
-        let client_id =
-            ServiceWorkerClientId(service.inner.next_client_id.fetch_add(1, Ordering::Relaxed));
+        let client_id = service.inner.client_id_allocator.allocate();
         let document_url = service_worker_current_url_for_creation_url(&creation_url);
         let storage_key =
             ServiceWorkerRegistrationKey::first_party_storage_key_for_url(&document_url);

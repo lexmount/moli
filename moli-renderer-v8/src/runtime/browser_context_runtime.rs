@@ -174,8 +174,8 @@ struct RendererBrowserContextRuntimeInner {
     message_port_registry: crate::message_port_runtime::SharedMessagePortRegistry,
     broadcast_channel_registry: crate::broadcast_channel_runtime::SharedBroadcastChannelRegistry,
     browser_resource_runtime: crate::network::BrowserResourceRuntimeBinding,
-    shared_worker_runtime: crate::shared_worker_runtime::SharedWorkerRuntimeService,
-    service_worker_runtime: crate::service_worker_runtime::ServiceWorkerRuntimeService,
+    shared_worker_runtime: shared_workers::LazySharedWorkerRuntime,
+    service_worker_runtime: service_worker_runtime::LazyServiceWorkerRuntime,
     storage_partition_identity: RendererStoragePartitionIdentity,
     next_web_storage_opaque_context_nonce: AtomicU64,
     next_child_document_loader_id: AtomicU64,
@@ -314,12 +314,12 @@ fn terminate_browser_context_resource_producers(inner: &RendererBrowserContextRu
     for handle in dedicated_worker_handles.into_values() {
         let _ = handle.terminate_for_devtools();
     }
-    inner
-        .shared_worker_runtime
-        .terminate_all_for_context_shutdown();
-    inner
-        .service_worker_runtime
-        .terminate_all_for_context_shutdown();
+    if let Some(shared_worker_runtime) = inner.shared_worker_runtime.get() {
+        shared_worker_runtime.terminate_all_for_context_shutdown();
+    }
+    if let Some(service_worker_runtime) = inner.service_worker_runtime.get() {
+        service_worker_runtime.terminate_all_for_context_shutdown();
+    }
 }
 
 impl Default for RendererBrowserContextRuntimeOwner {
@@ -379,7 +379,7 @@ impl RendererBrowserContextRuntime {
         Self::from_parts(
             message_port_registry,
             broadcast_channel_registry,
-            crate::shared_worker_runtime::new_shared_worker_runtime_service(),
+            None,
             service_worker_resource_store,
             browser_resource_runtime,
         )
@@ -399,7 +399,7 @@ impl RendererBrowserContextRuntime {
         let runtime = Self::from_parts(
             message_port_registry,
             broadcast_channel_registry,
-            crate::shared_worker_runtime::new_shared_worker_runtime_service(),
+            None,
             crate::new_shared_service_worker_resource_store(),
             browser_resource_runtime,
         );
@@ -425,7 +425,7 @@ impl RendererBrowserContextRuntime {
         let runtime = Self::from_parts(
             message_port_registry,
             broadcast_channel_registry,
-            shared_worker_runtime,
+            Some(shared_worker_runtime),
             crate::new_shared_service_worker_resource_store(),
             browser_resource_runtime,
         );
@@ -449,7 +449,7 @@ impl RendererBrowserContextRuntime {
             crate::network::BrowserResourceRuntimeOwnerRoot::new(browser_resource_runtime_owner);
         let runtime = Self::from_parts_with_worker_context_runtime(
             restored_worker_context_runtime,
-            crate::shared_worker_runtime::new_shared_worker_runtime_service(),
+            None,
             service_worker_resource_store,
             browser_resource_runtime,
         );
@@ -463,7 +463,7 @@ impl RendererBrowserContextRuntime {
     fn from_parts(
         message_port_registry: crate::message_port_runtime::SharedMessagePortRegistry,
         broadcast_channel_registry: crate::broadcast_channel_runtime::SharedBroadcastChannelRegistry,
-        shared_worker_runtime: crate::shared_worker_runtime::SharedWorkerRuntimeService,
+        shared_worker_runtime: Option<crate::shared_worker_runtime::SharedWorkerRuntimeService>,
         service_worker_resource_store: crate::SharedServiceWorkerResourceStore,
         browser_resource_runtime: crate::network::BrowserResourceRuntimeBinding,
     ) -> Self {
@@ -483,7 +483,7 @@ impl RendererBrowserContextRuntime {
 
     fn from_parts_with_worker_context_runtime(
         service_worker_context_runtime: RendererWorkerContextRuntime,
-        shared_worker_runtime: crate::shared_worker_runtime::SharedWorkerRuntimeService,
+        shared_worker_runtime: Option<crate::shared_worker_runtime::SharedWorkerRuntimeService>,
         service_worker_resource_store: crate::SharedServiceWorkerResourceStore,
         browser_resource_runtime: crate::network::BrowserResourceRuntimeBinding,
     ) -> Self {
@@ -496,17 +496,24 @@ impl RendererBrowserContextRuntime {
             NEXT_RENDERER_BROWSER_CONTEXT_RUNTIME_ID.fetch_add(1, Ordering::Relaxed),
         );
         let renderer_output_transport_tx = RendererOutputTransportSenderSlot::default();
-        shared_worker_runtime
-            .configure_target_output_streams(id, renderer_output_transport_tx.clone());
-        let service_worker_runtime =
-            crate::service_worker_runtime::
-                new_service_worker_runtime_service_with_resource_store_and_browser_resource_runtime_binding(
-                    service_worker_resource_store,
-                    service_worker_context_runtime,
-                    browser_resource_runtime.clone(),
-                    id,
-                    renderer_output_transport_tx.clone(),
-                );
+        let shared_worker_runtime = match shared_worker_runtime {
+            Some(service) => shared_workers::LazySharedWorkerRuntime::from_service(
+                service,
+                id,
+                renderer_output_transport_tx.clone(),
+            ),
+            None => shared_workers::LazySharedWorkerRuntime::new(
+                id,
+                renderer_output_transport_tx.clone(),
+            ),
+        };
+        let service_worker_runtime = service_worker_runtime::LazyServiceWorkerRuntime::new(
+            service_worker_resource_store,
+            service_worker_context_runtime,
+            browser_resource_runtime.clone(),
+            id,
+            renderer_output_transport_tx.clone(),
+        );
         Self {
             inner: Arc::new(RendererBrowserContextRuntimeInner {
                 id,
@@ -551,12 +558,12 @@ impl RendererBrowserContextRuntime {
         sender: super::RendererOutputTransportSender,
     ) {
         self.inner.renderer_output_transport_tx.set(sender.clone());
-        self.inner
-            .shared_worker_runtime
-            .bind_target_output_transport(sender.clone());
-        self.inner
-            .service_worker_runtime
-            .bind_target_output_transport(sender);
+        if let Some(shared_worker_runtime) = self.inner.shared_worker_runtime.get() {
+            shared_worker_runtime.bind_target_output_transport(sender.clone());
+        }
+        if let Some(service_worker_runtime) = self.inner.service_worker_runtime.get() {
+            service_worker_runtime.bind_target_output_transport(sender);
+        }
     }
 
     pub(crate) fn renderer_output_transport_sender(
@@ -570,15 +577,42 @@ impl RendererBrowserContextRuntime {
     }
 
     pub fn moli_memory_diagnostics(&self) -> Value {
-        let service_worker_diagnostics = self.inner.service_worker_runtime.diagnostics_snapshot();
+        let shared_worker_runtime_initialized = self.inner.shared_worker_runtime.is_initialized();
+        let mut shared_worker_diagnostics = self.inner.shared_worker_runtime.get().map_or_else(
+            || {
+                json!({
+                    "matchingEntryCount": 0,
+                    "loadingInstanceCount": 0,
+                    "runningInstanceCount": 0,
+                    "clientCount": 0,
+                    "loadingHostCount": 0,
+                    "runningWorkerIsolateCount": 0,
+                    "pendingServiceLaneEventCount": 0,
+                })
+            },
+            |runtime| runtime.moli_memory_diagnostics(),
+        );
+        shared_worker_diagnostics["runtimeInitialized"] = shared_worker_runtime_initialized.into();
+        let service_worker_runtime_initialized = self.inner.service_worker_runtime.is_initialized();
+        let deferred_service_worker_window_client_count = self
+            .inner
+            .service_worker_runtime
+            .deferred_window_client_count();
+        let service_worker_diagnostics = self
+            .inner
+            .service_worker_runtime
+            .get()
+            .map_or_else(Default::default, |runtime| runtime.diagnostics_snapshot());
         json!({
             "rendererOutputTransport": self
                 .inner
                 .renderer_output_transport_tx
                 .sender()
                 .map(|sender| sender.diagnostics()),
-            "sharedWorker": self.inner.shared_worker_runtime.moli_memory_diagnostics(),
+            "sharedWorker": shared_worker_diagnostics,
             "serviceWorker": {
+                "runtimeInitialized": service_worker_runtime_initialized,
+                "deferredWindowClients": deferred_service_worker_window_client_count,
                 "registrations": service_worker_diagnostics.registration_count,
                 "runtimeRegistrations": service_worker_diagnostics.registration_count,
                 "versions": service_worker_diagnostics.version_count,
@@ -607,7 +641,12 @@ impl RendererBrowserContextRuntime {
     pub fn shared_worker_runtime_diagnostics_for_diagnostics(
         &self,
     ) -> RendererSharedWorkerRuntimeDiagnostics {
-        self.inner.shared_worker_runtime.diagnostics_snapshot()
+        self.inner
+            .shared_worker_runtime
+            .get()
+            .map_or_else(RendererSharedWorkerRuntimeDiagnostics::default, |runtime| {
+                runtime.diagnostics_snapshot()
+            })
     }
 
     pub(crate) fn message_port_registry(
@@ -633,7 +672,20 @@ impl RendererBrowserContextRuntime {
     pub(crate) fn service_worker_runtime(
         &self,
     ) -> crate::service_worker_runtime::ServiceWorkerRuntimeService {
-        self.inner.service_worker_runtime.clone()
+        self.inner.service_worker_runtime.get_or_init()
+    }
+
+    pub(crate) fn service_worker_runtime_if_initialized(
+        &self,
+    ) -> Option<crate::service_worker_runtime::ServiceWorkerRuntimeService> {
+        self.inner.service_worker_runtime.get()
+    }
+
+    pub(crate) fn ensure_service_worker_runtime_for_navigation(&self) -> bool {
+        self.inner
+            .service_worker_runtime
+            .get_or_init_for_navigation()
+            .is_some()
     }
 
     pub(crate) fn next_web_storage_opaque_context_nonce(
@@ -925,6 +977,76 @@ mod tests {
         let clone = runtime.clone();
 
         assert!(runtime.shares_state_with(&clone));
+    }
+
+    #[test]
+    fn worker_services_stay_deferred_until_first_use() {
+        let runtime = RendererBrowserContextRuntime::new();
+
+        assert_eq!(
+            runtime.moli_memory_diagnostics()["sharedWorker"]["runtimeInitialized"],
+            false
+        );
+        assert_eq!(
+            runtime.moli_memory_diagnostics()["serviceWorker"]["runtimeInitialized"],
+            false
+        );
+
+        let _ = runtime.next_shared_worker_client_owner_id();
+        let document_url = url::Url::parse("https://deferred-client.test/").unwrap();
+        let client_queue = crate::page_task_queue::RendererPageServiceWorkerTestHarness::new();
+        runtime.register_service_worker_client(
+            document_url.clone(),
+            moli_storage_key::MoliStorageKey::first_party_from_url(&document_url, None)
+                .serialized_storage_key(),
+            crate::service_worker_runtime::ServiceWorkerClientFrameType::TopLevel,
+            Some(crate::native_bridge::WindowDocumentOwner::for_test(1)),
+            client_queue.sender(),
+        );
+        let (shared_wake_tx, _shared_wake_rx) =
+            crate::shared_worker_runtime::shared_worker_owner_wake_channel();
+        runtime.add_shared_worker_owner_wake_sender(shared_wake_tx);
+        let (service_wake_tx, _service_wake_rx) =
+            crate::service_worker_runtime::service_worker_owner_wake_channel();
+        runtime.add_service_worker_owner_wake_sender(service_wake_tx);
+        runtime.set_service_worker_pause_on_start_for_devtools(true);
+
+        assert!(!runtime.ensure_service_worker_runtime_for_navigation());
+        assert_eq!(
+            runtime.moli_memory_diagnostics()["sharedWorker"]["runtimeInitialized"],
+            false
+        );
+        assert_eq!(
+            runtime.moli_memory_diagnostics()["serviceWorker"]["runtimeInitialized"],
+            false
+        );
+        assert_eq!(
+            runtime.moli_memory_diagnostics()["serviceWorker"]["deferredWindowClients"],
+            1
+        );
+
+        runtime.inner.shared_worker_runtime.get_or_init();
+        runtime.service_worker_runtime();
+        assert_eq!(
+            runtime.moli_memory_diagnostics()["sharedWorker"]["runtimeInitialized"],
+            true
+        );
+        assert_eq!(
+            runtime.moli_memory_diagnostics()["serviceWorker"]["runtimeInitialized"],
+            true
+        );
+        assert_eq!(
+            runtime.moli_memory_diagnostics()["serviceWorker"]["deferredWindowClients"],
+            0
+        );
+        assert_eq!(
+            runtime
+                .service_worker_runtime()
+                .diagnostics_snapshot()
+                .live_client_count,
+            1
+        );
+        assert!(runtime.service_worker_pause_on_start_for_devtools());
     }
 
     #[test]

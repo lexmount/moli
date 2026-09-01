@@ -3478,12 +3478,24 @@ fn top_level_http_location_navigation_reserves_service_worker_client_until_commi
         .await;
         let loader =
             crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
-        let page_vm = test_page_vm_with_loader_and_document_url(
+        let browser_context_owner = crate::runtime::RendererBrowserContextRuntime::new();
+        let browser_context_runtime = browser_context_owner.handle();
+        browser_context_runtime.service_worker_runtime();
+        let (owner_wake_tx, _owner_wake_rx) = tokio::sync::mpsc::unbounded_channel();
+        let runtime_hooks =
+            PageVmRuntimeHooks::standalone_with_owner_wake_and_browser_context_without_owner_reservation_for_test(
+                crate::page_task_queue::RendererOwnerWakeSender::new(
+                    owner_wake_tx,
+                    crate::runtime::RendererPageToken::new_for_testing(PageId::new_for_testing(1)),
+                ),
+                browser_context_runtime.clone(),
+            );
+        let page_vm = test_page_vm_with_loader_document_url_and_hooks(
             &loader,
             Vec::new(),
             Url::parse(&format!("{base_url}/start.html")).unwrap(),
+            runtime_hooks,
         );
-        let browser_context_runtime = page_vm.runtime_hooks.browser_context_runtime.clone();
         let browser_context_runtime_after_drop = browser_context_runtime.clone();
         let local_executor = page_vm.local_executor.clone();
         let next_url = format!("{base_url}/next.html");
@@ -3579,7 +3591,42 @@ fn top_level_http_location_navigation_reserves_service_worker_client_until_commi
         server
             .await
             .expect("top-level reserved navigation response server should finish");
+        drop(browser_context_owner);
     });
+}
+
+#[test]
+fn top_level_http_location_navigation_without_registrations_keeps_service_worker_runtime_deferred()
+{
+    let loader =
+        crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+    let mut page_vm = test_page_vm_with_loader_and_document_url(
+        &loader,
+        Vec::new(),
+        Url::parse("https://deferred-navigation.test/start.html").unwrap(),
+    );
+    let browser_context_runtime = page_vm.runtime_hooks.browser_context_runtime.clone();
+
+    assert_eq!(
+        browser_context_runtime.moli_memory_diagnostics()["serviceWorker"]["runtimeInitialized"],
+        false
+    );
+    page_vm
+        .vm_mut()
+        .eval("location.href = 'https://deferred-navigation.test/next.html'; 'queued'")
+        .expect("location navigation should queue");
+    assert!(page_vm.vm().has_pending_location_navigation());
+    assert_eq!(
+        browser_context_runtime.moli_memory_diagnostics()["serviceWorker"]["runtimeInitialized"],
+        false,
+        "an empty Service Worker store must not make navigation materialize the runtime"
+    );
+
+    drop(page_vm);
+    assert_eq!(
+        browser_context_runtime.moli_memory_diagnostics()["serviceWorker"]["runtimeInitialized"],
+        false
+    );
 }
 
 #[test]

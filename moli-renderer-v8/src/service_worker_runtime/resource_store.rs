@@ -170,6 +170,13 @@ impl ServiceWorkerResourceStore {
         .collect()
     }
 
+    pub(crate) fn is_empty(&self) -> bool {
+        match &self.backend {
+            ServiceWorkerResourceStoreBackend::Memory(registrations) => registrations.is_empty(),
+            ServiceWorkerResourceStoreBackend::Json(json) => json.registrations.is_empty(),
+        }
+    }
+
     pub(super) fn delete_registration(&mut self, key: &ServiceWorkerRegistrationKey) -> Result<()> {
         let mut last_error = None;
         for _ in 0..=SERVICE_WORKER_RESOURCE_STORE_MUTATION_RETRY_COUNT {

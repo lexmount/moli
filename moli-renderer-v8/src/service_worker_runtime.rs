@@ -63,8 +63,8 @@ pub(crate) use events::{
     service_worker_fetch_request_metadata, service_worker_opaque_response_rejection,
 };
 pub(crate) use ids::{
-    ServiceWorkerClientId, ServiceWorkerEventId, ServiceWorkerRegistrationId,
-    ServiceWorkerVersionId,
+    ServiceWorkerClientId, ServiceWorkerClientIdAllocator, ServiceWorkerEventId,
+    ServiceWorkerRegistrationId, ServiceWorkerVersionId,
 };
 pub(crate) use jobs::ServiceWorkerUnregisterStart;
 pub(crate) use owner_wake::{

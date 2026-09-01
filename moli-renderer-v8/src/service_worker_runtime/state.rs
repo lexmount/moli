@@ -122,7 +122,7 @@ fn target_status_for_lifecycle_state(
 pub(super) struct ServiceWorkerRuntimeInner {
     pub(super) next_registration_id: AtomicU64,
     pub(super) next_version_id: AtomicU64,
-    pub(super) next_client_id: AtomicU64,
+    pub(super) client_id_allocator: super::ids::ServiceWorkerClientIdAllocator,
     pub(super) next_event_id: AtomicU64,
     pub(super) next_force_update_page_load_waiter_id: AtomicU64,
     pub(super) next_notification_id: AtomicU64,
@@ -146,13 +146,14 @@ impl ServiceWorkerRuntimeInner {
         resource_store: SharedServiceWorkerResourceStore,
         restored_worker_context_runtime: RendererWorkerContextRuntime,
         browser_resource_runtime: crate::network::BrowserResourceRuntimeBinding,
+        client_id_allocator: super::ids::ServiceWorkerClientIdAllocator,
         browser_context_runtime_id: crate::runtime::RendererBrowserContextRuntimeId,
         output_transport: crate::runtime::RendererOutputTransportSenderSlot,
     ) -> Self {
         Self {
             next_registration_id: AtomicU64::new(1),
             next_version_id: AtomicU64::new(1),
-            next_client_id: AtomicU64::new(1),
+            client_id_allocator,
             next_event_id: AtomicU64::new(1),
             next_force_update_page_load_waiter_id: AtomicU64::new(1),
             next_notification_id: AtomicU64::new(1),
