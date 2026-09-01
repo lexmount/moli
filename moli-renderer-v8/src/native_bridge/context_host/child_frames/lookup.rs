@@ -42,7 +42,7 @@ impl JsContextHost {
     }
 
     pub(crate) fn child_browsing_context_count_for_document(&self, document: DomHandle) -> usize {
-        self.child_browsing_context_direct_frame_handles_for_document(document)
+        self.window_child_browsing_context_handles_for_document(document)
             .len()
     }
 
@@ -158,6 +158,22 @@ impl JsContextHost {
             .collect()
     }
 
+    fn window_child_browsing_context_handles_for_document(
+        &self,
+        document: DomHandle,
+    ) -> Vec<DomHandle> {
+        // A frame inside a shadow tree still owns a browsing context, but it is
+        // not exposed through the containing Window's indexed properties.
+        self.child_browsing_context_direct_frame_handles_for_document(document)
+            .into_iter()
+            .filter(|handle| {
+                self.dom_host()
+                    .node(*handle)
+                    .is_some_and(|node| node.flags().in_document_tree())
+            })
+            .collect()
+    }
+
     #[cfg(test)]
     pub(crate) fn child_browsing_context_handle_by_index(&self, index: usize) -> Option<DomHandle> {
         // Tests use this to inspect the global frame-tree projection rather
@@ -176,7 +192,7 @@ impl JsContextHost {
         if self.child_browsing_contexts.is_empty() {
             return None;
         }
-        self.child_browsing_context_direct_frame_handles_for_document(document)
+        self.window_child_browsing_context_handles_for_document(document)
             .into_iter()
             .nth(index)
     }
