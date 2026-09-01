@@ -10,6 +10,9 @@ use super::{
 };
 use crate::{
     context_bootstrap::ContextBootstrapAssets,
+    devtools::target::{
+        RendererDevToolsTargetShutdownRegistration, RendererDevToolsTargetShutdownRegistry,
+    },
     document_runtime::DocumentRuntime,
     exception_reporting::v8_message_listener,
     module_runtime::{
@@ -356,24 +359,31 @@ impl RendererDocumentIsolateHandle {
         Self::new_with_foreground_wake(
             V8ForegroundTaskWake::page(v8_foreground_task_sender),
             RendererDocumentIsolateTeardown::standalone_test(),
+            None,
         )
     }
 
     pub(crate) fn new_owner_reserved_page(
         v8_foreground_task_sender: RendererPageV8ForegroundTaskSender,
+        devtools_target_shutdown_registry: &RendererDevToolsTargetShutdownRegistry,
     ) -> Result<RendererDocumentIsolateBootstrap> {
         Self::new_with_foreground_wake(
             V8ForegroundTaskWake::page(v8_foreground_task_sender),
             RendererDocumentIsolateTeardown::owner_reserved_page(),
+            Some(devtools_target_shutdown_registry),
         )
     }
 
     fn new_with_foreground_wake(
         foreground_wake: V8ForegroundTaskWake,
         renderer_document_isolate_teardown: RendererDocumentIsolateTeardown,
+        devtools_target_shutdown_registry: Option<&RendererDevToolsTargetShutdownRegistry>,
     ) -> Result<RendererDocumentIsolateBootstrap> {
         let (renderer_document_isolate, bridge_bindings) =
-            RendererDocumentIsolateHolder::new_holder(foreground_wake)?;
+            RendererDocumentIsolateHolder::new_holder(
+                foreground_wake,
+                devtools_target_shutdown_registry,
+            )?;
         let renderer_document_isolate = Self {
             inner: Rc::new(RefCell::new(renderer_document_isolate)),
         };
@@ -496,6 +506,9 @@ impl RendererDocumentIsolateHandle {
 }
 
 pub(super) struct RendererDocumentIsolateHolder {
+    // Unregister before destroying the Inspector backend so owner shutdown
+    // never observes a target whose isolate has already been disposed.
+    _devtools_target_shutdown_registration: Option<RendererDevToolsTargetShutdownRegistration>,
     // Inspector backend/session teardown touches V8 objects, so it must drop before the
     // isolate. `ScriptVm::drop` normally performs explicit context destruction;
     // this field order is the final safety net for partial construction paths.
@@ -509,7 +522,10 @@ pub(super) struct RendererDocumentIsolateHolder {
 }
 
 impl RendererDocumentIsolateHolder {
-    fn new_holder(foreground_wake: V8ForegroundTaskWake) -> Result<(Self, NativeBridgeBindings)> {
+    fn new_holder(
+        foreground_wake: V8ForegroundTaskWake,
+        devtools_target_shutdown_registry: Option<&RendererDevToolsTargetShutdownRegistry>,
+    ) -> Result<(Self, NativeBridgeBindings)> {
         let timing_enabled = moli_trace::cdp_nav_timing_enabled();
         let total_start = timing_enabled.then(std::time::Instant::now);
 
@@ -607,6 +623,10 @@ impl RendererDocumentIsolateHolder {
 
         let inspector_start = timing_enabled.then(std::time::Instant::now);
         let inspector_backend = RendererInspectorIsolateBackend::new(&mut isolate);
+        let devtools_target_shutdown_registration = devtools_target_shutdown_registry
+            .map(|registry| registry.register(inspector_backend.devtools_target()))
+            .transpose()
+            .map_err(|error| anyhow!(error))?;
         if timing_enabled {
             tracing::info!(
                 target: "moli_cdp_nav_timing",
@@ -632,6 +652,7 @@ impl RendererDocumentIsolateHolder {
 
         Ok((
             Self::new(
+                devtools_target_shutdown_registration,
                 inspector_backend,
                 isolate_bootstrap,
                 platform_registration,
@@ -642,12 +663,14 @@ impl RendererDocumentIsolateHolder {
     }
 
     pub(super) fn new(
+        devtools_target_shutdown_registration: Option<RendererDevToolsTargetShutdownRegistration>,
         inspector_backend: RendererInspectorIsolateBackend,
         bootstrap: IsolateBootstrapCache,
         platform_registration: V8PlatformIsolateRegistration,
         isolate: v8::OwnedIsolate,
     ) -> Self {
         Self {
+            _devtools_target_shutdown_registration: devtools_target_shutdown_registration,
             inspector_backend: Some(inspector_backend),
             bootstrap,
             _platform_registration: platform_registration,

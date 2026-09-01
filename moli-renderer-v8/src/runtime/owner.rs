@@ -1007,6 +1007,8 @@ pub(super) struct RendererOwnerState {
     pub(super) render_runtime_admission: std::sync::OnceLock<RenderRuntimeHandle>,
     pub(super) inspector_io_wake_tx: mpsc::UnboundedSender<RendererInspectorIoOwnerWake>,
     pub(super) browser_context_runtime: RendererBrowserContextRuntime,
+    pub(super) devtools_target_shutdown_registry:
+        crate::devtools::target::RendererDevToolsTargetShutdownRegistry,
     pub(super) owner_local_host_id: RendererOwnerLocalHostId,
     layout_policy: Mutex<RendererOwnerLayoutPolicyState>,
     context_shutdown_notify: tokio::sync::Notify,
@@ -1810,6 +1812,7 @@ impl RendererOwnerHandle {
             render_runtime_admission: std::sync::OnceLock::new(),
             inspector_io_wake_tx,
             browser_context_runtime,
+            devtools_target_shutdown_registry: Default::default(),
             owner_local_host_id,
             layout_policy: Mutex::new(RendererOwnerLayoutPolicyState::default()),
             context_shutdown_notify: tokio::sync::Notify::new(),
@@ -2333,6 +2336,7 @@ impl RendererOwnerHandle {
         // one side of this boundary: rejected with ownership returned to the
         // caller, or durably enqueued for the renderer terminal drain.
         self.render_runtime.close_admission();
+        self.state.devtools_target_shutdown_registry.terminate_all();
         self.state
             .page_table
             .terminate_and_cancel_all_contexts(RendererPageContextCancelReason::ContextDropped);

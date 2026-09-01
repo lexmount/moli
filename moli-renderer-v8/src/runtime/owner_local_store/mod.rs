@@ -1124,8 +1124,10 @@ impl RendererOwnerLocalStore {
         let v8_foreground_task_sender = page_runtime_task_source
             .v8_foreground_task_sender()
             .ok_or_else(|| anyhow!("owner-reserved Page is missing its V8 foreground source"))?;
-        let bootstrap =
-            RendererDocumentIsolateHandle::new_owner_reserved_page(v8_foreground_task_sender)?;
+        let bootstrap = RendererDocumentIsolateHandle::new_owner_reserved_page(
+            v8_foreground_task_sender,
+            &owner.owner_state.devtools_target_shutdown_registry,
+        )?;
         let host_handle = bootstrap.clone_renderer_document_isolate_handle_for_owner_retention();
         let reservation_id = self.next_renderer_document_isolate_reservation_id;
         self.next_renderer_document_isolate_reservation_id = self
