@@ -66,7 +66,7 @@ impl RendererPublicationRoute {
         let owner_route = CdpSessionRoute::PageTarget {
             browser_context_id,
             target_id,
-            is_attached_session: false,
+            session_key: moli_page_types::DevToolsSessionKey::Primary,
         };
         Self::UnattachedOwner {
             owner_route,
@@ -127,7 +127,7 @@ impl RendererPublicationOwner {
                     owner_route: CdpSessionRoute::PageTarget {
                         browser_context_id: browser_context.id.clone(),
                         target_id: browser_context.active_target_id()?.to_owned(),
-                        is_attached_session: false,
+                        session_key: moli_page_types::DevToolsSessionKey::Primary,
                     },
                     projection: RendererPublicationProjection::CurrentPage,
                 })

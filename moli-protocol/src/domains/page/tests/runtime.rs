@@ -1117,7 +1117,7 @@ async fn runtime_evaluate_child_navigation_emits_child_frame_navigation_and_life
         .browser_context
         .as_mut()
         .unwrap()
-        .active_page_state_mut()
+        .active_page_target_mut()
         .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .page_session_state
         .page_lifecycle_events = true;
@@ -1170,7 +1170,7 @@ async fn runtime_evaluate_timeout_child_navigation_emits_child_frame_navigation_
         .browser_context
         .as_mut()
         .unwrap()
-        .active_page_state_mut()
+        .active_page_target_mut()
         .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .page_session_state
         .page_lifecycle_events = true;
@@ -1214,7 +1214,7 @@ async fn runtime_evaluate_child_location_navigation_emits_child_frame_navigation
         .browser_context
         .as_mut()
         .unwrap()
-        .active_page_state_mut()
+        .active_page_target_mut()
         .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .page_session_state
         .page_lifecycle_events = true;
@@ -1296,7 +1296,7 @@ async fn runtime_evaluate_child_history_back_emits_child_frame_navigation_and_li
         .browser_context
         .as_mut()
         .unwrap()
-        .active_page_state_mut()
+        .active_page_target_mut()
         .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .page_session_state
         .page_lifecycle_events = true;

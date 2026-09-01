@@ -2114,7 +2114,7 @@ mod protocol_neutral_tests {
             browser_context.assign_auxiliary_session_to_target("TID-chain", "SID-aux".to_owned())
         );
         browser_context
-            .active_page_state_mut()
+            .active_page_target_mut()
             .runtime_slot
             .set_page_attachment_id_for_test(1);
         conn.browser_context = Some(browser_context);
@@ -2255,7 +2255,7 @@ mod protocol_neutral_tests {
                 .assign_auxiliary_session_to_target("TID-response-chain", "SID-aux".to_owned())
         );
         browser_context
-            .active_page_state_mut()
+            .active_page_target_mut()
             .runtime_slot
             .set_page_attachment_id_for_test(1);
         conn.browser_context = Some(browser_context);
@@ -2393,7 +2393,7 @@ mod protocol_neutral_tests {
         browser_context.set_active_target_id("TID-chain-bidi".to_owned());
         browser_context.attach_active_session("SID-primary".to_owned());
         browser_context
-            .active_page_state_mut()
+            .active_page_target_mut()
             .runtime_slot
             .set_page_attachment_id_for_test(1);
         conn.browser_context = Some(browser_context);

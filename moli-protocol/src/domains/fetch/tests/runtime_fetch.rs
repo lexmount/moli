@@ -1780,7 +1780,7 @@ async fn continue_request_returns_before_delayed_subresource_response() {
         .browser_context
         .as_mut()
         .unwrap()
-        .active_page_state_mut()
+        .active_page_target_mut()
         .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .inspector_enabled = true;
@@ -5469,7 +5469,7 @@ async fn runtime_fetch_subresource_pauses_until_continue_request_then_resolves_p
         .browser_context
         .as_mut()
         .unwrap()
-        .active_page_state_mut()
+        .active_page_target_mut()
         .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .inspector_enabled = true;
@@ -5623,7 +5623,7 @@ async fn runtime_fetch_subresource_continue_request_fails_when_network_offline()
         .browser_context
         .as_mut()
         .unwrap()
-        .active_page_state_mut()
+        .active_page_target_mut()
         .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .inspector_enabled = true;
@@ -5754,7 +5754,7 @@ async fn runtime_fetch_subresource_request_animation_frame_pauses_until_continue
         .browser_context
         .as_mut()
         .unwrap()
-        .active_page_state_mut()
+        .active_page_target_mut()
         .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .inspector_enabled = true;
@@ -5935,7 +5935,7 @@ async fn runtime_fetch_subresource_queue_microtask_pauses_until_continue_request
         .browser_context
         .as_mut()
         .unwrap()
-        .active_page_state_mut()
+        .active_page_target_mut()
         .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .inspector_enabled = true;
@@ -7767,7 +7767,7 @@ async fn close_aborts_paused_runtime_fetch_subresource() {
         .browser_context
         .as_mut()
         .unwrap()
-        .active_page_state_mut()
+        .active_page_target_mut()
         .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .inspector_enabled = true;

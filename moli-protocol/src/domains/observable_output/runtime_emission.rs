@@ -243,7 +243,7 @@ mod tests {
                 .browser_context
                 .as_mut()
                 .expect("browser context should exist");
-            bc.active_page_state_mut().devtools_sessions
+            bc.active_page_target_mut().devtools_sessions
                 [moli_page_types::DevToolsSessionKey::Primary]
                 .runtime_session_state
                 .runtime_frontend_enabled = true;
@@ -258,11 +258,11 @@ mod tests {
                 .browser_context
                 .as_mut()
                 .expect("browser context should exist");
-            bc.active_page_state_mut()
+            bc.active_page_target_mut()
                 .owner_state
                 .runtime_observable_state
                 .mark_emitted_console_counts(HashMap::from([(7, 1)]));
-            bc.active_page_state_mut()
+            bc.active_page_target_mut()
                 .owner_state
                 .runtime_observable_state
                 .mark_emitted_exception_entries(1);
@@ -295,10 +295,10 @@ mod tests {
                 .as_mut()
                 .expect("browser context should exist");
             bc.set_target_url("http://example.test/runtime-source".to_owned());
-            bc.active_page_state_mut()
+            bc.active_page_target_mut()
                 .runtime_slot
                 .set_page_attachment_id_for_test(3);
-            bc.active_page_state_mut()
+            bc.active_page_target_mut()
                 .runtime_slot
                 .sync_observable_output_source_from_renderer_snapshot(
                     "http://example.test/runtime-source".to_owned(),
@@ -312,7 +312,7 @@ mod tests {
             .browser_context
             .as_ref()
             .expect("browser context should exist")
-            .active_page_state()
+            .active_page_target()
             .owner_state
             .runtime_observable_state;
         assert_eq!(
@@ -335,7 +335,7 @@ mod tests {
         let mut inactive = BrowserContext::new("BID-inactive".to_owned());
         inactive.set_active_target_id("TID-inactive".to_owned());
         inactive
-            .active_page_state_mut()
+            .active_page_target_mut()
             .devtools_sessions
             .ensure_attached("SID-aux")
             .runtime_session_state

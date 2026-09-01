@@ -977,7 +977,7 @@ mod tests {
         browser_context.attach_active_session("SID-nav");
         browser_context.set_target_url("https://example.test/start".to_owned());
         browser_context
-            .active_page_state_mut()
+            .active_page_target_mut()
             .runtime_slot
             .set_page_attachment_id_for_test(1);
         conn.browser_context = Some(browser_context);
@@ -1119,7 +1119,7 @@ mod tests {
         let mut browser_context = BrowserContext::new_with_page_for_test("BID-1", "TID-page");
         browser_context.attach_active_session("SID-page");
         browser_context
-            .active_page_state_mut()
+            .active_page_target_mut()
             .runtime_slot
             .enable_primary_network_events();
         conn.browser_context = Some(browser_context);
@@ -1310,7 +1310,7 @@ mod tests {
         browser_context.set_active_target_id("FRAME-1");
         browser_context.attach_active_session("SID-nav");
         browser_context.set_target_url("https://example.test/parent".to_owned());
-        browser_context.active_page_state_mut().devtools_sessions
+        browser_context.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_domain_enabled = true;

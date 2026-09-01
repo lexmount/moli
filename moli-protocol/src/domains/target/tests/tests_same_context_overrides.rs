@@ -135,11 +135,11 @@ async fn same_context_targets_restore_their_own_page_session_overrides_after_swi
             .expect("active browser context");
         assert_eq!(bc.active_target_id(), Some("TID-000000000A"));
         assert_eq!(
-            bc.active_page_state().network_policy.extra_headers(),
+            bc.active_page_target().effective_policy().extra_headers(),
             vec![("X-Target".into(), "A".into())]
         );
         assert_eq!(
-            bc.active_page_state().locale_override.as_deref(),
+            bc.active_page_target().effective_policy().locale_override(),
             Some("en-GB")
         );
     }
@@ -196,11 +196,11 @@ async fn same_context_targets_restore_their_own_page_session_overrides_after_swi
             .expect("active browser context");
         assert_eq!(bc.active_target_id(), Some(second_target_id.as_str()));
         assert_eq!(
-            bc.active_page_state().network_policy.extra_headers(),
+            bc.active_page_target().effective_policy().extra_headers(),
             vec![("X-Target".into(), "B".into())]
         );
         assert_eq!(
-            bc.active_page_state().locale_override.as_deref(),
+            bc.active_page_target().effective_policy().locale_override(),
             Some("fr-FR")
         );
     }
@@ -362,7 +362,7 @@ async fn same_context_targets_restore_their_own_network_conditions_after_session
             .expect("active browser context after direct background navigation");
         assert_eq!(active.active_target_id(), Some("TID-000000000NA"));
         let parked = active
-            .parked_page_session_state(&second_target_id)
+            .non_default_background_page_target_for_test(&second_target_id)
             .expect("second target should keep parked network state");
         assert!(parked.network_policy.network_offline());
         assert_eq!(parked.network_policy.emulated_network_latency(), 25.0);
@@ -391,31 +391,31 @@ async fn same_context_targets_restore_their_own_network_conditions_after_session
             .as_ref()
             .expect("active browser context after restoring first target");
         assert_eq!(active.active_target_id(), Some("TID-000000000NA"));
-        assert!(!active.active_page_state().network_policy.network_offline());
+        assert!(!active.active_page_target().network_policy.network_offline());
         assert_eq!(
             active
-                .active_page_state()
+                .active_page_target()
                 .network_policy
                 .emulated_network_latency(),
             150.0
         );
         assert_eq!(
             active
-                .active_page_state()
+                .active_page_target()
                 .network_policy
                 .emulated_download_throughput(),
             1024.0
         );
         assert_eq!(
             active
-                .active_page_state()
+                .active_page_target()
                 .network_policy
                 .emulated_upload_throughput(),
             512.0
         );
         assert_eq!(
             active
-                .active_page_state()
+                .active_page_target()
                 .network_policy
                 .emulated_connection_type(),
             Some("cellular3g")
@@ -921,7 +921,10 @@ async fn same_context_targets_restore_their_own_loader_overrides_after_switching
             .page_target(&second_target_id)
             .expect("background target");
         assert_eq!(
-            background.network_policy.user_agent_override(),
+            background
+                .effective_policy()
+                .browser_identity_override()
+                .map(|identity| identity.user_agent()),
             Some("Moli/Target-B")
         );
         assert_eq!(background.tls_verify_host_override, Some(true));
@@ -952,13 +955,14 @@ async fn same_context_targets_restore_their_own_loader_overrides_after_switching
         assert_eq!(active.active_target_id(), Some(second_target_id.as_str()));
         assert_eq!(
             active
-                .active_page_state()
-                .network_policy
-                .user_agent_override(),
+                .active_page_target()
+                .effective_policy()
+                .browser_identity_override()
+                .map(|identity| identity.user_agent()),
             Some("Moli/Target-B")
         );
         assert_eq!(
-            active.active_page_state().tls_verify_host_override,
+            active.active_page_target().tls_verify_host_override,
             Some(true)
         );
     }
@@ -985,13 +989,14 @@ async fn same_context_targets_restore_their_own_loader_overrides_after_switching
         assert_eq!(active.active_target_id(), Some("TID-000000000UA"));
         assert_eq!(
             active
-                .active_page_state()
-                .network_policy
-                .user_agent_override(),
+                .active_page_target()
+                .effective_policy()
+                .browser_identity_override()
+                .map(|identity| identity.user_agent()),
             Some("Moli/Target-A")
         );
         assert_eq!(
-            active.active_page_state().tls_verify_host_override,
+            active.active_page_target().tls_verify_host_override,
             Some(false)
         );
     }
@@ -1024,9 +1029,9 @@ async fn same_context_targets_restore_their_own_proxy_loader_overrides_after_swi
             .browser_context
             .as_mut()
             .expect("active browser context");
-        active.active_page_state_mut().http_proxy_override =
+        active.active_page_target_mut().http_proxy_override =
             Some("http://proxy-a.test:8080".into());
-        active.active_page_state_mut().http_no_proxy_override = Some("localhost,127.0.0.1".into());
+        active.active_page_target_mut().http_no_proxy_override = Some("localhost,127.0.0.1".into());
     }
     ctx.conn.invalidate_resource_runtime_async().await;
     ctx.conn
@@ -1093,9 +1098,9 @@ async fn same_context_targets_restore_their_own_proxy_loader_overrides_after_swi
             .as_mut()
             .expect("active browser context");
         assert_eq!(active.active_target_id(), Some(second_target_id.as_str()));
-        active.active_page_state_mut().http_proxy_override =
+        active.active_page_target_mut().http_proxy_override =
             Some("http://proxy-b.test:8080".into());
-        active.active_page_state_mut().http_no_proxy_override = Some("::1,.example.com".into());
+        active.active_page_target_mut().http_no_proxy_override = Some("::1,.example.com".into());
     }
     ctx.conn.invalidate_resource_runtime_async().await;
     ctx.conn
@@ -1120,11 +1125,14 @@ async fn same_context_targets_restore_their_own_proxy_loader_overrides_after_swi
             .expect("active browser context");
         assert_eq!(active.active_target_id(), Some("TID-000000000PX"));
         assert_eq!(
-            active.active_page_state().http_proxy_override.as_deref(),
+            active.active_page_target().http_proxy_override.as_deref(),
             Some("http://proxy-a.test:8080")
         );
         assert_eq!(
-            active.active_page_state().http_no_proxy_override.as_deref(),
+            active
+                .active_page_target()
+                .http_no_proxy_override
+                .as_deref(),
             Some("localhost,127.0.0.1")
         );
     }
@@ -1248,13 +1256,14 @@ async fn same_context_targets_restore_their_own_loader_overrides_after_close_tar
         assert_eq!(active.active_target_id(), Some("TID-000000000UC"));
         assert_eq!(
             active
-                .active_page_state()
-                .network_policy
-                .user_agent_override(),
+                .active_page_target()
+                .effective_policy()
+                .browser_identity_override()
+                .map(|identity| identity.user_agent()),
             Some("Moli/Close-A")
         );
         assert_eq!(
-            active.active_page_state().tls_verify_host_override,
+            active.active_page_target().tls_verify_host_override,
             Some(false)
         );
     }
@@ -1288,9 +1297,9 @@ async fn same_context_targets_restore_their_own_proxy_loader_overrides_after_clo
             .browser_context
             .as_mut()
             .expect("active browser context");
-        active.active_page_state_mut().http_proxy_override =
+        active.active_page_target_mut().http_proxy_override =
             Some("http://proxy-close-a.test:8080".into());
-        active.active_page_state_mut().http_no_proxy_override = Some("localhost,127.0.0.1".into());
+        active.active_page_target_mut().http_no_proxy_override = Some("localhost,127.0.0.1".into());
     }
     ctx.conn.invalidate_resource_runtime_async().await;
     ctx.conn
@@ -1359,9 +1368,9 @@ async fn same_context_targets_restore_their_own_proxy_loader_overrides_after_clo
             .browser_context
             .as_mut()
             .expect("active browser context");
-        active.active_page_state_mut().http_proxy_override =
+        active.active_page_target_mut().http_proxy_override =
             Some("http://proxy-close-b.test:8080".into());
-        active.active_page_state_mut().http_no_proxy_override = Some("::1,.example.com".into());
+        active.active_page_target_mut().http_no_proxy_override = Some("::1,.example.com".into());
     }
     ctx.conn.invalidate_resource_runtime_async().await;
     ctx.conn
@@ -1390,11 +1399,14 @@ async fn same_context_targets_restore_their_own_proxy_loader_overrides_after_clo
             .expect("active browser context");
         assert_eq!(active.active_target_id(), Some("TID-000000000PC"));
         assert_eq!(
-            active.active_page_state().http_proxy_override.as_deref(),
+            active.active_page_target().http_proxy_override.as_deref(),
             Some("http://proxy-close-a.test:8080")
         );
         assert_eq!(
-            active.active_page_state().http_no_proxy_override.as_deref(),
+            active
+                .active_page_target()
+                .http_no_proxy_override
+                .as_deref(),
             Some("localhost,127.0.0.1")
         );
     }

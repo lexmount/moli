@@ -18,161 +18,134 @@ pub(crate) enum PageLifecycleEventsEnableResult {
 
 impl TargetSessionStateMut<'_> {
     fn set_page_domain_enabled(mut self, enabled: bool, subscription_generation: u64) {
-        if let Some(state) = self.page_session_state_mut() {
-            if enabled {
-                state.enable_page_domain(subscription_generation);
-            } else {
-                state.disable_page_domain();
-            }
+        let state = self.page_session_state_mut();
+        if enabled {
+            state.enable_page_domain(subscription_generation);
+        } else {
+            state.disable_page_domain();
         }
     }
 
     fn set_console_enabled(mut self, enabled: bool) {
-        if let Some(state) = self.devtools_session_state_mut() {
-            state.console_output_session_state.console_enabled = enabled;
-        }
+        self.devtools_session_state_mut()
+            .console_output_session_state
+            .console_enabled = enabled;
     }
 
     fn enable_audits_with_storage(
         mut self,
         storage: &crate::domains::audits_output_state::TargetAuditsStorageState,
-    ) -> Option<Option<crate::domains::audits_output_state::TargetAuditsOutputCursor>> {
-        let state = self.page_session_state_mut()?;
-        Some(state.audits.enable(storage))
+    ) -> Option<crate::domains::audits_output_state::TargetAuditsOutputCursor> {
+        self.page_session_state_mut().audits.enable(storage)
     }
 
     fn disable_audits(mut self) {
-        if let Some(state) = self.page_session_state_mut() {
-            state.audits.disable();
-        }
+        self.page_session_state_mut().audits.disable();
     }
 
     #[cfg(test)]
     fn set_log_enabled(mut self, enabled: bool) {
-        if let Some(state) = self.page_session_state_mut() {
-            state.log_enabled = enabled;
-        }
+        self.page_session_state_mut().log_enabled = enabled;
     }
 
     fn enable_log_with_storage(
         mut self,
         storage: crate::domains::log_output_state::TargetLogStorageState,
-    ) -> Option<bool> {
-        let state = self.devtools_session_state_mut()?;
+    ) -> bool {
+        let state = self.devtools_session_state_mut();
         if state.page_session_state.log_enabled {
-            return Some(false);
+            return false;
         }
         state.page_session_state.log_enabled = true;
         state
             .console_output_session_state
             .reset_log_delivery_for_enable(storage);
-        Some(true)
-    }
-
-    fn disable_log_and_violations(mut self) {
-        if let Some(state) = self.devtools_session_state_mut() {
-            state.page_session_state.log_enabled = false;
-            state
-                .console_output_session_state
-                .clear_log_violation_thresholds();
-        }
-    }
-
-    fn set_page_file_chooser_opened_event_enabled(mut self, enabled: bool) {
-        if let Some(state) = self.page_session_state_mut() {
-            state.page_file_chooser_opened_event_enabled = enabled;
-        }
-    }
-
-    fn disable_page_domain(mut self) {
-        if let Some(state) = self.page_session_state_mut() {
-            state.disable_page_domain();
-            state.page_lifecycle_events = false;
-            state.page_bypass_csp_enabled = false;
-            state.page_font_families.clear();
-            state.page_file_chooser_opened_event_enabled = false;
-            state.page_intercept_file_chooser_dialog_enabled = false;
-            state.page_screencast.stop();
-            state.javascript_dialog_state.clear();
-        }
-    }
-
-    fn set_page_lifecycle_events_enabled(mut self, enabled: bool) {
-        if let Some(state) = self.page_session_state_mut() {
-            state.page_lifecycle_events = enabled;
-        }
-    }
-
-    fn set_page_bypass_csp_enabled(mut self, enabled: bool) {
-        if let Some(state) = self.page_session_state_mut() {
-            state.page_bypass_csp_enabled = enabled;
-        }
-    }
-
-    fn set_page_font_families(mut self, font_families: serde_json::Map<String, Value>) {
-        if let Some(state) = self.page_session_state_mut() {
-            state.page_font_families = font_families;
-        }
-    }
-
-    fn set_page_intercept_file_chooser_dialog_enabled(mut self, enabled: bool) {
-        if let Some(state) = self.page_session_state_mut() {
-            state.page_intercept_file_chooser_dialog_enabled = enabled;
-        }
-    }
-
-    fn start_page_screencast(mut self, config: PageScreencastConfig) -> Option<i32> {
-        let state = self.page_session_state_mut()?;
-        Some(state.page_screencast.start(config))
-    }
-
-    fn stop_page_screencast(mut self) -> bool {
-        let Some(state) = self.page_session_state_mut() else {
-            return false;
-        };
-        state.page_screencast.stop();
         true
     }
 
-    fn begin_page_screencast_capture(mut self, generation: i32) -> Option<bool> {
-        let state = self.page_session_state_mut()?;
-        Some(state.page_screencast.begin_capture(generation))
+    fn disable_log_and_violations(mut self) {
+        let state = self.devtools_session_state_mut();
+        state.page_session_state.log_enabled = false;
+        state
+            .console_output_session_state
+            .clear_log_violation_thresholds();
     }
 
-    fn complete_page_screencast_capture(
-        mut self,
-        generation: i32,
-        frame_emitted: bool,
-    ) -> Option<bool> {
-        let state = self.page_session_state_mut()?;
-        Some(
-            state
-                .page_screencast
-                .complete_capture(generation, frame_emitted),
-        )
+    fn set_page_file_chooser_opened_event_enabled(mut self, enabled: bool) {
+        self.page_session_state_mut()
+            .page_file_chooser_opened_event_enabled = enabled;
     }
 
-    fn acknowledge_page_screencast_frame(mut self, generation: i32) -> Option<bool> {
-        let state = self.page_session_state_mut()?;
-        Some(state.page_screencast.acknowledge_frame(generation))
+    fn disable_page_domain(mut self) {
+        let state = self.page_session_state_mut();
+        state.disable_page_domain();
+        state.page_lifecycle_events = false;
+        state.page_bypass_csp_enabled = false;
+        state.page_font_families.clear();
+        state.page_file_chooser_opened_event_enabled = false;
+        state.page_intercept_file_chooser_dialog_enabled = false;
+        state.page_screencast.stop();
+        state.javascript_dialog_state.clear();
+    }
+
+    fn set_page_lifecycle_events_enabled(mut self, enabled: bool) {
+        self.page_session_state_mut().page_lifecycle_events = enabled;
+    }
+
+    fn set_page_bypass_csp_enabled(mut self, enabled: bool) {
+        self.page_session_state_mut().page_bypass_csp_enabled = enabled;
+    }
+
+    fn set_page_font_families(mut self, font_families: serde_json::Map<String, Value>) {
+        self.page_session_state_mut().page_font_families = font_families;
+    }
+
+    fn set_page_intercept_file_chooser_dialog_enabled(mut self, enabled: bool) {
+        self.page_session_state_mut()
+            .page_intercept_file_chooser_dialog_enabled = enabled;
+    }
+
+    fn start_page_screencast(mut self, config: PageScreencastConfig) -> i32 {
+        self.page_session_state_mut().page_screencast.start(config)
+    }
+
+    fn stop_page_screencast(mut self) -> bool {
+        self.page_session_state_mut().page_screencast.stop();
+        true
+    }
+
+    fn begin_page_screencast_capture(mut self, generation: i32) -> bool {
+        self.page_session_state_mut()
+            .page_screencast
+            .begin_capture(generation)
+    }
+
+    fn complete_page_screencast_capture(mut self, generation: i32, frame_emitted: bool) -> bool {
+        self.page_session_state_mut()
+            .page_screencast
+            .complete_capture(generation, frame_emitted)
+    }
+
+    fn acknowledge_page_screencast_frame(mut self, generation: i32) -> bool {
+        self.page_session_state_mut()
+            .page_screencast
+            .acknowledge_frame(generation)
     }
 
     fn enable_performance(mut self, time_domain: PerformanceTimeDomain) -> bool {
         self.page_session_state_mut()
-            .map(|state| state.performance.enable(time_domain))
-            .unwrap_or(true)
+            .performance
+            .enable(time_domain)
     }
 
     fn disable_performance(mut self) {
-        if let Some(state) = self.page_session_state_mut() {
-            state.performance.disable();
-        }
+        self.page_session_state_mut().performance.disable();
     }
 
     fn set_performance_time_domain(mut self, time_domain: PerformanceTimeDomain) -> bool {
         self.page_session_state_mut()
-            .map(|state| state.performance.set_time_domain(time_domain))
-            .unwrap_or(true)
+            .performance
+            .set_time_domain(time_domain)
     }
 }
 
@@ -198,24 +171,19 @@ impl TargetSessionOwnerMut<'_> {
     }
 
     fn audits_output_snapshot(&mut self) -> Vec<moli_core::page::InspectorIssueSnapshot> {
-        let Some(runtime_slot) = self.runtime_slot_mut() else {
-            return Vec::new();
-        };
+        let runtime_slot = self.runtime_slot_mut();
         runtime_slot.ingest_owner_page_observable_output_updates();
         runtime_slot.inspector_issues().unwrap_or_default()
     }
 
     fn enable_audits(mut self) -> SessionOwnerAuditsEnableResult {
         let storage = self.sync_audits_storage();
-        let cursor = self
-            .mutate_session_state_ref(|state| state.enable_audits_with_storage(&storage))
-            .flatten();
+        let cursor =
+            self.mutate_session_state_ref(|state| state.enable_audits_with_storage(&storage));
         let replay = cursor.and_then(|cursor| {
             let issues = storage.issues_for_cursor(cursor)?;
             self.mutate_session_state_ref(|mut state| {
-                if let Some(session) = state.page_session_state_mut() {
-                    session.audits.mark_emitted(cursor);
-                }
+                state.page_session_state_mut().audits.mark_emitted(cursor);
             });
             Some(crate::domains::audits::TargetAuditsReplaySnapshot { issues })
         });
@@ -227,14 +195,11 @@ impl TargetSessionOwnerMut<'_> {
     ) -> crate::domains::audits_output_state::TargetAuditsStorageState {
         let source_issues = self.audits_output_snapshot();
         self.mutate_target_owner_state(|owner_state| {
-            owner_state.map(|state| {
-                state
-                    .audits_storage_state
-                    .ingest_source_issues(&source_issues);
-                state.audits_storage_state.clone()
-            })
+            owner_state
+                .audits_storage_state
+                .ingest_source_issues(&source_issues);
+            owner_state.audits_storage_state.clone()
         })
-        .unwrap_or_default()
     }
 
     fn disable_audits(mut self) -> bool {
@@ -244,14 +209,9 @@ impl TargetSessionOwnerMut<'_> {
 
     fn enable_log(mut self) -> SessionOwnerLogEnableResult {
         let output = self.log_output_snapshot();
-        let storage = self
-            .mutate_target_owner_state(|owner_state| {
-                owner_state.map(|state| state.log_storage_state)
-            })
-            .unwrap_or_default();
-        let should_replay = self
-            .mutate_session_state_ref(|state| state.enable_log_with_storage(storage))
-            .unwrap_or(false);
+        let storage = self.mutate_target_owner_state(|owner_state| owner_state.log_storage_state);
+        let should_replay =
+            self.mutate_session_state_ref(|state| state.enable_log_with_storage(storage));
         let replay = should_replay.then_some(output).flatten().and_then(
             |(url, lifecycle_errors, network_entries)| {
                 let lifecycle_end = lifecycle_errors.len();
@@ -259,15 +219,10 @@ impl TargetSessionOwnerMut<'_> {
                 let lifecycle_start = storage.lifecycle_start().min(lifecycle_end);
                 let network_start = storage.network_start().min(network_end);
                 self.mutate_session_state_ref(|mut state| {
-                    if let Some(session) = state.devtools_session_state_mut() {
-                        session
-                            .console_output_session_state
-                            .mark_log_entries_emitted(
-                                storage.generation(),
-                                lifecycle_end,
-                                network_end,
-                            );
-                    }
+                    state
+                        .devtools_session_state_mut()
+                        .console_output_session_state
+                        .mark_log_entries_emitted(storage.generation(), lifecycle_end, network_end);
                 });
                 let lifecycle_errors = lifecycle_errors
                     .into_iter()
@@ -302,11 +257,9 @@ impl TargetSessionOwnerMut<'_> {
             })
             .unwrap_or_default();
         self.mutate_target_owner_state(|owner_state| {
-            if let Some(owner_state) = owner_state {
-                owner_state
-                    .log_storage_state
-                    .clear_at(lifecycle_end, network_end);
-            }
+            owner_state
+                .log_storage_state
+                .clear_at(lifecycle_end, network_end);
         });
         true
     }
@@ -316,9 +269,7 @@ impl TargetSessionOwnerMut<'_> {
         thresholds: Vec<crate::conn::state::DevToolsLogViolationThreshold>,
     ) -> SessionOwnerLogControlResult {
         self.mutate_session_state_ref(|mut state| {
-            let Some(session) = state.devtools_session_state_mut() else {
-                return SessionOwnerLogControlResult::UnknownSession;
-            };
+            let session = state.devtools_session_state_mut();
             if !session.page_session_state.log_enabled {
                 return SessionOwnerLogControlResult::LogNotEnabled;
             }
@@ -331,11 +282,10 @@ impl TargetSessionOwnerMut<'_> {
 
     fn stop_log_violations(mut self) -> bool {
         self.mutate_session_state_ref(|mut state| {
-            if let Some(session) = state.devtools_session_state_mut() {
-                session
-                    .console_output_session_state
-                    .clear_log_violation_thresholds();
-            }
+            state
+                .devtools_session_state_mut()
+                .console_output_session_state
+                .clear_log_violation_thresholds();
         });
         true
     }
@@ -371,27 +321,22 @@ impl TargetSessionOwnerMut<'_> {
         let replay_target = if !enabled {
             None
         } else {
-            match &self {
-                Self::PageTarget {
-                    browser_context,
-                    target_id,
-                    session_id,
-                    is_auxiliary_target_session,
-                } => browser_context
-                    .page_target(target_id)
-                    .filter(|target| target.has_loaded_page())
-                    .and_then(|target| {
-                        let replay_session_id = if *is_auxiliary_target_session {
-                            session_id.clone()
-                        } else {
+            self.browser_context
+                .page_target(&self.target_id)
+                .filter(|target| target.has_loaded_page())
+                .and_then(|target| {
+                    let replay_session_id = match &self.session_key {
+                        moli_page_types::DevToolsSessionKey::Primary => {
                             target.session_id().map(str::to_owned)
-                        }?;
-                        Some(PageLifecycleReplayTarget {
-                            session_id: replay_session_id,
-                        })
-                    }),
-                Self::NoLoadedBrowserContext => None,
-            }
+                        }
+                        moli_page_types::DevToolsSessionKey::Attached(session_id) => {
+                            Some(session_id.clone())
+                        }
+                    }?;
+                    Some(PageLifecycleReplayTarget {
+                        session_id: replay_session_id,
+                    })
+                })
         };
         PageLifecycleEventsEnableResult::Handled { replay_target }
     }
@@ -417,7 +362,7 @@ impl TargetSessionOwnerMut<'_> {
         true
     }
 
-    fn start_page_screencast(self, config: PageScreencastConfig) -> Option<i32> {
+    fn start_page_screencast(self, config: PageScreencastConfig) -> i32 {
         self.mutate_session_state(|state| state.start_page_screencast(config))
     }
 
@@ -425,21 +370,17 @@ impl TargetSessionOwnerMut<'_> {
         self.mutate_session_state(|state| state.stop_page_screencast())
     }
 
-    fn begin_page_screencast_capture(self, generation: i32) -> Option<bool> {
+    fn begin_page_screencast_capture(self, generation: i32) -> bool {
         self.mutate_session_state(|state| state.begin_page_screencast_capture(generation))
     }
 
-    fn complete_page_screencast_capture(
-        self,
-        generation: i32,
-        frame_emitted: bool,
-    ) -> Option<bool> {
+    fn complete_page_screencast_capture(self, generation: i32, frame_emitted: bool) -> bool {
         self.mutate_session_state(|state| {
             state.complete_page_screencast_capture(generation, frame_emitted)
         })
     }
 
-    fn acknowledge_page_screencast_frame(self, generation: i32) -> Option<bool> {
+    fn acknowledge_page_screencast_frame(self, generation: i32) -> bool {
         self.mutate_session_state(|state| state.acknowledge_page_screencast_frame(generation))
     }
 
@@ -457,11 +398,11 @@ impl TargetSessionOwnerMut<'_> {
     }
 
     fn console_counts(&self) -> Option<(usize, usize)> {
-        self.runtime_slot_ref()
-            .and_then(runtime_observable_console_payloads)
-            .map(|(_, console_messages, lifecycle_errors)| {
+        runtime_observable_console_payloads(self.runtime_slot_ref()).map(
+            |(_, console_messages, lifecycle_errors)| {
                 (console_messages.len(), lifecycle_errors.len())
-            })
+            },
+        )
     }
 
     fn advance_console_domain_cursors_to_current(&mut self) {
@@ -469,11 +410,9 @@ impl TargetSessionOwnerMut<'_> {
             return;
         };
         self.mutate_target_owner_state(|owner_state| {
-            if let Some(owner_state) = owner_state {
-                owner_state
-                    .console_output_state
-                    .advance_console_domain_to_current(console_entries, lifecycle_errors);
-            }
+            owner_state
+                .console_output_state
+                .advance_console_domain_to_current(console_entries, lifecycle_errors);
         });
     }
 
@@ -490,8 +429,8 @@ impl TargetSessionOwnerMut<'_> {
         // Network storage is independent from Console/lifecycle storage: a
         // page that only produced a failed request has no observable source
         // tail, but Chromium must still replay its network Log entry.
-        let url = self.target_url()?;
-        let runtime_slot = self.runtime_slot_ref()?;
+        let url = self.target_url();
+        let runtime_slot = self.runtime_slot_ref();
         let lifecycle_errors = runtime_slot
             .observable_output_latest_source_tail()
             .map(|source| {
@@ -536,13 +475,21 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
     ) -> SessionOwnerAuditsEnableResult {
+        let accepts_without_target = self.accepts_unmaterialized_page_command(session_id, None);
         self.with_target_session_owner_mut(session_id, |owner| owner.enable_audits())
-            .unwrap_or(SessionOwnerAuditsEnableResult::UnknownSession)
+            .unwrap_or({
+                if accepts_without_target {
+                    SessionOwnerAuditsEnableResult::Handled { replay: None }
+                } else {
+                    SessionOwnerAuditsEnableResult::UnknownSession
+                }
+            })
     }
 
     pub(crate) fn disable_audits_for_session_owner(&mut self, session_id: Option<&str>) -> bool {
+        let accepts_without_target = self.accepts_unmaterialized_page_command(session_id, None);
         self.with_target_session_owner_mut(session_id, |owner| owner.disable_audits())
-            .unwrap_or(false)
+            .unwrap_or(accepts_without_target)
     }
 
     pub(crate) fn page_domain_enabled_for_session_owner(
@@ -703,7 +650,7 @@ impl CdpConnection {
             .with_target_session_owner_mut(session_id, |owner| {
                 owner.set_page_domain_enabled(enabled, subscription_generation)
             })
-            .unwrap_or(false);
+            .unwrap_or_else(|| self.accepts_unmaterialized_page_command(session_id, None));
         if handled && let Some(browser_context_id) = owner_browser_context_id.as_deref() {
             self.sync_javascript_dialog_handler_enabled_for_browser_context(browser_context_id);
         }
@@ -735,13 +682,15 @@ impl CdpConnection {
         owner: &crate::conn::CommandOwnerScope,
         enabled: bool,
     ) -> bool {
+        let accepts_without_target = self
+            .accepts_unmaterialized_page_command(owner.session_id(), owner.session_owner_route());
         let handled = self
             .with_target_session_owner_mut_for_route(
                 owner.session_id(),
                 owner.session_owner_route(),
                 |owner| owner.set_console_enabled(enabled),
             )
-            .unwrap_or(false);
+            .unwrap_or(accepts_without_target);
         if handled {
             let renderer_console_agent_owns_page_console_api_events = enabled
                 && self
@@ -776,30 +725,41 @@ impl CdpConnection {
         &mut self,
         owner: &crate::conn::CommandOwnerScope,
     ) -> bool {
+        let accepts_without_target = self
+            .accepts_unmaterialized_page_command(owner.session_id(), owner.session_owner_route());
         self.with_target_session_owner_mut_for_route(
             owner.session_id(),
             owner.session_owner_route(),
             |owner| owner.clear_console_messages(),
         )
-        .unwrap_or(false)
+        .unwrap_or(accepts_without_target)
     }
 
     pub(crate) fn enable_log_for_session_owner(
         &mut self,
         session_id: Option<&str>,
     ) -> SessionOwnerLogEnableResult {
+        let accepts_without_target = self.accepts_unmaterialized_page_command(session_id, None);
         self.with_target_session_owner_mut(session_id, |owner| owner.enable_log())
-            .unwrap_or(SessionOwnerLogEnableResult::UnknownSession)
+            .unwrap_or({
+                if accepts_without_target {
+                    SessionOwnerLogEnableResult::Handled { replay: None }
+                } else {
+                    SessionOwnerLogEnableResult::UnknownSession
+                }
+            })
     }
 
     pub(crate) fn disable_log_for_session_owner(&mut self, session_id: Option<&str>) -> bool {
+        let accepts_without_target = self.accepts_unmaterialized_page_command(session_id, None);
         self.with_target_session_owner_mut(session_id, |owner| owner.disable_log())
-            .unwrap_or(false)
+            .unwrap_or(accepts_without_target)
     }
 
     pub(crate) fn clear_log_for_session_owner(&mut self, session_id: Option<&str>) -> bool {
+        let accepts_without_target = self.accepts_unmaterialized_page_command(session_id, None);
         self.with_target_session_owner_mut(session_id, |owner| owner.clear_log())
-            .unwrap_or(false)
+            .unwrap_or(accepts_without_target)
     }
 
     pub(crate) fn start_log_violations_for_session_owner(
@@ -835,10 +795,12 @@ impl CdpConnection {
         owner_route: Option<&CdpSessionRoute>,
         enabled: bool,
     ) -> bool {
+        let accepts_without_target =
+            self.accepts_unmaterialized_page_command(session_id, owner_route);
         self.with_target_session_owner_mut_for_route(session_id, owner_route, |owner| {
             owner.set_page_file_chooser_opened_event_enabled(enabled)
         })
-        .unwrap_or(false)
+        .unwrap_or(accepts_without_target)
     }
 
     pub(crate) fn disable_page_domain_for_session_owner(
@@ -850,7 +812,7 @@ impl CdpConnection {
             .map(|(browser_context_id, _)| browser_context_id);
         let handled = self
             .with_target_session_owner_mut(session_id, |owner| owner.disable_page_domain())
-            .unwrap_or(false);
+            .unwrap_or_else(|| self.accepts_unmaterialized_page_command(session_id, None));
         if handled && let Some(browser_context_id) = owner_browser_context_id.as_deref() {
             self.sync_javascript_dialog_handler_enabled_for_browser_context(browser_context_id);
         }
@@ -876,10 +838,19 @@ impl CdpConnection {
         session_id: Option<&str>,
         enabled: bool,
     ) -> PageLifecycleEventsEnableResult {
+        let accepts_without_target = self.accepts_unmaterialized_page_command(session_id, None);
         self.with_target_session_owner_mut(session_id, |owner| {
             owner.set_page_lifecycle_events_enabled(enabled)
         })
-        .unwrap_or(PageLifecycleEventsEnableResult::UnknownSession)
+        .unwrap_or({
+            if accepts_without_target {
+                PageLifecycleEventsEnableResult::Handled {
+                    replay_target: None,
+                }
+            } else {
+                PageLifecycleEventsEnableResult::UnknownSession
+            }
+        })
     }
 
     pub(crate) fn set_page_bypass_csp_enabled_for_session_owner(
@@ -887,10 +858,11 @@ impl CdpConnection {
         session_id: Option<&str>,
         enabled: bool,
     ) -> bool {
+        let accepts_without_target = self.accepts_unmaterialized_page_command(session_id, None);
         self.with_target_session_owner_mut(session_id, |owner| {
             owner.set_page_bypass_csp_enabled(enabled)
         })
-        .unwrap_or(false)
+        .unwrap_or(accepts_without_target)
     }
 
     pub(crate) fn set_page_font_families_for_session_owner(
@@ -898,10 +870,11 @@ impl CdpConnection {
         session_id: Option<&str>,
         font_families: serde_json::Map<String, Value>,
     ) -> bool {
+        let accepts_without_target = self.accepts_unmaterialized_page_command(session_id, None);
         self.with_target_session_owner_mut(session_id, |owner| {
             owner.set_page_font_families(font_families)
         })
-        .unwrap_or(false)
+        .unwrap_or(accepts_without_target)
     }
 
     pub(crate) fn set_page_intercept_file_chooser_dialog_enabled_for_session_owner(
@@ -909,10 +882,11 @@ impl CdpConnection {
         session_id: Option<&str>,
         enabled: bool,
     ) -> bool {
+        let accepts_without_target = self.accepts_unmaterialized_page_command(session_id, None);
         self.with_target_session_owner_mut(session_id, |owner| {
             owner.set_page_intercept_file_chooser_dialog_enabled(enabled)
         })
-        .unwrap_or(false)
+        .unwrap_or(accepts_without_target)
     }
 
     pub(crate) fn start_page_screencast_for_session_owner(
@@ -921,7 +895,6 @@ impl CdpConnection {
         config: PageScreencastConfig,
     ) -> Option<i32> {
         self.with_target_session_owner_mut(session_id, |owner| owner.start_page_screencast(config))
-            .flatten()
     }
 
     pub(crate) fn page_screencast_visible_for_session_owner(
@@ -948,8 +921,10 @@ impl CdpConnection {
         owner_route: Option<&CdpSessionRoute>,
         generation: i32,
     ) -> Option<bool> {
-        self.target_session_owner_mut_for_route(session_id, owner_route)?
-            .begin_page_screencast_capture(generation)
+        Some(
+            self.target_session_owner_mut_for_route(session_id, owner_route)?
+                .begin_page_screencast_capture(generation),
+        )
     }
 
     pub(crate) fn complete_page_screencast_capture_for_route(
@@ -959,8 +934,10 @@ impl CdpConnection {
         generation: i32,
         frame_emitted: bool,
     ) -> Option<bool> {
-        self.target_session_owner_mut_for_route(session_id, owner_route)?
-            .complete_page_screencast_capture(generation, frame_emitted)
+        Some(
+            self.target_session_owner_mut_for_route(session_id, owner_route)?
+                .complete_page_screencast_capture(generation, frame_emitted),
+        )
     }
 
     pub(crate) fn acknowledge_page_screencast_frame_for_session_owner(
@@ -971,7 +948,6 @@ impl CdpConnection {
         self.with_target_session_owner_mut(session_id, |owner| {
             owner.acknowledge_page_screencast_frame(generation)
         })
-        .flatten()
     }
 
     pub(crate) fn performance_enabled_for_session_owner(&self, session_id: Option<&str>) -> bool {
@@ -985,17 +961,20 @@ impl CdpConnection {
         session_id: Option<&str>,
         time_domain: PerformanceTimeDomain,
     ) -> Option<bool> {
+        let accepts_without_target = self.accepts_unmaterialized_page_command(session_id, None);
         self.with_target_session_owner_mut(session_id, |owner| {
             owner.enable_performance(time_domain)
         })
+        .or(accepts_without_target.then_some(true))
     }
 
     pub(crate) fn disable_performance_for_session_owner(
         &mut self,
         session_id: Option<&str>,
     ) -> bool {
+        let accepts_without_target = self.accepts_unmaterialized_page_command(session_id, None);
         self.with_target_session_owner_mut(session_id, |owner| owner.disable_performance())
-            .unwrap_or(false)
+            .unwrap_or(accepts_without_target)
     }
 
     pub(crate) fn set_performance_time_domain_for_session_owner(
@@ -1003,9 +982,11 @@ impl CdpConnection {
         session_id: Option<&str>,
         time_domain: PerformanceTimeDomain,
     ) -> Option<bool> {
+        let accepts_without_target = self.accepts_unmaterialized_page_command(session_id, None);
         self.with_target_session_owner_mut(session_id, |owner| {
             owner.set_performance_time_domain(time_domain)
         })
+        .or(accepts_without_target.then_some(true))
     }
 }
 
@@ -1035,8 +1016,8 @@ mod tests {
     use crate::conn::PageTargetHost;
 
     fn active_session_state_mut(browser_context: &mut BrowserContext) -> TargetSessionStateMut<'_> {
-        let state = browser_context.active_page_state_mut();
-        TargetSessionStateMut::Loaded {
+        let state = browser_context.active_page_target_mut();
+        TargetSessionStateMut {
             devtools_session_state: &mut state.devtools_sessions
                 [moli_page_types::DevToolsSessionKey::Primary],
             network_policy: &mut state.network_policy,
@@ -1045,7 +1026,7 @@ mod tests {
     }
 
     fn parked_session_state_mut(state: &mut PageTargetHost) -> TargetSessionStateMut<'_> {
-        TargetSessionStateMut::Loaded {
+        TargetSessionStateMut {
             devtools_session_state: &mut state.devtools_sessions
                 [moli_page_types::DevToolsSessionKey::Primary],
             network_policy: &mut state.network_policy,
@@ -1071,44 +1052,44 @@ mod tests {
         );
 
         assert!(
-            active.active_page_state().devtools_sessions
+            active.active_page_target().devtools_sessions
                 [moli_page_types::DevToolsSessionKey::Primary]
                 .console_output_session_state
                 .console_enabled
         );
         assert!(
-            active.active_page_state().devtools_sessions
+            active.active_page_target().devtools_sessions
                 [moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .log_enabled
         );
         assert!(
-            active.active_page_state().devtools_sessions
+            active.active_page_target().devtools_sessions
                 [moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .page_file_chooser_opened_event_enabled
         );
         assert!(
-            active.active_page_state().devtools_sessions
+            active.active_page_target().devtools_sessions
                 [moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .page_bypass_csp_enabled
         );
         assert_eq!(
-            active.active_page_state().devtools_sessions
+            active.active_page_target().devtools_sessions
                 [moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .page_font_families,
             font_families
         );
         assert!(
-            active.active_page_state().devtools_sessions
+            active.active_page_target().devtools_sessions
                 [moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .page_intercept_file_chooser_dialog_enabled
         );
         assert!(
-            active.active_page_state().devtools_sessions
+            active.active_page_target().devtools_sessions
                 [moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .performance
@@ -1163,16 +1144,6 @@ mod tests {
                 .page_session_state
                 .performance
                 .enabled()
-        );
-
-        TargetSessionStateMut::NoLoaded.set_console_enabled(true);
-        TargetSessionStateMut::NoLoaded.set_log_enabled(true);
-        TargetSessionStateMut::NoLoaded.set_page_file_chooser_opened_event_enabled(true);
-        TargetSessionStateMut::NoLoaded.set_page_bypass_csp_enabled(true);
-        TargetSessionStateMut::NoLoaded.set_page_font_families(font_families);
-        TargetSessionStateMut::NoLoaded.set_page_intercept_file_chooser_dialog_enabled(true);
-        assert!(
-            TargetSessionStateMut::NoLoaded.enable_performance(PerformanceTimeDomain::TimeTicks)
         );
     }
 
@@ -1231,7 +1202,7 @@ mod tests {
             conn.browser_context
                 .as_ref()
                 .expect("browser context")
-                .active_page_state()
+                .active_page_target()
                 .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .page_file_chooser_opened_event_enabled
@@ -1243,7 +1214,7 @@ mod tests {
                 .browser_context
                 .as_ref()
                 .expect("browser context")
-                .active_page_state()
+                .active_page_target()
                 .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .page_file_chooser_opened_event_enabled

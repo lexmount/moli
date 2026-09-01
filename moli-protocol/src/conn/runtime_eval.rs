@@ -229,7 +229,7 @@ enum BidiChannelListenerRoute {
     Event(BackgroundProtocolEvent),
 }
 
-fn unregister_runtime_remote_object_group_from_parked_page_session_state(
+fn unregister_runtime_remote_object_group_from_page_target(
     page_session_state: &mut PageTargetHost,
     session_id: Option<&str>,
     object_group: &str,
@@ -1507,7 +1507,7 @@ impl CdpConnection {
                 target_id.map(|target_id| CdpSessionRoute::PageTarget {
                     browser_context_id,
                     target_id,
-                    is_attached_session: false,
+                    session_key: moli_page_types::DevToolsSessionKey::Primary,
                 })
             },
         )
@@ -1997,7 +1997,7 @@ impl CdpConnection {
             .drain_pending_inspector_awaits_for_sessions(session_ids)
         {
             if let Some(listener) = entry.bidi_channel_listener() {
-                unregister_runtime_remote_object_group_from_parked_page_session_state(
+                unregister_runtime_remote_object_group_from_page_target(
                     page_session_state,
                     entry.session_id(),
                     listener.channel_object_group(),
@@ -6931,7 +6931,7 @@ mod tests {
         browser_context.set_active_target_id("TID-active");
         browser_context.attach_active_session("SID-active".to_owned());
         browser_context
-            .active_page_state_mut()
+            .active_page_target_mut()
             .runtime_slot
             .set_page_attachment_id_for_test(1);
         conn.browser_context = Some(browser_context);
@@ -7105,7 +7105,7 @@ mod tests {
                 .browser_context
                 .as_mut()
                 .expect("test browser context should remain loaded");
-            let page_state = browser_context.active_page_state_mut();
+            let page_state = browser_context.active_page_target_mut();
             page_state
                 .devtools_sessions
                 .prepare_renderer_call_replacements(
@@ -7203,7 +7203,7 @@ mod tests {
                 .browser_context
                 .as_mut()
                 .expect("test browser context should remain loaded");
-            let page_state = browser_context.active_page_state_mut();
+            let page_state = browser_context.active_page_target_mut();
             page_state
                 .devtools_sessions
                 .prepare_renderer_call_replacements(
@@ -7303,7 +7303,7 @@ mod tests {
                 .browser_context
                 .as_mut()
                 .expect("test browser context should remain loaded");
-            let page_state = browser_context.active_page_state_mut();
+            let page_state = browser_context.active_page_target_mut();
             page_state
                 .devtools_sessions
                 .prepare_renderer_call_replacements(None, old_attachment, terminal_attachment)
@@ -8055,14 +8055,14 @@ mod tests {
         {
             let browser_context = conn.browser_context.as_ref().expect("browser context");
             assert!(
-                browser_context.active_page_state().devtools_sessions
+                browser_context.active_page_target().devtools_sessions
                     [moli_page_types::DevToolsSessionKey::Primary]
                     .has_pending_inspector_awaits(),
                 "active DevTools session should physically store its pending await"
             );
             assert!(
                 browser_context
-                    .parked_page_session_state("TID-bg")
+                    .non_default_background_page_target_for_test("TID-bg")
                     .is_some_and(|state| state.devtools_sessions
                         [moli_page_types::DevToolsSessionKey::Primary]
                         .has_pending_inspector_awaits()),
@@ -8258,7 +8258,7 @@ mod tests {
         browser_context.set_active_target_id("TID-listener-cancel".to_owned());
         browser_context.attach_active_session("SID-listener-cancel".to_owned());
         browser_context
-            .active_page_state_mut()
+            .active_page_target_mut()
             .runtime_slot
             .set_page_attachment_id_for_test(1);
         conn.browser_context = Some(browser_context);

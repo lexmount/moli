@@ -271,7 +271,7 @@ mod tests {
             )
         );
         browser_context
-            .active_page_state_mut()
+            .active_page_target_mut()
             .runtime_slot
             .set_page_attachment_id_for_test(1);
         conn.browser_context = Some(browser_context);

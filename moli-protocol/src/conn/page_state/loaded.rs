@@ -42,13 +42,13 @@ impl BrowserContext {
     }
 
     fn clear_active_target_session_scoped_state_fields(&mut self) {
-        self.active_page_state_mut()
+        self.active_page_target_mut()
             .clear_session_scoped_state_fields(false);
     }
 
     #[cfg(test)]
     fn clear_active_target_loaded_document_session_state(&mut self) {
-        for session in self.active_page_state_mut().devtools_sessions.states_mut() {
+        for session in self.active_page_target_mut().devtools_sessions.states_mut() {
             session
                 .page_session_state
                 .clear_loaded_document_context_state();
@@ -58,11 +58,11 @@ impl BrowserContext {
     #[cfg(test)]
     pub(crate) fn replace_loaded_page(&mut self, page: Option<Page>) -> Option<Page> {
         let previous = self
-            .active_page_state_mut()
+            .active_page_target_mut()
             .runtime_slot
             .replace_loaded_page(page);
         self.ingest_active_target_output_updates();
-        self.active_page_state_mut()
+        self.active_page_target_mut()
             .owner_state
             .clear_loaded_document_context_state();
         self.clear_active_target_loaded_document_session_state();
@@ -75,11 +75,11 @@ impl BrowserContext {
         reason: TargetPageAbsenceReason,
     ) -> Option<Page> {
         let previous = self
-            .active_page_state_mut()
+            .active_page_target_mut()
             .runtime_slot
             .clear_loaded_page_with_reason(reason);
         self.ingest_active_target_output_updates();
-        self.active_page_state_mut()
+        self.active_page_target_mut()
             .owner_state
             .clear_loaded_document_context_state();
         self.clear_active_target_loaded_document_session_state();
@@ -92,7 +92,7 @@ impl BrowserContext {
         // browsing context. New pages should inherit the current browser
         // policy surface before any JS observes `document.cookie` or
         // `navigator.cookieEnabled`.
-        self.active_page_state()
+        self.active_page_target()
             .document_cookie_manager_surface
             .apply_to_page_async(&mut page)
             .await;
@@ -107,7 +107,7 @@ impl BrowserContext {
 
     #[cfg(test)]
     pub(crate) fn ingest_active_target_output_updates(&mut self) -> bool {
-        self.active_page_state_mut()
+        self.active_page_target_mut()
             .runtime_slot
             .ingest_owner_page_observable_output_updates()
     }
@@ -130,7 +130,7 @@ impl BrowserContext {
         &mut self,
         preserve_attached_sessions: bool,
     ) -> Result<(), String> {
-        self.active_page_state_mut()
+        self.active_page_target_mut()
             .clear_session_scoped_state_fields(preserve_attached_sessions);
         let emulated_media: moli_core::page::EmulatedMediaOverrides =
             (&self.active_page_target().emulated_media).into();

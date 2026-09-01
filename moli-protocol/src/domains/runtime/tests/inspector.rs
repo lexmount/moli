@@ -11,7 +11,7 @@ async fn isolated_inspector_context_lookup_does_not_issue_internal_runtime_enabl
         .expect("browser context should exist");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    bc.active_page_state_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+    bc.active_page_target_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .runtime_frontend_enabled = true;
     let utility_context_id = create_isolated_world_async(&mut ctx, 14, "utility").await;
@@ -46,7 +46,7 @@ async fn isolated_inspector_context_lookup_does_not_collide_with_pending_inspect
         .expect("browser context should exist");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    bc.active_page_state_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+    bc.active_page_target_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .runtime_frontend_enabled = true;
     let utility_context_id = create_isolated_world_async(&mut ctx, 15, "utility").await;
@@ -83,7 +83,7 @@ async fn runtime_evaluate_materializes_default_context_via_inspector_hook() {
         .expect("browser context should exist");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    bc.active_page_state_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+    bc.active_page_target_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .runtime_frontend_enabled = true;
     ctx.sent.clear();
@@ -135,7 +135,7 @@ async fn pending_inspector_await_does_not_block_default_context_evaluate() {
         .expect("browser context should exist");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    bc.active_page_state_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+    bc.active_page_target_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .runtime_frontend_enabled = true;
     ctx.conn

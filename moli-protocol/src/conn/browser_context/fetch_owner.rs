@@ -122,27 +122,18 @@ fn runtime_slot_for_target_scoped_stream_mut<'a>(
 
 impl TargetSessionOwnerMut<'_> {
     fn open_scoped_io_stream_body_source(&mut self, body: CapturedBody) -> Result<String, String> {
-        match self {
-            Self::PageTarget {
-                browser_context,
-                target_id,
-                ..
-            } => {
-                let owner_key = fetch_stream_owner_key(&browser_context.id, target_id);
-                let Some(target) = browser_context.page_target_mut(target_id) else {
-                    return Err("NoDocumentLoaded".to_owned());
-                };
-                let handle = target_scoped_stream_handle(
-                    &owner_key,
-                    target.runtime_slot.allocate_io_stream_handle(),
-                );
-                target
-                    .runtime_slot
-                    .insert_io_stream_body_source(handle.clone(), body, 0);
-                Ok(handle)
-            }
-            Self::NoLoadedBrowserContext => Err("NoDocumentLoaded".to_owned()),
-        }
+        let owner_key = fetch_stream_owner_key(&self.browser_context.id, &self.target_id);
+        let Some(target) = self.browser_context.page_target_mut(&self.target_id) else {
+            return Err("NoDocumentLoaded".to_owned());
+        };
+        let handle = target_scoped_stream_handle(
+            &owner_key,
+            target.runtime_slot.allocate_io_stream_handle(),
+        );
+        target
+            .runtime_slot
+            .insert_io_stream_body_source(handle.clone(), body, 0);
+        Ok(handle)
     }
 }
 
@@ -216,9 +207,11 @@ fn remove_network_intercept_from_browser_context(
         .map(|target| target.target_id().to_owned())
         .collect::<Vec<_>>();
     for target_id in target_ids {
-        let removed = browser_context.mutate_parked_page_session_state(&target_id, |state| {
-            state.fetch_owner.remove_network_intercept(intercept_id)
-        });
+        let removed = browser_context
+            .page_target_mut(&target_id)
+            .expect("background target must remain registered")
+            .fetch_owner
+            .remove_network_intercept(intercept_id);
         if removed {
             return Ok(Some(None));
         }
@@ -1115,17 +1108,12 @@ impl CdpConnection {
         else {
             return Err("BrowserContextNotLoaded".to_owned());
         };
-        let Some((subresource_enabled, subresource_resource_type)) = owner.configure_fetch(
+        let (subresource_enabled, subresource_resource_type) = owner.configure_fetch(
             session_id.map(str::to_owned),
             handle_auth_requests,
             patterns,
-        ) else {
-            return Err("BrowserContextNotLoaded".to_owned());
-        };
-        let Some(page) = owner
-            .runtime_slot_mut()
-            .and_then(TargetRuntimeSlot::loaded_page_mut)
-        else {
+        );
+        let Some(page) = owner.runtime_slot_mut().loaded_page_mut() else {
             return Ok(None);
         };
         page.start_set_fetch_subresource_interception(
@@ -1151,19 +1139,14 @@ impl CdpConnection {
         else {
             return Err("BrowserContextNotLoaded".to_owned());
         };
-        let Some((subresource_enabled, subresource_resource_type)) = owner.add_network_intercept(
+        let (subresource_enabled, subresource_resource_type) = owner.add_network_intercept(
             intercept_id,
             intercept_session_id,
             handle_auth_requests,
             auth_url_patterns,
             patterns,
-        ) else {
-            return Err("BrowserContextNotLoaded".to_owned());
-        };
-        let Some(page) = owner
-            .runtime_slot_mut()
-            .and_then(TargetRuntimeSlot::loaded_page_mut)
-        else {
+        );
+        let Some(page) = owner.runtime_slot_mut().loaded_page_mut() else {
             return Ok(None);
         };
         page.start_set_fetch_subresource_interception(
@@ -1193,10 +1176,7 @@ impl CdpConnection {
             }
             return Err("NetworkInterceptNotFound".to_owned());
         };
-        let Some(page) = owner
-            .runtime_slot_mut()
-            .and_then(TargetRuntimeSlot::loaded_page_mut)
-        else {
+        let Some(page) = owner.runtime_slot_mut().loaded_page_mut() else {
             return Ok(None);
         };
         page.start_set_fetch_subresource_interception(
@@ -1255,15 +1235,10 @@ impl CdpConnection {
         else {
             return Ok(None);
         };
-        let Some((pending, (subresource_enabled, subresource_resource_type), page_update_required)) =
-            owner.reset_fetch_config_for_session_and_drain_pending_state(session_id)
-        else {
-            return Ok(None);
-        };
+        let (pending, (subresource_enabled, subresource_resource_type), page_update_required) =
+            owner.reset_fetch_config_for_session_and_drain_pending_state(session_id);
         let page_command = if page_update_required
-            && let Some(page) = owner
-                .runtime_slot_mut()
-                .and_then(TargetRuntimeSlot::loaded_page_mut)
+            && let Some(page) = owner.runtime_slot_mut().loaded_page_mut()
         {
             Some(
                 page.start_set_fetch_subresource_interception(
@@ -1283,8 +1258,10 @@ impl CdpConnection {
         session_id: Option<&str>,
         owner_route: Option<&CdpSessionRoute>,
     ) -> Option<SessionOwnerPendingFetchState> {
-        self.target_session_owner_mut_for_route(session_id, owner_route)?
-            .drain_fetch_pending_state()
+        Some(
+            self.target_session_owner_mut_for_route(session_id, owner_route)?
+                .drain_fetch_pending_state(),
+        )
     }
 }
 
@@ -1299,41 +1276,27 @@ fn pending_fetch_request_route(
             .then(|| CdpSessionRoute::PageTarget {
                 browser_context_id: browser_context.id.clone(),
                 target_id: target.target_id().to_owned(),
-                is_attached_session: false,
+                session_key: moli_page_types::DevToolsSessionKey::Primary,
             })
     })
 }
 
 impl TargetSessionOwnerMut<'_> {
     fn session_id(&self) -> Option<&str> {
-        match self {
-            Self::PageTarget { session_id, .. } => session_id.as_deref(),
-            Self::NoLoadedBrowserContext => None,
-        }
+        self.command_session_id.as_deref()
     }
 
     fn pending_fetch_owner_mut(&mut self) -> Option<SessionPendingFetchOwner<'_>> {
-        match self {
-            Self::PageTarget {
-                browser_context,
-                target_id,
-                ..
-            } => Some(SessionPendingFetchOwner(
-                &mut browser_context.page_target_mut(target_id)?.fetch_owner,
-            )),
-            Self::NoLoadedBrowserContext => None,
-        }
+        Some(SessionPendingFetchOwner(
+            &mut self
+                .browser_context
+                .page_target_mut(&self.target_id)?
+                .fetch_owner,
+        ))
     }
 
     fn fetch_body_stream_owner_mut(&mut self) -> Option<SessionFetchBodyStreamOwner<'_>> {
-        match self {
-            Self::PageTarget {
-                browser_context,
-                target_id,
-                ..
-            } => fetch_body_stream_owner_for_target_mut(browser_context, target_id),
-            Self::NoLoadedBrowserContext => None,
-        }
+        fetch_body_stream_owner_for_target_mut(self.browser_context, &self.target_id)
     }
 
     pub(super) fn register_pending_fetch_navigation_request(

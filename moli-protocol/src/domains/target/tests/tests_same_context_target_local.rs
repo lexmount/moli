@@ -1886,10 +1886,10 @@ async fn close_target_aborts_paused_request_stage_navigation() {
     let mut bc = BrowserContext::new("BID-9".into());
     bc.set_active_target_id("TID-000000000A");
     bc.attach_active_session("SID-1");
-    bc.active_page_state_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+    bc.active_page_target_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .inspector_enabled = true;
-    bc.active_page_state_mut()
+    bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -2593,11 +2593,17 @@ async fn playwright_over_cdp_context_target_attach_and_navigate_smoke() {
     assert_eq!(active.active_target_id(), Some(target_id.as_str()));
     assert_eq!(active.active_session_id(), Some(session_id.as_str()));
     assert_eq!(
-        active.active_page_state().locale_override.as_deref(),
+        active
+            .active_page_target()
+            .effective_policy()
+            .locale_override(),
         Some("fr-FR")
     );
     assert_eq!(
-        active.active_page_state().timezone_override.as_deref(),
+        active
+            .active_page_target()
+            .effective_policy()
+            .timezone_override(),
         Some("UTC")
     );
 }

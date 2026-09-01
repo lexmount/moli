@@ -613,7 +613,7 @@ mod tests {
             "TID-runtime-lifecycle",
             "SID-runtime-disabled".to_owned(),
         ));
-        bc.active_page_state_mut()
+        bc.active_page_target_mut()
             .runtime_slot
             .set_page_attachment_id_for_test(17);
         conn.browser_context = Some(bc);
@@ -640,10 +640,10 @@ mod tests {
     fn observable_source_outputs_own_runtime_observable_presence() {
         let mut conn = crate::conn::CdpConnection::default();
         let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
-        bc.active_page_state_mut()
+        bc.active_page_target_mut()
             .runtime_slot
             .set_page_attachment_id_for_test(1);
-        bc.active_page_state_mut().devtools_sessions
+        bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
             .runtime_frontend_enabled = true;
@@ -689,18 +689,18 @@ mod tests {
         let mut conn = crate::conn::CdpConnection::default();
         let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
         bc.set_target_url("data:text/html,console-only-source".to_owned());
-        bc.active_page_state_mut()
+        bc.active_page_target_mut()
             .runtime_slot
             .set_page_attachment_id_for_test(1);
-        bc.active_page_state_mut().devtools_sessions
+        bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .console_output_session_state
             .console_enabled = true;
-        bc.active_page_state_mut().devtools_sessions
+        bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .log_enabled = true;
-        bc.active_page_state_mut().devtools_sessions
+        bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
             .runtime_frontend_enabled = false;
@@ -743,10 +743,10 @@ mod tests {
     fn observable_source_outputs_require_concrete_runtime_prepared_items() {
         let mut conn = crate::conn::CdpConnection::default();
         let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
-        bc.active_page_state_mut()
+        bc.active_page_target_mut()
             .runtime_slot
             .set_page_attachment_id_for_test(1);
-        bc.active_page_state_mut().devtools_sessions
+        bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
             .runtime_frontend_enabled = true;
@@ -783,14 +783,14 @@ mod tests {
             .await
             .expect("test page should load");
         let _ = bc
-            .active_page_state_mut()
+            .active_page_target_mut()
             .runtime_slot
             .replace_loaded_page(Some(page));
-        bc.active_page_state_mut().devtools_sessions
+        bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .console_output_session_state
             .console_enabled = true;
-        bc.active_page_state_mut().devtools_sessions
+        bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .log_enabled = true;
@@ -825,7 +825,7 @@ mod tests {
                 .conn
                 .browser_context
                 .as_ref()
-                .map(|bc| &bc.active_page_state().runtime_slot)
+                .map(|bc| &bc.active_page_target().runtime_slot)
                 .expect("browser context should be loaded");
             let queue = TargetObservableOutputQueue::from_runtime_slot(runtime_slot)
                 .expect("queue should load");

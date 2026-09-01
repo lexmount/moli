@@ -3517,7 +3517,7 @@ mod producer_tests {
         bc.set_active_target_id("TID-activity-order");
         bc.set_target_url("https://example.test/page".to_owned());
         bc.attach_active_session("SID-activity-order");
-        bc.active_page_state_mut().devtools_sessions
+        bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_file_chooser_opened_event_enabled = true;
@@ -3674,11 +3674,11 @@ mod producer_tests {
         bc.set_active_target_id("TID-later-activity-order");
         bc.set_target_url("https://example.test/page".to_owned());
         bc.attach_active_session("SID-later-activity-order");
-        bc.active_page_state_mut().devtools_sessions
+        bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_lifecycle_events = true;
-        bc.active_page_state_mut().devtools_sessions
+        bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_domain_enabled = true;
@@ -3840,15 +3840,15 @@ mod producer_tests {
         bc.set_active_target_id("TID-1");
         bc.set_target_url("https://example.test/page".to_owned());
         bc.attach_active_session("SID-1");
-        bc.active_page_state_mut().devtools_sessions
+        bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_lifecycle_events = true;
-        bc.active_page_state_mut().devtools_sessions
+        bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_domain_enabled = true;
-        bc.active_page_state_mut().devtools_sessions
+        bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
             .runtime_frontend_enabled = true;
@@ -3924,11 +3924,11 @@ mod producer_tests {
         bc.set_active_target_id("TID-1");
         bc.set_target_url("https://example.test/page".to_owned());
         bc.attach_active_session("SID-1");
-        bc.active_page_state_mut().devtools_sessions
+        bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_lifecycle_events = true;
-        bc.active_page_state_mut().devtools_sessions
+        bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_domain_enabled = true;
@@ -4062,7 +4062,7 @@ mod producer_tests {
         bc.set_active_target_id("TID-1");
         bc.set_target_url("https://top.example/page".to_owned());
         bc.attach_active_session("SID-1");
-        bc.active_page_state_mut().devtools_sessions
+        bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_domain_enabled = true;
@@ -4270,11 +4270,11 @@ mod producer_tests {
         bc.set_active_target_id("TID-1");
         bc.set_target_url("https://example.test/page".to_owned());
         bc.attach_active_session("SID-1");
-        bc.active_page_state_mut().devtools_sessions
+        bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_lifecycle_events = true;
-        bc.active_page_state_mut().devtools_sessions
+        bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_domain_enabled = true;
@@ -4450,7 +4450,7 @@ mod producer_tests {
         bc.set_active_target_id("TID-1");
         bc.set_target_url("https://example.test/page".to_owned());
         bc.attach_active_session("SID-1");
-        bc.active_page_state_mut().devtools_sessions
+        bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_domain_enabled = true;
@@ -4612,7 +4612,7 @@ mod producer_tests {
         browser_context.set_active_target_id("TID-child-delivery-route");
         browser_context.set_target_url("https://example.test/page".to_owned());
         browser_context.attach_active_session("SID-child-delivery-route");
-        browser_context.active_page_state_mut().devtools_sessions
+        browser_context.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_domain_enabled = true;
@@ -4705,7 +4705,7 @@ mod producer_tests {
         bc.set_active_target_id("TID-1");
         bc.set_target_url("about:blank".to_owned());
         bc.attach_active_session("SID-1");
-        bc.active_page_state_mut().devtools_sessions
+        bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_domain_enabled = true;

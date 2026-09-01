@@ -19,36 +19,24 @@ pub(crate) struct TargetEmulationSessionStateMut<'a> {
 
 impl TargetSessionOwnerMut<'_> {
     fn mutate_emulation_session_state(
-        mut self,
+        self,
         f: impl FnOnce(Option<TargetEmulationSessionStateMut<'_>>),
     ) -> bool {
-        match &mut self {
-            Self::PageTarget {
-                browser_context,
-                target_id,
-                ..
-            } => {
-                let Some(state) = browser_context.page_target_mut(target_id) else {
-                    f(None);
-                    return false;
-                };
-                f(Some(TargetEmulationSessionStateMut {
-                    network_conditions: &mut state.network_conditions,
-                    geolocation_override: &mut state.geolocation_override,
-                    emulated_media: &mut state.emulated_media,
-                    emulated_device_metrics: &mut state.emulated_device_metrics,
-                    cpu_throttling_rate: &mut state.cpu_throttling_rate,
-                    touch_emulation_enabled: &mut state.touch_emulation_enabled,
-                    emit_touch_events_for_mouse: &mut state.emit_touch_events_for_mouse,
-                    focus_emulation_enabled: &mut state.focus_emulation_enabled,
-                    script_execution_disabled: &mut state.script_execution_disabled,
-                }))
-            }
-            Self::NoLoadedBrowserContext => {
-                f(None);
-                return false;
-            }
-        }
+        let Some(state) = self.browser_context.page_target_mut(&self.target_id) else {
+            f(None);
+            return false;
+        };
+        f(Some(TargetEmulationSessionStateMut {
+            network_conditions: &mut state.network_conditions,
+            geolocation_override: &mut state.geolocation_override,
+            emulated_media: &mut state.emulated_media,
+            emulated_device_metrics: &mut state.emulated_device_metrics,
+            cpu_throttling_rate: &mut state.cpu_throttling_rate,
+            touch_emulation_enabled: &mut state.touch_emulation_enabled,
+            emit_touch_events_for_mouse: &mut state.emit_touch_events_for_mouse,
+            focus_emulation_enabled: &mut state.focus_emulation_enabled,
+            script_execution_disabled: &mut state.script_execution_disabled,
+        }));
         true
     }
 
@@ -56,28 +44,18 @@ impl TargetSessionOwnerMut<'_> {
         &mut self,
         locale_override: Option<String>,
     ) -> Result<(), &'static str> {
-        self.mutate_page_state(|state, is_auxiliary_target_session, session_id| {
-            state.set_devtools_locale_override(
-                is_auxiliary_target_session,
-                session_id,
-                locale_override,
-            )
+        self.mutate_page_state(|state, session_key| {
+            state.set_devtools_locale_override(session_key, locale_override)
         })
-        .unwrap_or(Err("BrowserContextNotLoaded"))
     }
 
     fn set_devtools_timezone_override(
         &mut self,
         timezone_override: Option<String>,
     ) -> Result<(), &'static str> {
-        self.mutate_page_state(|state, is_auxiliary_target_session, session_id| {
-            state.set_devtools_timezone_override(
-                is_auxiliary_target_session,
-                session_id,
-                timezone_override,
-            )
+        self.mutate_page_state(|state, session_key| {
+            state.set_devtools_timezone_override(session_key, timezone_override)
         })
-        .unwrap_or(Err("BrowserContextNotLoaded"))
     }
 
     fn set_base_locale_override(
@@ -85,35 +63,28 @@ impl TargetSessionOwnerMut<'_> {
         locale_override: Option<String>,
         fallback_identity: &moli_browser_profile::BrowserIdentityProfile,
     ) -> bool {
-        self.mutate_page_state(|state, _is_auxiliary_target_session, _session_id| {
+        self.mutate_page_state(|state, _session_key| {
             state.set_base_locale_override(locale_override.clone());
             state
                 .network_policy
                 .set_base_accept_language_override(locale_override, fallback_identity);
-        })
-        .is_some()
+        });
+        true
     }
 
     fn set_base_timezone_override(&mut self, timezone_override: Option<String>) -> bool {
-        self.mutate_page_state(|state, _is_auxiliary_target_session, _session_id| {
+        self.mutate_page_state(|state, _session_key| {
             state.set_base_timezone_override(timezone_override);
-        })
-        .is_some()
+        });
+        true
     }
 }
 
 impl TargetSessionOwnerRef<'_> {
     fn emit_touch_events_for_mouse(&self) -> Option<bool> {
-        match self {
-            Self::PageTarget {
-                browser_context,
-                target_id,
-                ..
-            } => browser_context
-                .page_target(target_id)
-                .map(|state| state.emit_touch_events_for_mouse),
-            Self::NoLoadedBrowserContext => None,
-        }
+        self.browser_context
+            .page_target(&self.target_id)
+            .map(|state| state.emit_touch_events_for_mouse)
     }
 }
 

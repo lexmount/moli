@@ -28,7 +28,7 @@ impl CdpConnection {
             .browser_context
             .as_ref()
             .and_then(|bc| bc.page_targets.active())
-            .is_some_and(|host| host.network_policy.bypass_service_worker());
+            .is_some_and(|host| host.effective_policy().bypass_service_worker());
         let engine = self.active_navigation_engine_mut();
         engine.set_browser_identity_override(browser_identity);
         engine.set_http_proxy_override(http_proxy);
@@ -57,10 +57,13 @@ impl CdpConnection {
     pub fn user_agent(&self) -> &str {
         self.browser_context
             .as_ref()
-            .and_then(|bc| bc.effective_active_browser_identity_override())
-            .or(self.global_browser_identity_override.as_ref())
-            .unwrap_or(&self.base_browser_identity)
-            .user_agent()
+            .and_then(|browser_context| browser_context.effective_active_user_agent_override())
+            .or_else(|| {
+                self.global_browser_identity_override
+                    .as_ref()
+                    .map(moli_browser_profile::BrowserIdentityProfile::user_agent)
+            })
+            .unwrap_or_else(|| self.base_browser_identity.user_agent())
     }
 
     pub async fn set_user_agent_override_async(&mut self, user_agent: impl Into<String>) {

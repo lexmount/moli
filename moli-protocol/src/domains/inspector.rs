@@ -86,7 +86,7 @@ mod tests {
                 .browser_context
                 .as_ref()
                 .expect("browser context")
-                .active_page_state()
+                .active_page_target()
                 .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .runtime_session_state
                 .inspector_enabled
@@ -100,7 +100,7 @@ mod tests {
                 .browser_context
                 .as_ref()
                 .expect("browser context")
-                .active_page_state()
+                .active_page_target()
                 .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .runtime_session_state
                 .inspector_enabled
@@ -112,7 +112,7 @@ mod tests {
         let mut ctx = TestContext::new();
         let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
         bc.attach_active_session("SID-1");
-        bc.active_page_state_mut()
+        bc.active_page_target_mut()
             .owner_state
             .target_crash_state
             .mark_crashed();
@@ -139,7 +139,7 @@ mod tests {
         bc.set_active_target_id("TID-1");
         bc.attach_active_session("SID-primary");
         assert!(bc.assign_auxiliary_session_to_target("TID-1", "SID-aux".into()));
-        bc.active_page_state_mut()
+        bc.active_page_target_mut()
             .owner_state
             .target_crash_state
             .mark_crashed();
@@ -180,7 +180,7 @@ mod tests {
             Some("SID-background".into()),
             "about:blank#background".into(),
         ));
-        bc.mutate_parked_target_owner_state("TID-background", |owner_state| {
+        bc.mutate_background_target_owner_state_for_test("TID-background", |owner_state| {
             owner_state.target_crash_state.mark_crashed();
         });
         ctx.conn.browser_context = Some(bc);
@@ -198,7 +198,7 @@ mod tests {
         let bc = ctx.conn.browser_context.as_ref().expect("browser context");
         assert_eq!(bc.active_target_id(), Some("TID-active"));
         assert!(
-            bc.parked_page_session_state("TID-background")
+            bc.non_default_background_page_target_for_test("TID-background")
                 .is_some_and(|state| state.devtools_sessions
                     [moli_page_types::DevToolsSessionKey::Primary]
                     .runtime_session_state
@@ -270,7 +270,7 @@ mod tests {
             ),
             crate::conn::TargetPageSlot::empty_for_test_fixture(),
         ));
-        bc.active_page_state_mut()
+        bc.active_page_target_mut()
             .owner_state
             .target_crash_state
             .mark_crashed();
@@ -288,16 +288,19 @@ mod tests {
         {
             let bc = ctx.conn.browser_context.as_ref().expect("browser context");
             assert!(
-                !bc.active_page_state().devtools_sessions
+                !bc.active_page_target().devtools_sessions
                     [moli_page_types::DevToolsSessionKey::Primary]
                     .runtime_session_state
                     .inspector_enabled
             );
-            assert!(bc.parked_page_session_state("TID-B").is_some_and(|state| {
-                state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-                    .runtime_session_state
-                    .inspector_enabled
-            }));
+            assert!(
+                bc.non_default_background_page_target_for_test("TID-B")
+                    .is_some_and(|state| {
+                        state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                            .runtime_session_state
+                            .inspector_enabled
+                    })
+            );
         }
 
         ctx.process_async(json!({"id": 5, "method": "Inspector.disable", "sessionId": "SID-B"}))
@@ -305,12 +308,14 @@ mod tests {
         ctx.expect_result(5, json!({}), Some("SID-B"));
         let bc = ctx.conn.browser_context.as_ref().expect("browser context");
         assert!(
-            !bc.active_page_state().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+            !bc.active_page_target().devtools_sessions
+                [moli_page_types::DevToolsSessionKey::Primary]
                 .runtime_session_state
                 .inspector_enabled
         );
         assert!(
-            bc.parked_page_session_state("TID-B").is_none(),
+            bc.non_default_background_page_target_for_test("TID-B")
+                .is_none(),
             "disable should collapse staged parked state back to default"
         );
     }

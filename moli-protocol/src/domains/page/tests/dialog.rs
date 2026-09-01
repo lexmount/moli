@@ -136,7 +136,7 @@ async fn pending_javascript_dialogs_are_preserved_per_parked_target() {
 
     {
         let browser_context = ctx.conn.browser_context.as_mut().unwrap();
-        browser_context.active_page_state_mut().devtools_sessions
+        browser_context.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .javascript_dialog_state
@@ -158,13 +158,13 @@ async fn pending_javascript_dialogs_are_preserved_per_parked_target() {
                 .unwrap()
         );
         assert!(
-            browser_context.active_page_state().devtools_sessions
+            browser_context.active_page_target().devtools_sessions
                 [moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .javascript_dialog_state
                 .is_empty()
         );
-        browser_context.active_page_state_mut().devtools_sessions
+        browser_context.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .javascript_dialog_state
@@ -180,7 +180,7 @@ async fn pending_javascript_dialogs_are_preserved_per_parked_target() {
                 .unwrap()
         );
         assert_eq!(
-            browser_context.active_page_state().devtools_sessions
+            browser_context.active_page_target().devtools_sessions
                 [moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .javascript_dialog_state
@@ -198,7 +198,7 @@ async fn pending_javascript_dialogs_are_preserved_per_parked_target() {
                 .unwrap()
         );
         assert_eq!(
-            browser_context.active_page_state().devtools_sessions
+            browser_context.active_page_target().devtools_sessions
                 [moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .javascript_dialog_state
@@ -220,7 +220,7 @@ async fn javascript_dialog_events_round_trip_through_page_domain() {
         .browser_context
         .as_mut()
         .unwrap()
-        .active_page_state_mut()
+        .active_page_target_mut()
         .runtime_slot
         .set_loaded_page_for_test(page);
 
@@ -676,7 +676,7 @@ async fn javascript_dialog_events_are_emitted_after_runtime_call_function_on() {
         .browser_context
         .as_mut()
         .unwrap()
-        .active_page_state_mut()
+        .active_page_target_mut()
         .runtime_slot
         .set_loaded_page_for_test(page);
 
@@ -739,7 +739,7 @@ async fn javascript_dialog_events_are_emitted_from_playwright_utility_world_call
         .browser_context
         .as_mut()
         .unwrap()
-        .active_page_state_mut()
+        .active_page_target_mut()
         .runtime_slot
         .set_loaded_page_for_test(page);
 
@@ -826,7 +826,7 @@ async fn javascript_dialog_events_are_emitted_from_playwright_serialized_utility
         .browser_context
         .as_mut()
         .unwrap()
-        .active_page_state_mut()
+        .active_page_target_mut()
         .runtime_slot
         .set_loaded_page_for_test(page);
 

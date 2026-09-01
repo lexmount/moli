@@ -591,7 +591,7 @@ mod tests {
         let mut bc = BrowserContext::new("BID-1".into());
         bc.set_active_target_id("TID-1");
         bc.attach_active_session("SID-1");
-        bc.active_page_state_mut()
+        bc.active_page_target_mut()
             .runtime_slot
             .set_page_attachment_id_for_test(1);
         conn.browser_context = Some(bc);
@@ -685,7 +685,7 @@ mod tests {
         let mut bc = BrowserContext::new("BID-collision".into());
         bc.set_active_target_id("TID-collision");
         bc.attach_active_session("SID-collision");
-        bc.active_page_state_mut()
+        bc.active_page_target_mut()
             .runtime_slot
             .set_page_attachment_id_for_test(1);
         conn.browser_context = Some(bc);
@@ -766,7 +766,7 @@ mod tests {
         bc.set_active_target_id("TID-1");
         bc.attach_active_session("SID-1");
         assert!(bc.assign_auxiliary_session_to_target("TID-1", "FETCH-SID".to_owned()));
-        bc.active_page_state_mut()
+        bc.active_page_target_mut()
             .runtime_slot
             .set_page_attachment_id_for_test(1);
         conn.browser_context = Some(bc);
@@ -811,7 +811,7 @@ mod tests {
             conn.browser_context
                 .as_ref()
                 .unwrap()
-                .active_page_state()
+                .active_page_target()
                 .fetch_owner
                 .has_pending_subresource_fetch_for_test("FETCH-1"),
             "prepared emission should still register the paused request on the owner fetch state"
@@ -825,7 +825,7 @@ mod tests {
         bc.set_active_target_id("TID-1");
         bc.attach_active_session("SID-1");
         assert!(bc.assign_auxiliary_session_to_target("TID-1", "FETCH-SID".to_owned()));
-        bc.active_page_state_mut()
+        bc.active_page_target_mut()
             .runtime_slot
             .set_page_attachment_id_for_test(1);
         conn.browser_context = Some(bc);

@@ -102,8 +102,8 @@ pub(crate) use service_worker_target::{
 #[cfg(test)]
 pub(crate) use session::TargetPerformanceSessionState;
 pub(crate) use session::{
-    PageScreencastConfig, PageScreencastFormat, PerformanceTimeDomain, TargetNetworkPolicyState,
-    TargetPageSessionState, TargetRuntimeSessionState,
+    EffectiveTargetPolicy, PageScreencastConfig, PageScreencastFormat, PerformanceTimeDomain,
+    TargetNetworkPolicyState, TargetPageSessionState, TargetRuntimeSessionState,
 };
 pub(crate) use session_storage::TargetSessionStorageNamespace;
 pub(crate) use shared_worker_attachment::{

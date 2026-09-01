@@ -478,7 +478,7 @@ async fn execute_devtools_browser_context_add_preload_script_command(
         let route = CdpSessionRoute::PageTarget {
             browser_context_id: browser_context_id.clone(),
             target_id: active_target_id,
-            is_attached_session: false,
+            session_key: DevToolsSessionKey::Primary,
         };
         let owner = CommandOwnerScope::for_route(route);
         append_loaded_page_document_start_script_for_owner_async(conn, &owner, &renderer_script)
@@ -708,7 +708,7 @@ async fn execute_devtools_bidi_browser_context_remove_preload_script_command(
         let route = CdpSessionRoute::PageTarget {
             browser_context_id: browser_context_id.clone(),
             target_id: active_target_id,
-            is_attached_session: false,
+            session_key: DevToolsSessionKey::Primary,
         };
         let owner = CommandOwnerScope::for_route(route);
         remove_loaded_page_document_start_script_for_owner_async(conn, &owner, registry_key)

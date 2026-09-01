@@ -650,7 +650,7 @@ mod tests {
         let route = CdpSessionRoute::PageTarget {
             browser_context_id: "BID-1".to_owned(),
             target_id: "TID-page".to_owned(),
-            is_attached_session: false,
+            session_key: moli_page_types::DevToolsSessionKey::Primary,
         };
 
         control.ensure_owner(Some("SID-tab"));
@@ -692,7 +692,7 @@ mod tests {
         let route = CdpSessionRoute::PageTarget {
             browser_context_id: "BID-1".to_owned(),
             target_id: "TID-page".to_owned(),
-            is_attached_session: false,
+            session_key: moli_page_types::DevToolsSessionKey::Primary,
         };
         control.commit_attached_session_event(
             "SID-page".to_owned(),
@@ -742,7 +742,7 @@ mod tests {
                 Some(CdpSessionRoute::PageTarget {
                     browser_context_id: "BID-1".to_owned(),
                     target_id: "TID-page".to_owned(),
-                    is_attached_session: false,
+                    session_key: moli_page_types::DevToolsSessionKey::Primary,
                 }),
                 false,
                 false,
@@ -778,7 +778,7 @@ mod tests {
                 Some(CdpSessionRoute::PageTarget {
                     browser_context_id: "BID-1".to_owned(),
                     target_id: "TID-page".to_owned(),
-                    is_attached_session: false,
+                    session_key: moli_page_types::DevToolsSessionKey::Primary,
                 }),
                 false,
                 false,
@@ -817,7 +817,7 @@ mod tests {
             Some(CdpSessionRoute::PageTarget {
                 browser_context_id: "BID-1".to_owned(),
                 target_id: "TID-page".to_owned(),
-                is_attached_session: true,
+                session_key: moli_page_types::DevToolsSessionKey::Attached("SID-page".to_owned()),
             }),
             true,
             false,

@@ -32,7 +32,7 @@ async fn create_about_blank_target_with_initial_document(ctx: &mut TestContext, 
             .browser_context
             .as_ref()
             .expect("browser context")
-            .active_page_state()
+            .active_page_target()
             .runtime_slot
             .has_loaded_page(),
         "Target.createTarget should install the initial about:blank page"
@@ -74,7 +74,7 @@ async fn get_document_uses_fresh_initial_document_without_adapter() {
             .browser_context
             .as_ref()
             .expect("browser context")
-            .active_page_state()
+            .active_page_target()
             .runtime_slot
             .has_loaded_page(),
         "Target.createTarget should install the initial about:blank page before DOM.getDocument"
@@ -129,7 +129,7 @@ async fn get_flattened_document_uses_fresh_initial_document_without_adapter() {
             .browser_context
             .as_ref()
             .expect("browser context")
-            .active_page_state()
+            .active_page_target()
             .runtime_slot
             .has_loaded_page(),
         "Target.createTarget should install the initial about:blank page before DOM.getFlattenedDocument"
@@ -182,7 +182,7 @@ async fn describe_node_uses_fresh_initial_document_without_adapter() {
             .browser_context
             .as_ref()
             .expect("browser context")
-            .active_page_state()
+            .active_page_target()
             .runtime_slot
             .has_loaded_page(),
         "Target.createTarget should install the initial about:blank page before DOM.describeNode"

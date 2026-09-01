@@ -373,15 +373,6 @@ impl BrowserContext {
             .expect("BrowserContext has no active page target")
     }
 
-    #[cfg(test)]
-    pub(crate) fn active_page_state(&self) -> &PageTargetHost {
-        self.active_page_target()
-    }
-
-    pub(crate) fn active_page_state_mut(&mut self) -> &mut PageTargetHost {
-        self.active_page_target_mut()
-    }
-
     /// Parks a dialog only until the matching lightweight-popup target obtains
     /// a concrete protocol attachment.
     ///
@@ -653,10 +644,7 @@ impl BrowserContext {
         &self,
         target_id: &str,
     ) -> Option<BrowserContextPageStorageHandles> {
-        if self.is_active_target(target_id) {
-            return Some(self.page_storage_handles());
-        }
-        let target = self.background_target(target_id)?;
+        let target = self.page_target(target_id)?;
         Some(
             self.storage_partition
                 .handles
@@ -1508,19 +1496,24 @@ impl BrowserContext {
         self.active_target_id().map(str::to_owned)
     }
 
-    pub(crate) fn effective_active_browser_identity_override(
-        &self,
-    ) -> Option<&moli_browser_profile::BrowserIdentityProfile> {
-        self.page_targets
-            .active()
-            .and_then(|host| host.network_policy.browser_identity_override())
-            .or_else(|| self.default_browser_identity.profile())
-    }
-
     pub(crate) fn effective_active_browser_identity_override_owned(
         &self,
     ) -> Option<moli_browser_profile::BrowserIdentityProfile> {
-        self.effective_active_browser_identity_override().cloned()
+        self.page_targets
+            .active()
+            .and_then(|host| host.effective_policy().browser_identity_override().cloned())
+            .or_else(|| self.default_browser_identity.profile_owned())
+    }
+
+    pub(crate) fn effective_active_user_agent_override(&self) -> Option<&str> {
+        self.page_targets
+            .active()
+            .and_then(PageTargetHost::effective_user_agent_override)
+            .or_else(|| {
+                self.default_browser_identity
+                    .profile()
+                    .map(moli_browser_profile::BrowserIdentityProfile::user_agent)
+            })
     }
 
     pub(crate) fn effective_active_renderer_browser_identity_override_owned(
@@ -1574,14 +1567,18 @@ impl BrowserContext {
     pub(crate) fn effective_active_locale_override_owned(&self) -> Option<String> {
         self.page_targets
             .active()
-            .and_then(|host| host.locale_override.clone())
+            .and_then(|host| host.effective_policy().locale_override().map(str::to_owned))
             .or_else(|| self.default_locale_override.clone())
     }
 
     pub(crate) fn effective_active_timezone_override_owned(&self) -> Option<String> {
         self.page_targets
             .active()
-            .and_then(|host| host.timezone_override.clone())
+            .and_then(|host| {
+                host.effective_policy()
+                    .timezone_override()
+                    .map(str::to_owned)
+            })
             .or_else(|| self.default_timezone_override.clone())
     }
 
@@ -1629,24 +1626,32 @@ impl BrowserContext {
             .is_some_and(|conditions| !conditions.navigator_online())
     }
 
-    pub(crate) fn effective_parked_network_conditions(
+    pub(crate) fn effective_network_conditions_for_target(
         &self,
         target_id: &str,
     ) -> Option<EmulatedNetworkConditions> {
-        self.parked_page_session_state(target_id)
+        self.page_target(target_id)
             .and_then(|state| state.network_conditions)
             .or(self.default_network_conditions)
             .or(self.global_network_conditions)
     }
 
-    pub(crate) fn effective_parked_network_offline(&self, target_id: &str) -> bool {
-        self.effective_parked_network_conditions(target_id)
+    pub(crate) fn effective_network_offline_for_target(&self, target_id: &str) -> bool {
+        self.effective_network_conditions_for_target(target_id)
             .is_some_and(|conditions| !conditions.navigator_online())
     }
 
-    pub(crate) fn effective_parked_locale_override_owned(&self, target_id: &str) -> Option<String> {
-        self.parked_page_session_state(target_id)
-            .and_then(|state| state.locale_override.clone())
+    pub(crate) fn effective_locale_override_for_target_owned(
+        &self,
+        target_id: &str,
+    ) -> Option<String> {
+        self.page_target(target_id)
+            .and_then(|state| {
+                state
+                    .effective_policy()
+                    .locale_override()
+                    .map(str::to_owned)
+            })
             .or_else(|| self.default_locale_override.clone())
     }
 
@@ -1702,10 +1707,9 @@ impl BrowserContext {
             && self.service_worker_targets.is_empty()
     }
 
+    #[cfg(test)]
     pub(crate) fn attach_active_session(&mut self, session_id: impl Into<String>) {
-        self.page_targets
-            .active_mut()
-            .expect("cannot attach a session without an active page target")
+        self.active_page_target_mut()
             .attach_session(session_id.into());
     }
 
@@ -1715,16 +1719,6 @@ impl BrowserContext {
 
     pub(crate) fn target_url(&self) -> &str {
         self.active_page_target().target_identity.url()
-    }
-
-    pub(crate) fn target_security_origin(&self) -> &str {
-        self.active_page_target().target_identity.security_origin()
-    }
-
-    pub(crate) fn target_secure_context_type(&self) -> &str {
-        self.active_page_target()
-            .target_identity
-            .secure_context_type()
     }
 
     pub(crate) fn set_target_url(&mut self, url: String) {

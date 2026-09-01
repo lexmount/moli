@@ -579,7 +579,7 @@ mod tests {
             .browser_context
             .as_ref()
             .expect("browser context")
-            .active_page_state()
+            .active_page_target()
             .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .performance;
@@ -659,7 +659,7 @@ mod tests {
             .browser_context
             .as_ref()
             .expect("browser context")
-            .active_page_state()
+            .active_page_target()
             .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .performance;
@@ -894,14 +894,14 @@ mod tests {
 
         let browser_context = ctx.conn.browser_context.as_ref().expect("browser context");
         assert!(
-            !browser_context.active_page_state().devtools_sessions
+            !browser_context.active_page_target().devtools_sessions
                 [moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .performance
                 .enabled()
         );
         let auxiliary = browser_context
-            .active_page_state()
+            .active_page_target()
             .devtools_sessions
             .attached("SID-aux")
             .expect("auxiliary session state")
@@ -1178,7 +1178,7 @@ mod tests {
         ctx.expect_result(5, json!({}), Some("SID-background"));
         let active = ctx.conn.browser_context.as_ref().expect("browser context");
         assert!(
-            !active.active_page_state().devtools_sessions
+            !active.active_page_target().devtools_sessions
                 [moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .performance
@@ -1186,7 +1186,7 @@ mod tests {
         );
         assert!(
             active
-                .parked_page_session_state("TID-background")
+                .non_default_background_page_target_for_test("TID-background")
                 .is_some_and(|state| state.devtools_sessions
                     [moli_page_types::DevToolsSessionKey::Primary]
                     .page_session_state

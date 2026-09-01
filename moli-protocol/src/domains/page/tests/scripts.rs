@@ -118,7 +118,7 @@ async fn add_script_to_evaluate_on_new_document_does_not_mutate_existing_page() 
         .browser_context
         .as_mut()
         .unwrap()
-        .active_page_state_mut()
+        .active_page_target_mut()
         .runtime_slot
         .set_loaded_page_for_test(page);
 
@@ -202,7 +202,7 @@ async fn add_script_to_evaluate_on_new_document_keeps_duplicate_registrations_di
         .browser_context
         .as_ref()
         .expect("browser context")
-        .active_page_state()
+        .active_page_target()
         .owner_state
         .document_start_scripts
         .len();
@@ -432,7 +432,7 @@ async fn add_script_to_evaluate_on_new_document_run_immediately_mutates_existing
         .browser_context
         .as_mut()
         .unwrap()
-        .active_page_state_mut()
+        .active_page_target_mut()
         .runtime_slot
         .set_loaded_page_for_test(page);
 
@@ -480,7 +480,7 @@ async fn add_script_to_evaluate_on_new_document_run_immediately_world_name_creat
         .expect("page should load");
     let bc = ctx.conn.browser_context.as_mut().expect("browser context");
     let _ = bc
-        .active_page_state_mut()
+        .active_page_target_mut()
         .runtime_slot
         .replace_loaded_page(Some(page));
     bc.set_target_security_origin("https://stale-top-origin.example".into());
@@ -650,7 +650,7 @@ async fn remove_script_to_evaluate_on_new_document_does_not_rollback_run_immedia
         .browser_context
         .as_mut()
         .unwrap()
-        .active_page_state_mut()
+        .active_page_target_mut()
         .runtime_slot
         .set_loaded_page_for_test(page);
 
@@ -725,7 +725,7 @@ async fn create_isolated_world_requires_matching_frame_and_uses_fresh_initial_do
         .browser_context
         .as_mut()
         .unwrap()
-        .active_page_state_mut()
+        .active_page_target_mut()
         .runtime_slot
         .set_loaded_page_for_test(iframe_page);
     let child_frame_id = child_frame_id_for_single_iframe(&mut ctx, 400).await;
@@ -871,7 +871,7 @@ async fn create_isolated_world_async_accepts_child_frame_from_async_dispatch() {
         .browser_context
         .as_mut()
         .unwrap()
-        .active_page_state_mut()
+        .active_page_target_mut()
         .runtime_slot
         .set_loaded_page_for_test(iframe_page);
 
@@ -1139,7 +1139,7 @@ async fn create_isolated_world_installs_matching_bindings_before_document_start_
         .browser_context
         .as_mut()
         .expect("browser context")
-        .active_page_state_mut()
+        .active_page_target_mut()
         .runtime_slot
         .set_loaded_page_for_test(page);
 
@@ -1398,7 +1398,7 @@ async fn create_isolated_world_without_runtime_frontend_enabled_only_returns_res
         .browser_context
         .as_mut()
         .unwrap()
-        .active_page_state_mut()
+        .active_page_target_mut()
         .runtime_slot
         .set_loaded_page_for_test(page);
 
@@ -1434,7 +1434,7 @@ async fn create_isolated_world_accepts_cdp_and_corrected_grant_universal_access_
         .expect("page should load");
     let bc = ctx.conn.browser_context.as_mut().expect("browser context");
     let _ = bc
-        .active_page_state_mut()
+        .active_page_target_mut()
         .runtime_slot
         .replace_loaded_page(Some(page));
 
@@ -1506,7 +1506,7 @@ async fn create_isolated_world_returns_unique_context_ids_and_emits_runtime_even
         .expect("page should load");
     let bc = ctx.conn.browser_context.as_mut().expect("browser context");
     let _ = bc
-        .active_page_state_mut()
+        .active_page_target_mut()
         .runtime_slot
         .replace_loaded_page(Some(page));
     bc.set_target_security_origin("https://stale-top-origin.example".into());
@@ -1704,7 +1704,7 @@ async fn create_isolated_world_does_not_persist_across_navigation() {
         .expect("page should load");
     let bc = ctx.conn.browser_context.as_mut().expect("browser context");
     let _ = bc
-        .active_page_state_mut()
+        .active_page_target_mut()
         .runtime_slot
         .replace_loaded_page(Some(page));
     ctx.process_async(json!({
@@ -1769,10 +1769,10 @@ async fn create_isolated_world_after_reactivating_browser_context_with_another_l
             .as_mut()
             .expect("first browser context");
         let _ = bc
-            .active_page_state_mut()
+            .active_page_target_mut()
             .runtime_slot
             .replace_loaded_page(Some(first_page));
-        bc.active_page_state_mut().devtools_sessions
+        bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
             .runtime_frontend_enabled = false;
@@ -1796,10 +1796,10 @@ async fn create_isolated_world_after_reactivating_browser_context_with_another_l
             .browser_context_by_id_mut("BID-2")
             .expect("second browser context");
         let _ = bc
-            .active_page_state_mut()
+            .active_page_target_mut()
             .runtime_slot
             .replace_loaded_page(Some(second_page));
-        bc.active_page_state_mut().devtools_sessions
+        bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
             .runtime_frontend_enabled = false;

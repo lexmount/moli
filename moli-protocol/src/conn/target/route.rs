@@ -1,4 +1,5 @@
 use crate::conn::{BrowserContext, CdpConnection};
+use moli_page_types::DevToolsSessionKey;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TargetHandlerAccessMode {
@@ -22,7 +23,7 @@ pub(crate) enum CdpSessionRoute {
     PageTarget {
         browser_context_id: String,
         target_id: String,
-        is_attached_session: bool,
+        session_key: DevToolsSessionKey,
     },
     SharedWorkerTarget {
         browser_context_id: String,
@@ -189,18 +190,11 @@ impl CdpConnection {
             });
         }
         self.browser_contexts().find_map(|browser_context| {
-            if browser_context.active_target_id() == Some(target_id) {
+            if browser_context.page_target(target_id).is_some() {
                 return Some(CdpSessionRoute::PageTarget {
                     browser_context_id: browser_context.id.clone(),
                     target_id: target_id.to_owned(),
-                    is_attached_session: false,
-                });
-            }
-            if browser_context.background_target(target_id).is_some() {
-                return Some(CdpSessionRoute::PageTarget {
-                    browser_context_id: browser_context.id.clone(),
-                    target_id: target_id.to_owned(),
-                    is_attached_session: false,
+                    session_key: DevToolsSessionKey::Primary,
                 });
             }
             if browser_context.has_shared_worker_target(target_id) {
@@ -268,7 +262,7 @@ impl CdpConnection {
                     .then(|| CdpSessionRoute::PageTarget {
                         browser_context_id: browser_context.id.clone(),
                         target_id: target.target_id().to_owned(),
-                        is_attached_session: false,
+                        session_key: DevToolsSessionKey::Primary,
                     })
             })
         })
@@ -320,51 +314,38 @@ fn prepared_browser_context_session_route(
     browser_context: &BrowserContext,
     session_id: &str,
 ) -> Option<CdpSessionRoute> {
-    if browser_context.active_session_id() == Some(session_id) {
+    if let Some((target, session_key)) = browser_context.page_targets.iter().find_map(|target| {
+        target
+            .devtools_sessions
+            .key_for_wire_session_id(session_id)
+            .map(|session_key| (target, session_key))
+    }) {
         return Some(CdpSessionRoute::PageTarget {
             browser_context_id: browser_context.id.clone(),
-            target_id: browser_context.active_target_id()?.to_owned(),
-            is_attached_session: false,
-        });
-    }
-
-    if let Some(target_id) = browser_context.auxiliary_target_id_for_session(session_id) {
-        return Some(CdpSessionRoute::PageTarget {
-            browser_context_id: browser_context.id.clone(),
-            target_id: target_id.to_owned(),
-            is_attached_session: true,
+            target_id: target.target_id().to_owned(),
+            session_key,
         });
     }
 
     browser_context
-        .background_targets()
-        .find(|target| target.is_session(session_id))
-        .map(|target| CdpSessionRoute::PageTarget {
+        .shared_worker_target_id_for_session(session_id)
+        .map(|target_id| CdpSessionRoute::SharedWorkerTarget {
             browser_context_id: browser_context.id.clone(),
-            target_id: target.target_id().to_owned(),
-            is_attached_session: false,
+            target_id: target_id.to_owned(),
         })
         .or_else(|| {
             browser_context
-                .shared_worker_target_id_for_session(session_id)
-                .map(|target_id| CdpSessionRoute::SharedWorkerTarget {
+                .dedicated_worker_target_id_for_session(session_id)
+                .map(|target_id| CdpSessionRoute::DedicatedWorkerTarget {
                     browser_context_id: browser_context.id.clone(),
                     target_id: target_id.to_owned(),
                 })
                 .or_else(|| {
                     browser_context
-                        .dedicated_worker_target_id_for_session(session_id)
-                        .map(|target_id| CdpSessionRoute::DedicatedWorkerTarget {
+                        .service_worker_target_id_for_session(session_id)
+                        .map(|target_id| CdpSessionRoute::ServiceWorkerTarget {
                             browser_context_id: browser_context.id.clone(),
                             target_id: target_id.to_owned(),
-                        })
-                        .or_else(|| {
-                            browser_context
-                                .service_worker_target_id_for_session(session_id)
-                                .map(|target_id| CdpSessionRoute::ServiceWorkerTarget {
-                                    browser_context_id: browser_context.id.clone(),
-                                    target_id: target_id.to_owned(),
-                                })
                         })
                 })
         })
@@ -387,7 +368,7 @@ mod tests {
         let route = CdpSessionRoute::PageTarget {
             browser_context_id: "BID-route".to_owned(),
             target_id: "TID-a".to_owned(),
-            is_attached_session: false,
+            session_key: DevToolsSessionKey::Primary,
         };
         connection.target_control.commit_attached_session(
             "SID-a".to_owned(),
@@ -408,6 +389,46 @@ mod tests {
         assert_eq!(
             connection.background_target_route(Some("SID-a")),
             Some(("BID-route".to_owned(), "TID-a".to_owned()))
+        );
+    }
+
+    #[test]
+    fn prepared_page_sessions_resolve_from_their_target_registry() {
+        let mut browser_context = BrowserContext::new("BID-route".to_owned());
+        browser_context.set_active_target_id("TID-active");
+        browser_context.attach_active_session("SID-active");
+
+        let mut background = PageTargetHost::with_url(
+            "TID-background".to_owned(),
+            Some("SID-background".to_owned()),
+            "about:blank".to_owned(),
+        );
+        background.devtools_sessions.ensure_attached("SID-attached");
+        assert!(browser_context.insert_page_target_host(background));
+
+        assert_eq!(
+            prepared_browser_context_session_route(&browser_context, "SID-active"),
+            Some(CdpSessionRoute::PageTarget {
+                browser_context_id: "BID-route".to_owned(),
+                target_id: "TID-active".to_owned(),
+                session_key: DevToolsSessionKey::Primary,
+            })
+        );
+        assert_eq!(
+            prepared_browser_context_session_route(&browser_context, "SID-background"),
+            Some(CdpSessionRoute::PageTarget {
+                browser_context_id: "BID-route".to_owned(),
+                target_id: "TID-background".to_owned(),
+                session_key: DevToolsSessionKey::Primary,
+            })
+        );
+        assert_eq!(
+            prepared_browser_context_session_route(&browser_context, "SID-attached"),
+            Some(CdpSessionRoute::PageTarget {
+                browser_context_id: "BID-route".to_owned(),
+                target_id: "TID-background".to_owned(),
+                session_key: DevToolsSessionKey::Attached("SID-attached".to_owned()),
+            })
         );
     }
 }

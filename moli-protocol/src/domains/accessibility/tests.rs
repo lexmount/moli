@@ -187,7 +187,7 @@ async fn get_full_ax_tree_reads_live_renderer_dom_when_page_snapshot_is_stale() 
             .browser_context
             .as_mut()
             .expect("browser context")
-            .active_page_state_mut()
+            .active_page_target_mut()
             .runtime_slot
             .loaded_page_mut()
             .expect("loaded page");
@@ -231,7 +231,7 @@ async fn get_full_ax_tree_reads_live_renderer_dom_when_page_snapshot_is_stale() 
         .browser_context
         .as_mut()
         .expect("browser context")
-        .active_page_state_mut()
+        .active_page_target_mut()
         .runtime_slot
         .loaded_page_mut()
         .expect("loaded page");
@@ -627,7 +627,7 @@ async fn get_full_ax_tree_uses_fresh_initial_document_without_adapter() {
             .browser_context
             .as_ref()
             .expect("browser context")
-            .active_page_state()
+            .active_page_target()
             .runtime_slot
             .has_loaded_page(),
         "Target.createTarget should install the initial about:blank page before Accessibility"

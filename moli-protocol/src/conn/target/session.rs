@@ -653,7 +653,11 @@ mod tests {
                 Some(CdpSessionRoute::PageTarget {
                     browser_context_id: "BID-1".to_owned(),
                     target_id: target_id.to_owned(),
-                    is_attached_session: auto_attached,
+                    session_key: if auto_attached {
+                        moli_page_types::DevToolsSessionKey::Attached(session_id.to_owned())
+                    } else {
+                        moli_page_types::DevToolsSessionKey::Primary
+                    },
                 }),
                 auto_attached,
                 false,
@@ -750,7 +754,7 @@ mod tests {
             Some(CdpSessionRoute::PageTarget {
                 browser_context_id: "BID-1".to_owned(),
                 target_id: "TID-page".to_owned(),
-                is_attached_session: false,
+                session_key: moli_page_types::DevToolsSessionKey::Primary,
             }),
             true,
             true,

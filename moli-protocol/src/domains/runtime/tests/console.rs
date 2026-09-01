@@ -518,7 +518,7 @@ async fn deferred_heap_profiler_state_follows_renderer_owned_document_navigation
         .browser_context
         .as_ref()
         .expect("browser context")
-        .active_page_state()
+        .active_page_target()
         .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .inspector_session_state;
     assert!(
@@ -1464,7 +1464,7 @@ async fn runtime_discard_console_entries_advances_background_owner_without_promo
     );
     assert_eq!(
         browser_context
-            .parked_target_owner_state_or_default("TID-background")
+            .background_target_owner_state_or_default_for_test("TID-background")
             .runtime_observable_state
             .emitted_console_entries(),
         queue_console_entries,

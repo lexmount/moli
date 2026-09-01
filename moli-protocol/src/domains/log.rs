@@ -665,14 +665,14 @@ mod tests {
         ctx.expect_result(1, json!({}), Some("SID-background"));
         let active = ctx.conn.browser_context.as_ref().expect("browser context");
         assert!(
-            !active.active_page_state().devtools_sessions
+            !active.active_page_target().devtools_sessions
                 [moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .log_enabled
         );
         assert!(
             active
-                .parked_page_session_state("TID-background")
+                .non_default_background_page_target_for_test("TID-background")
                 .is_some_and(|state| state.devtools_sessions
                     [moli_page_types::DevToolsSessionKey::Primary]
                     .page_session_state
@@ -859,7 +859,7 @@ mod tests {
             .browser_context
             .as_ref()
             .expect("browser context")
-            .active_page_state()
+            .active_page_target()
             .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .console_output_session_state
             .log_violation_thresholds;
@@ -877,7 +877,7 @@ mod tests {
                 .browser_context
                 .as_ref()
                 .expect("browser context")
-                .active_page_state()
+                .active_page_target()
                 .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .console_output_session_state
                 .log_violation_thresholds

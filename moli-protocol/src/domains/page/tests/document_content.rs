@@ -19,13 +19,13 @@ async fn install_document_content_test_page(ctx: &mut TestContext, url: &str) {
     {
         let browser_context = ctx.conn.browser_context.as_mut().expect("browser context");
         let renderer_agent_candidate = browser_context
-            .active_page_state_mut()
+            .active_page_target_mut()
             .runtime_slot
             .prepare_renderer_agent_candidate(&committed_document, &mut navigation.page)
             .expect("document-content test renderer candidate should attach");
         browser_context.commit_document_navigation_if_matches(&committed_document);
         browser_context
-            .active_page_state_mut()
+            .active_page_target_mut()
             .runtime_slot
             .commit_loaded_navigation_renderer_attachment(
                 &mut navigation.page,
@@ -33,12 +33,12 @@ async fn install_document_content_test_page(ctx: &mut TestContext, url: &str) {
             )
             .expect("document-content test renderer candidate should commit");
         browser_context
-            .active_page_state_mut()
+            .active_page_target_mut()
             .runtime_slot
             .set_loaded_page_for_test(navigation.page);
         assert!(
             browser_context
-                .active_page_state_mut()
+                .active_page_target_mut()
                 .runtime_slot
                 .finish_renderer_document_navigation(&committed_document)
                 .expect("document-content test renderer navigation should finish")

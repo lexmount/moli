@@ -28,7 +28,7 @@ async fn create_target_clears_stale_crash_state() {
         .browser_context
         .as_mut()
         .unwrap()
-        .active_page_state_mut()
+        .active_page_target_mut()
         .owner_state
         .target_crash_state
         .mark_crashed();
@@ -50,7 +50,7 @@ async fn create_target_clears_stale_crash_state() {
             .browser_context
             .as_ref()
             .expect("browser context")
-            .active_page_state()
+            .active_page_target()
             .owner_state
             .target_crash_state
             .is_crashed()
@@ -1085,7 +1085,7 @@ async fn window_open_hands_off_session_storage_snapshot_and_initial_storage_key(
         let browser_context = ctx.conn.browser_context.as_mut().unwrap();
         browser_context.set_target_url(page.final_url().as_str().to_owned());
         let _ = browser_context
-            .active_page_state_mut()
+            .active_page_target_mut()
             .runtime_slot
             .replace_loaded_page(Some(page));
     }
@@ -1521,7 +1521,7 @@ async fn popup_initial_empty_document_record_captures_creator_identity() {
 
     let browser_context = ctx.conn.browser_context.as_ref().unwrap();
     let initial = browser_context
-        .parked_target_owner_state(popup_target_id)
+        .non_default_background_target_owner_state_for_test(popup_target_id)
         .and_then(|owner_state| owner_state.initial_empty_document_state())
         .expect("popup target should record initial empty document");
     let creator = initial
@@ -1605,7 +1605,7 @@ async fn popup_initial_empty_document_frame_tree_inherits_opener_origin() {
 
     let browser_context = ctx.conn.browser_context.as_ref().unwrap();
     let initial = browser_context
-        .parked_target_owner_state(&popup_target_id)
+        .non_default_background_target_owner_state_for_test(&popup_target_id)
         .and_then(|owner_state| owner_state.initial_empty_document_state())
         .expect("popup target should still record initial empty document");
     assert!(initial.is_on_initial_empty_document());
@@ -2173,7 +2173,7 @@ async fn anchor_left_click_activates_popup_while_initial_navigation_waits_for_de
             );
             assert!(
                 browser_context
-                    .active_page_state()
+                    .active_page_target()
                     .runtime_slot
                     .loaded_page()
                     .is_some_and(|page| moli_url::is_about_blank(page.final_url())),
@@ -2192,7 +2192,7 @@ async fn anchor_left_click_activates_popup_while_initial_navigation_waits_for_de
                     .is_some_and(|browser_context| {
                         browser_context.active_target_id() == Some(popup_target_id.as_str())
                             && browser_context
-                                .active_page_state()
+                                .active_page_target()
                                 .runtime_slot
                                 .loaded_page()
                                 .is_some_and(|page| page.final_url().as_str() == POPUP_URL)

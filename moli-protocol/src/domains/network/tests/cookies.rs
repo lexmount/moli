@@ -80,11 +80,14 @@ async fn set_extra_http_headers_replaces_previous_headers() {
 
     let bc = ctx.conn.browser_context.as_ref().expect("browser context");
     assert_eq!(
-        bc.active_page_state().network_policy.extra_headers().len(),
+        bc.active_page_target()
+            .effective_policy()
+            .extra_headers()
+            .len(),
         1
     );
     assert_eq!(
-        bc.active_page_state().network_policy.extra_headers()[0],
+        bc.active_page_target().effective_policy().extra_headers()[0],
         ("food".to_owned(), "bars".to_owned())
     );
 }
@@ -322,7 +325,7 @@ async fn set_user_agent_override_applies_to_current_page_fetch_requests() {
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    bc.active_page_state_mut()
+    bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);

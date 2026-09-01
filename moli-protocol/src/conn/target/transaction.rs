@@ -1,5 +1,6 @@
 use crate::conn::{BackgroundProtocolEvent, CdpSessionRoute};
 use crate::devtools_runtime::DevToolsTargetInfo;
+use moli_page_types::DevToolsSessionKey;
 
 use super::{CommittedAttachSession, DetachedTargetSession, TargetHostDelta};
 
@@ -320,7 +321,7 @@ pub(crate) enum TargetBindingCleanupAction {
     None,
     PageTarget {
         target_id: String,
-        is_attached_session: bool,
+        session_key: DevToolsSessionKey,
     },
     TabTarget {
         tab_target_id: String,
@@ -341,11 +342,11 @@ impl TargetBindingCleanupAction {
         match route {
             CdpSessionRoute::PageTarget {
                 target_id,
-                is_attached_session,
+                session_key,
                 ..
             } => Self::PageTarget {
                 target_id: target_id.clone(),
-                is_attached_session: *is_attached_session,
+                session_key: session_key.clone(),
             },
             CdpSessionRoute::TabTarget { tab_target_id, .. } => Self::TabTarget {
                 tab_target_id: tab_target_id.clone(),
@@ -562,6 +563,7 @@ mod tests {
     };
     use crate::conn::CdpSessionRoute;
     use crate::devtools_runtime::{DevToolsTargetId, DevToolsTargetInfo, DevToolsTargetKind};
+    use moli_page_types::DevToolsSessionKey;
 
     #[test]
     fn target_binding_cleanup_plan_maps_route_to_cleanup_action() {
@@ -571,13 +573,13 @@ mod tests {
                 &CdpSessionRoute::PageTarget {
                     browser_context_id: "BID-1".to_owned(),
                     target_id: "TID-active".to_owned(),
-                    is_attached_session: false,
+                    session_key: DevToolsSessionKey::Primary,
                 },
             )
             .action(),
             &TargetBindingCleanupAction::PageTarget {
                 target_id: "TID-active".to_owned(),
-                is_attached_session: false,
+                session_key: DevToolsSessionKey::Primary,
             },
         );
 
@@ -587,13 +589,13 @@ mod tests {
                 &CdpSessionRoute::PageTarget {
                     browser_context_id: "BID-1".to_owned(),
                     target_id: "TID-bg".to_owned(),
-                    is_attached_session: false,
+                    session_key: DevToolsSessionKey::Primary,
                 },
             )
             .action(),
             &TargetBindingCleanupAction::PageTarget {
                 target_id: "TID-bg".to_owned(),
-                is_attached_session: false,
+                session_key: DevToolsSessionKey::Primary,
             },
         );
 

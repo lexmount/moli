@@ -38,27 +38,30 @@ async fn close_target_success() {
     let mut ctx = TestContext::new();
     load_bc_with_target(&mut ctx, "BID-9", "TID-000000000A");
     let bc = ctx.conn.browser_context.as_mut().unwrap();
-    bc.active_page_state_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+    bc.active_page_target_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .page_session_state
         .page_lifecycle_events = true;
-    bc.active_page_state_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+    bc.active_page_target_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .runtime_frontend_enabled = true;
-    bc.active_page_state_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+    bc.active_page_target_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .inspector_enabled = true;
-    bc.active_page_state_mut()
+    bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    bc.active_page_state_mut()
-        .mutate_devtools_network_session_state(false, None, |network| {
-            network.network_enabled = true;
-            network.cache_disabled = true;
-            network.bypass_service_worker = true;
-            network.extra_headers = vec![("X-Test".into(), "1".into())];
-        });
-    bc.active_page_state_mut().css_enabled = true;
-    bc.active_page_state_mut().fetch_owner.configure(
+    bc.active_page_target_mut()
+        .mutate_devtools_network_session_state(
+            &moli_page_types::DevToolsSessionKey::Primary,
+            |network| {
+                network.network_enabled = true;
+                network.cache_disabled = true;
+                network.bypass_service_worker = true;
+                network.extra_headers = vec![("X-Test".into(), "1".into())];
+            },
+        );
+    bc.active_page_target_mut().css_enabled = true;
+    bc.active_page_target_mut().fetch_owner.configure(
         None,
         true,
         vec![crate::conn::FetchInterceptionPattern {
@@ -72,10 +75,10 @@ async fn close_target_success() {
     bc.set_next_network_request_sequence_for_test(41);
     bc.set_subresource_network_emitted_record_count_for_test(12);
     bc.set_next_io_stream_sequence_for_test(7);
-    bc.active_page_state_mut()
+    bc.active_page_target_mut()
         .runtime_slot
         .set_next_subresource_fetch_request_id_for_test(5);
-    bc.active_page_state_mut()
+    bc.active_page_target_mut()
         .owner_state
         .target_crash_state
         .mark_crashed();
@@ -299,7 +302,7 @@ async fn close_target_emits_detached_events() {
     let bc = ctx.conn.browser_context.as_mut().unwrap();
     bc.attach_active_session(session_id.clone());
     assert!(bc.assign_auxiliary_session_to_target("TID-000000000A", "SID-aux".into()));
-    bc.active_page_state_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+    bc.active_page_target_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .inspector_enabled = true;
 
@@ -519,7 +522,7 @@ async fn close_background_target_emits_detached_events_and_clears_attached_sessi
     );
     let bc = ctx.conn.browser_context.as_mut().unwrap();
     assert!(bc.assign_auxiliary_session_to_target("TID-000000000B", "SID-aux".into()));
-    bc.mutate_parked_page_session_state("TID-000000000B", |state| {
+    bc.mutate_background_page_target_for_test("TID-000000000B", |state| {
         state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary] =
             crate::conn::DevToolsSessionState {
                 runtime_session_state: crate::conn::TargetRuntimeSessionState {
@@ -560,7 +563,10 @@ async fn close_background_target_emits_detached_events_and_clears_attached_sessi
     let bc = ctx.conn.browser_context.as_ref().unwrap();
     assert!(bc.background_target("TID-000000000B").is_none());
     assert!(bc.auxiliary_target_id_for_session("SID-aux").is_none());
-    assert!(bc.parked_page_session_state("TID-000000000B").is_none());
+    assert!(
+        bc.non_default_background_page_target_for_test("TID-000000000B")
+            .is_none()
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -587,10 +593,10 @@ async fn close_target_aborts_paused_request_stage_navigation() {
     let mut bc = BrowserContext::new("BID-9".into());
     bc.set_active_target_id("TID-000000000A");
     bc.attach_active_session("SID-1");
-    bc.active_page_state_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+    bc.active_page_target_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .inspector_enabled = true;
-    bc.active_page_state_mut()
+    bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);

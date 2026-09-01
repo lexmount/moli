@@ -710,7 +710,7 @@ mod tests {
         let mut conn = CdpConnection::default();
         let mut browser_context = BrowserContext::new_with_page_for_test("BID-1", "TID-active");
         browser_context
-            .active_page_state_mut()
+            .active_page_target_mut()
             .runtime_slot
             .set_page_attachment_id_for_test(1);
         conn.browser_context = Some(browser_context);
@@ -773,12 +773,12 @@ mod tests {
 
         let bc = conn.browser_context.as_ref().unwrap();
         assert!(
-            bc.active_page_state()
+            bc.active_page_target()
                 .fetch_owner
                 .has_pending_subresource_fetch_for_test("FETCH-1")
         );
         assert!(
-            bc.active_page_state()
+            bc.active_page_target()
                 .fetch_owner
                 .has_pending_subresource_fetch_for_test("FETCH-2")
         );
@@ -789,7 +789,7 @@ mod tests {
         let mut conn = CdpConnection::default();
         let mut browser_context = BrowserContext::new_with_page_for_test("BID-1", "TID-active");
         browser_context
-            .active_page_state_mut()
+            .active_page_target_mut()
             .runtime_slot
             .set_page_attachment_id_for_test(1);
         conn.browser_context = Some(browser_context);
@@ -834,7 +834,7 @@ mod tests {
         let mut conn = CdpConnection::default();
         let mut browser_context = BrowserContext::new_with_page_for_test("BID-1", "TID-active");
         browser_context
-            .active_page_state_mut()
+            .active_page_target_mut()
             .runtime_slot
             .set_page_attachment_id_for_test(1);
         conn.browser_context = Some(browser_context);
@@ -844,7 +844,7 @@ mod tests {
         conn.browser_context
             .as_mut()
             .expect("browser context should remain installed")
-            .active_page_state_mut()
+            .active_page_target_mut()
             .runtime_slot
             .replace_page_attachment_id_for_test();
         let owner = CommandOwnerScope::capture(&conn, None);
@@ -872,7 +872,7 @@ mod tests {
                 .browser_context
                 .as_ref()
                 .expect("browser context should remain installed")
-                .active_page_state()
+                .active_page_target()
                 .fetch_owner
                 .has_pending_subresource_fetch_for_test("FETCH-1"),
             "a stale prepared pause must not install pending command state"
@@ -924,11 +924,11 @@ mod tests {
 
         let bc = conn.browser_context.as_ref().unwrap();
         assert!(
-            bc.parked_fetch_state("TID-background")
+            bc.nonempty_background_fetch_state_for_test("TID-background")
                 .is_some_and(|state| state.has_pending_subresource_fetch_for_test("FETCH-1"))
         );
         assert!(
-            !bc.active_page_state()
+            !bc.active_page_target()
                 .fetch_owner
                 .has_pending_subresource_fetch_for_test("FETCH-1"),
             "background owner emission must not register the pause on the active target"

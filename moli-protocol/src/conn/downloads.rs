@@ -629,15 +629,10 @@ impl CdpConnection {
             .clone()
             .or_else(|| browser_context.active_target_id_owned())
             .unwrap_or_else(|| "FRAME-0".to_owned());
-        let request_headers = match target_id.as_deref() {
-            Some(target_id) if browser_context.active_target_id() != Some(target_id) => {
-                browser_context
-                    .parked_page_session_state(target_id)
-                    .map(|state| state.network_policy.extra_headers().to_vec())
-                    .unwrap_or_default()
-            }
-            _ => browser_context.effective_extra_headers(),
-        };
+        let request_headers = target_id
+            .as_deref()
+            .map(|target_id| browser_context.effective_extra_headers_for_target(target_id))
+            .unwrap_or_else(|| browser_context.effective_extra_headers());
         let initiator_url = self
             .runtime_session_owner_slot(session_id)
             .ok()
@@ -1502,7 +1497,7 @@ mod tests {
     use moli_fetch::FetchCancelHandle;
 
     use crate::{
-        conn::{BackgroundProtocolEvent, CdpConnection},
+        conn::{BackgroundProtocolEvent, BrowserContext, CdpConnection, PageTargetHost},
         devtools_runtime::AutomationEvent,
     };
 
@@ -1535,6 +1530,41 @@ mod tests {
         );
         assert_eq!(DownloadBehavior::parse("allowandname"), None);
         assert_eq!(DownloadBehavior::parse("unknown"), None);
+    }
+
+    #[test]
+    fn background_download_uses_its_target_and_context_header_layers() {
+        let mut connection = CdpConnection::new();
+        let mut browser_context = BrowserContext::new("BID-download".to_owned());
+        browser_context.set_active_target_id("TID-active");
+        browser_context.default_extra_headers =
+            vec![("X-Context-Default".to_owned(), "default".to_owned())];
+        browser_context.global_extra_headers =
+            vec![("X-Context-Global".to_owned(), "global".to_owned())];
+
+        let mut background = PageTargetHost::with_url(
+            "TID-background".to_owned(),
+            Some("SID-background".to_owned()),
+            "https://background.test/".to_owned(),
+        );
+        background
+            .network_policy
+            .push_extra_header(("X-Target".to_owned(), "target".to_owned()));
+        assert!(browser_context.insert_page_target_host(background));
+        connection.browser_context = Some(browser_context);
+
+        let owner = connection
+            .pending_download_owner_context(Some("SID-background"))
+            .expect("background session must resolve its Page target");
+        assert_eq!(owner.frame_id, "TID-background");
+        assert_eq!(
+            owner.request_headers,
+            [
+                ("X-Context-Global".to_owned(), "global".to_owned()),
+                ("X-Context-Default".to_owned(), "default".to_owned()),
+                ("X-Target".to_owned(), "target".to_owned()),
+            ]
+        );
     }
 
     #[test]

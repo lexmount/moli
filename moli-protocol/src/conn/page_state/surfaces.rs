@@ -277,17 +277,20 @@ impl BrowserContext {
         let target_headers = self
             .page_targets
             .active()
-            .map(|target| target.network_policy.extra_headers())
-            .unwrap_or(&[]);
-        self.merged_extra_headers_for_target_policy(target_headers)
+            .map(PageTargetHost::effective_policy)
+            .unwrap_or_default();
+        self.merged_extra_headers_for_target_policy(target_headers.extra_headers())
     }
 
-    pub(crate) fn effective_parked_extra_headers(&self, target_id: &str) -> Vec<(String, String)> {
+    pub(crate) fn effective_extra_headers_for_target(
+        &self,
+        target_id: &str,
+    ) -> Vec<(String, String)> {
         let target_headers = self
-            .parked_page_session_state(target_id)
-            .map(|state| state.network_policy.extra_headers())
-            .unwrap_or(&[]);
-        self.merged_extra_headers_for_target_policy(target_headers)
+            .page_target(target_id)
+            .map(PageTargetHost::effective_policy)
+            .unwrap_or_default();
+        self.merged_extra_headers_for_target_policy(target_headers.extra_headers())
     }
 
     pub fn viewport_width(&self) -> u32 {

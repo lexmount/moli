@@ -83,7 +83,7 @@ impl BrowserContext {
         Vec<(String, PendingSubresourceFetchAuthRequest)>,
         Vec<(String, PendingSubresourceFetchResponseRequest)>,
     ) {
-        self.active_page_state_mut()
+        self.active_page_target_mut()
             .fetch_owner
             .drain_pending_requests()
     }
@@ -94,7 +94,7 @@ impl BrowserContext {
         request_id: &str,
     ) -> Result<Option<String>, String> {
         let handle = self
-            .active_page_state_mut()
+            .active_page_target_mut()
             .runtime_slot
             .allocate_io_stream_handle();
         let active_target = &mut self
@@ -115,7 +115,7 @@ impl BrowserContext {
         &mut self,
         request_id: &str,
     ) -> Option<PendingSubresourceFetchRequest> {
-        self.active_page_state_mut()
+        self.active_page_target_mut()
             .fetch_owner
             .take_pending_subresource_fetch_request(request_id, None)
     }
@@ -128,7 +128,7 @@ impl BrowserContext {
         navigation: NavigationDispatchState,
         body: DocumentBodySource,
     ) {
-        self.active_page_state_mut()
+        self.active_page_target_mut()
             .fetch_owner
             .register_pending_fetch_response_navigation(
                 request_id,
@@ -144,7 +144,7 @@ impl BrowserContext {
         request_id: String,
         pending: PendingSubresourceFetchRequest,
     ) {
-        self.active_page_state_mut()
+        self.active_page_target_mut()
             .fetch_owner
             .register_pending_subresource_fetch_request(request_id, pending);
     }
@@ -155,14 +155,14 @@ impl BrowserContext {
         request_id: Option<String>,
         pending: PendingSubresourceFetchRequest,
     ) {
-        self.active_page_state_mut()
+        self.active_page_target_mut()
             .fetch_owner
             .register_in_flight_subresource_fetch_request(request_id, pending);
     }
 
     #[cfg(test)]
     pub(crate) fn allocate_subresource_network_request_id(&mut self) -> String {
-        self.active_page_state_mut()
+        self.active_page_target_mut()
             .runtime_slot
             .request_id_allocator()
             .allocate_network_request_id()
@@ -175,7 +175,7 @@ impl BrowserContext {
         response_body: String,
         session_ids: impl IntoIterator<Item = Option<String>>,
     ) {
-        self.active_page_state_mut()
+        self.active_page_target_mut()
             .runtime_slot
             .record_captured_response_body(request_id, response_body, session_ids);
     }
@@ -187,7 +187,7 @@ impl BrowserContext {
         response_body: crate::conn::CapturedBody,
         session_ids: impl IntoIterator<Item = Option<String>>,
     ) {
-        self.active_page_state_mut()
+        self.active_page_target_mut()
             .runtime_slot
             .record_captured_response_body_source(request_id, response_body, session_ids);
     }
@@ -198,7 +198,7 @@ impl BrowserContext {
         request_id: String,
         session_ids: impl IntoIterator<Item = Option<String>>,
     ) {
-        self.active_page_state_mut()
+        self.active_page_target_mut()
             .runtime_slot
             .record_pending_response_body(request_id, session_ids);
     }
@@ -208,7 +208,7 @@ impl BrowserContext {
         &self,
         request_id: &str,
     ) -> Option<&crate::domains::network::CapturedResponseBody> {
-        self.active_page_state()
+        self.active_page_target()
             .runtime_slot
             .captured_response_body(request_id)
     }
@@ -221,14 +221,14 @@ impl BrowserContext {
 
     #[cfg(test)]
     pub(crate) fn allocate_io_stream_handle(&mut self) -> String {
-        self.active_page_state_mut()
+        self.active_page_target_mut()
             .runtime_slot
             .allocate_io_stream_handle()
     }
 
     #[cfg(test)]
     pub(crate) fn insert_io_stream(&mut self, handle: String, bytes: Vec<u8>, offset: usize) {
-        self.active_page_state_mut()
+        self.active_page_target_mut()
             .runtime_slot
             .insert_io_stream(handle, bytes, offset);
     }
@@ -240,70 +240,70 @@ impl BrowserContext {
         offset: Option<usize>,
         size: Option<usize>,
     ) -> Option<crate::domains::network::TargetIoStreamRead> {
-        self.active_page_state_mut()
+        self.active_page_target_mut()
             .runtime_slot
             .read_io_stream(handle, offset, size)
     }
 
     #[cfg(test)]
     pub(crate) fn has_captured_response_body_for_test(&self, request_id: &str) -> bool {
-        self.active_page_state()
+        self.active_page_target()
             .runtime_slot
             .has_captured_response_body(request_id)
     }
 
     #[cfg(test)]
     pub(crate) fn captured_response_bodies_empty_for_test(&self) -> bool {
-        self.active_page_state()
+        self.active_page_target()
             .runtime_slot
             .captured_response_bodies_empty()
     }
 
     #[cfg(test)]
     pub(crate) fn set_next_network_request_sequence_for_test(&mut self, sequence: u64) {
-        self.active_page_state_mut()
+        self.active_page_target_mut()
             .runtime_slot
             .set_next_network_request_sequence_for_test(sequence);
     }
 
     #[cfg(test)]
     pub(crate) fn next_network_request_sequence_for_test(&self) -> u64 {
-        self.active_page_state()
+        self.active_page_target()
             .runtime_slot
             .next_network_request_sequence_for_test()
     }
 
     #[cfg(test)]
     pub(crate) fn io_streams_empty_for_test(&self) -> bool {
-        self.active_page_state()
+        self.active_page_target()
             .runtime_slot
             .io_streams_empty_for_test()
     }
 
     #[cfg(test)]
     pub(crate) fn set_next_io_stream_sequence_for_test(&mut self, sequence: u64) {
-        self.active_page_state_mut()
+        self.active_page_target_mut()
             .runtime_slot
             .set_next_io_stream_sequence_for_test(sequence);
     }
 
     #[cfg(test)]
     pub(crate) fn next_io_stream_sequence_for_test(&self) -> u64 {
-        self.active_page_state()
+        self.active_page_target()
             .runtime_slot
             .next_io_stream_sequence_for_test()
     }
 
     #[cfg(test)]
     pub(crate) fn set_subresource_network_emitted_record_count_for_test(&mut self, count: usize) {
-        self.active_page_state_mut()
+        self.active_page_target_mut()
             .runtime_slot
             .set_subresource_emitted_record_count_for_test(count);
     }
 
     #[cfg(test)]
     pub(crate) fn subresource_network_emitted_record_count_for_test(&self) -> usize {
-        self.active_page_state()
+        self.active_page_target()
             .runtime_slot
             .subresource_emitted_record_count_for_test()
     }
@@ -421,13 +421,13 @@ mod tests {
         );
 
         assert!(
-            bc.active_page_state()
+            bc.active_page_target()
                 .fetch_owner
                 .has_in_flight_subresource_fetches_for_test()
         );
         let _ = bc.take_active_target_pending_fetch_state();
         assert!(
-            !bc.active_page_state()
+            !bc.active_page_target()
                 .fetch_owner
                 .has_in_flight_subresource_fetches_for_test()
         );
@@ -442,12 +442,12 @@ mod tests {
         );
 
         assert!(
-            bc.active_page_state()
+            bc.active_page_target()
                 .fetch_owner
                 .has_pending_subresource_fetch_for_test("INT-SUB-9")
         );
         assert!(
-            bc.active_page_state()
+            bc.active_page_target()
                 .fetch_owner
                 .has_pending_fetch_request_id_for_test("INT-SUB-9")
         );
@@ -457,12 +457,12 @@ mod tests {
             .expect("pending subresource fetch should be found by its protocol request id");
         assert_eq!(pending.network_request_id, "REQ-9");
         assert!(
-            !bc.active_page_state()
+            !bc.active_page_target()
                 .fetch_owner
                 .has_pending_subresource_fetch_for_test("INT-SUB-9")
         );
         assert!(
-            !bc.active_page_state()
+            !bc.active_page_target()
                 .fetch_owner
                 .has_pending_fetch_request_id_for_test("INT-SUB-9")
         );
@@ -486,13 +486,13 @@ mod tests {
 
         assert_eq!(stream, "STREAM-1");
         assert!(
-            bc.active_page_state()
+            bc.active_page_target()
                 .fetch_owner
                 .pending_fetch_response_transfer_is_pending_for_test("INT-1"),
             "buffered body stream reads from IO artifacts and keeps the paused response reusable"
         );
         assert!(
-            bc.active_page_state()
+            bc.active_page_target()
                 .fetch_owner
                 .active_fetch_response_body_stream_request_id_for_test(&stream)
                 .is_none()
@@ -517,7 +517,7 @@ mod tests {
             .await
             .unwrap();
         assert!(
-            !bc.active_page_state()
+            !bc.active_page_target()
                 .fetch_owner
                 .has_in_flight_subresource_fetches_for_test()
         );

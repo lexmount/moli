@@ -164,7 +164,7 @@ async fn runtime_xhr_subresource_pauses_until_continue_request_then_loads_respon
         .browser_context
         .as_mut()
         .unwrap()
-        .active_page_state_mut()
+        .active_page_target_mut()
         .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .inspector_enabled = true;
@@ -469,7 +469,7 @@ async fn runtime_xhr_subresource_request_animation_frame_pauses_until_continue_r
         .browser_context
         .as_mut()
         .unwrap()
-        .active_page_state_mut()
+        .active_page_target_mut()
         .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .inspector_enabled = true;
@@ -631,7 +631,7 @@ async fn runtime_xhr_subresource_queue_microtask_pauses_until_continue_request_t
         .browser_context
         .as_mut()
         .unwrap()
-        .active_page_state_mut()
+        .active_page_target_mut()
         .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .inspector_enabled = true;

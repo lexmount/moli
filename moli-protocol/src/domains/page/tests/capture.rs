@@ -183,7 +183,7 @@ async fn capture_screenshot_rejects_completion_from_replaced_renderer_attachment
         .browser_context
         .as_mut()
         .expect("browser context")
-        .active_page_state_mut()
+        .active_page_target_mut()
         .runtime_slot
         .replace_loaded_page(Some(replacement));
 
@@ -266,7 +266,7 @@ async fn capture_snapshot_returns_minimal_mhtml_for_loaded_page() {
         .browser_context
         .as_mut()
         .expect("browser context")
-        .active_page_state_mut()
+        .active_page_target_mut()
         .runtime_slot
         .replace_loaded_page(Some(page));
 
@@ -318,7 +318,7 @@ async fn capture_snapshot_dispatch_serializes_html_in_renderer_owner() {
         .browser_context
         .as_mut()
         .expect("browser context")
-        .active_page_state_mut()
+        .active_page_target_mut()
         .runtime_slot
         .replace_loaded_page(Some(page));
 
@@ -513,7 +513,7 @@ async fn capture_screenshot_targets_loaded_background_owner_without_promotion() 
         .browser_context
         .as_mut()
         .expect("browser context")
-        .mutate_parked_page_session_state("TID-background", |state| {
+        .mutate_background_page_target_for_test("TID-background", |state| {
             state.emulated_device_metrics = Some(EmulatedDeviceMetrics {
                 width: 320,
                 height: 240,
@@ -560,7 +560,7 @@ async fn capture_screenshot_targets_inactive_loaded_owner_without_activation() {
     let mut inactive = BrowserContext::new("BID-inactive-screenshot".to_owned());
     inactive.set_active_target_id("TID-inactive".to_owned());
     inactive.attach_active_session("SID-inactive".to_owned());
-    inactive.active_page_state_mut().emulated_device_metrics = Some(EmulatedDeviceMetrics {
+    inactive.active_page_target_mut().emulated_device_metrics = Some(EmulatedDeviceMetrics {
         width: 500,
         height: 300,
         device_scale_factor: 1.5,
@@ -922,7 +922,7 @@ async fn get_layout_metrics_queries_live_renderer_for_loaded_pages() {
         .browser_context
         .as_mut()
         .expect("browser context")
-        .active_page_state_mut()
+        .active_page_target_mut()
         .runtime_slot
         .replace_loaded_page(Some(page));
 

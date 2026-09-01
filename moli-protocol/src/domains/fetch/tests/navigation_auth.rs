@@ -43,7 +43,7 @@ async fn continue_with_auth_retries_navigation_with_basic_credentials() {
 
     let mut ctx = TestContext::new();
     let mut bc = attached_browser_context();
-    bc.active_page_state_mut()
+    bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -204,7 +204,7 @@ async fn devtools_continue_response_credentials_retries_auth_navigation() {
 
     let mut ctx = TestContext::new();
     let mut bc = attached_browser_context();
-    bc.active_page_state_mut()
+    bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -350,7 +350,7 @@ async fn continue_with_auth_and_intercept_response_pauses_before_authorized_body
 
     let mut ctx = TestContext::new();
     let mut bc = attached_browser_context();
-    bc.active_page_state_mut()
+    bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -484,7 +484,7 @@ async fn continue_with_non_basic_auth_and_intercept_response_fails_explicitly_wi
 
     let mut ctx = TestContext::new();
     let mut bc = attached_browser_context();
-    bc.active_page_state_mut()
+    bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -601,7 +601,7 @@ async fn navigation_auth_required_includes_synthesized_cookie_header() {
 
     let mut ctx = TestContext::new();
     let mut bc = attached_browser_context();
-    bc.active_page_state_mut()
+    bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
     let url = format!("http://{addr}/auth");
@@ -698,7 +698,7 @@ async fn continue_with_auth_prefers_supported_navigation_challenge_over_unsuppor
 
     let mut ctx = TestContext::new();
     let mut bc = attached_browser_context();
-    bc.active_page_state_mut()
+    bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -848,7 +848,7 @@ async fn run_navigation_cdp_fetch_then_bidi_network_auth_required_terminal(
     let mut ctx = TestContext::new();
     let mut bc = attached_browser_context();
     assert!(bc.assign_auxiliary_session_to_target("TID-1", "SID-fetch".to_owned()));
-    bc.active_page_state_mut()
+    bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);

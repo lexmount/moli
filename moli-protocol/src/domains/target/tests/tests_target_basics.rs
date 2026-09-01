@@ -251,10 +251,10 @@ async fn dispose_browser_context_aborts_paused_request_stage_navigation() {
     let mut bc = BrowserContext::new("BID-9".into());
     bc.set_active_target_id("TID-000000000A");
     bc.attach_active_session("SID-1");
-    bc.active_page_state_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+    bc.active_page_target_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .inspector_enabled = true;
-    bc.active_page_state_mut()
+    bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -839,7 +839,7 @@ async fn page_stop_loading_aborts_background_pending_fetch_without_promotion() {
         let bc = ctx.conn.browser_context.as_ref().expect("browser context");
         assert_eq!(bc.active_target_id(), Some("TID-000000000A"));
         assert!(
-            bc.parked_fetch_state(&second_target_id)
+            bc.nonempty_background_fetch_state_for_test(&second_target_id)
                 .is_some_and(|state| !state.is_empty())
         );
     }
@@ -868,7 +868,7 @@ async fn page_stop_loading_aborts_background_pending_fetch_without_promotion() {
             .expect("background target should remain parked");
         assert_eq!(background.session_id(), Some(session_id.as_str()));
         assert!(
-            bc.parked_fetch_state(&second_target_id)
+            bc.nonempty_background_fetch_state_for_test(&second_target_id)
                 .is_none_or(|state| state.is_empty())
         );
     }
@@ -1625,10 +1625,10 @@ async fn same_context_targets_do_not_replay_bare_isolated_worlds_after_switching
     {
         let bc = ctx.conn.browser_context.as_mut().expect("browser context");
         let _ = bc
-            .active_page_state_mut()
+            .active_page_target_mut()
             .runtime_slot
             .replace_loaded_page(Some(first_page));
-        bc.active_page_state_mut().devtools_sessions
+        bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
             .runtime_frontend_enabled = true;
@@ -1715,7 +1715,7 @@ async fn same_context_targets_do_not_replay_bare_isolated_worlds_after_switching
         .browser_context
         .as_mut()
         .unwrap()
-        .active_page_state_mut()
+        .active_page_target_mut()
         .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .runtime_frontend_enabled = true;
@@ -1745,7 +1745,7 @@ async fn same_context_targets_do_not_replay_bare_isolated_worlds_after_switching
         .browser_context
         .as_mut()
         .unwrap()
-        .active_page_state_mut()
+        .active_page_target_mut()
         .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .runtime_frontend_enabled = true;
@@ -1808,7 +1808,7 @@ async fn same_context_targets_do_not_replay_bare_isolated_worlds_after_switching
         .browser_context
         .as_mut()
         .unwrap()
-        .active_page_state_mut()
+        .active_page_target_mut()
         .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .runtime_frontend_enabled = true;

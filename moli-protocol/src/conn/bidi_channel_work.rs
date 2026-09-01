@@ -225,7 +225,7 @@ mod tests {
         let owner_route = crate::conn::CdpSessionRoute::PageTarget {
             browser_context_id: "BID-owner".to_owned(),
             target_id: "TID-owner".to_owned(),
-            is_attached_session: false,
+            session_key: moli_page_types::DevToolsSessionKey::Primary,
         };
         let owner = BidiChannelPageOwner::capture_for_owner(
             &conn,

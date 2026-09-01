@@ -42,7 +42,7 @@ impl CommandOwnerScope {
             Some(target_id) => CdpSessionRoute::PageTarget {
                 browser_context_id: browser_context.id.clone(),
                 target_id,
-                is_attached_session: false,
+                session_key: moli_page_types::DevToolsSessionKey::Primary,
             },
             None => CdpSessionRoute::BrowserContext {
                 browser_context_id: browser_context.id.clone(),
@@ -74,7 +74,7 @@ impl CommandOwnerScope {
             Some(target_id) => CdpSessionRoute::PageTarget {
                 browser_context_id: page.browser_context_id().to_owned(),
                 target_id: target_id.to_owned(),
-                is_attached_session: false,
+                session_key: moli_page_types::DevToolsSessionKey::Primary,
             },
             None => CdpSessionRoute::BrowserContext {
                 browser_context_id: page.browser_context_id().to_owned(),

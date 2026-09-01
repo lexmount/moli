@@ -799,7 +799,7 @@ mod tests {
             .browser_context
             .as_mut()
             .expect("browser context")
-            .active_page_state_mut()
+            .active_page_target_mut()
             .runtime_slot
             .loaded_page_mut()
             .expect("loaded page")
@@ -1236,7 +1236,7 @@ mod tests {
                 .browser_context
                 .as_ref()
                 .unwrap()
-                .active_page_state()
+                .active_page_target()
                 .css_enabled
         );
         ctx.expect_result(101, json!({}), None);
@@ -1248,7 +1248,7 @@ mod tests {
                 .browser_context
                 .as_ref()
                 .unwrap()
-                .active_page_state()
+                .active_page_target()
                 .css_enabled
         );
         ctx.expect_result(102, json!({}), None);
@@ -1445,7 +1445,7 @@ mod tests {
                 .browser_context
                 .as_ref()
                 .unwrap()
-                .active_page_state()
+                .active_page_target()
                 .css_enabled
         );
 
@@ -1461,7 +1461,7 @@ mod tests {
                 .browser_context
                 .as_ref()
                 .unwrap()
-                .active_page_state()
+                .active_page_target()
                 .css_enabled
         );
     }
@@ -1688,7 +1688,7 @@ mod tests {
         let mut browser_context = BrowserContext::new("BID-css-owner-route".to_owned());
         browser_context.set_active_target_id("TID-css-active".to_owned());
         browser_context
-            .active_page_state_mut()
+            .active_page_target_mut()
             .runtime_slot
             .set_loaded_page_for_test(active_page);
         browser_context.stage_background_target(

@@ -71,7 +71,7 @@ async fn request_stage_navigation_request_paused_includes_synthesized_cookie_hea
 
     let mut ctx = TestContext::new();
     let mut bc = attached_browser_context();
-    bc.active_page_state_mut()
+    bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
     let url = format!("http://{addr}/page");
@@ -151,7 +151,7 @@ fetch('/api', { method: 'POST', body: 'nav-payload' })
 
     let mut ctx = TestContext::new();
     let mut bc = attached_browser_context();
-    bc.active_page_state_mut()
+    bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -373,7 +373,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     let mut ctx = TestContext::new();
     let mut bc = attached_browser_context();
-    bc.active_page_state_mut()
+    bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -535,7 +535,7 @@ window.addEventListener('load', () => {
 
     let mut ctx = TestContext::new();
     let mut bc = attached_browser_context();
-    bc.active_page_state_mut()
+    bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -696,7 +696,7 @@ window.postMessage('go', '*');
 
     let mut ctx = TestContext::new();
     let mut bc = attached_browser_context();
-    bc.active_page_state_mut()
+    bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -862,7 +862,7 @@ document.body.setAttribute('data-trigger', '1');
 
     let mut ctx = TestContext::new();
     let mut bc = attached_browser_context();
-    bc.active_page_state_mut()
+    bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -1027,7 +1027,7 @@ observer.observe(document.getElementById('target'));
 
     let mut ctx = TestContext::new();
     let mut bc = attached_browser_context();
-    bc.active_page_state_mut()
+    bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -1189,7 +1189,7 @@ setTimeout(() => {
 
     let mut ctx = TestContext::new();
     let mut bc = attached_browser_context();
-    bc.active_page_state_mut()
+    bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -1364,7 +1364,7 @@ const id = setInterval(() => {
 
     let mut ctx = TestContext::new();
     let mut bc = attached_browser_context();
-    bc.active_page_state_mut()
+    bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -1537,7 +1537,7 @@ queueMicrotask(() => {
 
     let mut ctx = TestContext::new();
     let mut bc = attached_browser_context();
-    bc.active_page_state_mut()
+    bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -1698,7 +1698,7 @@ Promise.resolve().then(() => {
 
     let mut ctx = TestContext::new();
     let mut bc = attached_browser_context();
-    bc.active_page_state_mut()
+    bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -1860,7 +1860,7 @@ setTimeout(() => {
 
     let mut ctx = TestContext::new();
     let mut bc = attached_browser_context();
-    bc.active_page_state_mut()
+    bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -2040,7 +2040,7 @@ const id = setInterval(() => {
 
     let mut ctx = TestContext::new();
     let mut bc = attached_browser_context();
-    bc.active_page_state_mut()
+    bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -2214,7 +2214,7 @@ queueMicrotask(() => {
 
     let mut ctx = TestContext::new();
     let mut bc = attached_browser_context();
-    bc.active_page_state_mut()
+    bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -2376,7 +2376,7 @@ Promise.resolve().then(() => {
 
     let mut ctx = TestContext::new();
     let mut bc = attached_browser_context();
-    bc.active_page_state_mut()
+    bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -2538,7 +2538,7 @@ requestIdleCallback(deadline => {
 
     let mut ctx = TestContext::new();
     let mut bc = attached_browser_context();
-    bc.active_page_state_mut()
+    bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -2696,7 +2696,7 @@ requestIdleCallback(() => {
 
     let mut ctx = TestContext::new();
     let mut bc = attached_browser_context();
-    bc.active_page_state_mut()
+    bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -2860,7 +2860,7 @@ requestAnimationFrame(() => {
 
     let mut ctx = TestContext::new();
     let mut bc = attached_browser_context();
-    bc.active_page_state_mut()
+    bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -3016,7 +3016,7 @@ requestAnimationFrame(() => {
 
     let mut ctx = TestContext::new();
     let mut bc = attached_browser_context();
-    bc.active_page_state_mut()
+    bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -3168,7 +3168,7 @@ fetch('/api').catch(() => {});
 
     let mut ctx = TestContext::new();
     let mut bc = attached_browser_context();
-    bc.active_page_state_mut()
+    bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -3294,7 +3294,7 @@ async fn continue_with_auth_default_aborts_pending_navigation() {
     ctx.expect_error(74, -32000, "Fetch auth challenge aborted");
     let bc = ctx.conn.browser_context.as_ref().expect("browser context");
     assert!(
-        !bc.active_page_state()
+        !bc.active_page_target()
             .fetch_owner
             .has_pending_fetch_state_for_test()
     );
@@ -3338,7 +3338,7 @@ async fn continue_with_auth_success_clears_pending_auth_navigation() {
 
     let mut ctx = TestContext::new();
     let mut bc = attached_browser_context();
-    bc.active_page_state_mut()
+    bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -3379,7 +3379,7 @@ async fn continue_with_auth_success_clears_pending_auth_navigation() {
 
     let bc = ctx.conn.browser_context.as_ref().expect("browser context");
     assert!(
-        bc.active_page_state()
+        bc.active_page_target()
             .fetch_owner
             .has_pending_fetch_auth_navigation_for_test("INT-1")
     );
@@ -3402,7 +3402,7 @@ async fn continue_with_auth_success_clears_pending_auth_navigation() {
 
     let bc = ctx.conn.browser_context.as_ref().expect("browser context");
     assert!(
-        !bc.active_page_state()
+        !bc.active_page_target()
             .fetch_owner
             .has_pending_fetch_state_for_test()
     );
@@ -3446,7 +3446,7 @@ async fn continue_with_auth_retries_navigation_with_basic_proxy_credentials() {
 
     let mut ctx = TestContext::new();
     let mut bc = attached_browser_context();
-    bc.active_page_state_mut()
+    bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -3541,7 +3541,7 @@ async fn continue_with_auth_retries_navigation_with_digest_proxy_credentials() {
 
     let mut ctx = TestContext::new();
     let mut bc = attached_browser_context();
-    bc.active_page_state_mut()
+    bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -3685,7 +3685,7 @@ async fn cancel_https_proxy_connect_auth_emits_407_without_extra_info_and_fails_
 
     let mut ctx = TestContext::new();
     let mut bc = attached_browser_context();
-    bc.active_page_state_mut()
+    bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -3835,7 +3835,7 @@ async fn continue_with_auth_handles_multi_round_basic_navigation_challenge() {
 
     let mut ctx = TestContext::new();
     let mut bc = attached_browser_context();
-    bc.active_page_state_mut()
+    bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -3967,7 +3967,7 @@ async fn continue_with_auth_handles_digest_navigation_challenge() {
 
     let mut ctx = TestContext::new();
     let mut bc = attached_browser_context();
-    bc.active_page_state_mut()
+    bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -4098,7 +4098,7 @@ async fn continue_with_auth_handles_multi_round_digest_navigation_challenge() {
 
     let mut ctx = TestContext::new();
     let mut bc = attached_browser_context();
-    bc.active_page_state_mut()
+    bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);

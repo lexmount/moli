@@ -18,7 +18,7 @@ async fn context_with_loaded_fetch_page() -> TestContext {
         .expect("fetch correlation page should load");
     let mut browser_context = attached_browser_context();
     browser_context
-        .active_page_state_mut()
+        .active_page_target_mut()
         .runtime_slot
         .replace_loaded_page(Some(page));
     ctx.conn.browser_context = Some(browser_context);

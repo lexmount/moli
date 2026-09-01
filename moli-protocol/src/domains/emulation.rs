@@ -1373,11 +1373,7 @@ fn start_network_conditions_update_for_current_route(
         } => conn
             .browser_context_by_id(browser_context_id)
             .is_some_and(|browser_context| {
-                if browser_context.is_active_target(target_id) {
-                    browser_context.effective_active_network_offline()
-                } else {
-                    browser_context.effective_parked_network_offline(target_id)
-                }
+                browser_context.effective_network_offline_for_target(target_id)
             }),
         PendingEmulationPageTarget::SessionOwner { .. } => false,
     };
@@ -1452,13 +1448,7 @@ fn start_extra_headers_update_for_route(
             target_id,
         } => conn
             .browser_context_by_id(browser_context_id)
-            .map(|browser_context| {
-                if browser_context.is_active_target(target_id) {
-                    browser_context.effective_extra_headers()
-                } else {
-                    browser_context.effective_parked_extra_headers(target_id)
-                }
-            }),
+            .map(|browser_context| browser_context.effective_extra_headers_for_target(target_id)),
         PendingEmulationPageTarget::SessionOwner { .. } => None,
     };
     let Some(headers) = headers else {
@@ -2004,7 +1994,7 @@ fn top_level_target_routes_for_browser_contexts(
             CdpSessionRoute::PageTarget {
                 browser_context_id: browser_context.id.clone(),
                 target_id: target.target_id().to_owned(),
-                is_attached_session: false,
+                session_key: moli_page_types::DevToolsSessionKey::Primary,
             }
         }));
     }
@@ -2256,20 +2246,11 @@ fn is_moli_internal_default_user_context(browser_context_id: &str) -> bool {
 fn browser_context_default_device_metrics_runtime_command_count(
     browser_context: &BrowserContext,
 ) -> usize {
-    let active_count = usize::from(browser_context.page_targets.active().is_some_and(|target| {
-        target.emulated_device_metrics.is_none() && target.runtime_slot.loaded_page().is_some()
-    }));
-    let background_count = browser_context
-        .background_targets()
-        .filter(|target| {
-            let target_id = target.target_id();
-            browser_context
-                .parked_page_session_state(target_id)
-                .is_none_or(|state| state.emulated_device_metrics.is_none())
-                && target.loaded_page().is_some()
-        })
-        .count();
-    active_count + background_count
+    browser_context
+        .page_targets
+        .iter()
+        .filter(|target| target.emulated_device_metrics.is_none() && target.loaded_page().is_some())
+        .count()
 }
 
 fn start_browser_context_default_device_metrics_page_commands(
@@ -2325,7 +2306,7 @@ fn start_browser_context_default_device_metrics_page_commands(
             .target_id()
             .to_owned();
         let has_target_override = browser_context
-            .parked_page_session_state(&target_id)
+            .page_target(&target_id)
             .is_some_and(|state| state.emulated_device_metrics.is_some());
         if has_target_override {
             continue;
@@ -2901,10 +2882,8 @@ fn locale_override_for_route(
     let (browser_context_id, target_id) =
         conn.target_owner_identity_for_route(session_id, owner_route)?;
     let browser_context = conn.browser_context_by_id(&browser_context_id)?;
-    if let Some(target_id) = target_id
-        && browser_context.background_target(&target_id).is_some()
-    {
-        return Some(browser_context.effective_parked_locale_override_owned(&target_id));
+    if let Some(target_id) = target_id {
+        return Some(browser_context.effective_locale_override_for_target_owned(&target_id));
     }
     Some(browser_context.effective_active_locale_override_owned())
 }

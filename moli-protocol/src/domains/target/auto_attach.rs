@@ -1036,7 +1036,7 @@ pub(super) async fn release_attached_sessions_for_root_frontend_async(
         let preserves_other_frontends = matches!(
             detach_plan.cleanup_plan().map(|plan| plan.action()),
             Some(crate::conn::TargetBindingCleanupAction::PageTarget {
-                is_attached_session: false,
+                session_key: moli_page_types::DevToolsSessionKey::Primary,
                 ..
             })
         );
@@ -1111,7 +1111,7 @@ async fn detach_attached_session_for_owner_async(
     match cleanup_plan.action().clone() {
         crate::conn::TargetBindingCleanupAction::PageTarget {
             target_id,
-            is_attached_session,
+            session_key,
         } => {
             // A parent-session detach cascade bypasses the direct
             // Target.detachFromTarget path. Release the renderer inspector
@@ -1126,7 +1126,10 @@ async fn detach_attached_session_for_owner_async(
             let _ = conn
                 .detach_runtime_inspector_session_for_session_owner_async(Some(session_id))
                 .await;
-            if is_attached_session {
+            if matches!(
+                session_key,
+                moli_page_types::DevToolsSessionKey::Attached(_)
+            ) {
                 clear_detached_session_target_overrides_best_effort(conn, session_id).await;
                 super::clear_detached_target_fetch_state_background_events_async(
                     conn,

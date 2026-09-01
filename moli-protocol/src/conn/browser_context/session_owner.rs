@@ -1,17 +1,37 @@
 #[cfg(test)]
 use crate::conn::BrowserContext;
 use crate::conn::{CdpConnection, CdpSessionRoute, PageTargetHost};
+use moli_page_types::DevToolsSessionKey;
 
-pub(super) enum TargetSessionOwner {
-    PageTarget {
-        browser_context_id: String,
-        target_id: String,
-        is_auxiliary_target_session: bool,
-    },
-    NoLoadedBrowserContext,
+pub(super) struct TargetSessionOwner {
+    pub(super) browser_context_id: String,
+    pub(super) target_id: String,
+    pub(super) session_key: DevToolsSessionKey,
 }
 
 impl CdpConnection {
+    /// Some generated Page-domain agents acknowledge enable/disable commands
+    /// before a Page host exists. Keep that protocol behavior at the command
+    /// boundary instead of manufacturing an owner that does not own a Page.
+    pub(super) fn accepts_unmaterialized_page_command(
+        &self,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
+    ) -> bool {
+        if session_id.is_some() {
+            return false;
+        }
+        match owner_route {
+            Some(CdpSessionRoute::Browser | CdpSessionRoute::BrowserContext { .. }) => true,
+            Some(_) => false,
+            None => self
+                .browser_context
+                .as_ref()
+                .and_then(|browser_context| browser_context.active_target_id())
+                .is_none(),
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn with_background_target_session<R>(
         &mut self,
@@ -29,7 +49,7 @@ impl CdpConnection {
         f: impl FnOnce(&mut PageTargetHost),
     ) -> bool {
         self.target_session_owner_mut(session_id)
-            .and_then(|mut owner| owner.mutate_page_state(|state, _, _| f(state)))
+            .map(|mut owner| owner.mutate_page_state(|state, _| f(state)))
             .is_some()
     }
 
@@ -53,67 +73,89 @@ impl CdpConnection {
             None => match owner_route {
                 Some(route) => route.clone(),
                 None => {
-                    let Some(browser_context) = self.browser_context.as_ref() else {
-                        return Some(TargetSessionOwner::NoLoadedBrowserContext);
-                    };
-                    let Some(target_id) = browser_context.active_target_id() else {
-                        return Some(TargetSessionOwner::NoLoadedBrowserContext);
-                    };
-                    return Some(TargetSessionOwner::PageTarget {
+                    let browser_context = self.browser_context.as_ref()?;
+                    let target_id = browser_context.active_target_id()?;
+                    return Some(TargetSessionOwner {
                         browser_context_id: browser_context.id.clone(),
                         target_id: target_id.to_owned(),
-                        is_auxiliary_target_session: false,
+                        session_key: DevToolsSessionKey::Primary,
                     });
                 }
             },
         };
 
         match route {
-            CdpSessionRoute::Browser => Some(
-                self.browser_context
-                    .as_ref()
-                    .and_then(|browser_context| {
-                        Some(TargetSessionOwner::PageTarget {
-                            browser_context_id: browser_context.id.clone(),
-                            target_id: browser_context.active_target_id()?.to_owned(),
-                            is_auxiliary_target_session: false,
-                        })
-                    })
-                    .unwrap_or(TargetSessionOwner::NoLoadedBrowserContext),
-            ),
-            CdpSessionRoute::BrowserContext { browser_context_id } => Some(
-                self.browser_context_by_id(&browser_context_id)
-                    .and_then(|browser_context| {
-                        Some(TargetSessionOwner::PageTarget {
-                            browser_context_id,
-                            target_id: browser_context.active_target_id()?.to_owned(),
-                            is_auxiliary_target_session: false,
-                        })
-                    })
-                    .unwrap_or(TargetSessionOwner::NoLoadedBrowserContext),
-            ),
+            CdpSessionRoute::Browser => {
+                let browser_context = self.browser_context.as_ref()?;
+                Some(TargetSessionOwner {
+                    browser_context_id: browser_context.id.clone(),
+                    target_id: browser_context.active_target_id()?.to_owned(),
+                    session_key: DevToolsSessionKey::Primary,
+                })
+            }
+            CdpSessionRoute::BrowserContext { browser_context_id } => {
+                let browser_context = self.browser_context_by_id(&browser_context_id)?;
+                Some(TargetSessionOwner {
+                    browser_context_id,
+                    target_id: browser_context.active_target_id()?.to_owned(),
+                    session_key: DevToolsSessionKey::Primary,
+                })
+            }
             CdpSessionRoute::PageTarget {
                 browser_context_id,
                 target_id,
-                is_attached_session,
+                session_key,
             } => {
                 let browser_context = self.browser_context_by_id(&browser_context_id)?;
                 if browser_context.page_target(&target_id).is_some() {
-                    Some(TargetSessionOwner::PageTarget {
+                    Some(TargetSessionOwner {
                         browser_context_id,
                         target_id,
-                        is_auxiliary_target_session: is_attached_session,
+                        session_key,
                     })
                 } else {
-                    Some(TargetSessionOwner::NoLoadedBrowserContext)
+                    None
                 }
             }
             CdpSessionRoute::TabTarget { .. }
             | CdpSessionRoute::SharedWorkerTarget { .. }
             | CdpSessionRoute::DedicatedWorkerTarget { .. }
-            | CdpSessionRoute::ServiceWorkerTarget { .. } => {
-                Some(TargetSessionOwner::NoLoadedBrowserContext)
-            }
+            | CdpSessionRoute::ServiceWorkerTarget { .. } => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_browser_context_does_not_materialize_a_page_owner() {
+        let mut conn = CdpConnection::default();
+        conn.browser_context = Some(BrowserContext::new("BID-empty-owner".to_owned()));
+
+        assert!(conn.target_session_owner(None).is_none());
+        assert!(conn.accepts_unmaterialized_page_command(None, None));
+        assert!(!conn.accepts_unmaterialized_page_command(Some("SID-missing"), None));
+    }
+
+    #[test]
+    fn stale_page_route_is_not_reinterpreted_as_the_active_page() {
+        let mut conn = CdpConnection::default();
+        conn.browser_context = Some(BrowserContext::new_with_page_for_test(
+            "BID-stale-owner",
+            "TID-live",
+        ));
+        let stale_route = CdpSessionRoute::PageTarget {
+            browser_context_id: "BID-stale-owner".to_owned(),
+            target_id: "TID-stale".to_owned(),
+            session_key: DevToolsSessionKey::Primary,
+        };
+
+        assert!(
+            conn.target_session_owner_for_route(None, Some(&stale_route))
+                .is_none()
+        );
+        assert!(!conn.accepts_unmaterialized_page_command(None, Some(&stale_route)));
     }
 }

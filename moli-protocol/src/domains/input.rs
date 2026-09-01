@@ -2180,7 +2180,7 @@ mod producer_tests {
         let mut conn = CdpConnection::default();
         let mut bc = BrowserContext::new_with_page_for_test("BID-typed", "TID-typed");
         bc.attach_active_session("SID-typed");
-        bc.active_page_state_mut().devtools_sessions
+        bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_file_chooser_opened_event_enabled = true;
@@ -2264,7 +2264,7 @@ mod producer_tests {
         let mut bc = BrowserContext::new("BID-document-collision".into());
         bc.set_active_target_id("TID-document-collision");
         bc.attach_active_session("SID-document-collision");
-        bc.active_page_state_mut().devtools_sessions
+        bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_file_chooser_opened_event_enabled = true;
@@ -2335,7 +2335,7 @@ mod producer_tests {
         let mut bc = BrowserContext::new("BID-page-replacement".into());
         bc.set_active_target_id("TID-page-replacement");
         bc.attach_active_session("SID-page-replacement");
-        bc.active_page_state_mut().devtools_sessions
+        bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_file_chooser_opened_event_enabled = true;
@@ -2450,7 +2450,7 @@ mod producer_tests {
         let mut conn = CdpConnection::default();
         let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
         bc.attach_active_session("SID-1");
-        bc.active_page_state_mut().devtools_sessions
+        bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_file_chooser_opened_event_enabled = true;
@@ -2498,7 +2498,7 @@ mod producer_tests {
         let mut conn = CdpConnection::default();
         let mut bc = BrowserContext::new_with_page_for_test("BID-context", "TID-context");
         bc.attach_active_session("SID-context");
-        bc.active_page_state_mut().devtools_sessions
+        bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_file_chooser_opened_event_enabled = true;

@@ -915,7 +915,7 @@ async fn get_navigation_history_completes_through_command_dispatch() {
         .browser_context
         .as_mut()
         .expect("browser context")
-        .active_page_state_mut()
+        .active_page_target_mut()
         .runtime_slot
         .set_loaded_page_for_test(page);
 
@@ -980,7 +980,7 @@ async fn reset_navigation_history_prunes_browser_and_renderer_history() {
         .browser_context
         .as_mut()
         .expect("browser context")
-        .active_page_state_mut()
+        .active_page_target_mut()
         .runtime_slot
         .set_loaded_page_for_test(page);
 
@@ -1485,7 +1485,7 @@ async fn get_navigation_history_targets_inactive_loaded_owner_without_activation
     inactive.attach_active_session("SID-inactive".to_owned());
     inactive.set_target_url(page.final_url().as_str().to_owned());
     inactive
-        .active_page_state_mut()
+        .active_page_target_mut()
         .runtime_slot
         .replace_loaded_page(Some(page));
     ctx.conn.inactive_browser_contexts.push(inactive);
@@ -1847,7 +1847,7 @@ async fn navigate_with_runtime_frontend_enabled_network_child_playwright_style_u
         .browser_context
         .as_mut()
         .unwrap()
-        .active_page_state_mut()
+        .active_page_target_mut()
         .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .runtime_frontend_enabled = true;
@@ -2633,7 +2633,7 @@ async fn navigate_with_lifecycle_events_enabled_emits_lifecycle_markers() {
         .browser_context
         .as_mut()
         .unwrap()
-        .active_page_state_mut()
+        .active_page_target_mut()
         .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .page_session_state
         .page_lifecycle_events = true;
@@ -2801,7 +2801,7 @@ async fn navigate_with_child_iframe_emits_child_frame_navigation_and_lifecycle_e
         .browser_context
         .as_mut()
         .unwrap()
-        .active_page_state_mut()
+        .active_page_target_mut()
         .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .page_session_state
         .page_lifecycle_events = true;
@@ -3122,7 +3122,7 @@ async fn navigate_with_nested_child_frame_reports_outer_parent_frame_id() {
         .browser_context
         .as_mut()
         .unwrap()
-        .active_page_state_mut()
+        .active_page_target_mut()
         .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .page_session_state
         .page_lifecycle_events = true;
@@ -3210,11 +3210,11 @@ async fn navigate_with_runtime_frontend_enabled_emits_nested_child_default_conte
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
     ctx.enable_page_events_for_test(Some("SID-1"));
     let browser_context = ctx.conn.browser_context.as_mut().unwrap();
-    browser_context.active_page_state_mut().devtools_sessions
+    browser_context.active_page_target_mut().devtools_sessions
         [moli_page_types::DevToolsSessionKey::Primary]
         .page_session_state
         .page_lifecycle_events = true;
-    browser_context.active_page_state_mut().devtools_sessions
+    browser_context.active_page_target_mut().devtools_sessions
         [moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .runtime_frontend_enabled = true;
@@ -3298,7 +3298,7 @@ async fn navigate_with_legacy_runtime_frontend_projection_emits_context_creation
         .browser_context
         .as_mut()
         .unwrap()
-        .active_page_state_mut()
+        .active_page_target_mut()
         .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .runtime_frontend_enabled = true;
@@ -3588,7 +3588,7 @@ async fn navigate_with_runtime_frontend_enabled_emits_initial_console_before_dcl
         .browser_context
         .as_mut()
         .unwrap()
-        .active_page_state_mut()
+        .active_page_target_mut()
         .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .runtime_frontend_enabled = true;
@@ -3655,7 +3655,7 @@ async fn navigate_with_console_enabled_emits_initial_console_without_runtime_ena
             .browser_context
             .as_ref()
             .expect("browser context should exist")
-            .active_page_state()
+            .active_page_target()
             .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .inspector_session_state
             .v8_state
@@ -3809,7 +3809,7 @@ async fn navigate_with_runtime_frontend_enabled_emits_child_default_execution_co
         .browser_context
         .as_mut()
         .unwrap()
-        .active_page_state_mut()
+        .active_page_target_mut()
         .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .runtime_frontend_enabled = true;
@@ -5148,10 +5148,10 @@ async fn navigate_failure_creates_runtime_context_and_completes_lifecycle() {
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
     ctx.enable_page_events_for_test(Some("SID-1"));
     let bc = ctx.conn.browser_context.as_mut().unwrap();
-    bc.active_page_state_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+    bc.active_page_target_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .runtime_frontend_enabled = true;
-    bc.active_page_state_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+    bc.active_page_target_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .page_session_state
         .page_lifecycle_events = true;
 
@@ -5298,7 +5298,7 @@ async fn continue_request_completes_paused_navigation_before_commit_events() {
         .browser_context
         .as_mut()
         .unwrap()
-        .active_page_state_mut()
+        .active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
 
@@ -5383,7 +5383,7 @@ async fn stop_loading_aborts_paused_request_stage_navigation() {
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
     let bc = ctx.conn.browser_context.as_mut().unwrap();
-    bc.active_page_state_mut()
+    bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
     let committed_document_token = bc
@@ -5500,7 +5500,7 @@ async fn stop_loading_aborts_paused_response_stage_navigation() {
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
     let bc = ctx.conn.browser_context.as_mut().unwrap();
-    bc.active_page_state_mut()
+    bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
 
@@ -5617,7 +5617,7 @@ async fn stop_loading_aborts_paused_auth_navigation() {
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
     let bc = ctx.conn.browser_context.as_mut().unwrap();
-    bc.active_page_state_mut()
+    bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
 
@@ -6378,10 +6378,10 @@ async fn reload_after_crash_emits_target_reloaded_after_crash() {
         "data:text/html,<body>reload-after-crash</body>",
     );
     let bc = ctx.conn.browser_context.as_mut().unwrap();
-    bc.active_page_state_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+    bc.active_page_target_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .record_inspector_target_crashed();
-    bc.active_page_state_mut()
+    bc.active_page_target_mut()
         .owner_state
         .target_crash_state
         .mark_crashed();
@@ -6409,7 +6409,7 @@ async fn reload_after_crash_emits_target_reloaded_after_crash() {
             .browser_context
             .as_ref()
             .expect("browser context")
-            .active_page_state()
+            .active_page_target()
             .owner_state
             .target_crash_state
             .is_crashed()
@@ -6426,10 +6426,10 @@ async fn navigate_after_crash_emits_target_reloaded_after_crash() {
         "data:text/html,<body>before-crash</body>",
     );
     let bc = ctx.conn.browser_context.as_mut().unwrap();
-    bc.active_page_state_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+    bc.active_page_target_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .record_inspector_target_crashed();
-    bc.active_page_state_mut()
+    bc.active_page_target_mut()
         .owner_state
         .target_crash_state
         .mark_crashed();
@@ -6460,7 +6460,7 @@ async fn navigate_after_crash_emits_target_reloaded_after_crash() {
             .browser_context
             .as_ref()
             .expect("browser context")
-            .active_page_state()
+            .active_page_target()
             .owner_state
             .target_crash_state
             .is_crashed()
@@ -6484,7 +6484,7 @@ async fn navigate_after_crash_without_inspector_enabled_clears_crash_without_eve
         .browser_context
         .as_mut()
         .unwrap()
-        .active_page_state_mut()
+        .active_page_target_mut()
         .owner_state
         .target_crash_state
         .mark_crashed();
@@ -6516,7 +6516,7 @@ async fn navigate_after_crash_without_inspector_enabled_clears_crash_without_eve
             .browser_context
             .as_ref()
             .expect("browser context")
-            .active_page_state()
+            .active_page_target()
             .owner_state
             .target_crash_state
             .is_crashed()

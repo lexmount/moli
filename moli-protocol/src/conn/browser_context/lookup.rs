@@ -77,7 +77,7 @@ impl CdpConnection {
 
     pub(crate) fn browser_context_id_for_target(&self, target_id: &str) -> Option<&str> {
         self.browser_contexts()
-            .find(|bc| bc.is_active_target(target_id) || bc.background_target(target_id).is_some())
+            .find(|bc| bc.page_target(target_id).is_some())
             .map(|bc| bc.id.as_str())
     }
 

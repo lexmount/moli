@@ -3712,7 +3712,7 @@ mod tests {
         let mut context = BrowserContext::new("BID-1".to_owned());
         context.set_active_target_id("TID-page");
         let page_attachment_id = context
-            .active_page_state_mut()
+            .active_page_target_mut()
             .runtime_slot
             .set_page_attachment_id_for_test(1);
         let owner_page = TargetPageResidenceIdentity::new(
@@ -4692,7 +4692,7 @@ mod tests {
         conn.browser_context
             .as_mut()
             .unwrap()
-            .active_page_state_mut()
+            .active_page_target_mut()
             .runtime_slot
             .replace_page_attachment_id_for_test();
         let messages = protocol_messages(
@@ -6858,7 +6858,7 @@ mod tests {
             Some(crate::conn::CdpSessionRoute::PageTarget {
                 browser_context_id: "BID-1".to_owned(),
                 target_id: "TID-page".to_owned(),
-                is_attached_session: false,
+                session_key: moli_page_types::DevToolsSessionKey::Primary,
             }),
             "dropping late shared worker output must not disturb or reuse the active page session"
         );

@@ -701,7 +701,7 @@ fn tracing_owner_scope_distinguishes_flattened_sessions() {
         Some(CdpSessionRoute::PageTarget {
             browser_context_id: "BID-tracing".to_owned(),
             target_id: "TID-tracing".to_owned(),
-            is_attached_session: true,
+            session_key: moli_page_types::DevToolsSessionKey::Attached("SID-peer".to_owned()),
         })
     );
     assert_ne!(

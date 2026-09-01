@@ -3643,7 +3643,7 @@ async fn shared_worker_discard_console_entries_is_target_local() {
         Some(crate::conn::CdpSessionRoute::PageTarget {
             browser_context_id: "BID-shared".to_owned(),
             target_id: "TID-page".to_owned(),
-            is_attached_session: false,
+            session_key: moli_page_types::DevToolsSessionKey::Primary,
         }),
         "shared worker Runtime.discardConsoleEntries must not consume or rewrite the page session route"
     );

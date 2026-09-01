@@ -472,7 +472,7 @@ async fn same_context_targets_remove_only_their_own_pre_document_script_identifi
             .expect("active browser context");
         assert!(
             active
-                .active_page_state()
+                .active_page_target()
                 .owner_state
                 .document_start_scripts
                 .is_empty()
@@ -482,14 +482,14 @@ async fn same_context_targets_remove_only_their_own_pre_document_script_identifi
             .expect("background target should remain staged");
         assert_eq!(
             active
-                .parked_target_owner_state_or_default(staged.target_id())
+                .background_target_owner_state_or_default_for_test(staged.target_id())
                 .document_start_scripts
                 .len(),
             1
         );
         assert_eq!(
             active
-                .parked_target_owner_state_or_default(staged.target_id())
+                .background_target_owner_state_or_default_for_test(staged.target_id())
                 .document_start_scripts[0]
                 .0,
             "1"
@@ -625,7 +625,7 @@ async fn same_context_targets_remove_only_their_own_utility_pre_document_script_
             .expect("active browser context");
         assert!(
             active
-                .active_page_state()
+                .active_page_target()
                 .owner_state
                 .document_start_scripts
                 .is_empty()
@@ -635,14 +635,14 @@ async fn same_context_targets_remove_only_their_own_utility_pre_document_script_
             .expect("background target should remain staged");
         assert_eq!(
             active
-                .parked_target_owner_state_or_default(staged.target_id())
+                .background_target_owner_state_or_default_for_test(staged.target_id())
                 .document_start_scripts
                 .len(),
             1
         );
         assert_eq!(
             active
-                .parked_target_owner_state_or_default(staged.target_id())
+                .background_target_owner_state_or_default_for_test(staged.target_id())
                 .document_start_scripts[0]
                 .0,
             "1"
@@ -821,7 +821,7 @@ async fn same_context_targets_remove_only_their_own_utility_binding_definition_a
             .as_ref()
             .expect("active browser context");
         assert!(
-            active.active_page_state().devtools_sessions
+            active.active_page_target().devtools_sessions
                 [moli_page_types::DevToolsSessionKey::Primary]
                 .runtime_bindings
                 .iter()
@@ -834,7 +834,7 @@ async fn same_context_targets_remove_only_their_own_utility_binding_definition_a
             .background_target("TID-000000000UB")
             .expect("first target should remain staged");
         let staged_bindings = active
-            .parked_page_session_state(staged.target_id())
+            .non_default_background_page_target_for_test(staged.target_id())
             .map(|state| {
                 state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                     .runtime_bindings
@@ -1015,7 +1015,7 @@ async fn same_context_targets_remove_only_their_own_main_world_binding_definitio
             .as_ref()
             .expect("active browser context");
         assert!(
-            active.active_page_state().devtools_sessions
+            active.active_page_target().devtools_sessions
                 [moli_page_types::DevToolsSessionKey::Primary]
                 .runtime_bindings
                 .iter()
@@ -1027,7 +1027,7 @@ async fn same_context_targets_remove_only_their_own_main_world_binding_definitio
             .background_target("TID-000000000MB")
             .expect("first target should remain staged");
         let staged_bindings = active
-            .parked_page_session_state(staged.target_id())
+            .non_default_background_page_target_for_test(staged.target_id())
             .map(|state| {
                 state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                     .runtime_bindings
@@ -1241,7 +1241,7 @@ async fn same_context_targets_remove_only_their_own_dual_world_binding_definitio
             .expect("active browser context");
         assert!(
             active
-                .active_page_state().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                .active_page_target().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
 
                 .runtime_bindings
                 .iter()
@@ -1251,7 +1251,7 @@ async fn same_context_targets_remove_only_their_own_dual_world_binding_definitio
             .background_target("TID-000000000DB")
             .expect("first target should remain staged");
         let staged_bindings = active
-            .parked_page_session_state(staged.target_id())
+            .non_default_background_page_target_for_test(staged.target_id())
             .map(|state| state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary].runtime_bindings.as_slice())
             .unwrap_or(&[]);
         assert_eq!(

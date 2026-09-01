@@ -476,7 +476,7 @@ async fn runtime_child_frame_fetch_subresource_interception_uses_child_frame_att
         .browser_context
         .as_mut()
         .unwrap()
-        .active_page_state_mut()
+        .active_page_target_mut()
         .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .inspector_enabled = true;
@@ -5191,7 +5191,7 @@ async fn close_aborts_paused_response_stage_runtime_xhr_subresource() {
         .browser_context
         .as_mut()
         .unwrap()
-        .active_page_state_mut()
+        .active_page_target_mut()
         .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .inspector_enabled = true;
@@ -5529,7 +5529,7 @@ async fn close_aborts_paused_runtime_xhr_auth_subresource() {
         .browser_context
         .as_mut()
         .unwrap()
-        .active_page_state_mut()
+        .active_page_target_mut()
         .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .inspector_enabled = true;
@@ -5774,7 +5774,7 @@ async fn crash_aborts_paused_runtime_fetch_subresource() {
 
     let bc = ctx.conn.browser_context.as_ref().expect("browser context");
     assert!(
-        bc.active_page_state()
+        bc.active_page_target()
             .owner_state
             .target_crash_state
             .is_crashed()
@@ -5923,7 +5923,7 @@ async fn crash_aborts_paused_response_stage_runtime_xhr_subresource() {
 
     let bc = ctx.conn.browser_context.as_ref().expect("browser context");
     assert!(
-        bc.active_page_state()
+        bc.active_page_target()
             .owner_state
             .target_crash_state
             .is_crashed()
@@ -6105,7 +6105,7 @@ async fn crash_aborts_paused_runtime_xhr_auth_subresource() {
 
     let bc = ctx.conn.browser_context.as_ref().expect("browser context");
     assert!(
-        bc.active_page_state()
+        bc.active_page_target()
             .owner_state
             .target_crash_state
             .is_crashed()

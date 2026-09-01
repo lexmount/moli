@@ -38,8 +38,6 @@ pub struct PageTargetHost {
     pub(crate) tls_verify_host_override: Option<bool>,
     pub(crate) base_locale_override: Option<String>,
     pub(crate) base_timezone_override: Option<String>,
-    pub(crate) locale_override: Option<String>,
-    pub(crate) timezone_override: Option<String>,
     pub(crate) network_conditions: Option<EmulatedNetworkConditions>,
     pub(crate) geolocation_override: Option<EmulatedGeolocationOverrideState>,
     pub(crate) emulated_media: EmulatedMediaOverrides,
@@ -73,8 +71,6 @@ impl PageTargetHost {
             tls_verify_host_override: None,
             base_locale_override: None,
             base_timezone_override: None,
-            locale_override: None,
-            timezone_override: None,
             network_conditions: None,
             geolocation_override: None,
             emulated_media: EmulatedMediaOverrides::default(),
@@ -197,14 +193,15 @@ impl PageTargetHost {
         &mut self,
         mut engine: NavigationEngine,
     ) -> Option<NavigationEngine> {
-        engine.set_bypass_service_worker(self.network_policy.bypass_service_worker());
-        engine.set_cache_disabled(self.network_policy.cache_disabled());
+        let policy = self.effective_policy();
+        engine.set_bypass_service_worker(policy.bypass_service_worker());
+        engine.set_cache_disabled(policy.cache_disabled());
         self.navigation_engine.replace(engine)
     }
 
     pub(crate) fn set_base_cache_disabled(&mut self, disabled: bool) {
         self.network_policy.set_base_cache_disabled(disabled);
-        let effective = self.network_policy.cache_disabled();
+        let effective = self.effective_policy().cache_disabled();
         if let Some(engine) = self.navigation_engine.as_mut() {
             engine.set_cache_disabled(effective);
         }

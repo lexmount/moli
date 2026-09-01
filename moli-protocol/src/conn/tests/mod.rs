@@ -772,7 +772,7 @@ async fn replacing_or_retiring_a_loaded_page_changes_its_attachment_identity() {
     let context = conn.browser_context.as_mut().unwrap();
     assert_eq!(
         context
-            .active_page_state()
+            .active_page_target()
             .runtime_slot
             .page_attachment_id(),
         None
@@ -780,7 +780,7 @@ async fn replacing_or_retiring_a_loaded_page_changes_its_attachment_identity() {
 
     assert!(context.replace_loaded_page(Some(first_page)).is_none());
     let first_attachment = context
-        .active_page_state()
+        .active_page_target()
         .runtime_slot
         .page_attachment_id()
         .expect("first Page attachment");
@@ -789,7 +789,7 @@ async fn replacing_or_retiring_a_loaded_page_changes_its_attachment_identity() {
         .replace_loaded_page(Some(second_page))
         .expect("first Page should be replaced");
     let second_attachment = context
-        .active_page_state()
+        .active_page_target()
         .runtime_slot
         .page_attachment_id()
         .expect("second Page attachment");
@@ -801,7 +801,7 @@ async fn replacing_or_retiring_a_loaded_page_changes_its_attachment_identity() {
         .expect("second Page should be retired");
     assert_eq!(
         context
-            .active_page_state()
+            .active_page_target()
             .runtime_slot
             .page_attachment_id(),
         None
@@ -822,7 +822,7 @@ async fn moli_diagnostics_preserves_runtime_observable_diagnostics() {
     browser_context.attach_active_session("SID-diagnostics-capture");
     browser_context.set_target_url(page.final_url().as_str().to_owned());
     let _ = browser_context
-        .active_page_state_mut()
+        .active_page_target_mut()
         .runtime_slot
         .replace_loaded_page(Some(page));
     ctx.conn.browser_context = Some(browser_context);
@@ -997,7 +997,7 @@ async fn memory_diagnostics_sync_counts_dedicated_worker_from_cached_page_snapsh
             .as_mut()
             .and_then(|context| {
                 context
-                    .active_page_state_mut()
+                    .active_page_target_mut()
                     .runtime_slot
                     .loaded_page_mut()
             })
@@ -1257,10 +1257,10 @@ async fn memory_diagnostics_splits_pending_inspector_await_counts_by_target_owne
     browser_context.set_active_target_id("TID-pending-await-active");
     browser_context.attach_active_session("SID-pending-await-active");
     browser_context.replace_loaded_page(Some(active_page));
-    browser_context.active_page_state_mut().devtools_sessions
+    browser_context.active_page_target_mut().devtools_sessions
         [moli_page_types::DevToolsSessionKey::Primary]
         .register_pending_inspector_await(10_001, Some("SID-pending-await-active"), None);
-    browser_context.active_page_state_mut().devtools_sessions
+    browser_context.active_page_target_mut().devtools_sessions
         [moli_page_types::DevToolsSessionKey::Primary]
         .register_pending_inspector_await(
             10_002,

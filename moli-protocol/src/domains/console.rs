@@ -220,7 +220,7 @@ mod tests {
         }
         let browser_context = ctx.conn.browser_context.as_ref().expect("browser context");
         assert!(
-            !browser_context.active_page_state().devtools_sessions
+            !browser_context.active_page_target().devtools_sessions
                 [moli_page_types::DevToolsSessionKey::Primary]
                 .console_output_session_state
                 .console_enabled,
@@ -243,7 +243,7 @@ mod tests {
                 .browser_context
                 .as_ref()
                 .expect("browser context should exist")
-                .active_page_state()
+                .active_page_target()
                 .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .console_output_session_state
                 .console_enabled,
@@ -268,7 +268,7 @@ mod tests {
                 .browser_context
                 .as_ref()
                 .expect("browser context should exist")
-                .active_page_state()
+                .active_page_target()
                 .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .console_output_session_state
                 .console_enabled,
@@ -346,7 +346,7 @@ mod tests {
             .browser_context
             .as_mut()
             .expect("browser context should be loaded");
-        bc.active_page_state_mut().devtools_sessions
+        bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .console_output_session_state
             .console_enabled = true;
@@ -363,7 +363,7 @@ mod tests {
         let script_execution = page.script_execution();
         let snapshot = super::pending_console_activity_snapshot(super::ConsoleActivitySource {
             observable: bc
-                .active_page_state()
+                .active_page_target()
                 .owner_state
                 .console_output_state
                 .console_domain_emission_snapshot(
@@ -376,7 +376,7 @@ mod tests {
             .browser_context
             .as_mut()
             .expect("browser context should be loaded")
-            .active_page_state_mut()
+            .active_page_target_mut()
             .owner_state
             .console_output_state
             .advance_console_domain_to_current(
@@ -570,14 +570,14 @@ mod tests {
         ctx.expect_result(13, json!({}), Some("SID-background"));
         let active = ctx.conn.browser_context.as_ref().expect("browser context");
         assert!(
-            !active.active_page_state().devtools_sessions
+            !active.active_page_target().devtools_sessions
                 [moli_page_types::DevToolsSessionKey::Primary]
                 .console_output_session_state
                 .console_enabled
         );
         assert!(
             active
-                .parked_page_session_state("TID-background")
+                .non_default_background_page_target_for_test("TID-background")
                 .is_some_and(|state| state.devtools_sessions
                     [moli_page_types::DevToolsSessionKey::Primary]
                     .console_output_session_state

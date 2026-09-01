@@ -33,7 +33,7 @@ async fn loaded_page_html_for_test(ctx: &mut TestContext) -> String {
         .conn
         .browser_context
         .as_mut()
-        .and_then(|bc| bc.active_page_state_mut().runtime_slot.loaded_page_mut())
+        .and_then(|bc| bc.active_page_target_mut().runtime_slot.loaded_page_mut())
         .expect("loaded page");
     page.serialize_html_async()
         .await
@@ -256,7 +256,7 @@ async fn script_execution_disabled_completes_through_io_pending_dispatch() {
             .browser_context
             .as_ref()
             .unwrap()
-            .active_page_state()
+            .active_page_target()
             .script_execution_disabled
     );
 }
@@ -291,7 +291,7 @@ async fn auxiliary_session_first_io_emulation_response_uses_its_session_host() {
             .browser_context
             .as_ref()
             .expect("browser context")
-            .active_page_state()
+            .active_page_target()
             .script_execution_disabled
     );
 }
@@ -324,9 +324,9 @@ async fn timezone_override_can_complete_through_pending_command_dispatch() {
             .browser_context
             .as_ref()
             .unwrap()
-            .active_page_state()
-            .timezone_override
-            .as_deref(),
+            .active_page_target()
+            .effective_policy()
+            .timezone_override(),
         Some("Asia/Shanghai")
     );
 }
@@ -364,7 +364,7 @@ async fn emulated_media_can_complete_through_pending_command_dispatch() {
         .browser_context
         .as_ref()
         .unwrap()
-        .active_page_state()
+        .active_page_target()
         .emulated_media;
     assert_eq!(media.media.as_deref(), Some("screen"));
     assert_eq!(media.color_scheme.as_deref(), Some("dark"));
@@ -599,7 +599,7 @@ async fn idle_override_updates_idle_detector_and_clear_restores_actual_state() {
             .as_mut()
             .and_then(|context| {
                 context
-                    .active_page_state_mut()
+                    .active_page_target_mut()
                     .runtime_slot
                     .loaded_page_mut()
             })
@@ -650,7 +650,7 @@ async fn idle_override_updates_idle_detector_and_clear_restores_actual_state() {
             .as_mut()
             .and_then(|context| {
                 context
-                    .active_page_state_mut()
+                    .active_page_target_mut()
                     .runtime_slot
                     .loaded_page_mut()
             })
@@ -691,7 +691,7 @@ async fn idle_override_updates_idle_detector_and_clear_restores_actual_state() {
         .as_mut()
         .and_then(|context| {
             context
-                .active_page_state_mut()
+                .active_page_target_mut()
                 .runtime_slot
                 .loaded_page_mut()
         })
@@ -805,14 +805,17 @@ async fn pure_state_emulation_commands_complete_through_command_dispatch() {
     }
 
     let browser_context = ctx.conn.browser_context.as_ref().unwrap();
-    assert!(browser_context.active_page_state().focus_emulation_enabled);
-    assert!(browser_context.active_page_state().touch_emulation_enabled);
+    assert!(browser_context.active_page_target().focus_emulation_enabled);
+    assert!(browser_context.active_page_target().touch_emulation_enabled);
     assert!(
         browser_context
-            .active_page_state()
+            .active_page_target()
             .emit_touch_events_for_mouse
     );
-    assert_eq!(browser_context.active_page_state().cpu_throttling_rate, 1.0);
+    assert_eq!(
+        browser_context.active_page_target().cpu_throttling_rate,
+        1.0
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -837,7 +840,7 @@ async fn set_cpu_throttling_rate_rejects_invalid_params() {
             .browser_context
             .as_ref()
             .expect("browser context")
-            .active_page_state()
+            .active_page_target()
             .cpu_throttling_rate,
         1.0
     );
@@ -907,7 +910,7 @@ async fn live_apply_emulation_commands_without_loaded_page_do_not_use_legacy_fal
             .browser_context
             .as_ref()
             .expect("browser context")
-            .active_page_state()
+            .active_page_target()
             .cpu_throttling_rate,
         2.5
     );
@@ -1042,7 +1045,7 @@ async fn live_cpu_throttling_rate_uses_pending_command_dispatch() {
             .browser_context
             .as_ref()
             .expect("browser context")
-            .active_page_state()
+            .active_page_target()
             .cpu_throttling_rate,
         3.0
     );
@@ -1120,10 +1123,13 @@ async fn multi_session_locale_and_timezone_claims_match_chromium() {
         .browser_context
         .as_ref()
         .expect("browser context")
-        .active_page_state();
-    assert_eq!(page_state.locale_override.as_deref(), Some("fr-FR"));
+        .active_page_target();
     assert_eq!(
-        page_state.timezone_override.as_deref(),
+        page_state.effective_policy().locale_override(),
+        Some("fr-FR")
+    );
+    assert_eq!(
+        page_state.effective_policy().timezone_override(),
         Some("Europe/Paris")
     );
 }
@@ -1154,9 +1160,10 @@ async fn multi_session_browser_identity_uses_attachment_order_and_field_contribu
             .browser_context
             .as_ref()
             .expect("browser context")
-            .active_page_state()
-            .network_policy
-            .user_agent_override(),
+            .active_page_target()
+            .effective_policy()
+            .browser_identity_override()
+            .map(|identity| identity.user_agent()),
         Some("Moli/Aux-1")
     );
     assert_eq!(
@@ -1164,7 +1171,7 @@ async fn multi_session_browser_identity_uses_attachment_order_and_field_contribu
             .browser_context
             .as_ref()
             .expect("browser context")
-            .active_page_state()
+            .active_page_target()
             .effective_renderer_browser_identity_override_owned()
             .expect("renderer identity")
             .user_agent(),
@@ -1185,9 +1192,10 @@ async fn multi_session_browser_identity_uses_attachment_order_and_field_contribu
             .browser_context
             .as_ref()
             .expect("browser context")
-            .active_page_state()
-            .network_policy
-            .user_agent_override(),
+            .active_page_target()
+            .effective_policy()
+            .browser_identity_override()
+            .map(|identity| identity.user_agent()),
         Some("Moli/Primary-2")
     );
 
@@ -1203,13 +1211,14 @@ async fn multi_session_browser_identity_uses_attachment_order_and_field_contribu
         }),
     )
     .await;
-    let identity = ctx
+    let effective_policy = ctx
         .conn
         .browser_context
         .as_ref()
         .expect("browser context")
-        .active_page_state()
-        .network_policy
+        .active_page_target()
+        .effective_policy();
+    let identity = effective_policy
         .browser_identity_override()
         .expect("UA and per-field contributions should compose an identity");
     assert_eq!(identity.user_agent(), "Moli/Primary-2");
@@ -1230,9 +1239,10 @@ async fn multi_session_browser_identity_uses_attachment_order_and_field_contribu
             .browser_context
             .as_ref()
             .expect("browser context")
-            .active_page_state()
-            .network_policy
-            .user_agent_override(),
+            .active_page_target()
+            .effective_policy()
+            .browser_identity_override()
+            .map(|identity| identity.user_agent()),
         Some("Moli/Aux-2"),
         "Network.disable must not dispose the shared Emulation agent state"
     );
@@ -1246,9 +1256,10 @@ async fn multi_session_browser_identity_uses_attachment_order_and_field_contribu
             .browser_context
             .as_ref()
             .expect("browser context")
-            .active_page_state()
-            .network_policy
-            .user_agent_override(),
+            .active_page_target()
+            .effective_policy()
+            .browser_identity_override()
+            .map(|identity| identity.user_agent()),
         Some("Moli/Primary-2")
     );
 }
@@ -1270,7 +1281,7 @@ async fn async_emulation_device_state_updates_browser_context() {
             .browser_context
             .as_ref()
             .unwrap()
-            .active_page_state()
+            .active_page_target()
             .focus_emulation_enabled
     );
 
@@ -1286,7 +1297,7 @@ async fn async_emulation_device_state_updates_browser_context() {
             .browser_context
             .as_ref()
             .unwrap()
-            .active_page_state()
+            .active_page_target()
             .touch_emulation_enabled
     );
 
@@ -1302,7 +1313,7 @@ async fn async_emulation_device_state_updates_browser_context() {
             .browser_context
             .as_ref()
             .unwrap()
-            .active_page_state()
+            .active_page_target()
             .emit_touch_events_for_mouse
     );
 
@@ -1317,7 +1328,7 @@ async fn async_emulation_device_state_updates_browser_context() {
         .conn
         .browser_context
         .as_ref()
-        .and_then(|bc| bc.active_page_state().geolocation_override.as_ref())
+        .and_then(|bc| bc.active_page_target().geolocation_override.as_ref())
         .and_then(EmulatedGeolocationOverrideState::position)
         .expect("geolocation override should be set");
     assert_eq!(geolocation.latitude, 37.33182);
@@ -1335,7 +1346,7 @@ async fn async_emulation_device_state_updates_browser_context() {
         .conn
         .browser_context
         .as_ref()
-        .and_then(|bc| bc.active_page_state().emulated_device_metrics.as_ref())
+        .and_then(|bc| bc.active_page_target().emulated_device_metrics.as_ref())
         .expect("device metrics should be set");
     assert_eq!(metrics.width, 800);
     assert_eq!(metrics.height, 600);
@@ -1352,7 +1363,7 @@ async fn async_emulation_device_state_updates_browser_context() {
             .browser_context
             .as_ref()
             .unwrap()
-            .active_page_state()
+            .active_page_target()
             .emulated_device_metrics
             .is_none()
     );
@@ -1412,7 +1423,7 @@ async fn set_user_agent_override_applies_to_subsequent_navigation_requests() {
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    bc.active_page_state_mut()
+    bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -2301,7 +2312,7 @@ async fn clear_geolocation_override_restores_default_after_explicit_unavailable(
             .browser_context
             .as_ref()
             .and_then(|browser_context| browser_context
-                .active_page_state()
+                .active_page_target()
                 .geolocation_override
                 .as_ref()),
         Some(EmulatedGeolocationOverrideState::PositionUnavailable)
@@ -2323,7 +2334,7 @@ async fn clear_geolocation_override_restores_default_after_explicit_unavailable(
             .browser_context
             .as_ref()
             .expect("browser context")
-            .active_page_state()
+            .active_page_target()
             .geolocation_override
             .is_none()
     );
@@ -2841,15 +2852,20 @@ async fn context_locale_override_applies_to_loaded_background_page_without_promo
     );
     assert_eq!(
         browser_context
-            .active_page_state()
-            .locale_override
-            .as_deref(),
+            .active_page_target()
+            .effective_policy()
+            .locale_override(),
         Some("fr-FR")
     );
     assert!(
         browser_context
-            .parked_page_session_state("TID-background")
-            .and_then(|state| state.locale_override.as_deref())
+            .non_default_background_page_target_for_test("TID-background")
+            .and_then(|state| {
+                state
+                    .effective_policy()
+                    .locale_override()
+                    .map(str::to_owned)
+            })
             .is_none(),
         "context-wide locale remains browser-context state, not parked session state"
     );
@@ -2960,7 +2976,7 @@ async fn session_emulation_routes_to_loaded_background_owner_without_promotion()
     let browser_context = ctx.conn.browser_context.as_ref().expect("browser context");
     assert!(
         browser_context
-            .active_page_state()
+            .active_page_target()
             .emulated_media
             .color_scheme
             .is_none(),
@@ -2968,16 +2984,17 @@ async fn session_emulation_routes_to_loaded_background_owner_without_promotion()
     );
     assert!(
         browser_context
-            .active_page_state()
-            .locale_override
+            .active_page_target()
+            .effective_policy()
+            .locale_override()
             .is_none(),
         "background Emulation should not mutate the active target locale override"
     );
     let parked = browser_context
-        .parked_page_session_state("TID-background")
+        .non_default_background_page_target_for_test("TID-background")
         .expect("background parked state");
     assert_eq!(parked.emulated_media.color_scheme.as_deref(), Some("dark"));
-    assert_eq!(parked.locale_override.as_deref(), Some("zh-CN"));
+    assert_eq!(parked.effective_policy().locale_override(), Some("zh-CN"));
     assert_eq!(
         parked
             .geolocation_override

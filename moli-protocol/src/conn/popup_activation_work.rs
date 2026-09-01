@@ -25,7 +25,7 @@ impl PopupTargetActivationAction {
             owner_scope: CommandOwnerScope::for_route(CdpSessionRoute::PageTarget {
                 browser_context_id: browser_context_id.to_owned(),
                 target_id: target_id.to_owned(),
-                is_attached_session: false,
+                session_key: moli_page_types::DevToolsSessionKey::Primary,
             }),
             browser_context_id: browser_context_id.to_owned(),
             target_id: target_id.to_owned(),

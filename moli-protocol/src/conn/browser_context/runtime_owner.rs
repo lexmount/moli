@@ -17,18 +17,15 @@ pub(crate) enum SessionOwnerRuntimeFrontendEnableResult {
 
 impl TargetSessionStateMut<'_> {
     fn set_runtime_frontend_enabled(mut self, enabled: bool) {
-        if let Some(state) = self.runtime_session_state_mut() {
-            state.runtime_frontend_enabled = enabled;
-            if !enabled {
-                state.runtime_contexts_reported_to_frontend = false;
-            }
+        let state = self.runtime_session_state_mut();
+        state.runtime_frontend_enabled = enabled;
+        if !enabled {
+            state.runtime_contexts_reported_to_frontend = false;
         }
     }
 
     fn set_inspector_enabled(mut self, enabled: bool) {
-        if let Some(state) = self.runtime_session_state_mut() {
-            state.inspector_enabled = enabled;
-        }
+        self.runtime_session_state_mut().inspector_enabled = enabled;
     }
 }
 
@@ -59,6 +56,7 @@ impl CdpConnection {
         session_id: Option<&str>,
         enabled: bool,
     ) -> SessionOwnerInspectorEnableResult {
+        let accepts_without_target = self.accepts_unmaterialized_page_command(session_id, None);
         let target_crashed = self
             .target_owner_state_for_session(session_id)
             .is_some_and(|owner_state| owner_state.target_crash_state.is_crashed());
@@ -67,7 +65,11 @@ impl CdpConnection {
             .with_target_session_owner_mut(session_id, |owner| owner.set_inspector_enabled(enabled))
             .is_none()
         {
-            return SessionOwnerInspectorEnableResult::UnknownSession;
+            return if accepts_without_target {
+                SessionOwnerInspectorEnableResult::Handled
+            } else {
+                SessionOwnerInspectorEnableResult::UnknownSession
+            };
         }
 
         if enabled && target_crashed {
@@ -88,13 +90,21 @@ impl CdpConnection {
         owner: &crate::conn::CommandOwnerScope,
         enabled: bool,
     ) -> SessionOwnerRuntimeFrontendEnableResult {
+        let accepts_without_target = self
+            .accepts_unmaterialized_page_command(owner.session_id(), owner.session_owner_route());
         let result = self
             .with_target_session_owner_mut_for_route(
                 owner.session_id(),
                 owner.session_owner_route(),
                 |owner| owner.set_runtime_frontend_enabled(enabled),
             )
-            .unwrap_or(SessionOwnerRuntimeFrontendEnableResult::UnknownSession);
+            .unwrap_or({
+                if accepts_without_target {
+                    SessionOwnerRuntimeFrontendEnableResult::Handled
+                } else {
+                    SessionOwnerRuntimeFrontendEnableResult::UnknownSession
+                }
+            });
         if matches!(result, SessionOwnerRuntimeFrontendEnableResult::Handled) && !enabled {
             let _ = self
                 .set_renderer_runtime_agent_owns_page_console_api_events_for_owner(owner, false);

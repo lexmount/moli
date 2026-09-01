@@ -605,7 +605,7 @@ impl CdpConnection {
             if matches!(
                 cleanup_plan.action(),
                 TargetBindingCleanupAction::PageTarget {
-                    is_attached_session: false,
+                    session_key: moli_page_types::DevToolsSessionKey::Primary,
                     ..
                 }
             ) {
@@ -626,7 +626,7 @@ impl CdpConnection {
     ) {
         match cleanup_plan.action() {
             TargetBindingCleanupAction::PageTarget {
-                is_attached_session: true,
+                session_key: moli_page_types::DevToolsSessionKey::Attached(_),
                 ..
             } => {
                 if let Some(bc) = self.browser_context.as_mut() {
@@ -653,7 +653,7 @@ impl CdpConnection {
             }
             TargetBindingCleanupAction::None
             | TargetBindingCleanupAction::PageTarget {
-                is_attached_session: false,
+                session_key: moli_page_types::DevToolsSessionKey::Primary,
                 ..
             } => {}
         }
@@ -708,7 +708,7 @@ impl CdpConnection {
         match cleanup_plan.action() {
             TargetBindingCleanupAction::PageTarget {
                 target_id,
-                is_attached_session: false,
+                session_key: moli_page_types::DevToolsSessionKey::Primary,
             } => {
                 if let Some(bc) = self.browser_context.as_mut() {
                     if bc.is_active_target(target_id) {
@@ -723,7 +723,7 @@ impl CdpConnection {
                 }
             }
             TargetBindingCleanupAction::PageTarget {
-                is_attached_session: true,
+                session_key: moli_page_types::DevToolsSessionKey::Attached(_),
                 ..
             } => {
                 if let Some(bc) = self.browser_context.as_mut() {
