@@ -2330,6 +2330,139 @@ fn svg_marker_orient_angle_is_a_live_animated_angle() {
 }
 
 #[test]
+fn svg_svg_element_value_factories_create_typed_objects() {
+    let mut vm = new_parsed_test_vm(
+        "https://svg-value-factories.test/",
+        "<!doctype html><html><body></body></html>",
+    );
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const assert = (condition, message) => {
+                if (!condition) throw new Error(message);
+              };
+              const rejectsTypeError = callback => {
+                try {
+                  callback();
+                  return false;
+                } catch (error) {
+                  return error instanceof TypeError;
+                }
+              };
+              const rejectsDom = (name, callback) => {
+                try {
+                  callback();
+                  return false;
+                } catch (error) {
+                  return error.name === name;
+                }
+              };
+              const ns = "http://www.w3.org/2000/svg";
+              const svg = document.createElementNS(ns, "svg");
+              const wrongReceiver = document.createElementNS(ns, "rect");
+
+              const factoryNames = [
+                "createSVGNumber",
+                "createSVGLength",
+                "createSVGAngle",
+                "createSVGPoint",
+                "createSVGMatrix",
+                "createSVGRect",
+                "createSVGTransform",
+                "createSVGTransformFromMatrix",
+              ];
+              for (const name of factoryNames) {
+                const descriptor = Object.getOwnPropertyDescriptor(SVGSVGElement.prototype, name);
+                assert(typeof descriptor.value === "function", `${name} method`);
+                assert(descriptor.value.length === 0, `${name} arity`);
+                assert(descriptor.enumerable && descriptor.configurable && descriptor.writable,
+                  `${name} descriptor flags`);
+                assert(rejectsTypeError(() => descriptor.value.call(wrongReceiver)),
+                  `${name} receiver brand`);
+              }
+
+              const number = svg.createSVGNumber();
+              const length = svg.createSVGLength();
+              const point = svg.createSVGPoint();
+              const rect = svg.createSVGRect();
+              assert(number instanceof SVGNumber && number.value === 0, "SVGNumber result");
+              assert(length instanceof SVGLength && length.value === 0 &&
+                length.unitType === SVGLength.SVG_LENGTHTYPE_NUMBER, "SVGLength result");
+              assert(point instanceof DOMPoint && point instanceof SVGPoint,
+                "SVGPoint result interface");
+              assert(point.x === 0 && point.y === 0 && point.z === 0 && point.w === 1,
+                "SVGPoint defaults");
+              assert(rect instanceof SVGRect && !(rect instanceof DOMRect),
+                "SVGRect result interface");
+              assert(rect.x === 0 && rect.y === 0 && rect.width === 0 && rect.height === 0,
+                "SVGRect defaults");
+              assert(svg.createSVGNumber() !== number && svg.createSVGLength() !== length &&
+                svg.createSVGPoint() !== point && svg.createSVGRect() !== rect,
+                "factories return new objects");
+
+              number.value = 2;
+              assert(number.value === 2, "SVGNumber assignment");
+              assert(rejectsTypeError(() => { number.value = NaN; }),
+                "SVGNumber rejects NaN");
+              assert(number.value === 2, "SVGNumber preserves rejected assignment");
+
+              length.valueAsString = "2px";
+              assert(length.value === 2 && length.valueAsString === "2px",
+                "SVGLength assignment");
+              assert(rejectsDom("NotSupportedError", () => {
+                length.convertToSpecifiedUnits(SVGLength.SVG_LENGTHTYPE_UNKNOWN);
+              }), "SVGLength rejects unsupported unit");
+              assert(rejectsDom("SyntaxError", () => { length.valueAsString = "10deg"; }),
+                "SVGLength rejects invalid syntax");
+              assert(rejectsTypeError(() => { length.value = NaN; }),
+                "SVGLength rejects NaN");
+              assert(length.value === 2 && length.valueAsString === "2px",
+                "SVGLength preserves rejected assignments");
+
+              point.x = 100;
+              point.y = 200;
+              assert(point.x === 100 && point.y === 200, "SVGPoint assignment");
+              for (const invalid of [point, NaN, Infinity]) {
+                assert(rejectsTypeError(() => { point.x = invalid; }),
+                  "SVGPoint rejects non-finite values");
+                assert(point.x === 100, "SVGPoint preserves rejected assignment");
+              }
+              point.y = null;
+              assert(point.y === 0, "SVGPoint converts null");
+
+              Object.assign(rect, { x: 100, y: 200, width: 300, height: 400 });
+              assert(rect.x === 100 && rect.y === 200 && rect.width === 300 &&
+                rect.height === 400, "SVGRect assignment");
+              for (const [property, invalid] of [
+                ["x", rect],
+                ["y", "aString"],
+                ["width", svg],
+                ["height", NaN],
+              ]) {
+                assert(rejectsTypeError(() => { rect[property] = invalid; }),
+                  `SVGRect rejects invalid ${property}`);
+              }
+              rect.y = null;
+              assert(rect.y === 0, "SVGRect converts null");
+
+              const regularPoint = new DOMPoint();
+              const regularRect = new DOMRect();
+              regularPoint.x = NaN;
+              regularRect.x = Infinity;
+              assert(Number.isNaN(regularPoint.x) && regularRect.x === Infinity,
+                "regular geometry objects remain unrestricted");
+              return "ok";
+            })()
+            "#,
+        )
+        .expect("SVG value factory probe should evaluate");
+
+    assert_eq!(result, "ok");
+}
+
+#[test]
 fn svg_string_lists_reflect_conditional_processing_attributes() {
     let mut vm = new_parsed_test_vm(
         "https://svg-string-list.test/",
