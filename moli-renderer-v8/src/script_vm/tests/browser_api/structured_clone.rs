@@ -104,6 +104,75 @@ fn structured_clone_preserves_webassembly_module() {
 }
 
 #[test]
+fn structured_clone_preserves_file_list_brand_contents_and_graph_identity() {
+    let mut vm = new_storage_test_vm("https://file-list-structured-clone.test/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const transfer = new DataTransfer();
+              const file = new File(["file bytes"], "note.txt", {
+                type: "text/custom",
+                lastModified: 42
+              });
+              file.expando = "not serialized";
+              transfer.items.add(file);
+              const list = transfer.files;
+              list.expando = "not serialized";
+
+              let indexedGetterHits = 0;
+              Object.defineProperty(list, "0", {
+                configurable: true,
+                get() {
+                  indexedGetterHits++;
+                  throw new Error("FileList serialization invoked an indexed getter");
+                }
+              });
+
+              const listFirst = structuredClone({ list, alias: list, file });
+              const fileFirst = structuredClone({ file, list });
+              const empty = structuredClone(new DataTransfer().files);
+
+              return JSON.stringify({
+                listBrand: listFirst.list instanceof FileList,
+                listPrototype: Object.getPrototypeOf(listFirst.list) === FileList.prototype,
+                listDistinct: listFirst.list !== list,
+                listAlias: listFirst.list === listFirst.alias,
+                listLength: listFirst.list.length,
+                itemMatchesFile: listFirst.list.item(0) === listFirst.file,
+                indexedMatchesFile: listFirst.list[0] === listFirst.file,
+                fileFirstIdentity: fileFirst.list[0] === fileFirst.file,
+                fileBrand: listFirst.file instanceof File && listFirst.file instanceof Blob,
+                fileDistinct: listFirst.file !== file,
+                fileMetadata: [
+                  listFirst.file.name,
+                  listFirst.file.type,
+                  listFirst.file.lastModified,
+                  listFirst.file.size
+                ],
+                expandosExcluded:
+                  listFirst.list.expando === undefined && listFirst.file.expando === undefined,
+                indexedGetterHits,
+                empty: [
+                  empty instanceof FileList,
+                  Object.getPrototypeOf(empty) === FileList.prototype,
+                  empty.length,
+                  empty.item(0) === null
+                ]
+              });
+            })()
+            "#,
+        )
+        .expect("FileList structuredClone probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"listBrand":true,"listPrototype":true,"listDistinct":true,"listAlias":true,"listLength":1,"itemMatchesFile":true,"indexedMatchesFile":true,"fileFirstIdentity":true,"fileBrand":true,"fileDistinct":true,"fileMetadata":["note.txt","text/custom",42,10],"expandosExcluded":true,"indexedGetterHits":0,"empty":[true,true,0,true]}"#,
+    );
+}
+
+#[test]
 fn structured_clone_rejects_native_dom_nodes() {
     let mut vm = new_storage_test_vm("https://example.com/dom-node-clone");
 
