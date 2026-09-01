@@ -1648,3 +1648,45 @@ fn detached_document_creation_brand_checks_accept_standard_prototype_methods() {
         r#"{"htmlElement":"true,SECTION,true,false","htmlElementNs":"true,x,article,http://www.w3.org/1999/xhtml","xmlElement":"true,Mixed,null","xmlElementNs":"true,p,item,urn:test","characterNodes":"true,txt,true,note,true,2,true,pi","attrs":"true,data-x,true,p,flag,urn:test","importAdopt":"true,p,item,true,true","documentOwn":"false,false,false,false,false"}"#
     );
 }
+
+#[test]
+fn hyperlink_protocol_is_colon_when_href_cannot_be_parsed() {
+    let mut vm = new_storage_test_vm("https://hyperlink-invalid-url.test/page.html");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const base = document.createElement("base");
+  base.href = "about:blank";
+  (document.head || document.documentElement || document).appendChild(base);
+  const inputs = [
+    "",
+    "javascript://:443",
+    "javascript://test:test",
+    "javascript://[:1]",
+    "mailto://:443",
+    "mailto://test:test",
+    "mailto://[:1]"
+  ];
+
+  for (const tag of ["a", "area"]) {
+    const element = document.createElement(tag);
+    for (const input of inputs) {
+      element.setAttribute("href", input);
+      if (element.href !== input) {
+        throw new Error(`${tag} should preserve the unparsable href ${input}`);
+      }
+      if (element.protocol !== ":") {
+        throw new Error(`${tag} should expose ':' for the unparsable href ${input}`);
+      }
+    }
+  }
+  return "ok";
+})()
+"#,
+        )
+        .expect("unparsable hyperlink protocol probe should evaluate");
+
+    assert_eq!(result, "ok");
+}
