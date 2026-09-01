@@ -288,7 +288,7 @@ struct SvgMatrixRotateFromVectorArgs {
 struct SvgLengthNewValueSpecifiedUnitsArgs {
     #[webidl(required, converter = "unsigned_short")]
     unit_type: u16,
-    #[webidl(required)]
+    #[webidl(required, converter = "double")]
     value: f64,
 }
 
