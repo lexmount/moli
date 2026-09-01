@@ -314,4 +314,20 @@ impl DocumentType {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct DocumentFragment;
+pub struct DocumentFragment {
+    host: Option<NativeNodeId>,
+}
+
+impl DocumentFragment {
+    pub fn new(host: Option<NativeNodeId>) -> Self {
+        Self { host }
+    }
+
+    pub fn host(&self) -> Option<NativeNodeId> {
+        self.host
+    }
+
+    pub(crate) fn set_host(&mut self, host: NativeNodeId) {
+        self.host = Some(host);
+    }
+}

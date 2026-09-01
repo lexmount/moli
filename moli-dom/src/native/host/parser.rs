@@ -86,7 +86,7 @@ impl DomHost {
         if is_template {
             let template_contents = self
                 .dom
-                .create_template_contents_fragment_for_document(document_handle);
+                .create_template_contents_fragment_for_document(document_handle, Some(node_id));
             if let Some(element) = self
                 .node_mut(node_id)
                 .and_then(|node| node.data_mut().as_element_mut())
