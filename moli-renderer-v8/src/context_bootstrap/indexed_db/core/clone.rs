@@ -2,16 +2,18 @@ use super::*;
 use crate::{
     context_bootstrap::{
         FileSystemHandleDurablePayload, build_file_list_object,
-        build_file_system_handle_from_durable_payload, file_list_files_from_object,
-        file_system_handle_clone_payload_from_object,
-        file_system_handle_durable_payload_from_object, image_data_clone_payload_from_object,
+        build_file_system_handle_from_durable_payload, build_geometry_object_from_clone_payload,
+        file_list_files_from_object, file_system_handle_clone_payload_from_object,
+        file_system_handle_durable_payload_from_object, geometry_clone_payload_from_object,
+        image_data_clone_payload_from_object,
     },
     dom::native::SelectedFile,
     structured_clone::{
         BlobClonePayload, HOST_OBJECT_TAG_BLOB, HOST_OBJECT_TAG_CRYPTO_KEY,
-        HOST_OBJECT_TAG_FILE_LIST, HOST_OBJECT_TAG_FILE_SYSTEM_HANDLE, HOST_OBJECT_TAG_IMAGE_DATA,
-        blob_clone_payload_from_object, build_blob_object_from_clone_payload,
-        read_crypto_key_payload, read_image_data_payload, write_crypto_key_payload,
+        HOST_OBJECT_TAG_FILE_LIST, HOST_OBJECT_TAG_FILE_SYSTEM_HANDLE, HOST_OBJECT_TAG_GEOMETRY,
+        HOST_OBJECT_TAG_IMAGE_DATA, blob_clone_payload_from_object,
+        build_blob_object_from_clone_payload, read_crypto_key_payload, read_geometry_clone_payload,
+        read_image_data_payload, write_crypto_key_payload, write_geometry_clone_payload,
         write_image_data_payload,
     },
 };
@@ -102,6 +104,18 @@ impl v8::ValueSerializerImpl for IndexedDbStructuredCloneSerializer {
                     return Some(true);
                 }
             }
+            Some("ImageData") => {
+                if let Some(payload) = image_data_clone_payload_from_object(scope, object) {
+                    write_image_data_payload(serializer, payload);
+                    return Some(true);
+                }
+            }
+            Some("DOMPoint" | "DOMPointReadOnly" | "DOMRect" | "DOMRectReadOnly" | "DOMQuad" | "DOMMatrix" | "DOMMatrixReadOnly") => {
+                if let Some(payload) = geometry_clone_payload_from_object(scope, object) {
+                    write_geometry_clone_payload(serializer, payload);
+                    return Some(true);
+                }
+            }
             Some("FileList") => {
                 let Some(files) = file_list_files_from_object(scope, object) else {
                     let exception = dom_exception_value(
@@ -148,12 +162,6 @@ impl v8::ValueSerializerImpl for IndexedDbStructuredCloneSerializer {
                     let index = self.store_blob_external_object(scope, object, payload)?;
                     serializer.write_uint32(HOST_OBJECT_TAG_BLOB);
                     serializer.write_uint32(index);
-                    return Some(true);
-                }
-            }
-            Some("ImageData") => {
-                if let Some(payload) = image_data_clone_payload_from_object(scope, object) {
-                    write_image_data_payload(serializer, payload);
                     return Some(true);
                 }
             }
@@ -281,6 +289,17 @@ impl v8::ValueDeserializerImpl for IndexedDbStructuredCloneDeserializer {
                     None
                 })
             }
+            HOST_OBJECT_TAG_GEOMETRY => read_geometry_clone_payload(deserializer)
+                .map(|payload| build_geometry_object_from_clone_payload(scope, payload))
+                .or_else(|| {
+                    let exception = dom_exception_value(
+                        scope,
+                        "Failed to deserialize IndexedDB Geometry object.",
+                        "DataCloneError",
+                    );
+                    scope.throw_exception(exception);
+                    None
+                }),
             HOST_OBJECT_TAG_BLOB => {
                 let mut index = 0;
                 if !deserializer.read_uint32(&mut index) {

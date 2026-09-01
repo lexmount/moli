@@ -46,7 +46,7 @@ pub(crate) const HOST_OBJECT_TAG_FILE_SYSTEM_HANDLE: u32 = 7;
 const HOST_OBJECT_TAG_QUOTA_EXCEEDED_ERROR: u32 = 8;
 const HOST_OBJECT_TAG_WRITABLE_STREAM: u32 = 9;
 const HOST_OBJECT_TAG_TRANSFORM_STREAM: u32 = 10;
-const HOST_OBJECT_TAG_GEOMETRY: u32 = 11;
+pub(crate) const HOST_OBJECT_TAG_GEOMETRY: u32 = 11;
 pub(crate) const HOST_OBJECT_TAG_FILE_LIST: u32 = 12;
 
 const GEOMETRY_KIND_DOM_POINT_READONLY: u32 = 0;
@@ -965,7 +965,7 @@ pub(crate) fn read_image_data_payload<'s>(
     )
 }
 
-fn write_geometry_clone_payload(
+pub(crate) fn write_geometry_clone_payload(
     serializer: &dyn v8::ValueSerializerHelper,
     payload: GeometryClonePayload,
 ) {
@@ -1018,7 +1018,7 @@ fn write_geometry_clone_payload(
     }
 }
 
-fn read_geometry_clone_payload(
+pub(crate) fn read_geometry_clone_payload(
     deserializer: &dyn v8::ValueDeserializerHelper,
 ) -> Option<GeometryClonePayload> {
     let kind = read_u32(deserializer)?;
