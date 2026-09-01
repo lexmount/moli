@@ -267,6 +267,24 @@ struct SvgAnimatedIntegerProperty {
     component: SvgAnimatedIntegerComponent,
 }
 
+#[derive(Clone, Copy)]
+enum SvgAnimatedNumberComponent {
+    Scalar,
+    PairFirst,
+    PairSecondOrFirst,
+    NumberOrPercentage,
+}
+
+#[derive(Clone, Copy)]
+struct SvgAnimatedNumberProperty {
+    index: usize,
+    interface: &'static str,
+    name: &'static str,
+    attribute: &'static str,
+    initial_value: f64,
+    component: SvgAnimatedNumberComponent,
+}
+
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "SVG list item")]
 struct SvgListItemArgs<'s> {

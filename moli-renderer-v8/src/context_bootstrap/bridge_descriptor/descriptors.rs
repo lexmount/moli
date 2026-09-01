@@ -323,6 +323,11 @@ const NODE_BRIDGE_DESCRIPTORS: &[BridgeDescriptor] = &[
     ),
     descriptor(web_api_interfaces::SVGMaskElement::DESCRIPTOR, ELEMENT_GROUPS),
     descriptor(web_api_interfaces::SVGMarkerElement::DESCRIPTOR, ELEMENT_GROUPS),
+    descriptor(web_api_interfaces::SVGMaskElement::DESCRIPTOR, ELEMENT_GROUPS),
+    descriptor(web_api_interfaces::SVGMetadataElement::DESCRIPTOR, ELEMENT_GROUPS),
+    descriptor(web_api_interfaces::SVGScriptElement::DESCRIPTOR, ELEMENT_GROUPS),
+    descriptor(web_api_interfaces::SVGStopElement::DESCRIPTOR, ELEMENT_GROUPS),
+    descriptor(web_api_interfaces::SVGStyleElement::DESCRIPTOR, ELEMENT_GROUPS),
     specialized_descriptor(
         web_api_interfaces::SVGPathElement::DESCRIPTOR,
         ELEMENT_GROUPS,
