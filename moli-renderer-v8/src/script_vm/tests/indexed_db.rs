@@ -1264,6 +1264,152 @@ fn indexed_db_roundtrips_file_list_with_file_graph_identity() {
 }
 
 #[test]
+fn indexed_db_roundtrips_image_data_and_geometry_objects() {
+    let mut vm =
+        new_storage_page_task_executor_test_vm("https://indexeddb-image-data-geometry.test/");
+
+    vm.eval(
+        r#"
+(() => {
+  globalThis.__indexedDbGeometryResult = "pending";
+  const dbName = `image-data-geometry-${Math.random()}`;
+  const open = indexedDB.open(dbName, 1);
+  open.onerror = () => {
+    globalThis.__indexedDbGeometryResult = `open-error:${open.error && open.error.name}`;
+  };
+  open.onupgradeneeded = () => open.result.createObjectStore("values");
+  open.onsuccess = () => {
+    const image = new ImageData(
+      new Uint8ClampedArray([1, 2, 3, 4, 5, 6, 7, 8]),
+      2,
+      1,
+      { colorSpace: "display-p3" }
+    );
+    const pointReadOnly = new DOMPointReadOnly(1, -0, Infinity, NaN);
+    const point = new DOMPoint(2, 3, 4, 5);
+    const rectReadOnly = new DOMRectReadOnly(6, 7, 8, 9);
+    const rect = new DOMRect(10, 11, 12, 13);
+    const quad = new DOMQuad(
+      { x: 1, y: 2, z: 3, w: 4 },
+      { x: 5, y: 6, z: 7, w: 8 },
+      { x: 9, y: 10, z: 11, w: 12 },
+      { x: 13, y: 14, z: 15, w: 16 }
+    );
+    const matrixReadOnly = new DOMMatrixReadOnly([1, 2, 3, 4, 5, 6]);
+    const matrix = new DOMMatrix([
+      11, 12, 13, 14,
+      21, 22, 23, 24,
+      31, 32, 33, 34,
+      41, 42, 43, 44
+    ]);
+    for (const value of [
+      image,
+      pointReadOnly,
+      point,
+      rectReadOnly,
+      rect,
+      quad,
+      matrixReadOnly,
+      matrix
+    ]) {
+      value.expando = "not serialized";
+    }
+
+    const write = open.result.transaction("values", "readwrite");
+    write.objectStore("values").put({
+      image,
+      imageAlias: image,
+      pointReadOnly,
+      point,
+      rectReadOnly,
+      rect,
+      quad,
+      matrixReadOnly,
+      matrix
+    }, "value");
+    write.oncomplete = () => {
+      const read = open.result.transaction("values").objectStore("values").get("value");
+      read.onerror = () => {
+        globalThis.__indexedDbGeometryResult =
+          `read-error:${read.error && read.error.name}`;
+      };
+      read.onsuccess = () => {
+        const row = read.result;
+        const exactBrand = (value, name) =>
+          Object.getPrototypeOf(value) === self[name].prototype;
+        const sameValues = (value, names, expected) =>
+          names.every((name, index) => Object.is(value[name], expected[index]));
+        globalThis.__indexedDbGeometryResult = JSON.stringify({
+          image: [
+            exactBrand(row.image, "ImageData"),
+            row.image !== image,
+            row.image === row.imageAlias,
+            row.image.width,
+            row.image.height,
+            row.image.colorSpace,
+            Array.from(row.image.data).join(","),
+            row.image.data !== image.data
+          ],
+          pointReadOnly:
+            exactBrand(row.pointReadOnly, "DOMPointReadOnly") &&
+            sameValues(row.pointReadOnly, ["x", "y", "z", "w"], [1, -0, Infinity, NaN]),
+          point:
+            exactBrand(row.point, "DOMPoint") &&
+            sameValues(row.point, ["x", "y", "z", "w"], [2, 3, 4, 5]),
+          rectReadOnly:
+            exactBrand(row.rectReadOnly, "DOMRectReadOnly") &&
+            sameValues(row.rectReadOnly, ["x", "y", "width", "height"], [6, 7, 8, 9]),
+          rect:
+            exactBrand(row.rect, "DOMRect") &&
+            sameValues(row.rect, ["x", "y", "width", "height"], [10, 11, 12, 13]),
+          quad:
+            exactBrand(row.quad, "DOMQuad") &&
+            [row.quad.p1, row.quad.p2, row.quad.p3, row.quad.p4]
+              .every((pointValue, index) =>
+                sameValues(
+                  pointValue,
+                  ["x", "y", "z", "w"],
+                  [1 + index * 4, 2 + index * 4, 3 + index * 4, 4 + index * 4]
+                )),
+          matrixReadOnly:
+            exactBrand(row.matrixReadOnly, "DOMMatrixReadOnly") &&
+            sameValues(row.matrixReadOnly, ["a", "b", "c", "d", "e", "f", "is2D"],
+              [1, 2, 3, 4, 5, 6, true]),
+          matrix:
+            exactBrand(row.matrix, "DOMMatrix") &&
+            sameValues(row.matrix, ["m11", "m12", "m13", "m14", "m41", "m42", "m43", "m44", "is2D"],
+              [11, 12, 13, 14, 41, 42, 43, 44, false]),
+          expandosExcluded: [
+            row.image,
+            row.pointReadOnly,
+            row.point,
+            row.rectReadOnly,
+            row.rect,
+            row.quad,
+            row.matrixReadOnly,
+            row.matrix
+          ].every(value => value.expando === undefined)
+        });
+      };
+    };
+  };
+  return "scheduled";
+})()
+"#,
+    )
+    .expect("indexeddb ImageData/Geometry workflow should schedule");
+
+    let result = vm
+        .eval_after_selected_page_tasks("String(globalThis.__indexedDbGeometryResult)")
+        .expect("indexeddb ImageData/Geometry result should be readable");
+
+    assert_eq!(
+        result,
+        r#"{"image":[true,true,true,2,1,"display-p3","1,2,3,4,5,6,7,8",true],"pointReadOnly":true,"point":true,"rectReadOnly":true,"rect":true,"quad":true,"matrixReadOnly":true,"matrix":true,"expandosExcluded":true}"#
+    );
+}
+
+#[test]
 fn indexed_db_roundtrips_opfs_handles_with_durable_external_objects() {
     let mut vm = new_storage_page_task_executor_test_vm("https://indexeddb-opfs-handle.test/");
 
