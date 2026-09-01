@@ -128,7 +128,6 @@ async fn loaded_dom_storage_context() -> (TestContext, String, String, tokio::ta
         .as_mut()
         .expect("browser context should exist")
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .set_loaded_page_for_test(page);
     (ctx, page_url, origin, server)
@@ -464,7 +463,6 @@ async fn dom_storage_resolves_child_frame_storage_ids_without_collapsing_to_top_
         .as_mut()
         .expect("browser context")
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .set_loaded_page_for_test(page);
 

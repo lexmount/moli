@@ -513,7 +513,6 @@ mod tests {
         browser_context.set_target_url(page.final_url().as_str().to_owned());
         let _ = browser_context
             .active_page_state_mut()
-            .active_target
             .runtime_slot
             .replace_loaded_page(Some(page));
         conn.browser_context = Some(browser_context);

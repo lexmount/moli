@@ -1197,7 +1197,6 @@ mod tests {
                 .as_ref()
                 .expect("browser context")
                 .active_page_state()
-                .active_target
                 .runtime_slot
                 .has_loaded_page(),
             "Target.createTarget should install the initial about:blank page before DOMSnapshot"

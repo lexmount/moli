@@ -255,7 +255,6 @@ async fn dispose_browser_context_aborts_paused_request_stage_navigation() {
         .runtime_session_state
         .inspector_enabled = true;
     bc.active_page_state_mut()
-        .active_target
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -1627,7 +1626,6 @@ async fn same_context_targets_do_not_replay_bare_isolated_worlds_after_switching
         let bc = ctx.conn.browser_context.as_mut().expect("browser context");
         let _ = bc
             .active_page_state_mut()
-            .active_target
             .runtime_slot
             .replace_loaded_page(Some(first_page));
         bc.active_page_state_mut().devtools_sessions

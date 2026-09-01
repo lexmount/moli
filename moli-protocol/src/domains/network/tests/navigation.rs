@@ -120,7 +120,6 @@ async fn async_dispatch_offline_runtime_fetch_emits_loading_failed() {
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     bc.active_page_state_mut()
-        .active_target
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);

@@ -473,7 +473,6 @@ async fn same_context_targets_remove_only_their_own_pre_document_script_identifi
         assert!(
             active
                 .active_page_state()
-                .active_target
                 .owner_state
                 .document_start_scripts
                 .is_empty()
@@ -627,7 +626,6 @@ async fn same_context_targets_remove_only_their_own_utility_pre_document_script_
         assert!(
             active
                 .active_page_state()
-                .active_target
                 .owner_state
                 .document_start_scripts
                 .is_empty()

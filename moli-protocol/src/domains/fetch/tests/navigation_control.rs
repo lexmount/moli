@@ -72,13 +72,11 @@ async fn continue_request_rejects_invalid_url_without_consuming_pending_navigati
     let bc = ctx.conn.browser_context.as_ref().expect("browser context");
     assert!(
         bc.active_page_state()
-            .active_target
             .fetch_owner
             .has_pending_fetch_request_id_for_test(&request_id)
     );
     assert!(
         bc.active_page_state()
-            .active_target
             .fetch_owner
             .has_pending_fetch_navigation_for_test(&request_id)
     );
@@ -126,13 +124,11 @@ async fn continue_request_rejects_invalid_post_data_without_consuming_pending_na
     let bc = ctx.conn.browser_context.as_ref().expect("browser context");
     assert!(
         bc.active_page_state()
-            .active_target
             .fetch_owner
             .has_pending_fetch_request_id_for_test(&request_id)
     );
     assert!(
         bc.active_page_state()
-            .active_target
             .fetch_owner
             .has_pending_fetch_navigation_for_test(&request_id)
     );
@@ -259,7 +255,6 @@ async fn fail_request_blocked_by_client_maps_main_document_navigation_to_net_err
     let mut ctx = TestContext::new();
     let mut bc = attached_browser_context();
     bc.active_page_state_mut()
-        .active_target
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -390,7 +385,6 @@ async fn response_stage_document_pattern_pauses_main_document_after_response() {
     let mut ctx = TestContext::new();
     let mut bc = attached_browser_context();
     bc.active_page_state_mut()
-        .active_target
         .runtime_slot
         .enable_primary_network_events();
     let url = format!("http://{addr}/page");
@@ -592,7 +586,6 @@ async fn continue_request_with_post_data_marks_network_request_as_having_post_da
     let mut ctx = TestContext::new();
     let mut bc = attached_browser_context();
     bc.active_page_state_mut()
-        .active_target
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -710,7 +703,6 @@ async fn intercepted_form_post_navigation_body_is_available_by_network_request_i
     {
         let bc = ctx.conn.browser_context.as_mut().expect("browser context");
         bc.active_page_state_mut()
-            .active_target
             .runtime_slot
             .enable_primary_network_events();
     }
@@ -829,7 +821,6 @@ async fn continue_request_with_intercept_response_pauses_after_response_until_co
     let mut ctx = TestContext::new();
     let mut bc = attached_browser_context();
     bc.active_page_state_mut()
-        .active_target
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -959,7 +950,6 @@ async fn intercepted_navigation_start_events_stay_before_network_pause_with_back
     let mut ctx = TestContext::new();
     let mut bc = attached_browser_context();
     bc.active_page_state_mut()
-        .active_target
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -1018,7 +1008,6 @@ async fn disable_aborts_paused_main_document_navigation() {
     let mut ctx = TestContext::new();
     let mut bc = attached_browser_context();
     bc.active_page_state_mut()
-        .active_target
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);

@@ -2,9 +2,9 @@ use super::session_owner::TargetSessionOwner;
 use super::*;
 use crate::conn::state::{
     BrowserContextPageStorageHandles, BrowserContextResourceStorageHandles, DevToolsSessionState,
-    PageNavigationHistoryEntry, RendererMainDocumentCommitSeed, TargetFetchConfig,
+    PageNavigationHistoryEntry, PageTargetHost, RendererMainDocumentCommitSeed, TargetFetchConfig,
     TargetNetworkPolicyState, TargetOwnerState, TargetPageAbsenceReason,
-    TargetPageResidenceIdentity, TargetPageState, TargetRuntimeSessionState, TargetRuntimeSlot,
+    TargetPageResidenceIdentity, TargetRuntimeSessionState, TargetRuntimeSlot,
 };
 use crate::conn::{
     BackgroundProtocolEvent, ConnectionNetworkRequestIdAllocator, DocumentStartScript,
@@ -457,13 +457,13 @@ fn target_navigation_initiator_url(target_url: &str, loaded_page: Option<&Page>)
     url.host_str().is_some().then_some(url)
 }
 
-fn clear_page_runtime_remote_object_tracking(state: &mut crate::conn::state::TargetPageState) {
+fn clear_page_runtime_remote_object_tracking(state: &mut crate::conn::state::PageTargetHost) {
     for session in state.devtools_sessions.states_mut() {
         session.clear_runtime_remote_object_tracking();
     }
 }
 
-fn clear_page_loaded_document_session_state(state: &mut crate::conn::state::TargetPageState) {
+fn clear_page_loaded_document_session_state(state: &mut crate::conn::state::PageTargetHost) {
     clear_page_runtime_remote_object_tracking(state);
     for session in state.devtools_sessions.states_mut() {
         session
@@ -793,7 +793,7 @@ impl<'a> TargetSessionOwnerMut<'a> {
 
     pub(super) fn mutate_page_state<T>(
         &mut self,
-        f: impl FnOnce(&mut TargetPageState, bool, Option<&str>) -> T,
+        f: impl FnOnce(&mut PageTargetHost, bool, Option<&str>) -> T,
     ) -> Option<T> {
         match self {
             Self::PageTarget {
@@ -965,8 +965,12 @@ impl<'a> TargetSessionOwnerMut<'a> {
         browser_context.forget_target_opener_references_for_target(target_id);
         browser_context.forget_target_window_names_for_target(target_id);
         browser_context.forget_target_popup_id_for_target(target_id);
+        let auxiliary_session_ids = target
+            .devtools_sessions
+            .attached_session_ids()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
         let primary_session_id = target.detach_session();
-        let auxiliary_session_ids = browser_context.remove_auxiliary_sessions_for_target(target_id);
         target.close_page_async().await;
         Some(ClosedPageTarget {
             target_id: target_id.clone(),
@@ -1538,9 +1542,12 @@ impl CdpConnection {
             browser_context.forget_target_opener_references_for_target(target_id);
             browser_context.forget_target_window_names_for_target(target_id);
             browser_context.forget_target_popup_id_for_target(target_id);
+            let auxiliary_session_ids = target
+                .devtools_sessions
+                .attached_session_ids()
+                .map(str::to_owned)
+                .collect::<Vec<_>>();
             let primary_session_id = target.detach_session();
-            let auxiliary_session_ids =
-                browser_context.remove_auxiliary_sessions_for_target(target_id);
             (
                 target,
                 primary_session_id,
@@ -1590,7 +1597,6 @@ impl CdpConnection {
                 browser_context.remove_auxiliary_sessions_for_target(&target_id);
             let collected_network_data_artifacts = browser_context
                 .active_page_target()
-                .active_target
                 .runtime_slot
                 .collected_network_data_artifacts();
             browser_context.clear_active_target_session_scoped_state_without_loaded_page();
@@ -1674,9 +1680,13 @@ impl CdpConnection {
                     browser_context.forget_target_opener_references_for_target(target_id);
                     browser_context.forget_target_window_names_for_target(target_id);
                     browser_context.forget_target_popup_id_for_target(target_id);
-                    page_session_ids
-                        .extend(browser_context.remove_auxiliary_sessions_for_target(target_id));
                     target.map(|mut target| {
+                        page_session_ids.extend(
+                            target
+                                .devtools_sessions
+                                .attached_session_ids()
+                                .map(str::to_owned),
+                        );
                         if let Some(session_id) = target.detach_session() {
                             page_session_ids.push(session_id);
                         }
@@ -2656,7 +2666,6 @@ mod tests {
         assert!(
             active
                 .active_page_state()
-                .active_target
                 .owner_state
                 .target_crash_state
                 .is_crashed()
@@ -2698,7 +2707,6 @@ mod tests {
         browser_context.attach_active_session("SID-active-primary".to_owned());
         browser_context
             .active_page_state_mut()
-            .active_target
             .runtime_slot
             .set_page_attachment_id_for_test(1);
         browser_context.insert_page_target_host(crate::conn::PageTargetHost::with_url(
@@ -2799,7 +2807,6 @@ mod tests {
         assert!(
             active
                 .active_page_state()
-                .active_target
                 .fetch_owner
                 .has_pending_subresource_fetch_for_test("FETCH-active")
         );
@@ -2865,7 +2872,6 @@ mod tests {
         assert!(
             !active
                 .active_page_state()
-                .active_target
                 .fetch_owner
                 .config_snapshot()
                 .is_enabled()
@@ -2873,7 +2879,6 @@ mod tests {
         assert!(
             !active
                 .active_page_state()
-                .active_target
                 .fetch_owner
                 .has_pending_subresource_fetch_for_test("FETCH-active")
         );
@@ -2925,7 +2930,6 @@ mod tests {
         let mut active = BrowserContext::new_with_page_for_test("BID-active", "TID-active");
         active
             .active_page_state_mut()
-            .active_target
             .owner_state
             .record_loaded_page_navigation_history((
                 "https://active.example/".to_owned(),
@@ -2977,7 +2981,6 @@ mod tests {
         let mut active = BrowserContext::new_with_page_for_test("BID-active", "FRAME-0");
         active
             .active_page_state_mut()
-            .active_target
             .runtime_slot
             .enable_primary_network_events();
         active.record_captured_response_body(
@@ -3039,7 +3042,6 @@ mod tests {
         let mut active = BrowserContext::new_with_page_for_test("BID-active", "FRAME-0");
         active
             .active_page_state_mut()
-            .active_target
             .runtime_slot
             .enable_primary_network_events();
         let mut owner = TargetSessionOwnerMut::PageTarget {
@@ -3782,7 +3784,6 @@ mod tests {
         ));
         browser_context
             .active_page_state_mut()
-            .active_target
             .runtime_slot
             .set_page_attachment_id_for_test(41);
         conn.browser_context = Some(browser_context);

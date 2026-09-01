@@ -230,7 +230,7 @@ enum BidiChannelListenerRoute {
 }
 
 fn unregister_runtime_remote_object_group_from_parked_page_session_state(
-    page_session_state: &mut TargetPageState,
+    page_session_state: &mut PageTargetHost,
     session_id: Option<&str>,
     object_group: &str,
 ) {
@@ -552,13 +552,11 @@ fn collect_moli_diagnostics_pending_snapshots(
 ) -> Result<(), String> {
     if browser_context
         .active_page_target()
-        .active_target
         .runtime_slot
         .has_loaded_page()
     {
         let pending_snapshot = browser_context
             .active_page_target()
-            .active_target
             .runtime_slot
             .loaded_page()
             .expect("active target loaded page should exist")
@@ -1689,7 +1687,7 @@ impl CdpConnection {
 
     pub(crate) fn fail_pending_inspector_awaits_from_page_session_state_for_sessions_background_events_into(
         out: &mut Vec<BackgroundProtocolEvent>,
-        page_session_state: &mut TargetPageState,
+        page_session_state: &mut PageTargetHost,
         primary_session_id: Option<&str>,
         session_ids: &[&str],
         reason: &'static str,
@@ -3686,10 +3684,7 @@ impl CdpConnection {
             .browser_context_by_id_mut(&route.browser_context_id)
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?;
         let slot = if browser_context.active_target_id() == route.target_id.as_deref() {
-            &mut browser_context
-                .active_page_target_mut()
-                .active_target
-                .runtime_slot
+            &mut browser_context.active_page_target_mut().runtime_slot
         } else {
             let target_id = route
                 .target_id
@@ -4127,7 +4122,6 @@ impl CdpConnection {
                     } else {
                         browser_context
                             .active_page_target_mut()
-                            .active_target
                             .runtime_slot
                             .loaded_page_mut()
                     }
@@ -6080,7 +6074,6 @@ mod tests {
         browser_context.attach_active_session("SID-active".to_owned());
         browser_context
             .active_page_state_mut()
-            .active_target
             .runtime_slot
             .set_page_attachment_id_for_test(1);
         conn.browser_context = Some(browser_context);
@@ -7385,7 +7378,6 @@ mod tests {
         browser_context.attach_active_session("SID-listener-cancel".to_owned());
         browser_context
             .active_page_state_mut()
-            .active_target
             .runtime_slot
             .set_page_attachment_id_for_test(1);
         conn.browser_context = Some(browser_context);

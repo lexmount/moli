@@ -237,7 +237,6 @@ async fn get_frame_tree_uses_owner_element_id_when_frame_name_is_empty() {
         .as_mut()
         .expect("browser context")
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .replace_loaded_page(Some(page));
     complete_child_frame_lifecycle(&mut ctx).await;
@@ -266,7 +265,6 @@ async fn get_frame_tree_projects_sandboxed_about_blank_from_document_url() {
         let bc = ctx.conn.browser_context.as_mut().expect("browser context");
         let _ = bc
             .active_page_state_mut()
-            .active_target
             .runtime_slot
             .replace_loaded_page(Some(page));
         bc.set_target_security_origin("https://top.example".into());
@@ -298,7 +296,6 @@ async fn get_frame_tree_recurses_into_nested_child_frames() {
         let bc = ctx.conn.browser_context.as_mut().expect("browser context");
         let _ = bc
             .active_page_state_mut()
-            .active_target
             .runtime_slot
             .replace_loaded_page(Some(page));
         bc.set_target_security_origin("https://top.example".into());
@@ -360,7 +357,6 @@ async fn get_frame_tree_projects_nested_sandboxed_srcdoc_from_document_urls() {
         let bc = ctx.conn.browser_context.as_mut().expect("browser context");
         let _ = bc
             .active_page_state_mut()
-            .active_target
             .runtime_slot
             .replace_loaded_page(Some(page));
         bc.set_target_security_origin("https://top.example".into());
@@ -455,7 +451,6 @@ async fn get_frame_tree_can_complete_through_pending_command_dispatch() {
         .as_mut()
         .expect("browser context")
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .replace_loaded_page(Some(page));
 
@@ -510,7 +505,6 @@ async fn pending_get_frame_tree_after_page_unload_returns_empty_target_tree() {
         .as_mut()
         .expect("browser context")
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .replace_loaded_page(Some(page));
 
@@ -529,7 +523,6 @@ async fn pending_get_frame_tree_after_page_unload_returns_empty_target_tree() {
         .as_mut()
         .expect("browser context")
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .clear_loaded_page_for_test_fixture();
 

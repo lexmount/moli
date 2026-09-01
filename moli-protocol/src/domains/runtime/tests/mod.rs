@@ -149,7 +149,6 @@ async fn push_loaded_runtime_frontend_enabled_background_context_async(
     background_context.set_active_target_id(target_id.to_owned());
     let _ = background_context
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .replace_loaded_page(Some(page));
     background_context.attach_active_session(session_id.to_owned());

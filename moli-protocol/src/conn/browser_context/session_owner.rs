@@ -1,6 +1,6 @@
 #[cfg(test)]
 use crate::conn::BrowserContext;
-use crate::conn::{CdpConnection, CdpSessionRoute, TargetPageState};
+use crate::conn::{CdpConnection, CdpSessionRoute, PageTargetHost};
 
 pub(super) enum TargetSessionOwner {
     PageTarget {
@@ -26,7 +26,7 @@ impl CdpConnection {
     pub(crate) fn mutate_target_page_state_for_session(
         &mut self,
         session_id: Option<&str>,
-        f: impl FnOnce(&mut TargetPageState),
+        f: impl FnOnce(&mut PageTargetHost),
     ) -> bool {
         self.target_session_owner_mut(session_id)
             .and_then(|mut owner| owner.mutate_page_state(|state, _, _| f(state)))

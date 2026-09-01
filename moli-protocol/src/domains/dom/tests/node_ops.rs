@@ -46,7 +46,6 @@ fn loaded_page_mut_for_test(ctx: &mut TestContext) -> &mut moli_core::page::Page
         .as_mut()
         .expect("browser context")
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .loaded_page_mut()
         .expect("loaded page")

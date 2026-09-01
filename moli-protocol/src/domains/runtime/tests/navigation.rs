@@ -82,7 +82,6 @@ async fn enable_uses_fresh_initial_document_without_adapter() {
             .as_ref()
             .expect("browser context should exist")
             .active_page_state()
-            .active_target
             .runtime_slot
             .has_loaded_page(),
         "Runtime.enable should observe the already-installed about:blank page"

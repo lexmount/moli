@@ -981,7 +981,7 @@ fn runtime_observable_console_payloads(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::conn::TargetPageState;
+    use crate::conn::PageTargetHost;
 
     fn active_session_state_mut(browser_context: &mut BrowserContext) -> TargetSessionStateMut<'_> {
         let state = browser_context.active_page_state_mut();
@@ -993,7 +993,7 @@ mod tests {
         }
     }
 
-    fn parked_session_state_mut(state: &mut TargetPageState) -> TargetSessionStateMut<'_> {
+    fn parked_session_state_mut(state: &mut PageTargetHost) -> TargetSessionStateMut<'_> {
         TargetSessionStateMut::Loaded {
             devtools_session_state: &mut state.devtools_sessions
                 [moli_page_types::DevToolsSessionKey::Primary],
@@ -1064,7 +1064,7 @@ mod tests {
                 .enabled()
         );
 
-        let mut parked = TargetPageState::default();
+        let mut parked = PageTargetHost::empty("TID-page-owner-test".to_owned());
         parked_session_state_mut(&mut parked).set_console_enabled(true);
         parked_session_state_mut(&mut parked).set_log_enabled(true);
         parked_session_state_mut(&mut parked).set_page_file_chooser_opened_event_enabled(true);

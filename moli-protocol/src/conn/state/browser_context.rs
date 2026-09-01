@@ -34,7 +34,6 @@ use super::{
     page_target_host::{PageTargetHost, PageTargetRegistry},
     parking::TargetOwnerState,
     service_worker_target::ServiceWorkerTargetState,
-    session::TargetPageState,
     shared_worker_target::SharedWorkerTargetState,
 };
 
@@ -45,7 +44,6 @@ pub struct BrowserContext {
     /// Policy retained while the context has no page target yet. The first
     /// target inherits it; once targets exist, each target owns its surface.
     pub(crate) default_document_cookie_manager_surface: BrowserContextCookieManagerSurface,
-    pub auxiliary_target_sessions: HashMap<String, String>,
     // Chromium exposes the live creator target, immutable creator frame, and
     // window.opener access as three independent TargetInfo properties.
     pub target_opener_ids: HashMap<String, String>,
@@ -376,11 +374,11 @@ impl BrowserContext {
     }
 
     #[cfg(test)]
-    pub(crate) fn active_page_state(&self) -> &TargetPageState {
+    pub(crate) fn active_page_state(&self) -> &PageTargetHost {
         self.active_page_target().state()
     }
 
-    pub(crate) fn active_page_state_mut(&mut self) -> &mut TargetPageState {
+    pub(crate) fn active_page_state_mut(&mut self) -> &mut PageTargetHost {
         self.active_page_target_mut().state_mut()
     }
 
@@ -514,7 +512,6 @@ impl BrowserContext {
             storage_partition,
             page_targets: PageTargetRegistry::default(),
             default_document_cookie_manager_surface: BrowserContextCookieManagerSurface::default(),
-            auxiliary_target_sessions: HashMap::new(),
             target_opener_ids: HashMap::new(),
             target_opener_frame_ids: HashMap::new(),
             target_can_access_opener: HashSet::new(),
@@ -922,7 +919,11 @@ impl BrowserContext {
                 .iter()
                 .filter(|info| info.attached)
                 .count(),
-            "auxiliaryTargetSessionCount": self.auxiliary_target_sessions.len(),
+            "auxiliaryTargetSessionCount": self
+                .page_targets
+                .iter()
+                .map(|target| target.devtools_sessions.attached_len())
+                .sum::<usize>(),
             "targetOpenerCount": self.target_opener_ids.len(),
             "targetOpenerFrameCount": self.target_opener_frame_ids.len(),
             "targetCanAccessOpenerCount": self.target_can_access_opener.len(),
@@ -1289,7 +1290,6 @@ impl BrowserContext {
     #[cfg(test)]
     pub(crate) fn clear_document_navigation_state_for_active_target(&mut self) {
         self.active_page_target_mut()
-            .active_target
             .runtime_slot
             .clear_document_navigation_state();
     }
@@ -1435,10 +1435,7 @@ impl BrowserContext {
 
     #[cfg(test)]
     pub(crate) fn session_storage_store_for_test(&self) -> &SharedWebStorageStore {
-        self.active_page_target()
-            .active_target
-            .session_storage_namespace
-            .store()
+        self.active_page_target().session_storage_namespace.store()
     }
 
     #[cfg(test)]

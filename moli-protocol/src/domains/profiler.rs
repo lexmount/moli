@@ -50,7 +50,6 @@ mod tests {
             .expect("browser context should exist");
         let _ = browser_context
             .active_page_state_mut()
-            .active_target
             .runtime_slot
             .replace_loaded_page(Some(page));
     }
@@ -96,7 +95,6 @@ mod tests {
             .expect("browser context should exist");
         let _ = browser_context
             .active_page_state_mut()
-            .active_target
             .runtime_slot
             .replace_loaded_page(Some(page));
     }
@@ -139,12 +137,7 @@ mod tests {
             .conn
             .browser_context
             .as_mut()
-            .and_then(|bc| {
-                bc.active_page_state_mut()
-                    .active_target
-                    .runtime_slot
-                    .loaded_page_mut()
-            })
+            .and_then(|bc| bc.active_page_state_mut().runtime_slot.loaded_page_mut())
             .expect("active target should still have a loaded page")
             .runtime_heap_usage_async()
             .await
@@ -2005,7 +1998,6 @@ mod tests {
             .expect("browser context should exist");
         let _ = browser_context
             .active_page_state_mut()
-            .active_target
             .runtime_slot
             .replace_loaded_page(Some(page));
 
@@ -2206,7 +2198,6 @@ mod tests {
             .expect("browser context should exist after reload");
         let _ = browser_context
             .active_page_state_mut()
-            .active_target
             .runtime_slot
             .replace_loaded_page(Some(page));
 

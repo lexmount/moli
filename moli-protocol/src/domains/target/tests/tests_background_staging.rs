@@ -72,12 +72,7 @@ async fn loaded_page_html_for_test(ctx: &mut TestContext) -> String {
         .conn
         .browser_context
         .as_mut()
-        .and_then(|bc| {
-            bc.active_page_state_mut()
-                .active_target
-                .runtime_slot
-                .loaded_page_mut()
-        })
+        .and_then(|bc| bc.active_page_state_mut().runtime_slot.loaded_page_mut())
         .expect("loaded page");
     page.serialize_html_async()
         .await
@@ -192,7 +187,6 @@ async fn same_context_background_session_can_stage_its_own_pre_document_state_be
         assert!(
             active
                 .active_page_state()
-                .active_target
                 .owner_state
                 .document_start_scripts
                 .is_empty()
@@ -401,7 +395,6 @@ async fn same_context_background_session_can_stage_its_own_utility_pre_document_
         assert!(
             active
                 .active_page_state()
-                .active_target
                 .owner_state
                 .document_start_scripts
                 .is_empty()
@@ -5789,7 +5782,6 @@ async fn same_context_background_session_can_stage_its_own_inspector_enable_befo
         .as_mut()
         .unwrap()
         .active_page_state_mut()
-        .active_target
         .owner_state
         .target_crash_state
         .mark_crashed();
@@ -5840,7 +5832,6 @@ async fn same_context_background_session_can_stage_its_own_inspector_enable_befo
         assert!(
             active
                 .active_page_state()
-                .active_target
                 .owner_state
                 .target_crash_state
                 .is_crashed()
@@ -5914,7 +5905,6 @@ async fn same_context_background_session_can_stage_its_own_inspector_enable_befo
             .as_ref()
             .expect("browser context")
             .active_page_state()
-            .active_target
             .owner_state
             .target_crash_state
             .is_crashed()
@@ -6016,7 +6006,6 @@ async fn same_context_background_session_can_disable_its_own_inspector_before_pr
         .as_mut()
         .unwrap()
         .active_page_state_mut()
-        .active_target
         .owner_state
         .target_crash_state
         .mark_crashed();
@@ -6046,7 +6035,6 @@ async fn same_context_background_session_can_disable_its_own_inspector_before_pr
             .as_ref()
             .expect("browser context")
             .active_page_state()
-            .active_target
             .owner_state
             .target_crash_state
             .is_crashed(),
@@ -6370,17 +6358,10 @@ async fn same_context_background_session_can_stage_its_own_fetch_enable_before_p
             .browser_context
             .as_ref()
             .expect("active browser context");
-        assert!(
-            !active
-                .active_page_state()
-                .active_target
-                .fetch_owner
-                .is_enabled()
-        );
+        assert!(!active.active_page_state().fetch_owner.is_enabled());
         assert!(
             active
                 .active_page_state()
-                .active_target
                 .fetch_owner
                 .config_snapshot()
                 .patterns()
@@ -6719,13 +6700,7 @@ async fn same_context_background_session_can_stage_its_own_fetch_auth_handling_b
             .browser_context
             .as_ref()
             .expect("active browser context");
-        assert!(
-            !active
-                .active_page_state()
-                .active_target
-                .fetch_owner
-                .is_enabled()
-        );
+        assert!(!active.active_page_state().fetch_owner.is_enabled());
         let staged = active
             .parked_page_session_state(&second_target_id)
             .expect("second target should have staged parked page session state");
@@ -6921,17 +6896,10 @@ async fn same_context_background_session_can_disable_its_own_fetch_before_promot
             .browser_context
             .as_ref()
             .expect("active browser context");
-        assert!(
-            !active
-                .active_page_state()
-                .active_target
-                .fetch_owner
-                .is_enabled()
-        );
+        assert!(!active.active_page_state().fetch_owner.is_enabled());
         assert!(
             active
                 .active_page_state()
-                .active_target
                 .fetch_owner
                 .config_snapshot()
                 .patterns()
@@ -7085,7 +7053,6 @@ async fn same_context_background_session_can_stage_its_own_network_enable_before
         assert!(
             !active
                 .active_page_state()
-                .active_target
                 .runtime_slot
                 .primary_network_events_enabled()
         );
@@ -7279,7 +7246,6 @@ async fn same_context_background_session_can_disable_its_own_network_before_prom
         assert!(
             !active
                 .active_page_state()
-                .active_target
                 .runtime_slot
                 .primary_network_events_enabled()
         );
@@ -7476,7 +7442,6 @@ async fn same_context_background_session_can_stage_its_own_cache_and_service_wor
         assert!(
             !active
                 .active_page_state()
-                .active_target
                 .runtime_slot
                 .primary_network_events_enabled()
         );
@@ -7537,7 +7502,6 @@ async fn same_context_background_session_can_stage_its_own_cache_and_service_wor
         assert_eq!(bc.active_target_id(), Some(second_target_id.as_str()));
         assert!(
             bc.active_page_state()
-                .active_target
                 .runtime_slot
                 .primary_network_events_enabled()
         );
@@ -7728,7 +7692,6 @@ async fn same_context_background_session_can_disable_its_own_cache_and_service_w
         assert!(
             !active
                 .active_page_state()
-                .active_target
                 .runtime_slot
                 .primary_network_events_enabled()
         );
@@ -7789,7 +7752,6 @@ async fn same_context_background_session_can_disable_its_own_cache_and_service_w
         assert_eq!(bc.active_target_id(), Some(second_target_id.as_str()));
         assert!(
             bc.active_page_state()
-                .active_target
                 .runtime_slot
                 .primary_network_events_enabled()
         );

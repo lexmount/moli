@@ -1,22 +1,10 @@
-use std::collections::HashMap;
-
-use super::devtools_session::{
-    DevToolsNetworkPolicyAggregate, DevToolsNetworkSessionState, DevToolsSessionRegistry,
-};
-use super::emulation::{
-    EmulatedDeviceMetrics, EmulatedGeolocationOverrideState, EmulatedMediaOverrides,
-    EmulatedNetworkConditions,
-};
+use super::devtools_session::{DevToolsNetworkPolicyAggregate, DevToolsNetworkSessionState};
+use super::emulation::EmulatedMediaOverrides;
 use super::fetch::TargetFetchOwner;
-use super::identity::TargetIdentityState;
 use super::javascript_dialog::TargetJavaScriptDialogState;
-use super::parking::TargetOwnerState;
-use super::runtime_slot::TargetRuntimeSlot;
-use super::session_storage::TargetSessionStorageNamespace;
-use crate::conn::cookie_manager_surface::BrowserContextCookieManagerSurface;
+use super::page_target_host::PageTargetHost;
 use crate::domains::audits_output_state::TargetAuditsSessionState;
 use moli_core::page::V8InspectorSessionState;
-use serde_json::Value;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) enum PerformanceTimeDomain {
@@ -71,84 +59,7 @@ impl TargetPerformanceSessionState {
     }
 }
 
-#[derive(Debug, Default)]
-pub struct ActiveTargetState {
-    pub(crate) runtime_slot: TargetRuntimeSlot,
-    pub(crate) fetch_owner: TargetFetchOwner,
-    pub(crate) owner_state: TargetOwnerState,
-    pub(crate) session_storage_namespace: TargetSessionStorageNamespace,
-}
-
-/// All mutable state owned by one page target.
-///
-/// Foreground selection is deliberately absent from this type. A page keeps
-/// the same state object while visible or hidden; selecting another page must
-/// not serialize this state into a second "parked" representation.
-#[derive(Debug)]
-pub struct TargetPageState {
-    pub(crate) target_identity: TargetIdentityState,
-    pub(crate) devtools_sessions: DevToolsSessionRegistry,
-    pub(crate) network_policy: TargetNetworkPolicyState,
-    pub(crate) http_proxy_override: Option<String>,
-    pub(crate) http_no_proxy_override: Option<String>,
-    pub(crate) tls_verify_host_override: Option<bool>,
-    // Target-scoped non-CDP policy (for example WebDriver BiDi). CDP session
-    // contributions temporarily shadow this layer and reveal it on detach.
-    pub(crate) base_locale_override: Option<String>,
-    pub(crate) base_timezone_override: Option<String>,
-    // Materialized values consumed by navigation and the renderer.
-    pub(crate) locale_override: Option<String>,
-    pub(crate) timezone_override: Option<String>,
-    pub(crate) network_conditions: Option<EmulatedNetworkConditions>,
-    pub(crate) geolocation_override: Option<EmulatedGeolocationOverrideState>,
-    pub(crate) emulated_media: EmulatedMediaOverrides,
-    pub(crate) emulated_device_metrics: Option<EmulatedDeviceMetrics>,
-    pub(crate) cpu_throttling_rate: f64,
-    pub(crate) input_intercept_drags_enabled: bool,
-    pub(crate) input_drag_intercepted: bool,
-    pub(crate) touch_emulation_enabled: bool,
-    pub(crate) emit_touch_events_for_mouse: bool,
-    pub(crate) focus_emulation_enabled: bool,
-    pub(crate) script_execution_disabled: bool,
-    pub(crate) css_enabled: bool,
-    pub(crate) document_cookie_manager_surface: BrowserContextCookieManagerSurface,
-    pub(crate) dom_remote_object_node_cache: HashMap<String, Value>,
-    pub(crate) active_target: ActiveTargetState,
-}
-
-impl Default for TargetPageState {
-    fn default() -> Self {
-        Self {
-            target_identity: TargetIdentityState::about_blank(),
-            devtools_sessions: DevToolsSessionRegistry::default(),
-            network_policy: TargetNetworkPolicyState::default(),
-            http_proxy_override: None,
-            http_no_proxy_override: None,
-            tls_verify_host_override: None,
-            base_locale_override: None,
-            base_timezone_override: None,
-            locale_override: None,
-            timezone_override: None,
-            network_conditions: None,
-            geolocation_override: None,
-            emulated_media: EmulatedMediaOverrides::default(),
-            emulated_device_metrics: None,
-            cpu_throttling_rate: 1.0,
-            input_intercept_drags_enabled: false,
-            input_drag_intercepted: false,
-            touch_emulation_enabled: false,
-            emit_touch_events_for_mouse: false,
-            focus_emulation_enabled: false,
-            script_execution_disabled: false,
-            css_enabled: false,
-            document_cookie_manager_surface: BrowserContextCookieManagerSurface::default(),
-            dom_remote_object_node_cache: HashMap::new(),
-            active_target: ActiveTargetState::default(),
-        }
-    }
-}
-
-impl TargetPageState {
+impl PageTargetHost {
     pub(crate) fn effective_renderer_browser_identity_override_owned(
         &self,
     ) -> Option<moli_browser_profile::BrowserIdentityProfile> {
@@ -279,10 +190,7 @@ impl TargetPageState {
 
     pub(crate) fn has_non_default_session_state(&self) -> bool {
         self.devtools_sessions.has_non_default_state()
-            || self
-                .active_target
-                .runtime_slot
-                .primary_network_events_enabled()
+            || self.runtime_slot.primary_network_events_enabled()
             || self.network_policy != TargetNetworkPolicyState::default()
             || self.http_proxy_override.is_some()
             || self.http_no_proxy_override.is_some()
@@ -301,8 +209,7 @@ impl TargetPageState {
             || self.focus_emulation_enabled
             || self.script_execution_disabled
             || self.css_enabled
-            || self.active_target.fetch_owner.config_snapshot()
-                != super::fetch::TargetFetchConfig::default()
+            || self.fetch_owner.config_snapshot() != super::fetch::TargetFetchConfig::default()
     }
 
     pub(crate) fn clear_session_scoped_state_fields(
@@ -311,9 +218,7 @@ impl TargetPageState {
     ) {
         self.devtools_sessions
             .reset(preserve_auxiliary_devtools_sessions);
-        self.active_target
-            .runtime_slot
-            .disable_primary_network_events();
+        self.runtime_slot.disable_primary_network_events();
         self.network_policy.clear_session_scoped_state();
         self.refresh_devtools_network_policy();
         self.refresh_devtools_emulation_policy();
@@ -330,31 +235,13 @@ impl TargetPageState {
         self.focus_emulation_enabled = false;
         self.script_execution_disabled = false;
         self.css_enabled = false;
-        self.active_target.fetch_owner = TargetFetchOwner::default();
-        self.active_target
-            .runtime_slot
+        self.fetch_owner = TargetFetchOwner::default();
+        self.runtime_slot
             .clear_session_scoped_network_observation_artifacts();
-        self.active_target
-            .runtime_slot
+        self.runtime_slot
             .request_id_allocator()
             .reset_fetch_navigation_request_counter();
-        self.active_target
-            .owner_state
-            .clear_observable_output_state();
-    }
-}
-
-impl std::ops::Deref for TargetPageState {
-    type Target = ActiveTargetState;
-
-    fn deref(&self) -> &Self::Target {
-        &self.active_target
-    }
-}
-
-impl std::ops::DerefMut for TargetPageState {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.active_target
+        self.owner_state.clear_observable_output_state();
     }
 }
 
@@ -850,13 +737,12 @@ impl TargetNetworkPolicyState {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        PageScreencastConfig, PageScreencastFormat, PageScreencastSessionState, TargetPageState,
-    };
+    use super::{PageScreencastConfig, PageScreencastFormat, PageScreencastSessionState};
+    use crate::conn::PageTargetHost;
 
     #[test]
     fn devtools_emulation_overrides_reveal_target_base_state_when_cleared() {
-        let mut state = TargetPageState::default();
+        let mut state = PageTargetHost::empty("TID-policy-test".to_owned());
         state.set_base_locale_override(Some("en-GB".to_owned()));
         state.set_base_timezone_override(Some("Europe/London".to_owned()));
         state.network_policy.set_browser_identity_override(

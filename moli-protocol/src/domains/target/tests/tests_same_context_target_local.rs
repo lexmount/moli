@@ -1890,7 +1890,6 @@ async fn close_target_aborts_paused_request_stage_navigation() {
         .runtime_session_state
         .inspector_enabled = true;
     bc.active_page_state_mut()
-        .active_target
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);

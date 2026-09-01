@@ -3705,7 +3705,6 @@ mod tests {
         context.set_active_target_id("TID-page");
         let page_attachment_id = context
             .active_page_state_mut()
-            .active_target
             .runtime_slot
             .set_page_attachment_id_for_test(1);
         let owner_page = TargetPageResidenceIdentity::new(
@@ -4685,7 +4684,6 @@ mod tests {
             .as_mut()
             .unwrap()
             .active_page_state_mut()
-            .active_target
             .runtime_slot
             .replace_page_attachment_id_for_test();
         let messages = protocol_messages(

@@ -914,7 +914,6 @@ async fn get_navigation_history_completes_through_command_dispatch() {
         .as_mut()
         .expect("browser context")
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .set_loaded_page_for_test(page);
 
@@ -980,7 +979,6 @@ async fn reset_navigation_history_prunes_browser_and_renderer_history() {
         .as_mut()
         .expect("browser context")
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .set_loaded_page_for_test(page);
 
@@ -1486,7 +1484,6 @@ async fn get_navigation_history_targets_inactive_loaded_owner_without_activation
     inactive.set_target_url(page.final_url().as_str().to_owned());
     inactive
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .replace_loaded_page(Some(page));
     ctx.conn.inactive_browser_contexts.push(inactive);
@@ -5300,7 +5297,6 @@ async fn continue_request_completes_paused_navigation_before_commit_events() {
         .as_mut()
         .unwrap()
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .enable_primary_network_events();
 
@@ -5386,7 +5382,6 @@ async fn stop_loading_aborts_paused_request_stage_navigation() {
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
     let bc = ctx.conn.browser_context.as_mut().unwrap();
     bc.active_page_state_mut()
-        .active_target
         .runtime_slot
         .enable_primary_network_events();
     let committed_document_token = bc
@@ -5504,7 +5499,6 @@ async fn stop_loading_aborts_paused_response_stage_navigation() {
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
     let bc = ctx.conn.browser_context.as_mut().unwrap();
     bc.active_page_state_mut()
-        .active_target
         .runtime_slot
         .enable_primary_network_events();
 
@@ -5622,7 +5616,6 @@ async fn stop_loading_aborts_paused_auth_navigation() {
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
     let bc = ctx.conn.browser_context.as_mut().unwrap();
     bc.active_page_state_mut()
-        .active_target
         .runtime_slot
         .enable_primary_network_events();
 
@@ -6387,7 +6380,6 @@ async fn reload_after_crash_emits_target_reloaded_after_crash() {
         .runtime_session_state
         .record_inspector_target_crashed();
     bc.active_page_state_mut()
-        .active_target
         .owner_state
         .target_crash_state
         .mark_crashed();
@@ -6416,7 +6408,6 @@ async fn reload_after_crash_emits_target_reloaded_after_crash() {
             .as_ref()
             .expect("browser context")
             .active_page_state()
-            .active_target
             .owner_state
             .target_crash_state
             .is_crashed()
@@ -6437,7 +6428,6 @@ async fn navigate_after_crash_emits_target_reloaded_after_crash() {
         .runtime_session_state
         .record_inspector_target_crashed();
     bc.active_page_state_mut()
-        .active_target
         .owner_state
         .target_crash_state
         .mark_crashed();
@@ -6469,7 +6459,6 @@ async fn navigate_after_crash_emits_target_reloaded_after_crash() {
             .as_ref()
             .expect("browser context")
             .active_page_state()
-            .active_target
             .owner_state
             .target_crash_state
             .is_crashed()
@@ -6494,7 +6483,6 @@ async fn navigate_after_crash_without_inspector_enabled_clears_crash_without_eve
         .as_mut()
         .unwrap()
         .active_page_state_mut()
-        .active_target
         .owner_state
         .target_crash_state
         .mark_crashed();
@@ -6527,7 +6515,6 @@ async fn navigate_after_crash_without_inspector_enabled_clears_crash_without_eve
             .as_ref()
             .expect("browser context")
             .active_page_state()
-            .active_target
             .owner_state
             .target_crash_state
             .is_crashed()

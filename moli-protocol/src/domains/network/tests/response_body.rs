@@ -31,7 +31,6 @@ async fn get_response_body_respects_recorded_session_visibility() {
     bc.set_active_target_id("TID-1".to_owned());
     bc.attach_active_session("SID-primary".to_owned());
     bc.active_page_state_mut()
-        .active_target
         .runtime_slot
         .enable_primary_network_events();
     assert!(bc.assign_auxiliary_session_to_target("TID-1", "SID-aux".to_owned()));
@@ -72,7 +71,6 @@ async fn get_response_body_requires_calling_session_network_listener() {
     bc.set_active_target_id("TID-1".to_owned());
     bc.attach_active_session("SID-primary".to_owned());
     bc.active_page_state_mut()
-        .active_target
         .runtime_slot
         .enable_primary_network_events();
     assert!(bc.assign_auxiliary_session_to_target("TID-1", "SID-aux".to_owned()));
@@ -119,7 +117,6 @@ async fn get_response_body_reports_pending_body_as_existing_without_data() {
     let mut ctx = TestContext::new();
     let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
     bc.active_page_state_mut()
-        .active_target
         .runtime_slot
         .enable_primary_network_events();
     bc.record_pending_response_body("REQ-pending".to_owned(), [None::<String>]);
@@ -142,7 +139,6 @@ async fn get_response_body_ready_body_replaces_pending_body() {
     let mut ctx = TestContext::new();
     let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
     bc.active_page_state_mut()
-        .active_target
         .runtime_slot
         .enable_primary_network_events();
     bc.record_pending_response_body("REQ-ready".to_owned(), [None::<String>]);
@@ -173,7 +169,6 @@ async fn get_response_body_rejects_bodies_over_materialization_limit() {
     ctx.conn = CdpConnection::new_with_fetch_config(config);
     let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
     bc.active_page_state_mut()
-        .active_target
         .runtime_slot
         .enable_primary_network_events();
     bc.record_captured_response_body("REQ-large".to_owned(), "hello".to_owned(), [None::<String>]);
@@ -197,7 +192,6 @@ async fn get_response_body_reports_default_single_resource_budget_eviction() {
     let mut ctx = TestContext::new();
     let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
     bc.active_page_state_mut()
-        .active_target
         .runtime_slot
         .enable_primary_network_events();
     bc.record_captured_response_body_source(
@@ -225,7 +219,6 @@ async fn get_response_body_base64_encodes_non_utf8_captured_bytes() {
     let mut ctx = TestContext::new();
     let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
     bc.active_page_state_mut()
-        .active_target
         .runtime_slot
         .enable_primary_network_events();
     bc.record_captured_response_body_source(
@@ -253,13 +246,11 @@ async fn get_request_post_data_matches_chromium_errors_and_binary_encoding() {
     let mut ctx = TestContext::new();
     let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
     bc.active_page_state_mut()
-        .active_target
         .runtime_slot
         .enable_primary_network_events();
     bc.record_pending_response_body("REQ-get".to_owned(), [None::<String>]);
     bc.record_pending_response_body("REQ-empty".to_owned(), [None::<String>]);
     bc.active_page_state_mut()
-        .active_target
         .runtime_slot
         .record_captured_request_body_with_collector_scope(
             "REQ-empty".to_owned(),
@@ -270,7 +261,6 @@ async fn get_request_post_data_matches_chromium_errors_and_binary_encoding() {
         );
     bc.record_pending_response_body("REQ-binary".to_owned(), [None::<String>]);
     bc.active_page_state_mut()
-        .active_target
         .runtime_slot
         .record_captured_request_body_with_collector_scope(
             "REQ-binary".to_owned(),
@@ -342,7 +332,6 @@ async fn get_response_body_returns_partial_body_after_staged_loading_failed() {
     bc.set_active_target_id("TID-1".to_owned());
     bc.attach_active_session("SID-1".to_owned());
     bc.active_page_state_mut()
-        .active_target
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -462,14 +451,12 @@ async fn get_request_post_data_respects_recorded_session_visibility() {
     bc.set_active_target_id("TID-1".to_owned());
     bc.attach_active_session("SID-primary".to_owned());
     bc.active_page_state_mut()
-        .active_target
         .runtime_slot
         .enable_primary_network_events();
     assert!(bc.assign_auxiliary_session_to_target("TID-1", "SID-aux".to_owned()));
     bc.enable_auxiliary_network_events("SID-aux");
     bc.record_pending_response_body("REQ-aux-only".to_owned(), [Some("SID-aux".to_owned())]);
     bc.active_page_state_mut()
-        .active_target
         .runtime_slot
         .record_captured_request_body_with_collector_scope(
             "REQ-aux-only".to_owned(),
@@ -510,7 +497,6 @@ async fn get_request_post_data_returns_main_document_navigation_post_body() {
     bc.set_active_target_id("TID-1".to_owned());
     bc.attach_active_session("SID-1".to_owned());
     bc.active_page_state_mut()
-        .active_target
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -566,7 +552,6 @@ async fn get_request_post_data_uses_text_projection_while_bidi_collector_keeps_t
     bc.set_active_target_id("TID-1".to_owned());
     bc.attach_active_session("SID-1".to_owned());
     bc.active_page_state_mut()
-        .active_target
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -672,7 +657,6 @@ async fn get_network_data_returns_bidi_response_body_bytes() {
     bc.set_active_target_id("TID-1".to_owned());
     bc.attach_active_session("bidi-session-1".to_owned());
     bc.active_page_state_mut()
-        .active_target
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);

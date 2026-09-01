@@ -707,7 +707,6 @@ async fn reset_resource_runtime_clears_loaded_page_cookie_backend() {
         .as_mut()
         .unwrap()
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .set_loaded_page_for_test(navigation.page);
 
@@ -716,7 +715,6 @@ async fn reset_resource_runtime_clears_loaded_page_cookie_backend() {
         .as_mut()
         .unwrap()
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .loaded_page_mut()
         .unwrap();
@@ -733,7 +731,6 @@ async fn reset_resource_runtime_clears_loaded_page_cookie_backend() {
         .as_mut()
         .unwrap()
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .loaded_page_mut()
         .unwrap();
@@ -975,7 +972,6 @@ async fn user_agent_override_rebinds_live_document_after_engine_runtime_invalida
         .as_mut()
         .unwrap()
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .set_loaded_page_for_test(navigation.page);
 
@@ -990,7 +986,6 @@ async fn user_agent_override_rebinds_live_document_after_engine_runtime_invalida
         .as_mut()
         .unwrap()
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .loaded_page_mut()
         .unwrap();
@@ -1022,7 +1017,6 @@ async fn tls_and_proxy_overrides_rebind_live_document_after_engine_runtime_inval
         .as_mut()
         .unwrap()
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .set_loaded_page_for_test(navigation.page);
 
@@ -1035,7 +1029,6 @@ async fn tls_and_proxy_overrides_rebind_live_document_after_engine_runtime_inval
         .as_mut()
         .unwrap()
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .loaded_page_mut()
         .unwrap();
@@ -1053,7 +1046,6 @@ async fn tls_and_proxy_overrides_rebind_live_document_after_engine_runtime_inval
         .as_mut()
         .unwrap()
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .loaded_page_mut()
         .unwrap();
@@ -1351,7 +1343,6 @@ async fn session_scoped_process_message_restores_previously_active_context_after
     assert!(
         inactive
             .active_page_state()
-            .active_target
             .runtime_slot
             .primary_network_events_enabled()
     );
@@ -1391,7 +1382,6 @@ async fn session_scoped_process_message_async_restores_previously_active_context
     assert!(
         inactive
             .active_page_state()
-            .active_target
             .runtime_slot
             .primary_network_events_enabled()
     );
@@ -1427,7 +1417,6 @@ async fn direct_network_enable_routes_to_inactive_active_owner_without_promoting
     assert!(
         inactive
             .active_page_state()
-            .active_target
             .runtime_slot
             .primary_network_events_enabled()
     );
@@ -1562,7 +1551,6 @@ fn devtools_document_lifecycle_wait_key_observes_interruption_and_target_loss() 
     browser_context.attach_active_session("SID-lifecycle-wait");
     browser_context
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .set_page_attachment_id_for_test(901);
     conn.browser_context = Some(browser_context);
@@ -1694,7 +1682,6 @@ fn devtools_document_lifecycle_wait_key_observes_interruption_and_target_loss() 
     replacement_context.attach_active_session("SID-lifecycle-wait");
     replacement_context
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .set_page_attachment_id_for_test(902);
     conn.browser_context = Some(replacement_context);
@@ -1739,7 +1726,6 @@ fn devtools_target_context_resolves_background_page_without_ambient_route() {
     browser_context.set_active_target_id("TID-active");
     browser_context
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .set_page_attachment_id_for_test(1001);
     assert!(
@@ -1753,11 +1739,9 @@ fn devtools_target_context_resolves_background_page_without_ambient_route() {
         .background_target_mut("TID-background")
         .expect("background PageTargetHost");
     background
-        .active_target
         .runtime_slot
         .set_page_attachment_id_for_test(1002);
     background
-        .active_target
         .runtime_slot
         .start_document_navigation("TID-background".to_owned(), "LID-background".to_owned());
     conn.browser_context = Some(browser_context);
@@ -2255,7 +2239,6 @@ async fn direct_network_enable_disable_routes_to_inactive_auxiliary_owner_withou
     assert!(
         !inactive
             .active_page_state()
-            .active_target
             .runtime_slot
             .primary_network_events_enabled(),
         "auxiliary Network.enable must not enable the target's primary listener"
@@ -2263,7 +2246,6 @@ async fn direct_network_enable_disable_routes_to_inactive_auxiliary_owner_withou
     assert!(
         inactive
             .active_page_state()
-            .active_target
             .runtime_slot
             .has_auxiliary_network_events_for_session("SID-aux")
     );
@@ -2289,7 +2271,6 @@ async fn direct_network_enable_disable_routes_to_inactive_auxiliary_owner_withou
     assert!(
         !inactive
             .active_page_state()
-            .active_target
             .runtime_slot
             .has_auxiliary_network_events_for_session("SID-aux")
     );
@@ -2739,7 +2720,6 @@ async fn direct_console_routes_to_inactive_active_owner_without_promoting_slot()
     assert_eq!(
         inactive
             .active_page_state()
-            .active_target
             .owner_state
             .console_output_state
             .console_domain_cursor(),
@@ -2793,7 +2773,6 @@ async fn direct_console_routes_to_inactive_active_owner_without_promoting_slot()
     assert_eq!(
         inactive
             .active_page_state()
-            .active_target
             .owner_state
             .console_output_state
             .console_domain_cursor(),

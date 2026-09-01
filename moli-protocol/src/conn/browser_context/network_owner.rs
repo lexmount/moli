@@ -229,7 +229,7 @@ impl TargetSessionOwnerMut<'_> {
         f: impl FnOnce(&mut crate::conn::state::DevToolsNetworkSessionState) -> T,
     ) -> Option<T> {
         fn mutate<T>(
-            page_state: &mut crate::conn::state::TargetPageState,
+            page_state: &mut crate::conn::state::PageTargetHost,
             session_id: Option<&str>,
             is_auxiliary_target_session: bool,
             f: impl FnOnce(&mut crate::conn::state::DevToolsNetworkSessionState) -> T,
@@ -997,7 +997,7 @@ impl CdpConnection {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::conn::{PageTargetHost, TargetPageState};
+    use crate::conn::PageTargetHost;
 
     fn active_session_state_mut(browser_context: &mut BrowserContext) -> TargetSessionStateMut<'_> {
         let state = browser_context.active_page_state_mut();
@@ -1009,7 +1009,7 @@ mod tests {
         }
     }
 
-    fn parked_session_state_mut(state: &mut TargetPageState) -> TargetSessionStateMut<'_> {
+    fn parked_session_state_mut(state: &mut PageTargetHost) -> TargetSessionStateMut<'_> {
         TargetSessionStateMut::Loaded {
             devtools_session_state: &mut state.devtools_sessions
                 [moli_page_types::DevToolsSessionKey::Primary],
@@ -1148,7 +1148,7 @@ mod tests {
             Some("cellular3g")
         );
 
-        let mut parked = TargetPageState::default();
+        let mut parked = PageTargetHost::empty("TID-network-owner-test".to_owned());
         {
             let network = &mut parked.devtools_sessions.primary_mut().network_session_state;
             network.network_enabled = true;

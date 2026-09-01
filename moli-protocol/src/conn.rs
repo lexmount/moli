@@ -548,7 +548,7 @@ pub use state::{
     EmulatedGeolocationOverrideState, EmulatedMediaOverrides, IsolatedWorldDefinition,
     LoadedNavigation, NavigationDispatchState, NavigationLoadOutcome, NavigationRequestLoadPolicy,
     PageNavigationHistoryEntry, PageTargetHost, PendingNavigationHistoryUpdate,
-    RuntimeBindingDefinition, TargetInfo, TargetPageState, URL_BASE,
+    RuntimeBindingDefinition, TargetInfo, URL_BASE,
 };
 pub(crate) use state::{
     BrowserContextPageStorageHandles, BrowserContextResourceStorageHandles,

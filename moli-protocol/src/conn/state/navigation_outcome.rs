@@ -378,13 +378,11 @@ impl<'a> TargetInfo<'a> {
             kind: "page",
             title: bc
                 .active_page_target()
-                .active_target
                 .owner_state
                 .committed_document_title()
                 .map(str::to_owned)
                 .or_else(|| {
                     bc.active_page_target()
-                        .active_target
                         .runtime_slot
                         .loaded_page()
                         .map(|page| page.document_title())

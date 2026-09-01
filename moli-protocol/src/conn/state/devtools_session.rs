@@ -60,6 +60,7 @@ pub(crate) struct DevToolsSessionState {
 /// source of truth.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct DevToolsSessionRegistry {
+    primary_session_id: Option<String>,
     states: BTreeMap<DevToolsSessionKey, DevToolsSessionState>,
     attached_order: Vec<String>,
 }
@@ -67,6 +68,7 @@ pub(crate) struct DevToolsSessionRegistry {
 impl Default for DevToolsSessionRegistry {
     fn default() -> Self {
         Self {
+            primary_session_id: None,
             states: BTreeMap::from([(
                 DevToolsSessionKey::Primary,
                 DevToolsSessionState::default(),
@@ -77,6 +79,18 @@ impl Default for DevToolsSessionRegistry {
 }
 
 impl DevToolsSessionRegistry {
+    pub(crate) fn primary_session_id(&self) -> Option<&str> {
+        self.primary_session_id.as_deref()
+    }
+
+    pub(crate) fn attach_primary(&mut self, session_id: String) {
+        self.primary_session_id = Some(session_id);
+    }
+
+    pub(crate) fn detach_primary(&mut self) -> Option<String> {
+        self.primary_session_id.take()
+    }
+
     pub(crate) fn primary(&self) -> &DevToolsSessionState {
         self.states
             .get(&DevToolsSessionKey::Primary)
@@ -162,6 +176,11 @@ impl DevToolsSessionRegistry {
             DevToolsSessionKey::Primary => None,
             DevToolsSessionKey::Attached(session_id) => Some((session_id.as_str(), state)),
         })
+    }
+
+    pub(crate) fn attached_session_ids(&self) -> impl Iterator<Item = &str> {
+        self.attached_entries()
+            .map(|(session_id, _state)| session_id)
     }
 
     pub(crate) fn attached_states(&self) -> impl Iterator<Item = &DevToolsSessionState> {

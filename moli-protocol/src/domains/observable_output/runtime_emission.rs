@@ -245,12 +245,10 @@ mod tests {
                 .as_mut()
                 .expect("browser context should exist");
             bc.active_page_state_mut()
-                .active_target
                 .owner_state
                 .runtime_observable_state
                 .mark_emitted_console_counts(HashMap::from([(7, 1)]));
             bc.active_page_state_mut()
-                .active_target
                 .owner_state
                 .runtime_observable_state
                 .mark_emitted_exception_entries(1);
@@ -284,11 +282,9 @@ mod tests {
                 .expect("browser context should exist");
             bc.set_target_url("http://example.test/runtime-source".to_owned());
             bc.active_page_state_mut()
-                .active_target
                 .runtime_slot
                 .set_page_attachment_id_for_test(3);
             bc.active_page_state_mut()
-                .active_target
                 .runtime_slot
                 .sync_observable_output_source_from_renderer_snapshot(
                     "http://example.test/runtime-source".to_owned(),
@@ -303,7 +299,6 @@ mod tests {
             .as_ref()
             .expect("browser context should exist")
             .active_page_state()
-            .active_target
             .owner_state
             .runtime_observable_state;
         assert_eq!(

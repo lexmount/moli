@@ -578,7 +578,6 @@ mod tests {
             "SID-runtime-disabled".to_owned(),
         ));
         bc.active_page_state_mut()
-            .active_target
             .runtime_slot
             .set_page_attachment_id_for_test(17);
         conn.browser_context = Some(bc);
@@ -606,7 +605,6 @@ mod tests {
         let mut conn = crate::conn::CdpConnection::default();
         let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
         bc.active_page_state_mut()
-            .active_target
             .runtime_slot
             .set_page_attachment_id_for_test(1);
         bc.active_page_state_mut().devtools_sessions
@@ -656,7 +654,6 @@ mod tests {
         let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
         bc.set_target_url("data:text/html,console-only-source".to_owned());
         bc.active_page_state_mut()
-            .active_target
             .runtime_slot
             .set_page_attachment_id_for_test(1);
         bc.active_page_state_mut().devtools_sessions
@@ -711,7 +708,6 @@ mod tests {
         let mut conn = crate::conn::CdpConnection::default();
         let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
         bc.active_page_state_mut()
-            .active_target
             .runtime_slot
             .set_page_attachment_id_for_test(1);
         bc.active_page_state_mut().devtools_sessions
@@ -752,7 +748,6 @@ mod tests {
             .expect("test page should load");
         let _ = bc
             .active_page_state_mut()
-            .active_target
             .runtime_slot
             .replace_loaded_page(Some(page));
         bc.active_page_state_mut().devtools_sessions
@@ -794,7 +789,7 @@ mod tests {
                 .conn
                 .browser_context
                 .as_ref()
-                .map(|bc| &bc.active_page_state().active_target.runtime_slot)
+                .map(|bc| &bc.active_page_state().runtime_slot)
                 .expect("browser context should be loaded");
             let queue = TargetObservableOutputQueue::from_runtime_slot(runtime_slot)
                 .expect("queue should load");

@@ -33,12 +33,7 @@ async fn loaded_page_html_for_test(ctx: &mut TestContext) -> String {
         .conn
         .browser_context
         .as_mut()
-        .and_then(|bc| {
-            bc.active_page_state_mut()
-                .active_target
-                .runtime_slot
-                .loaded_page_mut()
-        })
+        .and_then(|bc| bc.active_page_state_mut().runtime_slot.loaded_page_mut())
         .expect("loaded page");
     page.serialize_html_async()
         .await
@@ -605,7 +600,6 @@ async fn idle_override_updates_idle_detector_and_clear_restores_actual_state() {
             .and_then(|context| {
                 context
                     .active_page_state_mut()
-                    .active_target
                     .runtime_slot
                     .loaded_page_mut()
             })
@@ -657,7 +651,6 @@ async fn idle_override_updates_idle_detector_and_clear_restores_actual_state() {
             .and_then(|context| {
                 context
                     .active_page_state_mut()
-                    .active_target
                     .runtime_slot
                     .loaded_page_mut()
             })
@@ -699,7 +692,6 @@ async fn idle_override_updates_idle_detector_and_clear_restores_actual_state() {
         .and_then(|context| {
             context
                 .active_page_state_mut()
-                .active_target
                 .runtime_slot
                 .loaded_page_mut()
         })
@@ -1420,7 +1412,6 @@ async fn set_user_agent_override_applies_to_subsequent_navigation_requests() {
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     bc.active_page_state_mut()
-        .active_target
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);

@@ -2,7 +2,7 @@ use super::super::cookie_manager_surface::BrowserContextCookieManagerSurfaceSnap
 use super::super::{
     BrowserContext, CdpConnection, DocumentStartScript, EmulatedDeviceMetrics,
     EmulatedGeolocationOverrideState, EmulatedNetworkConditions, EmulatedViewportSurface,
-    TargetPageState, viewport_surface_install_script,
+    PageTargetHost, viewport_surface_install_script,
 };
 #[cfg(test)]
 use moli_cookie_jar::{BrowserCookieFacadeContextOverrides, BrowserCookieFacadeOverrides};
@@ -30,19 +30,17 @@ impl SurfaceOverrideInputs {
             active_target_surface: true,
             window_document_hidden: browser_context
                 .active_page_target()
-                .active_target
                 .owner_state
                 .window_document_hidden(),
             window_fullscreen: browser_context
                 .active_page_target()
-                .active_target
                 .owner_state
                 .window_fullscreen(),
         }
     }
 
     fn from_parked(
-        state: &TargetPageState,
+        state: &PageTargetHost,
         default_network_conditions: Option<EmulatedNetworkConditions>,
         default_geolocation_override: Option<EmulatedGeolocationOverrideState>,
         default_emulated_device_metrics: Option<EmulatedDeviceMetrics>,
@@ -149,7 +147,6 @@ impl BrowserContext {
         let target_id = self.active_target_id();
         scripts.extend(
             self.active_page_target()
-                .active_target
                 .owner_state
                 .document_start_scripts
                 .iter()
@@ -362,7 +359,7 @@ impl BrowserContext {
 
     pub(crate) fn generated_surface_override_script_for_parked_state(
         &self,
-        state: &TargetPageState,
+        state: &PageTargetHost,
     ) -> Option<DocumentStartScript> {
         Self::generated_surface_override_script_from_inputs(&SurfaceOverrideInputs::from_parked(
             state,
@@ -606,12 +603,7 @@ impl BrowserContext {
         let Some(script) = self.generated_surface_override_script() else {
             return Ok(());
         };
-        let Some(page) = self
-            .active_page_target_mut()
-            .active_target
-            .runtime_slot
-            .loaded_page_mut()
-        else {
+        let Some(page) = self.active_page_target_mut().runtime_slot.loaded_page_mut() else {
             return Ok(());
         };
         page.run_page_surface_override_script_async(&script.source)

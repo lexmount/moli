@@ -803,7 +803,6 @@ async fn replacing_or_retiring_a_loaded_page_changes_its_attachment_identity() {
     assert_eq!(
         context
             .active_page_state()
-            .active_target
             .runtime_slot
             .page_attachment_id(),
         None
@@ -812,7 +811,6 @@ async fn replacing_or_retiring_a_loaded_page_changes_its_attachment_identity() {
     assert!(context.replace_loaded_page(Some(first_page)).is_none());
     let first_attachment = context
         .active_page_state()
-        .active_target
         .runtime_slot
         .page_attachment_id()
         .expect("first Page attachment");
@@ -822,7 +820,6 @@ async fn replacing_or_retiring_a_loaded_page_changes_its_attachment_identity() {
         .expect("first Page should be replaced");
     let second_attachment = context
         .active_page_state()
-        .active_target
         .runtime_slot
         .page_attachment_id()
         .expect("second Page attachment");
@@ -835,7 +832,6 @@ async fn replacing_or_retiring_a_loaded_page_changes_its_attachment_identity() {
     assert_eq!(
         context
             .active_page_state()
-            .active_target
             .runtime_slot
             .page_attachment_id(),
         None
@@ -857,7 +853,6 @@ async fn moli_diagnostics_preserves_runtime_observable_diagnostics() {
     browser_context.set_target_url(page.final_url().as_str().to_owned());
     let _ = browser_context
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .replace_loaded_page(Some(page));
     ctx.conn.browser_context = Some(browser_context);
@@ -1033,7 +1028,6 @@ async fn memory_diagnostics_sync_counts_dedicated_worker_from_cached_page_snapsh
             .and_then(|context| {
                 context
                     .active_page_state_mut()
-                    .active_target
                     .runtime_slot
                     .loaded_page_mut()
             })

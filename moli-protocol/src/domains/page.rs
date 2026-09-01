@@ -1520,7 +1520,6 @@ fn start_set_javascript_dialog_handler_enabled(
     if let Some(page) = conn.browser_context.as_mut().and_then(|browser_context| {
         browser_context
             .active_page_target_mut()
-            .active_target
             .runtime_slot
             .loaded_page_mut()
     }) {

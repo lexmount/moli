@@ -104,7 +104,7 @@ fn fetch_body_stream_owner_for_target_mut<'a>(
 ) -> Option<SessionFetchBodyStreamOwner<'a>> {
     let owner_key = fetch_stream_owner_key(&browser_context.id, target_id);
     let target = browser_context.page_target_mut(target_id)?;
-    let active_target = &mut target.state_mut().active_target;
+    let active_target = target.state_mut();
     Some(SessionFetchBodyStreamOwner {
         owner_key,
         fetch_owner: &mut active_target.fetch_owner,
@@ -196,16 +196,10 @@ fn remove_network_intercept_from_browser_context(
     intercept_id: &str,
 ) -> Result<Option<Option<moli_core::page::PendingPageCommand>>, String> {
     let target = browser_context.active_page_target_mut();
-    if target
-        .active_target
-        .fetch_owner
-        .remove_network_intercept(intercept_id)
-    {
-        let (subresource_enabled, subresource_resource_type) = target
-            .active_target
-            .fetch_owner
-            .subresource_interception_config();
-        let Some(page) = target.active_target.runtime_slot.loaded_page_mut() else {
+    if target.fetch_owner.remove_network_intercept(intercept_id) {
+        let (subresource_enabled, subresource_resource_type) =
+            target.fetch_owner.subresource_interception_config();
+        let Some(page) = target.runtime_slot.loaded_page_mut() else {
             return Ok(Some(None));
         };
         return page

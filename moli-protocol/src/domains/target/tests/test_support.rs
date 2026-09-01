@@ -163,7 +163,6 @@ pub(super) async fn load_bc_with_titled_page_async(
     bc.set_target_url(url);
     let _ = bc
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .replace_loaded_page(Some(page));
     // Even this lightweight Target-domain fixture owns a real renderer Page

@@ -323,7 +323,6 @@ async fn set_user_agent_override_applies_to_current_page_fetch_requests() {
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     bc.active_page_state_mut()
-        .active_target
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);

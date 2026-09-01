@@ -193,7 +193,6 @@ async fn patchright_over_cdp_utility_world_binding_and_preload_stay_isolated_per
     assert_eq!(
         first_context
             .active_page_state()
-            .active_target
             .owner_state
             .document_start_scripts
             .len(),
@@ -957,7 +956,6 @@ async fn patchright_over_cdp_pre_document_remove_utility_world_preload_prevents_
             .as_ref()
             .expect("browser context")
             .active_page_state()
-            .active_target
             .owner_state
             .document_start_scripts
             .is_empty(),
@@ -1355,7 +1353,6 @@ async fn patchright_over_cdp_existing_utility_world_preload_remove_keeps_current
             .as_ref()
             .expect("browser context")
             .active_page_state()
-            .active_target
             .owner_state
             .document_start_scripts
             .is_empty(),

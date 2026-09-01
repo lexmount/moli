@@ -221,7 +221,6 @@ async fn javascript_dialog_events_round_trip_through_page_domain() {
         .as_mut()
         .unwrap()
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .set_loaded_page_for_test(page);
 
@@ -678,7 +677,6 @@ async fn javascript_dialog_events_are_emitted_after_runtime_call_function_on() {
         .as_mut()
         .unwrap()
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .set_loaded_page_for_test(page);
 
@@ -742,7 +740,6 @@ async fn javascript_dialog_events_are_emitted_from_playwright_utility_world_call
         .as_mut()
         .unwrap()
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .set_loaded_page_for_test(page);
 
@@ -830,7 +827,6 @@ async fn javascript_dialog_events_are_emitted_from_playwright_serialized_utility
         .as_mut()
         .unwrap()
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .set_loaded_page_for_test(page);
 

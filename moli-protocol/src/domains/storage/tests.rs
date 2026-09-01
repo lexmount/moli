@@ -869,7 +869,6 @@ async fn pending_storage_key_keeps_background_owner_route_across_completion() {
     bc.set_active_target_id("TID-storage-active".to_owned());
     bc.set_target_url(active_page.final_url().as_str().to_owned());
     bc.active_page_state_mut()
-        .active_target
         .runtime_slot
         .set_loaded_page_for_test(active_page);
     bc.insert_page_target_host(background);
@@ -2368,7 +2367,6 @@ async fn storage_get_usage_and_quota_reports_indexed_db_usage_for_origin() {
             .as_mut()
             .unwrap()
             .active_page_state_mut()
-            .active_target
             .runtime_slot
             .loaded_page_mut()
             .unwrap();
@@ -2985,7 +2983,6 @@ async fn storage_clear_data_for_origin_clears_indexed_db_backend() {
             .as_mut()
             .unwrap()
             .active_page_state_mut()
-            .active_target
             .runtime_slot
             .loaded_page_mut()
             .unwrap();
@@ -3044,7 +3041,6 @@ async fn storage_clear_data_for_origin_clears_indexed_db_backend() {
             .as_mut()
             .unwrap()
             .active_page_state_mut()
-            .active_target
             .runtime_slot
             .loaded_page_mut()
             .unwrap();

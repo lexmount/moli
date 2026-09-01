@@ -325,7 +325,6 @@ mod tests {
         browser_context.set_loaded_page_async(page).await;
         let current = browser_context
             .active_page_state()
-            .active_target
             .runtime_slot
             .current_renderer_attachment()
             .expect("installed page should have a renderer attachment");

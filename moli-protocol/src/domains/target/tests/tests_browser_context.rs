@@ -788,7 +788,6 @@ async fn dispose_browser_context_aborts_paused_request_stage_navigation() {
         .runtime_session_state
         .inspector_enabled = true;
     bc.active_page_state_mut()
-        .active_target
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -868,7 +867,6 @@ async fn dispose_browser_context_aborts_root_session_navigation_without_target_s
     let mut bc = BrowserContext::new("BID-root-dispose".into());
     bc.set_active_target_id("TID-root-dispose");
     bc.active_page_state_mut()
-        .active_target
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);

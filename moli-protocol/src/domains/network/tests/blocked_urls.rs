@@ -123,7 +123,6 @@ async fn set_blocked_urls_navigation_fails_with_blocked_by_client() {
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     bc.active_page_state_mut()
-        .active_target
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -166,7 +165,6 @@ async fn set_blocked_urls_runtime_fetch_emits_loading_failed() {
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     bc.active_page_state_mut()
-        .active_target
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -855,7 +853,6 @@ async fn emulate_network_conditions_offline_worker_fetch_emits_loading_failed() 
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     bc.active_page_state_mut()
-        .active_target
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -972,7 +969,6 @@ async fn emulate_network_conditions_offline_worker_xhr_emits_loading_failed() {
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     bc.active_page_state_mut()
-        .active_target
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -1085,7 +1081,6 @@ async fn set_blocked_urls_runtime_xhr_emits_loading_failed() {
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     bc.active_page_state_mut()
-        .active_target
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -1175,7 +1170,6 @@ async fn set_blocked_urls_runtime_websocket_emits_loading_failed() {
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     bc.active_page_state_mut()
-        .active_target
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -1355,7 +1349,6 @@ async fn emulate_network_conditions_offline_navigation_fails_before_completion_e
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     bc.active_page_state_mut()
-        .active_target
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
@@ -1398,7 +1391,6 @@ async fn emulate_network_conditions_offline_runtime_fetch_emits_loading_failed()
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     bc.active_page_state_mut()
-        .active_target
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);

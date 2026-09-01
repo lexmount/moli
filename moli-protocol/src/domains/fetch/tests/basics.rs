@@ -143,18 +143,8 @@ async fn enable_sets_fetch_flags_for_supported_patterns() {
     ctx.expect_result(2, json!({}), None);
 
     let bc = ctx.conn.browser_context.as_ref().unwrap();
-    assert!(
-        bc.active_page_state()
-            .active_target
-            .fetch_owner
-            .is_enabled()
-    );
-    assert!(
-        bc.active_page_state()
-            .active_target
-            .fetch_owner
-            .handle_auth_requests()
-    );
+    assert!(bc.active_page_state().fetch_owner.is_enabled());
+    assert!(bc.active_page_state().fetch_owner.handle_auth_requests());
 }
 
 #[tokio::test]
@@ -191,18 +181,13 @@ async fn enable_and_disable_are_session_local_for_same_target() {
 
     {
         let bc = ctx.conn.browser_context.as_ref().expect("browser context");
-        let aggregate = bc
-            .active_page_state()
-            .active_target
-            .fetch_owner
-            .config_snapshot();
+        let aggregate = bc.active_page_state().fetch_owner.config_snapshot();
         assert!(aggregate.is_enabled());
         assert!(aggregate.handle_auth_requests());
         assert_eq!(aggregate.patterns().len(), 2);
 
         let primary = bc
             .active_page_state()
-            .active_target
             .fetch_owner
             .config_snapshot_for_session(Some("SID-primary"));
         assert!(primary.is_enabled());
@@ -212,7 +197,6 @@ async fn enable_and_disable_are_session_local_for_same_target() {
 
         let aux = bc
             .active_page_state()
-            .active_target
             .fetch_owner
             .config_snapshot_for_session(Some("SID-aux"));
         assert!(aux.is_enabled());
@@ -230,32 +214,25 @@ async fn enable_and_disable_are_session_local_for_same_target() {
     ctx.expect_result(212, json!({}), Some("SID-primary"));
 
     let bc = ctx.conn.browser_context.as_ref().expect("browser context");
-    let aggregate = bc
-        .active_page_state()
-        .active_target
-        .fetch_owner
-        .config_snapshot();
+    let aggregate = bc.active_page_state().fetch_owner.config_snapshot();
     assert!(aggregate.is_enabled());
     assert!(!aggregate.handle_auth_requests());
     assert_eq!(aggregate.patterns().len(), 1);
     assert_eq!(aggregate.patterns()[0].url_pattern, "*aux*");
     assert!(
         !bc.active_page_state()
-            .active_target
             .fetch_owner
             .config_snapshot_for_session(Some("SID-primary"))
             .is_enabled()
     );
     assert!(
         bc.active_page_state()
-            .active_target
             .fetch_owner
             .config_snapshot_for_session(Some("SID-aux"))
             .is_enabled()
     );
     assert_eq!(
         bc.active_page_state()
-            .active_target
             .fetch_owner
             .subresource_interception_config(),
         (true, Some(moli_core::page::SubresourceResourceType::Xhr))
@@ -300,7 +277,6 @@ async fn disable_drains_only_current_session_pending_subresource_fetches() {
             .as_mut()
             .expect("browser context")
             .active_page_state_mut()
-            .active_target
             .fetch_owner;
         fetch_owner.register_pending_subresource_fetch_request(
             "FETCH-primary".to_owned(),
@@ -326,7 +302,6 @@ async fn disable_drains_only_current_session_pending_subresource_fetches() {
         .as_mut()
         .expect("browser context")
         .active_page_state_mut()
-        .active_target
         .fetch_owner;
     assert!(!fetch_owner.has_pending_fetch_request_id_for_test("FETCH-primary"));
     assert!(fetch_owner.has_pending_fetch_request_id_for_test("FETCH-aux"));
@@ -364,7 +339,6 @@ async fn disable_drains_fetch_owned_pending_when_same_session_network_intercept_
             .as_mut()
             .expect("browser context")
             .active_page_state_mut()
-            .active_target
             .fetch_owner;
         fetch_owner.add_network_intercept(
             "NETWORK-INTERCEPT-1".to_owned(),
@@ -405,7 +379,6 @@ async fn disable_drains_fetch_owned_pending_when_same_session_network_intercept_
         .as_mut()
         .expect("browser context")
         .active_page_state_mut()
-        .active_target
         .fetch_owner;
     assert!(!fetch_owner.has_pending_fetch_request_id_for_test("FETCH-owned"));
     assert!(fetch_owner.has_pending_fetch_request_id_for_test("NETWORK-owned"));
@@ -458,12 +431,7 @@ async fn enable_targets_loaded_background_owner_without_promotion() {
 
     let bc = ctx.conn.browser_context.as_ref().expect("browser context");
     assert_eq!(bc.active_target_id(), Some("TID-active"));
-    assert!(
-        !bc.active_page_state()
-            .active_target
-            .fetch_owner
-            .is_enabled()
-    );
+    assert!(!bc.active_page_state().fetch_owner.is_enabled());
     let staged = bc
         .parked_page_session_state("TID-background")
         .expect("background owner fetch config should be staged");
@@ -560,12 +528,7 @@ async fn pending_fetch_enable_keeps_background_owner_route_across_completion() {
 
     let bc = ctx.conn.browser_context.as_ref().expect("browser context");
     assert_eq!(bc.active_target_id(), Some("TID-fetch-active"));
-    assert!(
-        !bc.active_page_state()
-            .active_target
-            .fetch_owner
-            .is_enabled()
-    );
+    assert!(!bc.active_page_state().fetch_owner.is_enabled());
     let staged = bc
         .parked_page_session_state("TID-fetch-background")
         .expect("background fetch config should stay parked");
@@ -614,7 +577,6 @@ async fn enable_targets_inactive_owner_without_activation() {
             .as_ref()
             .expect("active context")
             .active_page_state()
-            .active_target
             .fetch_owner
             .is_enabled()
     );
@@ -624,24 +586,16 @@ async fn enable_targets_inactive_owner_without_activation() {
         .iter()
         .find(|bc| bc.id == "BID-inactive")
         .expect("inactive context");
+    assert!(inactive.active_page_state().fetch_owner.is_enabled());
     assert!(
         inactive
             .active_page_state()
-            .active_target
-            .fetch_owner
-            .is_enabled()
-    );
-    assert!(
-        inactive
-            .active_page_state()
-            .active_target
             .fetch_owner
             .handle_auth_requests()
     );
     assert_eq!(
         inactive
             .active_page_state()
-            .active_target
             .fetch_owner
             .config_snapshot()
             .url_pattern(),
@@ -691,12 +645,7 @@ async fn disable_targets_loaded_background_owner_without_promotion() {
 
     let bc = ctx.conn.browser_context.as_ref().expect("browser context");
     assert_eq!(bc.active_target_id(), Some("TID-active"));
-    assert!(
-        !bc.active_page_state()
-            .active_target
-            .fetch_owner
-            .is_enabled()
-    );
+    assert!(!bc.active_page_state().fetch_owner.is_enabled());
     assert!(
         bc.parked_page_session_state("TID-background").is_none(),
         "disabled background fetch config should collapse to default"
@@ -716,18 +665,8 @@ async fn enable_without_params_enables_default_fetch_interception() {
     ctx.expect_result(12, json!({}), None);
 
     let bc = ctx.conn.browser_context.as_ref().unwrap();
-    assert!(
-        bc.active_page_state()
-            .active_target
-            .fetch_owner
-            .is_enabled()
-    );
-    assert!(
-        !bc.active_page_state()
-            .active_target
-            .fetch_owner
-            .handle_auth_requests()
-    );
+    assert!(bc.active_page_state().fetch_owner.is_enabled());
+    assert!(!bc.active_page_state().fetch_owner.handle_auth_requests());
 }
 
 #[tokio::test]
@@ -748,18 +687,8 @@ async fn enable_with_invalid_request_stage_errors_and_keeps_fetch_disabled() {
     ctx.expect_error(3, -32602, "InvalidParams");
 
     let bc = ctx.conn.browser_context.as_ref().unwrap();
-    assert!(
-        !bc.active_page_state()
-            .active_target
-            .fetch_owner
-            .is_enabled()
-    );
-    assert!(
-        !bc.active_page_state()
-            .active_target
-            .fetch_owner
-            .handle_auth_requests()
-    );
+    assert!(!bc.active_page_state().fetch_owner.is_enabled());
+    assert!(!bc.active_page_state().fetch_owner.handle_auth_requests());
 }
 
 #[tokio::test]
@@ -778,17 +707,8 @@ async fn enable_with_specific_url_pattern_sets_pattern() {
     ctx.expect_result(18, json!({}), None);
 
     let bc = ctx.conn.browser_context.as_ref().unwrap();
-    assert!(
-        bc.active_page_state()
-            .active_target
-            .fetch_owner
-            .is_enabled()
-    );
-    let fetch_config = bc
-        .active_page_state()
-        .active_target
-        .fetch_owner
-        .config_snapshot();
+    assert!(bc.active_page_state().fetch_owner.is_enabled());
+    let fetch_config = bc.active_page_state().fetch_owner.config_snapshot();
     assert_eq!(fetch_config.url_pattern(), "https://example.com/api/*");
 }
 
@@ -828,15 +748,9 @@ async fn enable_with_document_resource_type_filter_sets_document_filter() {
     ctx.expect_result(14, json!({}), None);
 
     let bc = ctx.conn.browser_context.as_ref().unwrap();
-    assert!(
-        bc.active_page_state()
-            .active_target
-            .fetch_owner
-            .is_enabled()
-    );
+    assert!(bc.active_page_state().fetch_owner.is_enabled());
     assert_eq!(
         bc.active_page_state()
-            .active_target
             .fetch_owner
             .config_snapshot()
             .resource_type_filter(),
@@ -860,15 +774,9 @@ async fn enable_with_script_resource_type_filter_sets_script_filter() {
     ctx.expect_result(15, json!({}), None);
 
     let bc = ctx.conn.browser_context.as_ref().unwrap();
-    assert!(
-        bc.active_page_state()
-            .active_target
-            .fetch_owner
-            .is_enabled()
-    );
+    assert!(bc.active_page_state().fetch_owner.is_enabled());
     assert_eq!(
         bc.active_page_state()
-            .active_target
             .fetch_owner
             .config_snapshot()
             .resource_type_filter(),
@@ -892,15 +800,9 @@ async fn enable_with_fetch_resource_type_filter_sets_fetch_filter() {
     ctx.expect_result(15, json!({}), None);
 
     let bc = ctx.conn.browser_context.as_ref().unwrap();
-    assert!(
-        bc.active_page_state()
-            .active_target
-            .fetch_owner
-            .is_enabled()
-    );
+    assert!(bc.active_page_state().fetch_owner.is_enabled());
     assert_eq!(
         bc.active_page_state()
-            .active_target
             .fetch_owner
             .config_snapshot()
             .resource_type_filter(),
@@ -924,15 +826,9 @@ async fn enable_with_xhr_resource_type_filter_sets_xhr_filter() {
     ctx.expect_result(16, json!({}), None);
 
     let bc = ctx.conn.browser_context.as_ref().unwrap();
-    assert!(
-        bc.active_page_state()
-            .active_target
-            .fetch_owner
-            .is_enabled()
-    );
+    assert!(bc.active_page_state().fetch_owner.is_enabled());
     assert_eq!(
         bc.active_page_state()
-            .active_target
             .fetch_owner
             .config_snapshot()
             .resource_type_filter(),
@@ -956,15 +852,9 @@ async fn enable_with_ping_resource_type_filter_sets_ping_filter() {
     ctx.expect_result(18, json!({}), None);
 
     let bc = ctx.conn.browser_context.as_ref().unwrap();
-    assert!(
-        bc.active_page_state()
-            .active_target
-            .fetch_owner
-            .is_enabled()
-    );
+    assert!(bc.active_page_state().fetch_owner.is_enabled());
     assert_eq!(
         bc.active_page_state()
-            .active_target
             .fetch_owner
             .config_snapshot()
             .resource_type_filter(),
@@ -992,15 +882,9 @@ async fn enable_with_csp_violation_report_resource_type_filter_sets_csp_report_f
     ctx.expect_result(19, json!({}), None);
 
     let bc = ctx.conn.browser_context.as_ref().unwrap();
-    assert!(
-        bc.active_page_state()
-            .active_target
-            .fetch_owner
-            .is_enabled()
-    );
+    assert!(bc.active_page_state().fetch_owner.is_enabled());
     assert_eq!(
         bc.active_page_state()
-            .active_target
             .fetch_owner
             .config_snapshot()
             .resource_type_filter(),
@@ -1024,15 +908,9 @@ async fn enable_with_websocket_resource_type_filter_sets_websocket_filter() {
     ctx.expect_result(20, json!({}), None);
 
     let bc = ctx.conn.browser_context.as_ref().unwrap();
-    assert!(
-        bc.active_page_state()
-            .active_target
-            .fetch_owner
-            .is_enabled()
-    );
+    assert!(bc.active_page_state().fetch_owner.is_enabled());
     assert_eq!(
         bc.active_page_state()
-            .active_target
             .fetch_owner
             .config_snapshot()
             .resource_type_filter(),
@@ -1056,15 +934,9 @@ async fn enable_with_other_resource_type_filter_sets_other_filter() {
     ctx.expect_result(21, json!({}), None);
 
     let bc = ctx.conn.browser_context.as_ref().unwrap();
-    assert!(
-        bc.active_page_state()
-            .active_target
-            .fetch_owner
-            .is_enabled()
-    );
+    assert!(bc.active_page_state().fetch_owner.is_enabled());
     assert_eq!(
         bc.active_page_state()
-            .active_target
             .fetch_owner
             .config_snapshot()
             .resource_type_filter(),
@@ -1092,12 +964,7 @@ async fn enable_rejects_unimplemented_parser_discovered_resource_type_filters() 
         ctx.expect_error(20, -32602, "InvalidParams");
 
         let bc = ctx.conn.browser_context.as_ref().unwrap();
-        assert!(
-            !bc.active_page_state()
-                .active_target
-                .fetch_owner
-                .is_enabled()
-        );
+        assert!(!bc.active_page_state().fetch_owner.is_enabled());
     }
 }
 
@@ -1117,15 +984,9 @@ async fn enable_accepts_image_resource_type_filter() {
     ctx.expect_result(22, json!({}), None);
 
     let bc = ctx.conn.browser_context.as_ref().unwrap();
-    assert!(
-        bc.active_page_state()
-            .active_target
-            .fetch_owner
-            .is_enabled()
-    );
+    assert!(bc.active_page_state().fetch_owner.is_enabled());
     assert_eq!(
         bc.active_page_state()
-            .active_target
             .fetch_owner
             .config_snapshot()
             .resource_type_filter(),
@@ -1149,17 +1010,8 @@ async fn enable_with_response_stage_pattern_sets_response_stage() {
     ctx.expect_result(17, json!({}), None);
 
     let bc = ctx.conn.browser_context.as_ref().unwrap();
-    assert!(
-        bc.active_page_state()
-            .active_target
-            .fetch_owner
-            .is_enabled()
-    );
-    let fetch_config = bc
-        .active_page_state()
-        .active_target
-        .fetch_owner
-        .config_snapshot();
+    assert!(bc.active_page_state().fetch_owner.is_enabled());
+    let fetch_config = bc.active_page_state().fetch_owner.config_snapshot();
     assert_eq!(fetch_config.request_stage(), FetchRequestStage::Response);
     assert_eq!(fetch_config.resource_type_filter(), None);
 }
@@ -1184,23 +1036,9 @@ async fn enable_with_multiple_supported_patterns_enables_fetch_interception() {
     ctx.expect_result(13, json!({}), None);
 
     let bc = ctx.conn.browser_context.as_ref().unwrap();
-    assert!(
-        bc.active_page_state()
-            .active_target
-            .fetch_owner
-            .is_enabled()
-    );
-    assert!(
-        bc.active_page_state()
-            .active_target
-            .fetch_owner
-            .handle_auth_requests()
-    );
-    let fetch_config = bc
-        .active_page_state()
-        .active_target
-        .fetch_owner
-        .config_snapshot();
+    assert!(bc.active_page_state().fetch_owner.is_enabled());
+    assert!(bc.active_page_state().fetch_owner.handle_auth_requests());
+    let fetch_config = bc.active_page_state().fetch_owner.config_snapshot();
     assert_eq!(fetch_config.patterns().len(), 2);
     assert_eq!(
         fetch_config.patterns()[0].request_stage,
@@ -1225,11 +1063,9 @@ async fn disable_clears_fetch_state() {
     let mut ctx = TestContext::new();
     let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
     bc.active_page_state_mut()
-        .active_target
         .fetch_owner
         .configure(None, true, Vec::new());
     bc.active_page_state_mut()
-        .active_target
         .fetch_owner
         .register_pending_fetch_navigation_request(PendingFetchNavigation {
             fetch_request_id: "INT-1".to_owned(),
@@ -1262,7 +1098,6 @@ async fn disable_clears_fetch_state() {
             auth_required_blocked_intercepts: Vec::new(),
         });
     bc.active_page_state_mut()
-        .active_target
         .fetch_owner
         .register_pending_fetch_auth_navigation(
             "INT-1".to_owned(),
@@ -1318,21 +1153,10 @@ async fn disable_clears_fetch_state() {
     ctx.expect_result(5, json!({}), None);
 
     let bc = ctx.conn.browser_context.as_ref().unwrap();
+    assert!(!bc.active_page_state().fetch_owner.is_enabled());
+    assert!(!bc.active_page_state().fetch_owner.handle_auth_requests());
     assert!(
         !bc.active_page_state()
-            .active_target
-            .fetch_owner
-            .is_enabled()
-    );
-    assert!(
-        !bc.active_page_state()
-            .active_target
-            .fetch_owner
-            .handle_auth_requests()
-    );
-    assert!(
-        !bc.active_page_state()
-            .active_target
             .fetch_owner
             .has_pending_fetch_state_for_test()
     );
@@ -1343,15 +1167,12 @@ async fn disable_after_enable_resets_pending_requests() {
     let mut ctx = TestContext::new();
     let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
     bc.active_page_state_mut()
-        .active_target
         .fetch_owner
         .configure(None, false, Vec::new());
     bc.active_page_state_mut()
-        .active_target
         .fetch_owner
         .register_pending_fetch_request_id_for_test("INT-1".to_owned());
     bc.active_page_state_mut()
-        .active_target
         .fetch_owner
         .register_pending_fetch_request_id_for_test("INT-2".to_owned());
     ctx.conn.browser_context = Some(bc);
@@ -1413,11 +1234,9 @@ async fn continue_response_and_take_response_body_as_stream_validate_like_fetch_
     let mut ctx = TestContext::new();
     let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
     bc.active_page_state_mut()
-        .active_target
         .fetch_owner
         .register_pending_fetch_request_id_for_test("INT-42".to_owned());
     bc.active_page_state_mut()
-        .active_target
         .fetch_owner
         .register_pending_fetch_request_id_for_test("INT-43".to_owned());
     ctx.conn.browser_context = Some(bc);
@@ -1452,7 +1271,6 @@ async fn pending_fetch_request_can_be_consumed_once() {
     let mut ctx = TestContext::new();
     let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
     bc.active_page_state_mut()
-        .active_target
         .fetch_owner
         .register_pending_fetch_request_id_for_test("INT-7".to_owned());
     ctx.conn.browser_context = Some(bc);
@@ -1504,7 +1322,6 @@ async fn continue_with_auth_rejects_invalid_response_without_consuming_pending_a
     let mut ctx = TestContext::new();
     let mut bc = attached_browser_context();
     bc.active_page_state_mut()
-        .active_target
         .fetch_owner
         .register_pending_fetch_auth_navigation(
             "INT-8".to_owned(),
@@ -1570,7 +1387,6 @@ async fn continue_with_auth_rejects_invalid_response_without_consuming_pending_a
     let bc = ctx.conn.browser_context.as_ref().expect("browser context");
     assert!(
         bc.active_page_state()
-            .active_target
             .fetch_owner
             .has_pending_fetch_auth_navigation_for_test("INT-8")
     );
@@ -1581,7 +1397,6 @@ async fn continue_with_auth_unsupported_challenge_preserves_pending_auth_navigat
     let mut ctx = TestContext::new();
     let mut bc = attached_browser_context();
     bc.active_page_state_mut()
-        .active_target
         .fetch_owner
         .register_pending_fetch_auth_navigation(
             "INT-9".to_owned(),
@@ -1651,7 +1466,6 @@ async fn continue_with_auth_unsupported_challenge_preserves_pending_auth_navigat
     let bc = ctx.conn.browser_context.as_ref().expect("browser context");
     assert!(
         bc.active_page_state()
-            .active_target
             .fetch_owner
             .has_pending_fetch_auth_navigation_for_test("INT-9")
     );

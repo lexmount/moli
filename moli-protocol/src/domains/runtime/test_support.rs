@@ -63,7 +63,6 @@ pub(super) async fn with_loaded_http_document_async(
         .as_mut()
         .expect("browser context should be installed before loading test page");
     bc.active_page_state_mut()
-        .active_target
         .runtime_slot
         .enable_primary_network_events();
 }

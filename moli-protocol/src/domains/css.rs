@@ -800,7 +800,6 @@ mod tests {
             .as_mut()
             .expect("browser context")
             .active_page_state_mut()
-            .active_target
             .runtime_slot
             .loaded_page_mut()
             .expect("loaded page")
@@ -1670,7 +1669,6 @@ mod tests {
         browser_context.set_active_target_id("TID-css-active".to_owned());
         browser_context
             .active_page_state_mut()
-            .active_target
             .runtime_slot
             .set_loaded_page_for_test(active_page);
         browser_context.stage_background_target(

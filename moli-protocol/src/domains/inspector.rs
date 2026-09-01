@@ -113,7 +113,6 @@ mod tests {
         let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
         bc.attach_active_session("SID-1");
         bc.active_page_state_mut()
-            .active_target
             .owner_state
             .target_crash_state
             .mark_crashed();
@@ -141,7 +140,6 @@ mod tests {
         bc.attach_active_session("SID-primary");
         assert!(bc.assign_auxiliary_session_to_target("TID-1", "SID-aux".into()));
         bc.active_page_state_mut()
-            .active_target
             .owner_state
             .target_crash_state
             .mark_crashed();
@@ -273,7 +271,6 @@ mod tests {
             crate::conn::TargetPageSlot::empty_for_test_fixture(),
         ));
         bc.active_page_state_mut()
-            .active_target
             .owner_state
             .target_crash_state
             .mark_crashed();

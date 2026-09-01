@@ -239,7 +239,6 @@ async fn connection_preview_clear_cookie_store_with_persistent_scope_does_not_in
         .as_mut()
         .unwrap()
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .set_loaded_page_for_test(navigation.page);
 
@@ -332,7 +331,6 @@ async fn connection_clear_cookie_store_with_session_scope_invalidates_live_docum
         .as_mut()
         .unwrap()
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .set_loaded_page_for_test(navigation.page);
 
@@ -542,7 +540,6 @@ async fn connection_cookie_site_clear_invalidates_live_document_cookie_cache() {
         .as_mut()
         .unwrap()
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .set_loaded_page_for_test(navigation.page);
 
@@ -623,7 +620,6 @@ async fn connection_preview_clear_cookies_for_sites_does_not_invalidate_live_doc
         .as_mut()
         .unwrap()
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .set_loaded_page_for_test(navigation.page);
 

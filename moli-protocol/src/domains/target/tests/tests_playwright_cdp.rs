@@ -5804,7 +5804,6 @@ async fn playwright_over_cdp_target_document_start_script_does_not_leak_to_new_t
     assert_eq!(
         active
             .active_page_state()
-            .active_target
             .owner_state
             .document_start_scripts
             .len(),
@@ -6142,7 +6141,6 @@ async fn playwright_over_cdp_script_execution_disabled_blocks_page_scripts_but_n
         .and_then(|browser_context| {
             browser_context
                 .active_page_state_mut()
-                .active_target
                 .runtime_slot
                 .loaded_page_mut()
         })
@@ -6159,7 +6157,6 @@ async fn playwright_over_cdp_script_execution_disabled_blocks_page_scripts_but_n
     assert!(active.active_page_state().script_execution_disabled);
     let script_runs = active
         .active_page_state()
-        .active_target
         .runtime_slot
         .loaded_page()
         .expect("loaded page should exist")

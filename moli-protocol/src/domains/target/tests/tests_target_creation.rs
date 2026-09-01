@@ -29,7 +29,6 @@ async fn create_target_clears_stale_crash_state() {
         .as_mut()
         .unwrap()
         .active_page_state_mut()
-        .active_target
         .owner_state
         .target_crash_state
         .mark_crashed();
@@ -52,7 +51,6 @@ async fn create_target_clears_stale_crash_state() {
             .as_ref()
             .expect("browser context")
             .active_page_state()
-            .active_target
             .owner_state
             .target_crash_state
             .is_crashed()
@@ -1088,7 +1086,6 @@ async fn window_open_hands_off_session_storage_snapshot_and_initial_storage_key(
         browser_context.set_target_url(page.final_url().as_str().to_owned());
         let _ = browser_context
             .active_page_state_mut()
-            .active_target
             .runtime_slot
             .replace_loaded_page(Some(page));
     }
@@ -2176,7 +2173,7 @@ async fn anchor_left_click_activates_popup_while_initial_navigation_waits_for_de
             );
             assert!(
                 browser_context
-                    .active_page_state().active_target
+                    .active_page_state()
                     .runtime_slot
                     .loaded_page()
                     .is_some_and(|page| moli_url::is_about_blank(page.final_url())),
@@ -2195,7 +2192,7 @@ async fn anchor_left_click_activates_popup_while_initial_navigation_waits_for_de
                     .is_some_and(|browser_context| {
                         browser_context.active_target_id() == Some(popup_target_id.as_str())
                             && browser_context
-                                .active_page_state().active_target
+                                .active_page_state()
                                 .runtime_slot
                                 .loaded_page()
                                 .is_some_and(|page| page.final_url().as_str() == POPUP_URL)

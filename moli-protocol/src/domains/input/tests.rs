@@ -316,11 +316,7 @@ async fn completed_mouse_event_does_not_restore_replaced_page_state() {
         ctx.conn
             .browser_context
             .as_ref()
-            .and_then(|context| context
-                .active_page_state()
-                .active_target
-                .runtime_slot
-                .loaded_page())
+            .and_then(|context| context.active_page_state().runtime_slot.loaded_page())
             .is_some_and(|page| page.final_url().as_str() == replacement_url),
         "settling the original input command must not install its Page state into the replacement"
     );

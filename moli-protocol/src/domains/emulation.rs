@@ -2777,7 +2777,6 @@ fn start_geolocation_surface_override_page_commands(
     };
     let Some(page) = browser_context
         .active_page_target_mut()
-        .active_target
         .runtime_slot
         .loaded_page_mut()
     else {

@@ -828,19 +828,12 @@ async fn detach_from_target_aborts_paused_request_stage_navigation() {
     assert_eq!(bc.active_target_id(), Some(target_id.as_str()));
     assert!(
         !bc.active_page_state()
-            .active_target
             .fetch_owner
             .has_pending_fetch_state_for_test()
     );
+    assert!(!bc.active_page_state().fetch_owner.is_enabled());
     assert!(
         !bc.active_page_state()
-            .active_target
-            .fetch_owner
-            .is_enabled()
-    );
-    assert!(
-        !bc.active_page_state()
-            .active_target
             .runtime_slot
             .primary_network_events_enabled()
     );
@@ -930,7 +923,6 @@ async fn same_context_targets_keep_paused_fetch_state_target_local_after_switchi
         assert_eq!(bc.active_target_id(), Some(second_target_id.as_str()));
         assert!(
             !bc.active_page_state()
-                .active_target
                 .fetch_owner
                 .has_pending_fetch_state_for_test(),
             "promoted target should not see another target's pending fetch ids",

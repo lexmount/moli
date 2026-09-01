@@ -283,7 +283,6 @@ async fn install_runtime_document_replacement_test_page(ctx: &mut TestContext) -
         .as_mut()
         .expect("runtime replacement fixture browser context")
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .set_loaded_page_for_test(navigation.page);
     let (binding, initial_events) = ctx.conn.bind_renderer_document_lifecycle_for_session_owner(
@@ -425,7 +424,6 @@ async fn lifecycle_events_enable_without_renderer_binding_does_not_synthesize_re
         .as_mut()
         .expect("browser context")
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .set_loaded_page_for_test(page);
 
@@ -486,11 +484,7 @@ async fn assert_page_enable_uses_fresh_initial_document_without_adapter(target_u
         ctx.conn
             .browser_context
             .as_ref()
-            .and_then(|bc| bc
-                .active_page_state()
-                .active_target
-                .runtime_slot
-                .loaded_page())
+            .and_then(|bc| bc.active_page_state().runtime_slot.loaded_page())
             .is_some_and(|page| page.final_url().as_str() == target_url),
         "Target.createTarget should install the initial about:blank owner page"
     );
@@ -517,11 +511,7 @@ async fn assert_page_enable_uses_fresh_initial_document_without_adapter(target_u
         ctx.conn
             .browser_context
             .as_ref()
-            .and_then(|bc| bc
-                .active_page_state()
-                .active_target
-                .runtime_slot
-                .loaded_page())
+            .and_then(|bc| bc.active_page_state().runtime_slot.loaded_page())
             .is_some_and(|page| page.final_url().as_str() == target_url),
         "Page.enable should keep using the target-lifecycle initial about:blank page"
     );
@@ -562,7 +552,6 @@ async fn enable_succeeds_without_legacy_materialization_adapter_when_page_missin
             .as_ref()
             .expect("browser context")
             .active_page_state()
-            .active_target
             .runtime_slot
             .has_loaded_page(),
         "Page.enable should not install a loaded page when target lifecycle did not"
@@ -671,11 +660,7 @@ async fn enable_non_blank_initial_url_loads_through_pending_navigation_path() {
         ctx.conn
             .browser_context
             .as_ref()
-            .and_then(|bc| bc
-                .active_page_state()
-                .active_target
-                .runtime_slot
-                .loaded_page())
+            .and_then(|bc| bc.active_page_state().runtime_slot.loaded_page())
             .is_some_and(|page| page.final_url().as_str() == page_url),
         "Page.enable pending path should install the initial non-blank document"
     );
@@ -855,7 +840,6 @@ async fn set_lifecycle_events_enabled_replays_loaded_page_events() {
         .as_mut()
         .unwrap()
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .set_loaded_page_for_test(navigation.page);
     let (binding, initial_events) = ctx.conn.bind_renderer_document_lifecycle_for_session_owner(
@@ -930,7 +914,6 @@ async fn set_lifecycle_events_enabled_replays_only_protocol_visible_load_state()
         .as_mut()
         .unwrap()
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .set_loaded_page_for_test(navigation.page);
     let (binding, initial_events) = ctx.conn.bind_renderer_document_lifecycle_for_session_owner(
@@ -1032,7 +1015,6 @@ async fn set_lifecycle_events_enabled_is_session_local_for_active_auxiliary_sess
     let browser_context = ctx.conn.browser_context.as_mut().unwrap();
     browser_context
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .set_loaded_page_for_test(navigation.page);
     assert!(browser_context.assign_auxiliary_session_to_target("TID-active", "SID-aux".to_owned()));
@@ -2049,7 +2031,6 @@ async fn add_script_run_immediately_creates_top_level_world_even_when_child_worl
     let bc = ctx.conn.browser_context.as_mut().expect("browser context");
     let _ = bc
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .replace_loaded_page(Some(page));
     ctx.process_async(json!({
@@ -2337,7 +2318,6 @@ async fn bare_isolated_worlds_do_not_persist_across_navigation() {
     let bc = ctx.conn.browser_context.as_mut().expect("browser context");
     let _ = bc
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .replace_loaded_page(Some(page));
     ctx.process_async(json!({
@@ -2428,7 +2408,6 @@ async fn network_navigations_use_unique_document_loader_ids() {
         .as_mut()
         .unwrap()
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .enable_primary_network_events();
 
@@ -2580,7 +2559,6 @@ async fn crash_notifies_all_attached_sessions_and_marks_browser_context_crashed(
     assert!(bc.assign_auxiliary_session_to_target("TID-1", "SID-aux".into()));
     let _ = bc
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .replace_loaded_page(Some(page));
     let active_document_token = bc
@@ -2609,7 +2587,6 @@ async fn crash_notifies_all_attached_sessions_and_marks_browser_context_crashed(
     let bc = ctx.conn.browser_context.as_ref().unwrap();
     assert!(
         bc.active_page_state()
-            .active_target
             .owner_state
             .target_crash_state
             .is_crashed()
@@ -2661,7 +2638,6 @@ async fn crash_notifies_all_attached_sessions_and_marks_browser_context_crashed(
             .as_ref()
             .expect("browser context")
             .active_page_state()
-            .active_target
             .owner_state
             .target_crash_state
             .is_crashed()
@@ -2745,7 +2721,6 @@ async fn crash_aborts_paused_request_stage_navigation() {
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
     let bc = ctx.conn.browser_context.as_mut().unwrap();
     bc.active_page_state_mut()
-        .active_target
         .runtime_slot
         .enable_primary_network_events();
 
@@ -2910,7 +2885,6 @@ async fn crash_aborts_paused_response_stage_navigation() {
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
     let bc = ctx.conn.browser_context.as_mut().unwrap();
     bc.active_page_state_mut()
-        .active_target
         .runtime_slot
         .enable_primary_network_events();
 
@@ -2988,7 +2962,6 @@ async fn close_clears_loaded_page_state_and_emits_detached_events() {
         .runtime_session_state
         .inspector_enabled = true;
     bc.active_page_state_mut()
-        .active_target
         .runtime_slot
         .enable_primary_network_events();
     bc.active_page_state_mut()
@@ -2999,26 +2972,21 @@ async fn close_clears_loaded_page_state_and_emits_detached_events() {
             network.extra_headers = vec![("X-Test".into(), "1".into())];
         });
     bc.active_page_state_mut().css_enabled = true;
+    bc.active_page_state_mut().fetch_owner.configure(
+        None,
+        true,
+        vec![FetchInterceptionPattern {
+            url_pattern: "*".into(),
+            resource_type_filter: None,
+            request_stage: FetchRequestStage::Response,
+        }],
+    );
     bc.active_page_state_mut()
-        .active_target
-        .fetch_owner
-        .configure(
-            None,
-            true,
-            vec![FetchInterceptionPattern {
-                url_pattern: "*".into(),
-                resource_type_filter: None,
-                request_stage: FetchRequestStage::Response,
-            }],
-        );
-    bc.active_page_state_mut()
-        .active_target
         .owner_state
         .target_crash_state
         .mark_crashed();
     let _ = bc
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .replace_loaded_page(Some(page));
     let close_document_token = bc
@@ -3032,7 +3000,6 @@ async fn close_clears_loaded_page_state_and_emits_detached_events() {
     bc.set_subresource_network_emitted_record_count_for_test(12);
     bc.set_next_io_stream_sequence_for_test(7);
     bc.active_page_state_mut()
-        .active_target
         .runtime_slot
         .set_next_subresource_fetch_request_id_for_test(5);
     assert!(bc.assign_auxiliary_session_to_target("TID-1", "SID-aux".into()));
@@ -3091,7 +3058,6 @@ async fn close_aborts_paused_request_stage_navigation_and_clears_state() {
         .runtime_session_state
         .inspector_enabled = true;
     bc.active_page_state_mut()
-        .active_target
         .runtime_slot
         .enable_primary_network_events();
 
@@ -3335,7 +3301,6 @@ async fn close_aborts_paused_auth_navigation_and_clears_state() {
         .runtime_session_state
         .inspector_enabled = true;
     bc.active_page_state_mut()
-        .active_target
         .runtime_slot
         .enable_primary_network_events();
 

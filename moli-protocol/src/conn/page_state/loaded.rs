@@ -59,12 +59,10 @@ impl BrowserContext {
     pub(crate) fn replace_loaded_page(&mut self, page: Option<Page>) -> Option<Page> {
         let previous = self
             .active_page_state_mut()
-            .active_target
             .runtime_slot
             .replace_loaded_page(page);
         self.ingest_active_target_output_updates();
         self.active_page_state_mut()
-            .active_target
             .owner_state
             .clear_loaded_document_context_state();
         self.clear_active_target_loaded_document_session_state();
@@ -78,12 +76,10 @@ impl BrowserContext {
     ) -> Option<Page> {
         let previous = self
             .active_page_state_mut()
-            .active_target
             .runtime_slot
             .clear_loaded_page_with_reason(reason);
         self.ingest_active_target_output_updates();
         self.active_page_state_mut()
-            .active_target
             .owner_state
             .clear_loaded_document_context_state();
         self.clear_active_target_loaded_document_session_state();
@@ -112,7 +108,6 @@ impl BrowserContext {
     #[cfg(test)]
     pub(crate) fn ingest_active_target_output_updates(&mut self) -> bool {
         self.active_page_state_mut()
-            .active_target
             .runtime_slot
             .ingest_owner_page_observable_output_updates()
     }
@@ -120,15 +115,26 @@ impl BrowserContext {
     pub(crate) async fn clear_active_target_session_scoped_state_async(
         &mut self,
     ) -> Result<(), String> {
-        self.clear_active_target_session_scoped_state_fields();
+        self.clear_active_target_session_scoped_state_preserving_attached_async(false)
+            .await
+    }
+
+    pub(crate) async fn clear_active_target_primary_session_scoped_state_async(
+        &mut self,
+    ) -> Result<(), String> {
+        self.clear_active_target_session_scoped_state_preserving_attached_async(true)
+            .await
+    }
+
+    async fn clear_active_target_session_scoped_state_preserving_attached_async(
+        &mut self,
+        preserve_attached_sessions: bool,
+    ) -> Result<(), String> {
+        self.active_page_state_mut()
+            .clear_session_scoped_state_fields(preserve_attached_sessions);
         let emulated_media: moli_core::page::EmulatedMediaOverrides =
             (&self.active_page_target().emulated_media).into();
-        if let Some(page) = self
-            .active_page_target_mut()
-            .active_target
-            .runtime_slot
-            .loaded_page_mut()
-        {
+        if let Some(page) = self.active_page_target_mut().runtime_slot.loaded_page_mut() {
             page.set_extra_http_headers_async(&[])
                 .await
                 .map_err(|error| format!("failed to clear page extra headers: {error}"))?;

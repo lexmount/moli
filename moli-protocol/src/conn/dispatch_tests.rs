@@ -1188,7 +1188,6 @@ async fn devtools_runtime_call_function_popup_activity_drains_from_protocol_neut
         .as_mut()
         .expect("browser context")
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .set_loaded_page_for_test(page);
 
@@ -2085,7 +2084,6 @@ async fn runtime_enable_uses_background_initial_document_without_adapter() {
     assert!(
         !browser_context
             .active_page_state()
-            .active_target
             .runtime_slot
             .has_loaded_page(),
         "Runtime.enable must not install a page on the active target"
@@ -2209,7 +2207,6 @@ async fn page_enable_uses_background_initial_document_without_adapter() {
     assert!(
         !browser_context
             .active_page_state()
-            .active_target
             .runtime_slot
             .has_loaded_page(),
         "Page.enable must not install a page on the active target"
@@ -2301,7 +2298,6 @@ async fn initial_document_page_ensure_completion_uses_captured_owner() {
     assert!(
         !browser_context
             .active_page_state()
-            .active_target
             .runtime_slot
             .has_loaded_page(),
         "completion must not install the materialized page on the ambient active target"
@@ -2587,7 +2583,6 @@ async fn stale_initial_document_page_build_does_not_overwrite_committed_page() {
     );
     let initial = browser_context
         .active_page_state()
-        .active_target
         .owner_state
         .initial_empty_document_state()
         .expect("initial empty document state should remain recorded");
@@ -2711,7 +2706,6 @@ async fn target_lifecycle_ensure_installs_initial_about_blank_page_for_backgroun
     assert!(
         !browser_context
             .active_page_state()
-            .active_target
             .runtime_slot
             .has_loaded_page(),
         "background ensure must not install the materialized page on the active target"
@@ -2803,7 +2797,6 @@ async fn devtools_get_realms_succeeds_when_page_loaded_before_session_attach() {
         .as_mut()
         .expect("browser context")
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .set_loaded_page_for_test(page);
     conn.browser_context
@@ -4468,7 +4461,6 @@ async fn devtools_command_applies_window_state_to_document_surface() {
             .as_ref()
             .expect("browser context")
             .active_page_state()
-            .active_target
             .owner_state
             .window_document_hidden(),
         "SetWindowState must update the target owner state before applying document surfaces"
@@ -4504,7 +4496,6 @@ async fn devtools_command_applies_window_state_to_document_surface() {
             .as_ref()
             .expect("browser context")
             .active_page_state()
-            .active_target
             .owner_state
             .window_fullscreen(),
         "SetWindowState fullscreen must update the target owner before applying document surfaces"
@@ -5303,7 +5294,6 @@ async fn devtools_command_low_backend_node_refs_miss_without_backend_binding() {
             .as_mut()
             .expect("browser context")
             .active_page_state_mut()
-            .active_target
             .runtime_slot
             .loaded_page_mut()
             .expect("loaded page");
@@ -5396,7 +5386,6 @@ async fn devtools_command_low_backend_node_refs_miss_without_backend_binding() {
         .as_mut()
         .expect("browser context")
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .loaded_page_mut()
         .expect("loaded page");
@@ -6983,7 +6972,6 @@ async fn command_dispatch_completes_live_browser_permission_without_legacy_fallb
         .as_mut()
         .expect("browser context")
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .set_loaded_page_for_test(page);
 
@@ -7038,7 +7026,6 @@ async fn command_dispatch_completes_target_startup_commands_without_legacy_fallb
     assert!(
         browser_context
             .active_page_state()
-            .active_target
             .runtime_slot
             .has_loaded_page(),
         "Target.createTarget should complete target lifecycle initial document ensure"
@@ -7363,7 +7350,6 @@ async fn command_dispatch_completes_live_page_preload_without_legacy_fallback() 
         .as_mut()
         .expect("browser context")
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .set_loaded_page_for_test(page);
 
@@ -7401,7 +7387,6 @@ async fn command_dispatch_completes_live_page_preload_without_legacy_fallback() 
             .as_ref()
             .expect("browser context")
             .active_page_state()
-            .active_target
             .owner_state
             .document_start_scripts
             .iter()
@@ -7445,7 +7430,6 @@ async fn command_dispatch_completes_live_page_preload_without_legacy_fallback() 
             .as_ref()
             .expect("browser context")
             .active_page_state()
-            .active_target
             .owner_state
             .document_start_scripts
             .is_empty(),
@@ -7848,7 +7832,6 @@ async fn command_dispatch_completes_live_storage_set_cookies_without_legacy_fall
         .as_mut()
         .expect("browser context")
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .set_loaded_page_for_test(page);
 
@@ -7897,7 +7880,6 @@ async fn command_dispatch_completes_live_network_extra_headers_without_legacy_fa
         .as_mut()
         .expect("browser context")
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .set_loaded_page_for_test(page);
 
@@ -7935,7 +7917,6 @@ async fn command_dispatch_completes_live_network_blocked_urls_without_legacy_fal
         .as_mut()
         .expect("browser context")
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .set_loaded_page_for_test(page);
 
@@ -7973,7 +7954,6 @@ async fn command_dispatch_completes_live_network_set_cookie_without_legacy_fallb
         .as_mut()
         .expect("browser context")
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .set_loaded_page_for_test(page);
 
@@ -8019,7 +7999,6 @@ async fn command_dispatch_completes_live_network_emulation_without_legacy_fallba
         .as_mut()
         .expect("browser context")
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .set_loaded_page_for_test(page);
 
@@ -8063,7 +8042,6 @@ async fn command_dispatch_completes_live_network_user_agent_without_legacy_fallb
         .as_mut()
         .expect("browser context")
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .set_loaded_page_for_test(page);
 
@@ -8101,7 +8079,6 @@ async fn command_dispatch_completes_live_emulation_user_agent_without_legacy_fal
         .as_mut()
         .expect("browser context")
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .set_loaded_page_for_test(page);
 
@@ -8141,7 +8118,6 @@ async fn pending_emulation_user_agent_loader_keeps_active_owner_route_across_com
     browser_context.set_active_target_id("TID-emulation-ua-active".to_owned());
     browser_context
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .set_loaded_page_for_test(active_page);
     browser_context.stage_background_target(
@@ -8224,7 +8200,6 @@ async fn pending_emulation_timezone_keeps_background_owner_route_across_completi
     browser_context.set_active_target_id("TID-emulation-timezone-active".to_owned());
     browser_context
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .set_loaded_page_for_test(active_page);
     browser_context.stage_background_target(
@@ -8316,7 +8291,6 @@ async fn command_dispatch_completes_live_emulation_locale_without_legacy_fallbac
         .as_mut()
         .expect("browser context")
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .set_loaded_page_for_test(page);
 
@@ -8354,7 +8328,6 @@ async fn command_dispatch_completes_live_security_tls_without_legacy_fallback() 
         .as_mut()
         .expect("browser context")
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .set_loaded_page_for_test(page);
 
@@ -8395,7 +8368,6 @@ async fn pending_security_tls_keeps_background_owner_route_across_completion() {
     browser_context.set_active_target_id("TID-security-active".to_owned());
     browser_context
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .set_loaded_page_for_test(active_page);
     browser_context.stage_background_target(
@@ -8481,7 +8453,6 @@ async fn command_dispatch_completes_live_fetch_enable_without_legacy_fallback() 
         .as_mut()
         .expect("browser context")
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .set_loaded_page_for_test(page);
 
@@ -8544,7 +8515,6 @@ async fn devtools_network_intercept_commands_route_to_fetch_owner() {
             .as_ref()
             .expect("browser context")
             .active_page_state()
-            .active_target
             .fetch_owner
             .is_enabled(),
         "unknown context intercept should not mutate active fetch config"
@@ -8578,7 +8548,6 @@ async fn devtools_network_intercept_commands_route_to_fetch_owner() {
         .as_ref()
         .expect("browser context")
         .active_page_state()
-        .active_target
         .fetch_owner
         .config_snapshot();
     assert!(fetch_config.is_enabled());
@@ -8612,7 +8581,6 @@ async fn devtools_network_intercept_commands_route_to_fetch_owner() {
             .as_ref()
             .expect("browser context")
             .active_page_state()
-            .active_target
             .fetch_owner
             .is_enabled()
     );
@@ -8710,7 +8678,6 @@ async fn command_dispatch_completes_live_fetch_disable_without_legacy_fallback()
     browser_context.set_active_target_id("TID-fetch-disable-live".to_owned());
     browser_context
         .active_page_state_mut()
-        .active_target
         .fetch_owner
         .configure(None, true, Vec::new());
     ctx.conn.browser_context = Some(browser_context);
@@ -8724,7 +8691,6 @@ async fn command_dispatch_completes_live_fetch_disable_without_legacy_fallback()
         .as_mut()
         .expect("browser context")
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .set_loaded_page_for_test(page);
 
@@ -8749,7 +8715,6 @@ async fn command_dispatch_completes_live_fetch_disable_without_legacy_fallback()
             .as_ref()
             .expect("browser context should remain loaded")
             .active_page_state()
-            .active_target
             .fetch_owner
             .is_enabled()
     );

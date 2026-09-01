@@ -343,7 +343,6 @@ mod tests {
         let snapshot = super::pending_console_activity_snapshot(super::ConsoleActivitySource {
             observable: bc
                 .active_page_state()
-                .active_target
                 .owner_state
                 .console_output_state
                 .console_domain_emission_snapshot(
@@ -357,7 +356,6 @@ mod tests {
             .as_mut()
             .expect("browser context should be loaded")
             .active_page_state_mut()
-            .active_target
             .owner_state
             .console_output_state
             .advance_console_domain_to_current(

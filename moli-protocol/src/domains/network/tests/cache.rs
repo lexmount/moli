@@ -692,7 +692,6 @@ async fn clear_browser_cache_keeps_pending_response_navigation_transfer() {
     let bc = ctx.conn.browser_context.as_ref().unwrap();
     assert!(
         bc.active_page_state()
-            .active_target
             .fetch_owner
             .pending_fetch_response_transfer_is_pending_for_test("INT-1")
     );

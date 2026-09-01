@@ -599,7 +599,6 @@ mod tests {
             .expect("test page should load");
         let _ = bc
             .active_page_state_mut()
-            .active_target
             .runtime_slot
             .replace_loaded_page(Some(page));
         ctx.conn.browser_context = Some(bc);
@@ -615,7 +614,6 @@ mod tests {
         browser_context.attach_active_session("SID-1");
         browser_context
             .active_page_state_mut()
-            .active_target
             .runtime_slot
             .set_page_attachment_id_for_test(1);
         conn.browser_context = Some(browser_context);

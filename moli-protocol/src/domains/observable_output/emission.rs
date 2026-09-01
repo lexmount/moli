@@ -372,7 +372,6 @@ mod tests {
             .expect("browser context should be loaded");
         let page = bc
             .active_page_state_mut()
-            .active_target
             .runtime_slot
             .loaded_page_mut()
             .expect("loaded page should be installed");
@@ -406,7 +405,6 @@ mod tests {
             .expect("test page should load");
         let _ = bc
             .active_page_state_mut()
-            .active_target
             .runtime_slot
             .replace_loaded_page(Some(page));
         bc.active_page_state_mut().devtools_sessions
@@ -439,7 +437,7 @@ mod tests {
                 .page_session_state
                 .log_enabled,
             true,
-            &bc.active_page_state().active_target.owner_state,
+            &bc.active_page_state().owner_state,
             &bc.active_page_state().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .console_output_session_state,
             Some("SID-1"),
@@ -469,7 +467,6 @@ mod tests {
                 .as_ref()
                 .expect("browser context should be loaded")
                 .active_page_state()
-                .active_target
                 .owner_state
                 .console_output_state
                 .console_domain_cursor()
@@ -549,7 +546,6 @@ mod tests {
             .expect("test page should load");
         let _ = bc
             .active_page_state_mut()
-            .active_target
             .runtime_slot
             .replace_loaded_page(Some(page));
         bc.active_page_state_mut().devtools_sessions
@@ -613,7 +609,6 @@ mod tests {
             .expect("test page should load");
         let _ = bc
             .active_page_state_mut()
-            .active_target
             .runtime_slot
             .replace_loaded_page(Some(page));
         bc.active_page_state_mut().devtools_sessions
@@ -859,7 +854,6 @@ mod tests {
             let bc = ctx.conn.browser_context.as_ref().expect("browser context");
             (
                 bc.active_page_state()
-                    .active_target
                     .runtime_slot
                     .page_attachment_id()
                     .expect("active Page attachment"),
@@ -889,10 +883,7 @@ mod tests {
             let bc = ctx.conn.browser_context.as_ref().expect("browser context");
             assert_eq!(bc.active_target_id(), Some("TID-promoted"));
             assert_eq!(
-                bc.active_page_state()
-                    .active_target
-                    .runtime_slot
-                    .page_attachment_id(),
+                bc.active_page_state().runtime_slot.page_attachment_id(),
                 Some(promoted_attachment),
                 "promotion must transfer the installed Page attachment without reallocating it"
             );
@@ -1423,7 +1414,6 @@ mod tests {
             .as_ref()
             .expect("browser context should exist")
             .active_page_state()
-            .active_target
             .owner_state
             .runtime_observable_state;
         assert!(
@@ -1466,7 +1456,6 @@ mod tests {
             .as_ref()
             .expect("browser context should exist")
             .active_page_state()
-            .active_target
             .owner_state
             .runtime_observable_state;
         assert!(

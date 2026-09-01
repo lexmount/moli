@@ -184,7 +184,6 @@ async fn capture_screenshot_rejects_completion_from_replaced_renderer_attachment
         .as_mut()
         .expect("browser context")
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .replace_loaded_page(Some(replacement));
 
@@ -268,7 +267,6 @@ async fn capture_snapshot_returns_minimal_mhtml_for_loaded_page() {
         .as_mut()
         .expect("browser context")
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .replace_loaded_page(Some(page));
 
@@ -321,7 +319,6 @@ async fn capture_snapshot_dispatch_serializes_html_in_renderer_owner() {
         .as_mut()
         .expect("browser context")
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .replace_loaded_page(Some(page));
 
@@ -926,7 +923,6 @@ async fn get_layout_metrics_queries_live_renderer_for_loaded_pages() {
         .as_mut()
         .expect("browser context")
         .active_page_state_mut()
-        .active_target
         .runtime_slot
         .replace_loaded_page(Some(page));
 

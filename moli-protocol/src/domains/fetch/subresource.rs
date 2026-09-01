@@ -694,7 +694,6 @@ mod tests {
         let mut browser_context = BrowserContext::new_with_page_for_test("BID-1", "TID-active");
         browser_context
             .active_page_state_mut()
-            .active_target
             .runtime_slot
             .set_page_attachment_id_for_test(1);
         conn.browser_context = Some(browser_context);
@@ -757,13 +756,11 @@ mod tests {
         let bc = conn.browser_context.as_ref().unwrap();
         assert!(
             bc.active_page_state()
-                .active_target
                 .fetch_owner
                 .has_pending_subresource_fetch_for_test("FETCH-1")
         );
         assert!(
             bc.active_page_state()
-                .active_target
                 .fetch_owner
                 .has_pending_subresource_fetch_for_test("FETCH-2")
         );
@@ -775,7 +772,6 @@ mod tests {
         let mut browser_context = BrowserContext::new_with_page_for_test("BID-1", "TID-active");
         browser_context
             .active_page_state_mut()
-            .active_target
             .runtime_slot
             .set_page_attachment_id_for_test(1);
         conn.browser_context = Some(browser_context);
@@ -820,7 +816,6 @@ mod tests {
         let mut browser_context = BrowserContext::new_with_page_for_test("BID-1", "TID-active");
         browser_context
             .active_page_state_mut()
-            .active_target
             .runtime_slot
             .set_page_attachment_id_for_test(1);
         conn.browser_context = Some(browser_context);
@@ -831,7 +826,6 @@ mod tests {
             .as_mut()
             .expect("browser context should remain installed")
             .active_page_state_mut()
-            .active_target
             .runtime_slot
             .replace_page_attachment_id_for_test();
 
@@ -859,7 +853,6 @@ mod tests {
                 .as_ref()
                 .expect("browser context should remain installed")
                 .active_page_state()
-                .active_target
                 .fetch_owner
                 .has_pending_subresource_fetch_for_test("FETCH-1"),
             "a stale prepared pause must not install pending command state"
@@ -916,7 +909,6 @@ mod tests {
         );
         assert!(
             !bc.active_page_state()
-                .active_target
                 .fetch_owner
                 .has_pending_subresource_fetch_for_test("FETCH-1"),
             "background owner emission must not register the pause on the active target"
