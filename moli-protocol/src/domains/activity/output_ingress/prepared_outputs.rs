@@ -66,7 +66,7 @@ impl PreparedProtocolOutputs {
         Some(prepared)
     }
 
-    pub(in crate::domains::activity) async fn from_renderer_observation(
+    pub(in crate::domains::activity) fn from_renderer_observation(
         conn: &mut CdpConnection,
         session_id: Option<&str>,
         source_renderer_agent: moli_core::page::RendererDevToolsAgentToken,
@@ -112,7 +112,7 @@ impl PreparedProtocolOutputs {
             }
             RendererProtocolObservation::RuntimeInspector(batch) => {
                 let source_batches = vec![batch.clone()];
-                let mut batches = conn.route_current_renderer_inspector_output_for_session_owner(
+                let batches = conn.route_current_renderer_inspector_output_for_session_owner(
                     session_id,
                     source_batches.clone(),
                 );
@@ -125,41 +125,6 @@ impl PreparedProtocolOutputs {
                         )
                         .append_to_output_sink(&mut prepared);
                     return prepared;
-                }
-                for batch in &mut batches {
-                    let Some(attachment) = conn
-                        .target_page_protocol_attachment_identity_for_renderer_inspector_route(
-                            session_id,
-                            batch.session.wire_session_id(),
-                        )
-                    else {
-                        continue;
-                    };
-                    let output_session_id = attachment.session_id().map(str::to_owned);
-                    let normalize_node_objects = !conn
-                        .runtime_inspector_pause_active_for_session_owner(
-                            output_session_id.as_deref(),
-                        );
-                    for message in &mut batch.messages {
-                        let moli_core::page::RendererRuntimeInspectorMessage::Protocol(message) =
-                            message
-                        else {
-                            continue;
-                        };
-                        let mut value = message.value_mut();
-                        conn.normalize_runtime_event_context_ids_for_session_owner_async(
-                            output_session_id.as_deref(),
-                            &mut value,
-                        )
-                        .await;
-                        if normalize_node_objects {
-                            conn.normalize_node_remote_objects_for_session_owner_async(
-                                output_session_id.as_deref(),
-                                &mut value,
-                            )
-                            .await;
-                        }
-                    }
                 }
                 crate::domains::runtime::RuntimePreparedOutputs::
                     from_renderer_runtime_inspector_message_batches(

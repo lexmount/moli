@@ -436,14 +436,12 @@ mod tests {
         );
         let mut ordered_events = Vec::new();
         assert!(
-            !ctx.conn
-                .route_renderer_runtime_command_output_into(
-                    output,
-                    Some(77),
-                    None,
-                    &mut ordered_events,
-                )
-                .await,
+            !ctx.conn.route_renderer_runtime_command_output_into(
+                output,
+                Some(77),
+                None,
+                &mut ordered_events,
+            ),
             "a validated state-only response must not invent a frontend completion"
         );
         assert!(ordered_events.is_empty());

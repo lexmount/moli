@@ -215,15 +215,6 @@ impl PendingCdpCommandDispatch {
         }
     }
 
-    pub fn runtime_deferred_reply_page_owner_access_allowed(&self) -> bool {
-        match &self.inner {
-            PendingCdpCommandDispatchKind::Runtime(pending) => {
-                pending.deferred_reply_page_owner_access_allowed()
-            }
-            _ => false,
-        }
-    }
-
     pub fn waits_for_scheduler_deferred_inspector_reply(&self) -> bool {
         match &self.inner {
             PendingCdpCommandDispatchKind::Runtime(pending) => {
@@ -387,15 +378,6 @@ impl PendingCdpCommandDispatch {
 impl CompletedCdpCommandDispatch {
     pub fn kind_name(&self) -> &'static str {
         self.inner.name()
-    }
-
-    pub fn runtime_command_page_owner_access_allowed(&self) -> Option<bool> {
-        match &self.inner {
-            CompletedCdpCommandDispatchKind::Runtime(completed) => {
-                Some(completed.page_owner_access_allowed())
-            }
-            _ => None,
-        }
     }
 }
 

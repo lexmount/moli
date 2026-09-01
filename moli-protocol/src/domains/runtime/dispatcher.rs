@@ -265,9 +265,6 @@ enum PendingRuntimeCommandKind {
         routed_output: RuntimeInspectorRoutedOutput,
         renderer_response_rx: Option<RuntimeInspectorAsyncCompletionReceiver>,
         claimed_await: Option<ClaimedPendingInspectorAwait>,
-        // False when V8's nested pause loop, rather than the Page actor,
-        // consumed the Inspector command.
-        page_owner_access_allowed: bool,
     },
     SharedWorkerInspector {
         pending: PendingSharedWorkerRuntimeProtocolMessageDispatch,
@@ -298,7 +295,6 @@ enum CompletedRuntimeCommandKind {
     },
     InspectorDeferredReplyReady {
         routed_output: RuntimeInspectorRoutedOutput,
-        page_owner_access_allowed: bool,
     },
     SharedWorkerInspector {
         completed: Result<CompletedSharedWorkerRuntimeProtocolMessageDispatch, String>,
@@ -549,16 +545,6 @@ impl PendingRuntimeCommandDispatch {
         )
     }
 
-    pub(crate) fn deferred_reply_page_owner_access_allowed(&self) -> bool {
-        matches!(
-            self.pending,
-            PendingRuntimeCommandKind::InspectorDeferredReply {
-                page_owner_access_allowed: true,
-                ..
-            }
-        )
-    }
-
     pub(crate) fn append_scheduler_deferred_inspector_reply_output(
         &mut self,
         response_events: Vec<BackgroundProtocolEvent>,
@@ -568,7 +554,6 @@ impl PendingRuntimeCommandDispatch {
             routed_output,
             renderer_response_rx: _,
             claimed_await: _,
-            page_owner_access_allowed: _,
         } = &mut self.pending
         else {
             return;
@@ -585,7 +570,6 @@ impl PendingRuntimeCommandDispatch {
             routed_output,
             renderer_response_rx: _,
             claimed_await: _,
-            page_owner_access_allowed: _,
         } = &mut self.pending
         else {
             return Vec::new();
@@ -682,7 +666,6 @@ impl PendingRuntimeCommandDispatch {
                 routed_output,
                 renderer_response_rx: _,
                 claimed_await,
-                page_owner_access_allowed,
             } => {
                 let mut route_scope = owner_scope.enter(conn);
                 route_scope
@@ -691,10 +674,7 @@ impl PendingRuntimeCommandDispatch {
                         claimed_await,
                         routed_output.events(),
                     );
-                CompletedRuntimeCommandKind::InspectorDeferredReplyReady {
-                    routed_output,
-                    page_owner_access_allowed,
-                }
+                CompletedRuntimeCommandKind::InspectorDeferredReplyReady { routed_output }
             }
             _ => {
                 unreachable!(
@@ -758,11 +738,7 @@ impl PendingRuntimeCommandDispatch {
                     routed_output,
                     renderer_response_rx: _,
                     claimed_await: _,
-                    page_owner_access_allowed,
-                } => CompletedRuntimeCommandKind::InspectorDeferredReplyReady {
-                    routed_output,
-                    page_owner_access_allowed,
-                },
+                } => CompletedRuntimeCommandKind::InspectorDeferredReplyReady { routed_output },
                 PendingRuntimeCommandKind::SharedWorkerInspector {
                     pending,
                     binding_effect,
@@ -811,19 +787,6 @@ impl CompletedRuntimeCommandDispatch {
 
     pub(crate) fn session_id(&self) -> Option<&str> {
         self.owner_scope.session_id()
-    }
-
-    pub(crate) fn page_owner_access_allowed(&self) -> bool {
-        match &self.completed {
-            CompletedRuntimeCommandKind::Inspector {
-                completed: Ok(completed),
-            } => completed.page_owner_access_allowed(),
-            CompletedRuntimeCommandKind::InspectorDeferredReplyReady {
-                page_owner_access_allowed,
-                ..
-            } => *page_owner_access_allowed,
-            _ => true,
-        }
     }
 }
 
@@ -8076,7 +8039,6 @@ async fn route_registered_runtime_response_receiver_into(
     command_id: Option<u64>,
     session_id: Option<&str>,
     response_rx: RuntimeInspectorAsyncCompletionReceiver,
-    page_owner_access_allowed: bool,
     routed_output: &mut RuntimeInspectorRoutedOutput,
 ) -> bool {
     let Some(command_id) = command_id else {
@@ -8101,7 +8063,6 @@ async fn route_registered_runtime_response_receiver_into(
         output,
         Some(command_id),
         session_id,
-        page_owner_access_allowed,
         routed_output,
     )
     .await
@@ -8112,19 +8073,15 @@ async fn route_runtime_command_output_into_routed_output(
     output: RendererRuntimeCommandOutput,
     command_id: Option<u64>,
     session_id: Option<&str>,
-    page_owner_access_allowed: bool,
     routed_output: &mut RuntimeInspectorRoutedOutput,
 ) -> bool {
     let mut ordered_events = Vec::new();
-    let saw_current_response = conn
-        .route_renderer_runtime_command_output_with_page_owner_access_into(
-            output,
-            command_id,
-            session_id,
-            page_owner_access_allowed,
-            &mut ordered_events,
-        )
-        .await;
+    let saw_current_response = conn.route_renderer_runtime_command_output_into(
+        output,
+        command_id,
+        session_id,
+        &mut ordered_events,
+    );
     routed_output.append_ordered_events(ordered_events);
     saw_current_response
 }
@@ -8147,8 +8104,7 @@ async fn route_renderer_command_turn_output_into_routed_output(
             response_flush,
             &mut ordered_events,
             &mut post_response_events,
-        )
-        .await;
+        );
     if let Some(predecessor) = renderer_output_predecessor {
         routed_output.set_renderer_output_predecessor(predecessor);
     }
@@ -8192,13 +8148,11 @@ async fn complete_pending_runtime_inspector_command(
     let (
         messages,
         mut renderer_response_rx,
-        page_owner_access_allowed,
         response_delivery,
         session_response_predecessor,
         session_response_succeeded,
     ) = match completed_inspector {
         Ok(mut completed_protocol) => {
-            let page_owner_access_allowed = completed_protocol.page_owner_access_allowed();
             let session_response_succeeded = completed_protocol.session_response_succeeded();
             let session_response_predecessor = completed_protocol.session_response_predecessor();
             let response_delivery = completed_protocol.response_delivery();
@@ -8210,7 +8164,6 @@ async fn complete_pending_runtime_inspector_command(
                 Ok(messages) => (
                     messages,
                     renderer_response_rx,
-                    page_owner_access_allowed,
                     response_delivery,
                     session_response_predecessor,
                     session_response_succeeded,
@@ -8229,7 +8182,6 @@ async fn complete_pending_runtime_inspector_command(
                         (
                             None,
                             renderer_response_rx,
-                            page_owner_access_allowed,
                             response_delivery,
                             session_response_predecessor,
                             session_response_succeeded,
@@ -8354,7 +8306,6 @@ async fn complete_pending_runtime_inspector_command(
             completed.command_id,
             completed.session_id(),
             renderer_response_rx,
-            page_owner_access_allowed,
             &mut routed_output,
         )
         .await;
@@ -8377,7 +8328,6 @@ async fn complete_pending_runtime_inspector_command(
             completed,
             routed_output,
             renderer_response_rx,
-            page_owner_access_allowed,
         );
     }
     let succeeded = session_response_succeeded
@@ -8489,7 +8439,6 @@ fn pending_runtime_deferred_inspector_reply_command(
     completed: RuntimeCommandCompletionMeta,
     routed_output: RuntimeInspectorRoutedOutput,
     renderer_response_rx: Option<RuntimeInspectorAsyncCompletionReceiver>,
-    page_owner_access_allowed: bool,
 ) -> RuntimeCommandTaskStep {
     let claimed_await = completed.command_id.and_then(|command_id| {
         conn.claim_pending_inspector_await_for_scheduler_deferred_reply(
@@ -8510,7 +8459,6 @@ fn pending_runtime_deferred_inspector_reply_command(
             routed_output,
             renderer_response_rx,
             claimed_await,
-            page_owner_access_allowed,
         },
     }))
 }
@@ -8742,7 +8690,6 @@ async fn complete_pending_runtime_binding_inspector_command(
             completed.command_id,
             completed.session_id(),
             renderer_response_rx,
-            true,
             &mut routed_output,
         )
         .await;
@@ -9507,7 +9454,6 @@ async fn complete_pending_shared_worker_runtime_inspector_command(
             completed.command_id,
             completed.session_id(),
             renderer_response_rx,
-            true,
             &mut routed_output,
         )
         .await;
@@ -9521,7 +9467,6 @@ async fn complete_pending_shared_worker_runtime_inspector_command(
             completed,
             routed_output,
             renderer_response_rx,
-            true,
         );
     }
     let succeeded = routed_output.command_response_succeeded(completed.command_id);
@@ -9646,7 +9591,6 @@ async fn complete_pending_service_worker_runtime_inspector_command(
             completed.command_id,
             completed.session_id(),
             renderer_response_rx,
-            true,
             &mut routed_output,
         )
         .await;
@@ -9660,7 +9604,6 @@ async fn complete_pending_service_worker_runtime_inspector_command(
             completed,
             routed_output,
             renderer_response_rx,
-            true,
         );
     }
     let succeeded = routed_output.command_response_succeeded(completed.command_id);

@@ -635,19 +635,6 @@ impl PendingServiceWorkerRuntimeProtocolMessageDispatch {
 }
 
 impl CompletedRuntimeProtocolMessageDispatch {
-    pub(crate) fn page_owner_access_allowed(&self) -> bool {
-        matches!(
-            self.completion,
-            moli_core::page::CompletedRuntimeInspectorCommandDispatch::Owner(_)
-                | moli_core::page::CompletedRuntimeInspectorCommandDispatch::OwnerSessionResponse {
-                    ..
-                }
-                | moli_core::page::CompletedRuntimeInspectorCommandDispatch::OwnerSessionErrorSettled(
-                    _
-                )
-        )
-    }
-
     pub(crate) fn session_response_succeeded(&self) -> Option<bool> {
         match &self.completion {
             moli_core::page::CompletedRuntimeInspectorCommandDispatch::OwnerSessionResponse {
@@ -2695,29 +2682,11 @@ impl CdpConnection {
         current_seen
     }
 
-    pub(crate) async fn route_renderer_runtime_command_output_into(
+    pub(crate) fn route_renderer_runtime_command_output_into(
         &mut self,
         output: RendererRuntimeCommandOutput,
         current_cmd_id: Option<u64>,
         current_session_id: Option<&str>,
-        ordered_events: &mut Vec<BackgroundProtocolEvent>,
-    ) -> bool {
-        self.route_renderer_runtime_command_output_with_page_owner_access_into(
-            output,
-            current_cmd_id,
-            current_session_id,
-            true,
-            ordered_events,
-        )
-        .await
-    }
-
-    pub(crate) async fn route_renderer_runtime_command_output_with_page_owner_access_into(
-        &mut self,
-        output: RendererRuntimeCommandOutput,
-        current_cmd_id: Option<u64>,
-        current_session_id: Option<&str>,
-        page_owner_access_allowed: bool,
         ordered_events: &mut Vec<BackgroundProtocolEvent>,
     ) -> bool {
         if let Some(attachment_id) = output.renderer_agent_attachment_id()
@@ -2740,25 +2709,7 @@ impl CdpConnection {
                 self.merge_v8_inspector_session_state_for_session_owner(current_session_id, state);
         }
         let mut current_seen = false;
-        for mut message in output.into_messages() {
-            // Pause-loop responses are already concrete V8 protocol output.
-            // Context and DOM-node normalization can enqueue Page commands,
-            // so preserve the raw response until that owner can run again.
-            if page_owner_access_allowed
-                && let RendererRuntimeInspectorMessage::Protocol(message) = &mut message
-            {
-                let mut message_value = message.value_mut();
-                self.normalize_runtime_event_context_ids_for_session_owner_async(
-                    current_session_id,
-                    &mut message_value,
-                )
-                .await;
-                self.normalize_node_remote_objects_for_session_owner_async(
-                    current_session_id,
-                    &mut message_value,
-                )
-                .await;
-            }
+        for message in output.into_messages() {
             let mut response_events = Vec::new();
             let mut background_events = Vec::new();
             current_seen |= self
@@ -2775,7 +2726,7 @@ impl CdpConnection {
         current_seen
     }
 
-    pub(crate) async fn route_renderer_command_turn_output_into(
+    pub(crate) fn route_renderer_command_turn_output_into(
         &mut self,
         output: RendererCommandTurnOutput,
         current_cmd_id: Option<u64>,
@@ -2799,8 +2750,7 @@ impl CdpConnection {
                 current_cmd_id,
                 current_session_id,
                 ordered_events,
-            )
-            .await,
+            ),
             renderer_output_predecessor,
         )
     }
@@ -2958,18 +2908,16 @@ impl CdpConnection {
             response.into_renderer_command_output();
         let (renderer_agent_attachment_id, v8_state_update, messages) = output.into_parts();
         let mut ordered_events = Vec::new();
-        let current_seen = self
-            .route_renderer_runtime_command_output_into(
-                RendererRuntimeCommandOutput::from_parts(
-                    renderer_agent_attachment_id,
-                    v8_state_update,
-                    messages,
-                ),
-                Some(current_cmd_id),
-                current_session_id,
-                &mut ordered_events,
-            )
-            .await;
+        let current_seen = self.route_renderer_runtime_command_output_into(
+            RendererRuntimeCommandOutput::from_parts(
+                renderer_agent_attachment_id,
+                v8_state_update,
+                messages,
+            ),
+            Some(current_cmd_id),
+            current_session_id,
+            &mut ordered_events,
+        );
         response_events.extend(ordered_events);
         let _ = background_events;
         (current_seen, renderer_output_predecessor)
@@ -3403,139 +3351,6 @@ impl CdpConnection {
         );
         conn.publish_bidi_channel_listener_start(residence);
         BidiChannelListenerRoute::Event(event)
-    }
-
-    pub(crate) async fn normalize_node_remote_objects_for_session_owner_async(
-        &mut self,
-        session_id: Option<&str>,
-        payload: &mut Value,
-    ) {
-        let inspector_session_id =
-            self.target_renderer_runtime_inspector_session_id_for_session(session_id);
-        let include_whitespace =
-            crate::domains::dom::dom_agent_includes_whitespace_for_session(self, session_id);
-        self.normalize_node_remote_objects_by_page_lookup_async(
-            inspector_session_id.as_deref(),
-            include_whitespace,
-            payload,
-            |connection| connection.runtime_session_owner_page_mut(session_id),
-        )
-        .await;
-    }
-
-    async fn normalize_node_remote_objects_for_runtime_protocol_message_route_async(
-        &mut self,
-        session_id: Option<&str>,
-        route: &RuntimeProtocolMessagePageRoute,
-        payload: &mut Value,
-    ) {
-        let inspector_session_id =
-            self.target_renderer_runtime_inspector_session_id_for_session(session_id);
-        let include_whitespace =
-            crate::domains::dom::dom_agent_includes_whitespace_for_session(self, session_id);
-        self.normalize_node_remote_objects_by_page_lookup_async(
-            inspector_session_id.as_deref(),
-            include_whitespace,
-            payload,
-            |connection| connection.runtime_protocol_message_started_page_mut(route),
-        )
-        .await;
-    }
-
-    async fn normalize_node_remote_objects_by_page_lookup_async(
-        &mut self,
-        inspector_session_id: Option<&str>,
-        include_whitespace: bool,
-        payload: &mut Value,
-        mut page_lookup: impl for<'a> FnMut(&'a mut Self) -> Result<&'a mut Page, String>,
-    ) {
-        let mut paths = Vec::new();
-        collect_remote_object_paths(payload, "", &mut paths);
-
-        for path in paths {
-            let Some(remote_object) = payload.pointer(&path) else {
-                continue;
-            };
-            let Some(object_id) = remote_object
-                .get("objectId")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-            else {
-                continue;
-            };
-
-            let has_subtype = remote_object.get("subtype").is_some();
-            let is_object_like = remote_object
-                .get("type")
-                .and_then(Value::as_str)
-                .is_some_and(|ty| matches!(ty, "object" | "function"));
-            if has_subtype || !is_object_like {
-                continue;
-            }
-
-            let pending = page_lookup(self).and_then(|page| {
-                page.start_document_node_snapshot_for_object_id_in_inspector_session(
-                    inspector_session_id.map(str::to_owned),
-                    include_whitespace,
-                    &object_id,
-                    0,
-                    false,
-                )
-                .map_err(|error| error.to_string())
-            });
-            let is_node = match pending {
-                Ok(pending) => match pending.wait().await {
-                    Ok(completion) => page_lookup(self)
-                        .and_then(|page| {
-                            page.finish_document_node_snapshot_for_object_id(completion)
-                                .map_err(|error| error.to_string())
-                        })
-                        .ok()
-                        .flatten()
-                        .is_some(),
-                    Err(_) => false,
-                },
-                Err(_) => false,
-            };
-            if !is_node {
-                continue;
-            }
-
-            if let Some(remote_object) = payload.pointer_mut(&path).and_then(Value::as_object_mut) {
-                remote_object.insert("subtype".to_owned(), json!("node"));
-            }
-        }
-    }
-
-    pub(crate) async fn normalize_runtime_event_context_ids_for_session_owner_async(
-        &mut self,
-        session_id: Option<&str>,
-        message: &mut Value,
-    ) {
-        let Some(method) = message.get("method").and_then(Value::as_str) else {
-            return;
-        };
-        let context_pointer = match method {
-            "Runtime.consoleAPICalled" => "/params/executionContextId",
-            "Runtime.exceptionThrown" => "/params/exceptionDetails/executionContextId",
-            _ => return,
-        };
-        let Some(inspector_context_id) = message.pointer(context_pointer).and_then(Value::as_i64)
-        else {
-            return;
-        };
-        let Ok(Some(compatibility_context_id)) = self
-            .isolated_execution_context_id_for_inspector_context_for_session_owner_async(
-                session_id,
-                inspector_context_id,
-            )
-            .await
-        else {
-            return;
-        };
-        if let Some(context_id) = message.pointer_mut(context_pointer) {
-            *context_id = json!(compatibility_context_id);
-        }
     }
 
     pub(crate) async fn document_node_snapshot_for_runtime_remote_object_id_async(
@@ -4418,7 +4233,7 @@ impl CdpConnection {
         let timing_started = moli_trace::cdp_nav_timing_enabled().then(std::time::Instant::now);
         let inspector_session_id =
             self.target_renderer_runtime_inspector_session_id_for_session(session_id);
-        let mut messages = {
+        let messages = {
             let page = self.runtime_session_owner_page_mut(session_id)?;
             page.dispatch_runtime_protocol_message_for_inspector_session_async(
                 inspector_session_id,
@@ -4443,20 +4258,6 @@ impl CdpConnection {
             tracing::info!(
                 target: "moli_cdp_nav_timing",
                 stage = "runtime_inspector_output_ingested",
-                elapsed_ms = started.elapsed().as_millis(),
-            );
-        }
-        for message in &mut messages {
-            self.normalize_runtime_event_context_ids_for_session_owner_async(session_id, message)
-                .await;
-            self.normalize_node_remote_objects_for_session_owner_async(session_id, message)
-                .await;
-        }
-        if let Some(started) = timing_started {
-            tracing::info!(
-                target: "moli_cdp_nav_timing",
-                stage = "runtime_inspector_messages_normalized",
-                messages = messages.len(),
                 elapsed_ms = started.elapsed().as_millis(),
             );
         }
@@ -4505,22 +4306,8 @@ impl CdpConnection {
         {
             response.replace_with_error("Execution context was destroyed by navigation");
         }
-        let mut message = response.into_protocol_message_for_typed_runtime_route();
-        self.normalize_runtime_event_context_ids_for_session_owner_async(session_id, &mut message)
-            .await;
-        if !self.runtime_inspector_pause_active_for_session_owner(session_id) {
-            self.normalize_node_remote_objects_for_session_owner_async(session_id, &mut message)
-                .await;
-        }
+        let message = response.into_protocol_message_for_typed_runtime_route();
         Some(RendererRuntimeInspectorMessage::protocol(message))
-    }
-
-    pub(crate) fn runtime_inspector_pause_active_for_session_owner(
-        &mut self,
-        session_id: Option<&str>,
-    ) -> bool {
-        self.runtime_session_owner_page_mut(session_id)
-            .is_ok_and(|page| page.runtime_inspector_pause_active())
     }
 
     pub(crate) fn start_runtime_protocol_message_for_session_owner(
@@ -4796,23 +4583,6 @@ impl CdpConnection {
         runtime_messages
             .bind_renderer_agent_attachment(completed.route.renderer_agent_attachment_id);
         let runtime_messages = runtime_messages.messages_mut();
-        for runtime_message in runtime_messages.iter_mut() {
-            let RendererRuntimeInspectorMessage::Protocol(message) = runtime_message else {
-                continue;
-            };
-            let mut message_value = message.value_mut();
-            self.normalize_runtime_event_context_ids_for_session_owner_async(
-                completed.session_id.as_deref(),
-                &mut message_value,
-            )
-            .await;
-            self.normalize_node_remote_objects_for_runtime_protocol_message_route_async(
-                completed.session_id.as_deref(),
-                &completed.route,
-                &mut message_value,
-            )
-            .await;
-        }
         self.restore_frontend_command_ids_in_runtime_messages(
             completed.session_id.as_deref(),
             Some(completed.route.renderer_agent_attachment_id),
@@ -5121,14 +4891,12 @@ impl CdpConnection {
                 let _ = response_sender.send_output(output);
                 continue;
             }
-            let _ = self
-                .route_renderer_runtime_command_output_into(
-                    output,
-                    None,
-                    frontend_session_id.as_deref(),
-                    &mut events,
-                )
-                .await;
+            let _ = self.route_renderer_runtime_command_output_into(
+                output,
+                None,
+                frontend_session_id.as_deref(),
+                &mut events,
+            );
         }
         Ok(events)
     }
@@ -5396,7 +5164,6 @@ impl CdpConnection {
                 &mut release_events,
                 &mut release_post_response_events,
             )
-            .await
             .0
         } else {
             false
@@ -5426,14 +5193,12 @@ impl CdpConnection {
                     renderer_output_predecessor.is_none(),
                     "internal object-group cleanup cannot discard a concrete output cursor"
                 );
-                let release_response_seen = self
-                    .route_renderer_runtime_command_output_into(
-                        output,
-                        Some(command_id),
-                        session_id,
-                        &mut release_events,
-                    )
-                    .await;
+                let release_response_seen = self.route_renderer_runtime_command_output_into(
+                    output,
+                    Some(command_id),
+                    session_id,
+                    &mut release_events,
+                );
                 if !release_response_seen {
                     tracing::debug!(
                         command_id,
@@ -5555,7 +5320,6 @@ impl CdpConnection {
                 &mut listener_events,
                 &mut listener_post_response_events,
             )
-            .await
             .0
         } else {
             false
@@ -6040,38 +5804,6 @@ fn send_renderer_replacement_error(
             "message": message,
         },
     }));
-}
-
-fn collect_remote_object_paths(value: &Value, path: &str, out: &mut Vec<String>) {
-    let mut stack = vec![(value, path.to_owned(), MAX_INSPECTOR_PROTOCOL_VALUE_DEPTH)];
-    while let Some((value, path, remaining_tree_depth)) = stack.pop() {
-        let Some(next_tree_depth) = remaining_tree_depth.checked_sub(1) else {
-            continue;
-        };
-        match value {
-            Value::Object(map) => {
-                if map.get("objectId").and_then(Value::as_str).is_some()
-                    && map.get("type").and_then(Value::as_str).is_some()
-                {
-                    out.push(path.clone());
-                }
-
-                let children = map.iter().collect::<Vec<_>>();
-                for (key, child) in children.into_iter().rev() {
-                    let escaped_key = key.replace('~', "~0").replace('/', "~1");
-                    let child_path = format!("{path}/{escaped_key}");
-                    stack.push((child, child_path, next_tree_depth));
-                }
-            }
-            Value::Array(values) => {
-                for index in (0..values.len()).rev() {
-                    let child_path = format!("{path}/{index}");
-                    stack.push((&values[index], child_path, next_tree_depth));
-                }
-            }
-            Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
-        }
-    }
 }
 
 fn runtime_realm_info_to_execution_context_event(
@@ -7120,32 +6852,6 @@ mod tests {
             ));
 
             assert!(object_ids.is_empty());
-        });
-    }
-
-    #[test]
-    fn remote_object_path_collection_respects_protocol_depth_cap() {
-        run_deep_protocol_value_test("remote-object-path-depth-cap", || {
-            let value = json!({
-                "result": {
-                    "type": "object",
-                    "objectId": "OBJECT-1",
-                }
-            });
-            let mut paths = Vec::new();
-            collect_remote_object_paths(&value, "", &mut paths);
-            assert_eq!(paths, vec!["/result".to_owned()]);
-
-            let deep_value = deeply_nested_plain_value(
-                json!({
-                    "type": "object",
-                    "objectId": "too-deep",
-                }),
-                MAX_INSPECTOR_PROTOCOL_VALUE_DEPTH + 8,
-            );
-            paths.clear();
-            collect_remote_object_paths(&deep_value, "", &mut paths);
-            assert!(paths.is_empty());
         });
     }
 

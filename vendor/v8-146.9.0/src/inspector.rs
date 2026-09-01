@@ -698,6 +698,32 @@ impl V8InspectorSession {
     _scope: &PinScope<'s, '_>,
     object_id: StringView,
   ) -> Result<UnwrappedObject<'s>, UniquePtr<StringBuffer>> {
+    unsafe { self.unwrap_object_unchecked(object_id) }
+  }
+
+  /// Resolves an Inspector object while running synchronously inside a V8
+  /// embedder callback that already has an active C++ handle scope.
+  ///
+  /// The higher-ranked callback prevents the returned local handles from
+  /// escaping. The caller must still create a Rust `CallbackScope` from the
+  /// returned context before inspecting either handle.
+  ///
+  /// # Safety
+  ///
+  /// This must only be called synchronously from a V8 embedder callback while
+  /// the C++ handle scope that receives the resolved locals remains active.
+  pub unsafe fn with_unwrapped_object_in_current_handle_scope<R>(
+    &self,
+    object_id: StringView,
+    op: impl for<'s> FnOnce(UnwrappedObject<'s>) -> R,
+  ) -> Result<R, UniquePtr<StringBuffer>> {
+    unsafe { self.unwrap_object_unchecked(object_id) }.map(op)
+  }
+
+  unsafe fn unwrap_object_unchecked<'s>(
+    &self,
+    object_id: StringView,
+  ) -> Result<UnwrappedObject<'s>, UniquePtr<StringBuffer>> {
     let mut error = std::ptr::null_mut();
     let mut value = std::ptr::null();
     let mut context = std::ptr::null();

@@ -5339,7 +5339,7 @@ async fn websocket_cdp_debugger_step_out_responds_before_resumed_and_caller_paus
                 "method": "Runtime.evaluate",
                 "sessionId": session_id,
                 "params": {
-                    "expression": "(function outer(){ function inner(){ debugger; return 40; } return inner() + 2; })()",
+                    "expression": "(function outer(){ function inner(){ console.log('moli debugger prefix', document.body); debugger; return 40; } return inner() + 2; })()",
                     "returnByValue": true
                 }
             })
@@ -5356,6 +5356,24 @@ async fn websocket_cdp_debugger_step_out_responds_before_resumed_and_caller_paus
     assert!(
         !observed.iter().any(|message| message["id"] == json!(5_u64)),
         "Runtime.evaluate must remain pending while the renderer owner is paused: {observed:#?}"
+    );
+    let console_position = observed
+        .iter()
+        .position(|message| {
+            message["sessionId"].as_str() == Some(session_id.as_str())
+                && message["method"] == json!("Runtime.consoleAPICalled")
+                && message["params"]["args"][0]["value"] == json!("moli debugger prefix")
+                && message["params"]["args"][1]["objectId"].is_string()
+                && message["params"]["args"][1]["subtype"] == json!("node")
+        })
+        .unwrap_or_else(|| panic!("console prefix must be visible before pause: {observed:#?}"));
+    let pause_position = observed
+        .iter()
+        .position(|message| message["method"] == json!("Debugger.paused"))
+        .expect("nested Runtime.evaluate should emit Debugger.paused");
+    assert!(
+        console_position < pause_position,
+        "the suspending prefix must preserve console -> debugger pause order: {observed:#?}"
     );
     let initial_pause = observed
         .iter()
@@ -5934,6 +5952,97 @@ async fn websocket_cdp_handle_javascript_dialog_accept_resumes_confirm_with_true
         evaluate["result"]["result"]["value"],
         json!(true),
         "accepted confirm should return true to page JavaScript: {observed:#?}"
+    );
+
+    let receiver = send_cdp_command(
+        &mut socket,
+        14,
+        "Runtime.evaluate",
+        Some(&session_id),
+        json!({ "expression": "({})" }),
+    )
+    .await;
+    let receiver_object_id = receiver
+        .iter()
+        .find(|message| message["id"] == json!(14_u64))
+        .and_then(|message| message["result"]["result"]["objectId"].as_str())
+        .expect("Runtime.evaluate should return a receiver objectId")
+        .to_owned();
+    socket
+        .send(WsMessage::Text(
+            json!({
+                "id": 15_u64,
+                "method": "Runtime.callFunctionOn",
+                "sessionId": session_id,
+                "params": {
+                    "objectId": receiver_object_id,
+                    "functionDeclaration": "function () { console.log('moli callFunctionOn marker', document.body); return confirm('moli callFunctionOn confirm'); }",
+                    "awaitPromise": true,
+                    "returnByValue": true,
+                    "userGesture": true
+                }
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .expect("send Runtime.callFunctionOn that opens confirm");
+    let mut called = recv_until_match(&mut socket, |message| {
+        message["sessionId"].as_str() == Some(session_id.as_str())
+            && message["method"] == json!("Page.javascriptDialogOpening")
+            && message["params"]["message"] == json!("moli callFunctionOn confirm")
+    })
+    .await;
+    assert!(
+        !called.iter().any(|message| message["id"] == json!(15_u64)),
+        "Runtime.callFunctionOn must remain pending while confirm is open: {called:#?}"
+    );
+    let console_position = called
+        .iter()
+        .position(|message| {
+            message["sessionId"].as_str() == Some(session_id.as_str())
+                && message["method"] == json!("Runtime.consoleAPICalled")
+                && message["params"]["args"][0]["value"] == json!("moli callFunctionOn marker")
+                && message["params"]["args"][1]["objectId"].is_string()
+                && message["params"]["args"][1]["subtype"] == json!("node")
+        })
+        .unwrap_or_else(|| {
+            panic!("console output before callFunctionOn confirm must be published: {called:#?}")
+        });
+    let dialog_position = called
+        .iter()
+        .position(|message| {
+            message["sessionId"].as_str() == Some(session_id.as_str())
+                && message["method"] == json!("Page.javascriptDialogOpening")
+                && message["params"]["message"] == json!("moli callFunctionOn confirm")
+        })
+        .expect("callFunctionOn confirm opening event");
+    assert!(
+        console_position < dialog_position,
+        "the suspending prefix must preserve console -> dialog producer order: {called:#?}"
+    );
+    called.extend(
+        send_cdp_command(
+            &mut socket,
+            16,
+            "Page.handleJavaScriptDialog",
+            Some(&session_id),
+            json!({ "accept": true }),
+        )
+        .await,
+    );
+    if !called.iter().any(|message| message["id"] == json!(15_u64)) {
+        called
+            .extend(recv_until_match(&mut socket, |message| message["id"] == json!(15_u64)).await);
+    }
+    let call_function = called
+        .iter()
+        .find(|message| message["id"] == json!(15_u64))
+        .expect("Runtime.callFunctionOn should resolve after confirm is handled");
+    assert_eq!(
+        call_function["result"]["result"]["value"],
+        json!(true),
+        "accepted confirm should return true through Runtime.callFunctionOn: {called:#?}"
     );
 
     socket
