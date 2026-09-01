@@ -13,6 +13,7 @@ mod forms;
 mod json_response;
 mod misc;
 mod no_cors_redirect;
+mod query_realms;
 mod receivers;
 mod reopen;
 mod response_headers;
