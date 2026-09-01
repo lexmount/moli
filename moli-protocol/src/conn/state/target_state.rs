@@ -1,3 +1,5 @@
+//! State owned for the lifetime of one stable protocol target.
+
 use std::collections::HashSet;
 
 use moli_page_types::{DevToolsSessionKey, FrontendCommandId};

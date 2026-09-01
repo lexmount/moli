@@ -180,9 +180,11 @@ mod tests {
             Some("SID-background".into()),
             "about:blank#background".into(),
         ));
-        bc.mutate_background_target_owner_state_for_test("TID-background", |owner_state| {
-            owner_state.target_crash_state.mark_crashed();
-        });
+        bc.background_target_mut("TID-background")
+            .expect("background target must exist")
+            .owner_state
+            .target_crash_state
+            .mark_crashed();
         ctx.conn.browser_context = Some(bc);
 
         ctx.process_async(json!({
@@ -198,7 +200,8 @@ mod tests {
         let bc = ctx.conn.browser_context.as_ref().expect("browser context");
         assert_eq!(bc.active_target_id(), Some("TID-active"));
         assert!(
-            bc.non_default_background_page_target_for_test("TID-background")
+            bc.background_target("TID-background")
+                .filter(|target| target.has_non_default_session_state())
                 .is_some_and(|state| state.devtools_sessions
                     [moli_page_types::DevToolsSessionKey::Primary]
                     .runtime_session_state
@@ -294,7 +297,8 @@ mod tests {
                     .inspector_enabled
             );
             assert!(
-                bc.non_default_background_page_target_for_test("TID-B")
+                bc.background_target("TID-B")
+                    .filter(|target| target.has_non_default_session_state())
                     .is_some_and(|state| {
                         state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                             .runtime_session_state
@@ -314,7 +318,8 @@ mod tests {
                 .inspector_enabled
         );
         assert!(
-            bc.non_default_background_page_target_for_test("TID-B")
+            bc.background_target("TID-B")
+                .filter(|target| target.has_non_default_session_state())
                 .is_none(),
             "disable should collapse staged parked state back to default"
         );

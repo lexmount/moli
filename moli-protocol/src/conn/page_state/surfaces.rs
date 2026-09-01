@@ -39,7 +39,7 @@ impl SurfaceOverrideInputs {
         }
     }
 
-    fn from_parked(
+    fn from_background(
         state: &PageTargetHost,
         default_network_conditions: Option<EmulatedNetworkConditions>,
         default_geolocation_override: Option<EmulatedGeolocationOverrideState>,
@@ -99,7 +99,7 @@ impl SurfaceOverrideInputs {
     fn document_is_focused(&self) -> bool {
         // Focus and Page Visibility are target-state surfaces, not raw mirrors
         // of the CDP focus-emulation flag. Chrome's created active targets
-        // report focused and visible by default; parked/background targets
+        // report focused and visible by default; background targets
         // stay unfocused/hidden unless CDP explicitly asks to simulate a
         // focused and active page.
         (self.active_target_surface && !self.window_document_hidden) || self.focus_emulation_enabled
@@ -352,34 +352,36 @@ impl BrowserContext {
         ))
     }
 
-    pub(crate) fn generated_surface_override_script_for_parked_target(
+    pub(crate) fn generated_surface_override_script_for_background_target(
         &self,
         target_id: &str,
     ) -> Option<DocumentStartScript> {
         let target = self.background_target(target_id)?;
-        self.generated_surface_override_script_for_parked_state(target)
+        self.generated_surface_override_script_for_background_state(target)
     }
 
-    pub(crate) fn generated_surface_override_script_for_parked_state(
+    pub(crate) fn generated_surface_override_script_for_background_state(
         &self,
         state: &PageTargetHost,
     ) -> Option<DocumentStartScript> {
-        Self::generated_surface_override_script_from_inputs(&SurfaceOverrideInputs::from_parked(
-            state,
-            self.default_network_conditions
-                .or(self.global_network_conditions),
-            self.default_geolocation_override
-                .clone()
-                .or_else(|| self.global_geolocation_override.clone()),
-            self.default_emulated_device_metrics.clone(),
-        ))
+        Self::generated_surface_override_script_from_inputs(
+            &SurfaceOverrideInputs::from_background(
+                state,
+                self.default_network_conditions
+                    .or(self.global_network_conditions),
+                self.default_geolocation_override
+                    .clone()
+                    .or_else(|| self.global_geolocation_override.clone()),
+                self.default_emulated_device_metrics.clone(),
+            ),
+        )
     }
 
-    pub(crate) async fn apply_parked_target_surface_overrides_async(
+    pub(crate) async fn apply_background_target_surface_overrides_async(
         &mut self,
         target_id: &str,
-    ) -> Result<bool, String> {
-        let Some(script) = self.generated_surface_override_script_for_parked_target(target_id)
+    ) -> anyhow::Result<bool> {
+        let Some(script) = self.generated_surface_override_script_for_background_target(target_id)
         else {
             return Ok(false);
         };
@@ -391,7 +393,7 @@ impl BrowserContext {
         };
         page.run_page_surface_override_script_async(&script.source)
             .await
-            .map_err(|error| format!("failed to hide demoted page surface: {error}"))?;
+            .map_err(|error| anyhow::anyhow!("failed to hide background page surface: {error}"))?;
         Ok(true)
     }
 
@@ -602,7 +604,7 @@ impl BrowserContext {
 
     pub(crate) async fn apply_surface_overrides_to_loaded_page_async(
         &mut self,
-    ) -> Result<(), String> {
+    ) -> anyhow::Result<()> {
         let Some(script) = self.generated_surface_override_script() else {
             return Ok(());
         };
@@ -611,7 +613,7 @@ impl BrowserContext {
         };
         page.run_page_surface_override_script_async(&script.source)
             .await
-            .map_err(|error| format!("failed to apply page surface overrides: {error}"))
+            .map_err(|error| anyhow::anyhow!("failed to apply page surface overrides: {error}"))
     }
 
     #[cfg(test)]

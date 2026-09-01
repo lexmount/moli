@@ -1378,11 +1378,11 @@ async fn session_route_finds_browser_active_auxiliary_background_and_inactive_se
             Some("SID-inactive-background"),
             |bc, target_id| {
                 assert_eq!(bc.id, "BID-B");
-                bc.mutate_background_page_target_for_test(target_id, |state| {
-                    state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-                        .console_output_session_state
-                        .console_enabled = true;
-                });
+                bc.background_target_mut(target_id)
+                    .expect("background target must exist")
+                    .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                    .console_output_session_state
+                    .console_enabled = true;
                 target_id.to_owned()
             }
         ),
@@ -1398,14 +1398,11 @@ async fn session_route_finds_browser_active_auxiliary_background_and_inactive_se
             Some("SID-inactive-background"),
             |bc, target_id| {
                 assert_eq!(bc.id, "BID-B");
-                let mut console_enabled = false;
-                bc.mutate_background_page_target_for_test(target_id, |state| {
-                    console_enabled = state.devtools_sessions
-                        [moli_page_types::DevToolsSessionKey::Primary]
-                        .console_output_session_state
-                        .console_enabled;
-                });
-                console_enabled
+                bc.background_target(target_id)
+                    .expect("background target must exist")
+                    .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+                    .console_output_session_state
+                    .console_enabled
             }
         ),
         Some(true)

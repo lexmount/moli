@@ -329,7 +329,7 @@ pub(super) fn execute_devtools_create_target_command(
                 None,
             );
         } else if activating_created_target {
-            bc.stage_active_target_demoting_current(
+            bc.stage_foreground_target(
                 target_id.clone(),
                 None,
                 command.url.clone(),

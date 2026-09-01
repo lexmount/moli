@@ -1464,7 +1464,9 @@ async fn runtime_discard_console_entries_advances_background_owner_without_promo
     );
     assert_eq!(
         browser_context
-            .background_target_owner_state_or_default_for_test("TID-background")
+            .background_target("TID-background")
+            .expect("background target must exist")
+            .owner_state
             .runtime_observable_state
             .emitted_console_entries(),
         queue_console_entries,

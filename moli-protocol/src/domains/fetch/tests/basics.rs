@@ -433,7 +433,8 @@ async fn enable_targets_loaded_background_owner_without_promotion() {
     assert_eq!(bc.active_target_id(), Some("TID-active"));
     assert!(!bc.active_page_target().fetch_owner.is_enabled());
     let staged = bc
-        .non_default_background_page_target_for_test("TID-background")
+        .background_target("TID-background")
+        .filter(|target| target.has_non_default_session_state())
         .expect("background owner fetch config should be staged");
     assert!(staged.fetch_owner.config_snapshot().is_enabled());
     assert_eq!(
@@ -512,7 +513,8 @@ async fn pending_fetch_enable_keeps_background_owner_route_across_completion() {
     assert_eq!(bc.active_target_id(), Some("TID-fetch-active"));
     assert!(!bc.active_page_target().fetch_owner.is_enabled());
     let staged = bc
-        .non_default_background_page_target_for_test("TID-fetch-background")
+        .background_target("TID-fetch-background")
+        .filter(|target| target.has_non_default_session_state())
         .expect("background fetch config should stay parked");
     assert!(staged.fetch_owner.config_snapshot().is_enabled());
     assert_eq!(staged.fetch_owner.config_snapshot().patterns().len(), 1);
@@ -598,7 +600,10 @@ async fn disable_targets_loaded_background_owner_without_promotion() {
     bc.set_active_target_id("TID-active".to_owned());
     bc.attach_active_session("SID-active".to_owned());
     bc.insert_page_target_host(background);
-    bc.mutate_background_page_target_for_test("TID-background", |state| {
+    {
+        let state = bc
+            .background_target_mut("TID-background")
+            .expect("background target must exist");
         state.fetch_owner.configure(
             Some("SID-background".to_owned()),
             false,
@@ -608,7 +613,7 @@ async fn disable_targets_loaded_background_owner_without_promotion() {
                 request_stage: FetchRequestStage::Request,
             }],
         );
-    });
+    }
     ctx.conn.browser_context = Some(bc);
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<title>fetch disable background</title>",
@@ -629,7 +634,8 @@ async fn disable_targets_loaded_background_owner_without_promotion() {
     assert_eq!(bc.active_target_id(), Some("TID-active"));
     assert!(!bc.active_page_target().fetch_owner.is_enabled());
     assert!(
-        bc.non_default_background_page_target_for_test("TID-background")
+        bc.background_target("TID-background")
+            .filter(|target| target.has_non_default_session_state())
             .is_none(),
         "disabled background fetch config should collapse to default"
     );

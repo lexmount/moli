@@ -32,9 +32,9 @@ use super::{
     javascript_dialog::TargetPreparedJavaScriptDialog,
     page_slot::{DocumentNavigationToken, DocumentStartScript},
     page_target_host::{PageTargetHost, PageTargetRegistry},
-    parking::TargetOwnerState,
     service_worker_target::ServiceWorkerTargetState,
     shared_worker_target::SharedWorkerTargetState,
+    target_state::TargetOwnerState,
 };
 
 pub struct BrowserContext {
@@ -1675,11 +1675,6 @@ impl BrowserContext {
 
     pub(crate) fn rekey_active_target(&mut self, target_id: impl Into<String>) -> bool {
         self.page_targets.rekey_active(target_id.into())
-    }
-
-    #[cfg(test)]
-    pub(crate) fn clear_active_target_id(&mut self) {
-        self.page_targets.clear_selection();
     }
 
     pub(crate) fn active_session_id(&self) -> Option<&str> {

@@ -513,15 +513,15 @@ async fn capture_screenshot_targets_loaded_background_owner_without_promotion() 
         .browser_context
         .as_mut()
         .expect("browser context")
-        .mutate_background_page_target_for_test("TID-background", |state| {
-            state.emulated_device_metrics = Some(EmulatedDeviceMetrics {
-                width: 320,
-                height: 240,
-                device_scale_factor: 2.0,
-                screen_width: 320,
-                screen_height: 240,
-            });
-        });
+        .background_target_mut("TID-background")
+        .expect("background target must exist")
+        .emulated_device_metrics = Some(EmulatedDeviceMetrics {
+        width: 320,
+        height: 240,
+        device_scale_factor: 2.0,
+        screen_width: 320,
+        screen_height: 240,
+    });
 
     ctx.process_async(json!({
         "id": 114,

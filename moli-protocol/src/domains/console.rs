@@ -577,7 +577,8 @@ mod tests {
         );
         assert!(
             active
-                .non_default_background_page_target_for_test("TID-background")
+                .background_target("TID-background")
+                .filter(|target| target.has_non_default_session_state())
                 .is_some_and(|state| state.devtools_sessions
                     [moli_page_types::DevToolsSessionKey::Primary]
                     .console_output_session_state

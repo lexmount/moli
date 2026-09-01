@@ -522,16 +522,16 @@ async fn close_background_target_emits_detached_events_and_clears_attached_sessi
     );
     let bc = ctx.conn.browser_context.as_mut().unwrap();
     assert!(bc.assign_auxiliary_session_to_target("TID-000000000B", "SID-aux".into()));
-    bc.mutate_background_page_target_for_test("TID-000000000B", |state| {
-        state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary] =
-            crate::conn::DevToolsSessionState {
-                runtime_session_state: crate::conn::TargetRuntimeSessionState {
-                    inspector_enabled: true,
-                    ..Default::default()
-                },
+    bc.background_target_mut("TID-000000000B")
+        .expect("background target must exist")
+        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary] =
+        crate::conn::DevToolsSessionState {
+            runtime_session_state: crate::conn::TargetRuntimeSessionState {
+                inspector_enabled: true,
                 ..Default::default()
-            };
-    });
+            },
+            ..Default::default()
+        };
 
     ctx.process_async(json!({
         "id": 121,
@@ -564,7 +564,8 @@ async fn close_background_target_emits_detached_events_and_clears_attached_sessi
     assert!(bc.background_target("TID-000000000B").is_none());
     assert!(bc.auxiliary_target_id_for_session("SID-aux").is_none());
     assert!(
-        bc.non_default_background_page_target_for_test("TID-000000000B")
+        bc.background_target("TID-000000000B")
+            .filter(|target| target.has_non_default_session_state())
             .is_none()
     );
 }

@@ -1,24 +1,21 @@
 from __future__ import annotations
 
 import asyncio
-import json
-import urllib.request
 from contextlib import suppress
-from typing import Any, Awaitable
+from typing import Any
 
 from ..assertions import SmokeError, assert_equal, record_contract, wait_until
 from ..helpers import attach_cdp_event_collector
-from ..progress import await_with_progress
+from .multi_page_support import (
+    MultiPageCase,
+    close_context,
+    expect_protocol_error,
+    read_fixture_json,
+)
 
 
-async def run_multi_page_contracts(
-    browser: Any,
-    fixture: str,
-    results: list[dict[str, Any]],
-) -> None:
-    """Run Chromium-calibrated ownership contracts across live Page targets."""
-
-    contracts = (
+def multi_page_contract_cases() -> tuple[MultiPageCase, ...]:
+    return (
         _remote_object_and_execution_context_ownership,
         _target_local_device_metrics,
         _new_document_script_session_lifecycle,
@@ -43,12 +40,6 @@ async def run_multi_page_contracts(
         _network_response_body_target_ownership,
         _websocket_survives_peer_target_close,
     )
-    for contract in contracts:
-        await await_with_progress(
-            f"multi-page/{contract.__name__.removeprefix('_')}",
-            contract(browser, fixture, results),
-            timeout_seconds=20,
-        )
 
 
 async def _remote_object_and_execution_context_ownership(
@@ -98,11 +89,11 @@ async def _remote_object_and_execution_context_ownership(
                 f"page A isolated world returned no executionContextId: {isolated!r}"
             )
 
-        foreign_object_error = await _expect_protocol_error(
+        foreign_object_error = await expect_protocol_error(
             session_b.send("Runtime.getProperties", {"objectId": object_id}),
             "page B resolving page A objectId",
         )
-        foreign_context_error = await _expect_protocol_error(
+        foreign_context_error = await expect_protocol_error(
             session_b.send(
                 "Runtime.evaluate",
                 {
@@ -142,7 +133,7 @@ async def _remote_object_and_execution_context_ownership(
             f"{fixture}/plain?multi-page-object=a-replaced",
             wait_until="load",
         )
-        stale_object_error = await _expect_protocol_error(
+        stale_object_error = await expect_protocol_error(
             session_a.send("Runtime.getProperties", {"objectId": object_id}),
             "old objectId after its owning Document was replaced",
         )
@@ -175,7 +166,7 @@ async def _remote_object_and_execution_context_ownership(
             *(session.detach() for session in sessions),
             return_exceptions=True,
         )
-        await _close_context(context)
+        await close_context(context)
 
 
 async def _target_local_device_metrics(
@@ -277,7 +268,7 @@ async def _target_local_device_metrics(
             *(session.detach() for session in sessions),
             return_exceptions=True,
         )
-        await _close_context(context)
+        await close_context(context)
 
 
 async def _new_document_script_session_lifecycle(
@@ -417,7 +408,7 @@ async def _new_document_script_session_lifecycle(
             *(session.detach() for session in sessions),
             return_exceptions=True,
         )
-        await _close_context(context)
+        await close_context(context)
 
 
 async def _same_target_new_document_script_session_ownership(
@@ -543,7 +534,7 @@ async def _same_target_new_document_script_session_ownership(
             *(session.detach() for session in sessions),
             return_exceptions=True,
         )
-        await _close_context(context)
+        await close_context(context)
 
 
 async def _isolated_world_script_detach_lifecycle(
@@ -658,7 +649,7 @@ async def _isolated_world_script_detach_lifecycle(
             *(session.detach() for session in sessions),
             return_exceptions=True,
         )
-        await _close_context(context)
+        await close_context(context)
 
 
 async def _same_name_isolated_worlds_are_session_local(
@@ -838,7 +829,7 @@ async def _same_name_isolated_worlds_are_session_local(
             *(session.detach() for session in sessions),
             return_exceptions=True,
         )
-        await _close_context(context)
+        await close_context(context)
 
 
 async def _runtime_binding_session_lifecycle(
@@ -978,7 +969,7 @@ async def _runtime_binding_session_lifecycle(
             *(session.detach() for session in sessions),
             return_exceptions=True,
         )
-        await _close_context(context)
+        await close_context(context)
 
 
 async def _same_target_remote_objects_are_session_local(
@@ -1049,7 +1040,7 @@ async def _same_target_remote_objects_are_session_local(
         if not isinstance(object_a, str) or not object_a:
             raise SmokeError(f"session A returned no objectId: {remote_a!r}")
 
-        foreign_error = await _expect_protocol_error(
+        foreign_error = await expect_protocol_error(
             session_b.send("Runtime.getProperties", {"objectId": object_a}),
             "same-target session B resolving session A objectId",
         )
@@ -1067,7 +1058,7 @@ async def _same_target_remote_objects_are_session_local(
             "same-target object owner resolves its handle",
         )
         await session_a.send("Runtime.releaseObject", {"objectId": object_a})
-        released_error = await _expect_protocol_error(
+        released_error = await expect_protocol_error(
             session_a.send("Runtime.getProperties", {"objectId": object_a}),
             "released same-target objectId",
         )
@@ -1099,7 +1090,7 @@ async def _same_target_remote_objects_are_session_local(
             "Runtime.releaseObjectGroup",
             {"objectGroup": "shared-name-group"},
         )
-        released_group_error = await _expect_protocol_error(
+        released_group_error = await expect_protocol_error(
             session_a.send("Runtime.getProperties", {"objectId": grouped_object_a}),
             "released owner object group",
         )
@@ -1158,7 +1149,7 @@ async def _same_target_remote_objects_are_session_local(
             *(session.detach() for session in sessions),
             return_exceptions=True,
         )
-        await _close_context(context)
+        await close_context(context)
 
 
 async def _same_target_dom_node_and_backend_node_ownership(
@@ -1218,7 +1209,7 @@ async def _same_target_dom_node_and_backend_node_ownership(
                 f"DOM.describeNode returned no backendNodeId: {owner_description!r}"
             )
 
-        foreign_node_error = await _expect_protocol_error(
+        foreign_node_error = await expect_protocol_error(
             session_b.send("DOM.describeNode", {"nodeId": owner_node_id}),
             "unpublished DOM nodeId in peer session",
         )
@@ -1242,7 +1233,7 @@ async def _same_target_dom_node_and_backend_node_ownership(
             "owner",
             "peer resolves target-scoped backendNodeId",
         )
-        foreign_object_error = await _expect_protocol_error(
+        foreign_object_error = await expect_protocol_error(
             session_a.send("Runtime.getProperties", {"objectId": peer_object_id}),
             "DOM-resolved peer Runtime objectId",
         )
@@ -1290,7 +1281,7 @@ async def _same_target_dom_node_and_backend_node_ownership(
             *(session.detach() for session in sessions),
             return_exceptions=True,
         )
-        await _close_context(context)
+        await close_context(context)
 
 
 async def _same_source_scripts_keep_session_authority(
@@ -1357,7 +1348,7 @@ async def _same_source_scripts_keep_session_authority(
             1,
             "colliding identifier removes only session B's registration",
         )
-        repeated_remove_error = await _expect_protocol_error(
+        repeated_remove_error = await expect_protocol_error(
             session_b.send(
                 "Page.removeScriptToEvaluateOnNewDocument",
                 {"identifier": identifier_a},
@@ -1465,7 +1456,7 @@ async def _same_source_scripts_keep_session_authority(
             *(session.detach() for session in sessions),
             return_exceptions=True,
         )
-        await _close_context(context)
+        await close_context(context)
 
 
 async def _network_enablement_is_session_local(
@@ -1502,7 +1493,7 @@ async def _network_enablement_is_session_local(
         events_a.clear()
         events_b.clear()
         await session_a.send("Network.disable")
-        disabled_cache_error = await _expect_protocol_error(
+        disabled_cache_error = await expect_protocol_error(
             session_a.send("Network.getResponseBody", {"requestId": request_a}),
             "disabled Network session response-body cache",
         )
@@ -1572,7 +1563,7 @@ async def _network_enablement_is_session_local(
             *(session.detach() for session in sessions),
             return_exceptions=True,
         )
-        await _close_context(context)
+        await close_context(context)
 
 
 async def _page_lifecycle_enablement_is_session_local(
@@ -1681,7 +1672,7 @@ async def _page_lifecycle_enablement_is_session_local(
             *(session.detach() for session in sessions),
             return_exceptions=True,
         )
-        await _close_context(context)
+        await close_context(context)
 
 
 async def _same_name_runtime_bindings_keep_session_authority(
@@ -1796,7 +1787,7 @@ async def _same_name_runtime_bindings_keep_session_authority(
             *(session.detach() for session in sessions),
             return_exceptions=True,
         )
-        await _close_context(context)
+        await close_context(context)
 
 
 async def _runtime_enablement_and_context_replay_are_session_local(
@@ -1898,7 +1889,7 @@ async def _runtime_enablement_and_context_replay_are_session_local(
             *(session.detach() for session in sessions),
             return_exceptions=True,
         )
-        await _close_context(context)
+        await close_context(context)
 
 
 async def _session_detach_cancels_only_its_pending_await(
@@ -1981,7 +1972,7 @@ async def _session_detach_cancels_only_its_pending_await(
             *(session.detach() for session in sessions),
             return_exceptions=True,
         )
-        await _close_context(context)
+        await close_context(context)
 
 
 async def _fetch_interception_is_session_local(
@@ -2097,7 +2088,7 @@ async def _fetch_interception_is_session_local(
                 ),
                 timeout=2,
             )
-        await _close_context(context)
+        await close_context(context)
 
 
 async def _network_and_emulation_profiles_are_target_local(
@@ -2182,7 +2173,7 @@ async def _network_and_emulation_profiles_are_target_local(
             async def read_profile() -> bool:
                 try:
                     profile = await asyncio.to_thread(
-                        _read_fixture_json,
+                        read_fixture_json,
                         f"{fixture}/profile-result?token={token}",
                     )
                 except Exception:
@@ -2293,7 +2284,7 @@ async def _network_and_emulation_profiles_are_target_local(
             wait_until="load",
         )
         detached_wire_profile = await asyncio.to_thread(
-            _read_fixture_json,
+            read_fixture_json,
             f"{fixture}/profile-result?token={detached_token}",
         )
         detached_runtime_profile, surviving_runtime_profile = await asyncio.gather(
@@ -2355,7 +2346,7 @@ async def _network_and_emulation_profiles_are_target_local(
             *(session.detach() for session in sessions),
             return_exceptions=True,
         )
-        await _close_context(context)
+        await close_context(context)
 
 
 async def _closed_target_new_document_script_does_not_leak(
@@ -2460,7 +2451,7 @@ async def _closed_target_new_document_script_does_not_leak(
             *(session.detach() for session in sessions),
             return_exceptions=True,
         )
-        await _close_context(context)
+        await close_context(context)
 
 
 async def _broadcast_channel_context_partition(
@@ -2561,8 +2552,8 @@ async def _broadcast_channel_context_partition(
             },
         )
     finally:
-        await _close_context(context_a)
-        await _close_context(context_b)
+        await close_context(context_a)
+        await close_context(context_b)
 
 
 async def _same_target_navigation_supersession(
@@ -2658,7 +2649,7 @@ async def _same_target_navigation_supersession(
             first_navigation.cancel()
         with suppress(Exception):
             await context.unroute("**/multi-page-supersession-held")
-        await _close_context(context)
+        await close_context(context)
 
 
 async def _target_destroy_event_cardinality(
@@ -2769,7 +2760,7 @@ async def _target_destroy_event_cardinality(
         with suppress(Exception):
             await browser_cdp.detach()
         if not context_closed:
-            await _close_context(context)
+            await close_context(context)
 
 
 async def _network_response_body_target_ownership(
@@ -2824,11 +2815,11 @@ async def _network_response_body_target_ownership(
             [True, True],
             "target sessions resolve their own response bodies",
         )
-        foreign_a = await _expect_protocol_error(
+        foreign_a = await expect_protocol_error(
             session_a.send("Network.getResponseBody", {"requestId": request_b}),
             "page A resolving page B requestId",
         )
-        foreign_b = await _expect_protocol_error(
+        foreign_b = await expect_protocol_error(
             session_b.send("Network.getResponseBody", {"requestId": request_a}),
             "page B resolving page A requestId",
         )
@@ -2865,7 +2856,7 @@ async def _network_response_body_target_ownership(
             *(session.detach() for session in sessions),
             return_exceptions=True,
         )
-        await _close_context(context)
+        await close_context(context)
 
 
 async def _websocket_survives_peer_target_close(
@@ -2987,15 +2978,7 @@ async def _websocket_survives_peer_target_close(
             *(session.detach() for session in sessions),
             return_exceptions=True,
         )
-        await _close_context(context)
-
-
-async def _expect_protocol_error(awaitable: Awaitable[Any], label: str) -> str:
-    try:
-        result = await awaitable
-    except Exception as error:
-        return str(error)
-    raise SmokeError(f"{label} unexpectedly succeeded: {result!r}")
+        await close_context(context)
 
 
 def _default_execution_context_id(events: list[dict[str, Any]]) -> int | None:
@@ -3209,18 +3192,3 @@ def _has_received_websocket_payload_length(
         if observed_length == payload_length:
             return True
     return False
-
-
-async def _close_context(context: Any) -> None:
-    try:
-        await asyncio.wait_for(context.close(), timeout=5)
-    except Exception as error:
-        raise SmokeError(
-            f"BrowserContext.close failed: {type(error).__name__}: {error}"
-        ) from error
-
-
-def _read_fixture_json(url: str) -> Any:
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-    with opener.open(url, timeout=2) as response:
-        return json.load(response)

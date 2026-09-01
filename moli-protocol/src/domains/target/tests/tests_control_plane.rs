@@ -928,8 +928,10 @@ async fn same_context_targets_keep_paused_fetch_state_target_local_after_switchi
             "promoted target should not see another target's pending fetch ids",
         );
         let parked = bc
-            .nonempty_background_fetch_state_for_test(&first_target_id)
-            .expect("first target pending fetch state should be parked");
+            .background_target(&first_target_id)
+            .expect("background target must exist")
+            .fetch_owner
+            .pending_state();
         assert!(
             parked.has_pending_fetch_request_id_for_test(&request_id),
             "first target pending fetch id should move with parked target state",
@@ -1373,7 +1375,7 @@ async fn set_auto_attach_prefers_existing_background_target_with_parked_loaded_r
             ),
             crate::conn::TargetPageSlot::empty_for_test_fixture(),
         ));
-        bc.stage_active_target_demoting_current(
+        bc.stage_foreground_target(
             "TID-0000000010".into(),
             None,
             "about:blank#parked".into(),
@@ -1390,7 +1392,7 @@ async fn set_auto_attach_prefers_existing_background_target_with_parked_loaded_r
             .browser_context
             .as_mut()
             .unwrap()
-            .promote_background_target_to_active_slot_async("TID-000000000E")
+            .select_page_target_async("TID-000000000E")
             .await
             .expect("restoring the original active target should succeed"),
         "the original active target should remain parked during fixture setup"

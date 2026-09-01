@@ -1461,12 +1461,12 @@ async fn bring_session_route_to_front_async(
     }
 
     match conn
-        .promote_background_target_to_active_for_connection_async(&target_id)
+        .select_page_target_for_connection_async(&target_id)
         .await
     {
         Ok(Some(activation)) => Ok(activation.into_protocol_events()),
         Ok(None) => Err("UnknownTargetId".into()),
-        Err(message) => Err(message),
+        Err(error) => Err(error.to_string()),
     }
 }
 

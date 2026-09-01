@@ -1,35 +1,27 @@
 from __future__ import annotations
 
 import asyncio
-import json
-import urllib.request
 from contextlib import suppress
-from typing import Any, Awaitable
+from typing import Any
 
 from ..assertions import SmokeError, assert_equal, record_contract, wait_until
 from ..helpers import attach_cdp_event_collector
-from ..progress import await_with_progress
+from .multi_page_support import (
+    MultiPageCase,
+    close_context,
+    expect_protocol_error,
+    read_fixture_json,
+    runtime_value,
+)
 
 
-async def run_multi_page_isolation_contracts(
-    browser: Any,
-    fixture: str,
-    results: list[dict[str, Any]],
-) -> None:
-    """Exercise shared-renderer boundaries that can silently cross Page owners."""
-
-    contracts = (
+def multi_page_isolation_contract_cases() -> tuple[MultiPageCase, ...]:
+    return (
         _busy_runtime_termination_is_target_local,
         _stop_loading_is_target_local,
         _same_target_session_policies_follow_chromium,
         _activation_churn_preserves_target_ownership,
     )
-    for contract in contracts:
-        await await_with_progress(
-            f"multi-page/{contract.__name__.removeprefix('_')}",
-            contract(browser, fixture, results),
-            timeout_seconds=20,
-        )
 
 
 async def _busy_runtime_termination_is_target_local(
@@ -51,7 +43,7 @@ async def _busy_runtime_termination_is_target_local(
         session_b = await context.new_cdp_session(page_b)
         sessions = [session_a, session_b]
         await asyncio.to_thread(
-            _read_fixture_json,
+            read_fixture_json,
             f"{fixture}/inspector-routing-witness/reset",
         )
 
@@ -73,7 +65,7 @@ for (;;) {}""",
         async def busy_loop_entered() -> bool:
             try:
                 status = await asyncio.to_thread(
-                    _read_fixture_json,
+                    read_fixture_json,
                     f"{fixture}/inspector-routing-witness/status",
                 )
             except Exception:
@@ -124,7 +116,7 @@ for (;;) {}""",
                 f"{peer_result!r}"
             )
         assert_equal(
-            _runtime_value(peer_result),
+            runtime_value(peer_result),
             1,
             "target B queued Runtime command after target A termination",
         )
@@ -146,7 +138,7 @@ for (;;) {}""",
             ),
         )
         assert_equal(
-            [_runtime_value(recovery_a), _runtime_value(recovery_b)],
+            [runtime_value(recovery_a), runtime_value(recovery_b)],
             [1, 1],
             "target-local Runtime recovery after termination",
         )
@@ -162,10 +154,10 @@ for (;;) {}""",
             commands=["Runtime.evaluate x4", "Runtime.terminateExecution"],
             observed={
                 "busyTargetTerminated": True,
-                "peerValue": _runtime_value(peer_result),
+                "peerValue": runtime_value(peer_result),
                 "recoveryValues": [
-                    _runtime_value(recovery_a),
-                    _runtime_value(recovery_b),
+                    runtime_value(recovery_a),
+                    runtime_value(recovery_b),
                 ],
             },
         )
@@ -187,7 +179,7 @@ for (;;) {}""",
             *(session.detach() for session in sessions),
             return_exceptions=True,
         )
-        await _close_context(context)
+        await close_context(context)
 
 
 async def _stop_loading_is_target_local(
@@ -324,7 +316,7 @@ async def _stop_loading_is_target_local(
             {"dcl": "1", "load": "0", "readyState": "complete"},
             "target A lifecycle after Page.stopLoading",
         )
-        stale_interception_error = await _expect_protocol_error(
+        stale_interception_error = await expect_protocol_error(
             session_a.send(
                 "Fetch.continueRequest",
                 {"requestId": paused_request_id},
@@ -387,7 +379,7 @@ async def _stop_loading_is_target_local(
             *(session.detach() for session in sessions),
             return_exceptions=True,
         )
-        await _close_context(context)
+        await close_context(context)
 
 
 async def _same_target_session_policies_follow_chromium(
@@ -446,11 +438,11 @@ async def _same_target_session_policies_follow_chromium(
             "Emulation.setTimezoneOverride",
             {"timezoneId": "Europe/Paris"},
         )
-        locale_error = await _expect_protocol_error(
+        locale_error = await expect_protocol_error(
             second.send("Emulation.setLocaleOverride", {"locale": "ja-JP"}),
             "second same-target locale claim",
         )
-        timezone_error = await _expect_protocol_error(
+        timezone_error = await expect_protocol_error(
             second.send(
                 "Emulation.setTimezoneOverride",
                 {"timezoneId": "Asia/Tokyo"},
@@ -628,7 +620,7 @@ async def _same_target_session_policies_follow_chromium(
             *(session.detach() for session in sessions),
             return_exceptions=True,
         )
-        await _close_context(context)
+        await close_context(context)
 
 
 async def _activation_churn_preserves_target_ownership(
@@ -715,7 +707,7 @@ async def _activation_churn_preserves_target_ownership(
                 )
             )
             assert_equal(
-                [_runtime_value(value) for value in owner_values],
+                [runtime_value(value) for value in owner_values],
                 [f"activation-{index}" for index in range(4)],
                 f"session ownership after activating target {active_index}",
             )
@@ -839,18 +831,7 @@ async def _activation_churn_preserves_target_ownership(
         )
         with suppress(Exception):
             await browser_session.detach()
-        await _close_context(context)
-
-
-async def _expect_protocol_error(
-    awaitable: Awaitable[Any],
-    label: str,
-) -> str:
-    try:
-        result = await asyncio.wait_for(awaitable, timeout=5)
-    except Exception as error:
-        return str(error)
-    raise SmokeError(f"{label} unexpectedly succeeded: {result!r}")
+        await close_context(context)
 
 
 async def _runtime_identity(page: Any) -> dict[str, Any]:
@@ -868,27 +849,9 @@ async def _runtime_identity(page: Any) -> dict[str, Any]:
 
 async def _read_fixture_profile(fixture: str, token: str) -> dict[str, Any]:
     value = await asyncio.to_thread(
-        _read_fixture_json,
+        read_fixture_json,
         f"{fixture}/profile-result?token={token}",
     )
     if not isinstance(value, dict):
         raise SmokeError(f"fixture recorded no profile for {token}: {value!r}")
     return value
-
-
-def _runtime_value(response: dict[str, Any]) -> Any:
-    return response.get("result", {}).get("value")
-
-
-async def _close_context(context: Any) -> None:
-    try:
-        await asyncio.wait_for(context.close(), timeout=5)
-    except Exception as error:
-        raise SmokeError(
-            f"BrowserContext.close failed: {type(error).__name__}: {error}"
-        ) from error
-
-
-def _read_fixture_json(url: str) -> Any:
-    with urllib.request.urlopen(url, timeout=2) as response:
-        return json.loads(response.read().decode("utf-8"))

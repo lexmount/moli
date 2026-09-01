@@ -294,7 +294,7 @@ impl TargetJavaScriptDialog {
 /// Clearing dismisses every installed renderer completion. In-flight prepared
 /// output is authorized separately by the stable Page scope in
 /// `TargetRuntimeSlot`; keeping that authority out of this state lets an
-/// otherwise-default parked session fold away without losing Page identity.
+/// otherwise-default session state disappear without losing Page identity.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct TargetJavaScriptDialogState {
     pending_dialogs: Vec<TargetJavaScriptDialog>,

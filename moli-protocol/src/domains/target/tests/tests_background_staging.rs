@@ -156,7 +156,8 @@ async fn same_context_background_session_can_stage_its_own_pre_document_state_be
             .background_target(&second_target_id)
             .expect("staged background target");
         let staged_devtools_state = active
-            .non_default_background_page_target_for_test(staged.target_id())
+            .background_target(staged.target_id())
+            .filter(|target| target.has_non_default_session_state())
             .expect("staged page session state")
             .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .runtime_bindings
@@ -165,14 +166,18 @@ async fn same_context_background_session_can_stage_its_own_pre_document_state_be
         assert_eq!(staged_devtools_state[0].name, "targetBPreDocumentBinding");
         assert_eq!(
             active
-                .background_target_owner_state_or_default_for_test(staged.target_id())
+                .background_target(staged.target_id())
+                .expect("background target must exist")
+                .owner_state
                 .document_start_scripts
                 .len(),
             1
         );
         assert_eq!(
             active
-                .background_target_owner_state_or_default_for_test(staged.target_id())
+                .background_target(staged.target_id())
+                .expect("background target must exist")
+                .owner_state
                 .document_start_scripts[0]
                 .0,
             script_id
@@ -357,7 +362,8 @@ async fn same_context_background_session_can_stage_its_own_utility_pre_document_
             .background_target(&second_target_id)
             .expect("staged background target");
         let staged_devtools_state = active
-            .non_default_background_page_target_for_test(staged.target_id())
+            .background_target(staged.target_id())
+            .filter(|target| target.has_non_default_session_state())
             .expect("staged page session state")
             .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .runtime_bindings
@@ -373,14 +379,18 @@ async fn same_context_background_session_can_stage_its_own_utility_pre_document_
         );
         assert_eq!(
             active
-                .background_target_owner_state_or_default_for_test(staged.target_id())
+                .background_target(staged.target_id())
+                .expect("background target must exist")
+                .owner_state
                 .document_start_scripts
                 .len(),
             1
         );
         assert_eq!(
             active
-                .background_target_owner_state_or_default_for_test(staged.target_id())
+                .background_target(staged.target_id())
+                .expect("background target must exist")
+                .owner_state
                 .document_start_scripts[0]
                 .0,
             script_id
@@ -614,7 +624,8 @@ async fn same_context_background_session_can_remove_its_own_binding_before_promo
             .background_target(&second_target_id)
             .expect("staged background target");
         let staged_bindings_empty = active
-            .non_default_background_page_target_for_test(staged.target_id())
+            .background_target(staged.target_id())
+            .filter(|target| target.has_non_default_session_state())
             .is_none_or(|state| {
                 state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                     .runtime_bindings
@@ -626,14 +637,18 @@ async fn same_context_background_session_can_remove_its_own_binding_before_promo
         );
         assert_eq!(
             active
-                .background_target_owner_state_or_default_for_test(staged.target_id())
+                .background_target(staged.target_id())
+                .expect("background target must exist")
+                .owner_state
                 .document_start_scripts
                 .len(),
             1
         );
         assert_eq!(
             active
-                .background_target_owner_state_or_default_for_test(staged.target_id())
+                .background_target(staged.target_id())
+                .expect("background target must exist")
+                .owner_state
                 .document_start_scripts[0]
                 .0,
             script_id
@@ -776,14 +791,17 @@ async fn same_context_background_session_can_remove_its_own_preload_before_promo
             .background_target(&second_target_id)
             .expect("staged background target");
         let staged_bindings = &active
-            .non_default_background_page_target_for_test(staged.target_id())
+            .background_target(staged.target_id())
+            .filter(|target| target.has_non_default_session_state())
             .expect("staged page session state")
             .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .runtime_bindings;
         assert_eq!(staged_bindings.len(), 1);
         assert!(
             active
-                .background_target_owner_state_or_default_for_test(staged.target_id())
+                .background_target(staged.target_id())
+                .expect("background target must exist")
+                .owner_state
                 .document_start_scripts
                 .is_empty()
         );
@@ -928,7 +946,8 @@ async fn same_context_background_session_can_remove_its_own_utility_binding_befo
             .background_target(&second_target_id)
             .expect("staged background target");
         let staged_bindings_empty = active
-            .non_default_background_page_target_for_test(staged.target_id())
+            .background_target(staged.target_id())
+            .filter(|target| target.has_non_default_session_state())
             .is_none_or(|state| {
                 state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                     .runtime_bindings
@@ -940,14 +959,18 @@ async fn same_context_background_session_can_remove_its_own_utility_binding_befo
         );
         assert_eq!(
             active
-                .background_target_owner_state_or_default_for_test(staged.target_id())
+                .background_target(staged.target_id())
+                .expect("background target must exist")
+                .owner_state
                 .document_start_scripts
                 .len(),
             1
         );
         assert_eq!(
             active
-                .background_target_owner_state_or_default_for_test(staged.target_id())
+                .background_target(staged.target_id())
+                .expect("background target must exist")
+                .owner_state
                 .document_start_scripts[0]
                 .0,
             script_id
@@ -1115,7 +1138,8 @@ async fn same_context_background_session_can_remove_its_own_utility_preload_befo
             .background_target(&second_target_id)
             .expect("staged background target");
         let staged_bindings = &active
-            .non_default_background_page_target_for_test(staged.target_id())
+            .background_target(staged.target_id())
+            .filter(|target| target.has_non_default_session_state())
             .expect("staged page session state")
             .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .runtime_bindings;
@@ -1126,7 +1150,9 @@ async fn same_context_background_session_can_remove_its_own_utility_preload_befo
         );
         assert!(
             active
-                .background_target_owner_state_or_default_for_test(staged.target_id())
+                .background_target(staged.target_id())
+                .expect("background target must exist")
+                .owner_state
                 .document_start_scripts
                 .is_empty()
         );
@@ -1301,7 +1327,8 @@ async fn same_context_background_session_can_stage_its_own_emulated_media_before
             Some("dark")
         );
         let staged = active
-            .non_default_background_page_target_for_test(&second_target_id)
+            .background_target(&second_target_id)
+            .filter(|target| target.has_non_default_session_state())
             .expect("second target should have staged parked page session state");
         assert_eq!(staged.emulated_media.color_scheme.as_deref(), Some("light"));
     }
@@ -1440,7 +1467,8 @@ async fn same_context_background_session_can_clear_its_own_emulated_media_before
         );
         assert!(
             active
-                .non_default_background_page_target_for_test(&second_target_id)
+                .background_target(&second_target_id)
+                .filter(|target| target.has_non_default_session_state())
                 .is_none(),
             "clearing staged emulated media back to default should fold away the parked state entry",
         );
@@ -1578,7 +1606,8 @@ async fn same_context_background_session_can_stage_its_own_network_conditions_be
             10.0
         );
         let staged = active
-            .non_default_background_page_target_for_test(&second_target_id)
+            .background_target(&second_target_id)
+            .filter(|target| target.has_non_default_session_state())
             .expect("second target should have staged parked page session state");
         assert!(staged.network_policy.network_offline());
         assert_eq!(staged.network_policy.emulated_network_latency(), 25.0);
@@ -1745,7 +1774,8 @@ async fn same_context_background_session_can_stage_its_own_blocked_urls_before_p
             "active target should keep its own block list"
         );
         let staged = active
-            .non_default_background_page_target_for_test(&second_target_id)
+            .background_target(&second_target_id)
+            .filter(|target| target.has_non_default_session_state())
             .expect("second target should have staged parked page session state");
         assert!(
             staged.effective_policy().blocked_url_patterns().is_empty(),
@@ -1912,7 +1942,8 @@ async fn same_context_background_session_can_reset_its_own_network_conditions_be
             "active target should keep its default online state",
         );
         let staged = active
-            .non_default_background_page_target_for_test(&second_target_id)
+            .background_target(&second_target_id)
+            .filter(|target| target.has_non_default_session_state())
             .expect("second target should have staged parked page session state");
         assert!(!staged.network_policy.network_offline());
         assert_eq!(staged.network_policy.emulated_network_latency(), 0.0);
@@ -2128,7 +2159,8 @@ async fn same_context_background_session_can_stage_its_own_extra_headers_before_
             vec![("X-Target".into(), "A".into())]
         );
         let staged = active
-            .non_default_background_page_target_for_test(&second_target_id)
+            .background_target(&second_target_id)
+            .filter(|target| target.has_non_default_session_state())
             .expect("second target should have staged parked page session state");
         assert_eq!(
             staged.effective_policy().extra_headers(),
@@ -2336,7 +2368,8 @@ async fn same_context_background_session_can_clear_its_own_extra_headers_before_
             vec![("X-Target".into(), "A".into())]
         );
         let staged = active
-            .non_default_background_page_target_for_test(&second_target_id)
+            .background_target(&second_target_id)
+            .filter(|target| target.has_non_default_session_state())
             .expect("enabled background session should retain its target-owned state");
         assert!(staged.effective_policy().extra_headers().is_empty());
     }
@@ -2509,7 +2542,8 @@ async fn same_context_background_session_can_stage_its_own_user_agent_before_pro
             Some("Moli/Stage-A")
         );
         let staged = active
-            .non_default_background_page_target_for_test(&second_target_id)
+            .background_target(&second_target_id)
+            .filter(|target| target.has_non_default_session_state())
             .expect("second target should have staged parked page session state");
         assert_eq!(
             staged
@@ -2719,7 +2753,8 @@ async fn same_context_background_session_can_clear_its_own_user_agent_before_pro
             "active target should keep its default user agent override",
         );
         let staged = active
-            .non_default_background_page_target_for_test(&second_target_id)
+            .background_target(&second_target_id)
+            .filter(|target| target.has_non_default_session_state())
             .expect("second target should have staged parked page session state");
         assert_eq!(
             staged
@@ -2907,7 +2942,8 @@ async fn same_context_background_session_stages_locale_without_changing_request_
             Some("UTC")
         );
         let staged = active
-            .non_default_background_page_target_for_test(&second_target_id)
+            .background_target(&second_target_id)
+            .filter(|target| target.has_non_default_session_state())
             .expect("second target should have staged parked page session state");
         assert_eq!(staged.effective_policy().locale_override(), Some("fr-FR"));
         assert_eq!(
@@ -3112,7 +3148,8 @@ async fn same_context_background_session_can_clear_its_own_locale_before_promoti
         );
         assert!(
             active
-                .non_default_background_page_target_for_test(&second_target_id)
+                .background_target(&second_target_id)
+                .filter(|target| target.has_non_default_session_state())
                 .is_none(),
             "clearing staged locale back to default should fold away the parked state entry",
         );
@@ -3275,7 +3312,8 @@ async fn same_context_background_session_can_clear_its_own_timezone_before_promo
         );
         assert!(
             active
-                .non_default_background_page_target_for_test(&second_target_id)
+                .background_target(&second_target_id)
+                .filter(|target| target.has_non_default_session_state())
                 .is_none(),
             "clearing staged timezone back to default should fold away the parked state entry",
         );
@@ -3480,7 +3518,8 @@ async fn same_context_background_session_can_stage_its_own_emulation_overrides_b
         assert!(active.active_page_target().focus_emulation_enabled);
 
         let staged = active
-            .non_default_background_page_target_for_test(&second_target_id)
+            .background_target(&second_target_id)
+            .filter(|target| target.has_non_default_session_state())
             .expect("second target should have staged parked page session state");
         assert_eq!(
             staged.emulated_device_metrics.as_ref().map(|metrics| (
@@ -3674,7 +3713,8 @@ async fn same_context_background_session_can_stage_its_own_page_settings_before_
             .as_ref()
             .expect("active browser context");
         let staged = active
-            .non_default_background_page_target_for_test(&second_target_id)
+            .background_target(&second_target_id)
+            .filter(|target| target.has_non_default_session_state())
             .expect("staged page settings for background target");
         assert!(
             staged.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
@@ -3826,7 +3866,8 @@ async fn same_context_background_session_can_clear_its_own_device_metrics_before
         );
         assert!(
             active
-                .non_default_background_page_target_for_test(&second_target_id)
+                .background_target(&second_target_id)
+                .filter(|target| target.has_non_default_session_state())
                 .is_none(),
             "clearing staged device metrics back to default should fold away the parked state entry",
         );
@@ -4002,7 +4043,8 @@ async fn same_context_background_session_can_clear_its_own_touch_and_focus_befor
         );
         assert!(
             active
-                .non_default_background_page_target_for_test(&second_target_id)
+                .background_target(&second_target_id)
+                .filter(|target| target.has_non_default_session_state())
                 .is_none(),
             "clearing staged touch/focus back to defaults should fold away the parked state entry",
         );
@@ -4145,7 +4187,8 @@ async fn same_context_background_session_can_stage_its_own_script_execution_disa
             .expect("active browser context");
         assert!(!active.active_page_target().script_execution_disabled);
         let staged = active
-            .non_default_background_page_target_for_test(&second_target_id)
+            .background_target(&second_target_id)
+            .filter(|target| target.has_non_default_session_state())
             .expect("second target should have staged parked page session state");
         assert!(staged.script_execution_disabled);
     }
@@ -4315,10 +4358,13 @@ async fn same_context_background_session_can_reenable_its_own_script_execution_b
         // collapse back to the default.
         assert!(
             active
-                .non_default_background_page_target_for_test(&second_target_id)
+                .background_target(&second_target_id)
+                .filter(|target| target.has_non_default_session_state())
                 .is_none_or(|state| !state.script_execution_disabled),
             "script execution re-enable should clear the staged parked setting: {:#?}",
-            active.non_default_background_page_target_for_test(&second_target_id)
+            active
+                .background_target(&second_target_id)
+                .filter(|target| target.has_non_default_session_state())
         );
     }
 
@@ -4487,7 +4533,8 @@ async fn same_context_background_session_can_stage_its_own_lifecycle_events_befo
                 .page_lifecycle_events
         );
         let staged = active
-            .non_default_background_page_target_for_test(&second_target_id)
+            .background_target(&second_target_id)
+            .filter(|target| target.has_non_default_session_state())
             .expect("second target should have staged parked page session state");
         assert!(
             staged.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
@@ -4665,7 +4712,8 @@ async fn same_context_background_session_can_disable_its_own_lifecycle_events_be
         );
         assert!(
             active
-                .non_default_background_page_target_for_test(&second_target_id)
+                .background_target(&second_target_id)
+                .filter(|target| target.has_non_default_session_state())
                 .is_none(),
             "lifecycle disable should collapse staged parked state back to default"
         );
@@ -4802,7 +4850,8 @@ async fn same_context_background_session_can_stage_its_own_runtime_enable_before
                 .runtime_frontend_enabled
         );
         let staged = active
-            .non_default_background_page_target_for_test(&second_target_id)
+            .background_target(&second_target_id)
+            .filter(|target| target.has_non_default_session_state())
             .expect("second target should have staged parked page session state");
         assert!(
             staged.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
@@ -5023,7 +5072,8 @@ async fn same_context_loaded_background_session_runtime_enable_replays_context_w
             "direct Runtime.enable should not promote the loaded background target"
         );
         assert!(
-            bc.non_default_background_page_target_for_test(&second_target_id)
+            bc.background_target(&second_target_id)
+                .filter(|target| target.has_non_default_session_state())
                 .is_some_and(|state| state.devtools_sessions
                     [moli_page_types::DevToolsSessionKey::Primary]
                     .runtime_session_state
@@ -5877,7 +5927,8 @@ async fn same_context_background_session_can_stage_its_own_inspector_enable_befo
                 .inspector_enabled
         );
         let staged = active
-            .non_default_background_page_target_for_test(&second_target_id)
+            .background_target(&second_target_id)
+            .filter(|target| target.has_non_default_session_state())
             .expect("second target should have staged parked page session state");
         assert!(
             staged.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
@@ -6020,7 +6071,8 @@ async fn same_context_background_session_can_disable_its_own_inspector_before_pr
         );
         assert!(
             active
-                .non_default_background_page_target_for_test(&second_target_id)
+                .background_target(&second_target_id)
+                .filter(|target| target.has_non_default_session_state())
                 .is_none(),
             "inspector disable should collapse staged parked state back to default"
         );
@@ -6137,7 +6189,8 @@ async fn same_context_background_session_can_stage_its_own_css_enable_before_pro
             .expect("active browser context");
         assert!(!active.active_page_target().css_enabled);
         let staged = active
-            .non_default_background_page_target_for_test(&second_target_id)
+            .background_target(&second_target_id)
+            .filter(|target| target.has_non_default_session_state())
             .expect("second target should have staged parked page session state");
         assert!(staged.css_enabled);
     }
@@ -6256,7 +6309,8 @@ async fn same_context_background_session_can_disable_its_own_css_before_promotio
         assert!(!active.active_page_target().css_enabled);
         assert!(
             active
-                .non_default_background_page_target_for_test(&second_target_id)
+                .background_target(&second_target_id)
+                .filter(|target| target.has_non_default_session_state())
                 .is_none(),
             "css disable should collapse staged parked state back to default"
         );
@@ -6402,7 +6456,8 @@ async fn same_context_background_session_can_stage_its_own_fetch_enable_before_p
                 .is_empty()
         );
         let staged = active
-            .non_default_background_page_target_for_test(&second_target_id)
+            .background_target(&second_target_id)
+            .filter(|target| target.has_non_default_session_state())
             .expect("second target should have staged parked page session state");
         assert!(staged.fetch_owner.config_snapshot().is_enabled());
         assert_eq!(staged.fetch_owner.config_snapshot().patterns().len(), 1);
@@ -6593,8 +6648,11 @@ async fn same_context_background_fetch_continue_request_keeps_target_parked() {
         assert_eq!(active.active_target_id(), Some("TID-000000000PFC"));
         assert!(
             active
-                .nonempty_background_fetch_state_for_test(&second_target_id)
-                .is_some_and(|state| state.has_pending_fetch_navigation()),
+                .background_target(&second_target_id)
+                .expect("background target must exist")
+                .fetch_owner
+                .pending_state()
+                .has_pending_fetch_navigation(),
             "background fetch pause should stay parked before continueRequest"
         );
     }
@@ -6736,7 +6794,8 @@ async fn same_context_background_session_can_stage_its_own_fetch_auth_handling_b
             .expect("active browser context");
         assert!(!active.active_page_target().fetch_owner.is_enabled());
         let staged = active
-            .non_default_background_page_target_for_test(&second_target_id)
+            .background_target(&second_target_id)
+            .filter(|target| target.has_non_default_session_state())
             .expect("second target should have staged parked page session state");
         assert!(staged.fetch_owner.config_snapshot().is_enabled());
         assert!(staged.fetch_owner.config_snapshot().handle_auth_requests());
@@ -6941,7 +7000,8 @@ async fn same_context_background_session_can_disable_its_own_fetch_before_promot
         );
         assert!(
             active
-                .non_default_background_page_target_for_test(&second_target_id)
+                .background_target(&second_target_id)
+                .filter(|target| target.has_non_default_session_state())
                 .is_none(),
             "fetch disable should collapse staged parked state back to default"
         );
@@ -7091,7 +7151,8 @@ async fn same_context_background_session_can_stage_its_own_network_enable_before
                 .primary_network_events_enabled()
         );
         let staged = active
-            .non_default_background_page_target_for_test(&second_target_id)
+            .background_target(&second_target_id)
+            .filter(|target| target.has_non_default_session_state())
             .expect("second target should have staged parked page session state");
         assert!(staged.runtime_slot.primary_network_events_enabled());
     }
@@ -7285,7 +7346,8 @@ async fn same_context_background_session_can_disable_its_own_network_before_prom
         );
         assert!(
             active
-                .non_default_background_page_target_for_test(&second_target_id)
+                .background_target(&second_target_id)
+                .filter(|target| target.has_non_default_session_state())
                 .is_none(),
             "network disable should collapse staged parked state back to default"
         );
@@ -7492,7 +7554,8 @@ async fn same_context_background_session_can_stage_its_own_cache_and_service_wor
                 .bypass_service_worker()
         );
         let staged = active
-            .non_default_background_page_target_for_test(&second_target_id)
+            .background_target(&second_target_id)
+            .filter(|target| target.has_non_default_session_state())
             .expect("second target should have staged parked page session state");
         assert!(staged.runtime_slot.primary_network_events_enabled());
         assert!(staged.effective_policy().cache_disabled());
@@ -7747,7 +7810,8 @@ async fn same_context_background_session_can_disable_its_own_cache_and_service_w
                 .bypass_service_worker()
         );
         let staged = active
-            .non_default_background_page_target_for_test(&second_target_id)
+            .background_target(&second_target_id)
+            .filter(|target| target.has_non_default_session_state())
             .expect("second target should have staged parked page session state");
         assert!(staged.runtime_slot.primary_network_events_enabled());
         assert!(!staged.effective_policy().cache_disabled());

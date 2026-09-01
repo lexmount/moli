@@ -482,14 +482,18 @@ async fn same_context_targets_remove_only_their_own_pre_document_script_identifi
             .expect("background target should remain staged");
         assert_eq!(
             active
-                .background_target_owner_state_or_default_for_test(staged.target_id())
+                .background_target(staged.target_id())
+                .expect("background target must exist")
+                .owner_state
                 .document_start_scripts
                 .len(),
             1
         );
         assert_eq!(
             active
-                .background_target_owner_state_or_default_for_test(staged.target_id())
+                .background_target(staged.target_id())
+                .expect("background target must exist")
+                .owner_state
                 .document_start_scripts[0]
                 .0,
             "1"
@@ -635,14 +639,18 @@ async fn same_context_targets_remove_only_their_own_utility_pre_document_script_
             .expect("background target should remain staged");
         assert_eq!(
             active
-                .background_target_owner_state_or_default_for_test(staged.target_id())
+                .background_target(staged.target_id())
+                .expect("background target must exist")
+                .owner_state
                 .document_start_scripts
                 .len(),
             1
         );
         assert_eq!(
             active
-                .background_target_owner_state_or_default_for_test(staged.target_id())
+                .background_target(staged.target_id())
+                .expect("background target must exist")
+                .owner_state
                 .document_start_scripts[0]
                 .0,
             "1"
@@ -834,7 +842,8 @@ async fn same_context_targets_remove_only_their_own_utility_binding_definition_a
             .background_target("TID-000000000UB")
             .expect("first target should remain staged");
         let staged_bindings = active
-            .non_default_background_page_target_for_test(staged.target_id())
+            .background_target(staged.target_id())
+            .filter(|target| target.has_non_default_session_state())
             .map(|state| {
                 state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                     .runtime_bindings
@@ -1027,7 +1036,8 @@ async fn same_context_targets_remove_only_their_own_main_world_binding_definitio
             .background_target("TID-000000000MB")
             .expect("first target should remain staged");
         let staged_bindings = active
-            .non_default_background_page_target_for_test(staged.target_id())
+            .background_target(staged.target_id())
+            .filter(|target| target.has_non_default_session_state())
             .map(|state| {
                 state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                     .runtime_bindings
@@ -1251,7 +1261,7 @@ async fn same_context_targets_remove_only_their_own_dual_world_binding_definitio
             .background_target("TID-000000000DB")
             .expect("first target should remain staged");
         let staged_bindings = active
-            .non_default_background_page_target_for_test(staged.target_id())
+            .background_target(staged.target_id()).filter(|target| target.has_non_default_session_state())
             .map(|state| state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary].runtime_bindings.as_slice())
             .unwrap_or(&[]);
         assert_eq!(

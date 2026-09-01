@@ -5013,31 +5013,15 @@ async fn get_frame_owner_invalid_params_error() {
 #[tokio::test(flavor = "multi_thread")]
 async fn get_frame_owner_without_selected_target_errors() {
     let mut ctx = TestContext::new();
-    load_bc(&mut ctx, "BID-A");
+    ctx.conn.browser_context = Some(crate::conn::BrowserContext::new("BID-A".to_owned()));
 
     ctx.process_async(json!({
         "id": 1,
-        "method": "Page.navigate",
-        "params": {
-            "url": "data:text/html,<!doctype html><html><body><div></div></body></html>"
-        }
-    }))
-    .await;
-    ctx.expect_result(1, json!({"loaderId": "LID-0000000001"}), None);
-    crate::testing::wait_until_renderer_document_load(&mut ctx, None, "TID-1", "LID-0000000001")
-        .await;
-    let _ = ctx.take_all();
-    if let Some(bc) = ctx.conn.browser_context.as_mut() {
-        bc.clear_active_target_id();
-    }
-
-    ctx.process_async(json!({
-        "id": 2,
         "method": "DOM.getFrameOwner",
         "params": { "frameId": "TID-1" }
     }))
     .await;
-    ctx.expect_error(2, -31998, "BrowserContextNotLoaded");
+    ctx.expect_error(1, -31998, "BrowserContextNotLoaded");
 }
 
 #[tokio::test(flavor = "multi_thread")]

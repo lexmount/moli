@@ -26,8 +26,8 @@ pub(crate) enum RendererPublicationOwner {
 /// Exact protocol delivery route selected for one renderer publication.
 ///
 /// An attached session is already an exact route. A publication without a
-/// session instead carries the owner route needed to enter the correct parked
-/// target without promoting it into the active target slot. This type contains
+/// session instead carries the owner route needed to address the correct
+/// background target without changing foreground selection. This type contains
 /// no output payload and grants no renderer execution authority.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum RendererPublicationRoute {
@@ -84,7 +84,7 @@ pub(crate) fn renderer_publication_owners(
         // transaction that reserved that exact renderer Page. Inferring its
         // target from the mutable inventory at `Opened` time is ambiguous:
         // protocol can transiently retain two handles to the same Page while
-        // moving a target between active/background residence. Leave Page
+        // changing foreground selection. Leave Page
         // discovery empty and let the explicit binding win in either
         // open-before-bind or bind-before-open order.
         RendererOutputResidenceIdentity::Page { .. } => Vec::new(),
@@ -176,7 +176,8 @@ impl RendererPublicationOwner {
 
                     // Prefer the target route captured when the renderer stream
                     // was bound. This disambiguates the brief handoff window in
-                    // which active and parked state can both refer to one Page.
+                    // which the old and new renderer attachments can both be
+                    // observable from one stable target host.
                     let frozen_target = target_id
                         .as_deref()
                         .and_then(|target_id| browser_context.page_target(target_id))

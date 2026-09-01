@@ -134,6 +134,12 @@ assumptions: wire and live UA overrides both follow session attachment order,
 and an activation-churn preload probe must enable the Page agent before
 registering its new-Document script.
 
+Every `multi-page` case runs even when an earlier case fails, so one race does
+not hide later failures. For focused reproduction, set
+`MOLI_MULTI_PAGE_CASES` to a comma-separated list of case names. Parallel
+workers can partition that selected list with the one-based
+`MOLI_MULTI_PAGE_SHARD=INDEX/COUNT` setting.
+
 ## Current Coverage
 
 The current suite is a strong core smoke gate, not a complete Playwright compatibility suite.

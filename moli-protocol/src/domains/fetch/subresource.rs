@@ -924,8 +924,11 @@ mod tests {
 
         let bc = conn.browser_context.as_ref().unwrap();
         assert!(
-            bc.nonempty_background_fetch_state_for_test("TID-background")
-                .is_some_and(|state| state.has_pending_subresource_fetch_for_test("FETCH-1"))
+            bc.background_target("TID-background")
+                .expect("background target must exist")
+                .fetch_owner
+                .pending_state()
+                .has_pending_subresource_fetch_for_test("FETCH-1")
         );
         assert!(
             !bc.active_page_target()

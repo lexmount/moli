@@ -1521,8 +1521,10 @@ async fn popup_initial_empty_document_record_captures_creator_identity() {
 
     let browser_context = ctx.conn.browser_context.as_ref().unwrap();
     let initial = browser_context
-        .non_default_background_target_owner_state_for_test(popup_target_id)
-        .and_then(|owner_state| owner_state.initial_empty_document_state())
+        .background_target(popup_target_id)
+        .expect("background target must exist")
+        .owner_state
+        .initial_empty_document_state()
         .expect("popup target should record initial empty document");
     let creator = initial
         .creator()
@@ -1605,8 +1607,10 @@ async fn popup_initial_empty_document_frame_tree_inherits_opener_origin() {
 
     let browser_context = ctx.conn.browser_context.as_ref().unwrap();
     let initial = browser_context
-        .non_default_background_target_owner_state_for_test(&popup_target_id)
-        .and_then(|owner_state| owner_state.initial_empty_document_state())
+        .background_target(&popup_target_id)
+        .expect("background target must exist")
+        .owner_state
+        .initial_empty_document_state()
         .expect("popup target should still record initial empty document");
     assert!(initial.is_on_initial_empty_document());
 }

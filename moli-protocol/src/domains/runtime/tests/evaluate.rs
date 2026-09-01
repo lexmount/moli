@@ -1950,11 +1950,12 @@ async fn document_navigation_gate_is_scoped_to_background_target_owner() {
     )
     .await;
     let browser_context = ctx.conn.browser_context.as_mut().expect("browser context");
-    browser_context.mutate_background_page_target_for_test("TID-background", |state| {
-        state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-            .runtime_session_state
-            .runtime_frontend_enabled = true;
-    });
+    browser_context
+        .background_target_mut("TID-background")
+        .expect("background target must exist")
+        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+        .runtime_session_state
+        .runtime_frontend_enabled = true;
     browser_context
         .start_document_navigation_for_target(
             "TID-background",

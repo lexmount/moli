@@ -9,7 +9,6 @@ use serde_json::Value;
 
 use crate::devtools_runtime::RuntimeExecutionContextEvent;
 
-use super::parking::PendingInspectorAwait;
 use super::service_worker_lifetime::{
     TargetServiceWorkerProtocolAttachmentIdentity, TargetServiceWorkerProtocolAttachmentRetirement,
     TargetServiceWorkerProtocolAttachmentScope, TargetServiceWorkerRunIdentity,
@@ -17,6 +16,7 @@ use super::service_worker_lifetime::{
     TargetServiceWorkerRuntimeAttachmentIdentity, TargetServiceWorkerVersionIdentity,
     TargetServiceWorkerVersionRetirement, TargetServiceWorkerVersionScope,
 };
+use super::target_state::PendingInspectorAwait;
 use super::{
     DevToolsSessionState, DuplicatePendingRendererCommand, PreparedRendererCallDispatch,
     RegisterRendererCallError, RendererCommandCorrelation, RendererCommandDescriptor,

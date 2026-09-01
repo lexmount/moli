@@ -8218,12 +8218,10 @@ async fn pending_emulation_viewport_keeps_original_page_when_active_target_chang
     };
 
     assert!(
-        conn.promote_background_target_to_active_for_connection_async(
-            "TID-emulation-viewport-replacement",
-        )
-        .await
-        .expect("target activation should succeed")
-        .is_some()
+        conn.select_page_target_for_connection_async("TID-emulation-viewport-replacement",)
+            .await
+            .expect("target activation should succeed")
+            .is_some()
     );
     let messages = complete_command_task_for_test(&mut conn, *pending).await;
 
@@ -8685,7 +8683,8 @@ async fn devtools_network_intercept_commands_route_to_fetch_owner() {
         conn.browser_context
             .as_ref()
             .expect("browser context")
-            .non_default_background_page_target_for_test("TID-bidi-intercept-background")
+            .background_target("TID-bidi-intercept-background")
+            .filter(|target| target.has_non_default_session_state())
             .is_some_and(|state| state.fetch_owner.is_enabled()),
         "background target should own the intercept"
     );
@@ -8707,7 +8706,8 @@ async fn devtools_network_intercept_commands_route_to_fetch_owner() {
         conn.browser_context
             .as_ref()
             .expect("browser context")
-            .non_default_background_page_target_for_test("TID-bidi-intercept-background")
+            .background_target("TID-bidi-intercept-background")
+            .filter(|target| target.has_non_default_session_state())
             .is_none_or(|state| !state.fetch_owner.is_enabled()),
         "target-less remove should clear the background intercept"
     );

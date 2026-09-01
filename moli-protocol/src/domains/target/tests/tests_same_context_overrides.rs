@@ -362,7 +362,8 @@ async fn same_context_targets_restore_their_own_network_conditions_after_session
             .expect("active browser context after direct background navigation");
         assert_eq!(active.active_target_id(), Some("TID-000000000NA"));
         let parked = active
-            .non_default_background_page_target_for_test(&second_target_id)
+            .background_target(&second_target_id)
+            .filter(|target| target.has_non_default_session_state())
             .expect("second target should keep parked network state");
         assert!(parked.network_policy.network_offline());
         assert_eq!(parked.network_policy.emulated_network_latency(), 25.0);

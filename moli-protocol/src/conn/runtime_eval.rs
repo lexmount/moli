@@ -8107,7 +8107,8 @@ mod tests {
             );
             assert!(
                 browser_context
-                    .non_default_background_page_target_for_test("TID-bg")
+                    .background_target("TID-bg")
+                    .filter(|target| target.has_non_default_session_state())
                     .is_some_and(|state| state.devtools_sessions
                         [moli_page_types::DevToolsSessionKey::Primary]
                         .has_pending_inspector_awaits()),

@@ -153,7 +153,7 @@ async fn pending_javascript_dialogs_are_preserved_per_parked_target() {
         ));
         assert!(
             browser_context
-                .promote_background_target_to_active_slot_async("TID-B")
+                .select_page_target_async("TID-B")
                 .await
                 .unwrap()
         );
@@ -175,7 +175,7 @@ async fn pending_javascript_dialogs_are_preserved_per_parked_target() {
         let browser_context = ctx.conn.browser_context.as_mut().unwrap();
         assert!(
             browser_context
-                .promote_background_target_to_active_slot_async("TID-A")
+                .select_page_target_async("TID-A")
                 .await
                 .unwrap()
         );
@@ -193,7 +193,7 @@ async fn pending_javascript_dialogs_are_preserved_per_parked_target() {
         let browser_context = ctx.conn.browser_context.as_mut().unwrap();
         assert!(
             browser_context
-                .promote_background_target_to_active_slot_async("TID-B")
+                .select_page_target_async("TID-B")
                 .await
                 .unwrap()
         );

@@ -756,11 +756,11 @@ mod tests {
             TargetIdentityState::with_url("data:text/html,background-owner".to_owned()),
             TargetPageSlot::with_loaded_page_for_test(background_page),
         ));
-        bc.mutate_background_page_target_for_test("TID-background", |state| {
-            state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-                .console_output_session_state
-                .console_enabled = true;
-        });
+        bc.background_target_mut("TID-background")
+            .expect("background target must exist")
+            .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+            .console_output_session_state
+            .console_enabled = true;
         ctx.conn.browser_context = Some(bc);
 
         assert_eq!(
@@ -845,11 +845,11 @@ mod tests {
             TargetIdentityState::with_url("data:text/html,promoted-owner".to_owned()),
             TargetPageSlot::with_loaded_page_for_test(promoted_page),
         ));
-        bc.mutate_background_page_target_for_test("TID-promoted", |state| {
-            state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-                .console_output_session_state
-                .console_enabled = true;
-        });
+        bc.background_target_mut("TID-promoted")
+            .expect("background target must exist")
+            .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+            .console_output_session_state
+            .console_enabled = true;
         ctx.conn.browser_context = Some(bc);
 
         let (old_active_attachment, promoted_attachment) = {
@@ -876,7 +876,7 @@ mod tests {
                 .browser_context
                 .as_mut()
                 .expect("browser context")
-                .promote_background_target_to_active_slot_async("TID-promoted")
+                .select_page_target_async("TID-promoted")
                 .await
                 .expect("target promotion should succeed")
         );

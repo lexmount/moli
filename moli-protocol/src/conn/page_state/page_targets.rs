@@ -1,3 +1,5 @@
+//! Stable page-target registry behavior and foreground target selection.
+
 use super::super::state::{TargetPageAbsenceReason, TargetSessionStorageNamespace};
 use super::super::{
     BrowserContext, DedicatedWorkerTargetState, PageTargetHost, ServiceWorkerTargetState,
@@ -99,7 +101,7 @@ impl BrowserContext {
         debug_assert!(inserted, "staged page target id must be unique");
     }
 
-    pub(crate) fn stage_active_target_demoting_current(
+    pub(crate) fn stage_foreground_target(
         &mut self,
         target_id: String,
         session_id: Option<String>,
@@ -432,7 +434,7 @@ impl BrowserContext {
         let surface_script = if is_active {
             self.generated_surface_override_script_for_active_target()
         } else {
-            self.generated_surface_override_script_for_parked_target(target_id)
+            self.generated_surface_override_script_for_background_target(target_id)
         };
         let cleared_emulated_media = moli_core::page::EmulatedMediaOverrides::default();
 
@@ -551,10 +553,8 @@ impl BrowserContext {
     }
 
     #[cfg(test)]
-    pub(crate) async fn promote_first_background_target_to_active_async(
-        &mut self,
-    ) -> Option<String> {
-        let promoted = self
+    pub(crate) async fn select_first_background_target_async(&mut self) -> Option<String> {
+        let selected_target_id = self
             .background_targets()
             .find(|target| target.has_loaded_page())
             .map(|target| target.target_id().to_owned())
@@ -563,19 +563,17 @@ impl BrowserContext {
                     .next()
                     .map(|target| target.target_id().to_owned())
             })?;
-        self.promote_selected_background_target_to_active_async(promoted)
+        self.select_background_target_async(selected_target_id)
             .await
     }
 
-    pub(crate) async fn promote_last_background_target_to_active_async(
-        &mut self,
-    ) -> Option<String> {
-        let promoted = self.last_promotable_background_target_id()?;
-        self.promote_selected_background_target_to_active_async(promoted)
+    pub(crate) async fn select_last_background_target_async(&mut self) -> Option<String> {
+        let selected_target_id = self.last_selectable_background_target_id()?;
+        self.select_background_target_async(selected_target_id)
             .await
     }
 
-    pub(crate) fn last_promotable_background_target_id(&self) -> Option<String> {
+    pub(crate) fn last_selectable_background_target_id(&self) -> Option<String> {
         self.background_targets()
             .rev()
             .find(|target| target.has_loaded_page())
@@ -587,20 +585,17 @@ impl BrowserContext {
             })
     }
 
-    async fn promote_selected_background_target_to_active_async(
-        &mut self,
-        promoted: String,
-    ) -> Option<String> {
-        self.promote_background_target_to_active_slot_async(&promoted)
+    async fn select_background_target_async(&mut self, target_id: String) -> Option<String> {
+        self.select_page_target_async(&target_id)
             .await
-            .expect("applying promoted target visibility should succeed")
-            .then_some(promoted)
+            .expect("applying selected target visibility should succeed")
+            .then_some(target_id)
     }
 
-    pub(crate) async fn promote_background_target_to_active_slot_async(
+    pub(crate) async fn select_page_target_async(
         &mut self,
         target_id: &str,
-    ) -> Result<bool, String> {
+    ) -> anyhow::Result<bool> {
         if self.is_active_target(target_id) {
             return Ok(true);
         }
@@ -615,10 +610,10 @@ impl BrowserContext {
                 .page_target(target_id)
                 .is_none_or(|host| !host.has_pending_javascript_dialog());
         let previous_active_target_id = self.active_target_id_owned();
-        let demoted_surface_script = if synchronize_loaded_page {
+        let previous_surface_script = if synchronize_loaded_page {
             previous_active_target_id.as_deref().and_then(|target_id| {
                 let host = self.page_target(target_id)?;
-                self.generated_surface_override_script_for_parked_state(host)
+                self.generated_surface_override_script_for_background_state(host)
             })
         } else {
             None
@@ -629,7 +624,7 @@ impl BrowserContext {
             self.apply_surface_overrides_to_loaded_page_async().await?;
         }
         if let (Some(previous_active_target_id), Some(script)) =
-            (previous_active_target_id, demoted_surface_script)
+            (previous_active_target_id, previous_surface_script)
             && let Some(page) = self
                 .page_target_mut(&previous_active_target_id)
                 .and_then(|host| host.runtime_slot.loaded_page_mut())
@@ -637,79 +632,9 @@ impl BrowserContext {
                 .run_page_surface_override_script_async(&script.source)
                 .await
         {
-            tracing::warn!(target_id = previous_active_target_id, %error, "failed to update demoted page visibility");
+            tracing::warn!(target_id = previous_active_target_id, %error, "failed to update background page visibility");
         }
         Ok(true)
-    }
-
-    #[cfg(test)]
-    pub(crate) async fn demote_active_target_to_background_slot_async(
-        &mut self,
-    ) -> Result<bool, String> {
-        let Some(active_target_id) = self.active_target_id_owned() else {
-            return Ok(false);
-        };
-        let surface_script = self
-            .page_target(&active_target_id)
-            .and_then(|host| self.generated_surface_override_script_for_parked_state(host));
-        if let Some(script) = surface_script
-            && let Some(page) = self
-                .page_target_mut(&active_target_id)
-                .and_then(|host| host.runtime_slot.loaded_page_mut())
-        {
-            page.run_page_surface_override_script_async(&script.source)
-                .await
-                .map_err(|error| error.to_string())?;
-        }
-        self.clear_active_target_id();
-        Ok(true)
-    }
-
-    #[cfg(test)]
-    pub fn take_background_document_start_script_counter_for_test(
-        &mut self,
-        target_id: &str,
-    ) -> u32 {
-        let owner_state = &mut self
-            .background_target_mut(target_id)
-            .expect("background target must exist")
-            .owner_state;
-        let counter = owner_state.next_document_start_script_id;
-        owner_state.next_document_start_script_id = 0;
-        counter
-    }
-
-    #[cfg(test)]
-    pub fn replace_background_document_start_script_counter_for_test(
-        &mut self,
-        target_id: String,
-        counter: u32,
-    ) {
-        self.background_target_mut(&target_id)
-            .expect("background target must exist")
-            .owner_state
-            .next_document_start_script_id = counter;
-    }
-
-    #[cfg(test)]
-    pub(crate) fn non_default_background_page_target_for_test(
-        &self,
-        target_id: &str,
-    ) -> Option<&crate::conn::state::PageTargetHost> {
-        let state = self.background_target(target_id)?;
-        state.has_non_default_session_state().then_some(state)
-    }
-
-    #[cfg(test)]
-    pub fn mutate_background_page_target_for_test<T>(
-        &mut self,
-        target_id: &str,
-        mutate: impl FnOnce(&mut crate::conn::state::PageTargetHost) -> T,
-    ) -> T {
-        mutate(
-            self.background_target_mut(target_id)
-                .expect("background target must exist"),
-        )
     }
 
     pub(crate) fn begin_active_target_initial_empty_document(&mut self, initial_url: String) {
@@ -775,51 +700,6 @@ impl BrowserContext {
         mutate: impl FnOnce(&mut TargetOwnerState) -> T,
     ) -> Option<T> {
         Some(mutate(&mut self.page_target_mut(target_id)?.owner_state))
-    }
-
-    #[cfg(test)]
-    pub(crate) fn mutate_background_target_owner_state_for_test<T>(
-        &mut self,
-        target_id: &str,
-        mutate: impl FnOnce(&mut TargetOwnerState) -> T,
-    ) -> T {
-        mutate(
-            &mut self
-                .background_target_mut(target_id)
-                .expect("background target must exist")
-                .owner_state,
-        )
-    }
-
-    #[cfg(test)]
-    pub(crate) fn non_default_background_target_owner_state_for_test(
-        &self,
-        target_id: &str,
-    ) -> Option<&TargetOwnerState> {
-        let state = &self.background_target(target_id)?.owner_state;
-        (!state.is_default()).then_some(state)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn background_target_owner_state_or_default_for_test(
-        &self,
-        target_id: &str,
-    ) -> TargetOwnerState {
-        self.background_target(target_id)
-            .map(|target| target.owner_state.clone())
-            .unwrap_or_default()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn nonempty_background_fetch_state_for_test(
-        &self,
-        target_id: &str,
-    ) -> Option<&crate::conn::state::TargetFetchState> {
-        let state = self
-            .background_target(target_id)?
-            .fetch_owner
-            .pending_state();
-        (!state.is_empty()).then_some(state)
     }
 
     #[cfg(test)]
@@ -1336,8 +1216,6 @@ fn background_target_identity_for_initial_url(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use super::*;
     use crate::conn::state::{PerformanceTimeDomain, TargetPerformanceSessionState};
     use crate::conn::{
@@ -1346,6 +1224,7 @@ mod tests {
     };
     use crate::testing::TestContext;
     use serde_json::json;
+    use std::sync::Arc;
 
     #[test]
     fn independent_top_level_targets_isolate_session_storage_but_share_local_storage() {
@@ -1447,7 +1326,7 @@ mod tests {
     }
 
     #[test]
-    fn demoted_target_retains_its_session_storage_namespace() {
+    fn changing_foreground_selection_retains_each_session_storage_namespace() {
         let mut context = BrowserContext::new("BC-demoted-storage".to_owned());
         context.set_active_target_id("TID-first");
         let first_session_storage = context.page_storage_handles().session_storage_store.clone();
@@ -1457,58 +1336,31 @@ mod tests {
                 .set_item("https://same.test", "session", "first")
         );
 
-        context.stage_active_target_demoting_current(
+        context.stage_foreground_target(
             "TID-second".to_owned(),
             None,
             "about:blank".to_owned(),
             None,
         );
-        let parked_first_storage = context
+        let first_target_storage = context
             .page_storage_handles_for_target("TID-first")
-            .expect("demoted target should retain storage");
+            .expect("previous target should retain storage");
         let second_storage = context.page_storage_handles();
 
         assert!(Arc::ptr_eq(
             &first_session_storage,
-            &parked_first_storage.session_storage_store
+            &first_target_storage.session_storage_store
         ));
         assert!(!Arc::ptr_eq(
             &first_session_storage,
             &second_storage.session_storage_store
         ));
         assert_eq!(
-            parked_first_storage
+            first_target_storage
                 .session_storage_store
                 .lock()
                 .get_item("https://same.test", "session"),
             Some("first".to_owned())
-        );
-    }
-
-    #[test]
-    fn replacing_active_target_releases_its_session_storage_namespace() {
-        let mut context = BrowserContext::new("BC-replaced-storage".to_owned());
-        context.set_active_target_id("TID-first");
-        let first_session_storage = context.page_storage_handles().session_storage_store.clone();
-        assert!(
-            first_session_storage
-                .lock()
-                .set_item("https://same.test", "session", "first")
-        );
-
-        context.clear_active_target_id();
-        context.set_active_target_id("TID-second");
-        let second_session_storage = context.page_storage_handles().session_storage_store.clone();
-
-        assert!(!Arc::ptr_eq(
-            &first_session_storage,
-            &second_session_storage
-        ));
-        assert_eq!(
-            second_session_storage
-                .lock()
-                .get_item("https://same.test", "session"),
-            None
         );
     }
 
@@ -1551,8 +1403,11 @@ mod tests {
             None,
             None,
         );
-        context.replace_background_document_start_script_counter_for_test("TID-bg".to_owned(), 7);
-        context.mutate_background_page_target_for_test("TID-bg", |state| {
+        {
+            let state = context
+                .background_target_mut("TID-bg")
+                .expect("background target must exist");
+            state.owner_state.next_document_start_script_id = 7;
             state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary] =
                 DevToolsSessionState {
                     runtime_session_state: TargetRuntimeSessionState {
@@ -1561,7 +1416,7 @@ mod tests {
                     },
                     ..Default::default()
                 };
-        });
+        }
 
         let host = context
             .background_target("TID-bg")
@@ -1581,16 +1436,14 @@ mod tests {
         );
         assert!(
             context
-                .non_default_background_page_target_for_test("TID-bg")
+                .background_target("TID-bg")
+                .filter(|target| target.has_non_default_session_state())
                 .is_some_and(|state| state.devtools_sessions
                     [moli_page_types::DevToolsSessionKey::Primary]
                     .runtime_session_state
                     .runtime_frontend_enabled)
         );
-        assert_eq!(
-            context.take_background_document_start_script_counter_for_test("TID-bg"),
-            7
-        );
+        assert_eq!(host.owner_state.next_document_start_script_id, 7);
     }
 
     #[test]
@@ -1634,80 +1487,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn clearing_selection_keeps_the_page_target_host_and_its_state() {
-        let mut context = BrowserContext::new("BC-1".to_owned());
-        context.set_active_target_id("TID-active".to_owned());
-        context.attach_active_session("SID-active".to_owned());
-        context.set_target_url("https://active.test/".to_owned());
-        context.set_target_security_origin("https://active.test".to_owned());
-        context.set_target_secure_context_type("Secure".to_owned());
-        context
-            .active_page_target_mut()
-            .runtime_slot
-            .set_page_attachment_id_for_test(42);
-        context.active_page_target_mut().devtools_sessions
-            [moli_page_types::DevToolsSessionKey::Primary]
-            .runtime_session_state
-            .runtime_frontend_enabled = true;
-        context.active_page_target_mut().devtools_sessions
-            [moli_page_types::DevToolsSessionKey::Primary]
-            .runtime_session_state
-            .inspector_enabled = true;
-        context
-            .active_page_target_mut()
-            .owner_state
-            .next_document_start_script_id = 3;
-        context
-            .active_page_target_mut()
-            .owner_state
-            .document_start_scripts
-            .push((
-                "script-1".to_owned(),
-                DocumentStartScript {
-                    registry_key: None,
-                    devtools_session: None,
-                    source: "globalThis.fromDocumentStart = true".to_owned(),
-                    world_name: None,
-                    has_bidi_channel_argument: false,
-                    bidi_channel_handoffs: Vec::new(),
-                },
-            ));
-
-        context.clear_active_target_id();
-        let host = context
-            .page_target("TID-active")
-            .expect("clearing foreground selection must not remove the host");
-
-        assert_eq!(host.target_id(), "TID-active");
-        assert_eq!(host.session_id(), Some("SID-active"));
-        assert_eq!(host.target_url(), "https://active.test/");
-        assert_eq!(
-            host.target_identity().security_origin(),
-            "https://active.test"
-        );
-        assert_eq!(host.target_identity().secure_context_type(), "Secure");
-        assert_eq!(
-            host.page_attachment_id()
-                .map(|attachment_id| attachment_id.get()),
-            Some(42)
-        );
-        assert_eq!(host.owner_state.document_start_scripts.len(), 1);
-        assert!(
-            host.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-                .runtime_session_state
-                .runtime_frontend_enabled
-        );
-        assert!(
-            host.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-                .runtime_session_state
-                .inspector_enabled
-        );
-        assert_eq!(host.owner_state.next_document_start_script_id, 3);
-    }
-
     #[tokio::test(flavor = "multi_thread")]
-    async fn active_target_demote_to_background_slot_preserves_page_session_and_owner_state() {
+    async fn selecting_another_foreground_target_preserves_page_session_and_owner_state() {
         let mut ctx = TestContext::new();
         let active_page = ctx
             .conn
@@ -1791,162 +1572,170 @@ mod tests {
             .runtime_slot
             .current_renderer_attachment()
             .expect("loaded active page should have a renderer attachment");
-
-        assert!(
-            context
-                .demote_active_target_to_background_slot_async()
-                .await
-                .expect("demote should not fail")
+        context.stage_background_target(
+            "TID-selected".to_owned(),
+            Some("SID-selected".to_owned()),
+            "about:blank#selected".to_owned(),
+            None,
+            None,
         );
 
-        assert_eq!(context.active_target_id(), None);
+        assert_eq!(
+            context
+                .select_background_target_async("TID-selected".to_owned())
+                .await
+                .as_deref(),
+            Some("TID-selected")
+        );
+
+        assert_eq!(context.active_target_id(), Some("TID-selected"));
         assert!(
             context
                 .page_target("TID-demote")
                 .is_some_and(|host| host.has_loaded_page()),
-            "demoting should retain the loaded page in its stable host"
+            "changing foreground selection must retain the loaded page in its stable host"
         );
         assert_eq!(context.background_target_count(), 1);
-        let parked = &context.background_target_at(0).unwrap();
-        assert_eq!(parked.target_id(), "TID-demote");
-        assert_eq!(parked.session_id(), Some("SID-demote"));
+        let background_target = &context.background_target_at(0).unwrap();
+        assert_eq!(background_target.target_id(), "TID-demote");
+        assert_eq!(background_target.session_id(), Some("SID-demote"));
         assert_eq!(
-            parked.target_url(),
+            background_target.target_url(),
             "data:text/html,<title>demote-active</title>"
         );
         assert!(
-            parked.has_loaded_page(),
-            "demoting should move the loaded page back into the parked target"
+            background_target.has_loaded_page(),
+            "the loaded page must remain in the same stable target host"
         );
         assert_eq!(
-            parked
+            background_target
                 .runtime_slot()
                 .current_renderer_attachment()
                 .map(|attachment| attachment.id()),
             Some(active_attachment.id()),
-            "demoting a target must move its renderer channel without allocating a new route lease"
+            "changing foreground selection must not reallocate the renderer channel"
         );
         assert_eq!(
-            parked
+            background_target
                 .loaded_page()
                 .and_then(|page| page.renderer_agent_attachment_id()),
             Some(active_attachment.id()),
-            "the parked Page and its renderer channel must retain the same attachment"
+            "the background Page and its renderer channel must retain the same attachment"
         );
         assert!(
-            parked.runtime_slot.primary_network_events_enabled(),
-            "demoted target runtime slot should mirror parked Network.enable state for direct owner backlog delivery"
+            background_target
+                .runtime_slot
+                .primary_network_events_enabled(),
+            "the stable target runtime slot must retain Network.enable state"
         );
         assert!(
             context
-                .non_default_background_page_target_for_test("TID-demote")
+                .background_target("TID-demote")
+                .filter(|target| target.has_non_default_session_state())
                 .is_some_and(|state| state.devtools_sessions
                     [moli_page_types::DevToolsSessionKey::Primary]
                     .runtime_session_state
                     .runtime_frontend_enabled),
-            "session-scoped Runtime.enable state should be parked with the target"
+            "session-scoped Runtime.enable state must remain owned by the target"
         );
-        let non_default_background_page_target_for_test = context
-            .non_default_background_page_target_for_test("TID-demote")
-            .expect("demoted target should retain parked page session state");
+        let background_state = context
+            .background_target("TID-demote")
+            .filter(|target| target.has_non_default_session_state())
+            .expect("background target should retain page session state");
         assert!(
-            non_default_background_page_target_for_test.devtools_sessions
-                [moli_page_types::DevToolsSessionKey::Primary]
+            background_state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .runtime_session_state
                 .runtime_frontend_enabled,
-            "Runtime.enable state should move with the demoted target"
+            "Runtime.enable state must remain target-owned"
         );
         assert!(
-            non_default_background_page_target_for_test.devtools_sessions
-                [moli_page_types::DevToolsSessionKey::Primary]
+            background_state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .runtime_session_state
                 .inspector_enabled,
-            "Inspector.enable state should move with the demoted target"
+            "Inspector.enable state must remain target-owned"
         );
         assert!(
-            non_default_background_page_target_for_test.devtools_sessions
-                [moli_page_types::DevToolsSessionKey::Primary]
+            background_state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .console_output_session_state
                 .console_enabled,
-            "Console.enable state should move with the demoted target"
+            "Console.enable state must remain target-owned"
         );
         assert!(
-            non_default_background_page_target_for_test.devtools_sessions
-                [moli_page_types::DevToolsSessionKey::Primary]
+            background_state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .log_enabled,
-            "Log.enable state should move with the demoted target"
+            "Log.enable state must remain target-owned"
         );
         assert!(
-            non_default_background_page_target_for_test.devtools_sessions
-                [moli_page_types::DevToolsSessionKey::Primary]
+            background_state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .performance
                 .enabled(),
-            "Performance.enable state should move with the demoted target"
+            "Performance.enable state must remain target-owned"
         );
         assert_eq!(
-            non_default_background_page_target_for_test.devtools_sessions
-                [moli_page_types::DevToolsSessionKey::Primary]
+            background_state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .performance
                 .time_domain(),
             PerformanceTimeDomain::ThreadTicks,
-            "Performance time domain should move with the demoted target"
+            "Performance time domain must remain target-owned"
         );
         assert!(
-            non_default_background_page_target_for_test.devtools_sessions
-                [moli_page_types::DevToolsSessionKey::Primary]
+            background_state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .page_lifecycle_events,
-            "Page lifecycle listener state should move with the demoted target"
+            "Page lifecycle listener state must remain target-owned"
         );
         assert!(
-            non_default_background_page_target_for_test.devtools_sessions
-                [moli_page_types::DevToolsSessionKey::Primary]
+            background_state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .page_file_chooser_opened_event_enabled,
-            "file chooser opened listener state should move with the demoted target"
+            "file chooser opened listener state must remain target-owned"
         );
         assert!(
-            non_default_background_page_target_for_test.devtools_sessions
-                [moli_page_types::DevToolsSessionKey::Primary]
+            background_state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .page_intercept_file_chooser_dialog_enabled,
-            "file chooser interception state should move with the demoted target"
-        );
-        assert_eq!(
-            context.take_background_document_start_script_counter_for_test("TID-demote"),
-            9,
-            "target owner state should be parked with the target"
+            "file chooser interception state must remain target-owned"
         );
         assert_eq!(
             context
-                .non_default_background_target_owner_state_for_test("TID-demote")
-                .expect("demoted target should retain owner state")
+                .background_target("TID-demote")
+                .expect("previous target must remain registered")
+                .owner_state
+                .next_document_start_script_id,
+            9,
+            "owner state must remain target-owned"
+        );
+        assert_eq!(
+            context
+                .background_target("TID-demote")
+                .expect("background target should retain owner state")
+                .owner_state
                 .document_start_scripts
                 .len(),
             1,
-            "document-start scripts should be parked with the target owner state"
+            "document-start scripts must remain target-owned"
         );
-        let parked_runtime = &context
+        let background_runtime = &context
             .background_target("TID-demote")
-            .expect("demoted target should retain network state")
+            .expect("background target should retain network state")
             .runtime_slot;
-        assert_eq!(parked_runtime.next_fetch_request_id_for_test(), 77);
+        assert_eq!(background_runtime.next_fetch_request_id_for_test(), 77);
         assert_eq!(
-            parked_runtime.next_subresource_fetch_request_id_for_test(),
+            background_runtime.next_subresource_fetch_request_id_for_test(),
             88
         );
         assert_eq!(
-            parked_runtime.emitted_subresource_record_count_for_session_for_test(None),
+            background_runtime.emitted_subresource_record_count_for_session_for_test(None),
             3,
-            "target network artifacts should move into the parked target runtime slot"
+            "network artifacts must remain in the stable target runtime slot"
         );
     }
 
-    #[tokio::test]
-    async fn active_target_demote_without_active_target_is_noop() {
+    #[test]
+    fn staging_background_target_in_empty_context_leaves_foreground_empty() {
         let mut context = BrowserContext::new("BC-demote-empty".to_owned());
         context.stage_background_target(
             "TID-existing-bg".to_owned(),
@@ -1954,13 +1743,6 @@ mod tests {
             "https://existing.test/".to_owned(),
             None,
             None,
-        );
-
-        assert!(
-            !context
-                .demote_active_target_to_background_slot_async()
-                .await
-                .expect("no-op demote should not fail")
         );
 
         assert_eq!(context.active_target_id(), None);
@@ -1976,13 +1758,13 @@ mod tests {
     }
 
     #[test]
-    fn active_target_demote_without_page_preserves_pending_initial_document_reason() {
+    fn selecting_new_target_preserves_previous_pending_initial_document_reason() {
         let mut context = BrowserContext::new("BC-demote-pending".to_owned());
         context.set_active_target_id("TID-old-active");
         context.set_target_url("about:blank#old".to_owned());
         context.begin_active_target_initial_empty_document("about:blank#old".to_owned());
 
-        context.stage_active_target_demoting_current(
+        context.stage_foreground_target(
             "TID-new-active".to_owned(),
             Some("SID-new-active".to_owned()),
             "about:blank#new".to_owned(),
@@ -1992,11 +1774,11 @@ mod tests {
         assert_eq!(
             context
                 .background_target("TID-old-active")
-                .expect("previous active target should be parked")
+                .expect("previous active target should remain registered")
                 .runtime_slot()
                 .moli_memory_diagnostics()["loadedPageAbsenceReason"],
             json!("initial-document-page-build-pending"),
-            "production demotion must preserve a pending initial document absence reason"
+            "foreground selection must preserve a pending initial document absence reason"
         );
         assert_eq!(
             context
@@ -2021,9 +1803,9 @@ mod tests {
 
         assert!(
             context
-                .promote_background_target_to_active_slot_async("TID-pending-bg")
+                .select_page_target_async("TID-pending-bg")
                 .await
-                .expect("pending background target should still promote")
+                .expect("pending background target should remain selectable")
         );
 
         assert_eq!(
@@ -2032,12 +1814,12 @@ mod tests {
                 .runtime_slot
                 .moli_memory_diagnostics()["loadedPageAbsenceReason"],
             json!("initial-document-page-build-pending"),
-            "production promotion must preserve a pending initial document absence reason"
+            "foreground selection must preserve a pending initial document absence reason"
         );
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn promote_first_background_target_prefers_first_loaded_target() {
+    async fn select_first_background_target_prefers_first_loaded_target() {
         let mut ctx = TestContext::new();
         let first_loaded_page = ctx
             .conn
@@ -2093,12 +1875,12 @@ mod tests {
             .current_renderer_attachment()
             .expect("second loaded background target should have an attachment");
 
-        let promoted = context
-            .promote_first_background_target_to_active_async()
+        let selected = context
+            .select_first_background_target_async()
             .await
-            .expect("loaded background target should promote");
+            .expect("loaded background target should be selectable");
 
-        assert_eq!(promoted, "TID-first-loaded");
+        assert_eq!(selected, "TID-first-loaded");
         assert_eq!(context.active_target_id(), Some("TID-first-loaded"));
         assert_eq!(context.active_session_id(), Some("SID-first-loaded"));
         assert!(
@@ -2112,13 +1894,13 @@ mod tests {
                 .current_renderer_attachment()
                 .map(|attachment| attachment.id()),
             Some(first_attachment.id()),
-            "promotion must move the selected target's renderer channel with its Page"
+            "selection must preserve the target's renderer channel and Page"
         );
         assert!(
             context
                 .background_target("TID-second-loaded")
                 .is_some_and(PageTargetHost::has_loaded_page),
-            "later loaded background target should remain parked"
+            "later loaded background target should remain in the background"
         );
         assert_eq!(
             context
@@ -2170,9 +1952,9 @@ mod tests {
 
         assert!(
             context
-                .promote_background_target_to_active_slot_async("TID-background-route")
+                .select_page_target_async("TID-background-route")
                 .await
-                .expect("target swap should succeed")
+                .expect("target selection should succeed")
         );
 
         assert_eq!(
@@ -2193,7 +1975,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn background_target_promotion_restores_nested_page_session_state() {
+    async fn background_target_selection_preserves_nested_page_session_state() {
         let mut context = BrowserContext::new("BC-promote".to_owned());
         context.stage_background_target(
             "TID-bg".to_owned(),
@@ -2226,10 +2008,11 @@ mod tests {
         devtools_session_state
             .console_output_session_state
             .console_enabled = true;
-        context.mutate_background_page_target_for_test("TID-bg", |state| {
-            state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary] =
-                devtools_session_state;
-        });
+        context
+            .background_target_mut("TID-bg")
+            .expect("background target must exist")
+            .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary] =
+            devtools_session_state;
         context
             .background_target_mut("TID-bg")
             .expect("background target")
@@ -2238,9 +2021,9 @@ mod tests {
 
         assert!(
             context
-                .promote_background_target_to_active_slot_async("TID-bg")
+                .select_page_target_async("TID-bg")
                 .await
-                .expect("promotion should not fail")
+                .expect("target selection should not fail")
         );
 
         assert_eq!(context.active_target_id(), Some("TID-bg"));

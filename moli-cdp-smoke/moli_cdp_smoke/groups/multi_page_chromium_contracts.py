@@ -2,33 +2,26 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import suppress
-from typing import Any, Awaitable
+from typing import Any
 
 from ..assertions import SmokeError, assert_equal, record_contract, wait_until
 from ..helpers import attach_cdp_event_collector
-from ..progress import await_with_progress
+from .multi_page_support import (
+    MultiPageCase,
+    close_context,
+    expect_protocol_error,
+    runtime_value,
+)
 
 
-async def run_multi_page_chromium_contracts(
-    browser: Any,
-    fixture: str,
-    results: list[dict[str, Any]],
-) -> None:
-    """Run executable Chromium contracts that stress cross-Page ownership."""
-
-    contracts = (
+def multi_page_chromium_contract_cases() -> tuple[MultiPageCase, ...]:
+    return (
         _debugger_pause_is_target_local,
         _dom_storage_namespaces_route_across_targets,
         _navigation_history_entries_are_target_local,
         _blocked_urls_aggregate_across_target_sessions,
         _cache_disabled_aggregates_without_crossing_targets,
     )
-    for contract in contracts:
-        await await_with_progress(
-            f"multi-page/{contract.__name__.removeprefix('_')}",
-            contract(browser, fixture, results),
-            timeout_seconds=20,
-        )
 
 
 async def _debugger_pause_is_target_local(
@@ -86,7 +79,7 @@ async def _debugger_pause_is_target_local(
             timeout=5,
         )
         assert_equal(
-            _runtime_value(peer_result),
+            runtime_value(peer_result),
             42,
             "peer Runtime remains live while another Page is paused",
         )
@@ -100,7 +93,7 @@ async def _debugger_pause_is_target_local(
         owner_result = await asyncio.wait_for(paused_evaluation, timeout=5)
         paused_evaluation = None
         assert_equal(
-            _runtime_value(owner_result),
+            runtime_value(owner_result),
             42,
             "owning Runtime evaluation resumes",
         )
@@ -146,7 +139,7 @@ async def _debugger_pause_is_target_local(
             *(session.detach() for session in sessions),
             return_exceptions=True,
         )
-        await _close_context(context)
+        await close_context(context)
 
 
 async def _dom_storage_namespaces_route_across_targets(
@@ -282,7 +275,7 @@ async def _dom_storage_namespaces_route_across_targets(
             *(session.detach() for session in sessions),
             return_exceptions=True,
         )
-        await _close_context(context)
+        await close_context(context)
 
 
 async def _navigation_history_entries_are_target_local(
@@ -329,7 +322,7 @@ async def _navigation_history_entries_are_target_local(
             )
 
         peer_url_before = peer.url
-        foreign_error = await _expect_protocol_error(
+        foreign_error = await expect_protocol_error(
             peer_session.send(
                 "Page.navigateToHistoryEntry",
                 {"entryId": foreign_id},
@@ -383,7 +376,7 @@ async def _navigation_history_entries_are_target_local(
             *(session.detach() for session in sessions),
             return_exceptions=True,
         )
-        await _close_context(context)
+        await close_context(context)
 
 
 async def _blocked_urls_aggregate_across_target_sessions(
@@ -525,7 +518,7 @@ async def _blocked_urls_aggregate_across_target_sessions(
             *(session.detach() for session in sessions),
             return_exceptions=True,
         )
-        await _close_context(context)
+        await close_context(context)
 
 
 async def _cache_disabled_aggregates_without_crossing_targets(
@@ -645,7 +638,7 @@ async def _cache_disabled_aggregates_without_crossing_targets(
             *(session.detach() for session in sessions),
             return_exceptions=True,
         )
-        await _close_context(context)
+        await close_context(context)
 
 
 async def _fetch_result(page: Any, url: str) -> dict[str, Any]:
@@ -692,24 +685,3 @@ def _storage_event_count(
         is is_local
         for event in events
     )
-
-
-def _runtime_value(response: dict[str, Any]) -> Any:
-    return response.get("result", {}).get("value")
-
-
-async def _expect_protocol_error(awaitable: Awaitable[Any], label: str) -> str:
-    try:
-        await awaitable
-    except Exception as error:
-        return str(error)
-    raise SmokeError(f"{label} unexpectedly succeeded")
-
-
-async def _close_context(context: Any) -> None:
-    try:
-        await asyncio.wait_for(context.close(), timeout=5)
-    except Exception as error:
-        raise SmokeError(
-            f"BrowserContext.close failed: {type(error).__name__}: {error}"
-        ) from error

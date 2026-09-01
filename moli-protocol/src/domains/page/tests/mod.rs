@@ -177,7 +177,7 @@ fn load_bc_with_session(
     // materialized; setting only target/session/url metadata creates a Page
     // with no exact renderer Document attachment and makes typed child-frame
     // output correctly fail authorization.
-    bc.stage_active_target_demoting_current(
+    bc.stage_foreground_target(
         target_id.to_owned(),
         Some(session_id.to_owned()),
         url.to_owned(),

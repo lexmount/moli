@@ -1232,7 +1232,7 @@ async fn navigation_history_is_preserved_per_parked_target() {
     }
     assert!(
         ctx.conn
-            .promote_background_target_to_active_for_connection_async("TID-B")
+            .select_page_target_for_connection_async("TID-B")
             .await
             .unwrap()
             .is_some()
@@ -1263,7 +1263,7 @@ async fn navigation_history_is_preserved_per_parked_target() {
     {
         assert!(
             ctx.conn
-                .promote_background_target_to_active_for_connection_async("TID-A")
+                .select_page_target_for_connection_async("TID-A")
                 .await
                 .unwrap()
                 .is_some()

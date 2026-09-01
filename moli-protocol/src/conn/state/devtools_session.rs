@@ -5,13 +5,13 @@ use std::{
 
 use super::{
     page_slot::RuntimeBindingDefinition,
-    parking::{PendingInspectorAwait, TargetPendingInspectorAwaitRegistry},
     pending_renderer_command::{
         DuplicatePendingRendererCommand, PreparedRendererCallDispatch, PreparedRendererCallReplay,
         PreparedRendererCallTermination, RegisterRendererCallError, RendererCallIdExhausted,
         RendererCommandCorrelation, RendererCommandDescriptor,
     },
     session::{InspectorSessionState, TargetPageSessionState, TargetRuntimeSessionState},
+    target_state::{PendingInspectorAwait, TargetPendingInspectorAwaitRegistry},
 };
 use moli_core::{
     network::WebStorageMutationSubscription,

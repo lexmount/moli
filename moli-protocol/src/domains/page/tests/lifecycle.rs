@@ -1139,7 +1139,8 @@ async fn set_lifecycle_events_enabled_is_session_local_for_background_auxiliary_
 
     let browser_context = ctx.conn.browser_context.as_ref().unwrap();
     let parked = browser_context
-        .non_default_background_page_target_for_test("TID-background")
+        .background_target("TID-background")
+        .filter(|target| target.has_non_default_session_state())
         .expect("background target should retain parked page session state");
     assert!(
         !parked.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
@@ -1218,12 +1219,15 @@ async fn page_disable_clears_page_handler_state_for_background_auxiliary_session
         browser_context
             .assign_auxiliary_session_to_target("TID-background", "SID-background-aux".to_owned())
     );
-    browser_context.mutate_background_page_target_for_test("TID-background", |state| {
+    {
+        let state = browser_context
+            .background_target_mut("TID-background")
+            .expect("background target must exist");
         mark_page_domain_enabled(
             &mut state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state,
         );
-    });
+    }
     ctx.conn.browser_context = Some(browser_context);
 
     enable_page_domain_for_session(&mut ctx.conn, "SID-background-aux");
@@ -1243,7 +1247,8 @@ async fn page_disable_clears_page_handler_state_for_background_auxiliary_session
 
     let browser_context = ctx.conn.browser_context.as_ref().unwrap();
     let parked = browser_context
-        .non_default_background_page_target_for_test("TID-background")
+        .background_target("TID-background")
+        .filter(|target| target.has_non_default_session_state())
         .expect("background target should retain parked page session state");
     assert_page_domain_enabled(
         &parked.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary].page_session_state,
@@ -2248,11 +2253,11 @@ async fn document_start_script_run_immediately_targets_loaded_background_owner_w
         .browser_context
         .as_mut()
         .expect("browser context")
-        .mutate_background_page_target_for_test("TID-background", |state| {
-            state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-                .runtime_session_state
-                .runtime_frontend_enabled = true;
-        });
+        .background_target_mut("TID-background")
+        .expect("background target must exist")
+        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+        .runtime_session_state
+        .runtime_frontend_enabled = true;
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -2669,16 +2674,16 @@ async fn crash_targets_background_owner_without_promotion() {
     bc.attach_active_session("SID-active".to_owned());
     bc.set_target_url("data:text/html,<title>Active</title><main>active</main>".to_owned());
     bc.insert_page_target_host(background);
-    bc.mutate_background_page_target_for_test("TID-background", |state| {
-        state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary] =
-            crate::conn::DevToolsSessionState {
-                runtime_session_state: crate::conn::TargetRuntimeSessionState {
-                    inspector_enabled: true,
-                    ..Default::default()
-                },
+    bc.background_target_mut("TID-background")
+        .expect("background target must exist")
+        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary] =
+        crate::conn::DevToolsSessionState {
+            runtime_session_state: crate::conn::TargetRuntimeSessionState {
+                inspector_enabled: true,
                 ..Default::default()
-            };
-    });
+            },
+            ..Default::default()
+        };
     let background_document_token = bc
         .start_document_navigation_for_target(
             "TID-background",
@@ -2716,7 +2721,9 @@ async fn crash_targets_background_owner_without_promotion() {
         "background Page.crash must reject late body completions for the crashed document"
     );
     assert!(
-        bc.background_target_owner_state_or_default_for_test("TID-background")
+        bc.background_target("TID-background")
+            .expect("background target must exist")
+            .owner_state
             .target_crash_state
             .is_crashed()
     );
@@ -2847,8 +2854,8 @@ async fn crash_aborts_background_paused_navigation_without_promotion() {
         "background Page.crash should not promote the target"
     );
     assert!(
-        bc.nonempty_background_fetch_state_for_test("TID-background")
-            .is_none_or(|state| state.is_empty())
+        bc.background_target("TID-background")
+            .is_none_or(|target| target.fetch_owner.pending_state().is_empty())
     );
 }
 #[tokio::test(flavor = "multi_thread")]
@@ -3155,16 +3162,16 @@ async fn close_aborts_background_paused_navigation_without_promotion() {
         "about:blank#background".to_owned(),
     ));
     assert!(bc.assign_auxiliary_session_to_target("TID-background", "SID-aux".to_owned()));
-    bc.mutate_background_page_target_for_test("TID-background", |state| {
-        state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary] =
-            crate::conn::DevToolsSessionState {
-                runtime_session_state: crate::conn::TargetRuntimeSessionState {
-                    inspector_enabled: true,
-                    ..Default::default()
-                },
+    bc.background_target_mut("TID-background")
+        .expect("background target must exist")
+        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary] =
+        crate::conn::DevToolsSessionState {
+            runtime_session_state: crate::conn::TargetRuntimeSessionState {
+                inspector_enabled: true,
                 ..Default::default()
-            };
-    });
+            },
+            ..Default::default()
+        };
 
     ctx.process_async(json!({
         "id": 246,
@@ -3245,14 +3252,6 @@ async fn close_aborts_background_paused_navigation_without_promotion() {
     );
     assert!(bc.background_target("TID-background").is_none());
     assert!(bc.auxiliary_target_id_for_session("SID-aux").is_none());
-    assert!(
-        bc.non_default_background_page_target_for_test("TID-background")
-            .is_none()
-    );
-    assert!(
-        bc.nonempty_background_fetch_state_for_test("TID-background")
-            .is_none_or(|state| state.is_empty())
-    );
 }
 #[tokio::test(flavor = "multi_thread")]
 async fn close_without_target_loaded_errors() {
@@ -4080,7 +4079,8 @@ async fn start_screencast_is_session_local_for_background_auxiliary_session() {
 
     let browser_context = ctx.conn.browser_context.as_ref().unwrap();
     let parked = browser_context
-        .non_default_background_page_target_for_test("TID-background")
+        .background_target("TID-background")
+        .filter(|target| target.has_non_default_session_state())
         .expect("background target should retain parked page session state");
     assert!(
         !parked.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]

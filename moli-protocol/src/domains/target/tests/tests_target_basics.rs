@@ -852,8 +852,11 @@ async fn page_stop_loading_aborts_background_pending_fetch_without_promotion() {
         let bc = ctx.conn.browser_context.as_ref().expect("browser context");
         assert_eq!(bc.active_target_id(), Some("TID-000000000A"));
         assert!(
-            bc.nonempty_background_fetch_state_for_test(&second_target_id)
-                .is_some_and(|state| !state.is_empty())
+            !bc.background_target(&second_target_id)
+                .expect("background target must exist")
+                .fetch_owner
+                .pending_state()
+                .is_empty()
         );
     }
 
@@ -881,8 +884,11 @@ async fn page_stop_loading_aborts_background_pending_fetch_without_promotion() {
             .expect("background target should remain parked");
         assert_eq!(background.session_id(), Some(session_id.as_str()));
         assert!(
-            bc.nonempty_background_fetch_state_for_test(&second_target_id)
-                .is_none_or(|state| state.is_empty())
+            bc.background_target(&second_target_id)
+                .expect("background target must exist")
+                .fetch_owner
+                .pending_state()
+                .is_empty()
         );
     }
 }

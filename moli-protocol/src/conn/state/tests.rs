@@ -17,7 +17,7 @@ use super::navigation_outcome::{NavigationDispatchState, NavigationResultProject
 use super::page_slot::DocumentStartScript;
 use super::runtime_slot::TargetRuntimeSlot;
 use super::session::TargetPageSessionState;
-use super::{PageTargetHost, parking::TargetOwnerState};
+use super::{PageTargetHost, target_state::TargetOwnerState};
 
 use serde_json::json;
 use std::collections::HashMap;
@@ -1634,8 +1634,10 @@ fn background_target_initial_empty_document_record_tracks_navigation_lifecycle()
     );
 
     let initial = context
-        .non_default_background_target_owner_state_for_test("TID-initial-bg")
-        .and_then(TargetOwnerState::initial_empty_document_state)
+        .background_target("TID-initial-bg")
+        .expect("background target must exist")
+        .owner_state
+        .initial_empty_document_state()
         .expect("background target should record initial empty document");
     assert_eq!(initial.target_id(), "TID-initial-bg");
     assert_eq!(initial.initial_url(), "about:blank#background");
@@ -1645,8 +1647,10 @@ fn background_target_initial_empty_document_record_tracks_navigation_lifecycle()
     context.mark_target_initial_empty_document_materialized("TID-initial-bg");
     assert!(
         context
-            .non_default_background_target_owner_state_for_test("TID-initial-bg")
-            .and_then(TargetOwnerState::initial_empty_document_state)
+            .background_target("TID-initial-bg")
+            .expect("background target must exist")
+            .owner_state
+            .initial_empty_document_state()
             .expect("initial empty document state")
             .materialized()
     );
@@ -1656,16 +1660,20 @@ fn background_target_initial_empty_document_record_tracks_navigation_lifecycle()
         .expect("background target should start document navigation");
     assert!(
         context
-            .non_default_background_target_owner_state_for_test("TID-initial-bg")
-            .and_then(TargetOwnerState::initial_empty_document_state)
+            .background_target("TID-initial-bg")
+            .expect("background target must exist")
+            .owner_state
+            .initial_empty_document_state()
             .expect("initial empty document state")
             .pending_cross_document_navigation()
     );
 
     context.commit_document_navigation_if_matches(&token);
     let exited = context
-        .non_default_background_target_owner_state_for_test("TID-initial-bg")
-        .and_then(TargetOwnerState::initial_empty_document_state)
+        .background_target("TID-initial-bg")
+        .expect("background target must exist")
+        .owner_state
+        .initial_empty_document_state()
         .expect("initial empty document state");
     assert!(exited.exited());
     assert!(!exited.pending_cross_document_navigation());

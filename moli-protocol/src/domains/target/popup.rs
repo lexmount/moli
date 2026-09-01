@@ -639,12 +639,12 @@ async fn activate_popup_target_async(
         Ok(Vec::new())
     } else {
         match conn
-            .promote_background_target_to_active_for_connection_async(target_id)
+            .select_page_target_for_connection_async(target_id)
             .await
         {
             Ok(Some(activation)) => Ok(activation.into_protocol_events()),
             Ok(None) => Err("PopupTargetUnavailable".to_owned()),
-            Err(message) => Err(message),
+            Err(error) => Err(error.to_string()),
         }
     };
     restore_previously_active_browser_context(conn, restore_browser_context_id.as_deref());

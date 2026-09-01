@@ -957,7 +957,7 @@ mod tests {
         let worker_descriptor = RendererCommandDescriptor::from_frontend_policy(
             frontend.json().to_owned(),
             frontend.renderer_policy(),
-            RendererInspectorResponseDelivery::CommandReply,
+            RendererInspectorResponseDelivery::DevToolsSession,
         );
         let adapter_descriptor =
             RendererCommandDescriptor::from_synthesized_payload(frontend.json().to_owned())
@@ -969,8 +969,8 @@ mod tests {
         );
         assert_eq!(
             worker_descriptor.response_delivery(),
-            RendererInspectorResponseDelivery::CommandReply,
-            "the method catalog must not choose a Page-only output capability for Workers"
+            RendererInspectorResponseDelivery::DevToolsSession,
+            "external Worker commands must publish through their DevTools session"
         );
         assert_eq!(
             adapter_descriptor.response_delivery(),

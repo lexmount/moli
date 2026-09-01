@@ -14,11 +14,11 @@ use super::{
     DevToolsSessionState, DuplicatePendingRendererCommand, PreparedRendererCallDispatch,
     RegisterRendererCallError, RendererCommandCorrelation, RendererCommandDescriptor,
     page_slot::RuntimeBindingDefinition,
-    parking::PendingInspectorAwait,
     shared_worker_attachment::{
         TargetSharedWorkerProtocolAttachmentIdentity,
         TargetSharedWorkerProtocolAttachmentRetirement, TargetSharedWorkerProtocolAttachmentScope,
     },
+    target_state::PendingInspectorAwait,
 };
 
 // Chromium does not reserve negative Runtime.ExecutionContextId values for

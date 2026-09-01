@@ -17,7 +17,6 @@ mod page_residence_token;
 mod page_resource;
 mod page_slot;
 mod page_target_host;
-mod parking;
 mod pending_renderer_command;
 mod profiler;
 mod runtime_slot;
@@ -27,6 +26,7 @@ mod session;
 mod session_storage;
 mod shared_worker_attachment;
 mod shared_worker_target;
+mod target_state;
 #[cfg(test)]
 mod tests;
 
@@ -73,8 +73,6 @@ pub use page_slot::{DocumentStartScript, IsolatedWorldDefinition, RuntimeBinding
 pub(crate) use runtime_slot::{FinishedRendererDocumentNavigation, TargetRuntimeSlot};
 
 pub use fetch::TargetFetchConfig;
-#[cfg(test)]
-pub(crate) use fetch::TargetFetchState;
 pub(crate) use fetch::{TargetFetchOwner, TargetFetchSubresourceInterceptionSnapshot};
 
 pub(crate) use inspector::InspectorCommandDispatch;
@@ -127,7 +125,7 @@ pub(crate) use emulation::{
     EmulatedNetworkConditions, EmulatedViewportSurface, viewport_surface_install_script,
 };
 pub use page_target_host::PageTargetHost;
-pub(crate) use parking::{
+pub(crate) use target_state::{
     PendingBidiChannelListener, PendingInspectorAwait, TargetInitialEmptyDocumentCreator,
     TargetOwnerState, TargetWindowSurfaceState,
 };

@@ -587,11 +587,10 @@ async fn set_auto_attach_inner_async(
                 .into_iter()
                 .map(|target_id| (target_id, conn.gen_session_id()))
                 .collect::<Vec<_>>();
-            let promote_target_id = {
-                let bc = conn
-                    .browser_context
-                    .as_ref()
-                    .expect("browser context must exist when considering auto-attach promotion");
+            let foreground_target_id = {
+                let bc = conn.browser_context.as_ref().expect(
+                    "browser context must exist when choosing an auto-attached foreground target",
+                );
                 if !attach_page_targets || bc.has_loaded_page() {
                     None
                 } else {
@@ -651,18 +650,18 @@ async fn set_auto_attach_inner_async(
                 );
                 debug_assert!(assigned, "attached tab target must remain addressable");
             }
-            if let Some(promote_target_id) = promote_target_id {
+            if let Some(foreground_target_id) = foreground_target_id {
                 match conn
-                    .promote_background_target_to_active_for_connection_async(&promote_target_id)
+                    .select_page_target_for_connection_async(&foreground_target_id)
                     .await
                 {
                     Ok(Some(activation)) => {
                         out.extend_background_events(activation.into_protocol_events());
                     }
                     Ok(None) => {}
-                    Err(message) => {
+                    Err(error) => {
                         panic!(
-                            "same-context target should remain promotable during auto-attach: {message}"
+                            "same-context target should remain selectable during auto-attach: {error}"
                         );
                     }
                 }

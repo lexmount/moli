@@ -81,17 +81,17 @@ impl CdpConnection {
             .map(|bc| bc.id.as_str())
     }
 
-    pub(crate) async fn apply_parked_target_surface_overrides_async(
+    pub(crate) async fn apply_background_target_surface_overrides_async(
         &mut self,
         target_id: &str,
-    ) -> Result<bool, String> {
+    ) -> anyhow::Result<bool> {
         let browser_context_id = self
             .browser_context_id_for_target(target_id)
             .map(str::to_owned)
-            .ok_or_else(|| "UnknownTargetId".to_owned())?;
+            .ok_or_else(|| anyhow::anyhow!("UnknownTargetId"))?;
         self.browser_context_by_id_mut(&browser_context_id)
-            .ok_or_else(|| "UnknownBrowserContextId".to_owned())?
-            .apply_parked_target_surface_overrides_async(target_id)
+            .ok_or_else(|| anyhow::anyhow!("UnknownBrowserContextId"))?
+            .apply_background_target_surface_overrides_async(target_id)
             .await
     }
 }

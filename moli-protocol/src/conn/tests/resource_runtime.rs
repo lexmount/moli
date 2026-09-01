@@ -1856,11 +1856,12 @@ async fn direct_runtime_evaluate_javascript_dialog_uses_inactive_background_owne
 
     let mut inactive = BrowserContext::new("BID-dialog-background".into());
     inactive.insert_page_target_host(background);
-    inactive.mutate_background_page_target_for_test("TID-dialog-background", |state| {
-        state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-            .runtime_session_state
-            .runtime_frontend_enabled = true;
-    });
+    inactive
+        .background_target_mut("TID-dialog-background")
+        .expect("background target must exist")
+        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+        .runtime_session_state
+        .runtime_frontend_enabled = true;
     ctx.conn.inactive_browser_contexts.push(inactive);
     ctx.install_navigation_fixture_for_session_owner(&page_url, Some("SID-dialog-background"))
         .await;
@@ -1938,7 +1939,8 @@ async fn direct_runtime_evaluate_javascript_dialog_uses_inactive_background_owne
         .expect("inactive owner should remain parked");
     assert!(
         inactive
-            .non_default_background_page_target_for_test("TID-dialog-background")
+            .background_target("TID-dialog-background")
+            .filter(|target| target.has_non_default_session_state())
             .expect("background page session state should remain parked")
             .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
@@ -1960,11 +1962,12 @@ async fn direct_runtime_evaluate_popup_creates_target_in_inactive_background_own
 
     let mut inactive = BrowserContext::new("BID-popup-background".into());
     inactive.insert_page_target_host(background);
-    inactive.mutate_background_page_target_for_test("TID-popup-background", |state| {
-        state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-            .runtime_session_state
-            .runtime_frontend_enabled = true;
-    });
+    inactive
+        .background_target_mut("TID-popup-background")
+        .expect("background target must exist")
+        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+        .runtime_session_state
+        .runtime_frontend_enabled = true;
     ctx.conn.inactive_browser_contexts.push(inactive);
     ctx.install_navigation_fixture_for_session_owner(page_url, Some("SID-popup-background"))
         .await;
@@ -2049,11 +2052,12 @@ async fn direct_runtime_evaluate_self_popup_does_not_navigate_active_target_for_
 
     let mut inactive = BrowserContext::new("BID-self-popup-background".into());
     inactive.insert_page_target_host(background);
-    inactive.mutate_background_page_target_for_test("TID-self-popup-background", |state| {
-        state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-            .runtime_session_state
-            .runtime_frontend_enabled = true;
-    });
+    inactive
+        .background_target_mut("TID-self-popup-background")
+        .expect("background target must exist")
+        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+        .runtime_session_state
+        .runtime_frontend_enabled = true;
     ctx.conn.inactive_browser_contexts.push(inactive);
     ctx.install_navigation_fixture_for_session_owner(page_url, Some("SID-self-popup-background"))
         .await;
@@ -2103,14 +2107,17 @@ async fn direct_runtime_evaluate_file_chooser_uses_inactive_background_owner() {
 
     let mut inactive = BrowserContext::new("BID-file-background".into());
     inactive.insert_page_target_host(background);
-    inactive.mutate_background_page_target_for_test("TID-file-background", |state| {
+    {
+        let state = inactive
+            .background_target_mut("TID-file-background")
+            .expect("background target must exist");
         state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
             .runtime_frontend_enabled = true;
         state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_file_chooser_opened_event_enabled = true;
-    });
+    }
     ctx.conn.inactive_browser_contexts.push(inactive);
     ctx.install_navigation_fixture_for_session_owner(page_url, Some("SID-file-background"))
         .await;
@@ -2420,7 +2427,8 @@ async fn direct_network_enable_routes_to_inactive_background_owner_without_promo
         .expect("inactive owner must remain parked");
     assert!(
         inactive
-            .non_default_background_page_target_for_test("TID-background")
+            .background_target("TID-background")
+            .filter(|target| target.has_non_default_session_state())
             .expect("background session state should be staged")
             .runtime_slot
             .primary_network_events_enabled()
@@ -2460,7 +2468,8 @@ async fn direct_auxiliary_network_enable_for_background_target_does_not_enable_p
         .expect("inactive owner must remain parked");
     assert!(
         inactive
-            .non_default_background_page_target_for_test("TID-background")
+            .background_target("TID-background")
+            .filter(|target| target.has_non_default_session_state())
             .is_none_or(|state| !state.runtime_slot.primary_network_events_enabled()),
         "auxiliary background Network.enable must not enable the target's primary listener"
     );
@@ -2505,7 +2514,8 @@ async fn direct_network_enable_routes_to_active_background_owner_without_promoti
     );
     assert!(
         active
-            .non_default_background_page_target_for_test("TID-background")
+            .background_target("TID-background")
+            .filter(|target| target.has_non_default_session_state())
             .expect("background session state should be staged")
             .runtime_slot
             .primary_network_events_enabled()
@@ -2815,7 +2825,8 @@ async fn direct_console_routes_to_inactive_background_owner_without_promoting_sl
         .expect("inactive owner must remain parked");
     assert!(
         inactive
-            .non_default_background_page_target_for_test("TID-background")
+            .background_target("TID-background")
+            .filter(|target| target.has_non_default_session_state())
             .is_some_and(|state| state.devtools_sessions
                 [moli_page_types::DevToolsSessionKey::Primary]
                 .console_output_session_state
@@ -2843,7 +2854,8 @@ async fn direct_console_routes_to_inactive_background_owner_without_promoting_sl
         .expect("inactive owner must remain parked");
     assert!(
         inactive
-            .non_default_background_page_target_for_test("TID-background")
+            .background_target("TID-background")
+            .filter(|target| target.has_non_default_session_state())
             .is_some_and(|state| state.devtools_sessions
                 [moli_page_types::DevToolsSessionKey::Primary]
                 .console_output_session_state
@@ -2871,7 +2883,8 @@ async fn direct_console_routes_to_inactive_background_owner_without_promoting_sl
         .expect("inactive owner must remain parked");
     assert!(
         inactive
-            .non_default_background_page_target_for_test("TID-background")
+            .background_target("TID-background")
+            .filter(|target| target.has_non_default_session_state())
             .is_none_or(|state| !state.devtools_sessions
                 [moli_page_types::DevToolsSessionKey::Primary]
                 .console_output_session_state
@@ -2932,7 +2945,9 @@ async fn direct_console_routes_to_loaded_background_owner_and_advances_parked_cu
         .expect("inactive owner must remain parked");
     assert_eq!(
         inactive
-            .background_target_owner_state_or_default_for_test("TID-background")
+            .background_target("TID-background")
+            .expect("background target must exist")
+            .owner_state
             .console_output_state
             .console_domain_cursor(),
         (0, 0),
@@ -2958,7 +2973,9 @@ async fn direct_console_routes_to_loaded_background_owner_and_advances_parked_cu
         .expect("inactive owner must remain parked");
     assert_eq!(
         inactive
-            .background_target_owner_state_or_default_for_test("TID-background")
+            .background_target("TID-background")
+            .expect("background target must exist")
+            .owner_state
             .console_output_state
             .console_domain_cursor(),
         (0, 0),
@@ -3057,7 +3074,8 @@ async fn direct_log_enable_routes_to_inactive_background_owner_without_promoting
         .expect("inactive owner must remain parked");
     assert!(
         inactive
-            .non_default_background_page_target_for_test("TID-background")
+            .background_target("TID-background")
+            .filter(|target| target.has_non_default_session_state())
             .is_some_and(|state| state.devtools_sessions
                 [moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
@@ -3112,7 +3130,8 @@ async fn direct_log_enable_routes_to_loaded_background_owner_without_replaying_c
         .expect("inactive owner must remain parked");
     assert_eq!(
         inactive
-            .non_default_background_page_target_for_test("TID-background")
+            .background_target("TID-background")
+            .filter(|target| target.has_non_default_session_state())
             .expect("parked session state")
             .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .console_output_session_state
@@ -3197,11 +3216,12 @@ async fn direct_log_disable_routes_to_inactive_background_owner_without_promotin
         TargetIdentityState::about_blank(),
         TargetPageSlot::empty_for_test_fixture(),
     ));
-    inactive.mutate_background_page_target_for_test("TID-background", |state| {
-        state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-            .page_session_state
-            .log_enabled = true;
-    });
+    inactive
+        .background_target_mut("TID-background")
+        .expect("background target must exist")
+        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+        .page_session_state
+        .log_enabled = true;
     conn.inactive_browser_contexts.push(inactive);
 
     let response = conn
@@ -3224,7 +3244,8 @@ async fn direct_log_disable_routes_to_inactive_background_owner_without_promotin
         .expect("inactive owner must remain parked");
     assert!(
         inactive
-            .non_default_background_page_target_for_test("TID-background")
+            .background_target("TID-background")
+            .filter(|target| target.has_non_default_session_state())
             .is_none_or(|state| !state.devtools_sessions
                 [moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
@@ -3440,7 +3461,8 @@ async fn direct_network_policy_routes_to_inactive_background_owner_without_promo
         .find(|bc| bc.id == "BID-B")
         .expect("inactive owner must remain parked");
     let staged = inactive
-        .non_default_background_page_target_for_test("TID-background")
+        .background_target("TID-background")
+        .filter(|target| target.has_non_default_session_state())
         .expect("background session state should be staged");
     assert!(staged.effective_policy().cache_disabled());
     assert!(staged.effective_policy().bypass_service_worker());

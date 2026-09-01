@@ -2859,7 +2859,8 @@ async fn context_locale_override_applies_to_loaded_background_page_without_promo
     );
     assert!(
         browser_context
-            .non_default_background_page_target_for_test("TID-background")
+            .background_target("TID-background")
+            .filter(|target| target.has_non_default_session_state())
             .and_then(|state| {
                 state
                     .effective_policy()
@@ -2991,7 +2992,8 @@ async fn session_emulation_routes_to_loaded_background_owner_without_promotion()
         "background Emulation should not mutate the active target locale override"
     );
     let parked = browser_context
-        .non_default_background_page_target_for_test("TID-background")
+        .background_target("TID-background")
+        .filter(|target| target.has_non_default_session_state())
         .expect("background parked state");
     assert_eq!(parked.emulated_media.color_scheme.as_deref(), Some("dark"));
     assert_eq!(parked.effective_policy().locale_override(), Some("zh-CN"));

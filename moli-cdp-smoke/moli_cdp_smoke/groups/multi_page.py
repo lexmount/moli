@@ -11,9 +11,15 @@ from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from ..assertions import SmokeError, assert_equal, record, wait_until
 from ..helpers import attach_cdp_event_collector, run_worker_command
-from .multi_page_contracts import run_multi_page_contracts
-from .multi_page_chromium_contracts import run_multi_page_chromium_contracts
-from .multi_page_isolation_contracts import run_multi_page_isolation_contracts
+from .multi_page_chromium_contracts import multi_page_chromium_contract_cases
+from .multi_page_contracts import multi_page_contract_cases
+from .multi_page_isolation_contracts import multi_page_isolation_contract_cases
+from .multi_page_support import (
+    MultiPageCase,
+    close_context,
+    run_multi_page_cases,
+    runtime_value,
+)
 
 
 async def run_multi_page_group(
@@ -22,20 +28,26 @@ async def run_multi_page_group(
     results: list[dict[str, Any]],
 ) -> None:
     await _close_startup_target(browser)
-    await _page_churn_and_session_reattach(browser, fixture, results)
-    await _same_context_storage_and_history(browser, fixture, results)
-    await _mixed_navigation_outcomes_and_recovery(browser, fixture, results)
-    await _concurrent_route_outcomes(browser, fixture, results)
-    await _inflight_navigation_close_and_peer_recovery(browser, fixture, results)
-    await _target_local_session_events(browser, fixture, results)
-    await _target_local_dialogs(browser, fixture, results)
-    await _concurrent_downloads_and_peer(browser, fixture, results)
-    await _popup_tree_survives_middle_close(browser, fixture, results)
-    await _background_tasks_workers_and_screenshots(browser, fixture, results)
-    await _context_teardown_with_pending_commands(browser, fixture, results)
-    await run_multi_page_contracts(browser, fixture, results)
-    await run_multi_page_isolation_contracts(browser, fixture, results)
-    await run_multi_page_chromium_contracts(browser, fixture, results)
+    await run_multi_page_cases(browser, fixture, results, _multi_page_cases())
+
+
+def _multi_page_cases() -> tuple[MultiPageCase, ...]:
+    return (
+        _page_churn_and_session_reattach,
+        _same_context_storage_and_history,
+        _mixed_navigation_outcomes_and_recovery,
+        _concurrent_route_outcomes,
+        _inflight_navigation_close_and_peer_recovery,
+        _target_local_session_events,
+        _target_local_dialogs,
+        _concurrent_downloads_and_peer,
+        _popup_tree_survives_middle_close,
+        _background_tasks_workers_and_screenshots,
+        _context_teardown_with_pending_commands,
+        *multi_page_contract_cases(),
+        *multi_page_isolation_contract_cases(),
+        *multi_page_chromium_contract_cases(),
+    )
 
 
 async def _page_churn_and_session_reattach(
@@ -76,7 +88,7 @@ async def _page_churn_and_session_reattach(
             )
         )
         assert_equal(
-            [_runtime_value(write) for write in writes],
+            [runtime_value(write) for write in writes],
             [f"page-{index}" for index in range(6)],
             "six target-local Runtime writes",
         )
@@ -98,7 +110,7 @@ async def _page_churn_and_session_reattach(
             )
         )
         assert_equal(
-            [_runtime_value(read) for read in reads],
+            [runtime_value(read) for read in reads],
             [f"page-{index}" for index in range(6)],
             "Runtime state after alternating session reattach",
         )
@@ -154,7 +166,7 @@ async def _page_churn_and_session_reattach(
         )
         with suppress(Exception):
             await browser_cdp.detach()
-        await _close_context(context)
+        await close_context(context)
 
 
 async def _same_context_storage_and_history(
@@ -241,8 +253,8 @@ async def _same_context_storage_and_history(
         record(results, "multi_page_storage_history_and_context_disposal")
     finally:
         if not context_a_closed:
-            await _close_context(context_a)
-        await _close_context(context_b)
+            await close_context(context_a)
+        await close_context(context_b)
 
 
 async def _mixed_navigation_outcomes_and_recovery(
@@ -356,7 +368,7 @@ async def _mixed_navigation_outcomes_and_recovery(
             *(session.detach() for session in sessions),
             return_exceptions=True,
         )
-        await _close_context(context)
+        await close_context(context)
 
 
 async def _concurrent_route_outcomes(
@@ -442,8 +454,8 @@ async def _concurrent_route_outcomes(
             await context_a.unroute("**/multi-page-route/**")
         with suppress(Exception):
             await context_b.unroute("**/multi-page-route/**")
-        await _close_context(context_a)
-        await _close_context(context_b)
+        await close_context(context_a)
+        await close_context(context_b)
 
 
 async def _inflight_navigation_close_and_peer_recovery(
@@ -525,7 +537,7 @@ async def _inflight_navigation_close_and_peer_recovery(
         for task in (victim_navigation, victim_close):
             if task is not None and not task.done():
                 task.cancel()
-        await _close_context(context)
+        await close_context(context)
 
 
 async def _target_local_session_events(
@@ -639,7 +651,7 @@ async def _target_local_session_events(
             "Runtime.evaluate",
             {"expression": "21 * 2", "returnByValue": True},
         )
-        assert_equal(_runtime_value(surviving), 42, "auxiliary after primary detach")
+        assert_equal(runtime_value(surviving), 42, "auxiliary after primary detach")
         replacement = await context.new_cdp_session(pages[1])
         sessions.append(replacement)
         replacement_read = await _send_cdp(
@@ -648,7 +660,7 @@ async def _target_local_session_events(
             {"expression": "location.search", "returnByValue": True},
         )
         assert_equal(
-            _runtime_value(replacement_read),
+            runtime_value(replacement_read),
             "?session-network=1",
             "reattached target session route",
         )
@@ -662,7 +674,7 @@ async def _target_local_session_events(
             *(session.detach() for session in sessions),
             return_exceptions=True,
         )
-        await _close_context(context)
+        await close_context(context)
 
 
 async def _popup_tree_survives_middle_close(
@@ -740,7 +752,7 @@ async def _popup_tree_survives_middle_close(
             {"survivingPages": len(context.pages)},
         )
     finally:
-        await _close_context(context)
+        await close_context(context)
 
 
 async def _target_local_dialogs(
@@ -809,7 +821,7 @@ async def _target_local_dialogs(
         )
         record(results, "multi_page_target_local_concurrent_dialogs")
     finally:
-        await _close_context(context)
+        await close_context(context)
 
 
 async def _concurrent_downloads_and_peer(
@@ -873,7 +885,7 @@ async def _concurrent_downloads_and_peer(
         )
         record(results, "multi_page_concurrent_downloads_and_peer_cancel")
     finally:
-        await _close_context(context)
+        await close_context(context)
 
 
 async def _background_tasks_workers_and_screenshots(
@@ -966,7 +978,7 @@ async def _background_tasks_workers_and_screenshots(
             {"screenshots": 4, "workers": 3},
         )
     finally:
-        await _close_context(context)
+        await close_context(context)
 
 
 async def _context_teardown_with_pending_commands(
@@ -1028,8 +1040,8 @@ async def _context_teardown_with_pending_commands(
         )
     finally:
         if not context_a_closed:
-            await _close_context(context_a)
-        await _close_context(context_b)
+            await close_context(context_a)
+        await close_context(context_b)
 
 
 async def _open_popup(page: Any, url: str, name: str) -> Any:
@@ -1115,17 +1127,6 @@ async def _send_cdp(
     params: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return await asyncio.wait_for(session.send(method, params or {}), timeout=5)
-
-
-async def _close_context(context: Any) -> None:
-    try:
-        await asyncio.wait_for(context.close(), timeout=5)
-    except Exception as error:
-        raise SmokeError(f"BrowserContext.close failed: {type(error).__name__}: {error}") from error
-
-
-def _runtime_value(response: dict[str, Any]) -> Any:
-    return response.get("result", {}).get("value")
 
 
 def _collect_frame_ids(frame_tree: dict[str, Any]) -> set[str]:

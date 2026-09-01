@@ -125,7 +125,7 @@ pub(super) async fn execute_devtools_activate_target_command_async(
     ) && bc.background_target(&target_id).is_some()
     {
         match conn
-            .promote_background_target_to_active_for_connection_async(&target_id)
+            .select_page_target_for_connection_async(&target_id)
             .await
         {
             Ok(Some(activation)) => activation.into_protocol_events(),
@@ -139,12 +139,15 @@ pub(super) async fn execute_devtools_activate_target_command_async(
                     "UnknownTargetId",
                 ));
             }
-            Err(message) => {
+            Err(error) => {
                 restore_previously_active_browser_context(
                     conn,
                     previously_active_browser_context_id.as_deref(),
                 );
-                return Err(DevToolsError::new(DevToolsErrorKind::NoSuchTarget, message));
+                return Err(DevToolsError::new(
+                    DevToolsErrorKind::NoSuchTarget,
+                    error.to_string(),
+                ));
             }
         }
     } else if !matches!(

@@ -2772,7 +2772,7 @@ fn start_session_surface_override_page_command_for_route(
         if let Some(target_id) = target_id.as_deref()
             && browser_context.background_target(target_id).is_some()
         {
-            browser_context.generated_surface_override_script_for_parked_target(target_id)
+            browser_context.generated_surface_override_script_for_background_target(target_id)
         } else {
             browser_context.generated_surface_override_script_for_active_target()
         }
@@ -2812,7 +2812,7 @@ fn start_surface_override_for_route(
             if browser_context.is_active_target(target_id) {
                 browser_context.generated_surface_override_script_for_active_target()
             } else {
-                browser_context.generated_surface_override_script_for_parked_target(target_id)
+                browser_context.generated_surface_override_script_for_background_target(target_id)
             }
         }
         PendingEmulationPageTarget::SessionOwner { owner_scope } => {

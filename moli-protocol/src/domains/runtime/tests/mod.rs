@@ -177,11 +177,14 @@ async fn with_loaded_runtime_frontend_enabled_background_target_async(
     browser_context.set_active_target_id(active_target_id.to_owned());
     browser_context.attach_active_session(active_session_id.to_owned());
     browser_context.insert_page_target_host(background_target);
-    browser_context.mutate_background_page_target_for_test(background_target_id, |state| {
+    {
+        let state = browser_context
+            .background_target_mut(background_target_id)
+            .expect("background target must exist");
         state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
             .runtime_frontend_enabled = true;
-    });
+    }
     ctx.conn.browser_context = Some(browser_context);
     ctx.install_navigation_fixture_for_session_owner(
         &format!("data:text/html,{html}"),
