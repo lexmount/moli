@@ -2968,6 +2968,68 @@ fn live_form_request_submit_dispatches_submit_event_with_submitter() {
 
     assert_eq!(result, "true:true:submit:true:true:true|true:true:true");
 }
+
+#[test]
+fn eof_unclosed_form_control_dispatches_error_before_validation_or_submit() {
+    let mut vm = new_storage_test_vm("https://dangling-markup-form.test/");
+
+    vm.eval(
+        r#"
+(() => {
+  const parent = document.body || document.documentElement || document;
+  const form = document.createElement('form');
+  form.id = 'dangling-form';
+  const required = document.createElement('input');
+  required.required = true;
+  const select = document.createElement('select');
+  select.id = 'unclosed-select';
+  form.append(required, select);
+  parent.appendChild(form);
+
+  globalThis.__danglingFormEvents = [];
+  form.addEventListener('error', event => {
+    __danglingFormEvents.push([
+      event.type,
+      event.target === form,
+      event.bubbles,
+      event.cancelable
+    ].join(':'));
+  });
+  required.addEventListener('invalid', () => __danglingFormEvents.push('invalid'));
+  form.addEventListener('submit', () => __danglingFormEvents.push('submit'));
+})()
+"#,
+    )
+    .expect("dangling-markup form setup should evaluate");
+
+    let select = vm
+        .document_runtime
+        .dom_host()
+        .element_handle_by_id("unclosed-select")
+        .expect("select should exist");
+    assert!(
+        vm.document_runtime
+            .dom_host_mut()
+            .set_blocks_form_submission(select, true),
+        "parser EOF state should be recorded on the select"
+    );
+
+    let result = vm
+        .eval(
+            r#"
+document.getElementById('dangling-form').requestSubmit();
+JSON.stringify(__danglingFormEvents)
+"#,
+        )
+        .expect("blocked form submission should evaluate");
+
+    assert_eq!(result, r#"["error:true:false:false"]"#);
+    assert!(
+        vm.take_pending_location_navigation_with_seed().is_none(),
+        "blocked form submission must not queue navigation"
+    );
+}
+
 #[test]
 fn live_form_request_submit_parses_webidl_submitter_argument() {
     let mut vm = new_storage_test_vm("https://request-submit-webidl.test/");

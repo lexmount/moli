@@ -1585,8 +1585,10 @@ impl DocumentSink {
             .pop_pending_blocking_stylesheet_pause()
     }
 
-    pub(super) fn begin_tree_builder_finish(&self) {
-        self.target.borrow_mut().begin_tree_builder_finish();
+    pub(super) fn begin_tree_builder_finish(&self, unclosed_form_controls: &[NativeNodeId]) {
+        self.target
+            .borrow_mut()
+            .begin_tree_builder_finish(unclosed_form_controls);
     }
 
     pub(super) fn drain_discovered_blocking_stylesheet_inputs(
