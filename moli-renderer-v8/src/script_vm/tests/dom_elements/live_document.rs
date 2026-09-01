@@ -1741,6 +1741,215 @@ fn svg_animated_enumerations_reflect_typed_content_attributes() {
 }
 
 #[test]
+fn svg_filter_and_text_path_enumerations_reflect_typed_content_attributes() {
+    let mut vm = new_parsed_test_vm(
+        "https://svg-filter-enumerations.test/",
+        "<!doctype html><html><body></body></html>",
+    );
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const assert = (condition, message) => {
+                if (!condition) throw new Error(message);
+              };
+              const ns = "http://www.w3.org/2000/svg";
+              const interfaceCases = [
+                ["feBlend", SVGFEBlendElement, SVGElement],
+                ["feColorMatrix", SVGFEColorMatrixElement, SVGElement],
+                ["feComposite", SVGFECompositeElement, SVGElement],
+                ["feConvolveMatrix", SVGFEConvolveMatrixElement, SVGElement],
+                ["feDisplacementMap", SVGFEDisplacementMapElement, SVGElement],
+                ["feMorphology", SVGFEMorphologyElement, SVGElement],
+                ["feTurbulence", SVGFETurbulenceElement, SVGElement],
+                ["feFuncA", SVGFEFuncAElement, SVGComponentTransferFunctionElement],
+                ["feFuncB", SVGFEFuncBElement, SVGComponentTransferFunctionElement],
+                ["feFuncG", SVGFEFuncGElement, SVGComponentTransferFunctionElement],
+                ["feFuncR", SVGFEFuncRElement, SVGComponentTransferFunctionElement],
+                ["textPath", SVGTextPathElement, SVGTextContentElement],
+              ];
+
+              for (const [tag, constructor, parent] of interfaceCases) {
+                const element = document.createElementNS(ns, tag);
+                assert(element instanceof constructor, `${tag} interface`);
+                assert(Object.getPrototypeOf(constructor.prototype) === parent.prototype,
+                  `${constructor.name} parent`);
+                let illegalConstructor = false;
+                try {
+                  new constructor();
+                } catch (error) {
+                  illegalConstructor = error instanceof TypeError;
+                }
+                assert(illegalConstructor, `${constructor.name} illegal constructor`);
+              }
+
+              const constantGroups = [
+                [SVGComponentTransferFunctionElement, [
+                  ["SVG_FECOMPONENTTRANSFER_TYPE_UNKNOWN", 0],
+                  ["SVG_FECOMPONENTTRANSFER_TYPE_IDENTITY", 1],
+                  ["SVG_FECOMPONENTTRANSFER_TYPE_TABLE", 2],
+                  ["SVG_FECOMPONENTTRANSFER_TYPE_DISCRETE", 3],
+                  ["SVG_FECOMPONENTTRANSFER_TYPE_LINEAR", 4],
+                  ["SVG_FECOMPONENTTRANSFER_TYPE_GAMMA", 5],
+                ]],
+                [SVGFEBlendElement, [
+                  ["SVG_FEBLEND_MODE_UNKNOWN", 0],
+                  ["SVG_FEBLEND_MODE_NORMAL", 1],
+                  ["SVG_FEBLEND_MODE_MULTIPLY", 2],
+                  ["SVG_FEBLEND_MODE_SCREEN", 3],
+                  ["SVG_FEBLEND_MODE_DARKEN", 4],
+                  ["SVG_FEBLEND_MODE_LIGHTEN", 5],
+                  ["SVG_FEBLEND_MODE_OVERLAY", 6],
+                  ["SVG_FEBLEND_MODE_COLOR_DODGE", 7],
+                  ["SVG_FEBLEND_MODE_COLOR_BURN", 8],
+                  ["SVG_FEBLEND_MODE_HARD_LIGHT", 9],
+                  ["SVG_FEBLEND_MODE_SOFT_LIGHT", 10],
+                  ["SVG_FEBLEND_MODE_DIFFERENCE", 11],
+                  ["SVG_FEBLEND_MODE_EXCLUSION", 12],
+                  ["SVG_FEBLEND_MODE_HUE", 13],
+                  ["SVG_FEBLEND_MODE_SATURATION", 14],
+                  ["SVG_FEBLEND_MODE_COLOR", 15],
+                  ["SVG_FEBLEND_MODE_LUMINOSITY", 16],
+                ]],
+                [SVGFEColorMatrixElement, [
+                  ["SVG_FECOLORMATRIX_TYPE_UNKNOWN", 0],
+                  ["SVG_FECOLORMATRIX_TYPE_MATRIX", 1],
+                  ["SVG_FECOLORMATRIX_TYPE_SATURATE", 2],
+                  ["SVG_FECOLORMATRIX_TYPE_HUEROTATE", 3],
+                  ["SVG_FECOLORMATRIX_TYPE_LUMINANCETOALPHA", 4],
+                ]],
+                [SVGFECompositeElement, [
+                  ["SVG_FECOMPOSITE_OPERATOR_UNKNOWN", 0],
+                  ["SVG_FECOMPOSITE_OPERATOR_OVER", 1],
+                  ["SVG_FECOMPOSITE_OPERATOR_IN", 2],
+                  ["SVG_FECOMPOSITE_OPERATOR_OUT", 3],
+                  ["SVG_FECOMPOSITE_OPERATOR_ATOP", 4],
+                  ["SVG_FECOMPOSITE_OPERATOR_XOR", 5],
+                  ["SVG_FECOMPOSITE_OPERATOR_LIGHTER", 6],
+                  ["SVG_FECOMPOSITE_OPERATOR_ARITHMETIC", 7],
+                ]],
+                [SVGFEConvolveMatrixElement, [
+                  ["SVG_EDGEMODE_UNKNOWN", 0],
+                  ["SVG_EDGEMODE_DUPLICATE", 1],
+                  ["SVG_EDGEMODE_WRAP", 2],
+                  ["SVG_EDGEMODE_NONE", 3],
+                ]],
+                [SVGFEDisplacementMapElement, [
+                  ["SVG_CHANNEL_UNKNOWN", 0],
+                  ["SVG_CHANNEL_R", 1],
+                  ["SVG_CHANNEL_G", 2],
+                  ["SVG_CHANNEL_B", 3],
+                  ["SVG_CHANNEL_A", 4],
+                ]],
+                [SVGFEMorphologyElement, [
+                  ["SVG_MORPHOLOGY_OPERATOR_UNKNOWN", 0],
+                  ["SVG_MORPHOLOGY_OPERATOR_ERODE", 1],
+                  ["SVG_MORPHOLOGY_OPERATOR_DILATE", 2],
+                ]],
+                [SVGFETurbulenceElement, [
+                  ["SVG_TURBULENCE_TYPE_UNKNOWN", 0],
+                  ["SVG_TURBULENCE_TYPE_FRACTALNOISE", 1],
+                  ["SVG_TURBULENCE_TYPE_TURBULENCE", 2],
+                  ["SVG_STITCHTYPE_UNKNOWN", 0],
+                  ["SVG_STITCHTYPE_STITCH", 1],
+                  ["SVG_STITCHTYPE_NOSTITCH", 2],
+                ]],
+                [SVGTextPathElement, [
+                  ["TEXTPATH_METHODTYPE_UNKNOWN", 0],
+                  ["TEXTPATH_METHODTYPE_ALIGN", 1],
+                  ["TEXTPATH_METHODTYPE_STRETCH", 2],
+                  ["TEXTPATH_SPACINGTYPE_UNKNOWN", 0],
+                  ["TEXTPATH_SPACINGTYPE_AUTO", 1],
+                  ["TEXTPATH_SPACINGTYPE_EXACT", 2],
+                  ["TEXTPATH_SIDETYPE_UNKNOWN", 0],
+                  ["TEXTPATH_SIDETYPE_LEFT", 1],
+                  ["TEXTPATH_SIDETYPE_RIGHT", 2],
+                ]],
+              ];
+              for (const [constructor, constants] of constantGroups) {
+                for (const [name, expected] of constants) {
+                  assert(constructor[name] === expected, `${constructor.name}.${name}`);
+                  assert(constructor.prototype[name] === expected,
+                    `${constructor.name}.prototype.${name}`);
+                }
+              }
+
+              const blend = document.createElementNS(ns, "feBlend");
+              const blendModes = [
+                ["normal", 1], ["multiply", 2], ["screen", 3], ["darken", 4],
+                ["lighten", 5], ["overlay", 6], ["color-dodge", 7], ["color-burn", 8],
+                ["hard-light", 9], ["soft-light", 10], ["difference", 11],
+                ["exclusion", 12], ["hue", 13], ["saturation", 14], ["color", 15],
+                ["luminosity", 16],
+              ];
+              for (const [keyword, value] of blendModes) {
+                blend.setAttribute("mode", keyword);
+                assert(blend.mode.baseVal === value, `feBlend parses ${keyword}`);
+                blend.mode.baseVal = value;
+                assert(blend.getAttribute("mode") === keyword, `feBlend serializes ${keyword}`);
+              }
+
+              const cases = [
+                ["feFuncR", SVGComponentTransferFunctionElement, "type", 1, 5, "gamma", 6],
+                ["feBlend", SVGFEBlendElement, "mode", 1, 16, "luminosity", 17],
+                ["feColorMatrix", SVGFEColorMatrixElement, "type", 1, 4, "luminanceToAlpha", 5],
+                ["feComposite", SVGFECompositeElement, "operator", 1, 7, "arithmetic", 8],
+                ["feConvolveMatrix", SVGFEConvolveMatrixElement, "edgeMode", 1, 3, "none", 4],
+                ["feDisplacementMap", SVGFEDisplacementMapElement, "xChannelSelector", 4, 1, "R", 5],
+                ["feDisplacementMap", SVGFEDisplacementMapElement, "yChannelSelector", 4, 3, "B", 5],
+                ["feMorphology", SVGFEMorphologyElement, "operator", 1, 2, "dilate", 3],
+                ["feTurbulence", SVGFETurbulenceElement, "stitchTiles", 2, 1, "stitch", 3],
+                ["feTurbulence", SVGFETurbulenceElement, "type", 2, 1, "fractalNoise", 3],
+                ["textPath", SVGTextPathElement, "method", 1, 2, "stretch", 3],
+                ["textPath", SVGTextPathElement, "spacing", 2, 1, "auto", 3],
+                ["textPath", SVGTextPathElement, "side", 1, 2, "right", 3],
+              ];
+
+              for (const [tag, owner, property, initial, alternate, serialized, invalid] of cases) {
+                const element = document.createElementNS(ns, tag);
+                const animated = element[property];
+                assert(animated instanceof SVGAnimatedEnumeration, `${tag}.${property} interface`);
+                assert(element[property] === animated, `${tag}.${property} SameObject`);
+                assert(animated.baseVal === initial && animated.animVal === initial,
+                  `${tag}.${property} initial value`);
+
+                element.setAttribute(property, serialized);
+                assert(animated.baseVal === alternate && animated.animVal === alternate,
+                  `${tag}.${property} content attribute update`);
+                element.setAttribute(property, "invalid");
+                assert(animated.baseVal === initial, `${tag}.${property} invalid content attribute`);
+                element.removeAttribute(property);
+                assert(animated.baseVal === initial, `${tag}.${property} removed content attribute`);
+
+                animated.baseVal = alternate;
+                assert(element.getAttribute(property) === serialized,
+                  `${tag}.${property} reflected value`);
+                let rejected = false;
+                try {
+                  animated.baseVal = invalid;
+                } catch (error) {
+                  rejected = error instanceof TypeError;
+                }
+                assert(rejected, `${tag}.${property} invalid IDL value`);
+                assert(animated.baseVal === alternate,
+                  `${tag}.${property} preserved after rejection`);
+
+                const descriptor = Object.getOwnPropertyDescriptor(owner.prototype, property);
+                assert(typeof descriptor.get === "function", `${owner.name}.${property} getter`);
+                assert(descriptor.enumerable && descriptor.configurable,
+                  `${owner.name}.${property} flags`);
+              }
+              return "ok";
+            })()
+            "#,
+        )
+        .expect("SVG filter enumeration probe should evaluate");
+
+    assert_eq!(result, "ok");
+}
+
+#[test]
 fn svg_animated_boolean_reflects_preserve_alpha() {
     let mut vm = new_parsed_test_vm(
         "https://svg-animated-boolean.test/",
