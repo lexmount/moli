@@ -141,7 +141,10 @@ pub(in crate::context_bootstrap) fn file_list_item_callback<'s>(
     };
     let receiver = moli_webapi_declare::web_api_object_target(scope, args.this())
         .expect("FileList receiver validated by WebIDL");
-    let Some(value) = receiver.get_index(scope, parsed.index) else {
+    let Some(value) = get_private_value(scope, receiver, FILE_LIST_FILES_SLOT)
+        .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok())
+        .and_then(|files| files.get_index(scope, parsed.index))
+    else {
         rv.set(v8::null(scope).into());
         return;
     };
