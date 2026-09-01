@@ -385,6 +385,18 @@ interfaces! {
     SVGFilterElement: SVGElement;
     SVGMaskElement: SVGElement;
     SVGViewElement: SVGElement;
+    SVGComponentTransferFunctionElement: SVGElement;
+    SVGFEFuncAElement: SVGComponentTransferFunctionElement;
+    SVGFEFuncBElement: SVGComponentTransferFunctionElement;
+    SVGFEFuncGElement: SVGComponentTransferFunctionElement;
+    SVGFEFuncRElement: SVGComponentTransferFunctionElement;
+    SVGFEBlendElement: SVGElement;
+    SVGFEColorMatrixElement: SVGElement;
+    SVGFECompositeElement: SVGElement;
+    SVGFEDisplacementMapElement: SVGElement;
+    SVGFEMorphologyElement: SVGElement;
+    SVGFETurbulenceElement: SVGElement;
+    SVGTextPathElement: SVGTextContentElement;
     SVGElement: Element;
     SVGEllipseElement: SVGGeometryElement;
     SVGForeignObjectElement: SVGGraphicsElement;
