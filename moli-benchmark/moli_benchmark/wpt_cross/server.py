@@ -1106,6 +1106,61 @@ def _workers_modules_export_on_load_script_response() -> tuple[bytes, list[tuple
     )
 
 
+def _inspect_headers_response_headers(
+    query: str,
+    request_headers: list[tuple[str, str]],
+) -> list[tuple[str, str]]:
+    """Model fetch/api/resources/inspect-headers.py's response headers."""
+
+    params = parse_qsl(query, keep_blank_values=True)
+    checked_headers_value = next(
+        (value for name, value in params if name == "headers"),
+        None,
+    )
+    checked_headers = (
+        checked_headers_value.split("|") if checked_headers_value is not None else []
+    )
+    request_headers_by_name: dict[str, str] = {}
+    for name, value in request_headers:
+        request_headers_by_name.setdefault(name.lower(), value)
+
+    response_headers = []
+    for name in checked_headers:
+        value = request_headers_by_name.get(name.lower())
+        if value is not None:
+            response_headers.append((f"x-request-{name}", value))
+
+    if any(name == "cors" for name, _ in params):
+        response_headers.extend(
+            [
+                (
+                    "Access-Control-Allow-Origin",
+                    request_headers_by_name.get("origin", "*"),
+                ),
+                ("Access-Control-Allow-Credentials", "true"),
+                ("Access-Control-Allow-Methods", "GET, POST, HEAD"),
+                (
+                    "Access-Control-Expose-Headers",
+                    ", ".join(f"x-request-{name}" for name in checked_headers),
+                ),
+            ]
+        )
+        allow_headers = next(
+            (value for name, value in params if name == "allow_headers"),
+            None,
+        )
+        response_headers.append(
+            (
+                "Access-Control-Allow-Headers",
+                allow_headers
+                if allow_headers is not None
+                else ", ".join(name for name, _ in request_headers),
+            )
+        )
+
+    return response_headers
+
+
 def _url_host_literal(hostname: str) -> str:
     if hostname.startswith("[") and hostname.endswith("]"):
         return hostname
@@ -1857,6 +1912,18 @@ def _make_handler(
                     "text/plain; charset=utf-8",
                     _workers_url_encoding_response(parsed.query),
                     emit_body=emit_body,
+                )
+                return
+            if path == "/fetch/api/resources/inspect-headers.py":
+                self._send_bytes(
+                    "text/plain",
+                    b"",
+                    emit_body=emit_body,
+                    extra_headers=_inspect_headers_response_headers(
+                        parsed.query,
+                        list(self.headers.items()),
+                    ),
+                    status_code=pipe_status_code or 200,
                 )
                 return
             if path == (
