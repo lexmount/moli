@@ -3102,8 +3102,7 @@ pub(super) fn svg_geometry_get_total_length_callback<'s>(
 ) {
     let length = svg_geometry_segments(scope, args.this())
         .iter()
-        .map(SvgGeometrySegment::length)
-        .sum::<f64>();
+        .fold(0.0, |total, segment| total + segment.length());
     rv.set(v8::Number::new(scope, length).into());
 }
 

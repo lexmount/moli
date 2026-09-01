@@ -2729,6 +2729,47 @@ fn svg_geometry_queries_use_computed_paths_live_tree_and_kurbo_bounds() {
 }
 
 #[test]
+fn svg_path_errors_keep_valid_prefix_and_positive_zero_length() {
+    let mut vm = new_parsed_test_vm(
+        "https://svg-path-error-handling.test/",
+        r##"<!doctype html>
+        <svg xmlns="http://www.w3.org/2000/svg">
+          <path id="invalid" d="M 10 10 L 30 10 X 50 10"/>
+          <path id="empty" d=""/>
+          <path id="none" d="none"/>
+          <path id="missing_move" d="L 20 20"/>
+        </svg>"##,
+    );
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const byId = id => document.getElementById(id);
+              const invalid = byId("invalid");
+              const end = invalid.getPointAtLength(invalid.getTotalLength());
+              return JSON.stringify({
+                length: invalid.getTotalLength(),
+                end: [end.x, end.y],
+                emptyIsPositiveZero: Object.is(byId("empty").getTotalLength(), 0),
+                noneIsPositiveZero: Object.is(byId("none").getTotalLength(), 0),
+                missingMoveIsPositiveZero: Object.is(
+                  byId("missing_move").getTotalLength(),
+                  0,
+                ),
+              });
+            })()
+            "#,
+        )
+        .expect("SVG path error handling probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"length":20,"end":[30,10],"emptyIsPositiveZero":true,"noneIsPositiveZero":true,"missingMoveIsPositiveZero":true}"#,
+    );
+}
+
+#[test]
 fn element_methods_and_dataset_live_on_owner_prototypes() {
     let mut vm = new_storage_test_vm("https://example.com/");
 
