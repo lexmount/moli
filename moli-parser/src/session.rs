@@ -6,9 +6,10 @@ use html5ever::{
     tokenizer::{
         BufferQueue, TagKind, Token, TokenSink, TokenSinkResult, Tokenizer, TokenizerOpts,
     },
-    tree_builder::{TreeBuilder, TreeBuilderOpts, TreeSink},
+    tree_builder::{Tracer, TreeBuilder, TreeBuilderOpts, TreeSink},
 };
 use markup5ever::TokenizerResult;
+use moli_dom::native::NativeNodeId;
 use moli_script::script_element_nonce_is_nonceable;
 
 use super::{
@@ -45,16 +46,50 @@ enum TokenizerPause {
 
 struct EmbedderPausingTreeBuilder {
     inner: TreeBuilder<ParseHandle, DocumentSink>,
+    fragment_context: Option<NativeNodeId>,
     // Retain a callback's Break until html5ever accepts a pause result. This is
     // an undelivered notification, not a copy of the owner's current run state;
     // it must survive both later Continue callbacks and input chunk boundaries.
     deferred_owner_interruption: Cell<bool>,
 }
 
+#[derive(Default)]
+struct OpenFormControlTracer {
+    handles: RefCell<Vec<NativeNodeId>>,
+    fragment_context: Option<NativeNodeId>,
+}
+
+impl Tracer for OpenFormControlTracer {
+    type Handle = ParseHandle;
+
+    fn trace_handle(&self, node: &ParseHandle) {
+        let is_blocking_control = node.element_name.as_ref().is_some_and(|name| {
+            AsRef::<str>::as_ref(&name.ns) == "http://www.w3.org/1999/xhtml"
+                && matches!(AsRef::<str>::as_ref(&name.local), "select" | "textarea")
+        });
+        if !is_blocking_control {
+            return;
+        }
+        let Some(node_id) = node.dom_node_id() else {
+            return;
+        };
+        // html5ever also traces the fragment context for GC. It is an existing
+        // element, not an unclosed control created by this parser.
+        if Some(node_id) == self.fragment_context {
+            return;
+        }
+        let mut handles = self.handles.borrow_mut();
+        if !handles.contains(&node_id) {
+            handles.push(node_id);
+        }
+    }
+}
+
 impl EmbedderPausingTreeBuilder {
     fn new(sink: DocumentSink, opts: TreeBuilderOpts) -> Self {
         Self {
             inner: TreeBuilder::new(sink, opts),
+            fragment_context: None,
             deferred_owner_interruption: Cell::new(false),
         }
     }
@@ -64,14 +99,27 @@ impl EmbedderPausingTreeBuilder {
         context_handle: ParseHandle,
         opts: TreeBuilderOpts,
     ) -> Self {
+        let fragment_context = context_handle.dom_node_id();
         Self {
             inner: TreeBuilder::new_for_fragment(sink, context_handle, None, opts),
+            fragment_context,
             deferred_owner_interruption: Cell::new(false),
         }
     }
 
     fn sink(&self) -> &DocumentSink {
         &self.inner.sink
+    }
+
+    fn begin_tree_builder_finish(&self) {
+        let tracer = OpenFormControlTracer {
+            fragment_context: self.fragment_context,
+            ..OpenFormControlTracer::default()
+        };
+        self.inner.trace_handles(&tracer);
+        self.inner
+            .sink
+            .begin_tree_builder_finish(&tracer.handles.into_inner());
     }
 }
 
@@ -397,7 +445,7 @@ impl HtmlParserSession {
                 .pop_pending_blocking_stylesheet_pause();
         }
         debug_assert!(input_buffer.is_empty());
-        tokenizer.sink.sink().begin_tree_builder_finish();
+        tokenizer.sink.begin_tree_builder_finish();
         tokenizer.end();
         tokenizer.sink.inner.sink.finish()
     }
@@ -418,7 +466,7 @@ impl HtmlParserSession {
                 .pop_pending_blocking_stylesheet_pause();
         }
         debug_assert!(input_buffer.is_empty());
-        tokenizer.sink.sink().begin_tree_builder_finish();
+        tokenizer.sink.begin_tree_builder_finish();
         tokenizer.end();
         let sink = tokenizer.sink.sink();
         sink.finish_construction();
