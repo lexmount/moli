@@ -3048,6 +3048,116 @@ fn svg_svg_element_value_factories_create_typed_objects() {
 }
 
 #[test]
+fn svg_lengths_preserve_specified_units_and_resolve_live_context() {
+    let mut vm = new_parsed_test_vm(
+        "https://svg-length-context.test/",
+        r#"<!doctype html>
+        <html style="font-size:20px;line-height:24px">
+          <body>
+            <svg id="svg" width="150" height="50" viewBox="0 0 150 50">
+              <rect id="rect" style="font-size:12px"/>
+              <text id="text" x="10ch" style="font-size:20px"></text>
+              <text id="cap" x="10cap" style="font-size:20px"></text>
+              <text id="ic" x="10ic" style="font-size:20px"></text>
+              <text id="lh" x="10lh" style="font-size:20px;line-height:24px"></text>
+              <text id="rlh" x="10rlh" style="font-size:10px"></text>
+              <rect id="rem" x="5rem"/>
+              <rect id="viewport" x="10vw"/>
+            </svg>
+          </body>
+        </html>"#,
+    );
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const assert = (condition, message) => {
+                if (!condition) throw new Error(message);
+              };
+              const close = (actual, expected, tolerance = 1e-6) =>
+                Math.abs(actual - expected) <= tolerance;
+              const svg = document.getElementById("svg");
+
+              const standalone = svg.createSVGLength();
+              standalone.valueAsString = "48px";
+              standalone.convertToSpecifiedUnits(SVGLength.SVG_LENGTHTYPE_CM);
+              assert(standalone.valueAsString === "1.27cm",
+                `absolute serialization: ${standalone.valueAsString}`);
+              assert(close(standalone.valueInSpecifiedUnits, 1.27),
+                "absolute specified value");
+              assert(close(standalone.value, 48), "absolute user value");
+              standalone.value = 96;
+              assert(close(standalone.valueInSpecifiedUnits, 2.54),
+                "value setter preserves unit");
+              standalone.valueInSpecifiedUnits = 1;
+              assert(close(standalone.value, 96 / 2.54),
+                "specified setter resolves user value");
+
+              standalone.valueAsString = "40q";
+              assert(standalone.unitType === SVGLength.SVG_LENGTHTYPE_UNKNOWN,
+                "modern unit type");
+              assert(close(standalone.value, 96 / 2.54), "quarter millimeter value");
+              standalone.convertToSpecifiedUnits(SVGLength.SVG_LENGTHTYPE_MM);
+              assert(standalone.valueAsString === "10mm", "quarter millimeter conversion");
+
+              const rect = document.getElementById("rect");
+              const x = rect.x.baseVal;
+              x.valueAsString = "3px";
+              x.convertToSpecifiedUnits(SVGLength.SVG_LENGTHTYPE_PERCENTAGE);
+              assert(x.valueAsString === "2%" && close(x.value, 3),
+                `percentage conversion uses SVG viewport: ${x.valueAsString}|${x.value}|${x.valueInSpecifiedUnits}`);
+              x.valueAsString = "6px";
+              x.convertToSpecifiedUnits(SVGLength.SVG_LENGTHTYPE_EMS);
+              assert(x.valueAsString === "0.5em" && close(x.value, 6),
+                "em conversion uses owner font size");
+
+              svg.removeAttribute("viewBox");
+              x.valueAsString = "50%";
+              assert(close(x.value, 75), "initial percentage basis");
+              svg.width.baseVal.value = 300;
+              assert(close(x.value, 150), "live percentage basis");
+
+              const ch = document.getElementById("text").x.baseVal[0];
+              assert(ch.unitType === SVGLength.SVG_LENGTHTYPE_UNKNOWN,
+                "list modern unit type");
+              assert(close(ch.value, 100), "ch resolves from owner font size");
+              ch.value = 200;
+              assert(close(ch.valueInSpecifiedUnits, 20), "ch reverse conversion");
+
+              for (const [id, expected] of [
+                ["cap", 140],
+                ["ic", 200],
+                ["lh", 240],
+                ["rlh", 240],
+                ["rem", 100],
+              ]) {
+                const modern = document.getElementById(id).x.baseVal[0] ??
+                  document.getElementById(id).x.baseVal;
+                assert(modern.unitType === SVGLength.SVG_LENGTHTYPE_UNKNOWN,
+                  `${id} unit type`);
+                assert(close(modern.value, expected), `${id} context value`);
+                const specified = modern.valueInSpecifiedUnits;
+                modern.value = expected * 2;
+                assert(close(modern.valueInSpecifiedUnits, specified * 2),
+                  `${id} reverse conversion`);
+              }
+
+              const viewport = document.getElementById("viewport").x.baseVal;
+              const viewportValue = viewport.value;
+              viewport.value = viewportValue * 2;
+              assert(close(viewport.valueInSpecifiedUnits, 20),
+                "viewport reverse conversion");
+              return "ok";
+            })()
+            "#,
+        )
+        .expect("SVG length context probe should evaluate");
+
+    assert_eq!(result, "ok");
+}
+
+#[test]
 fn svg_string_lists_reflect_conditional_processing_attributes() {
     let mut vm = new_parsed_test_vm(
         "https://svg-string-list.test/",
