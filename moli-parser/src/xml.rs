@@ -18,7 +18,10 @@ use xmlparser::{
     ElementEnd as XmlElementEnd, Token as XmlTokenizerToken, Tokenizer as XmlTokenizer,
 };
 
-use super::{html_chunks, xml_tree_viewer::transform_document_to_xml_tree_view};
+use super::{
+    html_chunks, xml_preprocess::prepare_xml_for_xml5ever,
+    xml_tree_viewer::transform_document_to_xml_tree_view,
+};
 use moli_dom::native::{Attribute as NativeAttribute, DomHost, NativeDom, NativeNodeId, Node};
 
 #[derive(Debug, Clone, Default)]
@@ -111,6 +114,7 @@ impl XmlParser {
         xml: String,
         present_unstyled_xml: bool,
     ) -> NativeDom {
+        let xml = prepare_xml_for_xml5ever(&xml);
         let prepass_error = xml_element_stack_error(&xml);
         let sink = XmlDocumentSink::new(XmlLiveTreeSinkTarget::new_owned(final_url));
         let mut parser = parse_xml_document(sink, XmlParseOpts::default());
@@ -152,7 +156,8 @@ impl XmlParser {
         let target = XmlLiveTreeSinkTarget::new_borrowed(dom_host, document_handle)?;
         let sink = XmlDocumentSink::new(target);
         let mut parser = parse_xml_document(sink, XmlParseOpts::default());
-        for chunk in html_chunks(xml) {
+        let xml = prepare_xml_for_xml5ever(xml);
+        for chunk in html_chunks(&xml) {
             parser.process(XmlStrTendril::from(chunk));
         }
         parser.finish().finish_live_tree();
