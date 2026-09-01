@@ -1620,6 +1620,295 @@ fn svg_animated_lengths_reflect_initial_and_content_attribute_values() {
 }
 
 #[test]
+fn svg_fit_to_view_box_attributes_are_live_and_reflected() {
+    let mut vm = new_parsed_test_vm(
+        "https://svg-fit-to-view-box.test/",
+        "<!doctype html><html><head></head><body></body></html>",
+    );
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const assert = (condition, message) => {
+                if (!condition) throw new Error(message);
+              };
+              const throws = (callback, expected, message) => {
+                try {
+                  callback();
+                } catch (error) {
+                  assert(error.name === expected, `${message}: ${error.name}`);
+                  return;
+                }
+                throw new Error(`${message}: did not throw`);
+              };
+              const accessor = (prototype, name) => {
+                const descriptor = Object.getOwnPropertyDescriptor(prototype, name);
+                assert(typeof descriptor?.get === "function", `${prototype.constructor.name}.${name} getter`);
+                assert(descriptor.set === undefined, `${prototype.constructor.name}.${name} setter`);
+                assert(descriptor.enumerable && descriptor.configurable,
+                  `${prototype.constructor.name}.${name} flags`);
+                return descriptor;
+              };
+              const ns = "http://www.w3.org/2000/svg";
+
+              for (const constructor of [
+                SVGAnimatedRect,
+                SVGPreserveAspectRatio,
+                SVGAnimatedPreserveAspectRatio,
+              ]) {
+                assert(typeof constructor === "function", `${constructor.name} constructor`);
+                throws(() => new constructor(), "TypeError", `${constructor.name} illegal constructor`);
+              }
+
+              const fitCases = [
+                ["svg", SVGSVGElement],
+                ["symbol", SVGSymbolElement],
+                ["marker", SVGMarkerElement],
+                ["pattern", SVGPatternElement],
+                ["view", SVGViewElement],
+              ];
+              for (const [localName, constructor] of fitCases) {
+                accessor(constructor.prototype, "viewBox");
+                accessor(constructor.prototype, "preserveAspectRatio");
+                const element = document.createElementNS(ns, localName);
+                const viewBox = element.viewBox;
+                const aspectRatio = element.preserveAspectRatio;
+                assert(viewBox instanceof SVGAnimatedRect, `${localName}.viewBox interface`);
+                assert(aspectRatio instanceof SVGAnimatedPreserveAspectRatio,
+                  `${localName}.preserveAspectRatio interface`);
+                assert(element.viewBox === viewBox, `${localName}.viewBox SameObject`);
+                assert(element.preserveAspectRatio === aspectRatio,
+                  `${localName}.preserveAspectRatio SameObject`);
+              }
+
+              const imageDescriptor = accessor(
+                SVGImageElement.prototype,
+                "preserveAspectRatio",
+              );
+              assert(!("viewBox" in SVGImageElement.prototype), "image has no viewBox");
+              const image = document.createElementNS(ns, "image");
+              assert(image.preserveAspectRatio instanceof SVGAnimatedPreserveAspectRatio,
+                "image preserveAspectRatio interface");
+              assert(image.preserveAspectRatio === image.preserveAspectRatio,
+                "image preserveAspectRatio SameObject");
+
+              const svg = document.createElementNS(ns, "svg");
+              const animatedRect = svg.viewBox;
+              const baseRect = animatedRect.baseVal;
+              const animRect = animatedRect.animVal;
+              assert(baseRect instanceof SVGRect && animRect instanceof SVGRect,
+                "viewBox rectangle interfaces");
+              for (const rect of [baseRect, animRect]) {
+                assert(!(rect instanceof DOMRect), "viewBox uses native SVGRect, not DOMRect");
+                assert(Object.getPrototypeOf(rect) === SVGRect.prototype,
+                  "viewBox native rectangle prototype");
+                assert(Object.prototype.toString.call(rect) === "[object SVGRect]",
+                  "viewBox native rectangle tag");
+              }
+              assert(baseRect !== animRect, "viewBox base and animated rectangles are distinct");
+              assert(Object.prototype.toString.call(animatedRect) === "[object SVGAnimatedRect]",
+                "animated rectangle tag");
+              assert(baseRect.x === 0 && baseRect.y === 0 &&
+                baseRect.width === 0 && baseRect.height === 0, "initial viewBox");
+              assert(!svg.hasAttribute("viewBox"), "viewBox getter does not create attribute");
+
+              svg.setAttribute("viewBox", "10 20 30 40");
+              assert(baseRect.x === 10 && baseRect.y === 20 &&
+                baseRect.width === 30 && baseRect.height === 40,
+                "cached base rectangle tracks content attribute");
+              assert(animRect.x === 10 && animRect.y === 20 &&
+                animRect.width === 30 && animRect.height === 40,
+                "cached animated rectangle tracks content attribute");
+              baseRect.x = 11;
+              assert(svg.getAttribute("viewBox") === "11 20 30 40",
+                "base rectangle mutation reflects to viewBox");
+              assert(baseRect.x === 11 && animRect.x === 11,
+                "viewBox values remain synchronized after mutation");
+              throws(() => { animRect.x = 12; }, "NoModificationAllowedError",
+                "animated rectangle is read-only");
+              svg.setAttribute("viewBox", "0 0 -1 2");
+              assert(baseRect.x === 0 && baseRect.width === 0,
+                "invalid viewBox uses the initial value");
+              svg.removeAttribute("viewBox");
+              assert(baseRect.x === 0 && baseRect.height === 0,
+                "removed viewBox uses the initial value");
+
+              const animatedAspectRatio = svg.preserveAspectRatio;
+              const baseAspectRatio = animatedAspectRatio.baseVal;
+              const animAspectRatio = animatedAspectRatio.animVal;
+              assert(baseAspectRatio instanceof SVGPreserveAspectRatio &&
+                animAspectRatio instanceof SVGPreserveAspectRatio,
+                "preserveAspectRatio value interfaces");
+              assert(baseAspectRatio !== animAspectRatio,
+                "preserveAspectRatio base and animated values are distinct");
+              assert(baseAspectRatio.align ===
+                SVGPreserveAspectRatio.SVG_PRESERVEASPECTRATIO_XMIDYMID,
+                "initial preserveAspectRatio align");
+              assert(baseAspectRatio.meetOrSlice ===
+                SVGPreserveAspectRatio.SVG_MEETORSLICE_MEET,
+                "initial preserveAspectRatio meetOrSlice");
+              assert(!svg.hasAttribute("preserveAspectRatio"),
+                "preserveAspectRatio getter does not create attribute");
+
+              svg.setAttribute("preserveAspectRatio", "xMinYMax slice");
+              assert(baseAspectRatio.align ===
+                SVGPreserveAspectRatio.SVG_PRESERVEASPECTRATIO_XMINYMAX,
+                "cached base aspect ratio tracks content attribute");
+              assert(animAspectRatio.meetOrSlice ===
+                SVGPreserveAspectRatio.SVG_MEETORSLICE_SLICE,
+                "cached animated aspect ratio tracks content attribute");
+              baseAspectRatio.align =
+                SVGPreserveAspectRatio.SVG_PRESERVEASPECTRATIO_XMAXYMIN;
+              baseAspectRatio.meetOrSlice = SVGPreserveAspectRatio.SVG_MEETORSLICE_SLICE;
+              assert(svg.getAttribute("preserveAspectRatio") === "xMaxYMin slice",
+                "base aspect ratio mutation reflects canonical syntax");
+              assert(animAspectRatio.align ===
+                SVGPreserveAspectRatio.SVG_PRESERVEASPECTRATIO_XMAXYMIN,
+                "animated aspect ratio tracks base mutation");
+              baseAspectRatio.align = SVGPreserveAspectRatio.SVG_PRESERVEASPECTRATIO_UNKNOWN;
+              baseAspectRatio.meetOrSlice = SVGPreserveAspectRatio.SVG_MEETORSLICE_UNKNOWN;
+              assert(svg.getAttribute("preserveAspectRatio") === "xMaxYMin slice",
+                "unknown enumeration assignments are ignored");
+              throws(() => { animAspectRatio.align = 1; }, "NoModificationAllowedError",
+                "animated aspect ratio align is read-only");
+              throws(() => { animAspectRatio.meetOrSlice = 1; },
+                "NoModificationAllowedError", "animated aspect ratio meetOrSlice is read-only");
+              svg.setAttribute("preserveAspectRatio", "invalid");
+              assert(baseAspectRatio.align ===
+                SVGPreserveAspectRatio.SVG_PRESERVEASPECTRATIO_XMIDYMID &&
+                animAspectRatio.meetOrSlice === SVGPreserveAspectRatio.SVG_MEETORSLICE_MEET,
+                "invalid preserveAspectRatio uses the initial value");
+              svg.removeAttribute("preserveAspectRatio");
+              assert(baseAspectRatio.align ===
+                SVGPreserveAspectRatio.SVG_PRESERVEASPECTRATIO_XMIDYMID,
+                "removed preserveAspectRatio uses the initial value");
+
+              const constants = [
+                ["SVG_PRESERVEASPECTRATIO_UNKNOWN", 0],
+                ["SVG_PRESERVEASPECTRATIO_NONE", 1],
+                ["SVG_PRESERVEASPECTRATIO_XMINYMIN", 2],
+                ["SVG_PRESERVEASPECTRATIO_XMIDYMIN", 3],
+                ["SVG_PRESERVEASPECTRATIO_XMAXYMIN", 4],
+                ["SVG_PRESERVEASPECTRATIO_XMINYMID", 5],
+                ["SVG_PRESERVEASPECTRATIO_XMIDYMID", 6],
+                ["SVG_PRESERVEASPECTRATIO_XMAXYMID", 7],
+                ["SVG_PRESERVEASPECTRATIO_XMINYMAX", 8],
+                ["SVG_PRESERVEASPECTRATIO_XMIDYMAX", 9],
+                ["SVG_PRESERVEASPECTRATIO_XMAXYMAX", 10],
+                ["SVG_MEETORSLICE_UNKNOWN", 0],
+                ["SVG_MEETORSLICE_MEET", 1],
+                ["SVG_MEETORSLICE_SLICE", 2],
+              ];
+              for (const [name, value] of constants) {
+                assert(SVGPreserveAspectRatio[name] === value, `constructor ${name}`);
+                assert(SVGPreserveAspectRatio.prototype[name] === value, `prototype ${name}`);
+              }
+
+              const viewBoxDescriptor = Object.getOwnPropertyDescriptor(
+                SVGSVGElement.prototype,
+                "viewBox",
+              );
+              throws(() => viewBoxDescriptor.get.call(document.createElementNS(ns, "rect")),
+                "TypeError", "viewBox receiver brand");
+              throws(() => imageDescriptor.get.call(document.createElementNS(ns, "rect")),
+                "TypeError", "image preserveAspectRatio receiver brand");
+              const animatedRectDescriptor = Object.getOwnPropertyDescriptor(
+                SVGAnimatedRect.prototype,
+                "baseVal",
+              );
+              throws(() => animatedRectDescriptor.get.call({}), "TypeError",
+                "animated rectangle receiver brand");
+              const alignDescriptor = Object.getOwnPropertyDescriptor(
+                SVGPreserveAspectRatio.prototype,
+                "align",
+              );
+              throws(() => alignDescriptor.get.call({}), "TypeError",
+                "preserveAspectRatio receiver brand");
+              return "ok";
+            })()
+            "#,
+        )
+        .expect("SVG fit-to-view-box reflection probe should evaluate");
+
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn svg_view_box_rects_preserve_native_float_and_reentrant_setter_semantics() {
+    let mut vm = new_parsed_test_vm(
+        "https://svg-view-box-native-rect.test/",
+        "<!doctype html><html><head></head><body></body></html>",
+    );
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const assert = (condition, message) => {
+                if (!condition) throw new Error(message);
+              };
+              const throws = (callback, name) => {
+                try { callback(); } catch (error) {
+                  assert(error.name === name, `expected ${name}, got ${error.name}`);
+                  return;
+                }
+                throw new Error(`expected ${name}`);
+              };
+              const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+              const fields = ["x", "y", "width", "height"];
+              const values = rect => fields.map(field => rect[field]);
+              svg.setAttribute("viewBox", "1.2 2.4 3.6 4.8");
+              const base = svg.viewBox.baseVal;
+              const anim = svg.viewBox.animVal;
+              const assertValues = expected => {
+                for (const rect of [base, anim]) {
+                  assert(JSON.stringify(values(rect)) === JSON.stringify(expected.map(Math.fround)),
+                    `float values: ${values(rect)}`);
+                }
+              };
+              assertValues([1.2, 2.4, 3.6, 4.8]);
+              svg.setAttribute("viewBox", "5.5 6.6 7.7 8.8");
+              assertValues([5.5, 6.6, 7.7, 8.8]);
+              base.x = "1.2";
+              base.width = 1e20;
+              assertValues([1.2, 6.6, 1e20, 8.8]);
+              const reflected = svg.getAttribute("viewBox");
+              assert(JSON.stringify(reflected.split(" ").map(Number).map(Math.fround)) ===
+                JSON.stringify(values(base)), "float serialization round trip");
+              for (const invalid of [NaN, Infinity, -Infinity, 1e40, undefined, Symbol()]) {
+                throws(() => { base.x = invalid; }, "TypeError");
+                assert(svg.getAttribute("viewBox") === reflected,
+                  "rejected float assignment preserves the attribute");
+              }
+              throws(() => { anim.width = 1; }, "NoModificationAllowedError");
+              const domRectX = Object.getOwnPropertyDescriptor(DOMRect.prototype, "x");
+              throws(() => domRectX.get.call(base), "TypeError");
+              throws(() => domRectX.set.call(anim, 7), "TypeError");
+              assert(svg.getAttribute("viewBox") === reflected,
+                "read-only and foreign-interface setters preserve the attribute");
+
+              base.x = {
+                valueOf() {
+                  svg.setAttribute("viewBox", "10 20 30 40");
+                  return 9;
+                }
+              };
+              assert(svg.getAttribute("viewBox") === "9 20 30 40",
+                "numeric coercion preserves reentrant changes to the other fields");
+              assertValues([9, 20, 30, 40]);
+              svg.setAttribute("viewBox", "0 0 1e40 1");
+              assertValues([0, 0, 0, 0]);
+              return "ok";
+            })()
+            "#,
+        )
+        .expect("native SVG viewBox rectangle probe should evaluate");
+
+    assert_eq!(result, "ok");
+}
+
+#[test]
 fn svg_historical_interfaces_keep_current_element_constructors_only() {
     let mut vm = new_parsed_test_vm(
         "https://svg-historical-interfaces.test/",
