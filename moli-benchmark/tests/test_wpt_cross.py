@@ -4074,6 +4074,44 @@ test(() => {}, "ok");
             ],
         )
 
+    def test_fixture_server_models_form_echo_handler(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            (root_path / "resources").mkdir()
+            (root_path / "resources" / "testharness.js").write_text(
+                "// testharness", encoding="utf-8"
+            )
+            with WptFixtureServer(root_path) as server:
+                url = (
+                    f"{server.base_url}/html/semantics/forms/"
+                    "form-submission-0/form-echo.py"
+                )
+                responses = []
+                for method, body in (
+                    ("GET", None),
+                    ("HEAD", None),
+                    ("POST", b"\x00\x09\x7f\x80\xff"),
+                ):
+                    request = Request(url, data=body, method=method)
+                    with urlopen(request, timeout=2) as response:
+                        responses.append(
+                            (
+                                method,
+                                response.status,
+                                response.read(),
+                                response.headers["Content-Type"],
+                            )
+                        )
+
+        self.assertEqual(
+            responses,
+            [
+                ("GET", 200, b"", "text/plain"),
+                ("HEAD", 200, b"", "text/plain"),
+                ("POST", 200, b"00 09 7f 80 ff", "text/plain"),
+            ],
+        )
+
     def test_fixture_server_models_fetch_inspect_headers_handler(self) -> None:
         self.assertEqual(
             _inspect_headers_response_headers(
