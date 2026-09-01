@@ -82,6 +82,19 @@ pub fn parse_number_list(raw: &str) -> Option<Vec<f64>> {
         .collect()
 }
 
+pub fn parse_point_list(raw: &str) -> Option<Vec<(f64, f64)>> {
+    let values = parse_number_list(raw).or_else(|| {
+        let raw = raw.trim_end();
+        parse_number_list(raw.strip_suffix(',')?)
+    })?;
+    Some(
+        values
+            .chunks_exact(2)
+            .map(|point| (point[0], point[1]))
+            .collect(),
+    )
+}
+
 fn svg_length(length: SvgTypesLength) -> SvgLength {
     SvgLength {
         value: length.number,
