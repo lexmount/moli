@@ -733,6 +733,60 @@ body { background: rgb(0, 0, 255) }
     }
 
     #[test]
+    fn grid_intrinsic_sizes_preserve_flexible_spanning_automatic_minimum_semantics() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}
+.grid{display:grid;height:10px;grid-template-columns:1fr 30px;width:min-content}
+.item{grid-column:1/span 2}.wide{width:300px;height:10px}
+#multi-min{background:rgb(31,41,51)}#multi-min>.item{background:rgb(32,42,52)}
+#multi-max{width:max-content;background:rgb(41,51,61)}#multi-max>.item{background:rgb(42,52,62)}
+#single{grid-template-columns:1fr;background:rgb(51,61,71)}#single>.item{grid-column:1;background:rgb(52,62,72)}
+#explicit{background:rgb(61,71,81)}#explicit>.item{min-width:120px;background:rgb(62,72,82)}
+#rows{width:10px;height:min-content;grid-template-columns:10px;grid-template-rows:1fr 30px;background:rgb(71,81,91)}
+#rows>.item{grid-column:1;grid-row:1/span 2;background:rgb(72,82,92)}#rows .wide{width:10px;height:300px}
+</style></head><body>
+<div id=multi-min class=grid><div class=item><div class=wide></div></div></div>
+<div id=multi-max class=grid><div class=item><div class=wide></div></div></div>
+<div id=single class=grid><div class=item><div class=wide></div></div></div>
+<div id=explicit class=grid><div class=item><div class=wide></div></div></div>
+<div id=rows class=grid><div class=item><div class=wide></div></div></div>
+</body></html>"#,
+            )
+            .await;
+
+            // Chromium 147 keeps the automatic minimum at zero only for an
+            // item spanning multiple tracks including a flexible track. A
+            // max-content constraint, a single flexible track, or an explicit
+            // minimum still contributes. Intrinsic block-size remains
+            // max-content-like rather than reusing the inline-axis result.
+            for (color, expected) in [
+                (rgb(31, 41, 51), (0.0, 0.0, 30.0, 10.0)),
+                (rgb(32, 42, 52), (0.0, 0.0, 30.0, 10.0)),
+                (rgb(41, 51, 61), (0.0, 10.0, 300.0, 10.0)),
+                (rgb(42, 52, 62), (0.0, 10.0, 300.0, 10.0)),
+                (rgb(51, 61, 71), (0.0, 20.0, 300.0, 10.0)),
+                (rgb(52, 62, 72), (0.0, 20.0, 300.0, 10.0)),
+                (rgb(61, 71, 81), (0.0, 30.0, 120.0, 10.0)),
+                (rgb(62, 72, 82), (0.0, 30.0, 120.0, 10.0)),
+                (rgb(71, 81, 91), (0.0, 40.0, 10.0, 300.0)),
+                (rgb(72, 82, 92), (0.0, 40.0, 10.0, 300.0)),
+            ] {
+                assert_paint_rect(
+                    solid_paint_rect(&snapshot, color),
+                    moli_layout::PaintRect::new(expected.0, expected.1, expected.2, expected.3),
+                );
+            }
+        }));
+    }
+
+    #[test]
     fn layout_renderer_projects_static_position_and_flex_order_from_stylo() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
