@@ -41,6 +41,18 @@ struct SvgAnimatedNumberObjectDeclaration {
 }
 
 #[derive(WebApiObject)]
+#[webapi(
+    interface = web_api_interfaces::SVGAnimatedInteger,
+    own_to_string_tag = "SVGAnimatedInteger"
+)]
+struct SvgAnimatedIntegerObjectDeclaration {
+    #[webapi(slot = SVG_ANIMATED_INTEGER_BASE_VAL_SLOT)]
+    base_val: i32,
+    #[webapi(slot = SVG_ANIMATED_INTEGER_ANIM_VAL_SLOT)]
+    anim_val: i32,
+}
+
+#[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::SVGNumber, own_to_string_tag = "SVGNumber")]
 struct SvgNumberObjectDeclaration {
     #[webapi(slot = SVG_NUMBER_VALUE_SLOT)]
@@ -514,6 +526,163 @@ pub(super) fn build_svg_animated_number_for_attribute<'s>(
     set_svg_animated_number_owner_attribute(scope, object, owner, attribute);
     sync_svg_animated_number_from_owner_attribute(scope, object, owner, attribute);
     object
+}
+
+pub(super) fn build_svg_animated_integer<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: i32,
+) -> v8::Local<'s, v8::Object> {
+    SvgAnimatedIntegerObjectDeclaration::new(value, value)
+        .bind(scope)
+        .expect("SVGAnimatedInteger declaration should bind")
+}
+
+pub(super) fn build_svg_animated_integer_for_property<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+    property: SvgAnimatedIntegerProperty,
+) -> v8::Local<'s, v8::Object> {
+    let object = build_svg_animated_integer(scope, property.initial_value);
+    set_private_value(
+        scope,
+        object,
+        SVG_ANIMATED_INTEGER_OWNER_ELEMENT_SLOT,
+        owner.into(),
+    );
+    let index = u32::try_from(property.index).expect("SVG integer property index exceeds u32");
+    let index = v8::Integer::new_from_unsigned(scope, index);
+    set_private_value(
+        scope,
+        object,
+        SVG_ANIMATED_INTEGER_PROPERTY_INDEX_SLOT,
+        index.into(),
+    );
+    sync_svg_animated_integer_from_owner_attribute(scope, object);
+    object
+}
+
+pub(super) fn svg_animated_integer_property<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    animated: v8::Local<'s, v8::Object>,
+) -> Option<SvgAnimatedIntegerProperty> {
+    let index = get_private_value(scope, animated, SVG_ANIMATED_INTEGER_PROPERTY_INDEX_SLOT)?
+        .uint32_value(scope)?;
+    SVG_ANIMATED_INTEGER_PROPERTIES.get(index as usize).copied()
+}
+
+pub(super) fn sync_svg_animated_integer_from_owner_attribute<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    animated: v8::Local<'s, v8::Object>,
+) {
+    let Some(property) = svg_animated_integer_property(scope, animated) else {
+        return;
+    };
+    let Some(owner) = get_private_value(scope, animated, SVG_ANIMATED_INTEGER_OWNER_ELEMENT_SLOT)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+    else {
+        return;
+    };
+    let value = svg_owner_attribute_value(scope, owner, property.attribute)
+        .as_deref()
+        .and_then(|raw| parse_svg_animated_integer(property, raw))
+        .unwrap_or(property.initial_value);
+    set_svg_animated_integer_values(scope, animated, value);
+}
+
+pub(super) fn reflect_svg_animated_integer_to_owner_attribute<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    animated: v8::Local<'s, v8::Object>,
+) {
+    let Some(property) = svg_animated_integer_property(scope, animated) else {
+        return;
+    };
+    let Some(owner) = get_private_value(scope, animated, SVG_ANIMATED_INTEGER_OWNER_ELEMENT_SLOT)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+    else {
+        return;
+    };
+    let value = get_private_value(scope, animated, SVG_ANIMATED_INTEGER_BASE_VAL_SLOT)
+        .and_then(|value| value.int32_value(scope))
+        .unwrap_or(property.initial_value);
+    let serialized = match property.component {
+        SvgAnimatedIntegerComponent::Scalar => value.to_string(),
+        SvgAnimatedIntegerComponent::PairFirst | SvgAnimatedIntegerComponent::PairSecondOrFirst => {
+            let (mut first, mut second) =
+                svg_owner_attribute_value(scope, owner, property.attribute)
+                    .as_deref()
+                    .and_then(parse_svg_integer_pair)
+                    .unwrap_or((property.initial_value, property.initial_value));
+            match property.component {
+                SvgAnimatedIntegerComponent::PairFirst => first = value,
+                SvgAnimatedIntegerComponent::PairSecondOrFirst => second = value,
+                SvgAnimatedIntegerComponent::Scalar => unreachable!(),
+            }
+            format!("{first} {second}")
+        }
+    };
+    let Ok((runtime_ptr, handle)) =
+        crate::native_bridge::node_runtime_and_handle_from_object(scope, owner)
+    else {
+        return;
+    };
+    let runtime = unsafe { &mut *runtime_ptr };
+    let _ = runtime.set_attribute(scope, runtime_ptr, handle, property.attribute, &serialized);
+}
+
+pub(super) fn set_svg_animated_integer_values(
+    scope: &mut v8::PinScope<'_, '_>,
+    animated: v8::Local<'_, v8::Object>,
+    value: i32,
+) {
+    let value = v8::Integer::new(scope, value);
+    set_private_value(
+        scope,
+        animated,
+        SVG_ANIMATED_INTEGER_BASE_VAL_SLOT,
+        value.into(),
+    );
+    set_private_value(
+        scope,
+        animated,
+        SVG_ANIMATED_INTEGER_ANIM_VAL_SLOT,
+        value.into(),
+    );
+}
+
+pub(super) fn parse_svg_animated_integer(
+    property: SvgAnimatedIntegerProperty,
+    value: &str,
+) -> Option<i32> {
+    match property.component {
+        SvgAnimatedIntegerComponent::Scalar => parse_svg_integer(value),
+        SvgAnimatedIntegerComponent::PairFirst => {
+            parse_svg_integer_pair(value).map(|(first, _)| first)
+        }
+        SvgAnimatedIntegerComponent::PairSecondOrFirst => {
+            parse_svg_integer_pair(value).map(|(_, second)| second)
+        }
+    }
+}
+
+fn parse_svg_integer(value: &str) -> Option<i32> {
+    value.trim().parse().ok()
+}
+
+fn parse_svg_integer_pair(value: &str) -> Option<(i32, i32)> {
+    let value = value.trim();
+    if let Some((first, second)) = value.split_once(',') {
+        if second.contains(',') {
+            return None;
+        }
+        return Some((parse_svg_integer(first)?, parse_svg_integer(second)?));
+    }
+    let mut values = value.split_ascii_whitespace();
+    let first = parse_svg_integer(values.next()?)?;
+    let second = match values.next() {
+        Some(value) => parse_svg_integer(value)?,
+        None => first,
+    };
+    values.next().is_none().then_some((first, second))
 }
 
 pub(super) fn build_svg_number<'s>(
