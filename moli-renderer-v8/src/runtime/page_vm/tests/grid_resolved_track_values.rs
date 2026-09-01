@@ -85,9 +85,9 @@ vertical:getComputedStyle(document.getElementById('vertical')).gridTemplateColum
                 "areaRepeat": "20px 20px 20px 20px 20px 0px 0px 0px",
                 "fractional": "33.3281px 33.3281px 33.3281px",
                 "zoomed": "25px 75px",
-                "vertical": "1fr 3fr",
+                "vertical": "75px 225px",
             }),
-            "resolved horizontal Grid longhands must expose used tracks while preserving expanded line names, without publishing physical-axis values for vertical Grid",
+            "resolved Grid longhands must expose logical used tracks while preserving expanded line names in every writing mode",
         );
 
         page_vm
@@ -349,4 +349,77 @@ document.body.innerHTML = `
     })
     .await
     .expect("Grid minimum-contribution fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn screenshot_places_grid_items_from_logical_start_edges_in_every_writing_direction() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/grid-writing-direction-margins.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0}
+.grid{display:grid;width:80px;height:80px;grid-template-columns:80px}
+.grid>div{width:40px;height:20px;margin:4px 8px 12px 16px}
+#vertical-rl-ltr{writing-mode:vertical-rl}
+#vertical-lr-ltr{writing-mode:vertical-lr}
+#horizontal-rtl{direction:rtl}
+#vertical-rl-rtl{writing-mode:vertical-rl;direction:rtl}
+#vertical-lr-rtl{writing-mode:vertical-lr;direction:rtl}
+</style>`;
+document.body.innerHTML = `
+  <div class=grid id=horizontal-ltr><div></div></div>
+  <div class=grid id=vertical-rl-ltr><div></div></div>
+  <div class=grid id=vertical-lr-ltr><div></div></div>
+  <div class=grid id=horizontal-rtl><div></div></div>
+  <div class=grid id=vertical-rl-rtl><div></div></div>
+  <div class=grid id=vertical-lr-rtl><div></div></div>`;
+'installed'
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(400, 600, 1.0))?
+            .expect("logical Grid writing-direction screenshot layout");
+
+        let geometry = page_vm.vm_mut().eval(
+            r#"JSON.stringify(Object.fromEntries([
+  'horizontal-ltr','vertical-rl-ltr','vertical-lr-ltr',
+  'horizontal-rtl','vertical-rl-rtl','vertical-lr-rtl'
+].map(id=>{
+  const grid=document.getElementById(id);
+  const host=grid.getBoundingClientRect();
+  const child=grid.firstElementChild.getBoundingClientRect();
+  const style=getComputedStyle(grid);
+  return [id,{
+    offset:[child.x-host.x,child.y-host.y],
+    size:[child.width,child.height],
+    columns:style.gridTemplateColumns,
+    rows:style.gridTemplateRows
+  }];
+})))"#,
+        )?;
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&geometry)?,
+            serde_json::json!({
+                "horizontal-ltr": {"offset": [16, 4], "size": [40, 20], "columns": "80px", "rows": "80px"},
+                "vertical-rl-ltr": {"offset": [32, 4], "size": [40, 20], "columns": "80px", "rows": "80px"},
+                "vertical-lr-ltr": {"offset": [16, 4], "size": [40, 20], "columns": "80px", "rows": "80px"},
+                "horizontal-rtl": {"offset": [32, 4], "size": [40, 20], "columns": "80px", "rows": "80px"},
+                "vertical-rl-rtl": {"offset": [32, 48], "size": [40, 20], "columns": "80px", "rows": "80px"},
+                "vertical-lr-rtl": {"offset": [16, 48], "size": [40, 20], "columns": "80px", "rows": "80px"},
+            }),
+            "Grid columns, rows, margins, and self-alignment must share the container's logical axes",
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("logical Grid writing-direction fixture should run");
 }

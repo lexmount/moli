@@ -1677,11 +1677,6 @@ where
         if layout_box
             .capability_diagnostics
             .contains(&LayoutCapabilityDiagnostic::GridTemplateModeDeferred)
-            // The current backend reports detailed Grid tracks in physical
-            // axes. Publishing them for a vertical container would expose its
-            // width as the used `grid-template-columns` inline size. Keep the
-            // computed value until logical Grid constraints land in Taffy.
-            || !layout_box.style.uses_horizontal_writing_mode()
         {
             return;
         }
