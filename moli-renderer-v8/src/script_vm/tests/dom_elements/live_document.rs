@@ -2470,6 +2470,211 @@ fn svg_animated_integers_reflect_filter_content_attributes() {
 }
 
 #[test]
+fn svg_animated_numbers_reflect_filter_and_stop_content_attributes() {
+    let mut vm = new_parsed_test_vm(
+        "https://svg-animated-number.test/",
+        "<!doctype html><html><body></body></html>",
+    );
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const assert = (condition, message) => {
+                if (!condition) throw new Error(message);
+              };
+              const ns = "http://www.w3.org/2000/svg";
+              const cases = [
+                ["feFuncA", SVGFEFuncAElement, SVGComponentTransferFunctionElement, [
+                  ["slope", "slope", 1], ["intercept", "intercept", 0],
+                  ["amplitude", "amplitude", 1], ["exponent", "exponent", 1],
+                  ["offset", "offset", 0],
+                ]],
+                ["feComposite", SVGFECompositeElement, SVGFECompositeElement, [
+                  ["k1", "k1", 0], ["k2", "k2", 0],
+                  ["k3", "k3", 0], ["k4", "k4", 0],
+                ]],
+                ["feConvolveMatrix", SVGFEConvolveMatrixElement,
+                  SVGFEConvolveMatrixElement, [
+                    ["divisor", "divisor", 1], ["bias", "bias", 0],
+                    ["kernelUnitLengthX", "kernelUnitLength", 0],
+                    ["kernelUnitLengthY", "kernelUnitLength", 0],
+                  ]],
+                ["feDiffuseLighting", SVGFEDiffuseLightingElement,
+                  SVGFEDiffuseLightingElement, [
+                    ["surfaceScale", "surfaceScale", 1],
+                    ["diffuseConstant", "diffuseConstant", 1],
+                    ["kernelUnitLengthX", "kernelUnitLength", 0],
+                    ["kernelUnitLengthY", "kernelUnitLength", 0],
+                  ]],
+                ["feDisplacementMap", SVGFEDisplacementMapElement,
+                  SVGFEDisplacementMapElement, [["scale", "scale", 0]]],
+                ["feDistantLight", SVGFEDistantLightElement,
+                  SVGFEDistantLightElement, [
+                    ["azimuth", "azimuth", 0], ["elevation", "elevation", 0],
+                  ]],
+                ["feDropShadow", SVGFEDropShadowElement, SVGFEDropShadowElement, [
+                  ["dx", "dx", 2], ["dy", "dy", 2],
+                  ["stdDeviationX", "stdDeviation", 2],
+                  ["stdDeviationY", "stdDeviation", 2],
+                ]],
+                ["feGaussianBlur", SVGFEGaussianBlurElement,
+                  SVGFEGaussianBlurElement, [
+                    ["stdDeviationX", "stdDeviation", 0],
+                    ["stdDeviationY", "stdDeviation", 0],
+                  ]],
+                ["feMorphology", SVGFEMorphologyElement, SVGFEMorphologyElement, [
+                  ["radiusX", "radius", 0], ["radiusY", "radius", 0],
+                ]],
+                ["feOffset", SVGFEOffsetElement, SVGFEOffsetElement, [
+                  ["dx", "dx", 0], ["dy", "dy", 0],
+                ]],
+                ["fePointLight", SVGFEPointLightElement, SVGFEPointLightElement, [
+                  ["x", "x", 0], ["y", "y", 0], ["z", "z", 0],
+                ]],
+                ["feSpecularLighting", SVGFESpecularLightingElement,
+                  SVGFESpecularLightingElement, [
+                    ["surfaceScale", "surfaceScale", 1],
+                    ["specularConstant", "specularConstant", 1],
+                    ["specularExponent", "specularExponent", 1],
+                    ["kernelUnitLengthX", "kernelUnitLength", 0],
+                    ["kernelUnitLengthY", "kernelUnitLength", 0],
+                  ]],
+                ["feSpotLight", SVGFESpotLightElement, SVGFESpotLightElement, [
+                  ["x", "x", 0], ["y", "y", 0], ["z", "z", 0],
+                  ["pointsAtX", "pointsAtX", 0], ["pointsAtY", "pointsAtY", 0],
+                  ["pointsAtZ", "pointsAtZ", 0],
+                  ["specularExponent", "specularExponent", 1],
+                  ["limitingConeAngle", "limitingConeAngle", 0],
+                ]],
+                ["feTurbulence", SVGFETurbulenceElement, SVGFETurbulenceElement, [
+                  ["baseFrequencyX", "baseFrequency", 0],
+                  ["baseFrequencyY", "baseFrequency", 0], ["seed", "seed", 0],
+                ]],
+                ["stop", SVGStopElement, SVGStopElement, [["offset", "offset", 0]]],
+              ];
+
+              assert(typeof SVGAnimatedNumber === "function", "constructor exposed");
+              let illegalConstructor = false;
+              try {
+                new SVGAnimatedNumber();
+              } catch (error) {
+                illegalConstructor = error instanceof TypeError;
+              }
+              assert(illegalConstructor, "illegal constructor");
+
+              const baseDescriptor = Object.getOwnPropertyDescriptor(
+                SVGAnimatedNumber.prototype,
+                "baseVal",
+              );
+              const animDescriptor = Object.getOwnPropertyDescriptor(
+                SVGAnimatedNumber.prototype,
+                "animVal",
+              );
+              assert(typeof baseDescriptor.get === "function" &&
+                typeof baseDescriptor.set === "function", "baseVal descriptor");
+              assert(typeof animDescriptor.get === "function" && animDescriptor.set === undefined,
+                "animVal descriptor");
+
+              for (const [tag, constructor, owner, properties] of cases) {
+                const element = document.createElementNS(ns, tag);
+                assert(element instanceof constructor, `${tag} interface`);
+                for (const [property, attribute, initial] of properties) {
+                  const descriptor = Object.getOwnPropertyDescriptor(owner.prototype, property);
+                  assert(typeof descriptor.get === "function" && descriptor.set === undefined,
+                    `${owner.name}.${property} descriptor`);
+                  assert(descriptor.enumerable && descriptor.configurable,
+                    `${owner.name}.${property} descriptor flags`);
+
+                  const animated = element[property];
+                  assert(animated instanceof SVGAnimatedNumber, `${tag}.${property} interface`);
+                  assert(element[property] === animated, `${tag}.${property} SameObject`);
+                  assert(animated.baseVal === initial && animated.animVal === initial,
+                    `${tag}.${property} initial value`);
+
+                  element.setAttribute(attribute, "42");
+                  assert(animated.baseVal === 42 && animated.animVal === 42,
+                    `${tag}.${property} live content update`);
+                  element.setAttribute(attribute, "foobar");
+                  assert(animated.baseVal === initial && animated.animVal === initial,
+                    `${tag}.${property} invalid fallback`);
+                  element.removeAttribute(attribute);
+                  assert(animated.baseVal === initial && animated.animVal === initial,
+                    `${tag}.${property} removed fallback`);
+                }
+              }
+
+              const gaussian = document.createElementNS(ns, "feGaussianBlur");
+              const deviationX = gaussian.stdDeviationX;
+              const deviationY = gaussian.stdDeviationY;
+              gaussian.setAttribute("stdDeviation", "5");
+              assert(deviationX.baseVal === 5 && deviationY.baseVal === 5,
+                "single optional-number value");
+              gaussian.setAttribute("stdDeviation", "5, 7");
+              assert(deviationX.baseVal === 5 && deviationY.baseVal === 7,
+                "paired optional-number values");
+              deviationX.baseVal = 3;
+              assert(gaussian.getAttribute("stdDeviation") === "3 7",
+                "first pair component reflection");
+              deviationY.baseVal = 9;
+              assert(gaussian.getAttribute("stdDeviation") === "3 9" &&
+                deviationX.baseVal === 3 && deviationY.animVal === 9,
+                "second pair component reflection");
+
+              const specular = document.createElementNS(ns, "feSpecularLighting");
+              const surfaceScale = specular.surfaceScale;
+              surfaceScale.baseVal = -1;
+              assert(surfaceScale.baseVal === -1 && surfaceScale.animVal === -1 &&
+                specular.getAttribute("surfaceScale") === "-1", "scalar reflection");
+              surfaceScale.baseVal = 300;
+              for (const invalid of ["aString", NaN, Infinity, specular]) {
+                let rejected = false;
+                try {
+                  surfaceScale.baseVal = invalid;
+                } catch (error) {
+                  rejected = error instanceof TypeError;
+                }
+                assert(rejected && surfaceScale.baseVal === 300,
+                  "restricted float rejects invalid values");
+              }
+
+              const stop = document.createElementNS(ns, "stop");
+              const stopOffset = stop.offset;
+              stop.setAttribute("offset", "50%");
+              assert(stopOffset.baseVal === 0.5 && stopOffset.animVal === 0.5,
+                "stop percentage content value");
+              stopOffset.baseVal = 0.25;
+              assert(stop.getAttribute("offset") === "0.25", "stop number reflection");
+
+              let incompatibleAnimatedReceiver = false;
+              try {
+                baseDescriptor.get.call({});
+              } catch (error) {
+                incompatibleAnimatedReceiver = error instanceof TypeError;
+              }
+              assert(incompatibleAnimatedReceiver, "animated number receiver brand");
+
+              const k1Descriptor = Object.getOwnPropertyDescriptor(
+                SVGFECompositeElement.prototype,
+                "k1",
+              );
+              let incompatibleElementReceiver = false;
+              try {
+                k1Descriptor.get.call(specular);
+              } catch (error) {
+                incompatibleElementReceiver = error instanceof TypeError;
+              }
+              assert(incompatibleElementReceiver, "element receiver brand");
+              return "ok";
+            })()
+            "#,
+        )
+        .expect("SVG animated number probe should evaluate");
+
+    assert_eq!(result, "ok");
+}
+
+#[test]
 fn svg_animated_boolean_reflects_preserve_alpha() {
     let mut vm = new_parsed_test_vm(
         "https://svg-animated-boolean.test/",

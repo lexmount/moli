@@ -249,16 +249,45 @@ fn svg_element_interface_name_specializes_standard_elements() {
         "SVGFEConvolveMatrixElement"
     );
     assert_eq!(
+        svg_element_interface_name("feDiffuseLighting"),
+        "SVGFEDiffuseLightingElement"
+    );
+    assert_eq!(
         svg_element_interface_name("feDisplacementMap"),
         "SVGFEDisplacementMapElement"
+    );
+    assert_eq!(
+        svg_element_interface_name("feDistantLight"),
+        "SVGFEDistantLightElement"
+    );
+    assert_eq!(
+        svg_element_interface_name("feDropShadow"),
+        "SVGFEDropShadowElement"
     );
     assert_eq!(svg_element_interface_name("feFuncA"), "SVGFEFuncAElement");
     assert_eq!(svg_element_interface_name("feFuncB"), "SVGFEFuncBElement");
     assert_eq!(svg_element_interface_name("feFuncG"), "SVGFEFuncGElement");
     assert_eq!(svg_element_interface_name("feFuncR"), "SVGFEFuncRElement");
     assert_eq!(
+        svg_element_interface_name("feGaussianBlur"),
+        "SVGFEGaussianBlurElement"
+    );
+    assert_eq!(
         svg_element_interface_name("feMorphology"),
         "SVGFEMorphologyElement"
+    );
+    assert_eq!(svg_element_interface_name("feOffset"), "SVGFEOffsetElement");
+    assert_eq!(
+        svg_element_interface_name("fePointLight"),
+        "SVGFEPointLightElement"
+    );
+    assert_eq!(
+        svg_element_interface_name("feSpecularLighting"),
+        "SVGFESpecularLightingElement"
+    );
+    assert_eq!(
+        svg_element_interface_name("feSpotLight"),
+        "SVGFESpotLightElement"
     );
     assert_eq!(
         svg_element_interface_name("feTurbulence"),
@@ -289,6 +318,7 @@ fn svg_element_interface_name_specializes_standard_elements() {
     );
     assert_eq!(svg_element_interface_name("rect"), "SVGRectElement");
     assert_eq!(svg_element_interface_name("script"), "SVGScriptElement");
+    assert_eq!(svg_element_interface_name("stop"), "SVGStopElement");
     assert_eq!(svg_element_interface_name("svg"), "SVGSVGElement");
     assert_eq!(svg_element_interface_name("symbol"), "SVGSymbolElement");
     assert_eq!(svg_element_interface_name("text"), "SVGTextElement");
