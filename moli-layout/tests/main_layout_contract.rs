@@ -62,7 +62,6 @@ impl FixtureNode {
                     height: Some(height),
                     ratio: Some(width / height),
                 }),
-                ..ReplacedMetrics::default()
             }),
         }
     }

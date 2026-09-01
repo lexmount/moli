@@ -69,6 +69,12 @@ fn build_native_layout_pass_recursive(
         build_layout_pass_with_embedded_frames(&source, &mut styles, services, request, &mut frames)
     };
     styles.trace_profile(document);
+    if let Ok(pass) = result.as_ref() {
+        runtime.publish_remembered_layout_size_observations(
+            &pass.tree,
+            styles.take_remembered_size_observations(),
+        );
+    }
     document_stack.pop();
     result
 }

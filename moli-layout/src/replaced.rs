@@ -8,17 +8,14 @@
 use style::Atom;
 use taffy::{
     AvailableSpace, BoxSizing, CoreStyle as _, MaybeMath, MaybeResolve, RequestedAxis,
-    ResolveOrZero as _, ResolvedAspectRatio, Size, SizingMode,
+    ResolveOrZero as _, ResolvedAspectRatio, Size, SizeContainment, SizingMode,
 };
 
-use crate::{
-    LayoutReplacedKind, ReplacedMetrics, ReplacedNaturalSizing, style::resolve_stylo_calc_value,
-};
+use crate::{LayoutReplacedKind, ReplacedMetrics, style::resolve_stylo_calc_value};
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ReplacedContext {
     inherent_size: Size<f32>,
-    attribute_size: Size<Option<f32>>,
     inherent_ratio: Option<f32>,
 }
 
@@ -31,8 +28,6 @@ impl ReplacedContext {
             natural.ratio = valid_ratio(natural.ratio);
             natural
         });
-        metrics.attribute_width = valid_dimension(metrics.attribute_width);
-        metrics.attribute_height = valid_dimension(metrics.attribute_height);
         let default_size = match kind {
             LayoutReplacedKind::FormControl => Size {
                 width: 160.0,
@@ -54,49 +49,12 @@ impl ReplacedContext {
             },
         };
 
-        // Canvas width/height attributes define the intrinsic bitmap
-        // coordinate space independently: specifying only width does not
-        // scale the default 150px height. Inline SVG metrics are already
-        // normalized by the source adapter because a viewBox can provide an
-        // intrinsic ratio even when one or both dimensions are absent.
-        if kind == LayoutReplacedKind::Canvas {
-            metrics.natural_sizing = Some(ReplacedNaturalSizing {
-                width: metrics.attribute_width.or(Some(default_size.width)),
-                height: metrics.attribute_height.or(Some(default_size.height)),
-                ratio: None,
-            });
-            metrics.attribute_width = None;
-            metrics.attribute_height = None;
-        }
         let natural = metrics.natural_sizing.unwrap_or_default();
-        let inherent_ratio = natural.ratio.or_else(|| {
-            // HTML dimension attributes provide an aspect-ratio hint for
-            // image-like replaced elements before decoded pixels exist.
-            matches!(kind, LayoutReplacedKind::Image | LayoutReplacedKind::Media)
-                .then(|| {
-                    metrics
-                        .attribute_width
-                        .zip(metrics.attribute_height)
-                        .filter(|(_, height)| *height > 0.0)
-                        .map(|(width, height)| width / height)
-                })
-                .flatten()
-        });
+        let inherent_ratio = natural.ratio;
         let inherent_size =
             concrete_object_size(natural.width, natural.height, inherent_ratio, default_size);
-        let attribute_size = Size {
-            width: metrics.attribute_width,
-            height: metrics.attribute_height,
-        };
-        // Canvas dimensions define its intrinsic coordinate space even while
-        // its pixels remain an unavailable placeholder in Phase 4.
-        let inherent_ratio = inherent_ratio.or_else(|| {
-            (kind == LayoutReplacedKind::Canvas)
-                .then_some(inherent_size.width / inherent_size.height)
-        });
         Self {
             inherent_size,
-            attribute_size,
             inherent_ratio,
         }
     }
@@ -104,7 +62,6 @@ impl ReplacedContext {
     pub(crate) fn form_control(size: Size<f32>) -> Self {
         Self {
             inherent_size: size,
-            attribute_size: Size::NONE,
             inherent_ratio: None,
         }
     }
@@ -235,6 +192,7 @@ pub(crate) fn measure_replaced(
     available_space: Size<AvailableSpace>,
     context: &ReplacedContext,
     resolved_aspect_ratio: Option<ResolvedAspectRatio>,
+    size_containment: SizeContainment,
     style: &taffy::Style<Atom>,
     sizing_mode: SizingMode,
     requested_axis: RequestedAxis,
@@ -254,6 +212,30 @@ pub(crate) fn measure_replaced(
         padding_border_sum
     } else {
         Size::ZERO
+    };
+    // Blink's `LayoutInputNode::GetOverrideIntrinsicSize` replaces only the
+    // natural content-box dimension selected by used size containment. A
+    // missing explicit override becomes zero. HTML dimension attributes stay
+    // authored sizing inputs and therefore retain their normal precedence.
+    let contained_content_size = Size {
+        width: size_containment
+            .axes
+            .width
+            .then_some(size_containment.intrinsic_content_size.width.unwrap_or(0.0)),
+        height: size_containment.axes.height.then_some(
+            size_containment
+                .intrinsic_content_size
+                .height
+                .unwrap_or(0.0),
+        ),
+    };
+    let inherent_size = Size {
+        width: contained_content_size
+            .width
+            .unwrap_or(context.inherent_size.width),
+        height: contained_content_size
+            .height
+            .unwrap_or(context.inherent_size.height),
     };
     // The browser-owned style seam has already resolved the three CSS states
     // (`auto`, `<ratio>`, and `auto <ratio>`) against the natural ratio. Do not
@@ -287,6 +269,22 @@ pub(crate) fn measure_replaced(
         .maybe_resolve(preferred_basis, resolve_stylo_calc_value)
         .maybe_sub(box_sizing_adjustment)
         .maybe_max(min_size);
+
+    // Intrinsic sizing keywords observe the same overridden natural
+    // dimension. This is separate from explicit CSS and HTML dimensions,
+    // which must continue to win over the natural-size input.
+    for (raw, resolved) in [
+        (style.size, &mut preferred_size),
+        (style.min_size, &mut min_size),
+        (style.max_size, &mut max_size),
+    ] {
+        if raw.width.is_intrinsic() && size_containment.axes.width {
+            resolved.width = Some(inherent_size.width);
+        }
+        if raw.height.is_intrinsic() && size_containment.axes.height {
+            resolved.height = Some(inherent_size.height);
+        }
+    }
 
     // A replaced element's intrinsic min/max-content constraint transfers a
     // definite preferred size in the opposite axis through its preferred
@@ -344,7 +342,7 @@ pub(crate) fn measure_replaced(
             resolved_aspect_ratio,
             padding_border_sum,
         )
-        .unwrap_or(context.inherent_size);
+        .unwrap_or(inherent_size);
         let size = content_known.unwrap_or(transferred.maybe_clamp(min_size, style_max_size));
         return size.map(|value| value.max(0.0)) + padding_border_sum;
     }
@@ -355,16 +353,9 @@ pub(crate) fn measure_replaced(
             resolved_aspect_ratio,
             padding_border_sum,
         )
-        .unwrap_or(context.inherent_size)
-    } else if context.attribute_size.width.is_some() || context.attribute_size.height.is_some() {
-        apply_aspect_ratio_to_content_size(
-            context.attribute_size,
-            resolved_aspect_ratio,
-            padding_border_sum,
-        )
-        .unwrap_or(context.inherent_size)
+        .unwrap_or(inherent_size)
     } else {
-        context.inherent_size
+        inherent_size
     };
     let size = unclamped.map(|value| value.max(0.0));
     let width_violation = if size.width < min_size.width.unwrap_or(0.0) {
@@ -515,6 +506,7 @@ fn is_min_or_max_content(dimension: taffy::Dimension) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ReplacedNaturalSizing;
 
     fn image_context() -> ReplacedContext {
         ReplacedContext::for_element(
@@ -525,7 +517,6 @@ mod tests {
                     height: Some(60.0),
                     ratio: Some(1.0),
                 }),
-                ..ReplacedMetrics::default()
             }),
         )
     }
@@ -540,7 +531,6 @@ mod tests {
                     height: None,
                     ratio: None,
                 }),
-                ..ReplacedMetrics::default()
             }),
         );
         assert_eq!(
@@ -556,7 +546,6 @@ mod tests {
             LayoutReplacedKind::Image,
             Some(ReplacedMetrics {
                 natural_sizing: Some(ReplacedNaturalSizing::default()),
-                ..ReplacedMetrics::default()
             }),
         );
         assert_eq!(
@@ -587,7 +576,6 @@ mod tests {
                         height: Some(height),
                         ratio: Some(0.5),
                     }),
-                    ..ReplacedMetrics::default()
                 }),
             )
         };
@@ -621,10 +609,154 @@ mod tests {
                 .filter(|ratio| ratio.is_finite() && *ratio > 0.0)
                 .or(Some(1.0))
                 .and_then(|ratio| ResolvedAspectRatio::new(ratio, style.box_sizing)),
+            SizeContainment::NONE,
             style,
             SizingMode::InherentSize,
             RequestedAxis::Both,
         )
+    }
+
+    fn measure_with_containment(
+        context: &ReplacedContext,
+        style: &taffy::Style<Atom>,
+        containment: SizeContainment,
+        aspect_ratio: Option<ResolvedAspectRatio>,
+    ) -> Size<f32> {
+        measure_replaced(
+            Size::NONE,
+            Size::NONE,
+            Size {
+                width: AvailableSpace::MaxContent,
+                height: AvailableSpace::MaxContent,
+            },
+            context,
+            aspect_ratio,
+            containment,
+            style,
+            SizingMode::InherentSize,
+            RequestedAxis::Both,
+        )
+    }
+
+    #[test]
+    fn size_containment_overrides_only_natural_replaced_dimensions() {
+        let context = image_context();
+        let containment = SizeContainment::new(
+            Size {
+                width: true,
+                height: true,
+            },
+            Size {
+                width: Some(90.0),
+                height: Some(45.0),
+            },
+        );
+        assert_eq!(
+            measure_with_containment(&context, &taffy::Style::default(), containment, None,),
+            Size {
+                width: 90.0,
+                height: 45.0,
+            }
+        );
+
+        let inline_only = SizeContainment::new(
+            Size {
+                width: true,
+                height: false,
+            },
+            Size {
+                width: Some(90.0),
+                height: Some(999.0),
+            },
+        );
+        assert_eq!(
+            measure_with_containment(&context, &taffy::Style::default(), inline_only, None,),
+            Size {
+                width: 90.0,
+                height: 60.0,
+            }
+        );
+    }
+
+    #[test]
+    fn computed_replaced_dimensions_keep_precedence_over_contained_natural_size() {
+        let context = ReplacedContext::for_element(
+            LayoutReplacedKind::Image,
+            Some(ReplacedMetrics {
+                natural_sizing: Some(ReplacedNaturalSizing {
+                    width: Some(60.0),
+                    height: Some(60.0),
+                    ratio: Some(1.0),
+                }),
+            }),
+        );
+        let containment = SizeContainment::new(
+            Size {
+                width: true,
+                height: true,
+            },
+            Size {
+                width: Some(50.0),
+                height: Some(100.0),
+            },
+        );
+        let presentation_width = taffy::Style::<Atom> {
+            size: Size {
+                width: taffy::Dimension::length(80.0),
+                height: taffy::Dimension::auto(),
+            },
+            ..taffy::Style::default()
+        };
+        assert_eq!(
+            measure_with_containment(&context, &presentation_width, containment, None,),
+            Size {
+                width: 80.0,
+                height: 100.0,
+            }
+        );
+
+        let css_width = taffy::Style::<Atom> {
+            size: Size {
+                width: taffy::Dimension::length(120.0),
+                height: taffy::Dimension::auto(),
+            },
+            ..taffy::Style::default()
+        };
+        assert_eq!(
+            measure_with_containment(&context, &css_width, containment, None),
+            Size {
+                width: 120.0,
+                height: 100.0,
+            }
+        );
+    }
+
+    #[test]
+    fn contained_replaced_intrinsic_keywords_use_the_selected_override() {
+        let style = taffy::Style::<Atom> {
+            min_size: Size {
+                width: taffy::Dimension::max_content(),
+                height: taffy::Dimension::auto(),
+            },
+            ..taffy::Style::default()
+        };
+        let containment = SizeContainment::new(
+            Size {
+                width: true,
+                height: false,
+            },
+            Size {
+                width: Some(90.0),
+                height: None,
+            },
+        );
+        assert_eq!(
+            measure_with_containment(&image_context(), &style, containment, None),
+            Size {
+                width: 90.0,
+                height: 60.0,
+            }
+        );
     }
 
     #[test]
@@ -654,6 +786,7 @@ mod tests {
                 },
                 &image_context(),
                 ResolvedAspectRatio::new(2.0, box_sizing),
+                SizeContainment::NONE,
                 &style,
                 SizingMode::InherentSize,
                 RequestedAxis::Both,

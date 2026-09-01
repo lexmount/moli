@@ -240,6 +240,9 @@ where
     if request.requests_embedded_frames() {
         for index in 0..world.boxes.len() {
             let layout_box = &world.boxes[index];
+            if layout_box.skips_contents_for_content_visibility() {
+                continue;
+            }
             if !layout_box.element_semantics().is_some_and(|semantics| {
                 semantics.replaced == Some(crate::LayoutReplacedKind::Frame)
             }) {

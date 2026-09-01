@@ -321,7 +321,9 @@ where
                     let id = world.allocate(box_node);
                     world.map_source(source_node, id);
 
-                    if is_leaf_element(&semantics, kind, &style) {
+                    if is_leaf_element(&semantics, kind, &style)
+                        || world.boxes[id.index()].skips_contents_for_content_visibility()
+                    {
                         return Ok(vec![id]);
                     }
 

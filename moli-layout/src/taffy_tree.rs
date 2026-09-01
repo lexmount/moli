@@ -1494,6 +1494,14 @@ where
         self.boxes[LayoutBoxId::from_taffy(node_id).index()].resolved_aspect_ratio()
     }
 
+    fn get_size_containment(&self, node_id: NodeId) -> taffy::SizeContainment {
+        if self.is_viewport_taffy_node(node_id) {
+            taffy::SizeContainment::NONE
+        } else {
+            self.boxes[LayoutBoxId::from_taffy(node_id).index()].used_size_containment()
+        }
+    }
+
     fn resolve_calc_value(&self, value: *const (), basis: f32) -> f32 {
         resolve_stylo_calc_value(value, basis)
     }
@@ -1929,6 +1937,7 @@ where
         let writing_mode = layout_box.style.writing_mode();
         let replaced_context = layout_box.replaced_context;
         let resolved_aspect_ratio = layout_box.resolved_aspect_ratio();
+        let size_containment = layout_box.used_size_containment();
 
         if let Some(context) = replaced_context {
             // `measure_replaced` is the complete CSS replaced-element sizing
@@ -1944,6 +1953,7 @@ where
                 inputs.available_space,
                 &context,
                 resolved_aspect_ratio,
+                size_containment,
                 &style,
                 inputs.sizing_mode,
                 inputs.axis,

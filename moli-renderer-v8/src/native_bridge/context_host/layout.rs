@@ -2,7 +2,7 @@ use moli_browser_profile::DEFAULT_WINDOW_SURFACE_PROFILE;
 use moli_layout::{
     FrozenLayoutTree, GeometryProvider, LayoutAnswers, LayoutError, LayoutFlushReason,
     LayoutPassRequest, LayoutPassResult, LayoutQuery, LayoutQueryAnswer, LayoutQueryBatch,
-    LayoutViewport,
+    LayoutRememberedSize, LayoutRememberedSizePolicy, LayoutViewport,
 };
 
 use super::JsContextHost;
@@ -514,8 +514,26 @@ impl JsContextHost {
 
     pub(crate) fn reset_document_layout_state(&self) {
         *self.document_layout_state.borrow_mut() = Default::default();
+        *self.element_layout_state.borrow_mut() = Default::default();
         self.style_viewport_generation
             .set(self.style_viewport_generation.get().saturating_add(1));
+    }
+
+    pub(crate) fn last_remembered_layout_size(
+        &self,
+        element: DomHandle,
+    ) -> Option<LayoutRememberedSize> {
+        self.element_layout_state.borrow().remembered_size(element)
+    }
+
+    pub(crate) fn publish_remembered_layout_size_observations(
+        &self,
+        tree: &FrozenLayoutTree<DomHandle>,
+        observations: impl IntoIterator<Item = (DomHandle, LayoutRememberedSizePolicy)>,
+    ) {
+        self.element_layout_state
+            .borrow_mut()
+            .publish_remembered_size_observations(tree, observations);
     }
 
     pub(crate) fn invalidate_layout_after_interaction_state_change(&self) {

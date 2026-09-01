@@ -187,6 +187,24 @@ mod tests {
         }
     }
 
+    fn assert_named_paint_rect(
+        name: &str,
+        actual: moli_layout::PaintRect,
+        expected: moli_layout::PaintRect,
+    ) {
+        for (axis, actual, expected) in [
+            ("x", actual.x, expected.x),
+            ("y", actual.y, expected.y),
+            ("width", actual.width, expected.width),
+            ("height", actual.height, expected.height),
+        ] {
+            assert!(
+                (actual - expected).abs() <= 0.01,
+                "{name} {axis}: expected {expected}, got {actual}; rect={actual:?}"
+            );
+        }
+    }
+
     fn rgb(red: u8, green: u8, blue: u8) -> moli_layout::PaintColor {
         moli_layout::PaintColor::new(
             f32::from(red) / 255.0,
@@ -203,6 +221,147 @@ mod tests {
             .screenshot_layout_snapshot(moli_layout::PaintViewport::new(800, 600, 1.0))
             .expect("test layout should succeed")
             .expect("test fixture should have a document element")
+    }
+
+    #[test]
+    fn layout_renderer_applies_used_size_containment_across_formatting_contexts() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}
+.case{position:absolute;contain:size;contain-intrinsic-size:111px 22px}
+.large{width:300px;height:400px}
+#block{left:0;top:0;background:rgb(241,1,1)}
+#flex{display:flex;left:130px;top:0;background:rgb(242,2,2)}
+#grid{display:grid;left:260px;top:0;background:rgb(243,3,3)}
+#constrained{left:390px;top:0;width:300px;height:400px;max-width:max-content;max-height:max-content;background:rgb(244,4,4)}
+#boxed{left:0;top:60px;padding:5px 7px;border:3px solid transparent;background:rgb(245,5,5)}
+#single-axis{position:absolute;display:flow-root;left:150px;top:60px;writing-mode:vertical-rl;contain:inline-size;contain-intrinsic-width:77px;contain-intrinsic-height:88px;background:rgb(246,6,6)}
+#intrinsic-parent{position:absolute;display:flex;left:260px;top:60px;width:max-content;height:max-content;background:rgb(247,7,7)}
+#grid-tracks{position:absolute;display:grid;left:400px;top:60px;contain:size;grid-template-columns:50px auto;grid-template-rows:30px auto;gap:5px;background:rgb(248,8,8)}
+#replaced{position:absolute;left:500px;top:0;contain:size;contain-intrinsic-size:90px 45px;background:rgb(249,9,9)}
+#natural-ratio{position:absolute;left:600px;top:0;contain:size;contain-intrinsic-size:90px;background:rgb(250,10,10)}
+#authored-ratio{position:absolute;left:700px;top:0;contain:size;contain-intrinsic-size:90px;aspect-ratio:2/1;background:rgb(250,20,20)}
+#presentation-size{position:absolute;left:600px;top:60px;contain:size;contain-intrinsic-size:90px;background:rgb(250,30,30)}
+#hidden{position:absolute;left:0;top:130px;content-visibility:hidden;contain-intrinsic-size:70px 35px;background:rgb(251,11,11)}
+#hidden-child{width:300px;height:400px;background:rgb(252,12,12)}
+#hidden-replaced{position:absolute;left:300px;top:130px;width:40px;height:20px;content-visibility:hidden;background:rgb(252,22,22)}
+#table{position:absolute;left:100px;top:130px;border-spacing:0;contain:size;contain-intrinsic-size:10px;background:rgb(253,13,13)}
+#table td{padding:0}#table-content{width:80px;height:20px}
+#query-container{position:absolute;display:flow-root;left:200px;top:130px;container-type:inline-size;contain-intrinsic-width:65px;background:rgb(254,14,14)}
+#html-dimensions{position:absolute;left:400px;top:130px;contain:size;contain-intrinsic-size:90px;background:rgb(254,24,24)}
+</style></head><body>
+<div id=block class=case><div class=large></div></div>
+<div id=flex class=case><div class=large></div></div>
+<div id=grid class=case><div class=large></div></div>
+<div id=constrained class=case><div class=large></div></div>
+<div id=boxed class=case><div class=large></div></div>
+<div id=single-axis><div style="width:30px;height:40px"></div></div>
+<div id=intrinsic-parent><div class=case style="position:static"><div class=large></div></div></div>
+<div id=grid-tracks><div class=large></div><div class=large></div><div class=large></div></div>
+<img id=replaced>
+<img id=natural-ratio src="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='60'%20height='30'%3E%3C/svg%3E">
+<img id=authored-ratio src="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='60'%20height='30'%3E%3C/svg%3E">
+<svg id=presentation-size width=60 height=30></svg>
+<div id=hidden><div id=hidden-child></div></div>
+<svg id=hidden-replaced viewBox="0 0 40 20"><rect width=40 height=20 fill=blue></rect></svg>
+<table id=table><tbody><tr><td><div id=table-content></div></td></tr></tbody></table>
+<div id=query-container><div style="width:200px;height:30px"></div></div>
+<img id=html-dimensions width=130 height=70>
+</body></html>"#,
+            )
+            .await;
+
+            for (name, color, expected) in [
+                ("block", rgb(241, 1, 1), (0.0, 0.0, 111.0, 22.0)),
+                ("flex", rgb(242, 2, 2), (130.0, 0.0, 111.0, 22.0)),
+                ("grid", rgb(243, 3, 3), (260.0, 0.0, 111.0, 22.0)),
+                (
+                    "constrained",
+                    rgb(244, 4, 4),
+                    (390.0, 0.0, 111.0, 22.0),
+                ),
+                ("boxed", rgb(245, 5, 5), (0.0, 60.0, 131.0, 38.0)),
+                (
+                    "single-axis",
+                    rgb(246, 6, 6),
+                    (150.0, 60.0, 30.0, 88.0),
+                ),
+                (
+                    "intrinsic-parent",
+                    rgb(247, 7, 7),
+                    (260.0, 60.0, 111.0, 22.0),
+                ),
+                (
+                    "grid-tracks",
+                    rgb(248, 8, 8),
+                    (400.0, 60.0, 55.0, 35.0),
+                ),
+                ("replaced", rgb(249, 9, 9), (500.0, 0.0, 90.0, 45.0)),
+                (
+                    "natural-ratio",
+                    rgb(250, 10, 10),
+                    (600.0, 0.0, 90.0, 90.0),
+                ),
+                (
+                    "authored-ratio",
+                    rgb(250, 20, 20),
+                    (700.0, 0.0, 90.0, 45.0),
+                ),
+                (
+                    "presentation-size",
+                    rgb(250, 30, 30),
+                    (600.0, 60.0, 60.0, 30.0),
+                ),
+                ("hidden", rgb(251, 11, 11), (0.0, 130.0, 70.0, 35.0)),
+                (
+                    "hidden-replaced",
+                    rgb(252, 22, 22),
+                    (300.0, 130.0, 40.0, 20.0),
+                ),
+                ("table", rgb(253, 13, 13), (100.0, 130.0, 80.0, 20.0)),
+                (
+                    "query-container",
+                    rgb(254, 14, 14),
+                    (200.0, 130.0, 65.0, 30.0),
+                ),
+                (
+                    "html-dimensions",
+                    rgb(254, 24, 24),
+                    (400.0, 130.0, 130.0, 70.0),
+                ),
+            ] {
+                assert_named_paint_rect(
+                    name,
+                    solid_paint_rect(&snapshot, color),
+                    moli_layout::PaintRect::new(expected.0, expected.1, expected.2, expected.3),
+                );
+            }
+            assert!(
+                snapshot.fragments.iter().all(|fragment| {
+                    !fragment
+                        .solid_fill_in_surface()
+                        .is_some_and(|(_, color)| color == rgb(252, 12, 12))
+                }),
+                "content-visibility:hidden must not construct or paint descendant contents"
+            );
+            assert!(
+                snapshot.fragments.iter().all(|fragment| {
+                    !matches!(
+                        fragment,
+                        moli_layout::PaintFragment::SvgImage(image)
+                            if (image.destination.x - 300.0).abs() <= 0.01
+                                && (image.destination.y - 130.0).abs() <= 0.01
+                    )
+                }),
+                "content-visibility:hidden must paint the replaced element's own box without its replaced content"
+            );
+        }));
     }
 
     fn glyph_min_x(snapshot: &moli_layout::PaintSnapshot, color: moli_layout::PaintColor) -> f32 {

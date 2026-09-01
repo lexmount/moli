@@ -102,8 +102,6 @@ impl TestNode {
                     height: Some(height),
                     ratio: (height > 0.0).then_some(width / height),
                 }),
-                attribute_width: None,
-                attribute_height: None,
             }),
         }
     }

@@ -417,21 +417,20 @@ pub struct ReplacedNaturalSizing {
     pub ratio: Option<f32>,
 }
 
-/// Replaced-element inputs known without querying a paint backend.
+/// Natural replaced-element inputs owned by the DOM/resource layer.
+///
+/// HTML width/height presentation attributes are deliberately absent here:
+/// they enter layout through computed style. Canvas dimensions are different
+/// because they define the intrinsic bitmap and are converted to natural
+/// metrics before crossing this boundary.
 ///
 /// `natural_sizing: None` means that an HTML image resource is unavailable and
 /// therefore represents no content. `Some(Default::default())` is distinct: it
 /// represents available content with no natural dimensions or ratio, for
 /// which CSS Images supplies the default concrete object size.
-///
-/// Attribute dimensions remain separate because CSS replaced sizing gives
-/// them different precedence and may use a complete pair as an aspect-ratio
-/// hint.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ReplacedMetrics {
     pub natural_sizing: Option<ReplacedNaturalSizing>,
-    pub attribute_width: Option<f32>,
-    pub attribute_height: Option<f32>,
 }
 
 /// Pass-local view of one renderer-owned decoded image resource.

@@ -615,7 +615,6 @@ fn float_descendant_of_structural_inline_rounds_with_its_ifc_owner() {
                 height: Some(42.0),
                 ratio: Some(166.0 / 42.0),
             }),
-            ..ReplacedMetrics::default()
         }),
     ]);
     let mut styles = Styles::default();
@@ -969,8 +968,6 @@ fn degenerate_css_ratio_falls_back_to_the_replaced_intrinsic_ratio() {
                 height: Some(40.0),
                 ratio: Some(2.0),
             }),
-            attribute_width: None,
-            attribute_height: None,
         }),
     ]);
     let mut styles = Styles::default();
@@ -1046,7 +1043,6 @@ fn fractional_replaced_images_project_contiguous_pre_transform_destinations() {
                 height: Some(12.0),
                 ratio: Some(8.0),
             }),
-            ..ReplacedMetrics::default()
         })
         .with_image(image.clone())
     }));
@@ -1083,7 +1079,7 @@ fn fractional_replaced_images_project_contiguous_pre_transform_destinations() {
 }
 
 #[test]
-fn replaced_attributes_canvas_defaults_and_image_button_share_resource_free_sizing() {
+fn computed_size_hints_and_canvas_intrinsics_share_resource_free_sizing() {
     let source = Source(vec![
         Node::element(
             "root",
@@ -1098,12 +1094,7 @@ fn replaced_attributes_canvas_defaults_and_image_button_share_resource_free_sizi
             LayoutElementCategory::Generic,
             Some(LayoutReplacedKind::Image),
             Vec::new(),
-        )
-        .with_metrics(ReplacedMetrics {
-            attribute_width: Some(80.0),
-            attribute_height: Some(40.0),
-            ..ReplacedMetrics::default()
-        }),
+        ),
         Node::element(
             "canvas",
             "canvas",
@@ -1112,8 +1103,11 @@ fn replaced_attributes_canvas_defaults_and_image_button_share_resource_free_sizi
             Vec::new(),
         )
         .with_metrics(ReplacedMetrics {
-            attribute_width: Some(600.0),
-            ..ReplacedMetrics::default()
+            natural_sizing: Some(ReplacedNaturalSizing {
+                width: Some(600.0),
+                height: Some(150.0),
+                ratio: Some(4.0),
+            }),
         }),
         Node::element(
             "image-button",
@@ -1123,12 +1117,7 @@ fn replaced_attributes_canvas_defaults_and_image_button_share_resource_free_sizi
             )),
             Some(LayoutReplacedKind::FormControl),
             Vec::new(),
-        )
-        .with_metrics(ReplacedMetrics {
-            attribute_width: Some(90.0),
-            attribute_height: Some(45.0),
-            ..ReplacedMetrics::default()
-        }),
+        ),
     ]);
     let mut styles = Styles::default();
     styles.primary.insert(
@@ -1144,13 +1133,30 @@ fn replaced_attributes_canvas_defaults_and_image_button_share_resource_free_sizi
                     width: Dimension::length(120.0),
                     height: Dimension::auto(),
                 },
+                // Synthetic layout inputs receive the already-cascaded
+                // width/height declarations and mapped `auto 2 / 1` ratio.
+                aspect_ratio: Some(2.0),
                 ..Style::default()
             },
             RED,
         ),
     );
     styles.primary.insert(2, style(LayoutDisplay::Block, GREEN));
-    styles.primary.insert(3, style(LayoutDisplay::Block, BLUE));
+    styles.primary.insert(
+        3,
+        ResolvedLayoutStyle::synthetic(
+            LayoutDisplay::Block,
+            Style {
+                size: Size {
+                    width: Dimension::length(90.0),
+                    height: Dimension::length(45.0),
+                },
+                aspect_ratio: Some(2.0),
+                ..Style::default()
+            },
+            BLUE,
+        ),
+    );
 
     let snapshot = render(&source, &mut styles, 700, 400);
     assert_eq!(rect(&snapshot, RED), PaintRect::new(0.0, 0.0, 120.0, 60.0));
@@ -1204,12 +1210,7 @@ fn unavailable_images_use_zero_default_size_and_a_content_box_outline() {
             LayoutElementCategory::Generic,
             Some(LayoutReplacedKind::Image),
             Vec::new(),
-        )
-        .with_metrics(ReplacedMetrics {
-            attribute_width: Some(80.0),
-            attribute_height: Some(40.0),
-            ..ReplacedMetrics::default()
-        }),
+        ),
         Node::element(
             "unsized-image",
             "img",
@@ -1234,9 +1235,21 @@ fn unavailable_images_use_zero_default_size_and_a_content_box_outline() {
     styles
         .primary
         .insert(1, style(LayoutDisplay::Block, PaintColor::TRANSPARENT));
-    styles
-        .primary
-        .insert(2, style(LayoutDisplay::Block, PaintColor::TRANSPARENT));
+    styles.primary.insert(
+        2,
+        ResolvedLayoutStyle::synthetic(
+            LayoutDisplay::Block,
+            Style {
+                size: Size {
+                    width: Dimension::length(80.0),
+                    height: Dimension::length(40.0),
+                },
+                aspect_ratio: Some(2.0),
+                ..Style::default()
+            },
+            PaintColor::TRANSPARENT,
+        ),
+    );
     styles
         .primary
         .insert(3, style(LayoutDisplay::Block, PaintColor::TRANSPARENT));

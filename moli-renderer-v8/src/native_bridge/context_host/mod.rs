@@ -88,6 +88,7 @@ mod directory_reader_callbacks;
 mod document_domain;
 mod document_script_ready_inputs;
 mod dom_debugger;
+mod element_layout_state;
 mod element_toggle_events;
 mod event_callbacks;
 mod file_chooser;
@@ -800,6 +801,7 @@ pub(crate) struct JsContextHost {
     runtime: *mut DocumentRuntime,
     layout_policy: moli_page_types::LayoutPolicy,
     document_layout_state: RefCell<layout_state::DocumentLayoutState>,
+    element_layout_state: RefCell<element_layout_state::ElementLayoutState>,
     layout_pass_active: Cell<bool>,
     completed_layout_pass_count: Cell<u64>,
     completed_layout_pass_time: Cell<std::time::Duration>,

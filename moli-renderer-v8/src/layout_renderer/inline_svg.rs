@@ -34,8 +34,6 @@ pub(super) fn replaced_metrics(element: &Element) -> ReplacedMetrics {
             height: metadata.intrinsic_height,
             ratio: metadata.intrinsic_ratio,
         }),
-        attribute_width: None,
-        attribute_height: None,
     }
 }
 

@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
+use moli_dom::html_microsyntax::parse_non_negative_integer;
 use moli_layout::{
     LayoutElementCategory, LayoutElementMetadata, LayoutElementSemantics, LayoutFormControlData,
     LayoutFormControlKind, LayoutImageResource, LayoutInputControlKind, LayoutListData,
@@ -140,8 +141,17 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
         if semantics.replaced == Some(LayoutReplacedKind::Svg) {
             return Some(super::inline_svg::replaced_metrics(element));
         }
-        let attribute_width = numeric_dimension_attribute(self.host(), node, "width");
-        let attribute_height = numeric_dimension_attribute(self.host(), node, "height");
+        if semantics.replaced == Some(LayoutReplacedKind::Canvas) {
+            let width = canvas_dimension_attribute(self.host(), node, "width", 300);
+            let height = canvas_dimension_attribute(self.host(), node, "height", 150);
+            return Some(ReplacedMetrics {
+                natural_sizing: Some(ReplacedNaturalSizing {
+                    width: Some(width),
+                    height: Some(height),
+                    ratio: (height > 0.0).then_some(width / height),
+                }),
+            });
+        }
         let natural_sizing =
             self.runtime
                 .image_resource_sizing(node)
@@ -150,11 +160,7 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
                     height: sizing.natural_height,
                     ratio: sizing.natural_ratio,
                 });
-        Some(ReplacedMetrics {
-            natural_sizing,
-            attribute_width,
-            attribute_height,
-        })
+        Some(ReplacedMetrics { natural_sizing })
     }
 
     fn replaced_image(
@@ -660,10 +666,11 @@ fn html_input_control_kind(value: Option<&str>) -> LayoutInputControlKind {
     }
 }
 
-fn numeric_dimension_attribute(host: &DomHost, node: DomHandle, name: &str) -> Option<f32> {
-    let value = host.get_attribute(node, name)?;
-    let value = value.trim().parse::<f32>().ok()?;
-    value.is_finite().then_some(value.max(0.0))
+fn canvas_dimension_attribute(host: &DomHost, node: DomHandle, name: &str, default: u32) -> f32 {
+    host.get_attribute(node, name)
+        .and_then(|value| parse_non_negative_integer(&value))
+        .filter(|value| *value <= i32::MAX as u32)
+        .unwrap_or(default) as f32
 }
 
 #[cfg(test)]

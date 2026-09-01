@@ -1,3 +1,5 @@
+use moli_dom::html_microsyntax::parse_non_negative_integer;
+
 use crate::util::v8_string;
 use crate::webidl;
 
@@ -131,7 +133,7 @@ fn media_unsigned_long_attribute_getter<'s>(
         return;
     };
     let value = element_attribute(unsafe { &*runtime_ptr }, handle, attribute)
-        .and_then(|value| parse_unsigned_long_prefix(&value))
+        .and_then(|value| parse_non_negative_integer(&value))
         .filter(|value| *value <= i32::MAX as u32)
         .unwrap_or(0);
     rv.set_uint32(value);
@@ -160,17 +162,4 @@ fn media_unsigned_long_attribute_setter<'s>(
         }
     };
     set_reflected_attribute(scope, runtime_ptr, handle, attribute, &value.to_string());
-}
-
-fn parse_unsigned_long_prefix(value: &str) -> Option<u32> {
-    let value = value.trim_start_matches(|ch: char| ch.is_ascii_whitespace());
-    let value = value.strip_prefix('+').unwrap_or(value);
-    let digits = value
-        .chars()
-        .take_while(|ch| ch.is_ascii_digit())
-        .collect::<String>();
-    if digits.is_empty() {
-        return None;
-    }
-    digits.parse::<u32>().ok()
 }

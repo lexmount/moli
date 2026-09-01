@@ -6,6 +6,7 @@
 pub mod accessibility;
 pub mod custom_elements;
 pub mod forms;
+pub mod html_microsyntax;
 pub mod native;
 
 pub use native::{NativeNodeId as NodeId, NodeData};

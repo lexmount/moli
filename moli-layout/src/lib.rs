@@ -95,7 +95,7 @@ pub use source::{
 };
 pub use style::{
     LayoutDisplay, LayoutInlineAlignment, LayoutListMarkerPosition, LayoutListMarkerType,
-    LayoutPosition, ResolvedLayoutStyle,
+    LayoutPosition, LayoutRememberedSize, LayoutRememberedSizePolicy, ResolvedLayoutStyle,
 };
 pub use text::{
     DocumentLayoutServices, SystemFontPolicy, WebFontFace, WebFontRegistration,

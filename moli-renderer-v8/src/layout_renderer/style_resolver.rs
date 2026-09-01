@@ -1,6 +1,6 @@
 use moli_layout::{
-    LayoutDisplay, LayoutError, LayoutStyleResolver, LayoutViewport, ResolvedLayoutElementStyles,
-    ResolvedLayoutPseudoStyle, ResolvedLayoutStyle,
+    LayoutDisplay, LayoutError, LayoutRememberedSizePolicy, LayoutStyleResolver, LayoutViewport,
+    ResolvedLayoutElementStyles, ResolvedLayoutPseudoStyle, ResolvedLayoutStyle,
 };
 use std::time::Instant;
 
@@ -15,6 +15,7 @@ pub(super) struct NativeLayoutStyleResolver<'a> {
     reads: StyleObservation<'a>,
     scripting_enabled: bool,
     profile: Option<NativeLayoutStyleResolverProfile>,
+    remembered_size_observations: Vec<(DomHandle, LayoutRememberedSizePolicy)>,
 }
 
 #[derive(Default)]
@@ -48,7 +49,14 @@ impl<'a> NativeLayoutStyleResolver<'a> {
             scripting_enabled: runtime.document_scripting_enabled(document),
             profile: moli_trace::cpu_profile_enabled()
                 .then(NativeLayoutStyleResolverProfile::default),
+            remembered_size_observations: Vec::new(),
         }
+    }
+
+    pub(super) fn take_remembered_size_observations(
+        &mut self,
+    ) -> Vec<(DomHandle, LayoutRememberedSizePolicy)> {
+        std::mem::take(&mut self.remembered_size_observations)
     }
 
     pub(super) fn trace_profile(&self, document: crate::document_runtime::DomHandle) {
@@ -169,6 +177,13 @@ impl LayoutStyleResolver<DomHandle> for NativeLayoutStyleResolver<'_> {
             // overrides, but no layout object is generated while this exact
             // Document can execute scripts.
             resolved.force_display_none();
+        }
+        let remembered_size = self.runtime.last_remembered_layout_size(node);
+        resolved.select_last_remembered_size(remembered_size);
+        let remembered_size_policy = resolved.remembered_size_policy();
+        if remembered_size.is_some() || remembered_size_policy.observes_any_axis() {
+            self.remembered_size_observations
+                .push((node, remembered_size_policy));
         }
         if let Some(profile) = self.profile.as_mut() {
             profile.primary_policy_ns = profile.primary_policy_ns.saturating_add(

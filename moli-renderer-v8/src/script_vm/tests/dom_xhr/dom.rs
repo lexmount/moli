@@ -7934,7 +7934,7 @@ fn content_visibility_only_locks_chromium_eligible_boxes() {
           <table id="table" style="content-visibility: hidden"><tbody><tr><td>table visible</td></tr></tbody></table>
           <table><tbody><tr id="row" style="content-visibility: hidden"><td>row visible</td></tr></tbody></table>
           <table><tbody><tr><td id="cell" style="content-visibility: hidden">cell hidden</td></tr></tbody></table>
-          <table><caption id="caption" style="content-visibility: hidden">caption visible</caption><tbody><tr><td>caption body</td></tr></tbody></table>
+          <table><caption id="caption" style="content-visibility: hidden">caption visible<span style="display: none"> caption leak</span></caption><tbody><tr><td>caption body</td></tr></tbody></table>
         </body></html>"#,
     );
 
@@ -7950,7 +7950,8 @@ fn content_visibility_only_locks_chromium_eligible_boxes() {
     table: text('table'),
     row: text('row'),
     cell: text('cell'),
-    caption: text('caption')
+    caption: text('caption'),
+    bodyIncludesCaption: document.body.innerText.includes('caption visible')
   });
 })()
 "#,
@@ -7959,7 +7960,7 @@ fn content_visibility_only_locks_chromium_eligible_boxes() {
 
     assert_eq!(
         result,
-        r#"{"inline":"inline visible","atomic":"","block":"","table":"table visible","row":"row visible","cell":"","caption":"caption visible"}"#
+        r#"{"inline":"inline visible","atomic":"","block":"","table":"table visible","row":"row visible","cell":"","caption":"caption visible","bodyIncludesCaption":true}"#
     );
 }
 
