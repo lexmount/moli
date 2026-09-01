@@ -8152,6 +8152,91 @@ fn svg_list_objects_keep_declared_brand_and_members() {
 }
 
 #[test]
+fn svg_value_lists_enforce_item_types_indices_and_read_only_anim_values() {
+    let mut vm = new_storage_test_vm("https://svg-value-list-semantics.test/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const assert = (condition, message) => {
+                if (!condition) throw new Error(message);
+              };
+              const errorName = callback => {
+                try {
+                  callback();
+                  return "none";
+                } catch (error) {
+                  return error.name;
+                }
+              };
+              const SVG_NS = "http://www.w3.org/2000/svg";
+              const text = document.createElementNS(SVG_NS, "text");
+              const svg = document.createElementNS(SVG_NS, "svg");
+              text.setAttribute("x", "10 20");
+              text.setAttribute("rotate", "15 30");
+
+              const lengths = text.x;
+              const lengthBase = lengths.baseVal;
+              const lengthAnim = lengths.animVal;
+              const numbers = text.rotate;
+              const numberBase = numbers.baseVal;
+              const numberAnim = numbers.animVal;
+              const invalidItems = [30, "invalid", text, null];
+
+              for (const item of invalidItems) {
+                assert(errorName(() => lengthBase.initialize(item)) === "TypeError",
+                  "SVGLengthList.initialize item type");
+                assert(errorName(() => lengthBase.insertItemBefore(item, 0)) === "TypeError",
+                  "SVGLengthList.insertItemBefore item type");
+                assert(errorName(() => lengthBase.replaceItem(item, 0)) === "TypeError",
+                  "SVGLengthList.replaceItem item type");
+                assert(errorName(() => lengthBase.appendItem(item)) === "TypeError",
+                  "SVGLengthList.appendItem item type");
+                assert(errorName(() => { lengthBase[0] = item; }) === "TypeError",
+                  "SVGLengthList indexed setter item type");
+              }
+
+              const length = svg.createSVGLength();
+              length.value = 42;
+              lengthBase[0] = length;
+              assert(lengthBase[0] === length, "SVGLengthList indexed getter");
+              assert(text.getAttribute("x") === "42 20", "SVGLengthList indexed reflection");
+
+              const number = svg.createSVGNumber();
+              number.value = 7;
+              numberBase[1] = number;
+              assert(numberBase[1] === number, "SVGNumberList indexed getter");
+              assert(text.getAttribute("rotate") === "15 7", "SVGNumberList indexed reflection");
+              assert(errorName(() => lengthBase.appendItem(number)) === "TypeError",
+                "SVGLengthList rejects SVGNumber");
+              assert(errorName(() => numberBase.appendItem(length)) === "TypeError",
+                "SVGNumberList rejects SVGLength");
+
+              text.setAttribute("x", "1 2 3");
+              assert(lengthBase.length === 3 && lengthBase[2].value === 3,
+                "saved baseVal resynchronizes");
+              assert(text.x.animVal.length === 3 && text.x.animVal[2].value === 3,
+                "animVal resynchronizes after direct baseVal access");
+
+              assert(errorName(() => lengthAnim.clear()) === "NoModificationAllowedError",
+                "SVGLengthList animVal clear");
+              assert(errorName(() => { lengthAnim[0] = length; }) === "NoModificationAllowedError",
+                "SVGLengthList animVal indexed setter");
+              assert(errorName(() => numberAnim.appendItem(number)) === "NoModificationAllowedError",
+                "SVGNumberList animVal appendItem");
+              assert(errorName(() => SVGLengthList.prototype.clear.call({})) === "TypeError",
+                "SVGLengthList receiver brand");
+              return "ok";
+            })()
+            "#,
+        )
+        .expect("SVG value list semantics probe should evaluate");
+
+    assert_eq!(result, "ok");
+}
+
+#[test]
 fn svg_list_matrix_and_transform_declared_methods_keep_descriptors() {
     let mut vm = new_storage_test_vm("https://svg-method-descriptors.test/");
 
