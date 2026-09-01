@@ -3518,6 +3518,32 @@ document.body.setAttribute('data-error-state', [
     }
 
     #[test]
+    fn quirks_stylesheet_parser_client_claims_mode_neutral_scanner_descriptor() {
+        let final_url = Url::parse("https://example.test/docs/page.html").expect("test url");
+        let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("default loader");
+        let mut cache = BufferedDocumentPreloadState::default();
+        cache.append_to_main_document_scan(
+            &final_url,
+            r#"<link rel="stylesheet" href="/app.css">"#,
+            &loader,
+        );
+        assert_eq!(cache.pending_preload_counts_for_test(), (0, 1));
+
+        let stylesheet_candidate =
+            moli_stylesheet_blocking::DocumentOwnedBlockingStylesheetCandidate::Link {
+                node_id: NodeId::new(11),
+                url: Url::parse("https://example.test/app.css").expect("stylesheet URL"),
+                options: crate::stylesheet_blocking::StylesheetFetchOptions::default()
+                    .with_quirks_mode_mime_compatibility(true),
+            };
+        cache.claim_pending_stylesheet_preloads_for_parser(&[
+            DocumentOwnedBlockingStylesheetDiscoveryInput::from(&stylesheet_candidate),
+        ]);
+
+        assert_eq!(cache.pending_preload_counts_for_test(), (0, 0));
+    }
+
+    #[test]
     fn meta_csp_pending_descriptor_budget_falls_back_to_parser() {
         let final_url = Url::parse("https://example.test/docs/page.html").expect("test url");
         let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("default loader");

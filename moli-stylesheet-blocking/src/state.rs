@@ -767,6 +767,10 @@ mod tests {
             NativeNodeId::new(0)
         }
 
+        fn document_is_quirks_mode(&self) -> bool {
+            false
+        }
+
         fn document_order_stylesheet_candidate_ids_before(
             &self,
             _target_node_id: Option<NodeId>,
@@ -1498,6 +1502,31 @@ mod tests {
         );
 
         assert!(!plain_fetch.ptr_eq(&anonymous_fetch));
+    }
+
+    #[tokio::test]
+    async fn physical_key_keeps_mime_processing_compatibility_boundary() {
+        let mut state = StylesheetBlockingState::default();
+        let document_url = Url::parse("https://example.com/").expect("static document url");
+        let stylesheet_url =
+            Url::parse("https://example.com/shared.css").expect("static stylesheet url");
+        let standard = StylesheetFetchOptions::default();
+        let quirks = StylesheetFetchOptions::default().with_quirks_mode_mime_compatibility(true);
+
+        let standard_fetch = state.preload_stylesheet(
+            &PendingStylesheetFetcher,
+            document_url.clone(),
+            stylesheet_url.clone(),
+            standard,
+        );
+        let quirks_fetch = state.preload_stylesheet(
+            &PendingStylesheetFetcher,
+            document_url,
+            stylesheet_url,
+            quirks,
+        );
+
+        assert!(!standard_fetch.ptr_eq(&quirks_fetch));
     }
 
     #[tokio::test]

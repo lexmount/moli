@@ -509,7 +509,17 @@ impl BufferedDocumentPreloadState {
             .iter()
             .filter_map(|input| match input.signature() {
                 DocumentBlockingStylesheetSignature::Link { url, options } => {
-                    Some(options.resource_key(url.clone()))
+                    // The scanner runs ahead of the parser and cannot know the
+                    // Document's final quirks mode. MIME compatibility changes
+                    // response processing, not the request metadata, so claim
+                    // the buffered descriptor using the scanner's neutral
+                    // processing mode before it starts a duplicate fetch.
+                    Some(
+                        options
+                            .clone()
+                            .with_quirks_mode_mime_compatibility(false)
+                            .resource_key(url.clone()),
+                    )
                 }
                 DocumentBlockingStylesheetSignature::ParserCreatedStyleImport { .. } => None,
             })

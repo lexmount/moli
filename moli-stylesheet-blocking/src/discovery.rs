@@ -251,6 +251,7 @@ pub trait StylesheetBlockingReadView {
     fn final_url_clone(&self) -> Option<Url>;
     fn document_base_url_clone(&self) -> Option<Url>;
     fn document_node_id(&self) -> NativeNodeId;
+    fn document_is_quirks_mode(&self) -> bool;
 
     fn document_order_stylesheet_candidate_ids_before(
         &self,
@@ -282,6 +283,11 @@ impl StylesheetBlockingReadView for NativeDom {
 
     fn document_node_id(&self) -> NativeNodeId {
         self.document_node_id()
+    }
+
+    fn document_is_quirks_mode(&self) -> bool {
+        self.document()
+            .is_some_and(|document| document.is_quirks_mode())
     }
 
     fn document_order_stylesheet_candidate_ids_before(
@@ -323,6 +329,12 @@ impl StylesheetBlockingReadView for DomHost {
 
     fn document_node_id(&self) -> NativeNodeId {
         self.document_handle()
+    }
+
+    fn document_is_quirks_mode(&self) -> bool {
+        self.node(self.document_handle())
+            .and_then(Node::as_document)
+            .is_some_and(|document| document.is_quirks_mode())
     }
 
     fn document_order_stylesheet_candidate_ids_before(
@@ -409,7 +421,8 @@ fn stylesheet_link_disposition_in_view(
         element.nonce.as_deref(),
         element.charset.as_deref(),
         element.fetch_priority.as_deref(),
-    );
+    )
+    .with_quirks_mode_mime_compatibility(document.document_is_quirks_mode());
     let is_alternate = link_rel_includes_token(rel, "alternate");
     let blocking = !is_alternate && media_blocks_scripts(element.media.as_deref());
     Some(if blocking {

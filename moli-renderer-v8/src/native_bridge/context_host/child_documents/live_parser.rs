@@ -142,6 +142,14 @@ impl StylesheetBlockingReadView for ChildFrameLiveParserOwner<'_, '_, '_> {
         self.child_document_handle
     }
 
+    fn document_is_quirks_mode(&self) -> bool {
+        self.host
+            .dom_host()
+            .node(self.child_document_handle)
+            .and_then(Node::as_document)
+            .is_some_and(|document| document.is_quirks_mode())
+    }
+
     fn document_order_stylesheet_candidate_ids_before(
         &self,
         target_node_id: Option<crate::dom::NodeId>,
