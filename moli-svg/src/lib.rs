@@ -82,6 +82,17 @@ mod tests {
     }
 
     #[test]
+    fn path_geometry_preserves_complete_segments_before_a_parse_error() {
+        let invalid_command = path_segments("M 10 10 L 30 10 X 50 10");
+        assert_eq!(invalid_command.len(), 1);
+        assert_close(invalid_command[0].length(), 20.0);
+
+        let incomplete_curve = path_segments("M 10 10 L 30 10 C 40 0 50 20");
+        assert_eq!(incomplete_curve.len(), 1);
+        assert_close(incomplete_curve[0].length(), 20.0);
+    }
+
+    #[test]
     fn path_geometry_handles_relative_commands_and_close_path() {
         let segments = path_segments("m 1 1 l 3 0 v 4 h -3 z");
         let total = segments.iter().map(|segment| segment.length()).sum::<f64>();

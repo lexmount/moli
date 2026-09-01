@@ -4,7 +4,10 @@ use svgtypes::{SimplePathSegment, SimplifyingPathParser};
 pub(crate) fn path_geometry(raw: &str) -> Option<BezPath> {
     let mut path = BezPath::new();
     for segment in SimplifyingPathParser::from(raw) {
-        match segment.ok()? {
+        let Ok(segment) = segment else {
+            break;
+        };
+        match segment {
             SimplePathSegment::MoveTo { x, y } => path.move_to((x, y)),
             SimplePathSegment::LineTo { x, y } => path.line_to((x, y)),
             SimplePathSegment::CurveTo {
