@@ -11,7 +11,7 @@ use moli_layout::{
 use style::Atom;
 use taffy::{
     AlignContent, BoxSizing, Dimension, Display, FlexDirection, FlexWrap, Line, Rect, Size, Style,
-    style_helpers::{fr, length, line, percent},
+    style_helpers::{fr, length, line, percent, repeat},
 };
 
 const RED: PaintColor = PaintColor::new(1.0, 0.0, 0.0, 1.0);
@@ -301,6 +301,114 @@ fn explicit_and_implicit_grid_tracks_use_real_grid_layout() {
     assert_rect(
         solid_rect(&snapshot, BLUE),
         PaintRect::new(0.0, 170.0, 100.0, 30.0),
+    );
+}
+
+#[test]
+fn inline_grid_auto_repeat_uses_the_final_ratio_resolved_size() {
+    let source = FixtureSource {
+        nodes: vec![
+            FixtureNode::div("flow", vec![1]),
+            FixtureNode::div("grid", Vec::new()),
+        ],
+    };
+    let mut styles = FixtureStyles::default();
+    styles.0.insert(
+        0,
+        fixed_box(LayoutDisplay::Block, 200.0, 200.0, PaintColor::TRANSPARENT),
+    );
+    styles.0.insert(
+        1,
+        resolved(
+            LayoutDisplay::InlineGrid,
+            Style {
+                display: Display::Grid,
+                min_size: Size {
+                    width: Dimension::auto(),
+                    height: length(60.0),
+                },
+                aspect_ratio: Some(1.0),
+                grid_template_columns: vec![repeat("auto-fill", vec![length(50.0)])],
+                ..Style::default()
+            },
+            GREEN,
+        ),
+    );
+
+    let snapshot = render(&source, &mut styles, PaintViewport::new(200, 200, 1.0));
+    assert!(snapshot.diagnostics.is_empty());
+    assert_rect(
+        solid_rect(&snapshot, GREEN),
+        PaintRect::new(0.0, 0.0, 100.0, 100.0),
+    );
+}
+
+#[test]
+fn nested_grid_auto_repeat_resolves_percentage_minimum_through_ratio() {
+    let source = FixtureSource {
+        nodes: vec![
+            FixtureNode::div("flow", vec![1]),
+            FixtureNode::div("sizing container", vec![2]),
+            FixtureNode::div("percentage container", vec![3]),
+            FixtureNode::div("grid", Vec::new()),
+        ],
+    };
+    let mut styles = FixtureStyles::default();
+    styles.0.insert(
+        0,
+        fixed_box(LayoutDisplay::Block, 200.0, 200.0, PaintColor::TRANSPARENT),
+    );
+    styles.0.insert(
+        1,
+        resolved(
+            LayoutDisplay::Block,
+            Style {
+                size: Size {
+                    width: Dimension::min_content(),
+                    height: length(100.0),
+                },
+                ..Style::default()
+            },
+            GREEN,
+        ),
+    );
+    styles.0.insert(
+        2,
+        resolved(
+            LayoutDisplay::Block,
+            Style {
+                size: Size {
+                    width: Dimension::auto(),
+                    height: percent(1.0),
+                },
+                ..Style::default()
+            },
+            PaintColor::TRANSPARENT,
+        ),
+    );
+    styles.0.insert(
+        3,
+        resolved(
+            LayoutDisplay::Grid,
+            Style {
+                display: Display::Grid,
+                min_size: Size {
+                    width: Dimension::auto(),
+                    height: percent(0.6),
+                },
+                aspect_ratio: Some(1.0),
+                grid_template_columns: vec![repeat("auto-fill", vec![length(50.0)])],
+                ..Style::default()
+            },
+            PaintColor::TRANSPARENT,
+        ),
+    );
+
+    let snapshot = render(&source, &mut styles, PaintViewport::new(200, 200, 1.0));
+    assert!(snapshot.diagnostics.is_empty());
+    assert_rect(
+        solid_rect(&snapshot, GREEN),
+        PaintRect::new(0.0, 0.0, 100.0, 100.0),
     );
 }
 

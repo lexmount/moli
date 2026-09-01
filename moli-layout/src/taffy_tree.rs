@@ -2,7 +2,6 @@ use std::{fmt::Debug, hash::Hash};
 
 use parley::{AlignmentOptions, PositionedLayoutItem, YieldData};
 use style::Atom;
-use taffy::compute::ResolvedIntrinsicWidthInputs;
 use taffy::{
     AbsoluteAxis, AlignContent, AlignContentKeyword, AlignmentSafety, AutoSizeBehavior,
     AvailableSpace, BlockContext, BlockFormattingContext, BoxSizing, CacheTree, Clear,
@@ -13,8 +12,7 @@ use taffy::{
     ResolveOrZero, RoundTree, RunMode, Size, SizingMode, SizingPurpose, Style, TraversePartialTree,
     TraverseTree, WritingDirection, compute_block_layout, compute_cached_layout,
     compute_cached_size, compute_flexbox_layout, compute_grid_layout, compute_hidden_layout,
-    compute_leaf_layout_with_context, compute_root_layout,
-    resolve_intrinsic_width_inputs_with_provenance, round_layout,
+    compute_leaf_layout_with_context, compute_root_layout, resolve_leaf_node_sizing, round_layout,
 };
 
 use crate::{
@@ -488,24 +486,6 @@ where
                 | LayoutBoxKind::InlineTableWrapper
                 | LayoutBoxKind::AnonymousTableWrapper
         )
-}
-
-fn box_is_effectively_floated<N>(world: &LayoutWorld<N>, id: LayoutBoxId) -> bool
-where
-    N: Copy + Debug + Eq + Hash,
-{
-    let layout_box = &world.boxes[id.index()];
-    if !layout_box.style.is_floated()
-        || layout_box.style.is_absolute_positioned()
-        || layout_box.style.is_fixed_positioned()
-    {
-        return false;
-    }
-
-    layout_box.layout_parent.is_some_and(|parent| {
-        let parent_display = world.boxes[parent.index()].style.display();
-        !parent_display.is_flex_container() && !parent_display.is_grid_container()
-    })
 }
 
 fn nearest_list_item_ancestor<N>(
@@ -1531,11 +1511,11 @@ where
     }
 
     fn compute_child_layout(&mut self, node_id: NodeId, inputs: LayoutInput) -> LayoutOutput {
-        self.compute_node_layout(node_id, inputs, None, NodeSizingBoundary::Child)
+        self.compute_node_layout(node_id, inputs, None)
     }
 
     fn compute_child_size(&mut self, node_id: NodeId, inputs: LayoutInput) -> IntrinsicSizeResult {
-        self.compute_node_size(node_id, inputs, NodeSizingBoundary::Child)
+        self.compute_node_size(node_id, inputs)
     }
 }
 
@@ -1645,12 +1625,7 @@ where
         inputs: LayoutInput,
         block_context: Option<&mut BlockContext<'_>>,
     ) -> LayoutOutput {
-        self.compute_node_layout(
-            node_id,
-            inputs,
-            block_context,
-            NodeSizingBoundary::BlockFormattingContext,
-        )
+        self.compute_node_layout(node_id, inputs, block_context)
     }
 }
 
@@ -1745,38 +1720,6 @@ where
     }
 }
 
-/// Identifies the formatting context that owns a child's authored sizing.
-///
-/// Block layout materializes each item's authored sizing before dispatch.
-/// Taffy's generic child protocol (used by flex/grid contribution probes) and
-/// Moli's Parley-backed IFC instead resolve it at the child boundary.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum NodeSizingBoundary {
-    BlockFormattingContext,
-    Child,
-}
-
-impl NodeSizingBoundary {
-    fn resolve<N>(
-        self,
-        world: &mut LayoutWorld<N>,
-        node_id: NodeId,
-        inputs: LayoutInput,
-    ) -> ResolvedIntrinsicWidthInputs
-    where
-        N: Copy + Debug + Eq + Hash,
-    {
-        match self {
-            Self::BlockFormattingContext => ResolvedIntrinsicWidthInputs {
-                inputs,
-                depends_on_block_constraints: false,
-                applied_aspect_ratio: false,
-            },
-            Self::Child => world.resolve_child_sizing_inputs(node_id, inputs),
-        }
-    }
-}
-
 impl<N> LayoutWorld<N>
 where
     N: Copy + Debug + Eq + Hash,
@@ -1793,7 +1736,6 @@ where
         node_id: NodeId,
         inputs: LayoutInput,
         block_context: Option<&mut BlockContext<'_>>,
-        sizing_boundary: NodeSizingBoundary,
     ) -> LayoutOutput {
         let inputs = self.prepare_child_layout_input(node_id, inputs);
         if !self.is_viewport_taffy_node(node_id) && self.should_hide(node_id, inputs) {
@@ -1805,18 +1747,15 @@ where
                 compute_block_layout(world, node_id, inputs, None)
             });
         }
-        // Block intrinsic-height measurement consumes collapsible-margin sets
-        // in addition to numeric size. The legacy LayoutOutput cache retains
-        // only the latter, so caching this boundary would reconstruct escaped
-        // descendant margins as zero. Other child boundaries use the typed
-        // IntrinsicSizeResult cache through `compute_node_size`.
-        if sizing_boundary == NodeSizingBoundary::BlockFormattingContext
-            && inputs.run_mode == RunMode::ComputeSize
-        {
+        // Intrinsic-height measurement consumes collapsible-margin sets in
+        // addition to numeric size. The legacy LayoutOutput cache retains only
+        // the latter, so any caller still using this layout-returning boundary
+        // must measure uncached. Operation-specific sizing callers use the
+        // typed IntrinsicSizeResult cache through `compute_node_size`.
+        if inputs.run_mode == RunMode::ComputeSize {
             return self.compute_child_layout_uncached(node_id, inputs, block_context);
         }
         compute_cached_layout(self, node_id, inputs, |world, node_id, inputs| {
-            let inputs = sizing_boundary.resolve(world, node_id, inputs).inputs;
             world.compute_child_layout_uncached(node_id, inputs, block_context)
         })
     }
@@ -1824,12 +1763,7 @@ where
     /// Run the operation-specific intrinsic sizing protocol and retain the
     /// provenance that parent formatting contexts need for cache invalidation
     /// and preferred-ratio contribution selection.
-    fn compute_node_size(
-        &mut self,
-        node_id: NodeId,
-        inputs: LayoutInput,
-        sizing_boundary: NodeSizingBoundary,
-    ) -> IntrinsicSizeResult {
+    fn compute_node_size(&mut self, node_id: NodeId, inputs: LayoutInput) -> IntrinsicSizeResult {
         let inputs = self.prepare_child_layout_input(node_id, inputs);
         debug_assert_eq!(inputs.run_mode, RunMode::ComputeSize);
         if !self.is_viewport_taffy_node(node_id) && self.should_hide(node_id, inputs) {
@@ -1837,16 +1771,11 @@ where
         }
 
         compute_cached_size(self, node_id, inputs, |world, node_id, inputs| {
-            let resolved = sizing_boundary.resolve(world, node_id, inputs);
-            let inputs = resolved.inputs;
-            let mut result = if world.is_viewport_taffy_node(node_id) {
+            if world.is_viewport_taffy_node(node_id) {
                 compute_block_layout(world, node_id, inputs, None).into_intrinsic_size_result()
             } else {
                 world.compute_child_size_uncached(node_id, inputs)
-            };
-            result.depends_on_block_constraints |= resolved.depends_on_block_constraints;
-            result.applied_aspect_ratio |= resolved.applied_aspect_ratio;
-            result
+            }
         })
     }
 
@@ -1861,7 +1790,7 @@ where
         node_id: NodeId,
         inputs: LayoutInput,
     ) -> LayoutOutput {
-        self.compute_node_layout(node_id, inputs, None, NodeSizingBoundary::Child)
+        self.compute_node_layout(node_id, inputs, None)
     }
 
     /// Intrinsic-size counterpart to
@@ -1871,59 +1800,7 @@ where
         node_id: NodeId,
         inputs: LayoutInput,
     ) -> IntrinsicSizeResult {
-        self.compute_node_size(node_id, inputs, NodeSizingBoundary::Child)
-    }
-
-    /// Adapt Moli's margin-excluded float slot to Taffy's intrinsic resolver,
-    /// then project only resolved sizing state back onto the original
-    /// constraint space.
-    fn resolve_child_sizing_inputs(
-        &mut self,
-        node_id: NodeId,
-        inputs: LayoutInput,
-    ) -> ResolvedIntrinsicWidthInputs {
-        // Both Taffy's block float path and Moli's IFC path subtract the
-        // child's physical horizontal margins before dispatch. The shared
-        // intrinsic-width resolver owns that subtraction itself, so restore
-        // the margins only for this operation.
-        let intrinsic_inputs = if !self.is_viewport_taffy_node(node_id) {
-            let id = LayoutBoxId::from_taffy(node_id);
-            if box_is_effectively_floated(self, id) {
-                let writing_mode = self.get_writing_mode(node_id);
-                let percentage_basis = inputs
-                    .constraint_space(writing_mode)
-                    .margin_padding_percentage_basis();
-                let margin = self.boxes[id.index()]
-                    .style
-                    .taffy
-                    .margin
-                    .resolve_or_zero(percentage_basis, resolve_stylo_calc_value);
-                LayoutInput {
-                    available_space: inputs
-                        .available_space
-                        .map_width(|width| width.maybe_add(margin.left + margin.right)),
-                    ..inputs
-                }
-            } else {
-                inputs
-            }
-        } else {
-            inputs
-        };
-        let resolved =
-            resolve_intrinsic_width_inputs_with_provenance(self, node_id, intrinsic_inputs);
-        ResolvedIntrinsicWidthInputs {
-            inputs: LayoutInput {
-                // Carry only node-owned sizing and definiteness back across
-                // the float adapter. The caller's available space remains the
-                // margin-excluded border-box slot used for final layout.
-                known_dimensions: resolved.inputs.known_dimensions,
-                definite_dimensions: resolved.inputs.definite_dimensions,
-                ..inputs
-            },
-            depends_on_block_constraints: resolved.depends_on_block_constraints,
-            applied_aspect_ratio: resolved.applied_aspect_ratio,
-        }
+        self.compute_node_size(node_id, inputs)
     }
 
     fn should_hide(&self, node_id: NodeId, inputs: LayoutInput) -> bool {
@@ -2079,8 +1956,10 @@ where
             return LayoutOutput::from_sizes(size, size);
         }
 
+        let node_sizing = resolve_leaf_node_sizing(self, id.to_taffy(), inputs);
         let scrollbar_insets = self.get_scrollbar_insets(id.to_taffy());
-        let context = LeafLayoutContext::new(writing_mode, resolved_aspect_ratio, scrollbar_insets);
+        let context = LeafLayoutContext::new(writing_mode, resolved_aspect_ratio, scrollbar_insets)
+            .with_node_sizing(node_sizing);
         compute_leaf_layout_with_context(
             inputs,
             &style,
@@ -2120,32 +1999,7 @@ where
             .constraint_space(writing_mode)
             .margin_padding_percentage_basis();
         let resolved_aspect_ratio = self.boxes[id.index()].resolved_aspect_ratio();
-        let is_floated = box_is_effectively_floated(self, id);
-        // Both Taffy's block-float parent and Moli's IFC float parent
-        // pass the border-box space left after horizontal margins. Taffy's
-        // generic leaf adapter normally subtracts a leaf's own margins, so
-        // restore them only around that adapter to keep the parent-owned
-        // float-margin contract from being applied twice.
-        let leaf_inputs = if is_floated {
-            let margin = style
-                .margin
-                .resolve_or_zero(percentage_basis, resolve_stylo_calc_value);
-            LayoutInput {
-                available_space: Size {
-                    width: inputs
-                        .available_space
-                        .width
-                        .maybe_add(margin.left + margin.right),
-                    height: inputs
-                        .available_space
-                        .height
-                        .maybe_add(margin.top + margin.bottom),
-                },
-                ..inputs
-            }
-        } else {
-            inputs
-        };
+        let node_sizing = resolve_leaf_node_sizing(self, id.to_taffy(), inputs);
         let alignment = self.boxes[id.index()].style.text_align();
         let mut inline_context = self.boxes[id.index()]
             .inline_layout
@@ -2163,9 +2017,10 @@ where
         }
         let mut content_widths = std::mem::take(&mut inline_context.content_widths);
         let mut measurement: Option<InlineMeasurement> = None;
-        let context = LeafLayoutContext::new(writing_mode, resolved_aspect_ratio, scrollbar_insets);
+        let context = LeafLayoutContext::new(writing_mode, resolved_aspect_ratio, scrollbar_insets)
+            .with_node_sizing(node_sizing);
         let mut output = compute_leaf_layout_with_context(
-            leaf_inputs,
+            inputs,
             &style,
             context,
             resolve_stylo_calc_value,
@@ -2837,21 +2692,11 @@ where
                         resolve_stylo_calc_value,
                     );
                     let logical_margin = writing_direction.to_logical_box_strut(margin);
-                    // A non-replaced float's formatting-context algorithm
-                    // owns its content size; pass it the slot remaining after
-                    // margins just like Taffy's block-float parent does. A
-                    // replaced leaf retains Taffy's intrinsic-size adapter,
-                    // which consumes the full slot and subtracts its margin.
-                    let layout_inputs = if self.boxes[child.index()].is_replaced() {
-                        child_inputs
-                    } else {
-                        LayoutInput {
-                            available_space: child_inputs
-                                .available_space
-                                .map_width(|width| width.maybe_sub(margin.left + margin.right)),
-                            ..child_inputs
-                        }
-                    };
+                    // Child constraint spaces carry the complete margin-box
+                    // opportunity. The child sizing boundary removes its own
+                    // margins once, regardless of whether the float is a
+                    // replaced leaf or establishes another formatting context.
+                    let layout_inputs = child_inputs;
                     let output = if child_inputs.run_mode == RunMode::ComputeSize {
                         let result = self
                             .compute_inline_formatting_child_size(child.to_taffy(), layout_inputs);
@@ -3181,7 +3026,7 @@ mod tests {
         child_style.margin.top = LengthPercentageAuto::length(3.0);
         child_style.margin.bottom = LengthPercentageAuto::length(6.0);
 
-        let mut world = LayoutWorld::new(synthetic_block_box(0, Style::default()), false);
+        let mut world = LayoutWorld::new(synthetic_block_box(0, Style::default()), None);
         let root = world.root();
         let child = world.allocate(synthetic_block_box(1, child_style));
         world.boxes[root.index()].children.push(child);
@@ -3213,6 +3058,9 @@ mod tests {
                 width: AvailableSpace::Definite(100.0),
                 height: AvailableSpace::MaxContent,
             },
+            ignored_margins_for_stretch: taffy::Rect::default(),
+            inline_auto_behavior: AutoSizeBehavior::FitContent,
+            orthogonal_fallback: taffy::OrthogonalFallback::UseInitialContainingBlock,
             vertical_margins_are_collapsible: Line::TRUE,
         };
 
