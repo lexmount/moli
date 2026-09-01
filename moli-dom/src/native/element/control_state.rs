@@ -168,6 +168,7 @@ pub struct ElementControlState {
     scroll_top: Option<f64>,
     scroll_left: Option<f64>,
     custom_validation_message: String,
+    blocks_form_submission: bool,
     popover_open: bool,
     web_mcp_form_active: bool,
     web_mcp_submit_active: bool,
@@ -461,6 +462,10 @@ impl ElementControlState {
         &self.custom_validation_message
     }
 
+    pub fn blocks_form_submission(&self) -> bool {
+        self.blocks_form_submission
+    }
+
     pub fn popover_open(&self) -> bool {
         self.popover_open
     }
@@ -600,6 +605,14 @@ impl ElementControlState {
             return false;
         }
         self.indeterminate = indeterminate;
+        true
+    }
+
+    pub fn set_blocks_form_submission(&mut self, blocks: bool) -> bool {
+        if self.blocks_form_submission == blocks {
+            return false;
+        }
+        self.blocks_form_submission = blocks;
         true
     }
 

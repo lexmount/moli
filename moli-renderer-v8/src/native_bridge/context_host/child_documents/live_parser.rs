@@ -474,6 +474,16 @@ impl ParserDomMutationConsumer for ChildFrameLiveParserOwner<'_, '_, '_> {
             .set_script_already_started(node_id, true);
     }
 
+    fn mark_unclosed_form_control_for_parser(&mut self, node_id: DomHandle) {
+        if !self.targets_current_document() {
+            return;
+        }
+        let _ = self
+            .host
+            .dom_host_mut()
+            .set_blocks_form_submission(node_id, true);
+    }
+
     fn finish_parsing_children(
         &mut self,
         construction: &moli_dom::native::ParserConstruction,
