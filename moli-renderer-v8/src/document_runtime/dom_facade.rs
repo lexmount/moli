@@ -13,18 +13,14 @@ use html5ever::tree_builder::QuirksMode;
 // selector semantics or orchestrate mutation side effects on their own.
 impl DocumentRuntime {
     pub(crate) fn document_design_mode_enabled(&self, document: DomHandle) -> bool {
-        self.design_mode_documents.contains(&document)
+        self.dom_host
+            .document_design_mode_enabled_for_handle(document)
+            .unwrap_or(false)
     }
 
     pub(crate) fn set_document_design_mode_enabled(&mut self, document: DomHandle, enabled: bool) {
-        if !self.dom_host.node(document).is_some_and(Node::is_document) {
-            return;
-        }
-        if enabled {
-            self.design_mode_documents.insert(document);
-        } else {
-            self.design_mode_documents.remove(&document);
-        }
+        self.dom_host
+            .set_document_design_mode_enabled_for_handle(document, enabled);
     }
 
     pub(crate) fn snapshot_document(&self) -> NativeDom {

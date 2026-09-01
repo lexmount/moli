@@ -55,6 +55,7 @@ pub struct Document {
     // override execution, but detached/template documents must retain `false`
     // for fragment parsing and serialization even without a window.
     scripting_enabled: bool,
+    design_mode_enabled: bool,
     css_target: Option<NativeNodeId>,
     default_language: Option<Box<str>>,
     source_last_modified_ms: Option<f64>,
@@ -79,6 +80,7 @@ impl Document {
             quirks_mode: QuirksMode::NoQuirks,
             kind: DocumentKind::Html,
             scripting_enabled,
+            design_mode_enabled: false,
             css_target: None,
             default_language: None,
             source_last_modified_ms: None,
@@ -94,6 +96,7 @@ impl Document {
             quirks_mode: QuirksMode::NoQuirks,
             kind: DocumentKind::Xml,
             scripting_enabled: true,
+            design_mode_enabled: false,
             css_target: None,
             default_language: None,
             source_last_modified_ms: None,
@@ -144,6 +147,10 @@ impl Document {
         self.scripting_enabled
     }
 
+    pub fn design_mode_enabled(&self) -> bool {
+        self.design_mode_enabled
+    }
+
     pub fn fallback_base_url(&self) -> &Url {
         self.base_url_state.fallback_base_url()
     }
@@ -179,6 +186,10 @@ impl Document {
 
     pub fn set_scripting_enabled(&mut self, scripting_enabled: bool) {
         self.scripting_enabled = scripting_enabled;
+    }
+
+    pub fn set_design_mode_enabled(&mut self, design_mode_enabled: bool) {
+        self.design_mode_enabled = design_mode_enabled;
     }
 
     pub fn set_css_target(&mut self, target: Option<NativeNodeId>) -> bool {

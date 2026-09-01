@@ -765,7 +765,6 @@ pub(super) struct DocumentRuntime {
     selector_engine: QueryEngine,
     selector_debug: SelectorDebugCounters,
     document: HostDocumentState,
-    design_mode_documents: HashSet<DomHandle>,
     script_execution_control: crate::script_execution_control::RendererScriptExecutionControl,
     author_styles_disabled: bool,
     bypass_content_security_policy: bool,
