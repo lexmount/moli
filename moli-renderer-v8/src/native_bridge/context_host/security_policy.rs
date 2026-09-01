@@ -93,7 +93,7 @@ impl JsContextHost {
                 let mut policy_container =
                     self.child_browsing_context_policy_container_snapshot(handle)?;
                 policy_container.response_content_security_policies =
-                    self.child_effective_response_content_security_policies(handle);
+                    self.child_effective_enforced_content_security_policies(handle);
                 policy_container.response_content_security_report_only_policies =
                     self.child_effective_response_content_security_report_only_policies(handle);
                 policy_container.content_security_reporting_endpoints =
@@ -730,7 +730,8 @@ impl JsContextHost {
         let response_policies = self.child_response_content_security_policies(handle);
         let response_report_only_policies =
             self.child_response_content_security_report_only_policies(handle);
-        let response_reporting_endpoints = self.child_content_security_reporting_endpoints(handle);
+        let response_reporting_endpoints =
+            self.child_effective_content_security_reporting_endpoints(handle);
         // SAFETY: JsContextHost is owned by the ScriptVm that owns this DocumentRuntime.
         unsafe { &*self.runtime }.document_connect_csp_check_for_document_with_redirect_status(
             self.child_browsing_context_document_handle(handle),
@@ -782,7 +783,7 @@ impl JsContextHost {
         )
     }
 
-    fn child_effective_response_content_security_policies(
+    fn child_effective_enforced_content_security_policies(
         &self,
         child_handle: DomHandle,
     ) -> Vec<ContentSecurityPolicy> {
@@ -790,9 +791,9 @@ impl JsContextHost {
         if self
             .child_browsing_contexts
             .get(&child_handle)
-            .is_some_and(|entry| entry.security_origin_inherited())
+            .is_some_and(|entry| entry.content_security_policy_inherited())
         {
-            policies.extend(self.parent_effective_response_content_security_policies(child_handle));
+            policies.extend(self.parent_effective_enforced_content_security_policies(child_handle));
         }
         policies.extend(
             self.child_browsing_contexts
@@ -811,7 +812,7 @@ impl JsContextHost {
         if self
             .child_browsing_contexts
             .get(&child_handle)
-            .is_some_and(|entry| entry.security_origin_inherited())
+            .is_some_and(|entry| entry.content_security_policy_inherited())
         {
             policies.extend(
                 self.parent_effective_response_content_security_report_only_policies(child_handle),
@@ -830,15 +831,35 @@ impl JsContextHost {
         policies
     }
 
-    fn parent_effective_response_content_security_policies(
+    fn parent_effective_enforced_content_security_policies(
         &self,
         child_handle: DomHandle,
     ) -> Vec<ContentSecurityPolicy> {
         match self.child_browsing_context_parent_handle(child_handle) {
-            Some(parent) => self.child_effective_response_content_security_policies(parent),
-            None => unsafe { &*self.runtime }
-                .response_content_security_policies()
-                .to_vec(),
+            Some(parent) => {
+                let mut policies = self.child_effective_enforced_content_security_policies(parent);
+                if let Some(document) = self.child_browsing_context_document_handle(parent) {
+                    // SAFETY: JsContextHost is owned by the ScriptVm that owns this
+                    // DocumentRuntime.
+                    policies.extend(
+                        unsafe { &*self.runtime }
+                            .meta_content_security_policies_for_document(document),
+                    );
+                }
+                policies
+            }
+            None => {
+                // SAFETY: JsContextHost is owned by the ScriptVm that owns this
+                // DocumentRuntime.
+                let runtime = unsafe { &*self.runtime };
+                let mut policies = runtime.response_content_security_policies().to_vec();
+                policies.extend(
+                    runtime.meta_content_security_policies_for_document(
+                        runtime.document_handle(),
+                    ),
+                );
+                policies
+            }
         }
     }
 
@@ -863,7 +884,7 @@ impl JsContextHost {
         let inherits_parent = self
             .child_browsing_contexts
             .get(&child_handle)
-            .is_some_and(|entry| entry.security_origin_inherited());
+            .is_some_and(|entry| entry.content_security_policy_inherited());
         let has_own_response_policies = self
             .child_browsing_contexts
             .get(&child_handle)
@@ -1110,16 +1131,6 @@ impl JsContextHost {
         self.child_browsing_contexts
             .get(&handle)
             .map(|entry| entry.response_content_security_report_only_policies())
-            .unwrap_or_default()
-    }
-
-    fn child_content_security_reporting_endpoints(
-        &self,
-        handle: DomHandle,
-    ) -> ContentSecurityPolicyReportingEndpoints {
-        self.child_browsing_contexts
-            .get(&handle)
-            .map(|entry| entry.content_security_reporting_endpoints())
             .unwrap_or_default()
     }
 
