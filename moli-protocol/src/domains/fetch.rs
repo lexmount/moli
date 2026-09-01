@@ -253,10 +253,9 @@ impl PendingFetchCommandDispatch {
         Self {
             command_id,
             session_id: session_id.map(str::to_owned),
-            owner_scope: CommandOwnerScope::from_session_and_owner_route(
-                session_id,
-                session_owner_route,
-            ),
+            owner_scope: session_id
+                .map(CommandOwnerScope::for_session)
+                .unwrap_or_else(|| CommandOwnerScope::for_implicit_route(session_owner_route)),
             kind,
             pending,
         }

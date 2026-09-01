@@ -961,8 +961,9 @@ fn start_devtools_set_viewport_command(
             "BrowserContextNotLoaded",
         ));
     }
-    let owner_scope =
-        CommandOwnerScope::from_session_and_owner_route(session_id, owner_route.cloned());
+    let owner_scope = session_id
+        .map(CommandOwnerScope::for_session)
+        .unwrap_or_else(|| CommandOwnerScope::for_implicit_route(owner_route.cloned()));
     let runtime_call_id = conn.next_internal_runtime_command_id();
     let Some(page) = conn
         .loaded_page_mut_for_target_configuration_for_route(session_id, owner_route)
@@ -2790,8 +2791,9 @@ fn start_session_surface_override_page_command_for_route(
     let Some(script) = script else {
         return Ok(Vec::new());
     };
-    let owner_scope =
-        CommandOwnerScope::from_session_and_owner_route(session_id, owner_route.cloned());
+    let owner_scope = session_id
+        .map(CommandOwnerScope::for_session)
+        .unwrap_or_else(|| CommandOwnerScope::for_implicit_route(owner_route.cloned()));
     let runtime_call_id = conn.next_internal_runtime_command_id();
     let Some(page) = conn
         .loaded_page_mut_for_target_configuration_for_route(session_id, owner_route)

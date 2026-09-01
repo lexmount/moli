@@ -1263,15 +1263,14 @@ fn prepare_create_isolated_world_task(
 }
 
 fn pending_create_isolated_world_command_for_session(
-    conn: &CdpConnection,
     command_id: Option<u64>,
-    session_id: Option<&str>,
+    owner_scope: crate::conn::CommandOwnerScope,
     task: CreateIsolatedWorldCommandTask,
     pending: PendingCreateIsolatedWorldPhase,
 ) -> PageCommandTaskStep {
     PageCommandTaskStep::Pending(PendingPageCommandDispatch {
         command_id,
-        owner_scope: crate::conn::CommandOwnerScope::capture(conn, session_id),
+        owner_scope,
         kind: Box::new(PendingPageCommandKind::CreateIsolatedWorld(
             PendingCreateIsolatedWorldCommand { task, pending },
         )),
@@ -1292,10 +1291,11 @@ fn start_create_isolated_world_initial_navigation_or_renderer_phase(
         );
     }
 
+    let owner = crate::conn::CommandOwnerScope::capture(conn, session_id);
     let start = match super::navigation::start_initial_document_navigation_for_session_owner(
         conn,
         None,
-        session_id,
+        &owner,
         json!({}),
     ) {
         Ok(start) => start,
@@ -1317,9 +1317,8 @@ fn start_create_isolated_world_initial_navigation_or_renderer_phase(
         super::navigation::NavigateCommandStart::PendingLoad(pending) => {
             task.phase = CreateIsolatedWorldPhase::InitialDocumentNavigation;
             pending_create_isolated_world_command_for_session(
-                conn,
                 command_id,
-                session_id,
+                owner.clone(),
                 task,
                 PendingCreateIsolatedWorldPhase::InitialDocumentNavigation(pending),
             )
@@ -1339,9 +1338,8 @@ fn start_create_isolated_world_initial_navigation_or_renderer_phase(
         super::navigation::NavigateCommandStart::PendingContinueWithoutRequestPause(pending) => {
             task.phase = CreateIsolatedWorldPhase::InitialDocumentNavigation;
             pending_create_isolated_world_command_for_session(
-                conn,
                 command_id,
-                session_id,
+                owner,
                 task,
                 PendingCreateIsolatedWorldPhase::InitialDocumentNavigationContinue(pending),
             )
@@ -1355,6 +1353,7 @@ fn start_create_isolated_world_frame_or_world_phase(
     session_id: Option<&str>,
     mut task: CreateIsolatedWorldCommandTask,
 ) -> PageCommandTaskStep {
+    let owner = crate::conn::CommandOwnerScope::capture(conn, session_id);
     task.phase = CreateIsolatedWorldPhase::RuntimeActivity;
     let frame_id = (task.params.frame_id != task.target_id).then(|| task.params.frame_id.clone());
     let world_name = task.params.world_name.clone();
@@ -1374,9 +1373,8 @@ fn start_create_isolated_world_frame_or_world_phase(
         grant_universal_access,
     ) {
         Ok(pending) => pending_create_isolated_world_command_for_session(
-            conn,
             command_id,
-            session_id,
+            owner,
             task,
             PendingCreateIsolatedWorldPhase::RendererPageCommand(pending),
         ),

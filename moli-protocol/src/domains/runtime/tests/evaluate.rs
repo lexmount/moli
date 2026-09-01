@@ -2452,7 +2452,7 @@ async fn page_navigate_network_failure_commits_error_document() {
         old_document_token.clone(),
         crate::conn::NavigationDispatchState {
             navigate_id: None,
-            navigate_session_id: Some("SID-1".to_owned()),
+            owner: crate::conn::CommandOwnerScope::for_session("SID-1"),
             result_projection: crate::conn::NavigationResultProjection::Cdp(json!({})),
             frame_id: "TID-1".to_owned(),
             session_id: Some("SID-1".to_owned()),
@@ -2471,7 +2471,6 @@ async fn page_navigate_network_failure_commits_error_document() {
                 "InsecureScheme".to_owned(),
             ),
         },
-        None,
         Ok(crate::conn::CapturedBody::from_string(
             "stale body".to_owned(),
         )),

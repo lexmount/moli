@@ -1891,11 +1891,6 @@ fn continue_streaming_document_response_in_background(
         body_progress_source,
         prepared_document,
     } = pending;
-    let session_id = navigation.navigate_session_id.clone();
-    let none_session_owner_route =
-        crate::conn::CommandOwnerScope::capture(conn, session_id.as_deref())
-            .session_owner_route()
-            .cloned();
     let cancellation = response.cancellation_handle();
     if response_code.is_none()
         && response_headers.is_empty()
@@ -1907,14 +1902,12 @@ fn continue_streaming_document_response_in_background(
                 sender.clone(),
                 document_navigation_token.clone(),
                 navigation.clone(),
-                none_session_owner_route.clone(),
             );
             let (engine, navigation_result) =
                 prepared_document.resume_streaming(response, Some(body_completion_sink));
             let _ = sender.send(page::BackgroundNavigationCompletion::new(
                 document_navigation_token,
                 navigation,
-                none_session_owner_route,
                 engine,
                 Ok(navigation_result),
             ));
@@ -1935,13 +1928,11 @@ fn continue_streaming_document_response_in_background(
             sender.clone(),
             document_navigation_token.clone(),
             navigation.clone(),
-            none_session_owner_route.clone(),
         );
         let (engine, navigation_result) = job.run(Some(body_completion_sink)).await;
         let _ = sender.send(page::BackgroundNavigationCompletion::new(
             document_navigation_token,
             navigation,
-            none_session_owner_route,
             engine,
             navigation_result,
         ));

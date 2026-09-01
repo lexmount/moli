@@ -125,6 +125,7 @@ pub(super) fn try_start_search_in_resource_command(
         return complete_error(FRAME_NOT_FOUND);
     }
     let materialize_limit = conn.response_body_materialize_limit();
+    let owner = CommandOwnerScope::capture(conn, cmd.session_id);
 
     if is_root_frame {
         let main_document = conn.current_main_document_resource_for_session_owner(cmd.session_id);
@@ -153,15 +154,15 @@ pub(super) fn try_start_search_in_resource_command(
                 None => SelectedResource::Unavailable,
             }
         } else {
-            let Some(page) = loaded_page(conn, cmd.session_id) else {
+            let Some(page) = loaded_page(conn, &owner) else {
                 return complete_error(CONTENT_UNAVAILABLE);
             };
             select_subresource(page, &root_frame_id, true, &params.url, materialize_limit)
         };
-        return start_selected_resource_search(conn, cmd.id, cmd.session_id, params, selected);
+        return start_selected_resource_search(conn, cmd.id, owner, params, selected);
     }
 
-    let Some(page) = loaded_page(conn, cmd.session_id) else {
+    let Some(page) = loaded_page(conn, &owner) else {
         return complete_error(CONTENT_UNAVAILABLE);
     };
     match page.start_child_frame_resource_search_by_lines(
@@ -172,9 +173,8 @@ pub(super) fn try_start_search_in_resource_command(
         params.is_regex,
     ) {
         Ok(pending) => pending_step(
-            conn,
             cmd.id,
-            cmd.session_id,
+            owner,
             PendingSearchInResourceCommand {
                 params,
                 source: ResourceSearchSource::ChildDocument,
@@ -188,11 +188,11 @@ pub(super) fn try_start_search_in_resource_command(
 pub(super) fn complete_search_in_resource_command(
     conn: &mut CdpConnection,
     command_id: Option<u64>,
-    session_id: Option<&str>,
+    owner: &CommandOwnerScope,
     completed: CompletedSearchInResourceCommand,
 ) -> PageCommandTaskStep {
     let materialize_limit = conn.response_body_materialize_limit();
-    let Some(page) = loaded_page(conn, session_id) else {
+    let Some(page) = loaded_page(conn, owner) else {
         return complete_error(CONTENT_UNAVAILABLE);
     };
     let completion = match completed.completed {
@@ -225,7 +225,13 @@ pub(super) fn complete_search_in_resource_command(
                 &completed.params.url,
                 materialize_limit,
             );
-            start_selected_resource_search(conn, command_id, session_id, completed.params, selected)
+            start_selected_resource_search(
+                conn,
+                command_id,
+                owner.clone(),
+                completed.params,
+                selected,
+            )
         }
     }
 }
@@ -233,7 +239,7 @@ pub(super) fn complete_search_in_resource_command(
 fn start_selected_resource_search(
     conn: &mut CdpConnection,
     command_id: Option<u64>,
-    session_id: Option<&str>,
+    owner: CommandOwnerScope,
     params: SearchInResourceParams,
     selected: SelectedResource,
 ) -> PageCommandTaskStep {
@@ -242,7 +248,7 @@ fn start_selected_resource_search(
         SelectedResource::Unavailable => return complete_error(CONTENT_UNAVAILABLE),
         SelectedResource::Missing => return complete_error(RESOURCE_NOT_FOUND),
     };
-    let Some(page) = loaded_page(conn, session_id) else {
+    let Some(page) = loaded_page(conn, &owner) else {
         return complete_error(CONTENT_UNAVAILABLE);
     };
     match page.start_text_search_by_lines(
@@ -252,9 +258,8 @@ fn start_selected_resource_search(
         params.is_regex,
     ) {
         Ok(pending) => pending_step(
-            conn,
             command_id,
-            session_id,
+            owner,
             PendingSearchInResourceCommand {
                 params,
                 source: ResourceSearchSource::SelectedText,
@@ -266,14 +271,13 @@ fn start_selected_resource_search(
 }
 
 fn pending_step(
-    conn: &CdpConnection,
     command_id: Option<u64>,
-    session_id: Option<&str>,
+    owner_scope: CommandOwnerScope,
     pending: PendingSearchInResourceCommand,
 ) -> PageCommandTaskStep {
     PageCommandTaskStep::Pending(PendingPageCommandDispatch {
         command_id,
-        owner_scope: CommandOwnerScope::capture(conn, session_id),
+        owner_scope,
         kind: Box::new(PendingPageCommandKind::SearchInResource(pending)),
     })
 }
@@ -294,8 +298,8 @@ fn complete_error(message: impl Into<String>) -> PageCommandTaskStep {
     PageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message))
 }
 
-fn loaded_page<'a>(conn: &'a mut CdpConnection, session_id: Option<&str>) -> Option<&'a mut Page> {
-    conn.runtime_session_owner_slot_mut(session_id)
+fn loaded_page<'a>(conn: &'a mut CdpConnection, owner: &CommandOwnerScope) -> Option<&'a mut Page> {
+    conn.runtime_session_owner_slot_mut_for_route(owner.session_id(), owner.session_owner_route())
         .ok()?
         .loaded_page_mut()
 }

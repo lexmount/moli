@@ -736,7 +736,6 @@ pub(crate) struct BackgroundNavigationBodyCompletionSink {
         tokio::sync::mpsc::UnboundedSender<crate::domains::page::BackgroundNavigationCompletion>,
     token: DocumentNavigationToken,
     state: NavigationDispatchState,
-    none_session_owner_route: Option<CdpSessionRoute>,
 }
 
 impl BackgroundNavigationBodyCompletionSink {
@@ -746,13 +745,11 @@ impl BackgroundNavigationBodyCompletionSink {
         >,
         token: DocumentNavigationToken,
         state: NavigationDispatchState,
-        none_session_owner_route: Option<CdpSessionRoute>,
     ) -> Self {
         Self {
             sender,
             token,
             state,
-            none_session_owner_route,
         }
     }
 
@@ -768,7 +765,6 @@ impl BackgroundNavigationBodyCompletionSink {
             crate::domains::page::BackgroundNavigationCompletion::main_document_body(
                 self.token,
                 self.state,
-                self.none_session_owner_route,
                 body,
                 false,
                 body_progress_source,
@@ -1548,8 +1544,9 @@ impl CdpConnection {
         navigation: &NavigationDispatchState,
     ) -> TargetNavigationLoadInputs {
         apply_navigation_request_load_policy(
-            self.navigation_load_inputs_for_session_owner(
-                navigation.navigate_session_id.as_deref(),
+            self.navigation_load_inputs_for_route(
+                navigation.owner.session_id(),
+                navigation.owner.session_owner_route(),
             ),
             navigation.request_load_policy,
         )
@@ -1695,8 +1692,9 @@ impl CdpConnection {
         let main_document_commit = load_inputs
             .main_document_commit_for_final_url(&final_url, None)
             .map(Arc::new);
-        let page_reservation = self.reserve_renderer_page_for_session_owner(
-            navigation.navigate_session_id.as_deref(),
+        let page_reservation = self.reserve_renderer_page_for_route(
+            navigation.owner.session_id(),
+            navigation.owner.session_owner_route(),
             &load_inputs,
             &engine,
         );
@@ -2286,7 +2284,7 @@ impl CdpConnection {
         body_progress_source: MainDocumentBodyProgressSource,
     ) -> Result<NavigationLoadOutcome, String> {
         self.load_navigation_request_via_runtime_with_network_events_and_load_inputs_async(
-            navigation.navigate_session_id.as_deref(),
+            navigation.owner.session_id(),
             self.navigation_load_inputs_for_navigation(navigation),
             &navigation.request_method,
             navigation.requested_url.as_str(),
@@ -2422,8 +2420,9 @@ impl CdpConnection {
         let shared_resource_runtime =
             self.shared_resource_runtime_for_navigation_load_inputs(&load_inputs);
         let engine = self.background_navigation_engine_for_load_inputs(&load_inputs);
-        let page_reservation = self.reserve_renderer_page_for_session_owner(
-            navigation.navigate_session_id.as_deref(),
+        let page_reservation = self.reserve_renderer_page_for_route(
+            navigation.owner.session_id(),
+            navigation.owner.session_owner_route(),
             &load_inputs,
             &engine,
         );
@@ -2472,8 +2471,9 @@ impl CdpConnection {
         let shared_resource_runtime =
             self.shared_resource_runtime_for_navigation_load_inputs(&load_inputs);
         let engine = self.background_navigation_engine_for_load_inputs(&load_inputs);
-        let page_reservation = self.reserve_renderer_page_for_session_owner(
-            navigation.navigate_session_id.as_deref(),
+        let page_reservation = self.reserve_renderer_page_for_route(
+            navigation.owner.session_id(),
+            navigation.owner.session_owner_route(),
             &load_inputs,
             &engine,
         );
@@ -2506,18 +2506,30 @@ impl CdpConnection {
         load_inputs: &TargetNavigationLoadInputs,
         engine: &NavigationEngine,
     ) -> RendererPageReservationToken {
+        self.reserve_renderer_page_for_route(session_id, None, load_inputs, engine)
+    }
+
+    fn reserve_renderer_page_for_route(
+        &mut self,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
+        load_inputs: &TargetNavigationLoadInputs,
+        engine: &NavigationEngine,
+    ) -> RendererPageReservationToken {
         let page_reservation = engine.reserve_page_for_creation();
-        self.bind_renderer_page_reservation_for_session_owner(
+        self.bind_renderer_page_reservation_for_route(
             session_id,
+            owner_route,
             load_inputs,
             page_reservation,
         );
         page_reservation
     }
 
-    fn bind_renderer_page_reservation_for_session_owner(
+    fn bind_renderer_page_reservation_for_route(
         &mut self,
         session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
         load_inputs: &TargetNavigationLoadInputs,
         page_reservation: RendererPageReservationToken,
     ) {
@@ -2529,7 +2541,7 @@ impl CdpConnection {
         // reservation; recording `target_id: None` here would conflict with
         // that exact owner when the stream-open control is later consumed.
         if let Some((browser_context_id, Some(_target_id))) =
-            self.target_owner_identity_for_session(session_id)
+            self.target_owner_identity_for_route(session_id, owner_route)
         {
             assert_eq!(
                 load_inputs.browser_context_id.as_deref(),
@@ -2541,7 +2553,11 @@ impl CdpConnection {
                 page_reservation.page_id(),
             );
             let page_owner = self
-                .reserve_target_page_residence_identity_for_session(session_id, renderer_page)
+                .reserve_target_page_residence_identity_for_route(
+                    session_id,
+                    owner_route,
+                    renderer_page,
+                )
                 .expect("navigation Page reservation must retain its target owner");
             self.bind_renderer_page_output_owner(renderer_page, page_owner);
         }
@@ -2896,7 +2912,7 @@ impl CdpConnection {
     ) -> Result<NavigationLoadOutcome, String> {
         let load_inputs = self.navigation_load_inputs_for_navigation(navigation);
         self.build_navigation_from_buffered_body_source_with_load_inputs_async(
-            navigation.navigate_session_id.as_deref(),
+            navigation.owner.session_id(),
             &load_inputs,
             navigation.requested_url.clone(),
             final_url,
@@ -3407,7 +3423,7 @@ impl CdpConnection {
     ) -> Result<NavigationLoadOutcome, String> {
         let load_inputs = self.navigation_load_inputs_for_navigation(navigation);
         self.build_navigation_from_buffered_raw_response_with_load_inputs_async(
-            navigation.navigate_session_id.as_deref(),
+            navigation.owner.session_id(),
             &load_inputs,
             navigation.requested_url.clone(),
             navigation.request_method.clone(),
@@ -3465,7 +3481,7 @@ impl CdpConnection {
     ) -> Result<NavigationLoadOutcome, String> {
         let load_inputs = self.navigation_load_inputs_for_navigation(navigation);
         self.build_navigation_from_captured_raw_response_with_load_inputs_async(
-            navigation.navigate_session_id.as_deref(),
+            navigation.owner.session_id(),
             &load_inputs,
             navigation.requested_url.clone(),
             navigation.request_method.clone(),
@@ -3604,7 +3620,7 @@ impl CdpConnection {
     ) -> Result<NavigationLoadOutcome, String> {
         let load_inputs = self.navigation_load_inputs_for_navigation(navigation);
         self.build_navigation_from_streaming_raw_response_with_load_inputs_async(
-            navigation.navigate_session_id.as_deref(),
+            navigation.owner.session_id(),
             &load_inputs,
             navigation.requested_url.clone(),
             navigation.request_method.clone(),
@@ -3627,7 +3643,7 @@ impl CdpConnection {
     ) -> Result<NavigationLoadOutcome, String> {
         let load_inputs = self.navigation_load_inputs_for_navigation(navigation);
         self.build_navigation_from_streaming_raw_response_with_load_inputs_async(
-            navigation.navigate_session_id.as_deref(),
+            navigation.owner.session_id(),
             &load_inputs,
             navigation.requested_url.clone(),
             navigation.request_method.clone(),

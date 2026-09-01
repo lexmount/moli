@@ -107,9 +107,8 @@ pub(super) fn try_start_get_app_manifest_command(
     };
     match pending {
         Ok(pending) => pending_step(
-            conn,
             cmd.id,
-            cmd.session_id,
+            CommandOwnerScope::capture(conn, cmd.session_id),
             PendingGetAppManifestCommand {
                 manifest_id: params.manifest_id,
                 work: PendingGetAppManifestWork::Prepare(pending),
@@ -125,10 +124,12 @@ pub(super) fn try_start_get_app_manifest_command(
 pub(super) fn complete_get_app_manifest_command(
     conn: &mut CdpConnection,
     command_id: Option<u64>,
-    session_id: Option<&str>,
+    owner: &CommandOwnerScope,
     completed: CompletedGetAppManifestCommand,
     command_context: &mut CommandDispatchContext,
 ) -> PageCommandTaskStep {
+    let session_id = owner.session_id();
+    let owner_route = owner.session_owner_route();
     match completed.work {
         CompletedGetAppManifestWork::Prepare(completion) => {
             let completion = match completion {
@@ -141,7 +142,7 @@ pub(super) fn complete_get_app_manifest_command(
                 }
             };
             let preparation = match conn
-                .loaded_page_mut_for_protocol_access(session_id)
+                .loaded_page_mut_for_protocol_access_for_route(session_id, owner_route)
                 .and_then(|page| {
                     page.finish_prepare_app_manifest_load(completion)
                         .map_err(|error| error.to_string())
@@ -162,9 +163,8 @@ pub(super) fn complete_get_app_manifest_command(
                     ))
                 }
                 RendererAppManifestLoadPreparation::Ready(pending) => pending_step(
-                    conn,
                     command_id,
-                    session_id,
+                    owner.clone(),
                     PendingGetAppManifestCommand {
                         manifest_id: completed.manifest_id,
                         work: PendingGetAppManifestWork::Fetch(pending),
@@ -174,19 +174,19 @@ pub(super) fn complete_get_app_manifest_command(
         }
         CompletedGetAppManifestWork::Fetch(outcome) => {
             let (result, publication) = (*outcome).into_parts();
-            let pending = match conn.loaded_page_mut_for_protocol_access(session_id) {
-                Ok(page) => page.start_publish_app_manifest_load(publication),
-                Err(message) => {
-                    return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                        -32000, message,
-                    ));
-                }
-            };
+            let pending =
+                match conn.loaded_page_mut_for_protocol_access_for_route(session_id, owner_route) {
+                    Ok(page) => page.start_publish_app_manifest_load(publication),
+                    Err(message) => {
+                        return PageCommandTaskStep::Complete(CommandOutputPlan::error(
+                            -32000, message,
+                        ));
+                    }
+                };
             match pending {
                 Ok(pending) => pending_step(
-                    conn,
                     command_id,
-                    session_id,
+                    owner.clone(),
                     PendingGetAppManifestCommand {
                         manifest_id: completed.manifest_id,
                         work: PendingGetAppManifestWork::Publish {
@@ -212,7 +212,7 @@ pub(super) fn complete_get_app_manifest_command(
                 }
             };
             let output = match conn
-                .loaded_page_mut_for_protocol_access(session_id)
+                .loaded_page_mut_for_protocol_access_for_route(session_id, owner_route)
                 .and_then(|page| {
                     page.finish_publish_app_manifest_load(completion)
                         .map_err(|error| error.to_string())
@@ -226,7 +226,7 @@ pub(super) fn complete_get_app_manifest_command(
             };
             let mut ordered_events = Vec::new();
             command_context.consume_renderer_command_turn_output(output);
-            conn.ingest_runtime_session_owner_output_updates(session_id);
+            conn.ingest_runtime_session_owner_output_updates_for_route(session_id, owner_route);
             emit_pending_network_backlog_activity_background_events(
                 conn,
                 &mut ordered_events,
@@ -241,14 +241,13 @@ pub(super) fn complete_get_app_manifest_command(
 }
 
 fn pending_step(
-    conn: &CdpConnection,
     command_id: Option<u64>,
-    session_id: Option<&str>,
+    owner_scope: CommandOwnerScope,
     pending: PendingGetAppManifestCommand,
 ) -> PageCommandTaskStep {
     PageCommandTaskStep::Pending(PendingPageCommandDispatch {
         command_id,
-        owner_scope: CommandOwnerScope::capture(conn, session_id),
+        owner_scope,
         kind: Box::new(PendingPageCommandKind::GetAppManifest(pending)),
     })
 }

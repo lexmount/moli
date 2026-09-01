@@ -4686,10 +4686,9 @@ async fn start_protocol_neutral_runtime_command(
         )),
     };
     drop(route_scope);
-    step.with_owner_scope(CommandOwnerScope::from_session_and_owner_route(
-        None,
-        Some(session_owner_route),
-    ))
+    step.with_owner_scope(CommandOwnerScope::for_implicit_route(Some(
+        session_owner_route,
+    )))
 }
 
 fn runtime_inspector_command_json(command_id: u64, method: &str, params: &Value) -> String {
@@ -9198,10 +9197,10 @@ fn start_pending_shared_worker_runtime_inspector_command(
         PendingRuntimeCommandDispatch {
             command_id: cmd.id,
             action: action.label(),
-            owner_scope: CommandOwnerScope::from_session_and_owner_route(
-                cmd.session_id,
-                session_owner_route,
-            ),
+            owner_scope: cmd
+                .session_id
+                .map(CommandOwnerScope::for_session)
+                .unwrap_or_else(|| CommandOwnerScope::for_implicit_route(session_owner_route)),
             object_group,
             release_object_ids,
             release_object_group,
@@ -9263,10 +9262,10 @@ fn start_pending_service_worker_runtime_inspector_command(
         PendingRuntimeCommandDispatch {
             command_id: cmd.id,
             action: action.label(),
-            owner_scope: CommandOwnerScope::from_session_and_owner_route(
-                cmd.session_id,
-                session_owner_route,
-            ),
+            owner_scope: cmd
+                .session_id
+                .map(CommandOwnerScope::for_session)
+                .unwrap_or_else(|| CommandOwnerScope::for_implicit_route(session_owner_route)),
             object_group,
             release_object_ids,
             release_object_group,

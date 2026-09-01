@@ -1775,13 +1775,14 @@ impl CdpConnection {
             .is_ok_and(TargetRuntimeSlot::renderer_document_navigation_is_suspended)
     }
 
-    pub(crate) fn accepts_pending_document_navigation_for_session_owner(
+    pub(crate) fn accepts_pending_document_navigation_for_route(
         &self,
         session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
         token: &DocumentNavigationToken,
     ) -> bool {
         let Some((browser_context_id, target_id)) =
-            self.target_owner_identity_for_session(session_id)
+            self.target_owner_identity_for_route(session_id, owner_route)
         else {
             return false;
         };
@@ -1817,7 +1818,15 @@ impl CdpConnection {
         &self,
         session_id: Option<&str>,
     ) -> Option<String> {
-        self.runtime_session_owner_slot(session_id)
+        self.current_document_loader_id_for_route(session_id, None)
+    }
+
+    pub(crate) fn current_document_loader_id_for_route(
+        &self,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
+    ) -> Option<String> {
+        self.runtime_session_owner_slot_for_route(session_id, owner_route)
             .ok()
             .and_then(|slot| slot.current_document_loader_id().map(str::to_owned))
     }
@@ -1948,7 +1957,17 @@ impl CdpConnection {
         session_id: Option<&str>,
         loader_id: String,
     ) -> Option<DocumentNavigationToken> {
-        let (browser_context_id, target_id) = self.target_owner_identity_for_session(session_id)?;
+        self.start_document_navigation_for_route(session_id, None, loader_id)
+    }
+
+    pub(crate) fn start_document_navigation_for_route(
+        &mut self,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
+        loader_id: String,
+    ) -> Option<DocumentNavigationToken> {
+        let (browser_context_id, target_id) =
+            self.target_owner_identity_for_route(session_id, owner_route)?;
         let target_id = target_id?;
         self.browser_context_by_id_mut(&browser_context_id)?
             .start_document_navigation_for_target(&target_id, loader_id)
@@ -2288,10 +2307,7 @@ impl CdpConnection {
             let route = self
                 .target_session_route_for_target_id(target_id.as_str())
                 .or_else(|| self.target_session_route_for_child_frame_id(target_id.as_str()))?;
-            return Some(CommandOwnerScope::from_session_and_owner_route(
-                None,
-                Some(route),
-            ));
+            return Some(CommandOwnerScope::for_implicit_route(Some(route)));
         }
         Some(CommandOwnerScope::capture(
             self,
@@ -2384,13 +2400,14 @@ impl CdpConnection {
         })
     }
 
-    pub(crate) fn accepts_document_body_completion_for_session_owner(
+    pub(crate) fn accepts_document_body_completion_for_route(
         &self,
         session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
         token: &DocumentNavigationToken,
     ) -> bool {
         let Some((browser_context_id, target_id)) =
-            self.target_owner_identity_for_session(session_id)
+            self.target_owner_identity_for_route(session_id, owner_route)
         else {
             return false;
         };
@@ -2485,21 +2502,35 @@ impl CdpConnection {
     ) -> Option<
         tokio::sync::mpsc::UnboundedSender<crate::domains::page::BackgroundNavigationCompletion>,
     > {
-        if !self.can_run_background_navigation_for_session_owner(session_id) {
+        self.background_navigation_completion_sender_for_route(session_id, None)
+    }
+
+    pub(crate) fn background_navigation_completion_sender_for_route(
+        &self,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
+    ) -> Option<
+        tokio::sync::mpsc::UnboundedSender<crate::domains::page::BackgroundNavigationCompletion>,
+    > {
+        if !self.can_run_background_navigation_for_route(session_id, owner_route) {
             return None;
         }
         self.scheduler_hooks
             .background_navigation_completion_sender()
     }
 
-    fn can_run_background_navigation_for_session_owner(&self, session_id: Option<&str>) -> bool {
+    fn can_run_background_navigation_for_route(
+        &self,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
+    ) -> bool {
         if !self
             .scheduler_hooks
             .has_background_navigation_completion_sender()
         {
             return false;
         }
-        self.target_owner_identity_for_session(session_id)
+        self.target_owner_identity_for_route(session_id, owner_route)
             .is_some_and(|(_, target_id)| target_id.is_some())
     }
 
@@ -2561,25 +2592,10 @@ impl CdpConnection {
                 completion
             }
             crate::domains::page::BackgroundNavigationCompletion::MainDocumentBody(completion) => {
-                let previous_none_session_owner_route =
-                    completion.navigate_session_id().is_none().then(|| {
-                        self.replace_none_session_owner_route_override(
-                            completion.none_session_owner_route(),
-                        )
-                    });
                 completion.record_if_current(self);
-                if let Some(previous) = previous_none_session_owner_route {
-                    self.replace_none_session_owner_route_override(previous);
-                }
                 return command_context.take_protocol_events();
             }
         };
-        let previous_none_session_owner_route =
-            completion.navigate_session_id().is_none().then(|| {
-                self.replace_none_session_owner_route_override(
-                    completion.none_session_owner_route(),
-                )
-            });
         let timing_started = moli_trace::cdp_nav_timing_enabled().then(std::time::Instant::now);
         if timing_started.is_some() {
             tracing::info!(
@@ -2606,9 +2622,6 @@ impl CdpConnection {
         let protocol_events = self
             .drain_materialized_navigation_completion_background_events(completion, command_context)
             .await;
-        if let Some(previous) = previous_none_session_owner_route {
-            self.replace_none_session_owner_route_override(previous);
-        }
         protocol_events
     }
 
@@ -2968,7 +2981,7 @@ impl CdpConnection {
             crate::domains::page::push_superseded_navigation_result(out, &state);
             return;
         }
-        let navigation_session_id = state.navigate_session_id.clone();
+        let navigation_session_id = state.owner.session_id().map(str::to_owned);
         crate::domains::page::complete_materialized_navigation_into_buffer_async(
             self,
             out,

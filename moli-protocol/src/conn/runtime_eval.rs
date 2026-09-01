@@ -4216,7 +4216,15 @@ impl CdpConnection {
     }
 
     pub(crate) fn ingest_runtime_session_owner_output_updates(&mut self, session_id: Option<&str>) {
-        if let Ok(slot) = self.runtime_session_owner_slot_mut(session_id) {
+        self.ingest_runtime_session_owner_output_updates_for_route(session_id, None)
+    }
+
+    pub(crate) fn ingest_runtime_session_owner_output_updates_for_route(
+        &mut self,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
+    ) {
+        if let Ok(slot) = self.runtime_session_owner_slot_mut_for_route(session_id, owner_route) {
             let _ = slot.ingest_owner_page_observable_output_updates();
         }
     }
@@ -4225,6 +4233,19 @@ impl CdpConnection {
         &self,
         session_id: Option<&str>,
     ) -> Option<String> {
+        self.runtime_session_owner_frame_id_for_route(session_id, None)
+    }
+
+    pub(crate) fn runtime_session_owner_frame_id_for_route(
+        &self,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
+    ) -> Option<String> {
+        if let Some((_, target_id)) = self.target_owner_identity_for_route(session_id, owner_route)
+            && target_id.is_some()
+        {
+            return target_id;
+        }
         match session_id {
             None => self
                 .browser_context

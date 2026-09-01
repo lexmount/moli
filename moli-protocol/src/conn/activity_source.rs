@@ -4,15 +4,15 @@ use moli_core::{
 };
 use std::time::Instant;
 
-use super::{CdpConnection, CdpSessionRoute, TargetRuntimeSlot};
+use super::{CdpConnection, CdpSessionRoute, CommandOwnerScope, TargetRuntimeSlot};
 
 pub(crate) struct PendingChildFrameLifecycleWork {
-    session_id: Option<String>,
+    owner: CommandOwnerScope,
     pending: PendingPageCommand,
 }
 
 pub(crate) struct CompletedChildFrameLifecycleWork {
-    session_id: Option<String>,
+    owner: CommandOwnerScope,
     completion: CompletedPageCommand,
 }
 
@@ -24,7 +24,7 @@ impl PendingChildFrameLifecycleWork {
             .await
             .map_err(|error| error.to_string())?;
         Ok(CompletedChildFrameLifecycleWork {
-            session_id: self.session_id,
+            owner: self.owner,
             completion,
         })
     }
@@ -35,11 +35,17 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
     ) -> Option<(&mut NavigationEngine, &mut TargetRuntimeSlot)> {
+        self.activity_source_engine_and_runtime_slot_mut_for_route(session_id, None)
+    }
+
+    fn activity_source_engine_and_runtime_slot_mut_for_route(
+        &mut self,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
+    ) -> Option<(&mut NavigationEngine, &mut TargetRuntimeSlot)> {
         let route = match session_id {
             Some(_) => self.session_route(session_id)?,
-            None => self
-                .none_session_owner_route_override()
-                .unwrap_or(CdpSessionRoute::Browser),
+            None => owner_route.cloned().unwrap_or(CdpSessionRoute::Browser),
         };
         let (browser_context_id, target_id) = match &route {
             CdpSessionRoute::PageTarget {
@@ -68,15 +74,35 @@ impl CdpConnection {
             .navigation_engine_and_runtime_slot_mut()
     }
 
+    fn activity_source_engine_and_runtime_slot_mut_for_owner(
+        &mut self,
+        owner: &CommandOwnerScope,
+    ) -> Option<(&mut NavigationEngine, &mut TargetRuntimeSlot)> {
+        self.activity_source_engine_and_runtime_slot_mut_for_route(
+            owner.session_id(),
+            owner.session_owner_route(),
+        )
+    }
+
     pub(crate) fn start_child_frame_lifecycle_work_for_session_owner(
         &mut self,
         session_id: Option<&str>,
         timeout: std::time::Duration,
     ) -> Result<PendingChildFrameLifecycleWork, String> {
+        let owner = CommandOwnerScope::capture(self, session_id);
+        self.start_child_frame_lifecycle_work_for_owner(owner, timeout)
+    }
+
+    pub(crate) fn start_child_frame_lifecycle_work_for_owner(
+        &mut self,
+        owner: CommandOwnerScope,
+        timeout: std::time::Duration,
+    ) -> Result<PendingChildFrameLifecycleWork, String> {
         let storage = self
-            .navigation_load_inputs_for_session_owner(session_id)
+            .navigation_load_inputs_for_route(owner.session_id(), owner.session_owner_route())
             .resource_storage_handles();
-        let Some((engine, slot)) = self.activity_source_engine_and_runtime_slot_mut(session_id)
+        let Some((engine, slot)) =
+            self.activity_source_engine_and_runtime_slot_mut_for_owner(&owner)
         else {
             return Err("NoDocumentLoaded".to_owned());
         };
@@ -90,18 +116,15 @@ impl CdpConnection {
                 timeout,
             )
             .map_err(|error| error.to_string())?;
-        Ok(PendingChildFrameLifecycleWork {
-            session_id: session_id.map(str::to_owned),
-            pending,
-        })
+        Ok(PendingChildFrameLifecycleWork { owner, pending })
     }
 
     pub(crate) fn complete_child_frame_lifecycle_work_command_turn_for_session_owner(
         &mut self,
         pending: CompletedChildFrameLifecycleWork,
     ) -> Result<(bool, moli_core::page::RendererCommandTurnOutput), String> {
-        let session_id = pending.session_id.as_deref();
-        let Some((engine, slot)) = self.activity_source_engine_and_runtime_slot_mut(session_id)
+        let Some((engine, slot)) =
+            self.activity_source_engine_and_runtime_slot_mut_for_owner(&pending.owner)
         else {
             return Err("NoDocumentLoaded".to_owned());
         };

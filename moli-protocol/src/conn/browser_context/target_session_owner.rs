@@ -1349,17 +1349,35 @@ impl CdpConnection {
         inputs
     }
 
-    pub(crate) fn navigation_initiator_url_for_session_owner(
+    pub(crate) fn navigation_initiator_url_for_route(
         &self,
         session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
     ) -> Option<Url> {
-        self.target_session_owner_ref(session_id)
+        self.target_session_owner_ref_for_route(session_id, owner_route)
             .and_then(|owner| owner.navigation_initiator_url())
     }
 
     pub(crate) fn prepare_navigation_request_for_session_owner(
         &mut self,
         session_id: Option<&str>,
+        requested_url: &Url,
+        referrer: Option<&str>,
+        is_data_url: bool,
+    ) -> Option<TargetNavigationRequestPreflight> {
+        self.prepare_navigation_request_for_route(
+            session_id,
+            None,
+            requested_url,
+            referrer,
+            is_data_url,
+        )
+    }
+
+    pub(crate) fn prepare_navigation_request_for_route(
+        &mut self,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
         requested_url: &Url,
         referrer: Option<&str>,
         is_data_url: bool,
@@ -1371,7 +1389,7 @@ impl CdpConnection {
         let mut network_request_id_allocator =
             std::mem::take(&mut self.network_request_id_allocator);
         let result = self
-            .target_session_owner_mut(session_id)
+            .target_session_owner_mut_for_route(session_id, owner_route)
             .and_then(|mut owner| {
                 owner.prepare_navigation_request(
                     requested_url,
@@ -1390,7 +1408,16 @@ impl CdpConnection {
         session_id: Option<&str>,
         pending: PendingFetchNavigation,
     ) -> Option<()> {
-        self.target_session_owner_mut(session_id)?
+        self.register_pending_fetch_navigation_request_for_route(session_id, None, pending)
+    }
+
+    pub(crate) fn register_pending_fetch_navigation_request_for_route(
+        &mut self,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
+        pending: PendingFetchNavigation,
+    ) -> Option<()> {
+        self.target_session_owner_mut_for_route(session_id, owner_route)?
             .register_pending_fetch_navigation_request(pending)
     }
 
@@ -1800,7 +1827,15 @@ impl CdpConnection {
         &self,
         session_id: Option<&str>,
     ) -> Option<&TargetOwnerState> {
-        self.target_session_owner_ref(session_id)?
+        self.target_owner_state_for_route(session_id, None)
+    }
+
+    pub(crate) fn target_owner_state_for_route(
+        &self,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
+    ) -> Option<&TargetOwnerState> {
+        self.target_session_owner_ref_for_route(session_id, owner_route)?
             .target_owner_state()
     }
 
@@ -1971,22 +2006,21 @@ impl CdpConnection {
         ))
     }
 
-    /// Binds a renderer Page reservation to its explicit future target Page
-    /// attachment and returns that exact residence identity.
-    pub(crate) fn reserve_target_page_residence_identity_for_session(
+    pub(crate) fn reserve_target_page_residence_identity_for_route(
         &mut self,
         session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
         renderer_page: crate::conn::RendererPageResidenceIdentity,
     ) -> Option<TargetPageResidenceIdentity> {
         let (browser_context_id, routed_target_id) =
-            self.target_owner_identity_for_session(session_id)?;
+            self.target_owner_identity_for_route(session_id, owner_route)?;
         let target_id = routed_target_id.or_else(|| {
             self.browser_context_by_id(&browser_context_id)
                 .and_then(|browser_context| browser_context.active_target_id())
                 .map(str::to_owned)
         });
         let page_attachment_id = self
-            .runtime_session_owner_slot_mut(session_id)
+            .runtime_session_owner_slot_mut_for_route(session_id, owner_route)
             .ok()?
             .reserve_renderer_page_attachment(renderer_page);
         Some(TargetPageResidenceIdentity::new(
@@ -2000,12 +2034,13 @@ impl CdpConnection {
     /// Page-slot residence from which it was captured.
     pub(crate) fn target_page_residence_identity_is_current_for_session(
         &self,
-        session_id: Option<&str>,
+        _session_id: Option<&str>,
         expected: &TargetPageResidenceIdentity,
     ) -> bool {
-        self.target_page_residence_identity_for_session(session_id)
-            .as_ref()
-            == Some(expected)
+        self.browser_context_by_id(expected.browser_context_id())
+            .is_some_and(|browser_context| {
+                browser_context.target_page_residence_is_current(expected)
+            })
     }
 
     /// Captures the lifetime of the concrete Page attachment currently
@@ -2029,8 +2064,16 @@ impl CdpConnection {
         &self,
         session_id: Option<&str>,
     ) -> Option<crate::conn::TargetPageProtocolAttachmentIdentity> {
+        self.target_page_protocol_attachment_identity_for_route(session_id, None)
+    }
+
+    pub(crate) fn target_page_protocol_attachment_identity_for_route(
+        &self,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
+    ) -> Option<crate::conn::TargetPageProtocolAttachmentIdentity> {
         Some(crate::conn::TargetPageProtocolAttachmentIdentity::new(
-            self.target_page_residence_identity_for_session(session_id)?,
+            self.target_page_residence_identity_for_route(session_id, owner_route)?,
             session_id.map(str::to_owned),
         ))
     }
@@ -2106,8 +2149,21 @@ impl CdpConnection {
         session_id: Option<&str>,
         root_document: moli_core::RendererDocumentLifecycleIdentity,
     ) -> Option<crate::conn::TargetRootDocumentProtocolAttachmentIdentity> {
+        self.target_root_document_protocol_attachment_identity_for_route(
+            session_id,
+            None,
+            root_document,
+        )
+    }
+
+    pub(crate) fn target_root_document_protocol_attachment_identity_for_route(
+        &self,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
+        root_document: moli_core::RendererDocumentLifecycleIdentity,
+    ) -> Option<crate::conn::TargetRootDocumentProtocolAttachmentIdentity> {
         let binding = crate::conn::TargetRootDocumentProtocolAttachmentIdentity::new(
-            self.target_page_protocol_attachment_identity_for_session(session_id)?,
+            self.target_page_protocol_attachment_identity_for_route(session_id, owner_route)?,
             root_document,
         );
         self.target_root_document_protocol_attachment_identity_is_current(&binding)
@@ -2134,7 +2190,15 @@ impl CdpConnection {
         &self,
         session_id: Option<&str>,
     ) -> Option<moli_core::RendererDocumentLifecycleIdentity> {
-        self.runtime_session_owner_slot(session_id)
+        self.target_root_document_lifecycle_identity_for_route(session_id, None)
+    }
+
+    pub(crate) fn target_root_document_lifecycle_identity_for_route(
+        &self,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
+    ) -> Option<moli_core::RendererDocumentLifecycleIdentity> {
+        self.runtime_session_owner_slot_for_route(session_id, owner_route)
             .ok()?
             .page_slot()
             .renderer_document_lifecycle_binding()
@@ -2322,7 +2386,15 @@ impl CdpConnection {
         &self,
         session_id: Option<&str>,
     ) -> Vec<Option<String>> {
-        self.page_event_session_ids_for_session_owner(session_id)
+        self.subscribed_page_event_session_ids_for_route(session_id, None)
+    }
+
+    pub(crate) fn subscribed_page_event_session_ids_for_route(
+        &self,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
+    ) -> Vec<Option<String>> {
+        self.page_event_session_ids_for_route(session_id, owner_route)
             .into_iter()
             .filter(|event_session_id| {
                 self.target_page_session_state_for_session(event_session_id.as_deref())
@@ -2495,7 +2567,15 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
     ) -> Option<(usize, Vec<PageNavigationHistoryEntry>)> {
-        self.target_session_owner_mut(session_id)?
+        self.target_session_owner_navigation_history_snapshot_for_route(session_id, None)
+    }
+
+    pub(crate) fn target_session_owner_navigation_history_snapshot_for_route(
+        &mut self,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
+    ) -> Option<(usize, Vec<PageNavigationHistoryEntry>)> {
+        self.target_session_owner_mut_for_route(session_id, owner_route)?
             .navigation_history_snapshot()
     }
 
@@ -2521,11 +2601,12 @@ impl CdpConnection {
             .navigation_history_entry_url(entry_id)
     }
 
-    pub(crate) fn reset_navigation_history_for_session_owner(
+    pub(crate) fn reset_navigation_history_for_route(
         &mut self,
         session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
     ) -> Option<bool> {
-        self.target_session_owner_mut(session_id)?
+        self.target_session_owner_mut_for_route(session_id, owner_route)?
             .reset_navigation_history()
     }
 
@@ -2537,20 +2618,22 @@ impl CdpConnection {
             .can_reset_navigation_history()
     }
 
-    pub(crate) fn mark_next_navigation_history_replace_current_for_session_owner(
+    pub(crate) fn mark_next_navigation_history_replace_current_for_route(
         &mut self,
         session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
     ) -> Option<()> {
-        self.target_session_owner_mut(session_id)?
+        self.target_session_owner_mut_for_route(session_id, owner_route)?
             .mark_next_navigation_history_replace_current()
     }
 
-    pub(crate) fn mark_next_navigation_history_traverse_to_entry_for_session_owner(
+    pub(crate) fn mark_next_navigation_history_traverse_to_entry_for_route(
         &mut self,
         session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
         entry_id: i32,
     ) -> Option<()> {
-        self.target_session_owner_mut(session_id)?
+        self.target_session_owner_mut_for_route(session_id, owner_route)?
             .mark_next_navigation_history_traverse_to_entry(entry_id)
     }
 

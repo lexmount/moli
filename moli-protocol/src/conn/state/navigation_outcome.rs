@@ -9,7 +9,7 @@ use serde_json::Value;
 use std::sync::Arc;
 use url::Url;
 
-use crate::conn::ResponseCommitReady;
+use crate::conn::{CommandOwnerScope, ResponseCommitReady};
 use crate::devtools_runtime::DevToolsProtocol;
 use crate::domains::network::{
     CompletedDocumentProgressTransfer, CompletedDownloadProgressTransfer,
@@ -317,7 +317,7 @@ impl NavigationResultProjection {
 #[derive(Debug, Clone)]
 pub struct NavigationDispatchState {
     pub navigate_id: Option<u64>,
-    pub navigate_session_id: Option<String>,
+    pub(crate) owner: CommandOwnerScope,
     pub(crate) result_projection: NavigationResultProjection,
     pub frame_id: String,
     pub session_id: Option<String>,

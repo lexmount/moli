@@ -2,8 +2,14 @@ use super::{CdpConnection, CdpSessionRoute, NoneSessionOwnerRouteOverrideScope};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct CommandOwnerScope {
-    session_id: Option<String>,
-    session_owner_route: Option<CdpSessionRoute>,
+    identity: CommandOwnerIdentity,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum CommandOwnerIdentity {
+    Session(String),
+    ImplicitRoute(CdpSessionRoute),
+    Implicit,
 }
 
 impl CommandOwnerScope {
@@ -22,24 +28,32 @@ impl CommandOwnerScope {
                 })
             })
             .flatten();
-        Self {
-            session_id: session_id.map(str::to_owned),
-            session_owner_route: none_session_owner_route,
+        match session_id {
+            Some(session_id) => Self::for_session(session_id),
+            None => Self::for_implicit_route(none_session_owner_route),
         }
     }
 
-    pub(crate) fn from_session_and_owner_route(
-        session_id: Option<&str>,
-        session_owner_route: Option<CdpSessionRoute>,
-    ) -> Self {
+    pub(crate) fn for_session(session_id: &str) -> Self {
         Self {
-            session_id: session_id.map(str::to_owned),
-            session_owner_route,
+            identity: CommandOwnerIdentity::Session(session_id.to_owned()),
+        }
+    }
+
+    pub(crate) fn for_implicit_route(session_owner_route: Option<CdpSessionRoute>) -> Self {
+        Self {
+            identity: match session_owner_route {
+                Some(route) => CommandOwnerIdentity::ImplicitRoute(route),
+                None => CommandOwnerIdentity::Implicit,
+            },
         }
     }
 
     pub(crate) fn session_id(&self) -> Option<&str> {
-        self.session_id.as_deref()
+        match &self.identity {
+            CommandOwnerIdentity::Session(session_id) => Some(session_id),
+            CommandOwnerIdentity::ImplicitRoute(_) | CommandOwnerIdentity::Implicit => None,
+        }
     }
 
     /// Returns the exact route captured for an implicit-session command.
@@ -49,14 +63,17 @@ impl CommandOwnerScope {
     /// admission, so deferred completion cannot follow a later foreground
     /// selection.
     pub(crate) fn session_owner_route(&self) -> Option<&CdpSessionRoute> {
-        self.session_owner_route.as_ref()
+        match &self.identity {
+            CommandOwnerIdentity::ImplicitRoute(route) => Some(route),
+            CommandOwnerIdentity::Session(_) | CommandOwnerIdentity::Implicit => None,
+        }
     }
 
     pub(crate) fn enter<'a>(
         &self,
         conn: &'a mut CdpConnection,
     ) -> NoneSessionOwnerRouteOverrideScope<'a> {
-        conn.scoped_optional_none_session_owner_route_override(self.session_owner_route.clone())
+        conn.scoped_optional_none_session_owner_route_override(self.session_owner_route().cloned())
     }
 }
 

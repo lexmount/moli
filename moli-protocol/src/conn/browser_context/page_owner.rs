@@ -582,9 +582,10 @@ impl CdpConnection {
             })
     }
 
-    pub(crate) fn record_main_document_resource_body_for_session_owner(
+    pub(crate) fn record_main_document_resource_body_for_route(
         &mut self,
         session_id: Option<&str>,
+        owner_route: Option<&crate::conn::CdpSessionRoute>,
         frame_id: String,
         loader_id: String,
         url: url::Url,
@@ -592,7 +593,7 @@ impl CdpConnection {
         from_cache: bool,
         body: crate::conn::CapturedBody,
     ) -> bool {
-        self.with_target_owner_state_for_session_mut(session_id, |owner_state| {
+        self.with_target_owner_state_for_route_mut(session_id, owner_route, |owner_state| {
             owner_state.page_resource_store.record_main_document_body(
                 frame_id,
                 loader_id,

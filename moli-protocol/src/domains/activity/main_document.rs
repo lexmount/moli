@@ -151,7 +151,7 @@ impl MainDocumentNavigationActivity {
         crate::domains::target::emit_target_info_changed_for_session_owner_background_event(
             conn,
             &mut target_info_events,
-            self.state.navigate_session_id.as_deref(),
+            self.state.owner.session_id(),
         );
         out.extend_background_events_after_messages(target_info_events);
         if timing_enabled {
@@ -227,7 +227,7 @@ impl MainDocumentNavigationActivity {
             page::emit_bound_renderer_document_lifecycle_background_events(
                 conn,
                 &mut renderer_lifecycle_events,
-                self.state.navigate_session_id.as_deref(),
+                self.state.owner.session_id(),
                 binding,
                 &initial_renderer_document_lifecycle_events,
             );
@@ -236,14 +236,14 @@ impl MainDocumentNavigationActivity {
 
         if terminated_before_domcontentloaded {
             conn.cancel_renderer_document_load_visibility_barrier_for_session_owner(
-                self.state.navigate_session_id.as_deref(),
+                self.state.owner.session_id(),
                 &self.state.loader_id,
             );
             return;
         }
         if !reached_domcontentloaded {
             tracing::debug!(
-                session_id = self.state.navigate_session_id.as_deref(),
+                session_id = self.state.owner.session_id(),
                 "renderer page creation reached commit without DOMContentLoaded or termination"
             );
         }
@@ -255,8 +255,7 @@ impl MainDocumentNavigationActivity {
                 elapsed_ms = timing_started.elapsed().as_millis(),
             );
         }
-        let owner_scope =
-            CommandOwnerScope::capture(conn, self.state.navigate_session_id.as_deref());
+        let owner_scope = CommandOwnerScope::capture(conn, self.state.owner.session_id());
         conn.enqueue_deferred_main_document_load_completion(
             DeferredMainDocumentLoadCompletionAdmission::new(self, pending_download)
                 .with_renderer_document_binding(renderer_document_binding)
@@ -275,7 +274,7 @@ impl MainDocumentNavigationActivity {
         let timing_started = std::time::Instant::now();
         if !self.is_still_current(conn) {
             conn.cancel_renderer_document_load_visibility_barrier_for_session_owner(
-                self.state.navigate_session_id.as_deref(),
+                self.state.owner.session_id(),
                 &self.state.loader_id,
             );
             if timing_enabled {
@@ -293,7 +292,7 @@ impl MainDocumentNavigationActivity {
             .await;
         if post_load_observation_armed {
             conn.settle_root_frame_stopped_loading_observation(
-                self.state.navigate_session_id.as_deref(),
+                self.state.owner.session_id(),
             )
             .expect(
                 "an armed root post-load observation must settle its exact stopped-loading fact",
@@ -319,12 +318,13 @@ impl MainDocumentNavigationActivity {
             // The document token is the document identity. A same-document
             // navigation may update the target URL between DCL and load, but
             // it must not make the current document's load completion stale.
-            return conn.accepts_document_body_completion_for_session_owner(
-                self.state.navigate_session_id.as_deref(),
+            return conn.accepts_document_body_completion_for_route(
+                self.state.owner.session_id(),
+                self.state.owner.session_owner_route(),
                 token,
             );
         }
-        conn.runtime_session_owner_target_url(self.state.navigate_session_id.as_deref())
+        conn.runtime_session_owner_target_url(self.state.owner.session_id())
             .is_some_and(|url| url == self.final_url.as_str())
     }
 
@@ -431,7 +431,7 @@ impl MainDocumentNavigationActivity {
     pub(crate) fn navigation_error_messages_for_test(&mut self, message: &str) -> Vec<Value> {
         let state = self.state();
         let navigate_id = state.navigate_id;
-        let navigate_session_id = state.navigate_session_id.clone();
+        let navigate_session_id = state.owner.session_id().map(str::to_owned);
         let mut background_events = Vec::new();
         let mut output = MainDocumentProgressBackgroundEventBarrier::background_events(
             &mut background_events,
@@ -478,13 +478,13 @@ impl MainDocumentNavigationActivity {
     ) -> bool {
         self.emit_renderer_load_boundary_facts(conn, out);
         let armed = conn.arm_root_post_load_observation_for_session_owner(
-            self.state.navigate_session_id.as_deref(),
+            self.state.owner.session_id(),
             &self.state.loader_id,
         );
         if armed {
             let mut network_idle_events = Vec::new();
             conn.emit_root_network_idle_for_session_owner(
-                self.state.navigate_session_id.as_deref(),
+                self.state.owner.session_id(),
                 &mut network_idle_events,
             );
             out.extend_background_events(network_idle_events);
@@ -510,12 +510,12 @@ impl MainDocumentNavigationActivity {
             std::mem::take(&mut self.deferred_initial_renderer_document_lifecycle_events);
         let (binding, mut accepted_events) = conn
             .ingest_renderer_document_lifecycle_events_for_session_owner(
-                self.state.navigate_session_id.as_deref(),
+                self.state.owner.session_id(),
                 renderer_events,
             );
         accepted_events.extend(
             conn.release_renderer_document_load_visibility_barrier_for_session_owner(
-                self.state.navigate_session_id.as_deref(),
+                self.state.owner.session_id(),
                 &self.state.loader_id,
             )
             .unwrap_or_default(),
@@ -525,7 +525,7 @@ impl MainDocumentNavigationActivity {
             page::emit_bound_renderer_document_lifecycle_background_events(
                 conn,
                 &mut renderer_lifecycle_events,
-                self.state.navigate_session_id.as_deref(),
+                self.state.owner.session_id(),
                 binding,
                 &accepted_events,
             );
@@ -588,7 +588,7 @@ impl MainDocumentNavigationActivity {
             let error = conn
                 .handle_pending_download_activation_inline_async(
                     &mut download_events,
-                    self.state.navigate_session_id.as_deref(),
+                    self.state.owner.session_id(),
                     download,
                     &mut command_context,
                 )
@@ -601,7 +601,7 @@ impl MainDocumentNavigationActivity {
         };
         if let Some(message) = error {
             let navigate_id = self.state.navigate_id;
-            let navigate_session_id = self.state.navigate_session_id.clone();
+            let navigate_session_id = self.state.owner.session_id().map(str::to_owned);
             let mut command_output = CommandOutputBuffer::default();
             self.emit_navigation_error_into_buffer(&mut command_output, &message);
             out.extend_background_events(
@@ -624,9 +624,7 @@ impl MainDocumentNavigationActivity {
         network::emit_pending_network_backlog_activity_background_events(
             conn,
             out,
-            network::NetworkBacklogProjectionContext::new(
-                self.state.navigate_session_id.as_deref(),
-            ),
+            network::NetworkBacklogProjectionContext::new(self.state.owner.session_id()),
         );
         if timing_enabled {
             tracing::info!(
@@ -645,10 +643,7 @@ impl DeferredMainDocumentLoadCompletionAdmission {
         navigation_activity: MainDocumentNavigationActivity,
         pending_download: Option<RendererPendingDownloadActivation>,
     ) -> Self {
-        let owner_scope = CommandOwnerScope::from_session_and_owner_route(
-            navigation_activity.state.navigate_session_id.as_deref(),
-            None,
-        );
+        let owner_scope = navigation_activity.state.owner.clone();
         Self {
             state: DeferredMainDocumentLoadCompletionState {
                 navigation_activity,
@@ -960,7 +955,7 @@ mod tests {
     fn navigation_state() -> NavigationDispatchState {
         NavigationDispatchState {
             navigate_id: Some(77),
-            navigate_session_id: Some("SID-nav".to_owned()),
+            owner: CommandOwnerScope::for_session("SID-nav"),
             result_projection: NavigationResultProjection::Cdp(
                 json!({ "frameId": "FRAME-1", "loaderId": "LID-1" }),
             ),
@@ -1389,11 +1384,9 @@ mod tests {
             .await;
 
         let mut out = Vec::new();
-        output.into_plan().emit_into(
-            &mut out,
-            state.navigate_id,
-            state.navigate_session_id.as_deref(),
-        );
+        output
+            .into_plan()
+            .emit_into(&mut out, state.navigate_id, state.owner.session_id());
         let dcl_index = out
             .iter()
             .position(|message| message["method"] == json!("Page.domContentEventFired"))

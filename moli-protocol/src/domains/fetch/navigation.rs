@@ -38,12 +38,12 @@ fn prepare_navigation_response_stage(
     }
     let Some(response_stage) = conn
         .target_fetch_subresource_interception_snapshot_for_session_owner(
-            pending.navigation.navigate_session_id.as_deref(),
+            pending.navigation.owner.session_id(),
         )
         .and_then(|snapshot| {
             snapshot
                 .matching_response_stage_pause_sessions(
-                    pending.navigation.navigate_session_id.as_deref(),
+                    pending.navigation.owner.session_id(),
                     DevToolsNetworkResourceType::Document,
                     final_url,
                 )
@@ -64,7 +64,7 @@ pub(crate) async fn load_or_pause_navigation_for_auth_into_buffer_async(
     auth: Option<SubresourceAuthCredentials>,
     prior_network_observation_journal: Option<NetworkObservationJournal>,
 ) {
-    let navigate_session_id = pending.navigation.navigate_session_id.clone();
+    let navigate_session_id = pending.navigation.owner.session_id().map(str::to_owned);
     network::record_main_document_request_body(conn, &pending.navigation);
     let should_handle_auth = conn.target_fetch_matches_auth_required_for_session_owner(
         navigate_session_id.as_deref(),
@@ -173,7 +173,7 @@ pub(crate) async fn load_or_pause_navigation_for_auth_into_buffer_async(
                 {
                     populate_auth_challenge_origin(
                         conn,
-                        pending.navigation.navigate_session_id.as_deref(),
+                        pending.navigation.owner.session_id(),
                         &response_head.final_url,
                         &mut challenge,
                     );
@@ -271,7 +271,7 @@ pub(super) async fn load_or_pause_navigation_for_auth_as_background_events_async
     prior_network_observation_journal: Option<NetworkObservationJournal>,
 ) {
     let command_id = pending.navigation.navigate_id;
-    let command_session_id = pending.navigation.navigate_session_id.clone();
+    let command_session_id = pending.navigation.owner.session_id().map(str::to_owned);
     let mut output = CommandOutputBuffer::default();
     Box::pin(load_or_pause_navigation_for_auth_into_buffer_async(
         conn,
@@ -308,7 +308,7 @@ pub(super) async fn cancel_navigation_auth_as_background_events_async(
         auth_required_blocked_intercepts: Vec::new(),
     };
     let command_id = pending.navigation.navigate_id;
-    let command_session_id = pending.navigation.navigate_session_id.clone();
+    let command_session_id = pending.navigation.owner.session_id().map(str::to_owned);
     let mut output = CommandOutputBuffer::default();
     if response
         .observation_journal()
@@ -378,7 +378,7 @@ pub(super) async fn complete_tokened_materialized_navigation_as_background_event
     navigation: network::MaterializedNavigationLoadOutcome,
 ) {
     let command_id = navigation_state.navigate_id;
-    let command_session_id = navigation_state.navigate_session_id.clone();
+    let command_session_id = navigation_state.owner.session_id().map(str::to_owned);
     let mut output = CommandOutputBuffer::default();
     complete_tokened_materialized_navigation_into_buffer_async(
         conn,
@@ -407,7 +407,7 @@ pub(super) async fn complete_tokened_materialized_navigation_into_buffer_async(
             page::push_superseded_navigation_result(out, &navigation_state);
         } else {
             tracing::warn!(
-                session_id = navigation_state.navigate_session_id.as_deref(),
+                session_id = navigation_state.owner.session_id(),
                 "direct navigation aborted after command result was handled"
             );
         }
@@ -472,7 +472,7 @@ async fn handle_streaming_response_head_for_navigation_into_buffer_async(
     {
         populate_auth_challenge_origin(
             conn,
-            pending.navigation.navigate_session_id.as_deref(),
+            pending.navigation.owner.session_id(),
             &response_head.final_url,
             &mut challenge,
         );
@@ -575,7 +575,7 @@ async fn handle_streaming_response_head_for_navigation_into_buffer_async(
     };
     let (response, network_observation_journal) = response.into_parts_with_observation_journal();
     conn.register_pending_fetch_response_navigation_for_session_owner(
-        pending.navigation.navigate_session_id.as_deref(),
+        pending.navigation.owner.session_id(),
         pending.fetch_request_id.clone(),
         pending.document_navigation_token.clone(),
         pending.navigation.clone(),
@@ -684,7 +684,7 @@ fn pause_buffered_raw_response_stage_navigation_into_buffer(
     let request_cookie_report = response.response().request_cookie_report.clone();
     let (response, network_observation_journal) = response.into_parts_with_observation_journal();
     conn.register_pending_fetch_response_navigation_for_session_owner(
-        pending.navigation.navigate_session_id.as_deref(),
+        pending.navigation.owner.session_id(),
         pending.fetch_request_id.clone(),
         pending.document_navigation_token.clone(),
         pending.navigation.clone(),
@@ -794,7 +794,7 @@ fn navigation_auth_required_blocked_intercepts(
         return pending.auth_required_blocked_intercepts.clone();
     }
     let intercepts = conn.target_fetch_matching_auth_required_network_intercepts_for_session_owner(
-        pending.navigation.navigate_session_id.as_deref(),
+        pending.navigation.owner.session_id(),
         &pending.navigation.requested_url,
     );
     if !intercepts.is_empty() {
@@ -842,7 +842,7 @@ fn register_navigation_auth_required_event(
 ) -> crate::conn::BackgroundProtocolEvent {
     let blocked_intercepts = navigation_auth_required_blocked_intercepts(conn, pending);
     let mut pending_auth = crate::conn::PendingFetchAuthNavigation {
-        owner_session_id: pending.navigation.navigate_session_id.clone(),
+        owner_session_id: pending.navigation.owner.session_id().map(str::to_owned),
         action_session_id: pending.interception_session_id.clone(),
         interception_session_id: pending.interception_session_id.clone(),
         owner_kind: PendingSubresourceFetchOwnerKind::Fetch,
@@ -863,12 +863,12 @@ fn register_navigation_auth_required_event(
         .target_fetch_subresource_interception_snapshot_for_target(&pending.navigation.frame_id)
         .or_else(|| {
             conn.target_fetch_subresource_interception_snapshot_for_session_owner(
-                pending.navigation.navigate_session_id.as_deref(),
+                pending.navigation.owner.session_id(),
             )
         })
         .map(|snapshot| {
             snapshot.matching_auth_required_pause_sessions(
-                pending.navigation.navigate_session_id.as_deref(),
+                pending.navigation.owner.session_id(),
                 &pending.navigation.requested_url,
             )
         })
@@ -876,7 +876,7 @@ fn register_navigation_auth_required_event(
     if let Some(first_pause_session) = auth_sessions.first().cloned() {
         pending_auth.owner_session_id = routable_stage_owner_session_id(
             conn,
-            pending.navigation.navigate_session_id.as_deref(),
+            pending.navigation.owner.session_id(),
             first_pause_session.session_id.as_deref(),
         );
         pending_auth.owner_kind = first_pause_session.owner_kind;
@@ -889,7 +889,7 @@ fn register_navigation_auth_required_event(
         let mut remaining_sessions = Vec::new();
         for session in auth_sessions.into_iter().skip(1) {
             let Ok(next_request_id) = conn.allocate_fetch_navigation_request_id_for_session_owner(
-                pending.navigation.navigate_session_id.as_deref(),
+                pending.navigation.owner.session_id(),
             ) else {
                 break;
             };
@@ -914,7 +914,7 @@ fn register_navigation_auth_required_event(
     let pending_owner_session_id = pending_auth
         .owner_session_id
         .as_deref()
-        .or(pending.navigation.navigate_session_id.as_deref());
+        .or(pending.navigation.owner.session_id());
     conn.register_pending_fetch_auth_navigation_for_session_owner(
         pending_owner_session_id,
         pending.fetch_request_id.clone(),

@@ -71,7 +71,7 @@ async fn complete_tokened_materialized_navigation_background_events_async(
     navigation: network::MaterializedNavigationLoadOutcome,
 ) -> Option<RendererOutputFence> {
     let command_id = navigation_state.navigate_id;
-    let command_session_id = navigation_state.navigate_session_id.clone();
+    let command_session_id = navigation_state.owner.session_id().map(str::to_owned);
     let Some(token) = token else {
         out.extend(
             CommandOutputPlan::error(-32000, "Navigation aborted")

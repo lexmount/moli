@@ -96,7 +96,7 @@ async fn buffered_navigation_for_inactive_session_carries_its_target_engine() {
     let requested_url = Url::parse("https://target.example/fulfilled").unwrap();
     let navigation = NavigationDispatchState {
         navigate_id: Some(1),
-        navigate_session_id: Some("SID-target".to_owned()),
+        owner: crate::conn::CommandOwnerScope::for_session("SID-target"),
         result_projection: NavigationResultProjection::Cdp(json!({
             "frameId": "TID-target",
             "loaderId": "LOADER-target",

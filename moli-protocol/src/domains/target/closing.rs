@@ -172,10 +172,12 @@ async fn close_target_inner_async(
             .as_ref()
             .and_then(|browser_context| browser_context.background_target(&target_id))
             .and_then(|target| target.session_id().map(str::to_owned));
-        let owner_scope = crate::conn::CommandOwnerScope::from_session_and_owner_route(
-            session_id.as_deref(),
-            session_id.is_none().then_some(target_route),
-        );
+        let owner_scope = session_id
+            .as_deref()
+            .map(crate::conn::CommandOwnerScope::for_session)
+            .unwrap_or_else(|| {
+                crate::conn::CommandOwnerScope::for_implicit_route(Some(target_route))
+            });
         let renderer_output_predecessor =
             events::fail_pending_fetch_state_for_target_background_events_async(
                 conn,
