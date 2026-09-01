@@ -4,11 +4,57 @@ use crate::util::serialize_v8_array;
 use crate::web_api_interfaces;
 use moli_webapi_declare::DataPropertyDescriptorDeclaration;
 
-const SVG_RECT_ANIMATED_LENGTH_ATTRIBUTES: &[&str] = &["x", "y", "width", "height", "rx", "ry"];
-const SVG_CIRCLE_ANIMATED_LENGTH_ATTRIBUTES: &[&str] = &["cx", "cy", "r"];
-const SVG_ELLIPSE_ANIMATED_LENGTH_ATTRIBUTES: &[&str] = &["cx", "cy", "rx", "ry"];
-const SVG_LINE_ANIMATED_LENGTH_ATTRIBUTES: &[&str] = &["x1", "y1", "x2", "y2"];
-const SVG_BOX_ANIMATED_LENGTH_ATTRIBUTES: &[&str] = &["x", "y", "width", "height"];
+const SVG_RECT_ANIMATED_LENGTH_ATTRIBUTES: &[(&str, &str)] = &[
+    ("x", "0"),
+    ("y", "0"),
+    ("width", "0"),
+    ("height", "0"),
+    ("rx", "0"),
+    ("ry", "0"),
+];
+const SVG_CIRCLE_ANIMATED_LENGTH_ATTRIBUTES: &[(&str, &str)] =
+    &[("cx", "0"), ("cy", "0"), ("r", "0")];
+const SVG_ELLIPSE_ANIMATED_LENGTH_ATTRIBUTES: &[(&str, &str)] =
+    &[("cx", "0"), ("cy", "0"), ("rx", "0"), ("ry", "0")];
+const SVG_LINE_ANIMATED_LENGTH_ATTRIBUTES: &[(&str, &str)] =
+    &[("x1", "0"), ("y1", "0"), ("x2", "0"), ("y2", "0")];
+const SVG_BOX_ANIMATED_LENGTH_ATTRIBUTES: &[(&str, &str)] =
+    &[("x", "0"), ("y", "0"), ("width", "0"), ("height", "0")];
+const SVG_FILTER_ANIMATED_LENGTH_ATTRIBUTES: &[(&str, &str)] = &[
+    ("x", "-10%"),
+    ("y", "-10%"),
+    ("width", "120%"),
+    ("height", "120%"),
+];
+const SVG_FILTER_PRIMITIVE_ANIMATED_LENGTH_ATTRIBUTES: &[(&str, &str)] = &[
+    ("x", "0%"),
+    ("y", "0%"),
+    ("width", "100%"),
+    ("height", "100%"),
+];
+const SVG_LINEAR_GRADIENT_ANIMATED_LENGTH_ATTRIBUTES: &[(&str, &str)] =
+    &[("x1", "0%"), ("y1", "0%"), ("x2", "100%"), ("y2", "0%")];
+const SVG_RADIAL_GRADIENT_ANIMATED_LENGTH_ATTRIBUTES: &[(&str, &str)] = &[
+    ("cx", "50%"),
+    ("cy", "50%"),
+    ("r", "50%"),
+    ("fx", "50%"),
+    ("fy", "50%"),
+    ("fr", "0%"),
+];
+const SVG_MARKER_ANIMATED_LENGTH_ATTRIBUTES: &[(&str, &str)] = &[
+    ("refX", "0"),
+    ("refY", "0"),
+    ("markerWidth", "3"),
+    ("markerHeight", "3"),
+];
+const SVG_SVG_ANIMATED_LENGTH_ATTRIBUTES: &[(&str, &str)] = &[
+    ("x", "0"),
+    ("y", "0"),
+    ("width", "100%"),
+    ("height", "100%"),
+];
+const SVG_TEXT_PATH_ANIMATED_LENGTH_ATTRIBUTES: &[(&str, &str)] = &[("startOffset", "0")];
 const SVG_LENGTH_ACCESSOR_NAMES: &[&str] = &[
     "unitType",
     "value",
@@ -308,27 +354,168 @@ pub(super) fn svg_box_animated_length_getter<'s>(
     );
 }
 
+pub(super) fn svg_filter_animated_length_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    svg_element_animated_length_getter(
+        scope,
+        &args,
+        rv,
+        SVG_FILTER_ANIMATED_LENGTH_ATTRIBUTES,
+        "SVGFilterElement animated length attributes",
+    );
+}
+
+pub(super) fn svg_filter_primitive_animated_length_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    svg_element_animated_length_getter(
+        scope,
+        &args,
+        rv,
+        SVG_FILTER_PRIMITIVE_ANIMATED_LENGTH_ATTRIBUTES,
+        "SVGFilterPrimitiveStandardAttributes animated length attributes",
+    );
+}
+
+pub(super) fn svg_pattern_animated_length_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    svg_element_animated_length_getter(
+        scope,
+        &args,
+        rv,
+        SVG_BOX_ANIMATED_LENGTH_ATTRIBUTES,
+        "SVGPatternElement animated length attributes",
+    );
+}
+
+pub(super) fn svg_linear_gradient_animated_length_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    svg_element_animated_length_getter(
+        scope,
+        &args,
+        rv,
+        SVG_LINEAR_GRADIENT_ANIMATED_LENGTH_ATTRIBUTES,
+        "SVGLinearGradientElement animated length attributes",
+    );
+}
+
+pub(super) fn svg_radial_gradient_animated_length_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    svg_element_animated_length_getter(
+        scope,
+        &args,
+        rv,
+        SVG_RADIAL_GRADIENT_ANIMATED_LENGTH_ATTRIBUTES,
+        "SVGRadialGradientElement animated length attributes",
+    );
+}
+
+pub(super) fn svg_marker_animated_length_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    svg_element_animated_length_getter(
+        scope,
+        &args,
+        rv,
+        SVG_MARKER_ANIMATED_LENGTH_ATTRIBUTES,
+        "SVGMarkerElement animated length attributes",
+    );
+}
+
+pub(super) fn svg_mask_animated_length_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    svg_element_animated_length_getter(
+        scope,
+        &args,
+        rv,
+        SVG_FILTER_ANIMATED_LENGTH_ATTRIBUTES,
+        "SVGMaskElement animated length attributes",
+    );
+}
+
+pub(super) fn svg_svg_animated_length_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    svg_element_animated_length_getter(
+        scope,
+        &args,
+        rv,
+        SVG_SVG_ANIMATED_LENGTH_ATTRIBUTES,
+        "SVGSVGElement animated length attributes",
+    );
+}
+
+pub(super) fn svg_text_path_animated_length_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    svg_element_animated_length_getter(
+        scope,
+        &args,
+        rv,
+        SVG_TEXT_PATH_ANIMATED_LENGTH_ATTRIBUTES,
+        "SVGTextPathElement animated length attributes",
+    );
+}
+
 fn svg_element_animated_length_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
-    attributes: &'static [&'static str],
+    attributes: &'static [(&'static str, &'static str)],
     label: &'static str,
 ) {
-    let Some(name) = callback_data_item(scope, args, attributes, label) else {
+    let Some((name, initial_value)) = callback_data_item(scope, args, attributes, label) else {
         rv.set_undefined();
         return;
     };
+    svg_animated_length_attribute_getter(scope, args.this(), rv, name, initial_value);
+}
+
+fn svg_animated_length_attribute_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+    name: &'static str,
+    initial_value: &'static str,
+) {
     let slot = svg_animated_length_attribute_slot(name);
-    let owner = args.this();
     if let Some(value) = get_private_value(scope, owner, slot) {
         if let Ok(object) = v8::Local::<v8::Object>::try_from(value) {
-            sync_svg_animated_length_from_owner_attribute(scope, object, owner, name);
+            sync_svg_animated_length_from_owner_attribute(
+                scope,
+                object,
+                owner,
+                name,
+                initial_value,
+            );
         }
         rv.set(value);
         return;
     }
-    let value = build_svg_animated_length_for_attribute(scope, owner, name);
+    let value = build_svg_animated_length_for_attribute(scope, owner, name, initial_value);
     set_private_value(scope, owner, slot, value.into());
     rv.set(value.into());
 }
@@ -592,21 +779,9 @@ pub(super) fn svg_geometry_path_length_getter<'s>(
 pub(super) fn svg_text_content_text_length_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
+    rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let holder = args.this();
-    if let Some(value) = get_private_value(scope, holder, SVG_TEXT_CONTENT_TEXT_LENGTH_SLOT) {
-        rv.set(value);
-        return;
-    }
-    let value = build_svg_animated_length(scope, 0.0);
-    set_private_value(
-        scope,
-        holder,
-        SVG_TEXT_CONTENT_TEXT_LENGTH_SLOT,
-        value.into(),
-    );
-    rv.set(value.into());
+    svg_animated_length_attribute_getter(scope, args.this(), rv, "textLength", "0");
 }
 
 pub(super) fn svg_element_animated_enumeration_getter<'s>(
