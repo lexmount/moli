@@ -3342,6 +3342,14 @@ impl ParserStreamHtmlTreeSinkTarget {
         handle
     }
 
+    pub(super) fn template_contents_parent_handle(
+        &self,
+        node_id: NativeNodeId,
+    ) -> Option<ParseHandle> {
+        self.read_template_contents_handle(node_id)
+            .map(|handle| ParseHandle::new(handle, None))
+    }
+
     fn take_template_contents_insertion_hint(&mut self) -> Option<NativeNodeId> {
         self.next_template_contents_insertion.take()
     }
