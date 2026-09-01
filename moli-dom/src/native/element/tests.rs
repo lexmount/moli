@@ -235,9 +235,34 @@ fn svg_element_interface_name_specializes_standard_elements() {
     assert_eq!(svg_element_interface_name("defs"), "SVGDefsElement");
     assert_eq!(svg_element_interface_name("desc"), "SVGDescElement");
     assert_eq!(svg_element_interface_name("ellipse"), "SVGEllipseElement");
+    assert_eq!(svg_element_interface_name("feBlend"), "SVGFEBlendElement");
+    assert_eq!(
+        svg_element_interface_name("feColorMatrix"),
+        "SVGFEColorMatrixElement"
+    );
+    assert_eq!(
+        svg_element_interface_name("feComposite"),
+        "SVGFECompositeElement"
+    );
     assert_eq!(
         svg_element_interface_name("feConvolveMatrix"),
         "SVGFEConvolveMatrixElement"
+    );
+    assert_eq!(
+        svg_element_interface_name("feDisplacementMap"),
+        "SVGFEDisplacementMapElement"
+    );
+    assert_eq!(svg_element_interface_name("feFuncA"), "SVGFEFuncAElement");
+    assert_eq!(svg_element_interface_name("feFuncB"), "SVGFEFuncBElement");
+    assert_eq!(svg_element_interface_name("feFuncG"), "SVGFEFuncGElement");
+    assert_eq!(svg_element_interface_name("feFuncR"), "SVGFEFuncRElement");
+    assert_eq!(
+        svg_element_interface_name("feMorphology"),
+        "SVGFEMorphologyElement"
+    );
+    assert_eq!(
+        svg_element_interface_name("feTurbulence"),
+        "SVGFETurbulenceElement"
     );
     assert_eq!(svg_element_interface_name("filter"), "SVGFilterElement");
     assert_eq!(
@@ -267,6 +292,7 @@ fn svg_element_interface_name_specializes_standard_elements() {
     assert_eq!(svg_element_interface_name("svg"), "SVGSVGElement");
     assert_eq!(svg_element_interface_name("symbol"), "SVGSymbolElement");
     assert_eq!(svg_element_interface_name("text"), "SVGTextElement");
+    assert_eq!(svg_element_interface_name("textPath"), "SVGTextPathElement");
     assert_eq!(svg_element_interface_name("title"), "SVGTitleElement");
     assert_eq!(svg_element_interface_name("tspan"), "SVGTSpanElement");
     assert_eq!(svg_element_interface_name("use"), "SVGUseElement");
