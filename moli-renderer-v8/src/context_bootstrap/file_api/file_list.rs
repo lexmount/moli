@@ -6,13 +6,10 @@ use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 const FILE_LIST_LENGTH_SLOT: &str = "__lmFileListLength";
 const FILE_LIST_FILES_SLOT: &str = "__lmFileListFiles";
-const FILE_LIST_BRAND_SLOT: &str = "__lmFileListBrand";
 
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::FileList, require_prototype)]
 struct FileListObjectDeclaration {
-    #[webapi(slot = FILE_LIST_BRAND_SLOT, init = true)]
-    brand: (),
 
     #[webapi(slot = FILE_LIST_LENGTH_SLOT)]
     length: f64,
@@ -141,14 +138,17 @@ pub(in crate::context_bootstrap) fn file_list_item_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !file_list_receiver_branded(scope, args.this()) {
+    if !is_file_list_object(scope, args.this()) {
         throw_type_error(scope, "Illegal invocation");
         return;
     }
     let Some(parsed) = webidl::parse_args::<FileListItemArgs>(scope, &args) else {
         return;
     };
-    let Some(value) = args.this().get_index(scope, parsed.index) else {
+    let Some(value) = get_private_value(scope, args.this(), FILE_LIST_FILES_SLOT)
+        .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok())
+        .and_then(|files| files.get_index(scope, parsed.index))
+    else {
         rv.set(v8::null(scope).into());
         return;
     };
@@ -164,7 +164,7 @@ fn file_list_length_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !file_list_receiver_branded(scope, args.this()) {
+    if !is_file_list_object(scope, args.this()) {
         throw_type_error(scope, "Illegal invocation");
         return;
     }
@@ -180,12 +180,4 @@ fn file_list_length_from_object<'s>(
 ) -> Option<f64> {
     get_private_value(scope, object, FILE_LIST_LENGTH_SLOT)
         .and_then(|value| value.number_value(scope))
-}
-
-fn file_list_receiver_branded<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    receiver: v8::Local<'s, v8::Object>,
-) -> bool {
-    get_private_value(scope, receiver, FILE_LIST_BRAND_SLOT)
-        .is_some_and(|value| value.boolean_value(scope))
 }
