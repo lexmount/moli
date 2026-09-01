@@ -536,6 +536,80 @@ fn element_markup_sinks_enforce_trusted_html_and_standard_sink_names() {
     );
 }
 
+#[tokio::test]
+async fn local_child_realm_inherits_parent_meta_trusted_types_policy() {
+    let mut vm = new_storage_test_vm("https://trusted-types-local-child-inheritance.test/");
+
+    vm.eval(
+        r#"
+(() => {
+  const policy = trustedTypes.createPolicy("parent-pass-through", {
+    createHTML: value => value
+  });
+  const root = document.documentElement ||
+    document.appendChild(document.createElement("html"));
+  const head = document.head || root.appendChild(document.createElement("head"));
+  const body = document.body || root.appendChild(document.createElement("body"));
+  const meta = document.createElement("meta");
+  meta.httpEquiv = "Content-Security-Policy";
+  meta.content = "require-trusted-types-for 'script'; trusted-types parent-pass-through";
+  head.appendChild(meta);
+
+  const frame = document.createElement("iframe");
+  frame.id = "trusted-types-local-child";
+  frame.srcdoc = policy.createHTML("<!doctype html><div id='target'></div>");
+  body.appendChild(frame);
+})()
+"#,
+    )
+    .expect("local child Trusted Types inheritance setup should evaluate");
+
+    run_child_navigation_commit_and_host_load_for_test(
+        &mut vm,
+        "local child should commit before Trusted Types inheritance checks",
+    )
+    .await;
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const frame = document.getElementById("trusted-types-local-child");
+  const child = frame.contentWindow;
+  const target = frame.contentDocument.getElementById("target");
+  const outcome = callback => {
+    try {
+      callback();
+      return "none";
+    } catch (error) {
+      return `${error.name}:${error instanceof child.TypeError}`;
+    }
+  };
+
+  const childSink = outcome(() => { target.innerHTML = "unsafe"; });
+  const childPolicy = outcome(() => {
+    child.trustedTypes.createPolicy("blocked", { createHTML: value => value });
+  });
+  const adopted = document.adoptNode(target);
+  const adoptedSink = outcome(() => { adopted.innerHTML = "unsafe"; });
+
+  return JSON.stringify({
+    childSink,
+    childPolicy,
+    adoptedSink,
+    ownerIsTop: adopted.ownerDocument === document
+  });
+})()
+"#,
+        )
+        .expect("local child Trusted Types inheritance checks should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"childSink":"TypeError:true","childPolicy":"TypeError:true","adoptedSink":"TypeError:true","ownerIsTop":true}"#
+    );
+}
+
 #[test]
 fn document_parse_html_unsafe_gates_converted_union_source() {
     let mut vm = new_storage_test_vm("https://document-parse-html-unsafe-trusted-types.test/");
