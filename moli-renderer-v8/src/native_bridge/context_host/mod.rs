@@ -1188,10 +1188,60 @@ impl ChildBrowsingContextBootstrap {
             }
         }
     }
+
+    pub(in crate::native_bridge::context_host) fn content_security_policy_inherited(&self) -> bool {
+        match self {
+            Self::AboutBlank | Self::Srcdoc { .. } => true,
+            Self::Url(url) => child_browsing_context_url_inherits_content_security_policy(url),
+            Self::Request(request) => {
+                child_browsing_context_url_inherits_content_security_policy(&request.url)
+            }
+        }
+    }
 }
 
 fn child_browsing_context_url_inherits_security_origin(url: &url::Url) -> bool {
     (url.scheme() == "about" && url.path() == "blank") || url.scheme() == "javascript"
+}
+
+fn child_browsing_context_url_inherits_content_security_policy(url: &url::Url) -> bool {
+    child_browsing_context_url_inherits_security_origin(url)
+        || matches!(url.scheme(), "blob" | "data" | "filesystem")
+}
+
+#[cfg(test)]
+mod child_content_security_policy_inheritance_tests {
+    use super::*;
+
+    #[test]
+    fn local_scheme_csp_inheritance_is_independent_from_origin_inheritance() {
+        let cases = [
+            ("about:blank", true, true),
+            ("javascript:void 0", true, true),
+            ("blob:https://example.test/id", false, true),
+            ("data:text/html,child", false, true),
+            (
+                "filesystem:https://example.test/temporary/child",
+                false,
+                true,
+            ),
+            ("https://example.test/child", false, false),
+        ];
+
+        for (input, inherits_origin, inherits_csp) in cases {
+            let url = Url::parse(input).expect("test URL should parse");
+            assert_eq!(
+                child_browsing_context_url_inherits_security_origin(&url),
+                inherits_origin,
+                "origin inheritance for {input}",
+            );
+            assert_eq!(
+                child_browsing_context_url_inherits_content_security_policy(&url),
+                inherits_csp,
+                "CSP inheritance for {input}",
+            );
+        }
+    }
 }
 
 pub use crate::protocol_types::PendingRuntimeBindingCall;
