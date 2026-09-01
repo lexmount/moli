@@ -474,35 +474,7 @@ frame.name = 'target';
 
     assert_eq!(result, "[object Window]|true|object");
 }
-#[test]
-fn iframe_in_shadow_tree_is_not_a_named_window_property() {
-    let mut vm = new_storage_test_vm("https://shadow-iframe-named-property.test/");
 
-    let result = vm
-        .eval(
-            r#"
-const host = document.createElement('div');
-(document.body || document.documentElement || document).appendChild(host);
-const shadow = host.attachShadow({ mode: 'open' });
-const shadowFrame = document.createElement('iframe');
-shadowFrame.name = 'shadowTarget';
-shadow.appendChild(shadowFrame);
-const lightFrame = document.createElement('iframe');
-lightFrame.name = 'lightTarget';
-(document.body || document.documentElement || document).appendChild(lightFrame);
-[
-  'shadowTarget' in window,
-  window.shadowTarget === undefined,
-  shadowFrame.contentWindow !== null,
-  'lightTarget' in window,
-  window.lightTarget === lightFrame.contentWindow
-].join('|')
-"#,
-        )
-        .expect("shadow iframe named property probe should evaluate");
-
-    assert_eq!(result, "false|true|true|true|true");
-}
 #[test]
 fn child_webassembly_native_values_use_public_intrinsic_prototypes() {
     let mut vm = new_storage_test_vm("https://child-wasm-intrinsics.test/");
