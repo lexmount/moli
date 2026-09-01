@@ -185,14 +185,6 @@ impl PageTargetHost {
         self.session_storage_namespace = namespace;
     }
 
-    pub(crate) fn state(&self) -> &Self {
-        self
-    }
-
-    pub(crate) fn state_mut(&mut self) -> &mut Self {
-        self
-    }
-
     pub(crate) fn navigation_engine(&self) -> Option<&NavigationEngine> {
         self.navigation_engine.as_ref()
     }
@@ -280,6 +272,10 @@ pub(crate) struct PageTargetRegistry {
 impl PageTargetRegistry {
     pub(crate) fn is_empty(&self) -> bool {
         self.hosts.is_empty()
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.hosts.len()
     }
 
     pub(crate) fn active_target_id(&self) -> Option<&str> {

@@ -313,7 +313,7 @@ async fn restore_and_commit_loaded_navigation_page_async(
         page.restore_runtime_protocol_state_async(
             commit_state.renderer_runtime_inspector_session_id.clone(),
             &commit_state.runtime_inspector_session_restore_snapshots,
-            &commit_state.isolated_worlds,
+            &[],
             &commit_state.stored_runtime_bindings,
             &commit_state.session_runtime_bindings,
             commit_state.runtime_frontend_enabled,

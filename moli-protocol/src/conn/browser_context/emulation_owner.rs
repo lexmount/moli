@@ -28,10 +28,7 @@ impl TargetSessionOwnerMut<'_> {
                 target_id,
                 ..
             } => {
-                let Some(state) = browser_context
-                    .page_target_mut(target_id)
-                    .map(|target| target.state_mut())
-                else {
+                let Some(state) = browser_context.page_target_mut(target_id) else {
                     f(None);
                     return false;
                 };
@@ -114,7 +111,6 @@ impl TargetSessionOwnerRef<'_> {
                 ..
             } => browser_context
                 .page_target(target_id)
-                .map(|target| target.state())
                 .map(|state| state.emit_touch_events_for_mouse),
             Self::NoLoadedBrowserContext => None,
         }

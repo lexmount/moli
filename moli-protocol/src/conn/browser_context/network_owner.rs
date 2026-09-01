@@ -248,7 +248,7 @@ impl TargetSessionOwnerMut<'_> {
                 session_id,
                 is_auxiliary_target_session,
             } => Some(mutate(
-                browser_context.page_target_mut(target_id)?.state_mut(),
+                browser_context.page_target_mut(target_id)?,
                 session_id.as_deref(),
                 *is_auxiliary_target_session,
                 f,

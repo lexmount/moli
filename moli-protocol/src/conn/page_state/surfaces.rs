@@ -115,7 +115,7 @@ impl BrowserContext {
         ) -> bool,
     ) -> bool {
         if let Some(host) = self.page_targets.active_mut() {
-            let state = host.state_mut();
+            let state = host;
             if !mutate(&mut state.document_cookie_manager_surface) {
                 return false;
             }
@@ -354,7 +354,7 @@ impl BrowserContext {
         target_id: &str,
     ) -> Option<DocumentStartScript> {
         let target = self.background_target(target_id)?;
-        self.generated_surface_override_script_for_parked_state(target.state())
+        self.generated_surface_override_script_for_parked_state(target)
     }
 
     pub(crate) fn generated_surface_override_script_for_parked_state(

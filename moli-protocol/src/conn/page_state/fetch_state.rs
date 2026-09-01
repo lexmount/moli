@@ -60,7 +60,7 @@ impl BrowserContext {
 
     pub(crate) fn insert_page_target_host(&mut self, mut host: PageTargetHost) -> bool {
         if self.page_targets.is_empty() {
-            host.state_mut().document_cookie_manager_surface =
+            host.document_cookie_manager_surface =
                 self.default_document_cookie_manager_surface.clone();
         }
         host.set_base_cache_disabled(self.global_cache_disabled);
@@ -100,8 +100,7 @@ impl BrowserContext {
         let active_target = &mut self
             .page_targets
             .active_mut()
-            .expect("cannot open a response stream without an active page target")
-            .state_mut();
+            .expect("cannot open a response stream without an active page target");
         active_target
             .fetch_owner
             .open_pending_fetch_response_body_stream(

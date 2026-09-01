@@ -1646,14 +1646,6 @@ async fn same_context_targets_do_not_replay_bare_isolated_worlds_after_switching
     .await;
     let create_a = take_response_by_id(&mut ctx, 104150);
     assert!(create_a["result"]["executionContextId"].as_i64().is_some());
-    assert!(
-        ctx.conn
-            .target_owner_state_for_session(Some("SID-active"))
-            .expect("target A owner state should exist after utility-a creation")
-            .isolated_worlds
-            .is_empty(),
-        "Page.createIsolatedWorld must not become target-persistent state"
-    );
     ctx.take_all();
 
     ctx.process_async(json!({
@@ -1749,14 +1741,6 @@ async fn same_context_targets_do_not_replay_bare_isolated_worlds_after_switching
     }))
     .await;
     ctx.expect_result(104155, json!({}), None);
-    assert!(
-        ctx.conn
-            .target_owner_state_for_session(Some("SID-active"))
-            .expect("target A owner state should exist after reactivation")
-            .isolated_worlds
-            .is_empty(),
-        "target activation must not turn a document-scoped world into persistent state"
-    );
     ctx.conn
         .browser_context
         .as_mut()
@@ -1781,10 +1765,6 @@ async fn same_context_targets_do_not_replay_bare_isolated_worlds_after_switching
             .as_deref(),
         None,
         "target A primary session should use the target default renderer inspector session"
-    );
-    assert!(
-        target_a_commit.isolated_worlds.is_empty(),
-        "navigation restore must not carry bare Page.createIsolatedWorld worlds"
     );
 
     ctx.process_async(json!({

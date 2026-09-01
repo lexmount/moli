@@ -103,8 +103,7 @@ fn fetch_body_stream_owner_for_target_mut<'a>(
     target_id: &str,
 ) -> Option<SessionFetchBodyStreamOwner<'a>> {
     let owner_key = fetch_stream_owner_key(&browser_context.id, target_id);
-    let target = browser_context.page_target_mut(target_id)?;
-    let active_target = target.state_mut();
+    let active_target = browser_context.page_target_mut(target_id)?;
     Some(SessionFetchBodyStreamOwner {
         owner_key,
         fetch_owner: &mut active_target.fetch_owner,

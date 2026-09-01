@@ -375,11 +375,11 @@ impl BrowserContext {
 
     #[cfg(test)]
     pub(crate) fn active_page_state(&self) -> &PageTargetHost {
-        self.active_page_target().state()
+        self.active_page_target()
     }
 
     pub(crate) fn active_page_state_mut(&mut self) -> &mut PageTargetHost {
-        self.active_page_target_mut().state_mut()
+        self.active_page_target_mut()
     }
 
     /// Parks a dialog only until the matching lightweight-popup target obtains
@@ -877,20 +877,20 @@ impl BrowserContext {
             })
             .unwrap_or(Value::Null);
         let target_host_state_diagnostics = json!({
-            "targetHostCount": self.background_target_count(),
-            "pageSessionStateCount": self.background_targets()
-                .filter(|target| target.state().has_non_default_session_state())
+            "targetHostCount": self.page_targets.len(),
+            "pageSessionStateCount": self.page_targets.iter()
+                .filter(|target| target.has_non_default_session_state())
                 .count(),
-            "targetOwnerStateWithPendingInspectorAwaitCount": self.background_targets()
+            "targetOwnerStateWithPendingInspectorAwaitCount": self.page_targets.iter()
                 .filter(|target| target.has_pending_inspector_awaits())
                 .count(),
-            "pendingInspectorAwaitCount": self.background_targets()
+            "pendingInspectorAwaitCount": self.page_targets.iter()
                 .map(|target| target.pending_inspector_await_count())
                 .sum::<usize>(),
-            "nonEmptyFetchStateCount": self.background_targets()
+            "nonEmptyFetchStateCount": self.page_targets.iter()
                 .filter(|target| !target.fetch_owner.pending_state().is_empty())
                 .count(),
-            "ownerStates": self.background_targets().map(|target| json!({
+            "ownerStates": self.page_targets.iter().map(|target| json!({
                 "targetId": target.target_id(),
                 "ownerState": target.owner_state.moli_memory_diagnostics(),
             })).collect::<Vec<_>>(),

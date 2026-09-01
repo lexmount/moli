@@ -1573,16 +1573,15 @@ impl CdpConnection {
             .clone()
             .or_else(|| self.global_browser_identity_override.clone())
             .unwrap_or_else(|| self.base_browser_identity.clone());
-        let runtime_isolated_worlds = self
-            .prepare_loaded_navigation_commit_for_session_owner(session_id)
-            .map(|commit_state| commit_state.isolated_worlds)
-            .unwrap_or_default();
         Ok(PreparedDocumentPageCommitConfiguration {
             document_start_scripts: load_inputs.document_start_scripts,
             runtime_bindings: load_inputs.runtime_bindings,
             runtime_inspector_session_restore_snapshots: load_inputs
                 .runtime_inspector_session_restore_snapshots,
-            runtime_isolated_worlds,
+            // `Page.createIsolatedWorld` is Document-scoped. Only renderer
+            // inspector restore snapshots recreate persistent utility worlds;
+            // bare worlds must not cross a navigation.
+            runtime_isolated_worlds: Vec::new(),
             permission_overrides: load_inputs.permission_overrides,
             extra_http_headers: load_inputs.extra_http_headers,
             locale_override: load_inputs.locale_override,

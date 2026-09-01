@@ -17,7 +17,7 @@ use crate::{
 use super::{
     navigation::{PageNavigationHistoryEntry, TargetNavigationHistoryState},
     page_resource::TargetPageResourceStore,
-    page_slot::{DocumentStartScript, IsolatedWorldDefinition},
+    page_slot::DocumentStartScript,
     pending_renderer_command::{
         DuplicatePendingRendererCommand, PendingRendererCommandRegistry,
         PreparedRendererCallDispatch, PreparedRendererCallReplay, PreparedRendererCallTermination,
@@ -502,7 +502,6 @@ pub(crate) struct TargetOwnerState {
     pub(crate) committed_document_title: Option<String>,
     pub(crate) next_document_start_script_id: u32,
     pub(crate) document_start_scripts: Vec<(String, DocumentStartScript)>,
-    pub(crate) isolated_worlds: Vec<IsolatedWorldDefinition>,
     pub(crate) navigation_history_state: TargetNavigationHistoryState,
     pub(crate) page_resource_store: TargetPageResourceStore,
     pub(crate) runtime_observable_state: TargetRuntimeObservableState,
@@ -676,7 +675,6 @@ impl TargetOwnerState {
                 .iter()
                 .filter(|(_, script)| script.devtools_session.is_some())
                 .count(),
-            "isolatedWorldCount": self.isolated_worlds.len(),
             "retainedPageResourceBodyBytes": self.page_resource_store.retained_body_bytes(),
             "windowSurfaceState": self.window_surface_state.label(),
             "attachedChildFrameIdCount": self.attached_child_frame_ids.len(),
@@ -855,7 +853,6 @@ impl TargetOwnerState {
             && self.committed_document_title.is_none()
             && self.next_document_start_script_id == 0
             && self.document_start_scripts.is_empty()
-            && self.isolated_worlds.is_empty()
             && self.navigation_history_state == TargetNavigationHistoryState::default()
             && self.page_resource_store.is_empty()
             && self.runtime_observable_state == TargetRuntimeObservableState::default()
@@ -883,8 +880,6 @@ impl TargetOwnerState {
         self.attached_child_frame_ids.clear();
     }
 }
-
-pub(crate) type ParkedTargetOwnerState = TargetOwnerState;
 
 fn is_initial_empty_document_url(raw_url: &str) -> bool {
     url::Url::parse(raw_url)
