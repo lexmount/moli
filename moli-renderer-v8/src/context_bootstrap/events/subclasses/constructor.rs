@@ -154,7 +154,11 @@ fn event_subclass_constructor_callback<'s>(
             }
         }
         EventSubclassKind::InterestEvent => data::initialize_interest_event(scope, event, init),
-        EventSubclassKind::PopStateEvent => data::initialize_pop_state_event(scope, event, init),
+        EventSubclassKind::PopStateEvent => {
+            if !data::initialize_pop_state_event(scope, event, init) {
+                return;
+            }
+        }
         EventSubclassKind::PageTransitionEvent => {
             data::initialize_page_transition_event(scope, event, init);
         }
