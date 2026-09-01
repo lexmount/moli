@@ -55,11 +55,16 @@ impl SvgLength {
 }
 
 pub fn parse_length(raw: &str) -> Option<SvgLength> {
-    raw.trim().parse::<SvgTypesLength>().ok().map(svg_length)
+    raw.trim()
+        .to_ascii_lowercase()
+        .parse::<SvgTypesLength>()
+        .ok()
+        .map(svg_length)
 }
 
 pub fn parse_length_list(raw: &str) -> Option<Vec<SvgLength>> {
-    LengthListParser::from(raw)
+    let normalized = raw.to_ascii_lowercase();
+    LengthListParser::from(normalized.as_str())
         .map(|length| length.ok().map(svg_length))
         .collect()
 }
