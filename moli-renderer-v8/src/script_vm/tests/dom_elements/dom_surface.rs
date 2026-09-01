@@ -13570,7 +13570,14 @@ fn window_pageshow_uses_original_page_transition_event() {
     throw new Error("page replacement should not be invoked");
   };
   addEventListener("pageshow", event => {
-    __pageshowShape = `${event.type}:${event.persisted === false}:${'persisted' in event}`;
+    __pageshowShape = [
+      event.type,
+      event.persisted === false,
+      'persisted' in event,
+      event.bubbles,
+      event.cancelable,
+      event.isTrusted
+    ].join(':');
   });
   return "ready";
 })()
@@ -13583,7 +13590,7 @@ fn window_pageshow_uses_original_page_transition_event() {
     let shape = vm
         .eval("globalThis.__pageshowShape")
         .expect("pageshow shape should evaluate");
-    assert_eq!(shape, "pageshow:true:true");
+    assert_eq!(shape, "pageshow:true:true:true:true:true");
 }
 
 #[test]
@@ -13598,12 +13605,12 @@ fn window_load_uses_original_event_after_global_constructors_are_deleted() {
   globalThis.__windowLifecycleEvents = [];
   addEventListener('load', event => {
     __windowLifecycleEvents.push(
-      `load:${event instanceof OriginalEvent}:${event.target === document}:${event.currentTarget === window}`
+      `load:${event instanceof OriginalEvent}:${event.target === document}:${event.currentTarget === window}:${event.isTrusted}:${event.bubbles}:${event.cancelable}`
     );
   });
   addEventListener('pageshow', event => {
     __windowLifecycleEvents.push(
-      `pageshow:${event instanceof OriginalPageTransitionEvent}:${event.persisted}`
+      `pageshow:${event instanceof OriginalPageTransitionEvent}:${event.persisted}:${event.isTrusted}:${event.bubbles}:${event.cancelable}`
     );
   });
   delete globalThis.Event;
@@ -13619,7 +13626,7 @@ fn window_load_uses_original_event_after_global_constructors_are_deleted() {
     assert_eq!(
         vm.eval("__windowLifecycleEvents.join('|')")
             .expect("window lifecycle results should evaluate"),
-        "load:true:true:true|pageshow:true:false"
+        "load:true:true:true:true:false:false|pageshow:true:false:true:true:true"
     );
 }
 

@@ -10,7 +10,7 @@ use crate::{
     content_security_policy::{
         ContentSecurityPolicyViolationEventFields, send_content_security_policy_reports,
     },
-    context_bootstrap::{construct_original_event, mark_event_trusted},
+    context_bootstrap::construct_original_event,
     document_runtime::{
         DocumentNavigationEmbeddingContext, DocumentPolicyContainer, DomHandle, EventTargetHandle,
     },
@@ -650,7 +650,6 @@ impl JsContextHost {
                 if object_fallback_required {
                     self.enter_object_fallback_state(scope, handle);
                     if let Some(event) = construct_original_event(scope, "error") {
-                        mark_event_trusted(scope, event);
                         let host_ptr: *mut JsContextHost = self;
                         let runtime = unsafe { &mut *self.runtime };
                         let _ = runtime.dispatch_public_event_best_effort(

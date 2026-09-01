@@ -1880,9 +1880,16 @@ fn cross_document_unload_lifecycle_orders_pagehide_before_unload_without_timer()
             r##"
             (() => {
               const log = [];
-              addEventListener("beforeunload", () => log.push("beforeunload"));
-              addEventListener("pagehide", event => log.push(`pagehide:${event.persisted}`));
-              addEventListener("unload", () => log.push("unload"));
+              addEventListener("beforeunload", event => log.push(`beforeunload:${event.isTrusted}`));
+              addEventListener("pagehide", event => log.push([
+                "pagehide",
+                event instanceof PageTransitionEvent,
+                event.persisted,
+                event.bubbles,
+                event.cancelable,
+                event.isTrusted
+              ].join(":")));
+              addEventListener("unload", event => log.push(`unload:${event.isTrusted}`));
               navigation.navigate("/next-document");
               return log.join("|");
             })()
@@ -1890,7 +1897,10 @@ fn cross_document_unload_lifecycle_orders_pagehide_before_unload_without_timer()
         )
         .expect("cross-document unload lifecycle should evaluate");
 
-    assert_eq!(lifecycle, "beforeunload|pagehide:false|unload");
+    assert_eq!(
+        lifecycle,
+        "beforeunload:true|pagehide:true:false:true:true:true|unload:true"
+    );
     assert!(
         !vm.has_ready_timeout(),
         "pagehide is part of the unload step and must not create an independent timer task"
