@@ -208,6 +208,51 @@ fn structured_clone_rejects_native_dom_nodes() {
 }
 
 #[test]
+fn structured_clone_rejects_non_serializable_platform_objects_without_prototype_spoofing() {
+    let mut vm = new_storage_test_vm("https://platform-object-structured-clone.test/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const probe = value => {
+                try {
+                  structuredClone(value);
+                  return "ok";
+                } catch (error) {
+                  return error && error.name;
+                }
+              };
+
+              const fakeResponse = Object.create(Response.prototype);
+              fakeResponse.value = 7;
+              const fakeResponseClone = structuredClone(fakeResponse);
+              const fakeEvent = Object.create(Event.prototype);
+              fakeEvent.value = 9;
+              const fakeEventClone = structuredClone(fakeEvent);
+
+              return JSON.stringify({
+                response: probe(new Response()),
+                event: probe(new Event("event")),
+                messageChannel: probe(new MessageChannel()),
+                fakeResponse: [
+                  fakeResponseClone.value,
+                  fakeResponseClone instanceof Response
+                ],
+                fakeEvent: [fakeEventClone.value, fakeEventClone instanceof Event]
+              });
+            })()
+            "#,
+        )
+        .expect("non-serializable platform object structuredClone probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"response":"DataCloneError","event":"DataCloneError","messageChannel":"DataCloneError","fakeResponse":[7,false],"fakeEvent":[9,false]}"#
+    );
+}
+
+#[test]
 fn structured_clone_rejects_real_performance_entries_without_prototype_spoofing() {
     let document_url = Url::parse("https://performance-entry-clone.test/").expect("document URL");
     let mut vm = new_storage_test_vm(document_url.as_str());
