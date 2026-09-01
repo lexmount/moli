@@ -232,6 +232,7 @@ async fn project_renderer_output_records_for_route(
                     PreparedProtocolOutputs::from_renderer_observation(
                         conn,
                         owner,
+                        cursor.stream().residence(),
                         cursor.stream().renderer_agent(),
                         &observation,
                     )

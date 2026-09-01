@@ -14,7 +14,7 @@ async fn install_document_content_test_page(ctx: &mut TestContext, url: &str) {
         .load_navigation_via_runtime_for_session_owner_async(Some("SID-1"), url)
         .await
         .expect("document-content test page should load");
-    let navigation_engine = navigation.navigation_engine.take();
+    let navigation_engine = navigation.take_navigation_engine_replacement();
     let artifacts = navigation.page_creation_artifacts;
     {
         let browser_context = ctx.conn.browser_context.as_mut().expect("browser context");

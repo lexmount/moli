@@ -229,25 +229,6 @@ enum BidiChannelListenerRoute {
     Event(BackgroundProtocolEvent),
 }
 
-fn unregister_runtime_remote_object_group_from_page_target(
-    page_session_state: &mut PageTargetHost,
-    session_id: Option<&str>,
-    object_group: &str,
-) {
-    if let Some(session_id) = session_id
-        && let Some(state) = page_session_state
-            .devtools_sessions
-            .attached_mut(session_id)
-    {
-        state.unregister_runtime_remote_object_group(object_group);
-        return;
-    }
-    page_session_state
-        .devtools_sessions
-        .primary_mut()
-        .unregister_runtime_remote_object_group(object_group);
-}
-
 #[derive(Debug)]
 pub(crate) struct OwnerRuntimeResponse {
     command_id: u64,
@@ -397,15 +378,6 @@ impl RuntimeProtocolResponseRoute {
             Self::DevToolsSession => None,
         }
     }
-
-    fn into_command_reply_receiver(self) -> Option<RuntimeInspectorResponseReceiver> {
-        match self {
-            Self::CommandReply(receiver) => receiver,
-            Self::DevToolsSession => {
-                panic!("a DevTools session response cannot become a command reply")
-            }
-        }
-    }
 }
 
 enum PendingRuntimeProtocolMessageDispatchKind {
@@ -416,13 +388,13 @@ enum PendingRuntimeProtocolMessageDispatchKind {
 pub struct PendingSharedWorkerRuntimeProtocolMessageDispatch {
     session_id: Option<String>,
     pending: SharedWorkerRuntimeProtocolDispatchFuture,
-    deferred_response_rx: Option<RuntimeInspectorResponseReceiver>,
+    response_route: RuntimeProtocolResponseRoute,
 }
 
 pub struct PendingServiceWorkerRuntimeProtocolMessageDispatch {
     session_id: Option<String>,
     pending: ServiceWorkerRuntimeProtocolDispatchFuture,
-    deferred_response_rx: Option<RuntimeInspectorResponseReceiver>,
+    response_route: RuntimeProtocolResponseRoute,
 }
 
 pub struct PendingMoliDiagnosticsDispatch {
@@ -461,14 +433,41 @@ pub struct CompletedRuntimeProtocolMessageDispatch {
 
 pub struct CompletedSharedWorkerRuntimeProtocolMessageDispatch {
     session_id: Option<String>,
-    messages: Vec<RendererRuntimeInspectorMessage>,
-    deferred_response_rx: Option<RuntimeInspectorResponseReceiver>,
+    dispatch: CompletedWorkerRuntimeProtocolDispatch,
+    response_route: RuntimeProtocolResponseRoute,
 }
 
 pub struct CompletedServiceWorkerRuntimeProtocolMessageDispatch {
     session_id: Option<String>,
+    dispatch: CompletedWorkerRuntimeProtocolDispatch,
+    response_route: RuntimeProtocolResponseRoute,
+}
+
+struct CompletedWorkerRuntimeProtocolDispatch {
     messages: Vec<RendererRuntimeInspectorMessage>,
-    deferred_response_rx: Option<RuntimeInspectorResponseReceiver>,
+    session_response_predecessor: Option<RendererOutputFence>,
+    session_response_succeeded: Option<bool>,
+}
+
+impl CompletedWorkerRuntimeProtocolDispatch {
+    fn command_reply(messages: Vec<RendererRuntimeInspectorMessage>) -> Self {
+        Self {
+            messages,
+            session_response_predecessor: None,
+            session_response_succeeded: None,
+        }
+    }
+
+    fn devtools_session(
+        completed: moli_core::page::CompletedWorkerRuntimeInspectorCommandDispatch,
+    ) -> Self {
+        let (messages, predecessor, response_succeeded) = completed.into_parts();
+        Self {
+            messages,
+            session_response_predecessor: Some(predecessor),
+            session_response_succeeded: Some(response_succeeded),
+        }
+    }
 }
 
 pub struct CompletedMoliDiagnosticsDispatch {
@@ -540,9 +539,9 @@ pub struct CompletedRuntimeChildDefaultContextLookupDispatch {
 }
 
 type SharedWorkerRuntimeProtocolDispatchFuture =
-    Pin<Box<dyn Future<Output = Result<Vec<RendererRuntimeInspectorMessage>, String>>>>;
+    Pin<Box<dyn Future<Output = Result<CompletedWorkerRuntimeProtocolDispatch, String>>>>;
 type ServiceWorkerRuntimeProtocolDispatchFuture =
-    Pin<Box<dyn Future<Output = Result<Vec<RendererRuntimeInspectorMessage>, String>>>>;
+    Pin<Box<dyn Future<Output = Result<CompletedWorkerRuntimeProtocolDispatch, String>>>>;
 
 #[derive(Clone, Debug)]
 struct RuntimeProtocolMessagePageRoute {
@@ -621,11 +620,11 @@ impl PendingRuntimeProtocolMessageDispatch {
 
 impl PendingSharedWorkerRuntimeProtocolMessageDispatch {
     pub async fn wait(self) -> Result<CompletedSharedWorkerRuntimeProtocolMessageDispatch, String> {
-        let messages = self.pending.await?;
+        let dispatch = self.pending.await?;
         Ok(CompletedSharedWorkerRuntimeProtocolMessageDispatch {
             session_id: self.session_id,
-            messages,
-            deferred_response_rx: self.deferred_response_rx,
+            dispatch,
+            response_route: self.response_route,
         })
     }
 }
@@ -634,11 +633,11 @@ impl PendingServiceWorkerRuntimeProtocolMessageDispatch {
     pub async fn wait(
         self,
     ) -> Result<CompletedServiceWorkerRuntimeProtocolMessageDispatch, String> {
-        let messages = self.pending.await?;
+        let dispatch = self.pending.await?;
         Ok(CompletedServiceWorkerRuntimeProtocolMessageDispatch {
             session_id: self.session_id,
-            messages,
-            deferred_response_rx: self.deferred_response_rx,
+            dispatch,
+            response_route: self.response_route,
         })
     }
 }
@@ -699,7 +698,19 @@ impl CompletedSharedWorkerRuntimeProtocolMessageDispatch {
     pub(crate) fn take_deferred_response_receiver(
         &mut self,
     ) -> Option<RuntimeInspectorResponseReceiver> {
-        self.deferred_response_rx.take()
+        self.response_route.take_command_reply_receiver()
+    }
+
+    pub(crate) const fn response_delivery(&self) -> RendererInspectorResponseDelivery {
+        self.response_route.delivery()
+    }
+
+    pub(crate) fn session_response_predecessor(&self) -> Option<RendererOutputFence> {
+        self.dispatch.session_response_predecessor.clone()
+    }
+
+    pub(crate) fn session_response_succeeded(&self) -> Option<bool> {
+        self.dispatch.session_response_succeeded
     }
 }
 
@@ -707,7 +718,19 @@ impl CompletedServiceWorkerRuntimeProtocolMessageDispatch {
     pub(crate) fn take_deferred_response_receiver(
         &mut self,
     ) -> Option<RuntimeInspectorResponseReceiver> {
-        self.deferred_response_rx.take()
+        self.response_route.take_command_reply_receiver()
+    }
+
+    pub(crate) const fn response_delivery(&self) -> RendererInspectorResponseDelivery {
+        self.response_route.delivery()
+    }
+
+    pub(crate) fn session_response_predecessor(&self) -> Option<RendererOutputFence> {
+        self.dispatch.session_response_predecessor.clone()
+    }
+
+    pub(crate) fn session_response_succeeded(&self) -> Option<bool> {
+        self.dispatch.session_response_succeeded
     }
 }
 
@@ -1025,12 +1048,30 @@ impl CdpConnection {
         &self,
         session_id: Option<&str>,
         renderer_call_id: RendererCallId,
-        dispatched_attachment_id: RendererAgentAttachmentId,
+        dispatched_attachment_id: Option<RendererAgentAttachmentId>,
     ) -> Option<RendererCommandDescriptor> {
+        if let Some(owner_session_id) = session_id
+            && let Some(target) = self.shared_worker_target_for_session(session_id)
+        {
+            return target.renderer_command_descriptor_for_renderer_if_attachment_matches(
+                owner_session_id,
+                renderer_call_id,
+                dispatched_attachment_id,
+            );
+        }
+        if let Some(owner_session_id) = session_id
+            && let Some(target) = self.service_worker_target_for_session(session_id)
+        {
+            return target.renderer_command_descriptor_for_renderer_if_attachment_matches(
+                owner_session_id,
+                renderer_call_id,
+                dispatched_attachment_id,
+            );
+        }
         self.target_devtools_session_state_for_session(session_id)?
             .renderer_command_descriptor_for_renderer_if_attachment_matches(
                 renderer_call_id,
-                Some(dispatched_attachment_id),
+                dispatched_attachment_id,
             )
     }
 
@@ -1983,63 +2024,6 @@ impl CdpConnection {
         }
         self.target_devtools_session_state_for_session(session_id)
             .is_some_and(DevToolsSessionState::has_pending_inspector_awaits)
-    }
-
-    pub(crate) fn fail_pending_inspector_awaits_from_page_session_state_for_sessions_background_events_into(
-        out: &mut Vec<BackgroundProtocolEvent>,
-        page_session_state: &mut PageTargetHost,
-        primary_session_id: Option<&str>,
-        session_ids: &[&str],
-        reason: &'static str,
-    ) {
-        for (cdp_id, entry) in page_session_state
-            .devtools_sessions
-            .drain_pending_inspector_awaits_for_sessions(session_ids)
-        {
-            if let Some(listener) = entry.bidi_channel_listener() {
-                unregister_runtime_remote_object_group_from_page_target(
-                    page_session_state,
-                    entry.session_id(),
-                    listener.channel_object_group(),
-                );
-                continue;
-            }
-            push_pending_inspector_await_error_background_event(
-                out,
-                cdp_id,
-                entry.session_id(),
-                reason,
-            );
-        }
-        if let Some(primary_session_id) = primary_session_id
-            && session_ids.contains(&primary_session_id)
-        {
-            let terminated = page_session_state
-                .devtools_sessions
-                .primary_mut()
-                .terminate_all_renderer_calls(reason);
-            push_terminated_renderer_call_error_background_events(
-                out,
-                terminated,
-                Some(primary_session_id),
-                reason,
-            );
-        }
-        for session_id in session_ids {
-            let Some(state) = page_session_state
-                .devtools_sessions
-                .attached_mut(session_id)
-            else {
-                continue;
-            };
-            let terminated = state.terminate_all_renderer_calls(reason);
-            push_terminated_renderer_call_error_background_events(
-                out,
-                terminated,
-                Some(session_id),
-                reason,
-            );
-        }
     }
 
     pub(crate) fn fail_pending_inspector_awaits_from_shared_worker_target_session_background_events_into(
@@ -3788,7 +3772,24 @@ impl CdpConnection {
     ) {
         self.restore_frontend_command_ids_in_devtools_session_output_with_projection(
             session_id,
-            dispatched_attachment_id,
+            Some(dispatched_attachment_id),
+            messages,
+            true,
+        );
+    }
+
+    /// Resolves terminal responses carried by a Worker target's concrete
+    /// renderer output stream. Worker Inspector sessions do not use a Page
+    /// attachment id; the exact worker session lifetime is validated by the
+    /// prepared-output authority at the same ingress boundary.
+    pub(crate) fn restore_frontend_command_ids_in_worker_devtools_session_output(
+        &mut self,
+        session_id: &str,
+        messages: &mut Vec<RendererRuntimeInspectorMessage>,
+    ) {
+        self.restore_frontend_command_ids_in_devtools_session_output_with_projection(
+            Some(session_id),
+            None,
             messages,
             true,
         );
@@ -3811,7 +3812,7 @@ impl CdpConnection {
     ) {
         self.restore_frontend_command_ids_in_devtools_session_output_with_projection(
             session_id,
-            dispatched_attachment_id,
+            Some(dispatched_attachment_id),
             messages,
             false,
         );
@@ -3820,7 +3821,7 @@ impl CdpConnection {
     fn restore_frontend_command_ids_in_devtools_session_output_with_projection(
         &mut self,
         session_id: Option<&str>,
-        dispatched_attachment_id: RendererAgentAttachmentId,
+        dispatched_attachment_id: Option<RendererAgentAttachmentId>,
         messages: &mut Vec<RendererRuntimeInspectorMessage>,
         project_runtime_object_ownership: bool,
     ) {
@@ -3846,13 +3847,13 @@ impl CdpConnection {
                 .take_frontend_command_for_renderer_if_attachment_matches_for_session_owner(
                     session_id,
                     renderer_call_id,
-                    Some(dispatched_attachment_id),
+                    dispatched_attachment_id,
                 )
             else {
                 tracing::debug!(
                     session_id,
                     renderer_call_id = renderer_call_id.get(),
-                    attachment_id = dispatched_attachment_id.get(),
+                    attachment_id = ?dispatched_attachment_id.map(RendererAgentAttachmentId::get),
                     "dropping DevTools session response without a live renderer correlation"
                 );
                 return false;
@@ -4648,6 +4649,7 @@ impl CdpConnection {
             session_id,
             raw_json,
             None,
+            RuntimeProtocolResponseRoute::command_reply_without_receiver(),
         )
     }
 
@@ -4658,37 +4660,22 @@ impl CdpConnection {
         command_id: u64,
     ) -> Result<PendingSharedWorkerRuntimeProtocolMessageDispatch, String> {
         self.shared_worker_runtime_target_for_session(session_id)?;
-        let (correlation, raw_json, response_sender, response_route) =
+        let (_correlation, raw_json, response_sender, response_route) =
             self.prepare_renderer_call_for_session_owner(session_id, descriptor, command_id, None)?;
-        debug_assert_eq!(
-            response_route.delivery(),
-            RendererInspectorResponseDelivery::CommandReply,
-            "worker responses have not migrated to the page DevTools session output"
-        );
-        let response_receiver = response_route
-            .into_command_reply_receiver()
-            .expect("CommandReply worker dispatch must allocate a response receiver");
-        let result = self.start_shared_worker_runtime_protocol_message_for_session_with_optional_deferred_response(
+        self.start_shared_worker_runtime_protocol_message_for_session_with_optional_deferred_response(
             session_id,
             raw_json,
-            Some((response_sender, response_receiver)),
-        );
-        if result.is_err() {
-            let removed =
-                self.take_renderer_call_for_frontend_for_session_owner(session_id, command_id);
-            debug_assert_eq!(removed, Some(correlation));
-        }
-        result
+            Some(response_sender),
+            response_route,
+        )
     }
 
     fn start_shared_worker_runtime_protocol_message_for_session_with_optional_deferred_response(
         &mut self,
         session_id: Option<&str>,
         raw_json: String,
-        deferred_response: Option<(
-            RendererRuntimeInspectorResponseSender,
-            RuntimeInspectorResponseReceiver,
-        )>,
+        response_sender: Option<RendererRuntimeInspectorResponseSender>,
+        response_route: RuntimeProtocolResponseRoute,
     ) -> Result<PendingSharedWorkerRuntimeProtocolMessageDispatch, String> {
         let route = self.shared_worker_runtime_target_for_session(session_id)?;
         let renderer_runtime = self
@@ -4697,24 +4684,51 @@ impl CdpConnection {
             .ok_or_else(|| "UnknownSession".to_owned())?;
         let worker = route.worker;
         let inspector_session_id = session_id.map(str::to_owned);
-        let (deferred_response, deferred_response_rx) = match deferred_response {
-            Some((deferred_response, rx)) => (Some(deferred_response), Some(rx)),
-            None => (None, None),
-        };
-        let pending: SharedWorkerRuntimeProtocolDispatchFuture = match (worker, deferred_response) {
-            (WorkerRuntimeTarget::Shared(instance_id), Some(deferred_response)) => {
+        let response_delivery = response_route.delivery();
+        let pending: SharedWorkerRuntimeProtocolDispatchFuture = match (
+            worker,
+            response_sender,
+            response_delivery,
+        ) {
+            (
+                WorkerRuntimeTarget::Shared(instance_id),
+                Some(response),
+                RendererInspectorResponseDelivery::CommandReply,
+            ) => Box::pin(async move {
+                renderer_runtime
+                    .dispatch_shared_worker_runtime_protocol_message_with_deferred_response(
+                        instance_id,
+                        inspector_session_id,
+                        raw_json,
+                        response,
+                    )
+                    .await
+                    .map(CompletedWorkerRuntimeProtocolDispatch::command_reply)
+            }),
+            (
+                WorkerRuntimeTarget::Shared(instance_id),
+                Some(response),
+                RendererInspectorResponseDelivery::DevToolsSession,
+            ) => {
+                let inspector_session_id =
+                    inspector_session_id.ok_or_else(|| "UnknownSession".to_owned())?;
                 Box::pin(async move {
                     renderer_runtime
-                        .dispatch_shared_worker_runtime_protocol_message_with_deferred_response(
+                        .dispatch_shared_worker_runtime_protocol_message_with_devtools_session_response(
                             instance_id,
                             inspector_session_id,
                             raw_json,
-                            deferred_response,
+                            response,
                         )
                         .await
+                        .map(CompletedWorkerRuntimeProtocolDispatch::devtools_session)
                 })
             }
-            (WorkerRuntimeTarget::Shared(instance_id), None) => Box::pin(async move {
+            (
+                WorkerRuntimeTarget::Shared(instance_id),
+                None,
+                RendererInspectorResponseDelivery::CommandReply,
+            ) => Box::pin(async move {
                 renderer_runtime
                     .dispatch_shared_worker_runtime_protocol_message(
                         instance_id,
@@ -4722,20 +4736,47 @@ impl CdpConnection {
                         raw_json,
                     )
                     .await
+                    .map(CompletedWorkerRuntimeProtocolDispatch::command_reply)
             }),
-            (WorkerRuntimeTarget::Dedicated(instance_id), Some(deferred_response)) => {
+            (
+                WorkerRuntimeTarget::Dedicated(instance_id),
+                Some(response),
+                RendererInspectorResponseDelivery::CommandReply,
+            ) => Box::pin(async move {
+                renderer_runtime
+                    .dispatch_dedicated_worker_runtime_protocol_message_with_deferred_response(
+                        instance_id,
+                        inspector_session_id,
+                        raw_json,
+                        response,
+                    )
+                    .await
+                    .map(CompletedWorkerRuntimeProtocolDispatch::command_reply)
+            }),
+            (
+                WorkerRuntimeTarget::Dedicated(instance_id),
+                Some(response),
+                RendererInspectorResponseDelivery::DevToolsSession,
+            ) => {
+                let inspector_session_id =
+                    inspector_session_id.ok_or_else(|| "UnknownSession".to_owned())?;
                 Box::pin(async move {
                     renderer_runtime
-                        .dispatch_dedicated_worker_runtime_protocol_message_with_deferred_response(
+                        .dispatch_dedicated_worker_runtime_protocol_message_with_devtools_session_response(
                             instance_id,
                             inspector_session_id,
                             raw_json,
-                            deferred_response,
+                            response,
                         )
                         .await
+                        .map(CompletedWorkerRuntimeProtocolDispatch::devtools_session)
                 })
             }
-            (WorkerRuntimeTarget::Dedicated(instance_id), None) => Box::pin(async move {
+            (
+                WorkerRuntimeTarget::Dedicated(instance_id),
+                None,
+                RendererInspectorResponseDelivery::CommandReply,
+            ) => Box::pin(async move {
                 renderer_runtime
                     .dispatch_dedicated_worker_runtime_protocol_message(
                         instance_id,
@@ -4743,12 +4784,16 @@ impl CdpConnection {
                         raw_json,
                     )
                     .await
+                    .map(CompletedWorkerRuntimeProtocolDispatch::command_reply)
             }),
+            (_, None, RendererInspectorResponseDelivery::DevToolsSession) => {
+                return Err("DevToolsSessionResponseSenderMissing".to_owned());
+            }
         };
         Ok(PendingSharedWorkerRuntimeProtocolMessageDispatch {
             session_id: session_id.map(str::to_owned),
             pending,
-            deferred_response_rx,
+            response_route,
         })
     }
 
@@ -4788,9 +4833,9 @@ impl CdpConnection {
         self.restore_frontend_command_ids_in_runtime_messages(
             completed.session_id.as_deref(),
             None,
-            &mut completed.messages,
+            &mut completed.dispatch.messages,
         );
-        Ok(completed.messages)
+        Ok(completed.dispatch.messages)
     }
 
     pub(crate) fn start_service_worker_runtime_protocol_message_for_session(
@@ -4804,6 +4849,7 @@ impl CdpConnection {
             session_id,
             raw_json,
             None,
+            RuntimeProtocolResponseRoute::command_reply_without_receiver(),
         )
     }
 
@@ -4814,37 +4860,22 @@ impl CdpConnection {
         command_id: u64,
     ) -> Result<PendingServiceWorkerRuntimeProtocolMessageDispatch, String> {
         self.service_worker_runtime_target_for_session(session_id)?;
-        let (correlation, raw_json, response_sender, response_route) =
+        let (_correlation, raw_json, response_sender, response_route) =
             self.prepare_renderer_call_for_session_owner(session_id, descriptor, command_id, None)?;
-        debug_assert_eq!(
-            response_route.delivery(),
-            RendererInspectorResponseDelivery::CommandReply,
-            "worker responses have not migrated to the page DevTools session output"
-        );
-        let response_receiver = response_route
-            .into_command_reply_receiver()
-            .expect("CommandReply worker dispatch must allocate a response receiver");
-        let result = self.start_service_worker_runtime_protocol_message_for_session_with_optional_deferred_response(
+        self.start_service_worker_runtime_protocol_message_for_session_with_optional_deferred_response(
             session_id,
             raw_json,
-            Some((response_sender, response_receiver)),
-        );
-        if result.is_err() {
-            let removed =
-                self.take_renderer_call_for_frontend_for_session_owner(session_id, command_id);
-            debug_assert_eq!(removed, Some(correlation));
-        }
-        result
+            Some(response_sender),
+            response_route,
+        )
     }
 
     fn start_service_worker_runtime_protocol_message_for_session_with_optional_deferred_response(
         &mut self,
         session_id: Option<&str>,
         raw_json: String,
-        deferred_response: Option<(
-            RendererRuntimeInspectorResponseSender,
-            RuntimeInspectorResponseReceiver,
-        )>,
+        response_sender: Option<RendererRuntimeInspectorResponseSender>,
+        response_route: RuntimeProtocolResponseRoute,
     ) -> Result<PendingServiceWorkerRuntimeProtocolMessageDispatch, String> {
         let route = self.service_worker_runtime_target_for_session(session_id)?;
         let renderer_runtime = self
@@ -4853,36 +4884,50 @@ impl CdpConnection {
             .ok_or_else(|| "UnknownSession".to_owned())?;
         let version_id = route.version_id;
         let inspector_session_id = session_id.map(str::to_owned);
-        let (deferred_response, deferred_response_rx) = match deferred_response {
-            Some((deferred_response, rx)) => (Some(deferred_response), Some(rx)),
-            None => (None, None),
-        };
-        let pending =
-            Box::pin(async move {
-                match deferred_response {
-                    Some(deferred_response) => renderer_runtime
+        let response_delivery = response_route.delivery();
+        let pending: ServiceWorkerRuntimeProtocolDispatchFuture = Box::pin(async move {
+            match (response_sender, response_delivery) {
+                (Some(response), RendererInspectorResponseDelivery::CommandReply) => {
+                    renderer_runtime
                         .dispatch_service_worker_runtime_protocol_message_with_deferred_response(
                             version_id,
                             inspector_session_id,
                             raw_json,
-                            deferred_response,
+                            response,
                         )
-                        .await,
-                    None => {
-                        renderer_runtime
-                            .dispatch_service_worker_runtime_protocol_message(
+                        .await
+                        .map(CompletedWorkerRuntimeProtocolDispatch::command_reply)
+                }
+                (Some(response), RendererInspectorResponseDelivery::DevToolsSession) => {
+                    let inspector_session_id =
+                        inspector_session_id.ok_or_else(|| "UnknownSession".to_owned())?;
+                    renderer_runtime
+                            .dispatch_service_worker_runtime_protocol_message_with_devtools_session_response(
                                 version_id,
                                 inspector_session_id,
                                 raw_json,
+                                response,
                             )
                             .await
-                    }
+                            .map(CompletedWorkerRuntimeProtocolDispatch::devtools_session)
                 }
-            });
+                (None, RendererInspectorResponseDelivery::CommandReply) => renderer_runtime
+                    .dispatch_service_worker_runtime_protocol_message(
+                        version_id,
+                        inspector_session_id,
+                        raw_json,
+                    )
+                    .await
+                    .map(CompletedWorkerRuntimeProtocolDispatch::command_reply),
+                (None, RendererInspectorResponseDelivery::DevToolsSession) => {
+                    Err("DevToolsSessionResponseSenderMissing".to_owned())
+                }
+            }
+        });
         Ok(PendingServiceWorkerRuntimeProtocolMessageDispatch {
             session_id: session_id.map(str::to_owned),
             pending,
-            deferred_response_rx,
+            response_route,
         })
     }
 
@@ -4893,9 +4938,9 @@ impl CdpConnection {
         self.restore_frontend_command_ids_in_runtime_messages(
             completed.session_id.as_deref(),
             None,
-            &mut completed.messages,
+            &mut completed.dispatch.messages,
         );
-        Ok(completed.messages)
+        Ok(completed.dispatch.messages)
     }
 
     pub(crate) fn start_moli_diagnostics(

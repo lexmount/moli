@@ -289,16 +289,14 @@ pub(crate) enum WorkerToParentMessage {
     Console(WorkerConsoleMessage),
     /// A SharedWorker global is closing and its owner service should remove the instance.
     SharedWorkerClosed,
-    /// A SharedWorker V8 Inspector response waiting for the worker target's
-    /// concrete output boundary.
+    /// A V8 Inspector response waiting for its Worker target's concrete output
+    /// boundary.
     ///
-    /// This travels on the same worker-to-parent FIFO as `SharedWorkerClosed`.
-    /// The host can therefore bind the response to the exact worker-stream
-    /// cursor that precedes it instead of racing a separate response channel
-    /// against target retirement.
-    SharedWorkerRuntimeInspectorResponse(
-        crate::runtime::RendererRuntimeInspectorResponsePublication,
-    ),
+    /// This travels on the same worker-to-parent FIFO as lifecycle and runtime
+    /// observations. The host can therefore bind the response to the exact
+    /// target-stream cursor that precedes it instead of racing a separate
+    /// response channel against target retirement.
+    RuntimeInspectorResponse(crate::runtime::RendererRuntimeInspectorResponsePublication),
     /// A Service Worker lifecycle event finished dispatch and all `waitUntil()` promises.
     ServiceWorkerLifecycleCompleted(ServiceWorkerLifecycleCompletion),
     /// A Service Worker fetch event finished dispatch and `respondWith()` settled or fell back.

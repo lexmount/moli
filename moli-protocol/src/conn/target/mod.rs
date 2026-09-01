@@ -27,3 +27,4 @@ pub(crate) use transaction::{
     TargetBindingCleanupAction, TargetBindingCleanupPlan, TargetClosureCleanupPlan,
     TargetEventPlan, TargetSessionDetachCleanupPlan,
 };
+pub(crate) use worker_session::TargetWorkerProtocolAttachmentIdentity;

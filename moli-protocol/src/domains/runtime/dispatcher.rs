@@ -424,6 +424,9 @@ impl RuntimeInspectorRoutedOutput {
             push_runtime_protocol_event_or_background_event(plan, command_id, event);
         }
         plan.extend_post_response_events(self.post_response_events);
+        if let Some(predecessor) = self.renderer_output_predecessor {
+            plan.set_renderer_output_predecessor(predecessor);
+        }
     }
 }
 
@@ -1292,22 +1295,25 @@ fn start_heap_profiler_inspector_shared_worker_command_dispatch(
         ));
     }
 
-    let pending =
-        match start_shared_worker_frontend_inspector_dispatch(conn, cmd, cmd.json.to_owned()) {
-            Ok(pending) => pending,
-            Err(message)
-                if matches!(
-                    action,
-                    HeapProfilerAction::Enable | HeapProfilerAction::Disable
-                ) && (message == "NoDocumentLoaded"
-                    || worker_runtime_is_unavailable(&message)) =>
-            {
-                return RuntimeCommandTaskStep::Complete(CommandOutputPlan::success());
-            }
-            Err(message) => {
-                return RuntimeCommandTaskStep::Complete(shared_worker_runtime_error_plan(message));
-            }
-        };
+    let pending = match start_shared_worker_frontend_inspector_dispatch(
+        conn,
+        cmd,
+        cmd.json.to_owned(),
+        cmd.terminal_response_delivery(RendererInspectorResponseDelivery::DevToolsSession),
+    ) {
+        Ok(pending) => pending,
+        Err(message)
+            if matches!(
+                action,
+                HeapProfilerAction::Enable | HeapProfilerAction::Disable
+            ) && (message == "NoDocumentLoaded" || worker_runtime_is_unavailable(&message)) =>
+        {
+            return RuntimeCommandTaskStep::Complete(CommandOutputPlan::success());
+        }
+        Err(message) => {
+            return RuntimeCommandTaskStep::Complete(shared_worker_runtime_error_plan(message));
+        }
+    };
 
     let object_group = heap_profiler_object_group_for_command_result(cmd, action);
     RuntimeCommandTaskStep::Pending(Box::new(PendingRuntimeCommandDispatch {
@@ -1391,6 +1397,7 @@ fn start_profiler_inspector_shared_worker_command_dispatch(
         conn,
         cmd,
         dispatch.into_inspector_json(),
+        cmd.terminal_response_delivery(RendererInspectorResponseDelivery::DevToolsSession),
     ) {
         Ok(pending) => pending,
         Err(message) => {
@@ -1513,21 +1520,25 @@ fn start_console_inspector_shared_worker_command_dispatch(
         ));
     }
 
-    let pending =
-        match start_shared_worker_frontend_inspector_dispatch(conn, cmd, cmd.json.to_owned()) {
-            Ok(pending) => pending,
-            Err(message) if worker_runtime_is_unavailable(&message) => {
-                if !apply_console_output_state_for_session(conn, cmd.session_id, action) {
-                    return RuntimeCommandTaskStep::Complete(shared_worker_runtime_error_plan(
-                        "UnknownSession".to_owned(),
-                    ));
-                }
-                return RuntimeCommandTaskStep::Complete(CommandOutputPlan::success());
+    let pending = match start_shared_worker_frontend_inspector_dispatch(
+        conn,
+        cmd,
+        cmd.json.to_owned(),
+        cmd.terminal_response_delivery(RendererInspectorResponseDelivery::DevToolsSession),
+    ) {
+        Ok(pending) => pending,
+        Err(message) if worker_runtime_is_unavailable(&message) => {
+            if !apply_console_output_state_for_session(conn, cmd.session_id, action) {
+                return RuntimeCommandTaskStep::Complete(shared_worker_runtime_error_plan(
+                    "UnknownSession".to_owned(),
+                ));
             }
-            Err(message) => {
-                return RuntimeCommandTaskStep::Complete(shared_worker_runtime_error_plan(message));
-            }
-        };
+            return RuntimeCommandTaskStep::Complete(CommandOutputPlan::success());
+        }
+        Err(message) => {
+            return RuntimeCommandTaskStep::Complete(shared_worker_runtime_error_plan(message));
+        }
+    };
 
     RuntimeCommandTaskStep::Pending(Box::new(PendingRuntimeCommandDispatch {
         command_id: cmd.id,
@@ -1572,23 +1583,25 @@ fn start_console_inspector_service_worker_command_dispatch(
         ));
     }
 
-    let pending =
-        match start_service_worker_frontend_inspector_dispatch(conn, cmd, cmd.json.to_owned()) {
-            Ok(pending) => pending,
-            Err(message) if message == "ServiceWorkerRuntimeUnavailable" => {
-                if !apply_console_output_state_for_session(conn, cmd.session_id, action) {
-                    return RuntimeCommandTaskStep::Complete(service_worker_runtime_error_plan(
-                        "UnknownSession".to_owned(),
-                    ));
-                }
-                return RuntimeCommandTaskStep::Complete(CommandOutputPlan::success());
-            }
-            Err(message) => {
+    let pending = match start_service_worker_frontend_inspector_dispatch(
+        conn,
+        cmd,
+        cmd.json.to_owned(),
+        cmd.terminal_response_delivery(RendererInspectorResponseDelivery::DevToolsSession),
+    ) {
+        Ok(pending) => pending,
+        Err(message) if message == "ServiceWorkerRuntimeUnavailable" => {
+            if !apply_console_output_state_for_session(conn, cmd.session_id, action) {
                 return RuntimeCommandTaskStep::Complete(service_worker_runtime_error_plan(
-                    message,
+                    "UnknownSession".to_owned(),
                 ));
             }
-        };
+            return RuntimeCommandTaskStep::Complete(CommandOutputPlan::success());
+        }
+        Err(message) => {
+            return RuntimeCommandTaskStep::Complete(service_worker_runtime_error_plan(message));
+        }
+    };
 
     RuntimeCommandTaskStep::Pending(Box::new(PendingRuntimeCommandDispatch {
         command_id: cmd.id,
@@ -1991,12 +2004,13 @@ fn start_shared_worker_frontend_inspector_dispatch(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,
     inspector_json: String,
+    response_delivery: RendererInspectorResponseDelivery,
 ) -> Result<PendingSharedWorkerRuntimeProtocolMessageDispatch, String> {
     if let Some(command_id) = cmd.id {
         let descriptor = RendererCommandDescriptor::from_frontend_policy(
             inspector_json,
             cmd.renderer_policy(),
-            RendererInspectorResponseDelivery::CommandReply,
+            response_delivery,
         );
         conn.start_shared_worker_runtime_protocol_message_for_session_with_deferred_response(
             cmd.session_id,
@@ -2015,12 +2029,13 @@ fn start_service_worker_frontend_inspector_dispatch(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,
     inspector_json: String,
+    response_delivery: RendererInspectorResponseDelivery,
 ) -> Result<PendingServiceWorkerRuntimeProtocolMessageDispatch, String> {
     if let Some(command_id) = cmd.id {
         let descriptor = RendererCommandDescriptor::from_frontend_policy(
             inspector_json,
             cmd.renderer_policy(),
-            RendererInspectorResponseDelivery::CommandReply,
+            response_delivery,
         );
         conn.start_service_worker_runtime_protocol_message_for_session_with_deferred_response(
             cmd.session_id,
@@ -9206,7 +9221,17 @@ fn start_pending_shared_worker_runtime_inspector_command(
         action.label(),
     )
     .map_err(|error| error.to_string())?;
-    let pending = match start_shared_worker_frontend_inspector_dispatch(conn, cmd, inspector_json) {
+    let response_delivery = if await_promise {
+        RendererInspectorResponseDelivery::CommandReply
+    } else {
+        cmd.terminal_response_delivery(RendererInspectorResponseDelivery::DevToolsSession)
+    };
+    let pending = match start_shared_worker_frontend_inspector_dispatch(
+        conn,
+        cmd,
+        inspector_json,
+        response_delivery,
+    ) {
         Ok(pending) => pending,
         Err(message) => {
             forget_pre_registered_runtime_await(conn, pre_registered_await, &owner_scope);
@@ -9268,8 +9293,17 @@ fn start_pending_service_worker_runtime_inspector_command(
         action.label(),
     )
     .map_err(|error| error.to_string())?;
-    let pending = match start_service_worker_frontend_inspector_dispatch(conn, cmd, inspector_json)
-    {
+    let response_delivery = if await_promise {
+        RendererInspectorResponseDelivery::CommandReply
+    } else {
+        cmd.terminal_response_delivery(RendererInspectorResponseDelivery::DevToolsSession)
+    };
+    let pending = match start_service_worker_frontend_inspector_dispatch(
+        conn,
+        cmd,
+        inspector_json,
+        response_delivery,
+    ) {
         Ok(pending) => pending,
         Err(message) => {
             forget_pre_registered_runtime_await(conn, pre_registered_await, &owner_scope);
@@ -9422,13 +9456,28 @@ async fn complete_pending_shared_worker_runtime_inspector_command(
     binding_effect: Option<SharedWorkerRuntimeBindingEffect>,
     timing_started: Option<std::time::Instant>,
 ) -> RuntimeCommandTaskStep {
-    let (messages, mut renderer_response_rx) = match completed_inspector {
+    let (
+        messages,
+        mut renderer_response_rx,
+        response_delivery,
+        session_response_predecessor,
+        session_response_succeeded,
+    ) = match completed_inspector {
         Ok(mut completed_protocol) => {
+            let response_delivery = completed_protocol.response_delivery();
+            let session_response_predecessor = completed_protocol.session_response_predecessor();
+            let session_response_succeeded = completed_protocol.session_response_succeeded();
             let renderer_response_rx = completed_protocol.take_deferred_response_receiver();
             match conn
                 .complete_shared_worker_runtime_protocol_message_for_session(completed_protocol)
             {
-                Ok(messages) => (messages, renderer_response_rx),
+                Ok(messages) => (
+                    messages,
+                    renderer_response_rx,
+                    response_delivery,
+                    session_response_predecessor,
+                    session_response_succeeded,
+                ),
                 Err(message) => {
                     return complete_shared_worker_runtime_inspector_error(
                         conn, completed, message,
@@ -9453,6 +9502,9 @@ async fn complete_pending_shared_worker_runtime_inspector_command(
 
     let mut plan = CommandOutputPlan::default();
     let mut routed_output = RuntimeInspectorRoutedOutput::default();
+    if let Some(predecessor) = session_response_predecessor {
+        routed_output.set_renderer_output_predecessor(predecessor);
+    }
     let mut saw_current_response = route_inspector_messages_into_routed_output(
         conn,
         messages,
@@ -9460,7 +9512,14 @@ async fn complete_pending_shared_worker_runtime_inspector_command(
         &completed.owner_scope,
         &mut routed_output,
     );
-    if !completed.wait_for_deferred_reply
+    if saw_current_response {
+        renderer_response_rx.take();
+    }
+    if response_delivery == RendererInspectorResponseDelivery::DevToolsSession {
+        renderer_response_rx.take();
+    }
+    if response_delivery == RendererInspectorResponseDelivery::CommandReply
+        && !completed.wait_for_deferred_reply
         && let Some(renderer_response_rx) = renderer_response_rx.take()
     {
         saw_current_response |= route_registered_runtime_response_receiver_into(
@@ -9472,7 +9531,8 @@ async fn complete_pending_shared_worker_runtime_inspector_command(
         )
         .await;
     }
-    if completed.wait_for_deferred_reply
+    if response_delivery == RendererInspectorResponseDelivery::CommandReply
+        && completed.wait_for_deferred_reply
         && (renderer_response_rx.is_some() || !saw_current_response)
         && completed.command_id.is_some()
     {
@@ -9483,7 +9543,8 @@ async fn complete_pending_shared_worker_runtime_inspector_command(
             renderer_response_rx,
         );
     }
-    let succeeded = routed_output.command_response_succeeded(completed.command_id);
+    let succeeded = session_response_succeeded
+        .unwrap_or_else(|| routed_output.command_response_succeeded(completed.command_id));
     apply_shared_worker_runtime_completion_projection(
         conn,
         completed.session_id(),
@@ -9494,10 +9555,17 @@ async fn complete_pending_shared_worker_runtime_inspector_command(
         if let Some(console_action) = console_action_from_protocol_method(completed.action)
             && !apply_console_output_state_for_session(conn, completed.session_id(), console_action)
         {
-            return RuntimeCommandTaskStep::Complete(shared_worker_runtime_error_plan(format!(
-                "ConsoleCommandCompletionFailed: {}",
-                completed.action
-            )));
+            let message = format!("ConsoleCommandCompletionFailed: {}", completed.action);
+            if session_response_succeeded.is_some() {
+                tracing::warn!(
+                    command_id = completed.command_id,
+                    session_id = completed.session_id(),
+                    error = %message,
+                    "could not apply shared-worker projection after the terminal response was published"
+                );
+            } else {
+                return RuntimeCommandTaskStep::Complete(shared_worker_runtime_error_plan(message));
+            }
         }
         if let Some(effect) = binding_effect {
             match apply_shared_worker_runtime_binding_effect_after_success(
@@ -9559,13 +9627,28 @@ async fn complete_pending_service_worker_runtime_inspector_command(
     completed_inspector: Result<CompletedServiceWorkerRuntimeProtocolMessageDispatch, String>,
     timing_started: Option<std::time::Instant>,
 ) -> RuntimeCommandTaskStep {
-    let (messages, mut renderer_response_rx) = match completed_inspector {
+    let (
+        messages,
+        mut renderer_response_rx,
+        response_delivery,
+        session_response_predecessor,
+        session_response_succeeded,
+    ) = match completed_inspector {
         Ok(mut completed_protocol) => {
+            let response_delivery = completed_protocol.response_delivery();
+            let session_response_predecessor = completed_protocol.session_response_predecessor();
+            let session_response_succeeded = completed_protocol.session_response_succeeded();
             let renderer_response_rx = completed_protocol.take_deferred_response_receiver();
             match conn
                 .complete_service_worker_runtime_protocol_message_for_session(completed_protocol)
             {
-                Ok(messages) => (messages, renderer_response_rx),
+                Ok(messages) => (
+                    messages,
+                    renderer_response_rx,
+                    response_delivery,
+                    session_response_predecessor,
+                    session_response_succeeded,
+                ),
                 Err(message) => {
                     return complete_service_worker_runtime_inspector_error(
                         conn, completed, message,
@@ -9590,6 +9673,9 @@ async fn complete_pending_service_worker_runtime_inspector_command(
 
     let mut plan = CommandOutputPlan::default();
     let mut routed_output = RuntimeInspectorRoutedOutput::default();
+    if let Some(predecessor) = session_response_predecessor {
+        routed_output.set_renderer_output_predecessor(predecessor);
+    }
     let mut saw_current_response = route_inspector_messages_into_routed_output(
         conn,
         messages,
@@ -9597,7 +9683,14 @@ async fn complete_pending_service_worker_runtime_inspector_command(
         &completed.owner_scope,
         &mut routed_output,
     );
-    if !completed.wait_for_deferred_reply
+    if saw_current_response {
+        renderer_response_rx.take();
+    }
+    if response_delivery == RendererInspectorResponseDelivery::DevToolsSession {
+        renderer_response_rx.take();
+    }
+    if response_delivery == RendererInspectorResponseDelivery::CommandReply
+        && !completed.wait_for_deferred_reply
         && let Some(renderer_response_rx) = renderer_response_rx.take()
     {
         saw_current_response |= route_registered_runtime_response_receiver_into(
@@ -9609,7 +9702,8 @@ async fn complete_pending_service_worker_runtime_inspector_command(
         )
         .await;
     }
-    if completed.wait_for_deferred_reply
+    if response_delivery == RendererInspectorResponseDelivery::CommandReply
+        && completed.wait_for_deferred_reply
         && (renderer_response_rx.is_some() || !saw_current_response)
         && completed.command_id.is_some()
     {
@@ -9620,7 +9714,8 @@ async fn complete_pending_service_worker_runtime_inspector_command(
             renderer_response_rx,
         );
     }
-    let succeeded = routed_output.command_response_succeeded(completed.command_id);
+    let succeeded = session_response_succeeded
+        .unwrap_or_else(|| routed_output.command_response_succeeded(completed.command_id));
     apply_service_worker_runtime_completion_projection(
         conn,
         completed.session_id(),
@@ -9631,10 +9726,17 @@ async fn complete_pending_service_worker_runtime_inspector_command(
         && let Some(console_action) = console_action_from_protocol_method(completed.action)
         && !apply_console_output_state_for_session(conn, completed.session_id(), console_action)
     {
-        return RuntimeCommandTaskStep::Complete(service_worker_runtime_error_plan(format!(
-            "ConsoleCommandCompletionFailed: {}",
-            completed.action
-        )));
+        let message = format!("ConsoleCommandCompletionFailed: {}", completed.action);
+        if session_response_succeeded.is_some() {
+            tracing::warn!(
+                command_id = completed.command_id,
+                session_id = completed.session_id(),
+                error = %message,
+                "could not apply service-worker projection after the terminal response was published"
+            );
+        } else {
+            return RuntimeCommandTaskStep::Complete(service_worker_runtime_error_plan(message));
+        }
     }
     if succeeded {
         routed_output.register_object_group_for_success(
@@ -9725,7 +9827,18 @@ fn complete_shared_worker_runtime_inspector_error(
     message: String,
 ) -> RuntimeCommandTaskStep {
     if let Some(command_id) = completed.command_id {
+        let renderer_call = conn
+            .take_renderer_call_for_frontend_for_session_owner(completed.session_id(), command_id);
         conn.forget_pending_inspector_await(command_id, completed.session_id());
+        if renderer_call.is_none() {
+            tracing::debug!(
+                command_id,
+                session_id = completed.session_id(),
+                error = %message,
+                "ignored shared-worker completion after another route settled the frontend call"
+            );
+            return RuntimeCommandTaskStep::Complete(CommandOutputPlan::default());
+        }
     }
     match completed.action {
         "enable" if message == "NoDocumentLoaded" || worker_runtime_is_unavailable(&message) => {
@@ -9815,7 +9928,18 @@ fn complete_service_worker_runtime_inspector_error(
     message: String,
 ) -> RuntimeCommandTaskStep {
     if let Some(command_id) = completed.command_id {
+        let renderer_call = conn
+            .take_renderer_call_for_frontend_for_session_owner(completed.session_id(), command_id);
         conn.forget_pending_inspector_await(command_id, completed.session_id());
+        if renderer_call.is_none() {
+            tracing::debug!(
+                command_id,
+                session_id = completed.session_id(),
+                error = %message,
+                "ignored service-worker completion after another route settled the frontend call"
+            );
+            return RuntimeCommandTaskStep::Complete(CommandOutputPlan::default());
+        }
     }
     match completed.action {
         "enable"

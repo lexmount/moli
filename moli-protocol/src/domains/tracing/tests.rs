@@ -286,6 +286,7 @@ async fn owner_cleanup_cancels_trace_without_emitting_completion() {
         ctx.conn
             .execute_target_binding_cleanup_for_session_without_event_async("SID-peer")
             .await
+            .unwrap()
     );
     assert!(!ctx.conn.tracing_state.is_active());
     assert!(
@@ -362,7 +363,7 @@ async fn owner_cleanup_waits_for_cpu_trace_release_before_replacement_start() {
     )
     .await
     .expect("owner detach should wait for CPU trace cancellation");
-    assert!(cleaned);
+    assert!(cleaned.unwrap());
     assert!(stop_tasks > 0);
     assert!(!ctx.conn.tracing_state.is_active());
 

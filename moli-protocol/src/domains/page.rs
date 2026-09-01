@@ -121,8 +121,7 @@ use prepared_navigation::{
     PagePreparedSameDocumentNavigation, PagePreparedTopLevelLocationNavigation,
 };
 pub(crate) use termination::{
-    PageTargetTerminationKind, PageTargetTerminationOwnerAction,
-    complete_page_target_termination_owner_action_async,
+    PageTargetTerminationOwnerAction, complete_page_target_termination_owner_action_async,
     fail_pending_fetch_state_background_events_async, take_pending_fetch_state,
 };
 

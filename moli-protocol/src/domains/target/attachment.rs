@@ -601,408 +601,78 @@ async fn detach_from_target_inner_async(
         out.push_success();
         return;
     }
+    if let Some(session_id) = params.session_id.as_deref() {
+        let Some(route) = conn.session_route(Some(session_id)) else {
+            out.push_error(-31998, "InvalidSessionId");
+            return;
+        };
+        let Some(target_id) = detach_session_route_target_id(&route).map(str::to_owned) else {
+            out.push_error(-31998, "InvalidSessionId");
+            return;
+        };
+        match super::session_disposal::dispose_target_session_async(
+            conn,
+            out.background_events_mut(),
+            command_context.protocol_events_mut(),
+            crate::conn::TargetSessionDetachCleanupPlan::new(
+                target_id,
+                session_id,
+                None,
+                command_session_id,
+            ),
+        )
+        .await
+        {
+            Ok(outcome) => {
+                let (event_plan, predecessor) = outcome.into_parts();
+                if let Some(predecessor) = predecessor {
+                    command_context.set_renderer_output_predecessor(predecessor);
+                }
+                out.push_success();
+                out.target_events_mut().extend_background_events(event_plan);
+            }
+            Err(error) => out.push_error(-32000, error.to_string()),
+        }
+        return;
+    }
     if conn.browser_context.is_none() {
         out.push_success();
         return;
     }
-    if let Some(session_id) = params.session_id.as_deref()
-        && let Some(tab_target_id) = conn
-            .tab_target_id_for_session_id(session_id)
-            .map(str::to_owned)
-    {
-        if let Some(requested_target_id) = params.target_id.as_deref()
-            && requested_target_id != tab_target_id
-        {
-            out.push_error(-31998, "UnknownTargetId");
-            return;
-        }
-        out.push_success();
-        let event_plan = conn
-            .detach_session_with_binding_cleanup_event_plan_async(
-                crate::conn::TargetSessionDetachCleanupPlan::new(
-                    tab_target_id,
-                    session_id,
-                    None,
-                    command_session_id,
-                ),
-            )
-            .await;
-        out.target_events_mut().extend_background_events(event_plan);
-        return;
-    }
-    if let Some(session_id) = params.session_id.as_deref()
-        && let Some(target_id) = conn
-            .browser_context
-            .as_ref()
-            .and_then(|bc| bc.auxiliary_target_id_for_session(session_id))
-            .map(str::to_owned)
-    {
-        if let Some(requested_target_id) = params.target_id.as_deref()
-            && requested_target_id != target_id
-        {
-            out.push_error(-31998, "UnknownTargetId");
-            return;
-        }
-        conn.fail_pending_inspector_awaits_for_session_owner_background_events_into(
-            out.background_events_mut(),
-            command_context.protocol_events_mut(),
-            Some(session_id),
-            "Target detached",
-        );
-        let _ = conn
-            .detach_runtime_inspector_session_for_session_owner_async(Some(session_id))
-            .await;
-        super::auto_attach::clear_detached_session_target_overrides_best_effort(conn, session_id)
-            .await;
-        super::clear_detached_target_fetch_state_background_events_async(
-            conn,
-            out.background_events_mut(),
-            session_id,
-        )
-        .await;
-        out.push_success();
-        let event_plan = conn
-            .detach_session_with_binding_cleanup_event_plan_async(
-                crate::conn::TargetSessionDetachCleanupPlan::new(
-                    target_id,
-                    session_id,
-                    None,
-                    command_session_id,
-                ),
-            )
-            .await;
-        out.target_events_mut().extend_background_events(event_plan);
-        return;
-    }
-    if let Some(session_id) = params.session_id.as_deref()
-        && let Some(target_id) = conn
-            .browser_context
-            .as_ref()
-            .and_then(|bc| bc.dedicated_worker_target_id_for_session(session_id))
-            .map(str::to_owned)
-    {
-        if let Some(requested_target_id) = params.target_id.as_deref()
-            && requested_target_id != target_id
-        {
-            out.push_error(-31998, "UnknownTargetId");
-            return;
-        }
-        let renderer_detach = conn.browser_context.as_ref().and_then(|bc| {
-            bc.dedicated_worker_target(&target_id)
-                .map(|target| (bc.renderer_runtime(), target.renderer_instance_id))
+    if let Some(target_id) = params.target_id.as_deref() {
+        let worker_session_ids = conn.browser_context.as_ref().and_then(|browser_context| {
+            browser_context
+                .shared_worker_target(target_id)
+                .map(|target| target.session_ids())
+                .or_else(|| {
+                    browser_context
+                        .dedicated_worker_target(target_id)
+                        .map(|target| target.session_ids())
+                })
+                .or_else(|| {
+                    browser_context
+                        .service_worker_target(target_id)
+                        .map(|target| target.session_ids())
+                })
         });
-        conn.release_shared_worker_runtime_remote_objects_for_session_best_effort_async(session_id)
-            .await;
-        out.push_success();
-        conn.fail_pending_inspector_awaits_for_session_owner_background_events_into(
-            out.background_events_mut(),
-            command_context.protocol_events_mut(),
-            Some(session_id),
-            "Target detached",
-        );
-        if let Some((renderer_runtime, instance_id)) = renderer_detach {
-            renderer_runtime.detach_dedicated_worker_runtime_inspector_session(
-                instance_id,
-                Some(session_id.to_owned()),
-            );
-        }
-        let event_plan = conn
-            .detach_session_with_binding_cleanup_event_plan_async(
-                crate::conn::TargetSessionDetachCleanupPlan::new(target_id, session_id, None, None),
-            )
-            .await;
-        out.target_events_mut().extend_background_events(event_plan);
-        return;
-    }
-    if let Some(session_id) = params.session_id.as_deref()
-        && let Some(target_id) = conn
-            .browser_context
-            .as_ref()
-            .and_then(|bc| bc.shared_worker_target_id_for_session(session_id))
-            .map(str::to_owned)
-    {
-        if let Some(requested_target_id) = params.target_id.as_deref()
-            && requested_target_id != target_id
-        {
-            out.push_error(-31998, "UnknownTargetId");
-            return;
-        }
-        let renderer_detach = conn.browser_context.as_ref().and_then(|bc| {
-            bc.shared_worker_target(&target_id)
-                .map(|target| (bc.renderer_runtime(), target.renderer_instance_id))
-        });
-        conn.release_shared_worker_runtime_remote_objects_for_session_best_effort_async(session_id)
-            .await;
-        out.push_success();
-        conn.fail_pending_inspector_awaits_for_session_owner_background_events_into(
-            out.background_events_mut(),
-            command_context.protocol_events_mut(),
-            Some(session_id),
-            "Target detached",
-        );
-        if let Some((renderer_runtime, instance_id)) = renderer_detach {
-            renderer_runtime.detach_shared_worker_runtime_inspector_session(
-                instance_id,
-                Some(session_id.to_owned()),
-            );
-        }
-        let event_plan = conn
-            .detach_session_with_binding_cleanup_event_plan_async(
-                crate::conn::TargetSessionDetachCleanupPlan::new(target_id, session_id, None, None),
-            )
-            .await;
-        out.target_events_mut().extend_background_events(event_plan);
-        return;
-    }
-    if let Some(session_id) = params.session_id.as_deref()
-        && let Some(target_id) = conn
-            .browser_context
-            .as_ref()
-            .and_then(|bc| bc.service_worker_target_id_for_session(session_id))
-            .map(str::to_owned)
-    {
-        if let Some(requested_target_id) = params.target_id.as_deref()
-            && requested_target_id != target_id
-        {
-            out.push_error(-31998, "UnknownTargetId");
-            return;
-        }
-        out.push_success();
-        conn.fail_pending_inspector_awaits_for_session_owner_background_events_into(
-            out.background_events_mut(),
-            command_context.protocol_events_mut(),
-            Some(session_id),
-            "Target detached",
-        );
-        super::set_service_worker_pause_on_start_owner(conn, Some(session_id), false);
-        let event_plan = conn
-            .detach_session_with_binding_cleanup_event_plan_async(
-                crate::conn::TargetSessionDetachCleanupPlan::new(target_id, session_id, None, None),
-            )
-            .await;
-        out.target_events_mut().extend_background_events(event_plan);
-        return;
-    }
-    if let Some(session_id) = params.session_id.as_deref() {
-        let background_target_id = conn.browser_context.as_ref().and_then(|bc| {
-            bc.background_targets()
-                .find(|target| target.is_session(session_id))
-                .map(|target| target.target_id().to_owned())
-        });
-        if let Some(target_id) = background_target_id.as_deref() {
-            if let Some(requested_target_id) = params.target_id.as_deref()
-                && requested_target_id != target_id
-            {
-                out.push_error(-31998, "UnknownTargetId");
-                return;
-            }
-            conn.fail_pending_inspector_awaits_for_session_owner_background_events_into(
-                out.background_events_mut(),
-                command_context.protocol_events_mut(),
-                Some(session_id),
-                "Target detached",
-            );
-            let _ = conn
-                .detach_runtime_inspector_session_for_session_owner_async(Some(session_id))
-                .await;
-            match conn
-                .detach_background_target_session_binding_event_plan_async(
-                    crate::conn::TargetSessionDetachCleanupPlan::new(
-                        target_id,
-                        session_id,
-                        None,
-                        command_session_id,
-                    ),
-                )
+        if let Some(session_ids) = worker_session_ids {
+            match dispose_target_sessions_async(conn, out, command_context, target_id, session_ids)
                 .await
             {
-                Ok(Some(event_plan)) => {
-                    out.push_success();
-                    out.target_events_mut().extend_background_events(event_plan);
-                    return;
-                }
-                Ok(None) => {}
-                Err(message) => {
-                    out.push_error(-32000, message);
-                    return;
-                }
-            }
-        }
-    }
-    if let Some(target_id) = params.target_id.as_deref() {
-        let shared_worker_detach_plan = conn.browser_context.as_ref().and_then(|bc| {
-            bc.shared_worker_target(target_id).map(|target| {
-                (
-                    bc.renderer_runtime(),
-                    target.renderer_instance_id,
-                    target.session_ids(),
-                )
-            })
-        });
-        if conn
-            .browser_context
-            .as_ref()
-            .is_some_and(|bc| bc.has_shared_worker_target(target_id))
-        {
-            out.push_success();
-            for session_id in shared_worker_detach_plan
-                .as_ref()
-                .map(|(_, _, sessions)| sessions.as_slice())
-                .unwrap_or_default()
-            {
-                conn.release_shared_worker_runtime_remote_objects_for_session_best_effort_async(
-                    session_id,
-                )
-                .await;
-                conn.fail_pending_inspector_awaits_for_session_owner_background_events_into(
-                    out.background_events_mut(),
-                    command_context.protocol_events_mut(),
-                    Some(session_id),
-                    "Target detached",
-                );
-            }
-            if let Some((renderer_runtime, instance_id, session_ids)) = &shared_worker_detach_plan {
-                for session_id in session_ids {
-                    renderer_runtime.detach_shared_worker_runtime_inspector_session(
-                        *instance_id,
-                        Some(session_id.clone()),
-                    );
-                }
-            }
-            let detached_sessions = shared_worker_detach_plan
-                .as_ref()
-                .map(|(_, _, sessions)| sessions.clone())
-                .unwrap_or_default();
-            if !detached_sessions.is_empty() {
-                let event_plan = conn
-                    .detach_target_sessions_with_binding_cleanup_event_plan_async(
-                        crate::conn::TargetClosureCleanupPlan::new(
-                            target_id,
-                            None,
-                            detached_sessions,
-                        ),
-                        None,
-                    )
-                    .await;
-                out.target_events_mut().extend_background_events(event_plan);
-            }
-            return;
-        }
-        let dedicated_worker_detach_plan = conn.browser_context.as_ref().and_then(|bc| {
-            bc.dedicated_worker_target(target_id).map(|target| {
-                (
-                    bc.renderer_runtime(),
-                    target.renderer_instance_id,
-                    target.session_ids(),
-                )
-            })
-        });
-        if conn
-            .browser_context
-            .as_ref()
-            .is_some_and(|bc| bc.has_dedicated_worker_target(target_id))
-        {
-            out.push_success();
-            for session_id in dedicated_worker_detach_plan
-                .as_ref()
-                .map(|(_, _, sessions)| sessions.as_slice())
-                .unwrap_or_default()
-            {
-                conn.release_shared_worker_runtime_remote_objects_for_session_best_effort_async(
-                    session_id,
-                )
-                .await;
-                conn.fail_pending_inspector_awaits_for_session_owner_background_events_into(
-                    out.background_events_mut(),
-                    command_context.protocol_events_mut(),
-                    Some(session_id),
-                    "Target detached",
-                );
-            }
-            if let Some((renderer_runtime, instance_id, session_ids)) =
-                &dedicated_worker_detach_plan
-            {
-                for session_id in session_ids {
-                    renderer_runtime.detach_dedicated_worker_runtime_inspector_session(
-                        *instance_id,
-                        Some(session_id.clone()),
-                    );
-                }
-            }
-            let detached_sessions = dedicated_worker_detach_plan
-                .as_ref()
-                .map(|(_, _, sessions)| sessions.clone())
-                .unwrap_or_default();
-            if !detached_sessions.is_empty() {
-                let event_plan = conn
-                    .detach_target_sessions_with_binding_cleanup_event_plan_async(
-                        crate::conn::TargetClosureCleanupPlan::new(
-                            target_id,
-                            None,
-                            detached_sessions,
-                        ),
-                        None,
-                    )
-                    .await;
-                out.target_events_mut().extend_background_events(event_plan);
-            }
-            return;
-        }
-        if conn
-            .browser_context
-            .as_ref()
-            .is_some_and(|bc| bc.has_service_worker_target(target_id))
-        {
-            out.push_success();
-            let service_worker_session_ids: Vec<String> = conn
-                .browser_context
-                .as_ref()
-                .and_then(|bc| bc.service_worker_target(target_id))
-                .map(|target| target.session_ids())
-                .unwrap_or_default();
-            for session_id in &service_worker_session_ids {
-                conn.fail_pending_inspector_awaits_for_session_owner_background_events_into(
-                    out.background_events_mut(),
-                    command_context.protocol_events_mut(),
-                    Some(session_id.as_str()),
-                    "Target detached",
-                );
-                super::set_service_worker_pause_on_start_owner(
-                    conn,
-                    Some(session_id.as_str()),
-                    false,
-                );
-            }
-            if !service_worker_session_ids.is_empty() {
-                let event_plan = conn
-                    .detach_target_sessions_with_binding_cleanup_event_plan_async(
-                        crate::conn::TargetClosureCleanupPlan::new(
-                            target_id,
-                            None,
-                            service_worker_session_ids,
-                        ),
-                        None,
-                    )
-                    .await;
-                out.target_events_mut().extend_background_events(event_plan);
+                Ok(()) => out.push_success(),
+                Err(error) => out.push_error(-32000, error.to_string()),
             }
             return;
         }
     }
-    let Some(bc) = conn.browser_context.as_mut() else {
+    let Some((target_id, Some(current_session_id))) = conn
+        .browser_context
+        .as_ref()
+        .and_then(BrowserContext::active_target_identity)
+    else {
         out.push_success();
         return;
     };
-    let Some((target_id, Some(current_session_id))) = bc.active_target_identity() else {
-        out.push_success();
-        return;
-    };
-    if let Some(session_id) = params.session_id.as_deref()
-        && session_id != current_session_id
-    {
-        out.push_error(-31998, "InvalidSessionId");
-        return;
-    }
     if let Some(requested_target_id) = params.target_id.as_deref()
         && requested_target_id != target_id
     {
@@ -1010,56 +680,48 @@ async fn detach_from_target_inner_async(
         return;
     }
 
-    out.push_success();
-
-    let (
-        pending_navigations,
-        pending_auth_navigations,
-        pending_response_navigations,
-        pending_subresource_fetches,
-        pending_subresource_auths,
-        pending_subresource_responses,
-    ) = page::take_pending_fetch_state(conn, Some(&current_session_id));
-
-    let renderer_output_predecessor = page::fail_pending_fetch_state_background_events_async(
+    match super::session_disposal::dispose_target_session_async(
         conn,
         out.background_events_mut(),
-        Some(&current_session_id),
-        "Target detached",
-        "Target detached",
-        pending_navigations,
-        pending_auth_navigations,
-        pending_response_navigations,
-        pending_subresource_fetches,
-        pending_subresource_auths,
-        pending_subresource_responses,
-    )
-    .await;
-    if let Some(predecessor) = renderer_output_predecessor {
-        command_context.set_renderer_output_predecessor(predecessor);
-    }
-
-    conn.fail_pending_inspector_awaits_for_session_owner_background_events_into(
-        out.background_events_mut(),
         command_context.protocol_events_mut(),
-        Some(&current_session_id),
-        "Target detached",
-    );
+        crate::conn::TargetSessionDetachCleanupPlan::new(target_id, current_session_id, None, None),
+    )
+    .await
+    {
+        Ok(outcome) => {
+            let (event_plan, predecessor) = outcome.into_parts();
+            if let Some(predecessor) = predecessor {
+                command_context.set_renderer_output_predecessor(predecessor);
+            }
+            out.push_success();
+            out.target_events_mut().extend_background_events(event_plan);
+        }
+        Err(error) => out.push_error(-32000, error.to_string()),
+    }
+}
 
-    let _ = conn
-        .detach_runtime_inspector_session_for_session_owner_async(Some(&current_session_id))
-        .await;
-    let event_plan = conn
-        .detach_session_with_binding_cleanup_event_plan_async(
-            crate::conn::TargetSessionDetachCleanupPlan::new(
-                target_id,
-                current_session_id,
-                None,
-                None,
-            ),
+async fn dispose_target_sessions_async(
+    conn: &mut CdpConnection,
+    out: &mut TargetCommandOutput,
+    command_context: &mut crate::conn::CommandDispatchContext,
+    target_id: &str,
+    session_ids: Vec<String>,
+) -> anyhow::Result<()> {
+    for session_id in session_ids {
+        let outcome = super::session_disposal::dispose_target_session_async(
+            conn,
+            out.background_events_mut(),
+            command_context.protocol_events_mut(),
+            crate::conn::TargetSessionDetachCleanupPlan::new(target_id, &session_id, None, None),
         )
-        .await;
-    out.target_events_mut().extend_background_events(event_plan);
+        .await?;
+        let (event_plan, predecessor) = outcome.into_parts();
+        if let Some(predecessor) = predecessor {
+            command_context.set_renderer_output_predecessor(predecessor);
+        }
+        out.target_events_mut().extend_background_events(event_plan);
+    }
+    Ok(())
 }
 
 fn detach_session_route_target_id(route: &crate::conn::CdpSessionRoute) -> Option<&str> {

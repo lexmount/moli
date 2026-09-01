@@ -162,7 +162,7 @@ pub(crate) fn dispatch_worker_event<'s>(
         | WorkerToParentMessage::ServiceWorkerClientsClaim { .. }
         | WorkerToParentMessage::ServiceWorkerImportedScriptLoaded { .. }
         | WorkerToParentMessage::SharedWorkerClosed
-        | WorkerToParentMessage::SharedWorkerRuntimeInspectorResponse(_) => false,
+        | WorkerToParentMessage::RuntimeInspectorResponse(_) => false,
     }
 }
 

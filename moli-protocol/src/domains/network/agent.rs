@@ -860,10 +860,6 @@ impl TargetNetworkAgentState {
             .request_id_for_websocket_socket(socket_id, request_id_allocator)
     }
 
-    pub(crate) fn clear_session_scoped_observation_artifacts(&mut self) {
-        self.artifacts.clear_session_scoped_observation_artifacts();
-    }
-
     pub(crate) fn reset_all_target_scoped_artifacts(&mut self) {
         self.artifacts.reset_all_target_scoped_artifacts();
     }
@@ -1547,12 +1543,6 @@ impl TargetNetworkArtifacts {
     ) {
         self.websocket_network_artifacts
             .set_request_id_for_socket_if_absent(socket_id, request_id);
-    }
-
-    pub(crate) fn clear_session_scoped_observation_artifacts(&mut self) {
-        self.body_artifacts.clear_session_scoped();
-        self.subresource_network_artifacts.clear_request_ids();
-        self.websocket_network_artifacts.clear_all();
     }
 
     pub(crate) fn reset_all_target_scoped_artifacts(&mut self) {
@@ -2282,7 +2272,7 @@ mod tests {
     }
 
     #[test]
-    fn body_artifacts_clear_response_bodies_and_io_streams_together() {
+    fn target_artifact_reset_clears_response_bodies_and_io_streams_together() {
         let mut agent = TargetNetworkAgentState::default();
 
         agent.record_captured_response_body("REQ-1".to_owned(), "response body".to_owned(), [None]);
@@ -2290,17 +2280,8 @@ mod tests {
         assert!(agent.has_captured_response_body("REQ-1"));
         assert!(!agent.io_streams_empty());
 
-        agent.clear_session_scoped_observation_artifacts();
-        assert!(!agent.has_captured_response_body("REQ-1"));
-        assert!(agent.io_streams_empty());
-
-        agent.record_captured_response_body("REQ-2".to_owned(), "response body".to_owned(), [None]);
-        agent.insert_io_stream("STREAM-2".to_owned(), b"stream body".to_vec(), 0);
-        assert!(agent.has_captured_response_body("REQ-2"));
-        assert!(!agent.io_streams_empty());
-
         agent.reset_all_target_scoped_artifacts();
-        assert!(!agent.has_captured_response_body("REQ-2"));
+        assert!(!agent.has_captured_response_body("REQ-1"));
         assert!(agent.io_streams_empty());
     }
 

@@ -385,6 +385,13 @@ impl ServiceWorkerRuntimeService {
         Some(host.clone())
     }
 
+    pub(super) fn target_output_journal(
+        &self,
+        version_id: ServiceWorkerVersionId,
+    ) -> Option<crate::runtime::RendererTurnOutputJournal> {
+        self.inner.state.lock().target_output_journal(version_id)
+    }
+
     pub(super) fn enqueue_target_console_message(
         &self,
         version_id: ServiceWorkerVersionId,

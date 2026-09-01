@@ -2573,7 +2573,7 @@ fn loaded_page_mut_for_target_configuration<'a>(
 pub(crate) async fn clear_emulated_media_for_detached_session_async(
     conn: &mut CdpConnection,
     session_id: &str,
-) -> Result<(), String> {
+) -> anyhow::Result<()> {
     // Chromium's InspectorEmulationAgent::disable clears media overrides even
     // though the resulting settings are observable by every session on the
     // target. Match that contract when detach preserves the loaded page.
@@ -2597,7 +2597,9 @@ pub(crate) async fn clear_emulated_media_for_detached_session_async(
     };
     page.set_emulated_media_async(&page_overrides)
         .await
-        .map_err(|error| format!("failed to clear detached session emulated media: {error}"))
+        .map_err(|error| {
+            anyhow::anyhow!("failed to clear detached session emulated media: {error}")
+        })
 }
 
 fn single_pending_emulation_dispatch(

@@ -2742,6 +2742,50 @@ impl RendererRuntimeInspectorSessionResponseSettlement {
     }
 }
 
+/// Result of one Worker Inspector command whose terminal response was
+/// committed to the target's concrete renderer output stream.
+///
+/// The immediate messages contain only non-terminal Inspector output returned
+/// by dispatch. The response itself is owned by `predecessor` and reaches the
+/// frontend through the same target journal as surrounding Worker events.
+#[derive(Debug)]
+pub struct CompletedWorkerRuntimeInspectorCommandDispatch {
+    messages: Vec<RendererRuntimeInspectorMessage>,
+    predecessor: RendererOutputFence,
+    response_succeeded: bool,
+}
+
+impl CompletedWorkerRuntimeInspectorCommandDispatch {
+    pub fn into_parts(
+        self,
+    ) -> (
+        Vec<RendererRuntimeInspectorMessage>,
+        RendererOutputFence,
+        bool,
+    ) {
+        (self.messages, self.predecessor, self.response_succeeded)
+    }
+
+    pub(crate) async fn finish(
+        dispatch: Result<Vec<RendererRuntimeInspectorMessage>, String>,
+        settlement: oneshot::Receiver<RendererRuntimeInspectorSessionResponseSettlement>,
+    ) -> Result<Self, String> {
+        match settlement.await {
+            Ok(settlement) => {
+                let (predecessor, response_succeeded) = settlement.into_parts();
+                Ok(Self {
+                    messages: dispatch.unwrap_or_default(),
+                    predecessor,
+                    response_succeeded,
+                })
+            }
+            Err(_) => Err(dispatch
+                .err()
+                .unwrap_or_else(|| "WorkerRuntimeInspectorResponseCanceled".to_owned())),
+        }
+    }
+}
+
 impl RendererRuntimeInspectorResponsePublication {
     pub(crate) fn commit(
         self,
@@ -3250,7 +3294,7 @@ impl RendererRuntimeInspectorResponseLease {
 pub(crate) struct RendererDevToolsSessionOutputHost {
     agent_token: RendererDevToolsAgentToken,
     session: DevToolsSessionKey,
-    attachment_id: RendererAgentAttachmentId,
+    attachment_id: Option<RendererAgentAttachmentId>,
     output_journal: RendererTurnOutputJournal,
 }
 
@@ -3264,7 +3308,16 @@ impl RendererDevToolsSessionOutputHost {
         Self {
             agent_token,
             session,
-            attachment_id,
+            attachment_id: Some(attachment_id),
+            output_journal,
+        }
+    }
+
+    fn for_worker(session_id: String, output_journal: RendererTurnOutputJournal) -> Self {
+        Self {
+            agent_token: output_journal.stream().renderer_agent(),
+            session: DevToolsSessionKey::Attached(session_id),
+            attachment_id: None,
             output_journal,
         }
     }
@@ -3273,7 +3326,7 @@ impl RendererDevToolsSessionOutputHost {
         &self,
         completion: RendererRuntimeInspectorAsyncCompletion,
     ) -> Result<RendererOutputFence, RendererRuntimeInspectorAsyncCompletion> {
-        if completion.renderer_agent_attachment_id() != Some(self.attachment_id) {
+        if completion.renderer_agent_attachment_id() != self.attachment_id {
             return Err(completion);
         }
         if completion
@@ -3295,7 +3348,9 @@ impl RendererDevToolsSessionOutputHost {
             messages,
         );
         batch.v8_state_update = v8_state_update;
-        batch.bind_renderer_agent_attachment(self.attachment_id);
+        if let Some(attachment_id) = self.attachment_id {
+            batch.bind_renderer_agent_attachment(attachment_id);
+        }
         if !batch.has_resolved_source_identities() {
             return Err(completion);
         }
@@ -3386,7 +3441,7 @@ impl RendererRuntimeInspectorResponseDestination {
 enum RendererRuntimeInspectorResponsePublicationBoundary {
     Immediate,
     PageOwner(RendererOwnerWakeSender),
-    SharedWorkerParent(tokio::sync::mpsc::UnboundedSender<crate::worker::WorkerToParentMessage>),
+    WorkerParent(tokio::sync::mpsc::UnboundedSender<crate::worker::WorkerToParentMessage>),
 }
 
 #[derive(Clone)]
@@ -3470,12 +3525,12 @@ impl RendererRuntimeInspectorResponseSender {
         self
     }
 
-    pub(crate) fn defer_publication_to_shared_worker_parent(
+    pub(crate) fn defer_publication_to_worker_parent(
         mut self,
         parent_tx: tokio::sync::mpsc::UnboundedSender<crate::worker::WorkerToParentMessage>,
     ) -> Self {
         self.publication_boundary =
-            RendererRuntimeInspectorResponsePublicationBoundary::SharedWorkerParent(parent_tx);
+            RendererRuntimeInspectorResponsePublicationBoundary::WorkerParent(parent_tx);
         self
     }
 
@@ -3486,8 +3541,7 @@ impl RendererRuntimeInspectorResponseSender {
         host: RendererDevToolsSessionOutputHost,
     ) -> Self {
         assert_eq!(
-            self.attachment_id,
-            Some(host.attachment_id),
+            self.attachment_id, host.attachment_id,
             "a DevTools session response host must belong to the command attachment"
         );
         self.destination = match self.destination {
@@ -3502,6 +3556,17 @@ impl RendererRuntimeInspectorResponseSender {
             }
         };
         self
+    }
+
+    pub(crate) fn route_to_worker_devtools_session_output(
+        self,
+        session_id: String,
+        output_journal: RendererTurnOutputJournal,
+    ) -> Self {
+        self.route_to_devtools_session_output(RendererDevToolsSessionOutputHost::for_worker(
+            session_id,
+            output_journal,
+        ))
     }
 
     pub fn send(self, message: Value) -> Result<(), RendererRuntimeInspectorAsyncCompletion> {
@@ -3535,16 +3600,15 @@ impl RendererRuntimeInspectorResponseSender {
             RendererRuntimeInspectorResponsePublicationBoundary::PageOwner(owner_wake) => {
                 owner_wake.defer_runtime_inspector_response_publication(publication)
             }
-            RendererRuntimeInspectorResponsePublicationBoundary::SharedWorkerParent(parent_tx) => {
+            RendererRuntimeInspectorResponsePublicationBoundary::WorkerParent(parent_tx) => {
                 match parent_tx.send(
-                    crate::worker::WorkerToParentMessage::SharedWorkerRuntimeInspectorResponse(
-                        publication,
-                    ),
+                    crate::worker::WorkerToParentMessage::RuntimeInspectorResponse(publication),
                 ) {
                     Ok(()) => Ok(()),
                     Err(error) => {
-                        let crate::worker::WorkerToParentMessage::
-                            SharedWorkerRuntimeInspectorResponse(publication) = error.0
+                        let crate::worker::WorkerToParentMessage::RuntimeInspectorResponse(
+                            publication,
+                        ) = error.0
                         else {
                             unreachable!("the failed send must return the submitted publication")
                         };

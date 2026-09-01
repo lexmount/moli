@@ -305,7 +305,7 @@ pub struct ResponseCommitReady {
     response_status: u16,
     response_headers: Vec<(String, String)>,
     response_from_cache: bool,
-    navigation_engine: Option<NavigationEngine>,
+    navigation_engine_handoff: NavigationEngineHandoff,
     timing_started: Option<std::time::Instant>,
     main_document_commit: Option<Arc<RendererMainDocumentCommit>>,
     network_error_page: Option<NetworkErrorPageNavigation>,
@@ -399,8 +399,8 @@ impl ResponseCommitReady {
             .issue_commit_permit()
     }
 
-    pub(crate) fn with_navigation_engine(mut self, engine: NavigationEngine) -> Self {
-        self.navigation_engine = Some(engine);
+    pub(crate) fn with_navigation_engine_replacement(mut self, engine: NavigationEngine) -> Self {
+        self.navigation_engine_handoff = NavigationEngineHandoff::replacement(engine);
         self
     }
 
@@ -492,7 +492,10 @@ impl ResponseCommitReady {
             renderer_output_predecessor: diagnostics.renderer_output_predecessor,
             main_document_commit: self.main_document_commit.take(),
             document_progress_transfer,
-            navigation_engine: self.navigation_engine.take(),
+            navigation_engine_handoff: std::mem::replace(
+                &mut self.navigation_engine_handoff,
+                NavigationEngineHandoff::retained_by_owner(),
+            ),
             network_error_page: self.network_error_page.take(),
         })
     }
@@ -588,7 +591,7 @@ impl PausedResponsePreparedDocument {
             response_status: self.response_status,
             response_headers: self.response_headers,
             response_from_cache: self.response_from_cache,
-            navigation_engine: None,
+            navigation_engine_handoff: NavigationEngineHandoff::retained_by_owner(),
             timing_started: self.timing_started,
             main_document_commit: self.main_document_commit,
             network_error_page: None,
@@ -1437,7 +1440,7 @@ async fn build_navigation_from_streaming_raw_response_with_engine_async(
                 response_status,
                 response_headers,
                 response_from_cache,
-                navigation_engine: None,
+                navigation_engine_handoff: NavigationEngineHandoff::retained_by_owner(),
                 timing_started: timing_enabled.then_some(timing_started),
                 main_document_commit,
                 network_error_page: None,
@@ -1530,7 +1533,7 @@ async fn build_navigation_from_streaming_raw_response_with_engine_async(
             response_status,
             response_headers,
             response_from_cache,
-            navigation_engine: None,
+            navigation_engine_handoff: NavigationEngineHandoff::retained_by_owner(),
             timing_started: timing_enabled.then_some(timing_started),
             main_document_commit,
             network_error_page: None,
@@ -2414,8 +2417,9 @@ impl CdpConnection {
                 )
                 .await
             {
-                return navigation
-                    .map(|navigation| navigation.with_navigation_engine(inline_engine));
+                return navigation.map(|navigation| {
+                    navigation.with_navigation_engine_replacement(inline_engine)
+                });
             }
             if let Some(navigation) = load_data_url_navigation_with_engine_async(
                 &mut inline_engine,
@@ -2428,8 +2432,9 @@ impl CdpConnection {
             )
             .await
             {
-                return navigation
-                    .map(|navigation| navigation.with_navigation_engine(inline_engine));
+                return navigation.map(|navigation| {
+                    navigation.with_navigation_engine_replacement(inline_engine)
+                });
             }
         }
 
@@ -2789,8 +2794,8 @@ impl CdpConnection {
     }
 
     pub async fn load_page_via_runtime_async(&mut self, raw_url: &str) -> Result<Page, String> {
-        let navigation = self.load_navigation_via_runtime_async(raw_url).await?;
-        if let Some(engine) = navigation.navigation_engine {
+        let mut navigation = self.load_navigation_via_runtime_async(raw_url).await?;
+        if let Some(engine) = navigation.take_navigation_engine_replacement() {
             let page_owner = self.browser_context.as_ref().and_then(|context| {
                 Some((context.id.clone(), context.active_target_id()?.to_owned()))
             });
@@ -3138,7 +3143,7 @@ impl CdpConnection {
                 false,
                 network_progress,
             ),
-            navigation_engine: None,
+            navigation_engine_handoff: NavigationEngineHandoff::retained_by_owner(),
             network_error_page: None,
         })
     }
@@ -3436,7 +3441,7 @@ impl CdpConnection {
                 false,
                 network_progress,
             ),
-            navigation_engine: None,
+            navigation_engine_handoff: NavigationEngineHandoff::retained_by_owner(),
             network_error_page: None,
         })
     }
@@ -3633,7 +3638,7 @@ impl CdpConnection {
         )
         .await?;
         Ok(NavigationLoadOutcome::response_commit_ready(
-            navigation.with_navigation_engine(engine),
+            navigation.with_navigation_engine_replacement(engine),
         ))
     }
 
@@ -3786,7 +3791,7 @@ impl CdpConnection {
             RendererReplyBoundary::Stage,
         )
         .await?;
-        Ok(navigation.with_navigation_engine(engine))
+        Ok(navigation.with_navigation_engine_replacement(engine))
     }
 
     pub(crate) async fn collect_navigation_streaming_raw_response_async(
@@ -4055,7 +4060,7 @@ async fn prepare_captured_document_response_with_engine_async(
         response_status,
         response_headers,
         response_from_cache,
-        navigation_engine: None,
+        navigation_engine_handoff: NavigationEngineHandoff::retained_by_owner(),
         timing_started: None,
         main_document_commit,
         network_error_page,

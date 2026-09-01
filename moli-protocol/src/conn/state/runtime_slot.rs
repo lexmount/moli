@@ -70,16 +70,6 @@ pub(crate) struct TargetNetworkRequestIdAllocator<'a> {
 }
 
 impl TargetNetworkRequestIdAllocator<'_> {
-    pub(crate) fn reset_fetch_navigation_request_counter(&mut self) {
-        self.runtime_slot.request_counters.next_fetch_request_id = 0;
-    }
-
-    pub(crate) fn reset_subresource_fetch_request_counter(&mut self) {
-        self.runtime_slot
-            .request_counters
-            .next_subresource_fetch_request_id = 0;
-    }
-
     pub(crate) fn allocate_fetch_navigation_request_id(&mut self) -> String {
         self.runtime_slot.request_counters.next_fetch_request_id += 1;
         format!(
@@ -1236,11 +1226,6 @@ impl TargetRuntimeSlot {
     ) -> Option<u64> {
         self.network_agent
             .synthetic_websocket_socket_id_for_request(request_id)
-    }
-
-    pub(crate) fn clear_session_scoped_network_observation_artifacts(&mut self) {
-        self.network_agent
-            .clear_session_scoped_observation_artifacts();
     }
 
     pub(crate) fn reset_all_target_scoped_network_artifacts(&mut self) {

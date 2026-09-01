@@ -673,72 +673,92 @@ impl BrowserContext {
 }
 
 impl CdpConnection {
-    pub(crate) async fn remove_document_start_scripts_for_detached_session_best_effort_async(
+    pub(crate) async fn remove_document_start_scripts_for_detached_session_async(
         &mut self,
         session_id: &str,
-    ) {
+    ) -> anyhow::Result<()> {
         let renderer_inspector_session_id =
             self.target_renderer_runtime_inspector_session_id_for_session(Some(session_id));
         let devtools_session = moli_page_types::DevToolsSessionKey::from_wire_session_id(
             renderer_inspector_session_id.as_deref(),
         );
         let registry_keys = self
-            .with_target_owner_state_for_session_mut(Some(session_id), |owner_state| {
-                owner_state.take_document_start_script_registry_keys_for_session(&devtools_session)
+            .target_owner_state_for_session(Some(session_id))
+            .map(|owner_state| {
+                owner_state.document_start_script_registry_keys_for_session(&devtools_session)
             })
             .unwrap_or_default();
+        let has_loaded_page = self
+            .runtime_session_owner_slot_mut(Some(session_id))
+            .ok()
+            .is_some_and(|slot| slot.loaded_page().is_some());
+        if !has_loaded_page {
+            let _ = self.with_target_owner_state_for_session_mut(Some(session_id), |owner_state| {
+                owner_state.remove_document_start_scripts_for_session(&devtools_session)
+            });
+            return Ok(());
+        }
+
         for registry_key in registry_keys {
             let pending = self
                 .runtime_session_owner_slot_mut(Some(session_id))
                 .ok()
                 .and_then(|slot| slot.loaded_page_mut())
-                .map(|page| page.start_remove_document_start_script_by_registry_key(&registry_key));
-            let Some(pending) = pending else {
-                continue;
-            };
-            let pending = match pending {
-                Ok(pending) => pending,
-                Err(error) => {
-                    tracing::debug!(
-                        %error,
-                        session_id,
-                        registry_key,
-                        "failed to start detached-session document-start script cleanup"
-                    );
-                    continue;
-                }
-            };
-            let completion = match pending.wait().await {
-                Ok(completion) => completion,
-                Err(error) => {
-                    tracing::debug!(
-                        %error,
-                        session_id,
-                        registry_key,
-                        "detached-session document-start script cleanup was canceled"
-                    );
-                    continue;
-                }
-            };
-            let Some(page) = self
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "page disappeared while removing detached-session document-start scripts"
+                    )
+                })?
+                .start_remove_document_start_script_by_registry_key(&registry_key)
+                .map_err(|error| {
+                    anyhow::anyhow!(
+                        "failed to start detached-session document-start script cleanup: {error}"
+                    )
+                })?;
+            let completion = pending.wait().await.map_err(|error| {
+                anyhow::anyhow!(
+                    "detached-session document-start script cleanup was canceled: {error}"
+                )
+            })?;
+            let page = self
                 .runtime_session_owner_slot_mut(Some(session_id))
                 .ok()
                 .and_then(|slot| slot.loaded_page_mut())
-            else {
-                continue;
-            };
-            if let Err(error) = page.finish_unit_runtime_page_command(
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "page disappeared while finishing detached-session document-start script cleanup"
+                    )
+                })?;
+            page.finish_unit_runtime_page_command(
                 completion,
                 "remove detached-session document-start script",
-            ) {
-                tracing::debug!(
-                    %error,
-                    session_id,
-                    registry_key,
-                    "failed to finish detached-session document-start script cleanup"
-                );
-            }
+            )
+            .map_err(|error| {
+                anyhow::anyhow!(
+                    "failed to finish detached-session document-start script cleanup: {error}"
+                )
+            })?;
+            self.with_target_owner_state_for_session_mut(Some(session_id), |owner_state| {
+                owner_state.remove_document_start_script_registry_key_for_session(
+                    &devtools_session,
+                    &registry_key,
+                )
+            })
+            .ok_or_else(|| {
+                anyhow::anyhow!("session owner disappeared during document-start script cleanup")
+            })?;
         }
+
+        // Scripts without a renderer registry key never require a renderer
+        // round trip. Successful keyed removals have already been committed,
+        // so a later retry cannot revisit a renderer object that is gone.
+        self.with_target_owner_state_for_session_mut(Some(session_id), |owner_state| {
+            owner_state.remove_document_start_scripts_for_session(&devtools_session)
+        })
+        .ok_or_else(|| {
+            anyhow::anyhow!("session owner disappeared during document-start script cleanup")
+        })?;
+        Ok(())
     }
 }
 

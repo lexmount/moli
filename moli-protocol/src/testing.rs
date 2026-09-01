@@ -312,8 +312,8 @@ impl TestContext {
             .target_owner_identity_for_route(owner.session_id(), owner.session_owner_route())
             .expect("navigation fixture requires an installed browser context");
         let target_id = target_id.expect("navigation fixture requires an exact target");
+        let navigation_engine = navigation.take_navigation_engine_replacement();
         let renderer_output_predecessor = navigation.renderer_output_predecessor;
-        let navigation_engine = navigation.navigation_engine.take();
         let page_creation_artifacts = navigation.page_creation_artifacts;
         let final_url = navigation.final_url;
         let main_document_commit = navigation

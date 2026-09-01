@@ -1564,7 +1564,7 @@ impl DocumentBodySource {
             } => {
                 if !has_response_override && let Some(prepared_document) = prepared_document {
                     let (engine, navigation) = prepared_document.resume_streaming(response, None);
-                    return Ok(navigation.with_navigation_engine(engine));
+                    return Ok(navigation.with_navigation_engine_replacement(engine));
                 }
                 conn.build_navigation_from_streaming_raw_response_with_response_override_for_navigation_async(
                     navigation,

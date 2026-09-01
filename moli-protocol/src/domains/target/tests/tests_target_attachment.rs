@@ -1665,7 +1665,8 @@ async fn detach_from_target_drops_only_selected_page_renderer_inspector_session(
     }
     ctx.sent.clear();
 
-    let baseline_session_count = page_renderer_inspector_session_count(&mut ctx).await;
+    let baseline_session_count =
+        page_renderer_inspector_session_count(&mut ctx, "before Runtime.enable").await;
     ctx.process_async(json!({
         "id": 120_001,
         "sessionId": "SID-detach-primary",
@@ -1683,7 +1684,7 @@ async fn detach_from_target_drops_only_selected_page_renderer_inspector_session(
     ctx.sent.clear();
 
     assert_eq!(
-        page_renderer_inspector_session_count(&mut ctx).await,
+        page_renderer_inspector_session_count(&mut ctx, "after both sessions enabled").await,
         baseline_session_count + 1,
         "primary Runtime.enable must reuse the target default Inspector session while auxiliary Runtime.enable adds one session"
     );
@@ -1712,7 +1713,7 @@ async fn detach_from_target_drops_only_selected_page_renderer_inspector_session(
         "auxiliary detach must publish exactly one target detach event"
     );
     assert_eq!(
-        page_renderer_inspector_session_count(&mut ctx).await,
+        page_renderer_inspector_session_count(&mut ctx, "after auxiliary detach").await,
         baseline_session_count,
         "auxiliary detach should drop only that renderer V8 inspector session"
     );
@@ -1745,12 +1746,27 @@ async fn detach_from_target_drops_only_selected_page_renderer_inspector_session(
     ctx.expect_result(120_006, json!({}), Some("SID-detach-aux-replacement"));
     ctx.sent.clear();
     assert_eq!(
-        page_renderer_inspector_session_count(&mut ctx).await,
+        page_renderer_inspector_session_count(&mut ctx, "after replacement auxiliary enable").await,
         baseline_session_count + 1
     );
-
+    ctx.process_async(json!({
+        "id": 120_007,
+        "sessionId": "SID-detach-aux-replacement",
+        "method": "Network.enable"
+    }))
+    .await;
+    ctx.expect_result(120_007, json!({}), Some("SID-detach-aux-replacement"));
     ctx.process_async(json!({
         "id": 120_008,
+        "sessionId": "SID-detach-aux-replacement",
+        "method": "Network.setCacheDisabled",
+        "params": { "cacheDisabled": true }
+    }))
+    .await;
+    ctx.expect_result(120_008, json!({}), Some("SID-detach-aux-replacement"));
+
+    ctx.process_async(json!({
+        "id": 120_009,
         "method": "Target.detachFromTarget",
         "params": {
             "targetId": "TID-detach-inspector",
@@ -1758,7 +1774,7 @@ async fn detach_from_target_drops_only_selected_page_renderer_inspector_session(
         }
     }))
     .await;
-    ctx.expect_result(120_008, json!({}), None);
+    ctx.expect_result(120_009, json!({}), None);
     ctx.expect_event(
         "Target.detachedFromTarget",
         Some(&json!({
@@ -1773,13 +1789,12 @@ async fn detach_from_target_drops_only_selected_page_renderer_inspector_session(
         "primary detach must publish exactly one target detach event"
     );
     assert_eq!(
-        page_renderer_inspector_session_count(&mut ctx).await,
-        1,
-        "primary target detach must preserve same-target auxiliary renderer V8 inspector sessions"
+        page_renderer_inspector_session_count(&mut ctx, "after primary detach").await,
+        baseline_session_count,
+        "primary detach must release the default Inspector session while preserving the attached replacement session"
     );
-
     ctx.process_async(json!({
-        "id": 120_009,
+        "id": 120_010,
         "sessionId": "SID-detach-primary",
         "method": "Runtime.evaluate",
         "params": {
@@ -1788,10 +1803,21 @@ async fn detach_from_target_drops_only_selected_page_renderer_inspector_session(
         }
     }))
     .await;
-    ctx.expect_error(120_009, -32001, "Unknown sessionId");
+    ctx.expect_error(120_010, -32001, "Unknown sessionId");
+
+    let bc = ctx.conn.browser_context.as_ref().unwrap();
+    assert_eq!(
+        bc.auxiliary_target_id_for_session("SID-detach-aux-replacement"),
+        Some("TID-detach-inspector"),
+        "detaching primary must preserve the attached session binding"
+    );
+    assert!(
+        bc.active_page_target().effective_policy().cache_disabled(),
+        "detaching primary must preserve the attached Network handler state"
+    );
 
     ctx.process_async(json!({
-        "id": 120_010,
+        "id": 120_011,
         "sessionId": "SID-detach-aux-replacement",
         "method": "Runtime.evaluate",
         "params": {
@@ -1800,11 +1826,11 @@ async fn detach_from_target_drops_only_selected_page_renderer_inspector_session(
         }
     }))
     .await;
-    let evaluation = take_response_by_id(&mut ctx, 120_010);
+    let evaluation = take_response_by_id(&mut ctx, 120_011);
     assert_eq!(evaluation["result"]["result"]["value"], json!(42));
 
     ctx.process_async(json!({
-        "id": 120_011,
+        "id": 120_012,
         "method": "Target.detachFromTarget",
         "params": {
             "targetId": "TID-detach-inspector",
@@ -1812,7 +1838,7 @@ async fn detach_from_target_drops_only_selected_page_renderer_inspector_session(
         }
     }))
     .await;
-    ctx.expect_result(120_011, json!({}), None);
+    ctx.expect_result(120_012, json!({}), None);
     ctx.expect_event(
         "Target.detachedFromTarget",
         Some(&json!({
@@ -1820,10 +1846,34 @@ async fn detach_from_target_drops_only_selected_page_renderer_inspector_session(
             "sessionId": "SID-detach-aux-replacement"
         })),
     );
+    ctx.process_async(json!({
+        "id": 120_013,
+        "sessionId": "SID-detach-aux-replacement",
+        "method": "Runtime.evaluate",
+        "params": {
+            "expression": "21 + 21",
+            "returnByValue": true
+        }
+    }))
+    .await;
+    ctx.expect_error(120_013, -32001, "Unknown sessionId");
+
+    ctx.conn
+        .browser_context
+        .as_mut()
+        .expect("browser context")
+        .attach_active_session("SID-detach-diagnostic");
+    ctx.process_async(json!({
+        "id": 120_014,
+        "sessionId": "SID-detach-diagnostic",
+        "method": "Runtime.enable"
+    }))
+    .await;
+    ctx.expect_result(120_014, json!({}), Some("SID-detach-diagnostic"));
     assert_eq!(
-        page_renderer_inspector_session_count(&mut ctx).await,
-        0,
-        "detaching the final auxiliary session should release its renderer V8 inspector session"
+        page_renderer_inspector_session_count(&mut ctx, "after fresh primary attach").await,
+        baseline_session_count,
+        "a fresh primary session must not observe a leaked auxiliary renderer session"
     );
 }
 
@@ -2002,16 +2052,24 @@ async fn detach_from_target_removes_only_selected_session_document_start_scripts
     );
 }
 
-async fn page_renderer_inspector_session_count(ctx: &mut TestContext) -> u64 {
-    let response = ctx
+async fn page_renderer_inspector_session_count(ctx: &mut TestContext, stage: &str) -> u64 {
+    let page = ctx
         .conn
         .browser_context
         .as_mut()
         .and_then(|bc| bc.active_page_target_mut().runtime_slot.loaded_page_mut())
-        .expect("active target should still have a loaded page")
+        .expect("active target should still have a loaded page");
+    // This diagnostic deliberately runs on the primary Inspector route. It
+    // bypasses CdpConnection's session-aware Page accessor, so bind that route
+    // explicitly instead of inheriting whichever auxiliary session the prior
+    // command happened to stamp on the Page facade.
+    page.set_renderer_devtools_command_session_id(None);
+    let response = page
         .runtime_heap_usage_async()
         .await
-        .expect("runtime heap usage diagnostics should be available");
+        .unwrap_or_else(|error| {
+            panic!("runtime heap usage diagnostics should be available {stage}: {error}")
+        });
     u64::try_from(response.moli.runtime.inspector_session_count)
         .expect("inspector session count should fit u64")
 }

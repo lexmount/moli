@@ -133,11 +133,6 @@ impl DevToolsSessionRegistry {
             .get(&DevToolsSessionKey::Attached(session_id.to_owned()))
     }
 
-    pub(crate) fn attached_mut(&mut self, session_id: &str) -> Option<&mut DevToolsSessionState> {
-        self.states
-            .get_mut(&DevToolsSessionKey::Attached(session_id.to_owned()))
-    }
-
     pub(crate) fn ensure_attached(&mut self, session_id: &str) -> &mut DevToolsSessionState {
         if !self
             .states
@@ -160,10 +155,31 @@ impl DevToolsSessionRegistry {
         removed
     }
 
-    pub(crate) fn clear_attached(&mut self) {
-        self.states
-            .retain(|key, _state| matches!(key, DevToolsSessionKey::Primary));
-        self.attached_order.clear();
+    /// Removes one wire session and all domain-handler state it owns.
+    ///
+    /// The primary handler slot remains allocated for the renderer's implicit
+    /// root Inspector session, but its state is replaced atomically. Attached
+    /// sessions are removed from both the state map and attachment order.
+    pub(crate) fn dispose(
+        &mut self,
+        session_id: &str,
+        session_key: &DevToolsSessionKey,
+    ) -> Option<DevToolsSessionState> {
+        match session_key {
+            DevToolsSessionKey::Primary => {
+                if self.primary_session_id() != Some(session_id) {
+                    return None;
+                }
+                self.primary_session_id = None;
+                Some(std::mem::take(self.primary_mut()))
+            }
+            DevToolsSessionKey::Attached(attached_session_id)
+                if attached_session_id == session_id =>
+            {
+                self.remove_attached(session_id)
+            }
+            DevToolsSessionKey::Attached(_) => None,
+        }
     }
 
     pub(crate) fn attached_len(&self) -> usize {
@@ -384,13 +400,6 @@ impl DevToolsSessionRegistry {
         self.states.values_mut()
     }
 
-    pub(crate) fn reset(&mut self, preserve_attached_sessions: bool) {
-        *self.primary_mut() = DevToolsSessionState::default();
-        if !preserve_attached_sessions {
-            self.clear_attached();
-        }
-    }
-
     pub(crate) fn has_non_default_state(&self) -> bool {
         self.primary() != &DevToolsSessionState::default() || !self.attached_is_empty()
     }
@@ -404,15 +413,6 @@ impl DevToolsSessionRegistry {
         self.states()
             .map(DevToolsSessionState::pending_inspector_await_count)
             .sum()
-    }
-
-    pub(crate) fn drain_pending_inspector_awaits_for_sessions(
-        &mut self,
-        session_ids: &[&str],
-    ) -> Vec<(u64, PendingInspectorAwait)> {
-        self.states_mut()
-            .flat_map(|state| state.drain_pending_inspector_awaits_for_sessions(session_ids))
-            .collect()
     }
 
     pub(crate) fn prepare_renderer_call_replacements(
@@ -913,14 +913,6 @@ impl DevToolsSessionState {
 
     pub(crate) fn drain_pending_inspector_awaits(&mut self) -> Vec<(u64, PendingInspectorAwait)> {
         self.pending_inspector_awaits.drain_all()
-    }
-
-    pub(crate) fn drain_pending_inspector_awaits_for_sessions(
-        &mut self,
-        session_ids: &[&str],
-    ) -> Vec<(u64, PendingInspectorAwait)> {
-        self.pending_inspector_awaits
-            .drain_for_sessions(session_ids)
     }
 
     pub(crate) fn register_runtime_remote_object_ids<I>(&mut self, object_ids: I)
@@ -1428,13 +1420,71 @@ mod tests {
 
         assert!(sessions.has_pending_inspector_awaits());
         assert_eq!(sessions.pending_inspector_await_count(), 2);
-        let drained = sessions.drain_pending_inspector_awaits_for_sessions(&["SID-attached"]);
-        assert_eq!(drained.len(), 1);
+        let disposed = sessions
+            .dispose(
+                "SID-attached",
+                &DevToolsSessionKey::Attached("SID-attached".to_owned()),
+            )
+            .expect("attached session should be disposed");
+        assert_eq!(disposed.pending_inspector_await_count(), 1);
         assert_eq!(sessions.pending_inspector_await_count(), 1);
 
-        sessions.remove_attached("SID-attached");
+        assert!(sessions.attached_is_empty());
         assert_eq!(sessions.pending_inspector_await_count(), 1);
-        sessions.reset(false);
+        *sessions.primary_mut() = DevToolsSessionState::default();
         assert!(!sessions.has_pending_inspector_awaits());
+    }
+
+    #[test]
+    fn registry_dispose_is_exactly_once_and_preserves_peer_sessions() {
+        let mut sessions = DevToolsSessionRegistry::default();
+        sessions.attach_primary("SID-primary".to_owned());
+        sessions
+            .primary_mut()
+            .runtime_bindings
+            .push(binding("primary"));
+        sessions
+            .ensure_attached("SID-attached")
+            .runtime_bindings
+            .push(binding("attached"));
+
+        let disposed_attached = sessions
+            .dispose(
+                "SID-attached",
+                &DevToolsSessionKey::Attached("SID-attached".to_owned()),
+            )
+            .expect("attached session should be disposed");
+        assert_eq!(
+            disposed_attached.runtime_bindings,
+            vec![binding("attached")]
+        );
+        assert!(sessions.attached_is_empty());
+        assert_eq!(sessions.primary_session_id(), Some("SID-primary"));
+        assert_eq!(
+            sessions.primary().runtime_bindings,
+            vec![binding("primary")]
+        );
+        assert!(
+            sessions
+                .dispose(
+                    "SID-attached",
+                    &DevToolsSessionKey::Attached("SID-attached".to_owned()),
+                )
+                .is_none(),
+            "a disposed session must not settle twice"
+        );
+
+        let disposed_primary = sessions
+            .dispose("SID-primary", &DevToolsSessionKey::Primary)
+            .expect("primary session should be disposed");
+        assert_eq!(disposed_primary.runtime_bindings, vec![binding("primary")]);
+        assert_eq!(sessions.primary_session_id(), None);
+        assert_eq!(sessions.primary(), &DevToolsSessionState::default());
+        assert!(
+            sessions
+                .dispose("SID-primary", &DevToolsSessionKey::Primary)
+                .is_none(),
+            "primary disposal must also be exactly once"
+        );
     }
 }

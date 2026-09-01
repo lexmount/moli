@@ -52,7 +52,7 @@ impl RendererSharedWorkerHost {
                 self.begin_runtime_response_retirement();
                 self.notify_worker_closed();
             }
-            WorkerToParentMessage::SharedWorkerRuntimeInspectorResponse(publication) => {
+            WorkerToParentMessage::RuntimeInspectorResponse(publication) => {
                 self.publish_runtime_inspector_response(publication);
             }
             WorkerToParentMessage::ServiceWorkerLifecycleCompleted(_) => {

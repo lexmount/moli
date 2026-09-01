@@ -1,6 +1,5 @@
 use super::devtools_session::DevToolsNetworkSessionState;
 use super::emulation::EmulatedMediaOverrides;
-use super::fetch::TargetFetchOwner;
 use super::javascript_dialog::TargetJavaScriptDialogState;
 use super::page_target_host::PageTargetHost;
 use crate::domains::audits_output_state::TargetAuditsSessionState;
@@ -200,12 +199,8 @@ impl PageTargetHost {
             || self.fetch_owner.config_snapshot() != super::fetch::TargetFetchConfig::default()
     }
 
-    pub(crate) fn clear_session_scoped_state_fields(
-        &mut self,
-        preserve_auxiliary_devtools_sessions: bool,
-    ) {
-        self.devtools_sessions
-            .reset(preserve_auxiliary_devtools_sessions);
+    pub(crate) fn clear_primary_session_scoped_state_fields(&mut self) {
+        *self.devtools_sessions.primary_mut() = Default::default();
         self.runtime_slot.disable_primary_network_events();
         self.network_policy.clear_session_scoped_state();
         self.http_proxy_override = None;
@@ -221,13 +216,9 @@ impl PageTargetHost {
         self.focus_emulation_enabled = false;
         self.script_execution_disabled = false;
         self.css_enabled = false;
-        self.fetch_owner = TargetFetchOwner::default();
+        self.fetch_owner.remove_fetch_session(None);
         self.runtime_slot
-            .clear_session_scoped_network_observation_artifacts();
-        self.runtime_slot
-            .request_id_allocator()
-            .reset_fetch_navigation_request_counter();
-        self.owner_state.clear_observable_output_state();
+            .remove_network_session_observation_cursor(None);
     }
 }
 

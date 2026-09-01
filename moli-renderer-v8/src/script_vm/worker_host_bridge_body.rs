@@ -286,6 +286,27 @@ impl ScriptVm {
                 instance_id,
                 message,
             } => self.apply_shared_worker_host_bridge_record_body(instance_id, *message),
+            WorkerRuntimeEvent::Message {
+                message,
+                worker_id: _,
+            } if matches!(
+                message.as_ref(),
+                WorkerToParentMessage::RuntimeInspectorResponse(_)
+            ) =>
+            {
+                let WorkerToParentMessage::RuntimeInspectorResponse(publication) = *message else {
+                    unreachable!("the guarded Worker response variant must still match")
+                };
+                let published = self
+                    ._context_host
+                    .borrow()
+                    .publish_worker_runtime_inspector_response(publication);
+                Ok(if published {
+                    WorkerHostBridgeBodyEffect::StateAppliedWithoutPageContext
+                } else {
+                    WorkerHostBridgeBodyEffect::ExactTargetUnavailable
+                })
+            }
             WorkerRuntimeEvent::Message { worker_id, message } => {
                 self.apply_dedicated_worker_host_bridge_record_body(worker_id, *message)
             }
@@ -470,7 +491,7 @@ impl ScriptVm {
             | WorkerToParentMessage::ServiceWorkerClientsClaim { .. }
             | WorkerToParentMessage::ServiceWorkerImportedScriptLoaded { .. }
             | WorkerToParentMessage::SharedWorkerClosed
-            | WorkerToParentMessage::SharedWorkerRuntimeInspectorResponse(_) => {}
+            | WorkerToParentMessage::RuntimeInspectorResponse(_) => {}
         }
         Ok(())
     }

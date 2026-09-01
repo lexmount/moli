@@ -46,7 +46,7 @@ pub(crate) enum RendererPublicationRoute {
 /// are retained by the target; every other historical record is stale.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RendererPublicationProjection {
-    CurrentPage,
+    CurrentOwner,
     RetiringNetworkOnly,
 }
 
@@ -118,18 +118,19 @@ impl RendererPublicationOwner {
     pub(crate) fn resolve(&self, conn: &CdpConnection) -> Option<RendererPublicationRoute> {
         match self {
             Self::BrowserContext { browser_context_id } => {
-                let browser_context = conn
+                if !conn
                     .browser_context
                     .iter()
                     .chain(conn.inactive_browser_contexts.iter())
-                    .find(|browser_context| browser_context.id == *browser_context_id)?;
+                    .any(|browser_context| browser_context.id == *browser_context_id)
+                {
+                    return None;
+                }
                 Some(RendererPublicationRoute::UnattachedOwner {
-                    owner_route: CdpSessionRoute::PageTarget {
-                        browser_context_id: browser_context.id.clone(),
-                        target_id: browser_context.active_target_id()?.to_owned(),
-                        session_key: moli_page_types::DevToolsSessionKey::Primary,
+                    owner_route: CdpSessionRoute::BrowserContext {
+                        browser_context_id: browser_context_id.clone(),
                     },
-                    projection: RendererPublicationProjection::CurrentPage,
+                    projection: RendererPublicationProjection::CurrentOwner,
                 })
             }
             Self::PageTarget {
@@ -149,7 +150,7 @@ impl RendererPublicationOwner {
                             *renderer_page,
                             page_owner.page_attachment_id(),
                         ) {
-                            Some(RendererPublicationProjection::CurrentPage)
+                            Some(RendererPublicationProjection::CurrentOwner)
                         } else if runtime_slot.routes_retiring_renderer_page_owner(
                             *renderer_page,
                             page_owner.page_attachment_id(),

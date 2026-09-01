@@ -857,13 +857,20 @@ mod tests {
         .await;
         assert_eq!(aux_enable["result"], json!({}));
 
-        ctx.conn
-            .browser_context
-            .as_mut()
-            .expect("browser context")
-            .clear_active_target_session_binding_and_scoped_state_async()
-            .await
-            .expect("target session detach should clear scoped state");
+        let detach = process_and_take_response(
+            &mut ctx,
+            json!({
+                "id": 53,
+                "method": "Target.detachFromTarget",
+                "params": {
+                    "targetId": "TID-profiler",
+                    "sessionId": "SID-profiler-old"
+                }
+            }),
+            53,
+        )
+        .await;
+        assert_eq!(detach["result"], json!({}));
 
         {
             let browser_context = ctx.conn.browser_context.as_ref().expect("browser context");
@@ -872,8 +879,9 @@ mod tests {
                 browser_context
                     .active_page_target()
                     .devtools_sessions
-                    .attached_is_empty(),
-                "detaching the primary target session must drop active auxiliary inspector session state"
+                    .attached("SID-profiler-aux-old")
+                    .is_some(),
+                "detaching the primary target session must preserve independent auxiliary sessions"
             );
         }
 
@@ -885,11 +893,11 @@ mod tests {
         let start_without_enable = process_and_take_response(
             &mut ctx,
             json!({
-                "id": 53,
+                "id": 54,
                 "sessionId": "SID-profiler-new",
                 "method": "Profiler.start"
             }),
-            53,
+            54,
         )
         .await;
         assert_eq!(start_without_enable["error"]["code"], json!(-32000));

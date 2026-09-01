@@ -266,11 +266,8 @@ async fn settle_target_close_after_pending_fetches_async(
     owner_scope: crate::conn::CommandOwnerScope,
     target_id: String,
 ) {
-    let action = crate::domains::page::PageTargetTerminationOwnerAction::new(
-        owner_scope,
-        target_id,
-        crate::domains::page::PageTargetTerminationKind::TargetClose,
-    );
+    let action =
+        crate::domains::page::PageTargetTerminationOwnerAction::new(owner_scope, target_id);
     if let Some(predecessor) = renderer_output_predecessor {
         command_context.set_renderer_output_predecessor(predecessor);
         conn.publish_page_target_termination_owner_action(action);

@@ -479,6 +479,24 @@ impl RendererBrowserContextRuntime {
             .await
     }
 
+    pub async fn dispatch_shared_worker_runtime_protocol_message_with_devtools_session_response(
+        &self,
+        instance_id: SharedWorkerInstanceId,
+        inspector_session_id: String,
+        raw_json: String,
+        response: RendererRuntimeInspectorResponseSender,
+    ) -> Result<crate::runtime::CompletedWorkerRuntimeInspectorCommandDispatch, String> {
+        self.inner
+            .shared_worker_runtime
+            .dispatch_runtime_protocol_message_with_devtools_session_response(
+                instance_id,
+                inspector_session_id,
+                raw_json,
+                response,
+            )
+            .await
+    }
+
     pub fn detach_shared_worker_runtime_inspector_session(
         &self,
         instance_id: SharedWorkerInstanceId,

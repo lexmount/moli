@@ -307,7 +307,8 @@ pub use self::page_state::RendererPageState;
 use self::page_surface::RendererPageTable;
 pub use self::page_surface::RendererRuntimeInspectorMessageResponseOrder;
 pub use self::page_surface::{
-    DevToolsSessionKey, RendererAccessibilityPayloadsForObjectId, RendererActivityDiagnostics,
+    CompletedWorkerRuntimeInspectorCommandDispatch, DevToolsSessionKey,
+    RendererAccessibilityPayloadsForObjectId, RendererActivityDiagnostics,
     RendererAgentAttachmentId, RendererAutofillAddressField, RendererAutofillCreditCard,
     RendererAutofillTriggerOutcome, RendererAutofillTriggerRequest,
     RendererCaptureScreencastFrameReply, RendererCaptureScreenshotReply,

@@ -824,28 +824,6 @@ impl<'a> TargetSessionOwnerMut<'a> {
         Some(())
     }
 
-    pub(super) async fn close_page_target_async(&mut self) -> Option<ClosedPageTarget> {
-        let mut target = self.browser_context.page_targets.remove(&self.target_id)?;
-        self.browser_context
-            .forget_target_opener_references_for_target(&self.target_id);
-        self.browser_context
-            .forget_target_window_names_for_target(&self.target_id);
-        self.browser_context
-            .forget_target_popup_id_for_target(&self.target_id);
-        let auxiliary_session_ids = target
-            .devtools_sessions
-            .attached_session_ids()
-            .map(str::to_owned)
-            .collect::<Vec<_>>();
-        let primary_session_id = target.detach_session();
-        target.close_page_async().await;
-        Some(ClosedPageTarget {
-            target_id: self.target_id.clone(),
-            primary_session_id,
-            auxiliary_session_ids,
-        })
-    }
-
     pub(super) fn runtime_slot_mut(&mut self) -> &mut TargetRuntimeSlot {
         &mut self.target_mut().runtime_slot
     }
@@ -1345,29 +1323,34 @@ impl CdpConnection {
             .await
     }
 
-    pub(crate) async fn close_page_target_for_route_async(
-        &mut self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
-    ) -> Option<ClosedPageTarget> {
-        let collected_network_data_artifacts = self
-            .target_session_owner_ref_for_route(session_id, owner_route)?
-            .runtime_slot()
-            .collected_network_data_artifacts();
-        let closed = self
-            .target_session_owner_mut_for_route(session_id, owner_route)?
-            .close_page_target_async()
-            .await?;
-        self.record_collected_network_data_artifacts(collected_network_data_artifacts);
-        Some(closed)
-    }
-
-    pub(crate) async fn close_background_page_target_for_target_close_async(
+    async fn close_page_target_for_target_close_async(
         &mut self,
         target_id: &str,
         out: &mut Vec<BackgroundProtocolEvent>,
         reason: &'static str,
     ) -> Option<ClosedPageTarget> {
+        let primary_route = self.target_session_route_for_target_id(target_id)?;
+        let session_owners = self
+            .page_event_session_ids_for_route(None, Some(&primary_route))
+            .into_iter()
+            .map(|session_id| {
+                session_id
+                    .as_deref()
+                    .map(CommandOwnerScope::for_session)
+                    .unwrap_or_else(|| CommandOwnerScope::for_route(primary_route.clone()))
+            })
+            .collect::<Vec<_>>();
+        let mut claimed_await_events = Vec::new();
+        for owner in &session_owners {
+            self.fail_pending_inspector_awaits_for_owner_background_events_into(
+                out,
+                &mut claimed_await_events,
+                owner,
+                reason,
+            );
+        }
+        out.extend(claimed_await_events);
+
         let (
             mut target,
             primary_session_id,
@@ -1375,18 +1358,15 @@ impl CdpConnection {
             collected_network_data_artifacts,
         ) = {
             let browser_context = self.browser_context.as_mut()?;
-            let mut target = browser_context.remove_background_target(target_id)?;
+            let target = browser_context.take_page_target_for_close(target_id)?;
             let collected_network_data_artifacts =
                 target.runtime_slot.collected_network_data_artifacts();
-            browser_context.forget_target_opener_references_for_target(target_id);
-            browser_context.forget_target_window_names_for_target(target_id);
-            browser_context.forget_target_popup_id_for_target(target_id);
             let auxiliary_session_ids = target
                 .devtools_sessions
                 .attached_session_ids()
                 .map(str::to_owned)
                 .collect::<Vec<_>>();
-            let primary_session_id = target.detach_session();
+            let primary_session_id = target.session_id().map(str::to_owned);
             (
                 target,
                 primary_session_id,
@@ -1397,21 +1377,6 @@ impl CdpConnection {
         target.close_page_async().await;
         self.record_collected_network_data_artifacts(collected_network_data_artifacts);
 
-        let mut affected_sessions = Vec::new();
-        if let Some(session_id) = primary_session_id.as_deref() {
-            affected_sessions.push(session_id);
-        }
-        for session_id in &auxiliary_session_ids {
-            affected_sessions.push(session_id.as_str());
-        }
-        CdpConnection::fail_pending_inspector_awaits_from_page_session_state_for_sessions_background_events_into(
-            out,
-            &mut target,
-            primary_session_id.as_deref(),
-            &affected_sessions,
-            reason,
-        );
-
         Some(ClosedPageTarget {
             target_id: target_id.to_owned(),
             primary_session_id,
@@ -1419,35 +1384,35 @@ impl CdpConnection {
         })
     }
 
+    pub(crate) async fn close_background_page_target_for_target_close_async(
+        &mut self,
+        target_id: &str,
+        out: &mut Vec<BackgroundProtocolEvent>,
+        reason: &'static str,
+    ) -> Option<ClosedPageTarget> {
+        let is_background = self
+            .browser_context
+            .as_ref()
+            .is_some_and(|browser_context| {
+                browser_context.page_target(target_id).is_some()
+                    && !browser_context.is_active_target(target_id)
+            });
+        if !is_background {
+            return None;
+        }
+        self.close_page_target_for_target_close_async(target_id, out, reason)
+            .await
+    }
+
     pub(crate) async fn close_active_page_target_for_target_close_async(
         &mut self,
         out: &mut Vec<BackgroundProtocolEvent>,
+        reason: &'static str,
     ) -> Option<ClosedPageTarget> {
-        let (
-            target_id,
-            primary_session_id,
-            auxiliary_session_ids,
-            collected_network_data_artifacts,
-        ) = {
-            let browser_context = self.browser_context.as_mut()?;
-            let target_id = browser_context.active_target_id_owned()?;
-            let primary_session_id = browser_context.active_session_id_owned();
-            let auxiliary_session_ids =
-                browser_context.remove_auxiliary_sessions_for_target(&target_id);
-            let collected_network_data_artifacts = browser_context
-                .active_page_target()
-                .runtime_slot
-                .collected_network_data_artifacts();
-            browser_context.clear_active_target_session_scoped_state_without_loaded_page();
-            browser_context.remove_active_page_target_async().await;
-            (
-                target_id,
-                primary_session_id,
-                auxiliary_session_ids,
-                collected_network_data_artifacts,
-            )
-        };
-        self.record_collected_network_data_artifacts(collected_network_data_artifacts);
+        let target_id = self.browser_context.as_ref()?.active_target_id_owned()?;
+        let closed = self
+            .close_page_target_for_target_close_async(&target_id, out, reason)
+            .await?;
         let promoted_target_id = if let Some(browser_context) = self.browser_context.as_mut() {
             browser_context
                 .promote_last_background_target_to_active_async()
@@ -1470,11 +1435,7 @@ impl CdpConnection {
             );
         }
 
-        Some(ClosedPageTarget {
-            target_id,
-            primary_session_id,
-            auxiliary_session_ids,
-        })
+        Some(closed)
     }
 
     pub(crate) async fn rollback_incomplete_popup_target_without_event_async(
@@ -1495,46 +1456,20 @@ impl CdpConnection {
 
         let mut page_session_ids = Vec::new();
         if let Some(browser_context_id) = browser_context_id {
-            let is_active_target = self
-                .browser_context_by_id(&browser_context_id)
-                .is_some_and(|browser_context| browser_context.is_active_target(target_id));
-            if is_active_target {
-                if let Some(browser_context) = self.browser_context_by_id_mut(&browser_context_id) {
-                    if let Some((_target_id, session_id)) = browser_context.active_target_identity()
-                        && let Some(session_id) = session_id
-                    {
-                        page_session_ids.push(session_id);
-                    }
-                    page_session_ids
-                        .extend(browser_context.remove_auxiliary_sessions_for_target(target_id));
-                    browser_context.remove_active_page_target_async().await;
+            let target = self
+                .browser_context_by_id_mut(&browser_context_id)
+                .and_then(|browser_context| browser_context.take_page_target_for_close(target_id));
+            if let Some(mut target) = target {
+                page_session_ids.extend(
+                    target
+                        .devtools_sessions
+                        .attached_session_ids()
+                        .map(str::to_owned),
+                );
+                if let Some(session_id) = target.session_id() {
+                    page_session_ids.push(session_id.to_owned());
                 }
-            } else {
-                let close_background_target = {
-                    let Some(browser_context) = self.browser_context_by_id_mut(&browser_context_id)
-                    else {
-                        return;
-                    };
-                    let target = browser_context.remove_background_target(target_id);
-                    browser_context.forget_target_opener_references_for_target(target_id);
-                    browser_context.forget_target_window_names_for_target(target_id);
-                    browser_context.forget_target_popup_id_for_target(target_id);
-                    target.map(|mut target| {
-                        page_session_ids.extend(
-                            target
-                                .devtools_sessions
-                                .attached_session_ids()
-                                .map(str::to_owned),
-                        );
-                        if let Some(session_id) = target.detach_session() {
-                            page_session_ids.push(session_id);
-                        }
-                        target
-                    })
-                };
-                if let Some(mut target) = close_background_target {
-                    target.close_page_async().await;
-                }
+                target.close_page_async().await;
             }
         }
 

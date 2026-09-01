@@ -3,7 +3,7 @@ use tokio::sync::oneshot;
 use crate::runtime::{RendererRuntimeInspectorMessage, RendererRuntimeInspectorResponseSender};
 use crate::worker::{WorkerDevToolsHandle, WorkerHandle};
 
-use super::RendererBrowserContextRuntime;
+use super::{DedicatedWorkerDevToolsTarget, RendererBrowserContextRuntime};
 
 impl RendererBrowserContextRuntime {
     /// Allocates a browser-context-unique identity for one DedicatedWorker
@@ -20,16 +20,20 @@ impl RendererBrowserContextRuntime {
         &self,
         instance_id: u64,
         handle: &WorkerHandle,
+        output_journal: Option<crate::runtime::RendererTurnOutputJournal>,
     ) {
-        self.inner
-            .dedicated_worker_devtools_handles
-            .lock()
-            .insert(instance_id, handle.devtools_handle());
+        self.inner.dedicated_worker_devtools_targets.lock().insert(
+            instance_id,
+            DedicatedWorkerDevToolsTarget {
+                handle: handle.devtools_handle(),
+                output_journal,
+            },
+        );
     }
 
     pub(crate) fn unregister_dedicated_worker_devtools_handle(&self, instance_id: u64) {
         self.inner
-            .dedicated_worker_devtools_handles
+            .dedicated_worker_devtools_targets
             .lock()
             .remove(&instance_id);
     }
@@ -48,7 +52,18 @@ impl RendererBrowserContextRuntime {
 
     fn dedicated_worker_devtools_handle(&self, instance_id: u64) -> Option<WorkerDevToolsHandle> {
         self.inner
-            .dedicated_worker_devtools_handles
+            .dedicated_worker_devtools_targets
+            .lock()
+            .get(&instance_id)
+            .map(|target| target.handle.clone())
+    }
+
+    fn dedicated_worker_devtools_target(
+        &self,
+        instance_id: u64,
+    ) -> Option<DedicatedWorkerDevToolsTarget> {
+        self.inner
+            .dedicated_worker_devtools_targets
             .lock()
             .get(&instance_id)
             .cloned()
@@ -83,6 +98,40 @@ impl RendererBrowserContextRuntime {
             Some(deferred_response),
         )
         .await
+    }
+
+    pub async fn dispatch_dedicated_worker_runtime_protocol_message_with_devtools_session_response(
+        &self,
+        instance_id: u64,
+        inspector_session_id: String,
+        raw_json: String,
+        response: RendererRuntimeInspectorResponseSender,
+    ) -> Result<crate::runtime::CompletedWorkerRuntimeInspectorCommandDispatch, String> {
+        let Some(target) = self.dedicated_worker_devtools_target(instance_id) else {
+            return Err("DedicatedWorkerRuntimeUnavailable".to_owned());
+        };
+        let Some(output_journal) = target.output_journal else {
+            return Err("DedicatedWorkerRuntimeUnavailable".to_owned());
+        };
+        let response = response
+            .route_to_worker_devtools_session_output(inspector_session_id.clone(), output_journal);
+        let settlement = response
+            .take_session_response_settlement_receiver()
+            .expect("a Worker DevTools response must own one settlement receiver");
+        let (response_tx, response_rx) = oneshot::channel();
+        if !target.handle.dispatch_runtime_protocol_message(
+            Some(inspector_session_id),
+            raw_json,
+            Some(response),
+            response_tx,
+        ) {
+            return Err("DedicatedWorkerRuntimeUnavailable".to_owned());
+        }
+        let dispatch = response_rx
+            .await
+            .map_err(|_| "DedicatedWorkerRuntimeUnavailable".to_owned())?;
+        crate::runtime::CompletedWorkerRuntimeInspectorCommandDispatch::finish(dispatch, settlement)
+            .await
     }
 
     async fn dispatch_dedicated_worker_runtime_protocol_message_with_optional_deferred_response(

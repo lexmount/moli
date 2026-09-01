@@ -71,6 +71,7 @@ impl PreparedProtocolOutputs {
     pub(in crate::domains::activity) fn from_renderer_observation(
         conn: &mut CdpConnection,
         owner: &CommandOwnerScope,
+        source_residence: moli_core::RendererOutputResidenceIdentity,
         source_renderer_agent: moli_core::page::RendererDevToolsAgentToken,
         observation: &RendererProtocolObservation,
     ) -> Self {
@@ -113,6 +114,30 @@ impl PreparedProtocolOutputs {
                     .append_to_output_sink(&mut prepared);
             }
             RendererProtocolObservation::RuntimeInspector(batch) => {
+                let worker_output = match source_residence {
+                    moli_core::RendererOutputResidenceIdentity::SharedWorker { .. }
+                    | moli_core::RendererOutputResidenceIdentity::ServiceWorker { .. } => true,
+                    moli_core::RendererOutputResidenceIdentity::Page { .. } => batch
+                        .session
+                        .wire_session_id()
+                        .and_then(|session_id| conn.session_route(Some(session_id)))
+                        .is_some_and(|route| {
+                            matches!(
+                                route,
+                                crate::conn::CdpSessionRoute::DedicatedWorkerTarget { .. }
+                            )
+                        }),
+                };
+                if worker_output {
+                    crate::domains::runtime::RuntimePreparedOutputs::
+                        from_worker_renderer_runtime_inspector_message_batch(
+                            conn,
+                            source_residence,
+                            batch,
+                        )
+                        .append_to_output_sink(&mut prepared);
+                    return prepared;
+                }
                 let source_batches = vec![batch.clone()];
                 let batches = conn.route_current_renderer_inspector_output_for_owner(
                     owner,

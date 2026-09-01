@@ -1016,6 +1016,19 @@ impl ServiceWorkerTargetState {
             )
     }
 
+    pub(crate) fn renderer_command_descriptor_for_renderer_if_attachment_matches(
+        &self,
+        owner_session_id: &str,
+        renderer_call_id: moli_page_types::RendererCallId,
+        dispatched_attachment_id: Option<moli_page_types::RendererAgentAttachmentId>,
+    ) -> Option<RendererCommandDescriptor> {
+        self.session_state(owner_session_id)?
+            .renderer_command_descriptor_for_renderer_if_attachment_matches(
+                renderer_call_id,
+                dispatched_attachment_id,
+            )
+    }
+
     pub(crate) fn has_pending_inspector_awaits(&self) -> bool {
         self.sessions
             .values()

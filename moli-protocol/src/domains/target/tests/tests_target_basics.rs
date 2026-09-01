@@ -42,6 +42,12 @@ async fn close_active_target_fails_only_active_owner_pending_awaits() {
     let mut bc = BrowserContext::new("BID-await-owner".into());
     bc.set_active_target_id("TID-active-await".to_owned());
     bc.attach_active_session("SID-active-await".to_owned());
+    assert!(
+        bc.assign_auxiliary_session_to_target(
+            "TID-active-await",
+            "SID-active-aux-await".to_owned(),
+        )
+    );
     bc.insert_page_target_host(PageTargetHost::with_url(
         "TID-bg-await".to_owned(),
         Some("SID-bg-await".to_owned()),
@@ -50,6 +56,8 @@ async fn close_active_target_fails_only_active_owner_pending_awaits() {
     ctx.conn.browser_context = Some(bc);
     ctx.conn
         .register_pending_inspector_await(1041201, Some("SID-active-await"));
+    ctx.conn
+        .register_pending_inspector_await(1041203, Some("SID-active-aux-await"));
     ctx.conn
         .register_pending_inspector_await(1041202, Some("SID-bg-await"));
 
@@ -65,11 +73,16 @@ async fn close_active_target_fails_only_active_owner_pending_awaits() {
     let active_failed = take_response_by_id(&mut ctx, 1041201);
     assert_eq!(active_failed["sessionId"], json!("SID-active-await"));
     assert_eq!(active_failed["error"]["message"], json!("Target closed"));
+    let auxiliary_failed = take_response_by_id(&mut ctx, 1041203);
+    assert_eq!(auxiliary_failed["sessionId"], json!("SID-active-aux-await"));
+    assert_eq!(auxiliary_failed["error"]["message"], json!("Target closed"));
     assert!(
-        ctx.take_all()
-            .into_iter()
-            .all(|message| message["id"] != json!(1041202)),
-        "closing the active target must not fail the background owner's pending await"
+        ctx.take_all().into_iter().all(|message| {
+            message["id"] != json!(1041201)
+                && message["id"] != json!(1041202)
+                && message["id"] != json!(1041203)
+        }),
+        "target-local awaits must settle exactly once without touching the background owner"
     );
     assert!(
         ctx.conn

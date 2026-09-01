@@ -276,7 +276,7 @@ async fn install_runtime_document_replacement_test_page(ctx: &mut TestContext) -
         .load_navigation_via_runtime_async("data:text/html,<body>initial</body>")
         .await
         .expect("runtime replacement fixture page should load");
-    let navigation_engine = navigation.navigation_engine.take();
+    let navigation_engine = navigation.take_navigation_engine_replacement();
     let artifacts = navigation.page_creation_artifacts;
     ctx.conn
         .browser_context
@@ -829,7 +829,7 @@ async fn set_lifecycle_events_enabled_replays_loaded_page_events() {
         .load_navigation_via_runtime_async("data:text/html,<body>hello</body>")
         .await
         .expect("page should load");
-    let navigation_engine = navigation.navigation_engine.take();
+    let navigation_engine = navigation.take_navigation_engine_replacement();
     let dom_timestamp = navigation
         .page_creation_artifacts
         .lifecycle_snapshot
@@ -911,7 +911,7 @@ async fn set_lifecycle_events_enabled_replays_only_protocol_visible_load_state()
         .load_navigation_via_runtime_async("data:text/html,<body>visible lifecycle</body>")
         .await
         .expect("page should load");
-    let navigation_engine = navigation.navigation_engine.take();
+    let navigation_engine = navigation.take_navigation_engine_replacement();
     let artifacts = navigation.page_creation_artifacts;
     ctx.conn
         .browser_context
@@ -1014,7 +1014,7 @@ async fn set_lifecycle_events_enabled_is_session_local_for_active_auxiliary_sess
         .load_navigation_via_runtime_async("data:text/html,<body>active auxiliary lifecycle</body>")
         .await
         .expect("page should load");
-    let navigation_engine = navigation.navigation_engine.take();
+    let navigation_engine = navigation.take_navigation_engine_replacement();
     let artifacts = navigation.page_creation_artifacts;
     let browser_context = ctx.conn.browser_context.as_mut().unwrap();
     browser_context

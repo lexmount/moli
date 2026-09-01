@@ -64,6 +64,7 @@ struct RuntimeInspectorMessageBatch {
 #[derive(Clone, Debug, PartialEq)]
 enum RuntimeInspectorMessageAuthority {
     CurrentPage(crate::conn::TargetPageProtocolAttachmentIdentity),
+    CurrentWorker(crate::conn::TargetWorkerProtocolAttachmentIdentity),
     AuthorizedRetiredTerminal {
         browser_context_id: String,
         target_id: Option<String>,
@@ -75,6 +76,7 @@ impl RuntimeInspectorMessageAuthority {
     fn session_id(&self) -> Option<&str> {
         match self {
             Self::CurrentPage(attachment) => attachment.session_id(),
+            Self::CurrentWorker(attachment) => Some(attachment.session_id()),
             Self::AuthorizedRetiredTerminal { session_id, .. } => session_id.as_deref(),
         }
     }
@@ -84,6 +86,7 @@ impl RuntimeInspectorMessageAuthority {
             Self::CurrentPage(attachment) => {
                 conn.target_page_protocol_attachment_identity_is_current(attachment)
             }
+            Self::CurrentWorker(attachment) => attachment.is_current(),
             Self::AuthorizedRetiredTerminal {
                 browser_context_id,
                 target_id,
@@ -108,6 +111,9 @@ impl RuntimeInspectorMessageAuthority {
             Self::CurrentPage(attachment) => Some(
                 crate::conn::CommandOwnerScope::for_page_attachment(attachment),
             ),
+            Self::CurrentWorker(attachment) => {
+                Some(CommandOwnerScope::for_session(attachment.session_id()))
+            }
             Self::AuthorizedRetiredTerminal { .. } => None,
         }
     }
@@ -342,6 +348,53 @@ impl RuntimePreparedOutputs {
                 RendererRuntimeInspectorMessageResponseOrder::AfterCommandResponse => outputs
                     .post_response_inspector_message_batches
                     .push(prepared),
+            }
+        }
+        outputs
+    }
+
+    pub(crate) fn from_worker_renderer_runtime_inspector_message_batch(
+        conn: &mut CdpConnection,
+        residence: moli_core::RendererOutputResidenceIdentity,
+        batch: &RendererRuntimeInspectorMessageBatch,
+    ) -> Self {
+        let Some(session_id) = batch.session.wire_session_id() else {
+            return Self::default();
+        };
+        let Some(attachment) =
+            conn.worker_protocol_attachment_identity_for_renderer_output(session_id, residence)
+        else {
+            return Self::default();
+        };
+        let mut renderer_messages = batch.messages.clone();
+        conn.restore_frontend_command_ids_in_worker_devtools_session_output(
+            session_id,
+            &mut renderer_messages,
+        );
+        if renderer_messages.is_empty() {
+            return Self::default();
+        }
+        let target_id = attachment.target_id().to_owned();
+        let prepared = RuntimeInspectorMessageBatch {
+            authority: RuntimeInspectorMessageAuthority::CurrentWorker(attachment),
+            messages: renderer_messages
+                .into_iter()
+                .map(|message| {
+                    RuntimeInspectorMessage::from_renderer_message(message, Some(&target_id))
+                })
+                .collect(),
+            // Worker contexts never own Page/BiDi preload-channel listeners.
+            created_execution_context_ids: Vec::new(),
+        };
+        let mut outputs = Self::default();
+        match batch.command_response_order() {
+            RendererRuntimeInspectorMessageResponseOrder::BeforeCommandResponse => {
+                outputs.inspector_message_batches.push(prepared);
+            }
+            RendererRuntimeInspectorMessageResponseOrder::AfterCommandResponse => {
+                outputs
+                    .post_response_inspector_message_batches
+                    .push(prepared);
             }
         }
         outputs

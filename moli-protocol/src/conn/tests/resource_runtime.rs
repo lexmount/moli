@@ -135,8 +135,7 @@ async fn buffered_navigation_for_inactive_session_carries_its_target_engine() {
     let loaded =
         commit_navigation_outcome_for_session_test(&mut conn, outcome, Some("SID-target")).await;
     let target_engine = loaded
-        .navigation_engine
-        .as_ref()
+        .navigation_engine_replacement()
         .expect("target-scoped buffered navigation must carry its engine to commit");
     let target_renderer_owner = target_engine.renderer_owner_id_for_diagnostics();
 

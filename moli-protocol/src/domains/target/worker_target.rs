@@ -1251,7 +1251,8 @@ async fn commit_dedicated_worker_retirement_output_async(
                 conn.detach_dedicated_worker_session_with_binding_cleanup_event_plan_async(
                     cleanup_plan,
                 )
-                .await,
+                .await
+                .expect("retired dedicated-worker session cleanup should succeed"),
             );
         }
         WorkerTargetLifecycleOutput::DedicatedWorkerDestroyed {
@@ -2960,7 +2961,8 @@ async fn emit_target_lifecycle_events(
                 );
                 let event_plan = conn
                     .detach_session_with_binding_cleanup_event_plan_async(cleanup_plan)
-                    .await;
+                    .await
+                    .expect("retired shared-worker session cleanup should succeed");
                 side_effects.extend_background_events(event_plan);
                 retirement.retire();
             }
@@ -2983,7 +2985,8 @@ async fn emit_target_lifecycle_events(
                 );
                 let event_plan = conn
                     .detach_session_with_binding_cleanup_event_plan_async(cleanup_plan)
-                    .await;
+                    .await
+                    .expect("retired service-worker session cleanup should succeed");
                 side_effects.extend_background_events(event_plan);
                 retirement.retire();
             }

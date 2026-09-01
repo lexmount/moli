@@ -125,7 +125,6 @@ impl fmt::Debug for ProtocolSchedulerWork {
             }
             ProtocolSchedulerWorkPayload::PageTargetTerminationOwnerAction(action) => {
                 debug
-                    .field("action", &action.kind())
                     .field("session_id", &action.owner_scope().session_id())
                     .field("target_id", &action.target_id());
             }

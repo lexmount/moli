@@ -854,9 +854,11 @@ fn spawn_parent_message_pump(
                             messages,
                         );
                     }
+                    WorkerToParentMessage::RuntimeInspectorResponse(publication) => {
+                        let _ = publication.commit(None);
+                    }
                     WorkerToParentMessage::Post(_)
                     | WorkerToParentMessage::SharedWorkerClosed
-                    | WorkerToParentMessage::SharedWorkerRuntimeInspectorResponse(_)
                     | WorkerToParentMessage::SubresourceNetwork(_)
                     | WorkerToParentMessage::PendingSubresourceFetch(_)
                     | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }

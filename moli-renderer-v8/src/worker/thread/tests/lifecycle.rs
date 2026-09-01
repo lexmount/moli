@@ -1855,7 +1855,7 @@ async fn dispatch_service_worker_fetch_event_and_handled_console_for_test(
             | WorkerToParentMessage::ServiceWorkerSkipWaiting { .. }
             | WorkerToParentMessage::ServiceWorkerClientsClaim { .. }
             | WorkerToParentMessage::ServiceWorkerImportedScriptLoaded { .. }
-            | WorkerToParentMessage::SharedWorkerRuntimeInspectorResponse(_)
+            | WorkerToParentMessage::RuntimeInspectorResponse(_)
             | WorkerToParentMessage::SharedWorkerClosed => {}
         }
         if let (Some(completion), Some(handled_console)) =
@@ -2253,7 +2253,7 @@ async fn service_worker_fetch_respond_with_readable_stream_body_posts_stream_chu
             | WorkerToParentMessage::ServiceWorkerSkipWaiting { .. }
             | WorkerToParentMessage::ServiceWorkerClientsClaim { .. }
             | WorkerToParentMessage::ServiceWorkerImportedScriptLoaded { .. }
-            | WorkerToParentMessage::SharedWorkerRuntimeInspectorResponse(_)
+            | WorkerToParentMessage::RuntimeInspectorResponse(_)
             | WorkerToParentMessage::SharedWorkerClosed => {}
         }
     }
@@ -4262,7 +4262,7 @@ async fn service_worker_skip_waiting_posts_runtime_request() {
             | WorkerToParentMessage::Console(_)
             | WorkerToParentMessage::RuntimeInspectorMessages(_)
             | WorkerToParentMessage::Post(_)
-            | WorkerToParentMessage::SharedWorkerRuntimeInspectorResponse(_)
+            | WorkerToParentMessage::RuntimeInspectorResponse(_)
             | WorkerToParentMessage::SharedWorkerClosed => {}
         }
     }
@@ -4352,7 +4352,7 @@ async fn service_worker_clients_claim_posts_runtime_request() {
             | WorkerToParentMessage::RuntimeInspectorMessages(_)
             | WorkerToParentMessage::Post(_)
             | WorkerToParentMessage::ServiceWorkerImportedScriptLoaded { .. }
-            | WorkerToParentMessage::SharedWorkerRuntimeInspectorResponse(_)
+            | WorkerToParentMessage::RuntimeInspectorResponse(_)
             | WorkerToParentMessage::SharedWorkerClosed => {}
         }
     }
@@ -4620,7 +4620,7 @@ async fn service_worker_clients_match_all_and_get_resolve_from_parent_query_resu
             | WorkerToParentMessage::RuntimeInspectorMessages(_)
             | WorkerToParentMessage::Post(_)
             | WorkerToParentMessage::ServiceWorkerImportedScriptLoaded { .. }
-            | WorkerToParentMessage::SharedWorkerRuntimeInspectorResponse(_)
+            | WorkerToParentMessage::RuntimeInspectorResponse(_)
             | WorkerToParentMessage::SharedWorkerClosed => {}
         }
     }
@@ -4739,7 +4739,7 @@ async fn service_worker_worker_client_query_builds_base_client_object() {
             }
             WorkerToParentMessage::Console(_)
             | WorkerToParentMessage::RuntimeInspectorMessages(_)
-            | WorkerToParentMessage::SharedWorkerRuntimeInspectorResponse(_)
+            | WorkerToParentMessage::RuntimeInspectorResponse(_)
             | WorkerToParentMessage::SharedWorkerClosed => {}
             other => panic!("unexpected worker message: {other:?}"),
         }
@@ -4929,7 +4929,7 @@ self.addEventListener("message", event => {
             | WorkerToParentMessage::RuntimeInspectorMessages(_)
             | WorkerToParentMessage::Post(_)
             | WorkerToParentMessage::ServiceWorkerImportedScriptLoaded { .. }
-            | WorkerToParentMessage::SharedWorkerRuntimeInspectorResponse(_)
+            | WorkerToParentMessage::RuntimeInspectorResponse(_)
             | WorkerToParentMessage::SharedWorkerClosed => {}
         }
     }
@@ -5073,7 +5073,7 @@ self.addEventListener("message", event => {
             | WorkerToParentMessage::RuntimeInspectorMessages(_)
             | WorkerToParentMessage::Post(_)
             | WorkerToParentMessage::ServiceWorkerImportedScriptLoaded { .. }
-            | WorkerToParentMessage::SharedWorkerRuntimeInspectorResponse(_)
+            | WorkerToParentMessage::RuntimeInspectorResponse(_)
             | WorkerToParentMessage::SharedWorkerClosed => {}
         }
     }
@@ -5285,7 +5285,7 @@ self.addEventListener("message", event => {
             | WorkerToParentMessage::RuntimeInspectorMessages(_)
             | WorkerToParentMessage::Post(_)
             | WorkerToParentMessage::ServiceWorkerImportedScriptLoaded { .. }
-            | WorkerToParentMessage::SharedWorkerRuntimeInspectorResponse(_)
+            | WorkerToParentMessage::RuntimeInspectorResponse(_)
             | WorkerToParentMessage::SharedWorkerClosed => {}
         }
     }
@@ -5429,7 +5429,7 @@ self.addEventListener("message", event => {
             | WorkerToParentMessage::RuntimeInspectorMessages(_)
             | WorkerToParentMessage::Post(_)
             | WorkerToParentMessage::ServiceWorkerImportedScriptLoaded { .. }
-            | WorkerToParentMessage::SharedWorkerRuntimeInspectorResponse(_)
+            | WorkerToParentMessage::RuntimeInspectorResponse(_)
             | WorkerToParentMessage::SharedWorkerClosed => {}
         }
     }
@@ -5646,7 +5646,7 @@ self.addEventListener("message", event => {
             | WorkerToParentMessage::RuntimeInspectorMessages(_)
             | WorkerToParentMessage::Post(_)
             | WorkerToParentMessage::ServiceWorkerImportedScriptLoaded { .. }
-            | WorkerToParentMessage::SharedWorkerRuntimeInspectorResponse(_)
+            | WorkerToParentMessage::RuntimeInspectorResponse(_)
             | WorkerToParentMessage::SharedWorkerClosed => {}
             WorkerToParentMessage::ServiceWorkerClientsOpenWindow(open_window) => {
                 panic!(
@@ -7098,7 +7098,7 @@ self.addEventListener("notificationclick", event => {
             | WorkerToParentMessage::RuntimeInspectorMessages(_)
             | WorkerToParentMessage::Post(_)
             | WorkerToParentMessage::ServiceWorkerImportedScriptLoaded { .. }
-            | WorkerToParentMessage::SharedWorkerRuntimeInspectorResponse(_)
+            | WorkerToParentMessage::RuntimeInspectorResponse(_)
             | WorkerToParentMessage::SharedWorkerClosed => {}
         }
     }
@@ -7258,7 +7258,7 @@ self.addEventListener("notificationclose", event => {
             | WorkerToParentMessage::RuntimeInspectorMessages(_)
             | WorkerToParentMessage::Post(_)
             | WorkerToParentMessage::ServiceWorkerImportedScriptLoaded { .. }
-            | WorkerToParentMessage::SharedWorkerRuntimeInspectorResponse(_)
+            | WorkerToParentMessage::RuntimeInspectorResponse(_)
             | WorkerToParentMessage::SharedWorkerClosed => {}
         }
     }
@@ -9467,7 +9467,7 @@ async fn worker_error_report_ignores_throwing_accessors() {
         | WorkerToParentMessage::ServiceWorkerSkipWaiting { .. }
         | WorkerToParentMessage::ServiceWorkerClientsClaim { .. }
         | WorkerToParentMessage::ServiceWorkerImportedScriptLoaded { .. }
-        | WorkerToParentMessage::SharedWorkerRuntimeInspectorResponse(_)
+        | WorkerToParentMessage::RuntimeInspectorResponse(_)
         | WorkerToParentMessage::SharedWorkerClosed => panic!("expected worker error"),
     }
 }

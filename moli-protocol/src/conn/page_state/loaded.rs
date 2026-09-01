@@ -41,11 +41,6 @@ impl BrowserContext {
             .and_then(|host| host.runtime_slot.page_attachment_id())
     }
 
-    fn clear_active_target_session_scoped_state_fields(&mut self) {
-        self.active_page_target_mut()
-            .clear_session_scoped_state_fields(false);
-    }
-
     #[cfg(test)]
     fn clear_active_target_loaded_document_session_state(&mut self) {
         for session in self.active_page_target_mut().devtools_sessions.states_mut() {
@@ -112,69 +107,12 @@ impl BrowserContext {
             .ingest_owner_page_observable_output_updates()
     }
 
-    pub(crate) async fn clear_active_target_session_scoped_state_async(
-        &mut self,
-    ) -> Result<(), String> {
-        self.clear_active_target_session_scoped_state_preserving_attached_async(false)
-            .await
-    }
-
-    pub(crate) async fn clear_active_target_primary_session_scoped_state_async(
-        &mut self,
-    ) -> Result<(), String> {
-        self.clear_active_target_session_scoped_state_preserving_attached_async(true)
-            .await
-    }
-
-    async fn clear_active_target_session_scoped_state_preserving_attached_async(
-        &mut self,
-        preserve_attached_sessions: bool,
-    ) -> Result<(), String> {
-        self.active_page_target_mut()
-            .clear_session_scoped_state_fields(preserve_attached_sessions);
-        let emulated_media: moli_core::page::EmulatedMediaOverrides =
-            (&self.active_page_target().emulated_media).into();
-        if let Some(page) = self.active_page_target_mut().runtime_slot.loaded_page_mut() {
-            page.set_extra_http_headers_async(&[])
-                .await
-                .map_err(|error| format!("failed to clear page extra headers: {error}"))?;
-            page.set_network_offline_async(false)
-                .await
-                .map_err(|error| format!("failed to clear page offline state: {error}"))?;
-            page.set_bypass_service_worker_async(false)
-                .await
-                .map_err(|error| format!("failed to clear page service worker bypass: {error}"))?;
-            page.set_blocked_url_patterns_async(&[])
-                .await
-                .map_err(|error| format!("failed to clear page blocked URLs: {error}"))?;
-            page.set_script_execution_disabled_async(false)
-                .await
-                .map_err(|error| {
-                    format!("failed to clear page script execution disabled state: {error}")
-                })?;
-            page.set_cpu_throttling_rate_async(1.0)
-                .await
-                .map_err(|error| format!("failed to clear page CPU throttling rate: {error}"))?;
-            page.set_emulated_media_async(&emulated_media)
-                .await
-                .map_err(|error| format!("failed to clear page emulated media: {error}"))?;
-        }
-        self.apply_surface_overrides_to_loaded_page_async().await?;
-        Ok(())
-    }
-
-    pub(crate) fn clear_active_target_session_scoped_state_without_loaded_page(&mut self) {
-        self.clear_active_target_session_scoped_state_fields();
-    }
-
+    #[cfg(test)]
     pub(crate) async fn remove_active_page_target_async(&mut self) -> bool {
         let Some(target_id) = self.active_target_id_owned() else {
             return false;
         };
-        self.forget_target_opener_references_for_target(&target_id);
-        self.forget_target_window_names_for_target(&target_id);
-        self.forget_target_popup_id_for_target(&target_id);
-        let Some(mut host) = self.page_targets.remove(&target_id) else {
+        let Some(mut host) = self.take_page_target_for_close(&target_id) else {
             return false;
         };
         host.close_page_async().await;

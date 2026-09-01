@@ -19,6 +19,35 @@ use super::browser_context::BrowserContext;
 
 pub(crate) const NETWORK_ERROR_PAGE_URL: &str = "chrome-error://chromewebdata/";
 
+/// What must happen to the navigation engine after a completed load is
+/// committed.
+///
+/// Foreground loads borrow the engine already installed on their target.
+/// Background loads own a temporary engine and must return it to that exact
+/// target after commit. Keeping this distinction explicit prevents an omitted
+/// replacement handoff from silently looking like a valid background load.
+#[derive(Debug)]
+pub(crate) struct NavigationEngineHandoff(Option<NavigationEngine>);
+
+impl NavigationEngineHandoff {
+    pub(crate) fn retained_by_owner() -> Self {
+        Self(None)
+    }
+
+    pub(crate) fn replacement(engine: NavigationEngine) -> Self {
+        Self(Some(engine))
+    }
+
+    pub(crate) fn into_replacement(self) -> Option<NavigationEngine> {
+        self.0
+    }
+
+    #[cfg(test)]
+    pub(crate) fn replacement_ref(&self) -> Option<&NavigationEngine> {
+        self.0.as_ref()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct NetworkErrorPageNavigation {
     error_text: String,
@@ -194,14 +223,27 @@ pub struct LoadedNavigation {
     pub renderer_output_predecessor: Option<moli_core::RendererOutputFence>,
     pub(crate) main_document_commit: Option<Arc<RendererMainDocumentCommit>>,
     pub(crate) document_progress_transfer: CompletedDocumentProgressTransfer,
-    pub(crate) navigation_engine: Option<NavigationEngine>,
+    pub(crate) navigation_engine_handoff: NavigationEngineHandoff,
     pub(crate) network_error_page: Option<NetworkErrorPageNavigation>,
 }
 
 impl LoadedNavigation {
-    pub(crate) fn with_navigation_engine(mut self, engine: NavigationEngine) -> Self {
-        self.navigation_engine = Some(engine);
+    pub(crate) fn with_navigation_engine_replacement(mut self, engine: NavigationEngine) -> Self {
+        self.navigation_engine_handoff = NavigationEngineHandoff::replacement(engine);
         self
+    }
+
+    pub(crate) fn take_navigation_engine_replacement(&mut self) -> Option<NavigationEngine> {
+        std::mem::replace(
+            &mut self.navigation_engine_handoff,
+            NavigationEngineHandoff::retained_by_owner(),
+        )
+        .into_replacement()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn navigation_engine_replacement(&self) -> Option<&NavigationEngine> {
+        self.navigation_engine_handoff.replacement_ref()
     }
 
     #[cfg(test)]
@@ -253,12 +295,14 @@ impl NavigationLoadOutcome {
         Self::NetworkFailure(error_text)
     }
 
-    pub(crate) fn with_navigation_engine(self, engine: NavigationEngine) -> Self {
+    pub(crate) fn with_navigation_engine_replacement(self, engine: NavigationEngine) -> Self {
         match self {
             Self::ResponseCommitReady(navigation) => {
-                Self::response_commit_ready(navigation.with_navigation_engine(engine))
+                Self::response_commit_ready(navigation.with_navigation_engine_replacement(engine))
             }
-            Self::Loaded(navigation) => Self::loaded(navigation.with_navigation_engine(engine)),
+            Self::Loaded(navigation) => {
+                Self::loaded(navigation.with_navigation_engine_replacement(engine))
+            }
             Self::Download(navigation) => Self::Download(navigation),
             Self::NetworkFailure(error_text) => Self::NetworkFailure(error_text),
         }

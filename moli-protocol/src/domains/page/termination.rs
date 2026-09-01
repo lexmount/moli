@@ -10,29 +10,17 @@ use moli_core::RendererOutputFence;
 use super::{PageCommandTaskStep, complete_materialized_navigation_into_buffer_async};
 use crate::domains::command_output::{CommandOutputBuffer, CommandOutputPlan};
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PageTargetTerminationKind {
-    PageClose,
-    TargetClose,
-}
-
 #[derive(Debug)]
 pub(crate) struct PageTargetTerminationOwnerAction {
     owner_scope: CommandOwnerScope,
     target_id: String,
-    kind: PageTargetTerminationKind,
 }
 
 impl PageTargetTerminationOwnerAction {
-    pub(crate) fn new(
-        owner_scope: CommandOwnerScope,
-        target_id: String,
-        kind: PageTargetTerminationKind,
-    ) -> Self {
+    pub(crate) fn new(owner_scope: CommandOwnerScope, target_id: String) -> Self {
         Self {
             owner_scope,
             target_id,
-            kind,
         }
     }
 
@@ -44,12 +32,8 @@ impl PageTargetTerminationOwnerAction {
         &self.target_id
     }
 
-    pub(crate) fn kind(&self) -> PageTargetTerminationKind {
-        self.kind
-    }
-
-    fn into_parts(self) -> (CommandOwnerScope, String, PageTargetTerminationKind) {
-        (self.owner_scope, self.target_id, self.kind)
+    fn into_parts(self) -> (CommandOwnerScope, String) {
+        (self.owner_scope, self.target_id)
     }
 }
 
@@ -691,7 +675,6 @@ pub(super) async fn complete_close_command_dispatch(
     conn.publish_page_target_termination_owner_action(PageTargetTerminationOwnerAction::new(
         owner.clone(),
         target_id,
-        PageTargetTerminationKind::PageClose,
     ));
     complete_success_with_background_events(out)
 }
@@ -700,7 +683,7 @@ pub(crate) async fn complete_page_target_termination_owner_action_async(
     conn: &mut CdpConnection,
     action: PageTargetTerminationOwnerAction,
 ) -> crate::conn::CdpTurnOutcome {
-    let (owner_scope, expected_target_id, kind) = action.into_parts();
+    let (owner_scope, expected_target_id) = action.into_parts();
     let mut out = Vec::new();
     let current_target_id = conn
         .target_owner_identity_for_route(
@@ -715,33 +698,20 @@ pub(crate) async fn complete_page_target_termination_owner_action_async(
         );
     }
     let target_host_closure = conn.prepare_target_host_closure(&expected_target_id);
-    let closed = match kind {
-        PageTargetTerminationKind::PageClose => {
-            conn.close_page_target_for_route_async(
-                owner_scope.session_id(),
-                owner_scope.session_owner_route(),
-            )
+    let is_active_target = conn
+        .browser_context
+        .as_ref()
+        .is_some_and(|browser_context| browser_context.is_active_target(&expected_target_id));
+    let closed = if is_active_target {
+        conn.close_active_page_target_for_target_close_async(&mut out, "Target closed")
             .await
-        }
-        PageTargetTerminationKind::TargetClose => {
-            let is_active_target = conn
-                .browser_context
-                .as_ref()
-                .is_some_and(|browser_context| {
-                    browser_context.is_active_target(&expected_target_id)
-                });
-            if is_active_target {
-                conn.close_active_page_target_for_target_close_async(&mut out)
-                    .await
-            } else {
-                conn.close_background_page_target_for_target_close_async(
-                    &expected_target_id,
-                    &mut out,
-                    "Target closed",
-                )
-                .await
-            }
-        }
+    } else {
+        conn.close_background_page_target_for_target_close_async(
+            &expected_target_id,
+            &mut out,
+            "Target closed",
+        )
+        .await
     };
     let Some(closed) = closed else {
         return crate::conn::CdpTurnOutcome::new_with_protocol_events(

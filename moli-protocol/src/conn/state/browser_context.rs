@@ -1713,6 +1713,7 @@ impl BrowserContext {
             .attach_session(session_id.into());
     }
 
+    #[cfg(test)]
     pub(crate) fn detach_active_session(&mut self) -> Option<String> {
         self.page_targets.active_mut()?.detach_session()
     }

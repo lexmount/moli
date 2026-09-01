@@ -526,13 +526,16 @@ impl WorkerRuntimeInspector {
                 deferred_response,
                 response_tx,
             } => {
-                let deferred_response = if self.shared_worker {
-                    deferred_response.map(|response| {
-                        response.defer_publication_to_shared_worker_parent(self.parent_tx.clone())
-                    })
-                } else {
-                    deferred_response
-                };
+                let deferred_response = deferred_response.map(|response| {
+                    if self.shared_worker
+                        || response.response_delivery()
+                            == moli_page_types::RendererInspectorResponseDelivery::DevToolsSession
+                    {
+                        response.defer_publication_to_worker_parent(self.parent_tx.clone())
+                    } else {
+                        response
+                    }
+                });
                 let result = with_scoped_inspector_microtasks(isolate, || {
                     self.dispatch_protocol_message_scoped(
                         inspector_session_id.as_deref(),

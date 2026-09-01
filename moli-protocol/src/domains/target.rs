@@ -25,6 +25,7 @@ mod info;
 mod popup;
 #[cfg(test)]
 mod protocol_neutral_tests;
+mod session_disposal;
 #[cfg(test)]
 mod tests;
 mod worker_target;
@@ -184,17 +185,17 @@ pub(in crate::domains::target) async fn clear_detached_target_fetch_state_backgr
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
     session_id: &str,
-) {
+) -> Option<moli_core::RendererOutputFence> {
     clear_detached_target_owner_fetch_state_background_events_async(conn, out, Some(session_id))
-        .await;
+        .await
 }
 
 async fn clear_detached_target_owner_fetch_state_background_events_async(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
     session_id: Option<&str>,
-) {
-    let Some((pending_fetch_state, pending_page_command)) =
+) -> Option<moli_core::RendererOutputFence> {
+    let (pending_fetch_state, pending_page_command) =
         (match conn.start_disable_fetch_for_session_owner(session_id) {
             Ok(disable_state) => disable_state,
             Err(error) => {
@@ -203,12 +204,9 @@ async fn clear_detached_target_owner_fetch_state_background_events_async(
                     error,
                     "failed to disable Fetch interception while detaching target owner"
                 );
-                return;
+                return None;
             }
-        })
-    else {
-        return;
-    };
+        })?;
 
     if let Some(pending_page_command) = pending_page_command {
         match pending_page_command.wait().await {
@@ -252,7 +250,7 @@ async fn clear_detached_target_owner_fetch_state_background_events_async(
     // Target-owner teardown has no command response to fence. The concrete
     // renderer publication remains ordered on its own stream and will reach
     // protocol ingress independently.
-    let _ = page::fail_pending_fetch_state_background_events_async(
+    page::fail_pending_fetch_state_background_events_async(
         conn,
         out,
         session_id,
@@ -265,7 +263,7 @@ async fn clear_detached_target_owner_fetch_state_background_events_async(
         pending_subresource_auths,
         pending_subresource_responses,
     )
-    .await;
+    .await
 }
 
 impl CdpConnection {
@@ -282,7 +280,7 @@ impl CdpConnection {
             None,
             "Inspector detached",
         );
-        clear_detached_target_owner_fetch_state_background_events_async(
+        let _ = clear_detached_target_owner_fetch_state_background_events_async(
             self,
             side_effects.background_events_mut(),
             None,
@@ -1095,6 +1093,7 @@ fn select_browser_context_for_target(
 
 #[cfg(test)]
 mod devtools_runtime_entry_tests {
+    use crate::conn::RendererCommandDescriptor;
     use crate::devtools_runtime::{
         AutomationEvent, DevToolsActivateTargetCommand, DevToolsCloseTargetCommand,
         DevToolsCommand, DevToolsCommandContext, DevToolsCreateTargetCommand,
@@ -1256,6 +1255,10 @@ mod devtools_runtime_entry_tests {
         let mut browser_context = BrowserContext::new("BID-runtime-ready-close".to_owned());
         browser_context.set_active_target_id("TID-runtime-ready-close");
         browser_context.attach_active_session("SID-runtime-ready-close");
+        assert!(browser_context.assign_auxiliary_session_to_target(
+            "TID-runtime-ready-close",
+            "SID-runtime-ready-close-aux".to_owned(),
+        ));
         conn.browser_context = Some(browser_context);
         let page = conn
             .load_page_via_runtime_async("data:text/html,<p>runtime ready close</p>")
@@ -1275,6 +1278,31 @@ mod devtools_runtime_entry_tests {
             )
             .is_some(),
             "test must cover scheduler-deferred Runtime await owner cleanup"
+        );
+        conn.register_pending_inspector_await(7102, Some("SID-runtime-ready-close-aux"));
+        let auxiliary_dispatch = conn
+            .try_register_renderer_call_for_session_owner(
+                Some("SID-runtime-ready-close-aux"),
+                7102,
+                None,
+                RendererCommandDescriptor::from_synthesized_payload(
+                    json!({
+                        "id": 7102,
+                        "method": "Runtime.evaluate",
+                        "params": { "expression": "new Promise(() => {})" },
+                    })
+                    .to_string(),
+                )
+                .expect("test Runtime command should parse"),
+            )
+            .expect("auxiliary renderer command should register");
+        assert!(
+            conn.claim_pending_inspector_await_for_scheduler_deferred_reply(
+                7102,
+                &crate::conn::CommandOwnerScope::for_session("SID-runtime-ready-close-aux",),
+            )
+            .is_some(),
+            "test must cover an auxiliary scheduler-deferred Runtime await"
         );
 
         let (result, protocol_events) = execute_devtools_target_command_async_with_protocol_events(
@@ -1306,6 +1334,15 @@ mod devtools_runtime_entry_tests {
                     && response.error() == Some("Target closed"))),
             "pending Runtime await cancellation must remain a typed runtime-ready event"
         );
+        assert!(
+            protocol_events.iter().any(|event| event
+                .as_runtime_inspector_response_ready()
+                .is_some_and(|response| response.command_id() == 7102
+                    && response.error() == Some("Target closed")
+                    && response.has_bound_renderer_call_id())),
+            "an auxiliary claimed await must settle through its correlated typed response before the Page route retires"
+        );
+        drop(auxiliary_dispatch);
         assert!(
             protocol_events.iter().all(|event| {
                 event.protocol_message().is_none_or(|message| {

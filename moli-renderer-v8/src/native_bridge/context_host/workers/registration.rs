@@ -158,7 +158,11 @@ impl JsContextHost {
             .browser_context_runtime()
             .allocate_dedicated_worker_instance_id();
         self.browser_context_runtime()
-            .attach_dedicated_worker_devtools_handle(renderer_instance_id, &worker_handle);
+            .attach_dedicated_worker_devtools_handle(
+                renderer_instance_id,
+                &worker_handle,
+                self.renderer_output_journal(),
+            );
         let client_event_producer = self.dedicated_worker_client_event_producer(worker_id, &owner);
         Self::start_worker_message_relay(
             worker_id,
@@ -544,7 +548,11 @@ impl JsContextHost {
             .map(|state| state.renderer_instance_id)
             .expect("loading DedicatedWorker must retain its renderer instance identity");
         self.browser_context_runtime()
-            .attach_dedicated_worker_devtools_handle(renderer_instance_id, &worker_handle);
+            .attach_dedicated_worker_devtools_handle(
+                renderer_instance_id,
+                &worker_handle,
+                self.renderer_output_journal(),
+            );
         for message in pending_messages {
             worker_handle.post_message(message);
         }

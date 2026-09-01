@@ -39,6 +39,26 @@ impl JsContextHost {
         self.output_journal = Some(output_journal);
     }
 
+    pub(crate) fn renderer_output_journal(
+        &self,
+    ) -> Option<crate::runtime::RendererTurnOutputJournal> {
+        self.output_journal.clone()
+    }
+
+    pub(crate) fn publish_worker_runtime_inspector_response(
+        &self,
+        publication: crate::runtime::RendererRuntimeInspectorResponsePublication,
+    ) -> bool {
+        let Some(output_journal) = self.output_journal.as_ref() else {
+            return false;
+        };
+        self.publish_live_turn_output_prefix();
+        let predecessor = output_journal
+            .last_published_cursor()
+            .map(|cursor| output_journal.declare_fence(cursor));
+        publication.commit(predecessor).is_ok()
+    }
+
     /// Appends a browser-owner action to the one concrete sink for this turn.
     ///
     /// Command turns retain a distinct response boundary, but they use the

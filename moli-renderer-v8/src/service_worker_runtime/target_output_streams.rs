@@ -92,6 +92,13 @@ impl ServiceWorkerTargetOutputStreams {
         journal.publish_record(Self::record(event));
     }
 
+    pub(super) fn journal(
+        &self,
+        version_id: ServiceWorkerVersionId,
+    ) -> Option<RendererTurnOutputJournal> {
+        self.state.lock().live.get(&version_id).cloned()
+    }
+
     pub(super) fn publish_destroyed(
         &self,
         version_id: ServiceWorkerVersionId,

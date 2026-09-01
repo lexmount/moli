@@ -23,9 +23,10 @@ use url::Url;
 use crate::conn::{
     BackgroundNavigationLoadJob, BackgroundProtocolEvent, CapturedBody, CdpConnection,
     CdpSessionRoute, Cmd, CommandDispatchContext, CommandOwnerScope, DocumentNavigationToken,
-    FetchRequestStage, NavigationDispatchState, NavigationLoadOutcome, NavigationRequestLoadPolicy,
-    NavigationResultProjection, NavigationSourceDocumentSecurityContext, PendingFetchNavigation,
-    ResponseStageUrlMatchPolicy, monotonic_timestamp_seconds,
+    FetchRequestStage, NavigationDispatchState, NavigationEngineHandoff, NavigationLoadOutcome,
+    NavigationRequestLoadPolicy, NavigationResultProjection,
+    NavigationSourceDocumentSecurityContext, PendingFetchNavigation, ResponseStageUrlMatchPolicy,
+    monotonic_timestamp_seconds,
 };
 use moli_cookie_jar::{NetworkCookieRequestContext, StoredCookieQueryReport};
 
@@ -398,7 +399,7 @@ pub(crate) struct MaterializedNavigationCompletion {
     token: DocumentNavigationToken,
     state: NavigationDispatchState,
     navigation: network::MaterializedNavigationLoadOutcome,
-    engine: Option<NavigationEngine>,
+    engine_handoff: NavigationEngineHandoff,
 }
 
 impl MaterializedNavigationCompletion {
@@ -411,12 +412,12 @@ impl MaterializedNavigationCompletion {
             token,
             state,
             navigation,
-            engine: None,
+            engine_handoff: NavigationEngineHandoff::retained_by_owner(),
         }
     }
 
-    pub(crate) fn with_navigation_engine(mut self, engine: NavigationEngine) -> Self {
-        self.engine = Some(engine);
+    pub(crate) fn with_navigation_engine_replacement(mut self, engine: NavigationEngine) -> Self {
+        self.engine_handoff = NavigationEngineHandoff::replacement(engine);
         self
     }
 
@@ -446,9 +447,9 @@ impl MaterializedNavigationCompletion {
         DocumentNavigationToken,
         NavigationDispatchState,
         network::MaterializedNavigationLoadOutcome,
-        Option<NavigationEngine>,
+        NavigationEngineHandoff,
     ) {
-        (self.token, self.state, self.navigation, self.engine)
+        (self.token, self.state, self.navigation, self.engine_handoff)
     }
 }
 
@@ -597,15 +598,16 @@ impl BackgroundNavigationLifecycleCompletion {
     }
 
     /// Materialize the background navigation outcome into a queued
-    /// `MaterializedNavigationCompletion`. `retain_engine` should be `false`
+    /// `MaterializedNavigationCompletion`. `replace_owner_engine` should be
+    /// `false`
     /// when the completion's token is no longer current — stale completions
     /// still flow into the materialized queue so the drain can emit a
     /// terminal abort response for any outstanding `navigate_id`, but the
     /// stale background engine must not keep a renderer owner alive.
-    pub(crate) fn materialize_with_engine_retention(
+    pub(crate) fn materialize_with_engine_replacement(
         self,
         conn: &mut CdpConnection,
-        retain_engine: bool,
+        replace_owner_engine: bool,
     ) -> MaterializedNavigationCompletion {
         let Self {
             token,
@@ -614,7 +616,7 @@ impl BackgroundNavigationLifecycleCompletion {
             navigation,
             ready_at: _,
         } = self;
-        let should_retain_engine = retain_engine
+        let should_replace_owner_engine = replace_owner_engine
             && matches!(
                 navigation,
                 Ok(NavigationLoadOutcome::ResponseCommitReady(_)
@@ -622,8 +624,8 @@ impl BackgroundNavigationLifecycleCompletion {
             );
         let navigation = network::materialize_navigation_load_result(conn, &state, navigation);
         let completion = MaterializedNavigationCompletion::new(token, state, navigation);
-        if should_retain_engine {
-            completion.with_navigation_engine(engine)
+        if should_replace_owner_engine {
+            completion.with_navigation_engine_replacement(engine)
         } else {
             completion
         }
@@ -3172,15 +3174,15 @@ pub(super) async fn complete_pending_navigate_load_command(
         state.owner.session_owner_route(),
         &token,
     );
-    let should_retain_engine = is_current
+    let should_replace_owner_engine = is_current
         && matches!(
             navigation,
             Ok(NavigationLoadOutcome::ResponseCommitReady(_) | NavigationLoadOutcome::Loaded(_))
         );
     let navigation = network::materialize_navigation_load_result(conn, &state, navigation);
     let completion = MaterializedNavigationCompletion::new(token, state, navigation);
-    let completion = if should_retain_engine {
-        completion.with_navigation_engine(engine)
+    let completion = if should_replace_owner_engine {
+        completion.with_navigation_engine_replacement(engine)
     } else {
         completion
     };

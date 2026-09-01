@@ -505,24 +505,6 @@ mod tests {
         assert!(read.eof);
     }
 
-    #[tokio::test]
-    async fn clearing_session_scoped_state_clears_in_flight_subresources() {
-        let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
-        bc.register_in_flight_subresource_fetch_request(
-            Some("INT-SUB-2".to_owned()),
-            pending_subresource_fetch(2),
-        );
-
-        bc.clear_active_target_session_scoped_state_async()
-            .await
-            .unwrap();
-        assert!(
-            !bc.active_page_target()
-                .fetch_owner
-                .has_in_flight_subresource_fetches_for_test()
-        );
-    }
-
     #[test]
     fn network_and_io_stream_ids_cross_u32_max_without_reuse() {
         let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");

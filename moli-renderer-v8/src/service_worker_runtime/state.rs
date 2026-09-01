@@ -355,6 +355,13 @@ impl ServiceWorkerRuntimeState {
         self.live_target_run(version_id).as_ref() == Some(run)
     }
 
+    pub(super) fn target_output_journal(
+        &self,
+        version_id: ServiceWorkerVersionId,
+    ) -> Option<crate::runtime::RendererTurnOutputJournal> {
+        self.target_output_streams.journal(version_id)
+    }
+
     pub(super) fn record_target_created(
         &mut self,
         registration_id: ServiceWorkerRegistrationId,

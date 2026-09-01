@@ -480,7 +480,8 @@ impl RuntimeCommandOutputBarriers {
 #[cfg(test)]
 mod tests {
     use moli_core::{
-        RendererOwnerAction, RendererProtocolObservation, RendererRuntimeCommandCausalIdentity,
+        RendererOutputResidenceIdentity, RendererOwnerAction, RendererProtocolObservation,
+        RendererRuntimeCommandCausalIdentity,
         page::{
             DevToolsSessionKey, RendererDocumentLifecycleIdentity,
             RendererDocumentSourcedSameDocumentNavigation,
@@ -730,12 +731,16 @@ mod tests {
         let mut barriers = RuntimeCommandOutputBarriers::default();
         let permit = admit_registered_command(&mut conn, &mut barriers, 2);
         let cause = renderer_cause_for_permit(&conn, &permit);
-        let agent_token = conn
+        let page = conn
             .runtime_session_owner_slot(Some(SESSION_ID))
             .expect("loaded Page should retain its runtime slot")
             .loaded_page()
-            .expect("runtime slot should retain the loaded Page")
-            .renderer_devtools_agent_token();
+            .expect("runtime slot should retain the loaded Page");
+        let agent_token = page.renderer_devtools_agent_token();
+        let source_residence = RendererOutputResidenceIdentity::Page {
+            owner_local_host_id: page.renderer_owner_local_host_id(),
+            page_id: page.renderer_page_id(),
+        };
         let observation = RendererProtocolObservation::RuntimeInspector(
             RendererRuntimeInspectorMessageBatch::new_after_command_response(
                 agent_token,
@@ -756,6 +761,7 @@ mod tests {
             super::super::output_ingress::PreparedProtocolOutputs::from_renderer_observation(
                 &mut conn,
                 &crate::conn::CommandOwnerScope::for_session(SESSION_ID),
+                source_residence,
                 agent_token,
                 &observation,
             );

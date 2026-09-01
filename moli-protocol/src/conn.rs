@@ -122,6 +122,7 @@ pub use moli_protocol_cdp::{
 use target::DEFAULT_BROWSER_CONTEXT_ID;
 pub(crate) use target::{
     CdpSessionRoute, DefaultTargetLifecycle, TargetActivationTransition, TargetHandlerAccessMode,
+    TargetWorkerProtocolAttachmentIdentity,
 };
 
 #[derive(Clone, Debug)]
@@ -558,12 +559,12 @@ pub(crate) use state::{
     DedicatedWorkerTargetState, DevToolsBrowserIdentityOverride, DevToolsConsoleOutputSessionState,
     DevToolsLogViolationThreshold, DocumentNavigationToken, DuplicatePendingRendererCommand,
     EmulatedNetworkConditions, EmulatedViewportSurface, InspectorCommandDispatch,
-    NETWORK_ERROR_PAGE_URL, NavigationResultProjection, NavigationSourceDocumentSecurityContext,
-    NetworkErrorPageNavigation, PageScreencastConfig, PageScreencastFormat,
-    PendingBidiChannelListener, PendingInspectorAwait, PendingRendererCommandKey,
-    PerformanceTimeDomain, PreparedRendererCallDispatch, ProfilerAction, ProfilerInspectorCommand,
-    RendererCommandCorrelation, RendererCommandDescriptor, RendererCommandReplay,
-    RendererDocumentLifecycleObservation, RendererDocumentLifecycleObserver,
+    NETWORK_ERROR_PAGE_URL, NavigationEngineHandoff, NavigationResultProjection,
+    NavigationSourceDocumentSecurityContext, NetworkErrorPageNavigation, PageScreencastConfig,
+    PageScreencastFormat, PendingBidiChannelListener, PendingInspectorAwait,
+    PendingRendererCommandKey, PerformanceTimeDomain, PreparedRendererCallDispatch, ProfilerAction,
+    ProfilerInspectorCommand, RendererCommandCorrelation, RendererCommandDescriptor,
+    RendererCommandReplay, RendererDocumentLifecycleObservation, RendererDocumentLifecycleObserver,
     RendererMainDocumentCommitSeed, RendererPageResidenceIdentity,
     ServiceWorkerRuntimeExceptionSnapshot, ServiceWorkerTargetState, SharedWorkerTargetState,
     SiteDataClearOptions, TargetIdentityState, TargetInitialEmptyDocumentCreator, TargetOwnerState,
@@ -585,12 +586,11 @@ pub(crate) use state::{
 };
 pub(crate) use target::{
     PreparedTargetAttach, PreparedTargetHostClosure, PreparedTargetHostDelta,
-    TargetAttachSessionCommit, TargetBindingCleanupAction, TargetClosureCleanupPlan,
-    TargetSessionDetachCleanupPlan,
+    TargetAttachSessionCommit, TargetBindingCleanupAction, TargetBindingCleanupPlan,
+    TargetClosureCleanupPlan, TargetEventPlan, TargetSessionDetachCleanupPlan,
 };
 use target::{
-    TargetClosurePlan, TargetControlPlane, TargetEventPlan, TargetHostDelta,
-    target_destroyed_automation_events,
+    TargetClosurePlan, TargetControlPlane, TargetHostDelta, target_destroyed_automation_events,
 };
 pub(crate) use top_level_navigation_work::TopLevelLocationNavigationOwnerAction;
 
@@ -2628,7 +2628,7 @@ impl CdpConnection {
         // navigate_id-gated abort emission; the only thing we must avoid here
         // is letting the stale background engine displace the live one.
         let is_current = completion.is_current_for_connection(self);
-        let completion = completion.materialize_with_engine_retention(self, is_current);
+        let completion = completion.materialize_with_engine_replacement(self, is_current);
         if let Some(started) = timing_started {
             tracing::info!(
                 target: "moli_cdp_nav_timing",
@@ -2957,7 +2957,7 @@ impl CdpConnection {
             );
         }
         let is_current = completion.is_current_for_connection(self);
-        let (token, state, navigation, engine) = completion.into_parts();
+        let (token, state, navigation, engine_handoff) = completion.into_parts();
         if !is_current {
             crate::domains::page::push_superseded_navigation_result(out, &state);
             return;
@@ -2972,7 +2972,7 @@ impl CdpConnection {
             command_context,
         )
         .await;
-        if let Some(engine) = engine {
+        if let Some(engine) = engine_handoff.into_replacement() {
             self.adopt_loaded_navigation_engine_for_owner(&navigation_owner, engine);
         }
         if let Some(started) = timing_started {

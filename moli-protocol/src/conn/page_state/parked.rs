@@ -10,11 +10,12 @@ use crate::devtools_runtime::{
 use moli_core::network::SharedWebStorageStore;
 
 impl BrowserContext {
-    pub fn remove_background_target(&mut self, target_id: &str) -> Option<PageTargetHost> {
-        if self.is_active_target(target_id) {
-            return None;
-        }
-        self.page_targets.remove(target_id)
+    pub(crate) fn take_page_target_for_close(&mut self, target_id: &str) -> Option<PageTargetHost> {
+        let target = self.page_targets.remove(target_id)?;
+        self.forget_target_opener_references_for_target(target_id);
+        self.forget_target_window_names_for_target(target_id);
+        self.forget_target_popup_id_for_target(target_id);
+        Some(target)
     }
 
     pub(crate) fn stage_background_target(
@@ -315,7 +316,14 @@ impl BrowserContext {
             target
                 .runtime_slot
                 .remove_network_session_observation_cursor(Some(session_id));
-            target.devtools_sessions.remove_attached(session_id);
+            let disposed = target.devtools_sessions.dispose(
+                session_id,
+                &moli_page_types::DevToolsSessionKey::Attached(session_id.to_owned()),
+            );
+            debug_assert!(
+                disposed.is_some(),
+                "attached session must remain registered until disposal"
+            );
         }
         Some(target_id)
     }
@@ -323,7 +331,7 @@ impl BrowserContext {
     pub(crate) async fn clear_target_session_overrides_async(
         &mut self,
         session_id: &str,
-    ) -> Result<bool, String> {
+    ) -> anyhow::Result<bool> {
         let Some((target_id, session_key)) = self.page_targets.iter().find_map(|target| {
             target
                 .devtools_sessions
@@ -372,75 +380,64 @@ impl BrowserContext {
             )
             .await
             .map_err(|error| {
-                format!("failed to restore detached session network request policy: {error}")
+                anyhow::anyhow!(
+                    "failed to restore detached session network request policy: {error}"
+                )
             })?;
         }
         if delta.locale {
             page.set_locale_override_async(effective_locale.as_deref())
                 .await
-                .map_err(|error| format!("failed to restore detached session locale: {error}"))?;
+                .map_err(|error| {
+                    anyhow::anyhow!("failed to restore detached session locale: {error}")
+                })?;
         }
         if delta.timezone {
             page.set_timezone_override_async(effective_timezone.as_deref())
                 .await
-                .map_err(|error| format!("failed to restore detached session timezone: {error}"))?;
+                .map_err(|error| {
+                    anyhow::anyhow!("failed to restore detached session timezone: {error}")
+                })?;
         }
         Ok(browser_identity_changed)
     }
 
-    pub(crate) fn remove_auxiliary_sessions_for_target(&mut self, target_id: &str) -> Vec<String> {
-        let session_ids = self.auxiliary_session_ids_for_target(target_id);
-        for session_id in &session_ids {
-            let _ = self.remove_auxiliary_session(session_id);
-        }
-        session_ids
-    }
-
-    pub(crate) async fn clear_background_target_session_binding_and_scoped_state_async(
+    pub(crate) async fn dispose_primary_page_session_async(
         &mut self,
+        target_id: &str,
         session_id: &str,
-    ) -> Result<Option<String>, String> {
-        let Some(target_id) = self
-            .background_targets_mut()
-            .find(|target| target.is_session(session_id))
-            .map(|target| {
-                target.detach_session();
-                let target_id = target.target_id().to_owned();
-                target.runtime_slot.disable_primary_network_events();
-                target
-                    .runtime_slot
-                    .clear_session_scoped_network_observation_artifacts();
-                target
-                    .runtime_slot
-                    .request_id_allocator()
-                    .reset_fetch_navigation_request_counter();
-                target
-                    .runtime_slot
-                    .request_id_allocator()
-                    .reset_subresource_fetch_request_counter();
-                target_id
-            })
-        else {
-            return Ok(None);
+    ) -> anyhow::Result<bool> {
+        let is_active = self.is_active_target(target_id);
+        let Some(target) = self.page_target_mut(target_id) else {
+            return Ok(false);
         };
+        if !target.is_session(session_id) {
+            return Ok(false);
+        }
+        target.clear_primary_session_scoped_state_fields();
 
-        let cleared_emulated_media = moli_core::page::EmulatedMediaOverrides::default();
-        self.background_target_mut(&target_id)
-            .expect("background target must exist")
-            .clear_session_scoped_state_fields(true);
-        self.background_target_mut(&target_id)
-            .expect("background target must exist")
-            .runtime_slot
-            .remove_network_session_observation_cursor(Some(session_id));
-
-        let effective_headers = self.effective_extra_headers_for_target(&target_id);
+        let effective_headers = self.effective_extra_headers_for_target(target_id);
         let target = self
-            .page_target(&target_id)
-            .expect("background target must remain registered");
+            .page_target(target_id)
+            .expect("disposing page target must remain registered");
         let effective_policy = target.effective_policy();
+        let effective_locale = effective_policy
+            .locale_override()
+            .map(str::to_owned)
+            .or_else(|| self.default_locale_override.clone());
+        let effective_timezone = effective_policy
+            .timezone_override()
+            .map(str::to_owned)
+            .or_else(|| self.default_timezone_override.clone());
+        let surface_script = if is_active {
+            self.generated_surface_override_script_for_active_target()
+        } else {
+            self.generated_surface_override_script_for_parked_target(target_id)
+        };
+        let cleared_emulated_media = moli_core::page::EmulatedMediaOverrides::default();
 
         if let Some(page) = self
-            .background_target_mut(&target_id)
+            .page_target_mut(target_id)
             .and_then(|target| target.runtime_slot.loaded_page_mut())
         {
             page.set_network_request_policy_async(
@@ -450,59 +447,46 @@ impl BrowserContext {
                 effective_policy.blocked_url_patterns(),
             )
             .await
-            .map_err(|error| format!("failed to clear page network request policy: {error}"))?;
+            .map_err(|error| {
+                anyhow::anyhow!("failed to clear page network request policy: {error}")
+            })?;
             page.set_network_offline_async(false)
                 .await
-                .map_err(|error| format!("failed to clear page offline state: {error}"))?;
+                .map_err(|error| anyhow::anyhow!("failed to clear page offline state: {error}"))?;
             page.set_script_execution_disabled_async(false)
                 .await
                 .map_err(|error| {
-                    format!("failed to clear page script execution disabled state: {error}")
+                    anyhow::anyhow!("failed to clear page script execution disabled state: {error}")
+                })?;
+            page.set_cpu_throttling_rate_async(1.0)
+                .await
+                .map_err(|error| {
+                    anyhow::anyhow!("failed to clear page CPU throttling rate: {error}")
                 })?;
             page.set_emulated_media_async(&cleared_emulated_media)
                 .await
-                .map_err(|error| format!("failed to clear page emulated media: {error}"))?;
+                .map_err(|error| anyhow::anyhow!("failed to clear page emulated media: {error}"))?;
+            page.set_locale_override_async(effective_locale.as_deref())
+                .await
+                .map_err(|error| anyhow::anyhow!("failed to restore page locale: {error}"))?;
+            page.set_timezone_override_async(effective_timezone.as_deref())
+                .await
+                .map_err(|error| anyhow::anyhow!("failed to restore page timezone: {error}"))?;
+            if let Some(surface_script) = surface_script {
+                page.run_page_surface_override_script_async(&surface_script.source)
+                    .await
+                    .map_err(|error| {
+                        anyhow::anyhow!("failed to restore page surface overrides: {error}")
+                    })?;
+            }
         }
 
-        Ok(Some(target_id))
-    }
-
-    pub(crate) fn clear_background_target_primary_auto_attached_session(
-        &mut self,
-        session_id: &str,
-    ) -> Option<String> {
-        let target_id = self
-            .background_targets_mut()
-            .find(|target| target.is_session(session_id))
-            .map(|target| {
-                target.detach_session();
-                let target_id = target.target_id().to_owned();
-                target.runtime_slot.disable_primary_network_events();
-                target
-                    .runtime_slot
-                    .clear_session_scoped_network_observation_artifacts();
-                target
-                    .runtime_slot
-                    .request_id_allocator()
-                    .reset_fetch_navigation_request_counter();
-                target
-                    .runtime_slot
-                    .request_id_allocator()
-                    .reset_subresource_fetch_request_counter();
-                target_id
-            })?;
-        let target = self
-            .page_target_mut(&target_id)
-            .expect("background target must remain registered");
-        target.devtools_sessions.reset(true);
-        target.runtime_slot.disable_primary_network_events();
-        target.network_policy.clear_session_scoped_state();
-        target.fetch_owner.reset_config();
-        self.background_target_mut(&target_id)
-            .expect("background target must exist")
-            .runtime_slot
-            .remove_network_session_observation_cursor(Some(session_id));
-        Some(target_id)
+        let disposed = self
+            .page_target_mut(target_id)
+            .expect("disposing page target must remain registered")
+            .devtools_sessions
+            .dispose(session_id, &moli_page_types::DevToolsSessionKey::Primary);
+        Ok(disposed.is_some())
     }
 
     #[cfg(test)]
@@ -548,52 +532,6 @@ impl BrowserContext {
             target.target_identity().security_origin().to_owned(),
             target.target_identity().secure_context_type().to_owned(),
         ))
-    }
-
-    pub(crate) async fn clear_active_target_session_binding_and_scoped_state_async(
-        &mut self,
-    ) -> Result<(), String> {
-        let target_id = self.active_target_id_owned();
-        let auxiliary_inspector_session_ids = target_id
-            .as_deref()
-            .map(|target_id| self.auxiliary_session_ids_for_target(target_id))
-            .unwrap_or_default();
-        if let Some(page) = self.active_page_target_mut().runtime_slot.loaded_page_mut() {
-            for session_id in &auxiliary_inspector_session_ids {
-                page.detach_runtime_inspector_session_async(Some(session_id))
-                    .await
-                    .map_err(|error| {
-                        format!("failed to detach auxiliary renderer inspector session: {error}")
-                    })?;
-            }
-            page.detach_runtime_inspector_session_async(None)
-                .await
-                .map_err(|error| {
-                    format!("failed to detach primary renderer inspector session: {error}")
-                })?;
-        }
-        self.clear_active_target_session_scoped_state_async()
-            .await?;
-        self.detach_active_session();
-        for session_id in auxiliary_inspector_session_ids {
-            self.active_page_target_mut()
-                .runtime_slot
-                .remove_auxiliary_network_session(&session_id);
-        }
-        Ok(())
-    }
-
-    pub(crate) async fn clear_active_target_primary_auto_attached_session_async(
-        &mut self,
-    ) -> Result<Option<String>, String> {
-        let target_id = self.active_target_id_owned();
-        if self.active_session_id().is_none() {
-            return Ok(None);
-        }
-        self.clear_active_target_primary_session_scoped_state_async()
-            .await?;
-        self.detach_active_session();
-        Ok(target_id)
     }
 
     pub(crate) fn release_primary_session_binding_preserving_frontend_state(
