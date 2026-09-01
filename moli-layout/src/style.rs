@@ -1519,10 +1519,21 @@ impl ResolvedLayoutStyle {
         self.list_marker_position
     }
 
-    pub(crate) fn table_layout_is_fixed(&self) -> bool {
-        self.computed.as_ref().is_some_and(|computed| {
+    /// Whether this table uses the fixed table-layout algorithm after the
+    /// preferred inline-size eligibility rule is applied.
+    ///
+    /// `table-layout: fixed` is not sufficient on its own. CSS Tables routes
+    /// an automatic or max-content-sized table through automatic layout;
+    /// Blink exposes this combined decision as `IsFixedTableLayout()`.
+    pub(crate) fn uses_fixed_table_layout(&self) -> bool {
+        let authored_fixed = self.computed.as_ref().is_some_and(|computed| {
             computed.clone_table_layout() == style::computed_values::table_layout::T::Fixed
-        })
+        });
+        if !authored_fixed {
+            return false;
+        }
+        let preferred_inline_size = self.writing_mode().to_logical(self.taffy.size).inline_size;
+        !preferred_inline_size.is_auto() && !preferred_inline_size.is_max_content()
     }
 
     pub(crate) fn table_border_is_collapsed(&self) -> bool {

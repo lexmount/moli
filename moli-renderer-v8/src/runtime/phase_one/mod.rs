@@ -1444,6 +1444,88 @@ td{padding:0;border:0;height:10px}
     }
 
     #[test]
+    fn fixed_percentage_table_exports_its_parent_facing_max_content_size() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}html{scrollbar-width:none}
+.case{width:100px}.wrapper{display:table}.cell{display:table-cell}
+.flex{display:flex;height:10px}.flex table{height:5px}
+#percent-flex{background:rgb(201,11,11)}#percent-table{background:rgb(201,12,12)}
+#calc-flex{background:rgb(202,11,11)}#calc-table{background:rgb(202,12,12)}
+#length-flex{background:rgb(203,11,11)}#length-table{background:rgb(203,12,12)}
+#auto-flex{background:rgb(204,11,11)}#auto-table{background:rgb(204,12,12)}
+</style></head><body>
+<div class=case><div class=wrapper><div class=cell><div id=percent-flex class=flex><table id=percent-table style="table-layout:fixed;width:100%"></table></div></div></div></div>
+<div class=case><div class=wrapper><div class=cell><div id=calc-flex class=flex><table id=calc-table style="table-layout:fixed;width:calc(40px + 0%)"></table></div></div></div></div>
+<div class=case><div class=wrapper><div class=cell><div id=length-flex class=flex><table id=length-table style="table-layout:fixed;width:40px"></table></div></div></div></div>
+<div class=case><div class=wrapper><div class=cell><div id=auto-flex class=flex><table id=auto-table style="table-layout:auto;width:100%"></table></div></div></div></div>
+</body></html>"#,
+            )
+            .await;
+
+            // Chromium gives a percentage-dependent fixed table an
+            // effectively unbounded max-content contribution. The wrapper
+            // therefore fills the 100px opportunity, while final layout still
+            // resolves the authored width normally. Definite and automatic
+            // controls must retain their ordinary finite contributions.
+            for (color, expected_width) in [
+                (rgb(201, 11, 11), 100.0),
+                (rgb(201, 12, 12), 100.0),
+                (rgb(202, 11, 11), 100.0),
+                (rgb(202, 12, 12), 40.0),
+                (rgb(203, 11, 11), 40.0),
+                (rgb(203, 12, 12), 40.0),
+                (rgb(204, 11, 11), 4.0),
+                (rgb(204, 12, 12), 4.0),
+            ] {
+                let rect = solid_paint_rect(&snapshot, color);
+                assert!(
+                    (rect.width - expected_width).abs() <= 0.01,
+                    "expected width {expected_width}, got {rect:?}",
+                );
+            }
+        }));
+    }
+
+    #[test]
+    fn table_layout_fixed_with_auto_width_uses_automatic_column_measurement() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}html{scrollbar-width:none}
+table{table-layout:fixed;width:auto;border-spacing:0;background:rgb(205,11,11)}
+td{padding:0;border:0;height:5px;background:rgb(205,12,12)}
+.wide{width:80px;height:5px;background:rgb(205,13,13)}
+</style></head><body><table><tr><td style="width:10px"></td></tr><tr><td><div class=wide></div></td></tr></table></body></html>"#,
+            )
+            .await;
+
+            // `table-layout: fixed` selects the fixed algorithm only when the
+            // table has an eligible non-auto preferred width. Chromium keeps
+            // the computed property value but measures this table with the
+            // automatic algorithm, so the second row contributes 80px.
+            for color in [rgb(205, 11, 11), rgb(205, 12, 12), rgb(205, 13, 13)] {
+                let rect = solid_paint_rect(&snapshot, color);
+                assert!(
+                    (rect.width - 80.0).abs() <= 0.01,
+                    "auto-width table should measure every row: {rect:?}",
+                );
+            }
+        }));
+    }
+
+    #[test]
     fn automatic_table_layout_collects_authored_widths_after_a_colspan_header() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
