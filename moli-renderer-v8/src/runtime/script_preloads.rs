@@ -15,6 +15,10 @@ use url::Url;
 use moli_script::script_element_nonce_is_nonceable;
 use parking_lot::Mutex;
 
+use crate::modulepreload::{
+    ModulepreloadAsState, modulepreload_as_state_from_attribute,
+    modulepreload_media_attribute_matches, resolve_parser_network_resource_url,
+};
 use crate::network::ResourceRequestClient;
 use crate::page_task_queue::RendererOwnerWakeSender;
 use crate::parser::{PreparedScript, ScriptSource};
@@ -1379,6 +1383,58 @@ impl HtmlPreloadScannerSink {
         }
     }
 
+    fn maybe_collect_modulepreload(&self, tag: &Tag) {
+        if self.seen_import_map.get()
+            || (matches!(self.meta_csp_mode, MetaCspScannerMode::StopAfterMeta)
+                && self.seen_meta_csp_count.get() != 0)
+        {
+            return;
+        }
+        let Some(rel) = html_attr_value(&tag.attrs, "rel") else {
+            return;
+        };
+        if !link_rel_includes_token(&rel, "modulepreload")
+            || modulepreload_as_state_from_attribute(html_attr_value(&tag.attrs, "as").as_deref())
+                != ModulepreloadAsState::ScriptLike
+            || !modulepreload_media_attribute_matches(
+                html_attr_value(&tag.attrs, "media").as_deref(),
+            )
+        {
+            return;
+        }
+        let Some(href) = html_attr_value(&tag.attrs, "href") else {
+            return;
+        };
+        let Some(url) = resolve_parser_network_resource_url(&self.base_url.borrow(), &href) else {
+            return;
+        };
+        let kind_hint = crate::types::ScriptKind::Module;
+        let mode_hint = crate::types::ScriptMode::ModuleInOrder;
+        let fetch_metadata = crate::planning::ScriptFetchMetadata::from_script_attributes(
+            html_attr_value(&tag.attrs, "crossorigin").as_deref(),
+            html_attr_value(&tag.attrs, "referrerpolicy").as_deref(),
+            None,
+            html_attr_value(&tag.attrs, "integrity").as_deref(),
+            html_attr_value(&tag.attrs, "nonce").as_deref(),
+            html_attr_value(&tag.attrs, "fetchpriority").as_deref(),
+        );
+        let Some(key) = BufferedScriptPreloadKey::new(url.clone(), kind_hint, &fetch_metadata)
+        else {
+            return;
+        };
+        let mut requests = self.requests.borrow_mut();
+        if requests.seen.insert(BufferedPreloadKey::Script(key)) {
+            requests.script_requests.push(BufferedScriptPreloadRequest {
+                url,
+                initiator_url: self.final_url.clone(),
+                kind_hint,
+                mode_hint,
+                resource_type_hint: moli_fetch::RequestResourceType::Script,
+                fetch_metadata,
+            });
+        }
+    }
+
     fn maybe_update_base_url(&self, tag: &Tag) {
         if self.has_valid_base.get() {
             return;
@@ -1599,6 +1655,7 @@ impl TokenSink for HtmlPreloadScannerSink {
                 TokenSinkResult::RawData(ScriptData)
             }
             "link" => {
+                self.maybe_collect_modulepreload(&tag);
                 self.maybe_collect_stylesheet_preload(&tag);
                 TokenSinkResult::Continue
             }

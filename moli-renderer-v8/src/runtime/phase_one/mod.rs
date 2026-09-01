@@ -2664,7 +2664,7 @@ document.body.setAttribute('data-error-state', [
     }
 
     #[test]
-    fn buffered_html_preload_scan_leaves_modulepreload_to_native_module_map() {
+    fn buffered_html_preload_scan_routes_script_like_modulepreloads_to_native_module_map() {
         let final_url = Url::parse("https://example.test/docs/page.html").expect("test url");
         let requests = collect_preloadable_external_script_requests_from_html(
             &final_url,
@@ -2678,10 +2678,20 @@ document.body.setAttribute('data-error-state', [
             "#,
         );
 
+        assert!(
+            requests
+                .iter()
+                .all(|request| request.kind_hint == crate::types::ScriptKind::Module),
+            "scanner modulepreloads must take the native module-map admission path"
+        );
         assert_eq!(
-            requests,
-            Vec::new(),
-            "modulepreload must not enter the legacy script-text preload cache; the parser publishes exact link candidates to the native module map"
+            preload_request_urls(requests),
+            vec![
+                Url::parse("https://example.test/entry.mjs").expect("entry module URL"),
+                Url::parse("https://example.test/theme.css?version=1")
+                    .expect("default script-like module URL"),
+            ],
+            "the scanner should dedupe script-like modulepreloads while leaving typed and data candidates to the parser"
         );
     }
 
@@ -2859,6 +2869,7 @@ document.body.setAttribute('data-error-state', [
             r#"
                 <script type="module" src="/before.mjs"></script>
                 <script type="importmap">{"integrity": {}}</script>
+                <link rel="modulepreload" href="/after-preload.mjs">
                 <script type="module" src="/after.mjs"></script>
                 <script src="/classic.js"></script>
             "#,
@@ -2871,6 +2882,26 @@ document.body.setAttribute('data-error-state', [
                 Url::parse("https://example.test/classic.js").expect("classic url"),
             ]
         );
+    }
+
+    #[test]
+    fn html_preload_scanner_preserves_modulepreload_before_module_script() {
+        let final_url = Url::parse("https://example.test/docs/page.html").expect("test url");
+        let requests = collect_preloadable_external_script_requests_from_html(
+            &final_url,
+            r#"
+                <link rel="modulepreload" href="/entry.mjs" integrity="sha384-invalid">
+                <script type="module" src="/entry.mjs"></script>
+            "#,
+        );
+
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].url, requests[1].url);
+        assert_eq!(
+            requests[0].fetch_metadata.integrity.as_deref(),
+            Some("sha384-invalid")
+        );
+        assert_eq!(requests[1].fetch_metadata.integrity, None);
     }
 
     #[test]
