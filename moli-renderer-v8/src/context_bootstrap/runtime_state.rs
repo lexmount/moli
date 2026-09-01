@@ -1830,6 +1830,7 @@ pub(crate) fn finish_context_bootstrap(
         ("SVGAnimatedNumber", "SVGAnimatedNumber"),
         ("SVGAnimatedInteger", "SVGAnimatedInteger"),
         ("SVGNumberList", "SVGNumberList"),
+        ("SVGPointList", "SVGPointList"),
         ("SVGStringList", "SVGStringList"),
         ("SVGAnimatedNumberList", "SVGAnimatedNumberList"),
         ("SVGAnimatedBoolean", "SVGAnimatedBoolean"),

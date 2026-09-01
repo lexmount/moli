@@ -299,6 +299,33 @@ struct SvgNumberListObjectDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
+#[webapi(interface = web_api_interfaces::SVGPointList, own_to_string_tag = "SVGPointList")]
+struct SvgPointListObjectDeclaration<'scope> {
+    #[webapi(slot = SVG_POINT_LIST_ITEMS_SLOT)]
+    items: Vec<v8::Local<'scope, v8::Value>>,
+    #[webapi(slot = SVG_VALUE_LIST_READ_ONLY_SLOT)]
+    read_only: bool,
+    #[webapi(method, callback = svg_point_list_clear_callback, length = 0)]
+    clear: (),
+    #[webapi(method, callback = svg_point_list_initialize_callback, length = 1)]
+    initialize: (),
+    #[webapi(method, callback = svg_point_list_get_item_callback, length = 1)]
+    get_item: (),
+    #[webapi(
+        method,
+        callback = svg_point_list_insert_item_before_callback,
+        length = 2
+    )]
+    insert_item_before: (),
+    #[webapi(method, callback = svg_point_list_replace_item_callback, length = 2)]
+    replace_item: (),
+    #[webapi(method, callback = svg_point_list_remove_item_callback, length = 1)]
+    remove_item: (),
+    #[webapi(method, callback = svg_point_list_append_item_callback, length = 1)]
+    append_item: (),
+}
+
+#[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::SVGStringList, own_to_string_tag = "SVGStringList")]
 struct SvgStringListObjectDeclaration<'scope> {
     #[webapi(slot = SVG_STRING_LIST_ITEMS_SLOT)]
@@ -521,6 +548,7 @@ pub(super) fn build_svg_animated_value_list_for_attribute<'s>(
     let object = match kind {
         SvgListKind::Length => build_svg_animated_length_list(scope),
         SvgListKind::Number => build_svg_animated_number_list(scope),
+        SvgListKind::Point => unreachable!("SVGPointList is not an animated wrapper"),
     };
     sync_svg_animated_value_list_from_owner_attribute(scope, object, owner, attribute, kind);
     if let Some(base_val) = svg_animated_value_list_member(scope, object, "baseVal", kind) {
@@ -949,6 +977,32 @@ pub(super) fn build_svg_number_list<'s>(
         .bind_into(scope, object)
         .expect("SVGNumberList declaration should bind");
     object
+}
+
+pub(super) fn build_svg_point_list<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    read_only: bool,
+) -> v8::Local<'s, v8::Object> {
+    let template = v8::ObjectTemplate::new(scope);
+    configure_svg_value_list_indexed_property_handler(template);
+    let object = template
+        .new_instance(scope)
+        .expect("SVGPointList object template should instantiate");
+    SvgPointListObjectDeclaration::new(Vec::new(), read_only)
+        .bind_into(scope, object)
+        .expect("SVGPointList declaration should bind");
+    object
+}
+
+pub(super) fn build_svg_point_list_for_attribute<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+    read_only: bool,
+) -> v8::Local<'s, v8::Object> {
+    let list = build_svg_point_list(scope, read_only);
+    set_svg_value_list_owner_attribute(scope, list, owner, "points");
+    sync_svg_value_list_from_owner_attribute(scope, list, SvgListKind::Point);
+    list
 }
 
 pub(super) fn build_svg_string_list_for_attribute<'s>(
@@ -1834,16 +1888,22 @@ pub(super) fn svg_value_list_item_or_throw<'s>(
     value: v8::Local<'s, v8::Value>,
     kind: SvgListKind,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let (brand_slot, interface) = match kind {
-        SvgListKind::Length => (SVG_LENGTH_VALUE_SLOT, "SVGLength"),
-        SvgListKind::Number => (SVG_NUMBER_VALUE_SLOT, "SVGNumber"),
-    };
     let object = v8::Local::<v8::Object>::try_from(value).ok();
-    if let Some(object) = object
-        && get_private_value(scope, object, brand_slot).is_some()
-    {
-        return Some(object);
+    let valid = object.is_some_and(|object| match kind {
+        SvgListKind::Length => get_private_value(scope, object, SVG_LENGTH_VALUE_SLOT).is_some(),
+        SvgListKind::Number => get_private_value(scope, object, SVG_NUMBER_VALUE_SLOT).is_some(),
+        SvgListKind::Point => {
+            dom_point_clone_data(scope, object).is_some_and(|(mutable, _)| mutable)
+        }
+    });
+    if valid {
+        return object;
     }
+    let interface = match kind {
+        SvgListKind::Length => "SVGLength",
+        SvgListKind::Number => "SVGNumber",
+        SvgListKind::Point => "DOMPoint",
+    };
     webidl::throw_type_error(
         scope,
         &format!("Argument 1 can not be converted to {interface}"),
@@ -1867,6 +1927,7 @@ pub(super) fn svg_value_list_items<'s>(
     let slot = match kind {
         SvgListKind::Length => SVG_LENGTH_LIST_ITEMS_SLOT,
         SvgListKind::Number => SVG_NUMBER_LIST_ITEMS_SLOT,
+        SvgListKind::Point => SVG_POINT_LIST_ITEMS_SLOT,
     };
     get_private_value(scope, object, slot)
         .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok())
@@ -1882,11 +1943,22 @@ pub(super) fn set_svg_value_list_items<'s>(
     let slot = match kind {
         SvgListKind::Length => SVG_LENGTH_LIST_ITEMS_SLOT,
         SvgListKind::Number => SVG_NUMBER_LIST_ITEMS_SLOT,
+        SvgListKind::Point => SVG_POINT_LIST_ITEMS_SLOT,
     };
     if let Some(current) = get_private_value(scope, object, slot)
         .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok())
     {
         detach_svg_value_list_items(scope, current);
+    }
+    if matches!(kind, SvgListKind::Point) && svg_value_list_is_read_only(scope, object) {
+        for index in 0..items.length() {
+            if let Some(point) = items
+                .get_index(scope, index)
+                .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+            {
+                set_svg_point_read_only(scope, point, true);
+            }
+        }
     }
     attach_svg_value_list_items(scope, object, items);
     set_private_value(scope, object, slot, items.into());
@@ -2060,6 +2132,11 @@ pub(super) fn build_svg_value_list_item_values_from_attribute<'s>(
             .into_iter()
             .map(|value| build_svg_number(scope, value))
             .collect(),
+        SvgListKind::Point => svg_geometry::parse_point_list(raw)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(x, y)| build_svg_point_object_with_values(scope, x, y))
+            .collect(),
     }
 }
 
@@ -2159,6 +2236,14 @@ pub(super) fn serialize_svg_value_list_item<'s>(
         SvgListKind::Number => {
             let value = svg_number_slot(scope, item, SVG_NUMBER_VALUE_SLOT)?;
             Some(svg_geometry::serialize_number(value))
+        }
+        SvgListKind::Point => {
+            let point = dom_point_init_from_object(scope, item);
+            Some(format!(
+                "{} {}",
+                svg_geometry::serialize_number(point.x),
+                svg_geometry::serialize_number(point.y)
+            ))
         }
     }
 }
