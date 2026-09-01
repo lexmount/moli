@@ -10,6 +10,7 @@ mod file_input;
 mod forms;
 mod misc;
 mod no_cors_redirect;
+mod query_realms;
 mod response_headers;
 mod send_body;
 mod shadow_dom;
