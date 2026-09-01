@@ -2583,6 +2583,7 @@ css/css-syntax/serialize-escape-identifiers.html
 css/css-syntax/trailing-braces.html
 css/css-syntax/unclosed-url-at-eof.html
 css/css-syntax/unicode-range-selector.html
+css/css-syntax/urange-parsing.html
 css/css-syntax/url-whitespace-consumption.html
 css/css-syntax/var-with-blocks.html
 css/css-syntax/whitespace.html

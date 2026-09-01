@@ -7338,6 +7338,39 @@ fn css_font_face_descriptor_setter_uses_cssom_value_fragment_eof() {
 }
 
 #[test]
+fn css_font_face_unicode_range_setter_accepts_comments_between_tokens() {
+    let mut vm = new_storage_test_vm("https://css-font-face-unicode-range-comments.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const sheet = new CSSStyleSheet();
+  sheet.replaceSync('@font-face { font-family: Foo; src: local(Foo); unicode-range: U+1357; }');
+  const style = sheet.cssRules[0].style;
+  const values = [
+    'u/**/+/**/a/**/?',
+    'u/**/+0a/**/?',
+    'u/**/+0/**/?',
+    'u/**/+0/**/-0a',
+    'u/**/+0/**/-1',
+    'u/**/+/**/?'
+  ].map(value => {
+    style.setProperty('unicode-range', value);
+    return style.getPropertyValue('unicode-range');
+  });
+  style.setProperty('unicode-range', 'u/**/+a/**/b');
+  values.push(style.getPropertyValue('unicode-range'));
+  return values.join('|');
+})()
+"#,
+        )
+        .expect("CSSFontFaceRule unicode-range setter should accept comments between tokens");
+
+    assert_eq!(result, "U+A0-AF|U+A0-AF|U+0-F|U+0-A|U+0-1|U+0-F|U+0-F");
+}
+
+#[test]
 fn css_font_face_descriptor_dot_accessors_cover_stylo_descriptors() {
     let mut vm = new_storage_test_vm("https://css-font-face-descriptor-dot-accessors.test/");
 

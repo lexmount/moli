@@ -1984,7 +1984,6 @@ css/css-syntax/escaped-eof.html
 css/css-syntax/non-ascii-codepoints.html
 css/css-syntax/serialize-consecutive-tokens.html
 css/css-syntax/unclosed-constructs.html
-css/css-syntax/urange-parsing.html
 css/css-text-decor/animations/discrete-no-interpolation.html
 css/css-text-decor/animations/text-decoration-thickness-interpolation.html
 css/css-text-decor/animations/text-underline-offset-interpolation.html
