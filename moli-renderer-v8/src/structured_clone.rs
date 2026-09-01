@@ -37,7 +37,7 @@ pub(crate) use moli_structured_clone::{
 use v8::{ValueDeserializerHelper, ValueSerializerHelper};
 
 const HOST_OBJECT_TAG_MESSAGE_PORT: u32 = 1;
-const HOST_OBJECT_TAG_IMAGE_DATA: u32 = 2;
+pub(crate) const HOST_OBJECT_TAG_IMAGE_DATA: u32 = 2;
 pub(crate) const HOST_OBJECT_TAG_CRYPTO_KEY: u32 = 3;
 const HOST_OBJECT_TAG_READABLE_STREAM: u32 = 4;
 pub(crate) const HOST_OBJECT_TAG_BLOB: u32 = 5;
@@ -46,7 +46,7 @@ pub(crate) const HOST_OBJECT_TAG_FILE_SYSTEM_HANDLE: u32 = 7;
 const HOST_OBJECT_TAG_QUOTA_EXCEEDED_ERROR: u32 = 8;
 const HOST_OBJECT_TAG_WRITABLE_STREAM: u32 = 9;
 const HOST_OBJECT_TAG_TRANSFORM_STREAM: u32 = 10;
-const HOST_OBJECT_TAG_GEOMETRY: u32 = 11;
+pub(crate) const HOST_OBJECT_TAG_GEOMETRY: u32 = 11;
 pub(crate) const HOST_OBJECT_TAG_FILE_LIST: u32 = 12;
 
 const GEOMETRY_KIND_DOM_POINT_READONLY: u32 = 0;
@@ -887,7 +887,7 @@ pub(crate) fn build_blob_object_from_clone_payload<'s>(
     }
 }
 
-fn write_image_data_payload(
+pub(crate) fn write_image_data_payload(
     serializer: &dyn v8::ValueSerializerHelper,
     payload: ImageDataClonePayload,
 ) {
@@ -898,7 +898,7 @@ fn write_image_data_payload(
     write_raw_vec(serializer, &payload.bytes);
 }
 
-fn read_image_data_payload<'s>(
+pub(crate) fn read_image_data_payload<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     deserializer: &dyn v8::ValueDeserializerHelper,
 ) -> Option<v8::Local<'s, v8::Object>> {
@@ -926,7 +926,7 @@ fn read_image_data_payload<'s>(
     )
 }
 
-fn write_geometry_clone_payload(
+pub(crate) fn write_geometry_clone_payload(
     serializer: &dyn v8::ValueSerializerHelper,
     payload: GeometryClonePayload,
 ) {
@@ -979,7 +979,7 @@ fn write_geometry_clone_payload(
     }
 }
 
-fn read_geometry_clone_payload(
+pub(crate) fn read_geometry_clone_payload(
     deserializer: &dyn v8::ValueDeserializerHelper,
 ) -> Option<GeometryClonePayload> {
     let kind = read_u32(deserializer)?;
