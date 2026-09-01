@@ -93,6 +93,27 @@ mod tests {
     }
 
     #[test]
+    fn path_geometry_rejects_numbers_with_trailing_decimal_points() {
+        let separate_command = path_segments("M 0 0 L 10 10 L 20.,30");
+        assert_eq!(separate_command.len(), 1);
+        let end = point_at_length(&separate_command, f64::INFINITY);
+        assert_close(end.x, 10.0);
+        assert_close(end.y, 10.0);
+
+        let compound_command = path_segments("M 0 0 L 10 10 20.,30");
+        assert_eq!(compound_command.len(), 1);
+        let end = point_at_length(&compound_command, f64::INFINITY);
+        assert_close(end.x, 10.0);
+        assert_close(end.y, 10.0);
+
+        let first_coordinate = path_segments("M 0 0 L 15. 20");
+        assert_close(first_coordinate[0].length(), 0.0);
+        let end = point_at_length(&first_coordinate, f64::INFINITY);
+        assert_close(end.x, 0.0);
+        assert_close(end.y, 0.0);
+    }
+
+    #[test]
     fn path_geometry_handles_relative_commands_and_close_path() {
         let segments = path_segments("m 1 1 l 3 0 v 4 h -3 z");
         let total = segments.iter().map(|segment| segment.length()).sum::<f64>();
