@@ -92,18 +92,15 @@ fn service_worker_csp_report_seen(
 #[test]
 fn date_locale_methods_use_shared_time_formatting_surface() {
     let mut vm = new_storage_test_vm("https://date-locale-formatting.test/");
-    vm.set_timezone_override_and_sync_surface(Some("UTC"))
-        .expect("Date timezone override should make the baseline deterministic");
+    vm.set_timezone_override(Some("UTC"));
 
     let us = vm
         .eval("new Date(0).toLocaleString()")
         .expect("default Date locale formatting should evaluate");
     assert_eq!(us, "1/1/1970, 12:00:00 AM");
 
-    vm.set_locale_override_and_sync_surface(Some("fr-FR"))
-        .expect("Date locale override should sync into private surface");
-    vm.set_timezone_override_and_sync_surface(Some("Asia/Shanghai"))
-        .expect("Date timezone override should sync into private surface");
+    vm.set_locale_override(Some("fr-FR"));
+    vm.set_timezone_override(Some("Asia/Shanghai"));
 
     let result = vm
         .eval(
@@ -170,10 +167,8 @@ fn emulation_defaults_drive_real_intl_and_local_date_operations() {
 "#,
         )
         .expect("baseline Intl and Date surfaces should evaluate");
-    vm.set_locale_override_and_sync_surface(Some("fr-FR"))
-        .expect("locale override should sync into the Intl surface");
-    vm.set_timezone_override_and_sync_surface(Some("Europe/Paris"))
-        .expect("timezone override should sync into the Date surface");
+    vm.set_locale_override(Some("fr-FR"));
+    vm.set_timezone_override(Some("Europe/Paris"));
 
     let result = vm
         .eval(
@@ -213,10 +208,8 @@ fn emulation_defaults_drive_real_intl_and_local_date_operations() {
         r#"{"locales":["fr-FR","fr-FR","fr-FR","fr-FR"],"timezone":"Europe/Paris","formattedAsFrench":true,"winter":[-60,1,1],"summer":[-120,2,1],"strings":["Mon Jan 01 2024 01:00:00 GMT+0100","Mon Jan 01 2024","01:00:00 GMT+0100"],"explicit":["en-US","UTC"],"invalidOptions":"TypeError","navigatorLanguage":"en-US"}"#
     );
 
-    vm.set_locale_override_and_sync_surface(None)
-        .expect("clearing locale override should restore the host default");
-    vm.set_timezone_override_and_sync_surface(None)
-        .expect("clearing timezone override should restore native Date methods");
+    vm.set_locale_override(None);
+    vm.set_timezone_override(None);
     let restored = vm
         .eval(
             r#"
@@ -248,10 +241,8 @@ fn emulation_defaults_drive_real_intl_and_local_date_operations() {
 #[test]
 fn emulation_preserves_intl_construction_and_complete_local_date_operations() {
     let mut vm = new_storage_test_vm("https://date-locale-native-semantics.test/");
-    vm.set_locale_override_and_sync_surface(Some("fr-FR"))
-        .expect("locale override should sync into the Intl surface");
-    vm.set_timezone_override_and_sync_surface(Some("America/New_York"))
-        .expect("timezone override should sync into the Date surface");
+    vm.set_locale_override(Some("fr-FR"));
+    vm.set_timezone_override(Some("America/New_York"));
 
     let result = vm
         .eval(
@@ -344,10 +335,72 @@ fn emulation_preserves_intl_construction_and_complete_local_date_operations() {
 }
 
 #[test]
+fn date_locale_override_updates_reach_existing_main_child_and_isolated_realms() {
+    let mut vm = new_parsed_test_vm(
+        "https://date-locale-shared-state.test/",
+        "<!doctype html><html><body></body></html>",
+    );
+    vm.eval(
+        r#"
+const iframe = document.createElement("iframe");
+iframe.srcdoc = "<!doctype html><html><body></body></html>";
+document.body.appendChild(iframe);
+"ready"
+"#,
+    )
+    .expect("child Date/Intl realm setup should evaluate");
+    vm.drain_pending_child_frame_work_for_test();
+
+    let child_context_id = vm
+        .live_child_default_runtime_realm_inventory()
+        .into_iter()
+        .next()
+        .expect("child Date/Intl realm should be materialized")
+        .context_id;
+    let top_isolated_context_id = vm
+        .create_isolated_world("date-locale-shared-state", false)
+        .expect("top isolated Date/Intl realm should be created");
+    const PROBE: &str = r#"
+[
+  new Intl.DateTimeFormat().resolvedOptions().locale,
+  new Intl.DateTimeFormat().resolvedOptions().timeZone,
+  new Date(0).getHours()
+].join("|")
+"#;
+
+    vm.set_locale_override(Some("fr-FR"));
+    vm.set_timezone_override(Some("Asia/Shanghai"));
+    assert_eq!(vm.eval(PROBE).unwrap(), "fr-FR|Asia/Shanghai|8");
+    assert_eq!(
+        vm.eval_in_child_default_context(child_context_id, PROBE)
+            .unwrap(),
+        "fr-FR|Asia/Shanghai|8"
+    );
+    assert_eq!(
+        vm.eval_in_isolated_context(top_isolated_context_id, PROBE)
+            .unwrap(),
+        "fr-FR|Asia/Shanghai|8"
+    );
+
+    vm.set_locale_override(Some("en-US"));
+    vm.set_timezone_override(Some("America/New_York"));
+    assert_eq!(vm.eval(PROBE).unwrap(), "en-US|America/New_York|19");
+    assert_eq!(
+        vm.eval_in_child_default_context(child_context_id, PROBE)
+            .unwrap(),
+        "en-US|America/New_York|19"
+    );
+    assert_eq!(
+        vm.eval_in_isolated_context(top_isolated_context_id, PROBE)
+            .unwrap(),
+        "en-US|America/New_York|19"
+    );
+}
+
+#[test]
 fn date_locale_methods_are_declared_on_date_prototype() {
     let mut vm = new_storage_test_vm("https://date-locale-declared.test/");
-    vm.set_timezone_override_and_sync_surface(Some("UTC"))
-        .expect("Date timezone override should make the descriptor probe deterministic");
+    vm.set_timezone_override(Some("UTC"));
 
     let result = vm
         .eval(

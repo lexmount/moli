@@ -3423,8 +3423,7 @@ fn document_last_modified_uses_source_time_and_readonly_document_accessor() {
     let mut vm = new_storage_test_vm("https://document-last-modified.test/");
     vm.document_runtime
         .set_document_source_last_modified(Some(5_025_000.0));
-    vm.set_timezone_override_and_sync_surface(Some("Asia/Shanghai"))
-        .expect("timezone override should sync into the Date surface");
+    vm.set_timezone_override(Some("Asia/Shanghai"));
 
     let result = vm
         .eval(

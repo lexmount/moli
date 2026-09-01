@@ -150,12 +150,13 @@ impl PageVm {
     }
 
     pub(crate) fn set_locale_override(&mut self, locale: Option<&str>) -> Result<()> {
-        self.vm_mut().set_locale_override_and_sync_surface(locale)
+        self.vm_mut().set_locale_override(locale);
+        Ok(())
     }
 
     pub(crate) fn set_timezone_override(&mut self, timezone: Option<&str>) -> Result<()> {
-        self.vm_mut()
-            .set_timezone_override_and_sync_surface(timezone)
+        self.vm_mut().set_timezone_override(timezone);
+        Ok(())
     }
 
     pub(crate) fn set_script_execution_disabled(&mut self, disabled: bool) {

@@ -1,7 +1,6 @@
 use super::*;
 
 mod base64;
-mod date_locale;
 mod dialogs;
 mod navigator;
 mod performance;
@@ -12,10 +11,6 @@ mod window_features;
 use moli_webapi_declare::WebApiObject;
 
 pub(super) use base64::{window_atob_callback, window_btoa_callback};
-pub(super) use date_locale::current_date_locale_overrides;
-pub(crate) use date_locale::{
-    set_date_locale_override_for_current_context, set_date_timezone_override_for_current_context,
-};
 pub(super) use dialogs::entered_window_api_base_url;
 pub(super) use dialogs::{window_alert_callback, window_confirm_callback, window_prompt_callback};
 pub(crate) use dialogs::{
