@@ -360,6 +360,7 @@ mod tests {
         assert_close(length.value, 1.5);
         assert_eq!(length.unit, SvgLengthUnit::Ems);
         assert_eq!(length.serialize(), "1.5em");
+        assert_eq!(parse_length("1pX").unwrap().unit, SvgLengthUnit::Px);
         assert_eq!(serialize_number(3.0), "3");
         assert_eq!(serialize_number(3.25), "3.25");
         assert!(parse_length("1 px").is_none());
