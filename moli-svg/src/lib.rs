@@ -422,6 +422,18 @@ mod tests {
         assert_close(lengths[4].value, -5.0);
         assert!(parse_length_list("1px nope 2px").is_none());
 
+        let modern = parse_length_list("10cap, 2rlh 3vw-4q").unwrap();
+        assert_eq!(modern.len(), 4);
+        assert_eq!(modern[0].unit, SvgLengthUnit::Cap);
+        assert_eq!(modern[1].unit, SvgLengthUnit::Rlh);
+        assert_eq!(modern[2].unit, SvgLengthUnit::Vw);
+        assert_close(modern[3].value, -4.0);
+        assert_eq!(modern[3].unit, SvgLengthUnit::Q);
+        assert_eq!(modern[0].serialize(), "10cap");
+        assert_eq!(parse_length_list(" 10cap ").unwrap().len(), 1);
+        assert!(parse_length_list("10cap,").is_none());
+        assert!(parse_length_list("10cap nope").is_none());
+
         assert_close(parse_number(" .5 ").unwrap(), 0.5);
         assert_eq!(
             parse_number_list("10 20,30-40").unwrap(),
