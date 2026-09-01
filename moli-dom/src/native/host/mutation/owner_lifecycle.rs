@@ -72,7 +72,9 @@ impl NativeDom {
         mut reference_child: Option<NativeNodeId>,
         commit_candidate_registration: bool,
     ) -> Option<OwnerLifecycleChanges> {
-        if !self.can_have_children(parent) || parent == child || self.is_ancestor(child, parent) {
+        if !self.can_have_children(parent)
+            || self.is_host_including_inclusive_ancestor(child, parent)
+        {
             return None;
         }
         let parent_type = self.node(parent)?.node_type();
@@ -97,8 +99,7 @@ impl NativeDom {
         {
             let fragment_children = self.child_ids(child).collect::<Vec<_>>();
             let all_children_are_insertable = fragment_children.iter().all(|fragment_child| {
-                parent != *fragment_child
-                    && !self.is_ancestor(*fragment_child, parent)
+                !self.is_host_including_inclusive_ancestor(*fragment_child, parent)
                     && self.node(*fragment_child).is_some_and(|node| {
                         !node.data().is_document_fragment()
                             && Self::can_insert_child_type(parent_type, node.node_type())

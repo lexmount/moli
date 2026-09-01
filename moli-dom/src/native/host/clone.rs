@@ -252,6 +252,7 @@ impl DomHost {
                     available_to_element_internals,
                 } => {
                     self.dom.register_stylesheet_candidate_tree_scope(clone);
+                    self.dom.set_document_fragment_host(clone, host);
                     self.shadow_roots_by_host.borrow_mut().insert(
                         host,
                         ShadowRootState {
@@ -399,6 +400,7 @@ impl DomHost {
                     available_to_element_internals,
                 } => {
                     self.dom.register_stylesheet_candidate_tree_scope(clone);
+                    self.dom.set_document_fragment_host(clone, host);
                     self.shadow_roots_by_host.borrow_mut().insert(
                         host,
                         ShadowRootState {
