@@ -51,6 +51,57 @@ fn child_document_create_text_and_comment_nodes_work() {
         "function|3|#text|hello|true|function|8|#comment|note|2"
     );
 }
+
+#[test]
+fn child_document_factories_allocate_results_in_document_realm() {
+    let mut vm = new_storage_test_vm("https://child-document-factory-realm.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const frame = document.createElement('iframe');
+  (document.body || document.documentElement || document).appendChild(frame);
+  const child = frame.contentWindow;
+  const doc = child.document;
+  const ChildObject = child.Object;
+  child.Object = Object;
+  const range = doc.createRange();
+  const canvas = doc.createElement('canvas');
+  const context = canvas.getContext('2d');
+  const createdImageData = context.createImageData(1, 1);
+  const readImageData = context.getImageData(0, 0, 1, 1);
+  const values = {
+    nodeList: doc.querySelectorAll('*'),
+    attribute: doc.createAttribute('data-value'),
+    namespacedAttribute: doc.createAttributeNS(null, 'data-value'),
+    event: doc.createEvent('Event'),
+    range,
+    clonedRange: range.cloneRange(),
+    nodeIterator: doc.createNodeIterator(doc),
+    treeWalker: doc.createTreeWalker(doc),
+    implementation: doc.implementation,
+    documentType: doc.implementation.createDocumentType('html', '', ''),
+    xmlDocument: doc.implementation.createDocument(null, 'root'),
+    htmlDocument: doc.implementation.createHTMLDocument('title'),
+    canvasContext: context,
+    createdImageData,
+    createdImageDataData: createdImageData.data,
+    readImageData,
+    readImageDataData: readImageData.data
+  };
+  return Object.entries(values)
+    .filter(([, value]) => !(value instanceof ChildObject) || value instanceof Object)
+    .map(([name]) => name)
+    .join(',');
+})()
+"#,
+        )
+        .expect("child document factory realm probe should evaluate");
+
+    assert_eq!(result, "");
+}
+
 #[test]
 fn detached_character_data_accessors_parse_webidl_arguments() {
     let mut vm = new_storage_test_vm("https://detached-character-data-webidl.test/");

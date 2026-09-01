@@ -1,7 +1,7 @@
 use super::super::{
     CollectionKind, LiveCollectionQueryKind, collections, encode_tag_name_ns_query,
     node::{
-        node_is_document, node_runtime_and_handle_from_args,
+        node_is_document, node_owner_document_relevant_context, node_runtime_and_handle_from_args,
         node_runtime_and_handle_from_args_or_detached,
         node_runtime_and_handle_from_object_or_detached, receiver_has_detached_state,
         require_element_method_receiver, require_parent_node_receiver, set_wrapped_node_or_null,
@@ -170,7 +170,24 @@ pub(in crate::native_bridge) fn node_query_selector_all_callback<'s>(
     };
     match unsafe { &*runtime_ptr }.query_selector_all(Some(handle), &parsed.selectors) {
         Ok(handles) => {
-            let list = collections::build_node_list_from_handles(scope, runtime_ptr, &handles);
+            // Default-world wrappers are shared across same-origin documents,
+            // so their creation context need not be their document's realm.
+            // Isolated-world wrappers instead retain their own world identity.
+            let receiver_context = args.this().get_creation_context(scope);
+            let isolated_context = receiver_context.filter(|context| {
+                let host = unsafe { &*runtime_ptr };
+                host.window_execution_context_identity_for_v8_context(scope, *context)
+                    .is_some_and(|identity| {
+                        !host.window_execution_context_identity_is_default_world(identity)
+                    })
+            });
+            let relevant_context = isolated_context
+                .or_else(|| node_owner_document_relevant_context(scope, runtime_ptr, handle))
+                .or(receiver_context)
+                .unwrap_or_else(|| scope.get_current_context());
+            let target_scope = &mut v8::ContextScope::new(scope, relevant_context);
+            let list =
+                collections::build_node_list_from_handles(target_scope, runtime_ptr, &handles);
             rv.set(list.into());
         }
         Err(error) => throw_native_selector_error_for_selector(scope, &parsed.selectors, &error),
