@@ -1683,7 +1683,7 @@ impl DocumentRuntime {
         policies
     }
 
-    fn meta_content_security_policy_strings_for_document(
+    pub(crate) fn meta_content_security_policy_strings_for_document(
         &self,
         document_handle: DomHandle,
     ) -> Vec<String> {
