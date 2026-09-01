@@ -63,6 +63,10 @@ const SVG_ANIMATED_NUMBER_OWNER_ELEMENT_SLOT: &str = "__moliSvgAnimatedNumberOwn
 const SVG_ANIMATED_NUMBER_OWNER_ATTRIBUTE_SLOT: &str = "__moliSvgAnimatedNumberOwnerAttribute";
 const SVG_ANIMATED_NUMBER_BASE_VAL_SLOT: &str = "__moliSvgAnimatedNumberBaseVal";
 const SVG_ANIMATED_NUMBER_ANIM_VAL_SLOT: &str = "__moliSvgAnimatedNumberAnimVal";
+const SVG_ANIMATED_INTEGER_BASE_VAL_SLOT: &str = "__moliSvgAnimatedIntegerBaseVal";
+const SVG_ANIMATED_INTEGER_ANIM_VAL_SLOT: &str = "__moliSvgAnimatedIntegerAnimVal";
+const SVG_ANIMATED_INTEGER_OWNER_ELEMENT_SLOT: &str = "__moliSvgAnimatedIntegerOwnerElement";
+const SVG_ANIMATED_INTEGER_PROPERTY_INDEX_SLOT: &str = "__moliSvgAnimatedIntegerPropertyIndex";
 const SVG_ANIMATED_NUMBER_LIST_BASE_VAL_SLOT: &str = "__moliSvgAnimatedNumberListBaseVal";
 const SVG_ANIMATED_NUMBER_LIST_ANIM_VAL_SLOT: &str = "__moliSvgAnimatedNumberListAnimVal";
 const SVG_NUMBER_LIST_ITEMS_SLOT: &str = "__moliSvgNumberListItems";
@@ -96,11 +100,16 @@ const SVG_FE_BLEND_MODE_SLOT: &str = "__moliSvgFeBlendMode";
 const SVG_FE_COLOR_MATRIX_TYPE_SLOT: &str = "__moliSvgFeColorMatrixType";
 const SVG_FE_COMPOSITE_OPERATOR_SLOT: &str = "__moliSvgFeCompositeOperator";
 const SVG_FE_CONVOLVE_MATRIX_EDGE_MODE_SLOT: &str = "__moliSvgFeConvolveMatrixEdgeMode";
+const SVG_FE_CONVOLVE_MATRIX_ORDER_X_SLOT: &str = "__moliSvgFeConvolveMatrixOrderX";
+const SVG_FE_CONVOLVE_MATRIX_ORDER_Y_SLOT: &str = "__moliSvgFeConvolveMatrixOrderY";
+const SVG_FE_CONVOLVE_MATRIX_TARGET_X_SLOT: &str = "__moliSvgFeConvolveMatrixTargetX";
+const SVG_FE_CONVOLVE_MATRIX_TARGET_Y_SLOT: &str = "__moliSvgFeConvolveMatrixTargetY";
 const SVG_FE_DISPLACEMENT_MAP_X_CHANNEL_SLOT: &str = "__moliSvgFeDisplacementMapXChannel";
 const SVG_FE_DISPLACEMENT_MAP_Y_CHANNEL_SLOT: &str = "__moliSvgFeDisplacementMapYChannel";
 const SVG_FE_MORPHOLOGY_OPERATOR_SLOT: &str = "__moliSvgFeMorphologyOperator";
 const SVG_FE_TURBULENCE_STITCH_TILES_SLOT: &str = "__moliSvgFeTurbulenceStitchTiles";
 const SVG_FE_TURBULENCE_TYPE_SLOT: &str = "__moliSvgFeTurbulenceType";
+const SVG_FE_TURBULENCE_NUM_OCTAVES_SLOT: &str = "__moliSvgFeTurbulenceNumOctaves";
 const SVG_TEXT_PATH_METHOD_SLOT: &str = "__moliSvgTextPathMethod";
 const SVG_TEXT_PATH_SPACING_SLOT: &str = "__moliSvgTextPathSpacing";
 const SVG_TEXT_PATH_SIDE_SLOT: &str = "__moliSvgTextPathSide";
@@ -153,6 +162,25 @@ struct SvgAnimatedEnumerationProperty {
     cache_slot: &'static str,
     initial_value: u32,
     kind: SvgAnimatedEnumerationKind,
+}
+
+#[derive(Clone, Copy)]
+enum SvgAnimatedIntegerComponent {
+    Scalar,
+    PairFirst,
+    PairSecondOrFirst,
+}
+
+#[derive(Clone, Copy)]
+struct SvgAnimatedIntegerProperty {
+    index: usize,
+    interface: &'static str,
+    local_name: &'static str,
+    name: &'static str,
+    attribute: &'static str,
+    cache_slot: &'static str,
+    initial_value: i32,
+    component: SvgAnimatedIntegerComponent,
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -707,6 +735,59 @@ const SVG_ANIMATED_ENUMERATION_PROPERTIES: &[SvgAnimatedEnumerationProperty] = &
     },
 ];
 
+const SVG_ANIMATED_INTEGER_PROPERTIES: &[SvgAnimatedIntegerProperty] = &[
+    SvgAnimatedIntegerProperty {
+        index: 0,
+        interface: "SVGFEConvolveMatrixElement",
+        local_name: "feConvolveMatrix",
+        name: "orderX",
+        attribute: "order",
+        cache_slot: SVG_FE_CONVOLVE_MATRIX_ORDER_X_SLOT,
+        initial_value: 3,
+        component: SvgAnimatedIntegerComponent::PairFirst,
+    },
+    SvgAnimatedIntegerProperty {
+        index: 1,
+        interface: "SVGFEConvolveMatrixElement",
+        local_name: "feConvolveMatrix",
+        name: "orderY",
+        attribute: "order",
+        cache_slot: SVG_FE_CONVOLVE_MATRIX_ORDER_Y_SLOT,
+        initial_value: 3,
+        component: SvgAnimatedIntegerComponent::PairSecondOrFirst,
+    },
+    SvgAnimatedIntegerProperty {
+        index: 2,
+        interface: "SVGFEConvolveMatrixElement",
+        local_name: "feConvolveMatrix",
+        name: "targetX",
+        attribute: "targetX",
+        cache_slot: SVG_FE_CONVOLVE_MATRIX_TARGET_X_SLOT,
+        initial_value: 0,
+        component: SvgAnimatedIntegerComponent::Scalar,
+    },
+    SvgAnimatedIntegerProperty {
+        index: 3,
+        interface: "SVGFEConvolveMatrixElement",
+        local_name: "feConvolveMatrix",
+        name: "targetY",
+        attribute: "targetY",
+        cache_slot: SVG_FE_CONVOLVE_MATRIX_TARGET_Y_SLOT,
+        initial_value: 0,
+        component: SvgAnimatedIntegerComponent::Scalar,
+    },
+    SvgAnimatedIntegerProperty {
+        index: 4,
+        interface: "SVGFETurbulenceElement",
+        local_name: "feTurbulence",
+        name: "numOctaves",
+        attribute: "numOctaves",
+        cache_slot: SVG_FE_TURBULENCE_NUM_OCTAVES_SLOT,
+        initial_value: 1,
+        component: SvgAnimatedIntegerComponent::Scalar,
+    },
+];
+
 pub(in crate::context_bootstrap) fn install_svg_template_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
@@ -728,6 +809,7 @@ pub(in crate::context_bootstrap) fn install_svg_template_bindings<'s>(
             bindings::install_svg_animated_length_list_bindings(scope, template)
         }
         "SVGAnimatedNumber" => bindings::install_svg_animated_number_bindings(scope, template),
+        "SVGAnimatedInteger" => bindings::install_svg_animated_integer_bindings(scope, template),
         "SVGNumberList" => bindings::install_svg_number_list_bindings(scope, template),
         "SVGStringList" => bindings::install_svg_string_list_bindings(scope, template),
         "SVGAnimatedNumberList" => {

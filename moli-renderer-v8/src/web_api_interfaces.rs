@@ -402,6 +402,7 @@ interfaces! {
     SVGAngle;
     SVGAnimatedAngle;
     SVGMarkerElement: SVGElement;
+    SVGAnimatedInteger;
     SVGAnimatedNumber;
     SVGAnimatedNumberList;
     SVGAnimatedTransformList;
