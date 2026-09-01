@@ -2165,6 +2165,18 @@ pub(super) fn install_svg_element_accessor_bindings<'s>(
     }
     if matches!(
         interface_name,
+        "SVGSVGElement"
+            | "SVGSymbolElement"
+            | "SVGMarkerElement"
+            | "SVGPatternElement"
+            | "SVGViewElement"
+    ) {
+        SvgFitToViewBoxPrototypeAccessorsDeclaration::initialize_prototype_template(
+            scope, prototype,
+        );
+    }
+    if matches!(
+        interface_name,
         "SVGFEBlendElement"
             | "SVGFEColorMatrixElement"
             | "SVGFECompositeElement"
