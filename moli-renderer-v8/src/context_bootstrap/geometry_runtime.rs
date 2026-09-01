@@ -13,6 +13,7 @@ const DOM_POINT_X_SLOT: &str = "__moliDomPointX";
 const DOM_POINT_Y_SLOT: &str = "__moliDomPointY";
 const DOM_POINT_Z_SLOT: &str = "__moliDomPointZ";
 const DOM_POINT_W_SLOT: &str = "__moliDomPointW";
+const DOM_POINT_RESTRICTED_NUMBER_SLOT: &str = "__moliDomPointRestrictedNumber";
 
 const DOM_MATRIX_M11_SLOT: &str = "__moliDomMatrixM11";
 const DOM_MATRIX_M12_SLOT: &str = "__moliDomMatrixM12";
@@ -784,6 +785,20 @@ pub(in crate::context_bootstrap) fn build_dom_point_object<'s>(
         .expect("DOMPoint declaration should bind")
 }
 
+pub(in crate::context_bootstrap) fn build_svg_point_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+) -> v8::Local<'s, v8::Object> {
+    let object = build_dom_point_object(scope, 0.0, 0.0, 0.0, 1.0);
+    let restricted = v8::Boolean::new(scope, true);
+    set_private_value(
+        scope,
+        object,
+        DOM_POINT_RESTRICTED_NUMBER_SLOT,
+        restricted.into(),
+    );
+    object
+}
+
 fn build_dom_point_readonly_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     x: f64,
@@ -895,12 +910,22 @@ fn dom_point_setter_callback<'s>(
         throw_type_error(scope, "Illegal invocation");
         return;
     }
-    let Some(value) = geometry_number_value(
-        scope,
-        args.get(0),
-        webidl::Context::member("DOMPoint", slot),
-    ) else {
-        return;
+    let context = webidl::Context::member("DOMPoint", slot);
+    let value = if get_private_value(scope, args.this(), DOM_POINT_RESTRICTED_NUMBER_SLOT)
+        .is_some_and(|value| value.boolean_value(scope))
+    {
+        match webidl::convert::<webidl::Double>(scope, args.get(0), context) {
+            Ok(value) => value.0,
+            Err(error) => {
+                webidl::throw_error(scope, &error);
+                return;
+            }
+        }
+    } else {
+        let Some(value) = geometry_number_value(scope, args.get(0), context) else {
+            return;
+        };
+        value
     };
     set_private_value(
         scope,
