@@ -621,6 +621,60 @@ pub(super) fn svg_element_animated_enumeration_getter<'s>(
     rv.set(value.into());
 }
 
+pub(super) fn svg_element_animated_integer_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some(property) = callback_data_item(
+        scope,
+        &args,
+        SVG_ANIMATED_INTEGER_PROPERTIES,
+        "SVG animated integer properties",
+    ) else {
+        rv.set_undefined();
+        return;
+    };
+    let holder = args.this();
+    let Ok((runtime_ptr, handle)) =
+        crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, holder)
+    else {
+        webidl::throw_type_error(
+            scope,
+            &format!(
+                "{}.{} called on incompatible receiver.",
+                property.interface, property.name
+            ),
+        );
+        return;
+    };
+    let is_expected_element = unsafe { &*runtime_ptr }
+        .dom_host()
+        .node(handle)
+        .and_then(|node| node.as_element())
+        .is_some_and(|element| element.is_svg_element(property.local_name));
+    if !is_expected_element {
+        webidl::throw_type_error(
+            scope,
+            &format!(
+                "{}.{} called on incompatible receiver.",
+                property.interface, property.name
+            ),
+        );
+        return;
+    }
+    if let Some(value) = get_private_value(scope, holder, property.cache_slot) {
+        if let Ok(animated) = v8::Local::<v8::Object>::try_from(value) {
+            sync_svg_animated_integer_from_owner_attribute(scope, animated);
+        }
+        rv.set(value);
+        return;
+    }
+    let value = build_svg_animated_integer_for_property(scope, holder, property);
+    set_private_value(scope, holder, property.cache_slot, value.into());
+    rv.set(value.into());
+}
+
 pub(super) fn svg_text_positioning_list_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -1194,6 +1248,47 @@ pub(super) fn svg_animated_number_getter<'s>(
     rv.set(v8::Number::new(scope, value).into());
 }
 
+pub(super) fn svg_animated_integer_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some(name) = callback_data_item(
+        scope,
+        &args,
+        SVG_ANIMATED_ACCESSOR_NAMES,
+        "SVGAnimatedInteger attributes",
+    ) else {
+        rv.set_undefined();
+        return;
+    };
+    if !require_svg_receiver(
+        scope,
+        args.this(),
+        SVG_ANIMATED_INTEGER_BASE_VAL_SLOT,
+        "SVGAnimatedInteger",
+        &format!("{name} getter"),
+    ) {
+        return;
+    }
+    let slot = match name {
+        "baseVal" => SVG_ANIMATED_INTEGER_BASE_VAL_SLOT,
+        "animVal" => SVG_ANIMATED_INTEGER_ANIM_VAL_SLOT,
+        _ => {
+            rv.set_undefined();
+            return;
+        }
+    };
+    sync_svg_animated_integer_from_owner_attribute(scope, args.this());
+    let initial_value = svg_animated_integer_property(scope, args.this())
+        .map(|property| property.initial_value)
+        .unwrap_or_default();
+    let value = get_private_value(scope, args.this(), slot)
+        .and_then(|value| value.int32_value(scope))
+        .unwrap_or(initial_value);
+    rv.set(v8::Integer::new(scope, value).into());
+}
+
 pub(super) fn svg_animated_number_list_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -1362,6 +1457,44 @@ pub(super) fn svg_animated_number_setter<'s>(
         v8::Number::new(scope, value).into(),
     );
     reflect_svg_animated_number_to_owner_attribute(scope, args.this());
+}
+
+pub(super) fn svg_animated_integer_setter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some(name) = callback_data_item(
+        scope,
+        &args,
+        SVG_ANIMATED_ACCESSOR_NAMES,
+        "SVGAnimatedInteger attributes",
+    ) else {
+        return;
+    };
+    if !require_svg_receiver(
+        scope,
+        args.this(),
+        SVG_ANIMATED_INTEGER_BASE_VAL_SLOT,
+        "SVGAnimatedInteger",
+        &format!("{name} setter"),
+    ) || name != "baseVal"
+    {
+        return;
+    }
+    let value = match webidl::convert::<webidl::Long>(
+        scope,
+        args.get(0),
+        webidl::Context::member("SVGAnimatedInteger", "baseVal"),
+    ) {
+        Ok(value) => value.0,
+        Err(error) => {
+            webidl::throw_error(scope, &error);
+            return;
+        }
+    };
+    set_svg_animated_integer_values(scope, args.this(), value);
+    reflect_svg_animated_integer_to_owner_attribute(scope, args.this());
 }
 
 pub(super) fn svg_animated_transform_list_getter<'s>(
