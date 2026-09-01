@@ -3642,6 +3642,10 @@ impl StylesheetBlockingReadView for ParserStreamHtmlTreeSinkTarget {
         self.parser_owner_document_node_id()
     }
 
+    fn document_is_quirks_mode(&self) -> bool {
+        matches!(self.state.html_quirks_mode, QuirksMode::Quirks)
+    }
+
     fn document_order_stylesheet_candidate_ids_before(
         &self,
         target_node_id: Option<NodeId>,
