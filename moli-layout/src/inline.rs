@@ -2115,6 +2115,14 @@ impl InlineBuildInput {
         let mut styles = Vec::new();
         let mut style_parents = Vec::new();
         let mut style_samples = Vec::new();
+        let root_style_slot = intern_resolved_inline_style(
+            &mut styles,
+            &mut style_parents,
+            &mut style_samples,
+            root_text_style.clone(),
+            self.root_style,
+            None,
+        );
         let mut resolved_runs = Vec::<(Range<usize>, usize)>::new();
         for unit in &self.units {
             let mut base_style = world.boxes[unit.style_box.index()]
@@ -2161,32 +2169,76 @@ impl InlineBuildInput {
                 append_resolved_inline_run(&mut resolved_runs, start..end, style_slot);
             }
         }
+        let object_transition_style_slots = self
+            .objects
+            .iter()
+            .map(|(_, object, _)| {
+                let style_box = match object.role {
+                    InlineObjectRole::StartEdge => object.box_id,
+                    InlineObjectRole::EndEdge => {
+                        object.ancestors.last().copied().unwrap_or(self.root_style)
+                    }
+                    InlineObjectRole::Atomic
+                    | InlineObjectRole::Float
+                    | InlineObjectRole::OutOfFlow => return None,
+                };
+                let mut style = world.boxes[style_box.index()].style.parley_text_style();
+                parley.resolve_font_families(&mut style, None);
+                Some(intern_resolved_inline_style(
+                    &mut styles,
+                    &mut style_parents,
+                    &mut style_samples,
+                    style,
+                    style_box,
+                    None,
+                ))
+            })
+            .collect::<Vec<_>>();
         let mut builder = parley.layout_context.style_run_builder(
             &mut parley.font_context,
             &self.text,
             1.0,
             quantize,
         );
+        builder.reserve(styles.len(), resolved_runs.len().max(1));
         let style_indices = styles
             .iter()
             .map(|style| builder.push_style(style.clone()))
             .collect::<Vec<_>>();
+        builder.set_root_style(style_indices[root_style_slot]);
         if resolved_runs.is_empty() {
-            let style_index = builder.push_style(root_text_style.clone());
-            builder.push_style_run(style_index, 0..0);
+            builder.push_style_run(style_indices[root_style_slot], 0..0);
         } else {
             for (range, style_slot) in &resolved_runs {
                 builder.push_style_run(style_indices[*style_slot], range.clone());
             }
         }
-        for (object_id, (byte_index, _, kind)) in self.objects.iter().enumerate() {
-            builder.push_inline_box(InlineBox {
+        for (object_id, ((byte_index, object, kind), transition_style_slot)) in self
+            .objects
+            .iter()
+            .zip(&object_transition_style_slots)
+            .enumerate()
+        {
+            let kind = match object.role {
+                InlineObjectRole::StartEdge => InlineBoxKind::InlineStart,
+                InlineObjectRole::EndEdge => InlineBoxKind::InlineEnd,
+                InlineObjectRole::Atomic
+                | InlineObjectRole::Float
+                | InlineObjectRole::OutOfFlow => *kind,
+            };
+            let inline_box = InlineBox {
                 id: u64::try_from(object_id).expect("one IFC exceeded the u64 object limit"),
-                kind: *kind,
+                kind,
                 index: *byte_index,
                 width: 0.0,
                 height: 0.0,
-            });
+            };
+            if let Some(style_slot) = transition_style_slot {
+                builder
+                    .push_inline_box_with_style_transition(inline_box, style_indices[*style_slot]);
+            } else {
+                builder.push_inline_box(inline_box);
+            }
         }
         let layout = builder.build(&self.text);
         let font_metrics = styles

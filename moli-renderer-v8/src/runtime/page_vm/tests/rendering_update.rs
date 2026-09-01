@@ -3760,6 +3760,69 @@ document.body.innerHTML = `<p id=line>All the <span id=atomic>words</span> after
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn atomic_inline_stream_respects_inherited_wrap_state_without_text_runs() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/atomic-inline-wrap-state.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0}
+.case{width:60px;font-size:0;line-height:0}
+.item{display:inline-block;width:40px;height:10px}
+#root-nowrap,.group{white-space:nowrap}
+</style>`;
+document.body.innerHTML = `
+<div id=root-nowrap class=case><i id=r0 class=item></i><i id=r1 class=item></i><i id=r2 class=item></i><i id=r3 class=item></i></div>
+<div id=nested class=case><span class=group><i id=n0 class=item></i><i id=n1 class=item></i></span><i id=n2 class=item></i></div>`;
+'installed'
+"#,
+        )?;
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(180, 80, 1.0))?
+            .ok_or_else(|| anyhow::anyhow!("atomic wrap-state fixture lost its layout root"))?;
+
+        let geometry = page_vm.vm_mut().eval(
+            r#"JSON.stringify(Object.fromEntries(['r0','r1','r2','r3','n0','n1','n2'].map(id=>{const node=document.getElementById(id);const box=node.getBoundingClientRect();const parent=node.closest('.case').getBoundingClientRect();return [id,[box.x-parent.x,box.y-parent.y]]})))"#,
+        )?;
+        let geometry: serde_json::Value = serde_json::from_str(&geometry)?;
+        let assert_point = |id: &str, expected: [f32; 2]| {
+            let actual = geometry[id]
+                .as_array()
+                .unwrap_or_else(|| panic!("missing geometry for {id}: {geometry}"));
+            for (index, expected) in expected.into_iter().enumerate() {
+                let actual = actual[index].as_f64().expect("numeric geometry") as f32;
+                assert!(
+                    (actual - expected).abs() <= 0.05,
+                    "{id}[{index}]: expected {expected}, got {actual}; geometry={geometry}"
+                );
+            }
+        };
+
+        for (id, point) in [
+            ("r0", [0.0, 0.0]),
+            ("r1", [40.0, 0.0]),
+            ("r2", [80.0, 0.0]),
+            ("r3", [120.0, 0.0]),
+            ("n0", [0.0, 0.0]),
+            ("n1", [40.0, 0.0]),
+            ("n2", [0.0, 10.0]),
+        ] {
+            assert_point(id, point);
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("atomic inline wrap-state fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn rounded_flex_max_content_width_does_not_rewrap_its_text() {
     run_page_vm_async_test(async move {
         let loader =
