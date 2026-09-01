@@ -301,13 +301,20 @@ html,body{margin:0}
 #ratio>div{width:auto;height:60px;min-width:90px;aspect-ratio:1}
 #content-box>div{box-sizing:content-box;width:60px;min-width:90px;padding:0 8px;border:0 solid;border-width:0 5px}
 #block>div{width:10px;height:60px;min-height:90px}
+.fixed-max{display:grid;width:200px;grid-template-rows:10px}
+#fixed-max-floor{grid-template-columns:minmax(auto,0)}
+#fixed-max-clamp{grid-template-columns:minmax(auto,20px)}
+.fixed-max>div{justify-self:start;margin:0 10px 0 5px;border:0 solid;border-width:0 2px}
+.fixed-max span{display:block;width:100px;height:10px}
 </style>`;
 document.body.innerHTML = `
   <div class=column id=fixed><div></div></div>
   <div class=column id=smaller-min><div></div></div>
   <div class=column id=ratio><div></div></div>
   <div class=column id=content-box><div></div></div>
-  <div class=row id=block><div></div></div>`;
+  <div class=row id=block><div></div></div>
+  <div class=fixed-max id=fixed-max-floor><div><span></span></div></div>
+  <div class=fixed-max id=fixed-max-clamp><div><span></span></div></div>`;
 'installed'
 "#,
         )?;
@@ -318,7 +325,7 @@ document.body.innerHTML = `
             .expect("Grid minimum-contribution screenshot layout");
 
         let geometry = page_vm.vm_mut().eval(
-            r#"JSON.stringify(Object.fromEntries(['fixed','smaller-min','ratio','content-box','block'].map(id=>{
+            r#"JSON.stringify(Object.fromEntries(['fixed','smaller-min','ratio','content-box','block','fixed-max-floor','fixed-max-clamp'].map(id=>{
   const grid=document.getElementById(id);
   const child=grid.firstElementChild.getBoundingClientRect();
   const style=getComputedStyle(grid);
@@ -333,8 +340,10 @@ document.body.innerHTML = `
                 "ratio": {"columns": "90px", "rows": "10px", "size": [90, 60]},
                 "content-box": {"columns": "116px", "rows": "10px", "size": [116, 10]},
                 "block": {"columns": "10px", "rows": "90px", "size": [10, 90]},
+                "fixed-max-floor": {"columns": "19px", "rows": "10px", "size": [104, 10]},
+                "fixed-max-clamp": {"columns": "20px", "rows": "10px", "size": [104, 10]},
             }),
-            "Grid must choose between the used minimum and min-content contribution from the authored preferred-size source, before aspect-ratio transfer",
+            "Grid must preserve authored minimum-contribution provenance and clamp the complete outer automatic minimum without crossing its border floor",
         );
         Ok::<_, anyhow::Error>(())
     })
