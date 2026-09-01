@@ -10062,7 +10062,7 @@ document.getElementById('frame').srcdoc =
 }
 
 #[test]
-fn iframe_in_shadow_tree_is_not_a_named_window_property() {
+fn iframe_in_shadow_tree_is_not_a_window_child_property() {
     let mut vm = new_storage_test_vm("https://shadow-iframe-named-property.test/");
 
     let result = vm
@@ -10078,6 +10078,10 @@ const lightFrame = document.createElement('iframe');
 lightFrame.name = 'lightTarget';
 (document.body || document.documentElement || document).appendChild(lightFrame);
 [
+  window.length,
+  window.frames.length,
+  window[0] === lightFrame.contentWindow,
+  window[1] === undefined,
   'shadowTarget' in window,
   window.shadowTarget === undefined,
   shadowFrame.contentWindow !== null,
@@ -10088,7 +10092,7 @@ lightFrame.name = 'lightTarget';
         )
         .expect("shadow iframe named property probe should evaluate");
 
-    assert_eq!(result, "false|true|true|true|true");
+    assert_eq!(result, "1|1|true|true|false|true|true|true|true");
 }
 #[test]
 fn child_webassembly_constructors_use_newtarget_child_realm_default_prototype() {
