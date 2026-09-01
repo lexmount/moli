@@ -1552,9 +1552,17 @@ pub(super) fn svg_length_getter<'s>(
                 .unwrap_or(SVG_LENGTH_TYPE_NUMBER as f64);
             rv.set(v8::Integer::new_from_unsigned(scope, value as u32).into());
         }
-        "value" | "valueInSpecifiedUnits" => {
-            let value =
-                svg_length_number_slot(scope, args.this(), SVG_LENGTH_VALUE_SLOT).unwrap_or(0.0);
+        "value" => {
+            let value = svg_length_value_in_user_units(scope, args.this());
+            rv.set(v8::Number::new(scope, value).into());
+        }
+        "valueInSpecifiedUnits" => {
+            let value = svg_length_number_slot(
+                scope,
+                args.this(),
+                SVG_LENGTH_VALUE_IN_SPECIFIED_UNITS_SLOT,
+            )
+            .unwrap_or(0.0);
             rv.set(v8::Number::new(scope, value).into());
         }
         "valueAsString" => {
@@ -1711,7 +1719,7 @@ pub(super) fn svg_length_setter<'s>(
             let value = match webidl::convert::<webidl::Double>(
                 scope,
                 args.get(0),
-                webidl::Context::member("SVGLength", "value"),
+                webidl::Context::member("SVGLength", name),
             ) {
                 Ok(value) => value.0,
                 Err(error) => {
@@ -1719,7 +1727,11 @@ pub(super) fn svg_length_setter<'s>(
                     return;
                 }
             };
-            set_svg_length_numeric_value(scope, args.this(), value, SVG_LENGTH_TYPE_NUMBER);
+            if name == "value" {
+                set_svg_length_value_in_user_units(scope, args.this(), value);
+            } else {
+                set_svg_length_value_in_specified_units(scope, args.this(), value);
+            }
             reflect_svg_length_to_owner_attribute(scope, args.this());
             reflect_svg_value_list_item_to_owner_list(scope, args.this(), SvgListKind::Length);
         }
@@ -3317,7 +3329,9 @@ pub(super) fn svg_svg_element_create_length_callback<'s>(
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     if require_svg_svg_element_receiver(scope, args.this(), "createSVGLength") {
-        rv.set(build_svg_length(scope, 0.0).into());
+        let length = build_svg_length(scope, 0.0);
+        set_svg_length_owner_attribute(scope, length, args.this(), "");
+        rv.set(length.into());
     }
 }
 
@@ -3808,8 +3822,15 @@ pub(super) fn svg_length_convert_to_specified_units_callback<'s>(
         );
         return;
     }
-    let value = svg_length_number_slot(scope, args.this(), SVG_LENGTH_VALUE_SLOT).unwrap_or(0.0);
-    set_svg_length_numeric_value(scope, args.this(), value, parsed.unit_type as u32);
+    if !convert_svg_length_to_unit(scope, args.this(), parsed.unit_type as u32) {
+        throw_dom_exception(
+            scope,
+            "NotSupportedError",
+            9,
+            "The SVG length could not be resolved in the requested unit.",
+        );
+        return;
+    }
     reflect_svg_length_to_owner_attribute(scope, args.this());
     reflect_svg_value_list_item_to_owner_list(scope, args.this(), SvgListKind::Length);
     rv.set_undefined();
