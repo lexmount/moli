@@ -82,7 +82,7 @@ promise_test(async function () {
       "dedicated worker report-only CSP should dispatch an XHR SecurityPolicyViolationEvent",
     );
     assert_true(
-      has_event(outcome.events, "script-src", "worker-response-csp-report-to-dynamic-dependency.js"),
+      has_event(outcome.events, "script-src-elem", "worker-response-csp-report-to-dynamic-dependency.js"),
       "dedicated worker report-only CSP should dispatch a dynamic import SecurityPolicyViolationEvent",
     );
 
@@ -90,7 +90,7 @@ promise_test(async function () {
       { directive: "connect-src", blockedText: "target.txt?worker-fetch", label: "fetch" },
       { directive: "connect-src", blockedText: "target.txt?worker-xhr", label: "XHR" },
       {
-        directive: "script-src",
+        directive: "script-src-elem",
         blockedText: "worker-response-csp-report-to-dynamic-dependency.js",
         label: "dynamic import",
       },

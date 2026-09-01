@@ -2225,7 +2225,7 @@ async fn worker_dynamic_import_uses_worker_response_csp_not_outside_static_csp()
         .with_module_static_import_content_security_policies(vec![
             "worker-src *; script-src 'self'".to_owned(),
         ])
-        .with_content_security_policies(vec!["script-src 'self'".to_owned()]),
+        .with_content_security_policies(vec!["script-src-elem 'self'; script-src *".to_owned()]),
     );
 
     let msg = timeout(TIMEOUT, handle.recv())
@@ -2234,7 +2234,7 @@ async fn worker_dynamic_import_uses_worker_response_csp_not_outside_static_csp()
         .expect("channel closed");
     assert_eq!(
         expect_post_json(msg),
-        r#"{"status":"blocked","events":[{"type":"securitypolicyviolation","effectiveDirective":"script-src","violatedDirective":"script-src","blockedURI":"http://127.0.0.1:9/worker/dynamic.js","documentURI":"https://app.test/worker/main.js","originalPolicy":"script-src 'self'","disposition":"enforce","instance":true}],"name":"TypeError","csp":true}"#
+        r#"{"status":"blocked","events":[{"type":"securitypolicyviolation","effectiveDirective":"script-src-elem","violatedDirective":"script-src-elem","blockedURI":"http://127.0.0.1:9/worker/dynamic.js","documentURI":"https://app.test/worker/main.js","originalPolicy":"script-src-elem 'self'; script-src *","disposition":"enforce","instance":true}],"name":"TypeError","csp":true}"#
     );
 }
 
@@ -2391,8 +2391,8 @@ async fn shared_worker_dynamic_import_csp_block_dispatches_securitypolicyviolati
                 let matched = false;
                 addEventListener("securitypolicyviolation", event => {
                     matched = event.type === "securitypolicyviolation" &&
-                        event.effectiveDirective === "script-src" &&
-                        event.violatedDirective === "script-src" &&
+                        event.effectiveDirective === "script-src-elem" &&
+                        event.violatedDirective === "script-src-elem" &&
                         event.blockedURI === "http://127.0.0.1:9/worker/dynamic.js" &&
                         event.documentURI === "https://app.test/shared-worker.js" &&
                         event.originalPolicy === "script-src 'self'" &&
@@ -2661,7 +2661,7 @@ async fn worker_dynamic_import_report_only_csp_dispatches_without_blocking() {
     assert_eq!(
         expect_post_json(msg),
         format!(
-            r#"{{"events":[{{"type":"securitypolicyviolation","effectiveDirective":"script-src","violatedDirective":"script-src","blockedURI":"{dep_url}","documentURI":"{script_url}","originalPolicy":"script-src 'none'","disposition":"report","instance":true}}],"value":42}}"#
+            r#"{{"events":[{{"type":"securitypolicyviolation","effectiveDirective":"script-src-elem","violatedDirective":"script-src-elem","blockedURI":"{dep_url}","documentURI":"{script_url}","originalPolicy":"script-src 'none'","disposition":"report","instance":true}}],"value":42}}"#
         )
     );
     server
