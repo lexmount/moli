@@ -185,6 +185,51 @@ struct SvgNumberListTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::SVGPointList, enumerable)]
+struct SvgPointListTemplateMethodsDeclaration {
+    #[webapi(method = "clear", length = 0, callback = svg_point_list_clear_callback)]
+    clear: (),
+
+    #[webapi(
+        method = "initialize",
+        length = 1,
+        callback = svg_point_list_initialize_callback
+    )]
+    initialize: (),
+
+    #[webapi(method = "getItem", length = 1, callback = svg_point_list_get_item_callback)]
+    get_item: (),
+
+    #[webapi(
+        method = "insertItemBefore",
+        length = 2,
+        callback = svg_point_list_insert_item_before_callback
+    )]
+    insert_item_before: (),
+
+    #[webapi(
+        method = "replaceItem",
+        length = 2,
+        callback = svg_point_list_replace_item_callback
+    )]
+    replace_item: (),
+
+    #[webapi(
+        method = "removeItem",
+        length = 1,
+        callback = svg_point_list_remove_item_callback
+    )]
+    remove_item: (),
+
+    #[webapi(
+        method = "appendItem",
+        length = 1,
+        callback = svg_point_list_append_item_callback
+    )]
+    append_item: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::SVGStringList, enumerable)]
 struct SvgStringListTemplateMethodsDeclaration {
     #[webapi(method = "clear", length = 0, callback = svg_string_list_clear_callback)]
@@ -1181,6 +1226,19 @@ struct SvgNumberListTemplateAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::SVGPointList, enumerable)]
+struct SvgPointListTemplateAccessorsDeclaration {
+    #[webapi(accessor_property = "length", getter = svg_point_list_length_getter)]
+    length: (),
+
+    #[webapi(
+        accessor_property = "numberOfItems",
+        getter = svg_point_list_length_getter
+    )]
+    number_of_items: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::SVGStringList, enumerable)]
 struct SvgStringListTemplateAccessorsDeclaration {
     #[webapi(accessor_property = "length", getter = svg_string_list_length_getter)]
@@ -1473,6 +1531,24 @@ struct SvgGraphicsElementPrototypeAccessorsDeclaration {
 struct SvgGeometryElementPrototypeAccessorsDeclaration {
     #[webapi(accessor_property = "pathLength", getter = svg_geometry_path_length_getter)]
     path_length: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(name = "SVGAnimatedPoints", enumerable)]
+struct SvgAnimatedPointsPrototypeAccessorsDeclaration {
+    #[webapi(
+        accessor_property = "points",
+        getter = svg_animated_points_getter,
+        data = callback_data_index_value(scope, 0)
+    )]
+    points: (),
+
+    #[webapi(
+        accessor_property = "animatedPoints",
+        getter = svg_animated_points_getter,
+        data = callback_data_index_value(scope, 1)
+    )]
+    animated_points: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -2179,6 +2255,13 @@ pub(super) fn install_svg_number_list_bindings<'s>(
     install_svg_value_list_bindings(scope, template, SvgListKind::Number);
 }
 
+pub(super) fn install_svg_point_list_bindings<'s>(
+    scope: &mut v8::PinScope<'s, '_, ()>,
+    template: v8::Local<'s, v8::FunctionTemplate>,
+) {
+    install_svg_value_list_bindings(scope, template, SvgListKind::Point);
+}
+
 pub(super) fn install_svg_string_list_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
@@ -2272,6 +2355,10 @@ pub(super) fn install_svg_value_list_bindings<'s>(
         SvgListKind::Number => {
             SvgNumberListTemplateAccessorsDeclaration::initialize_prototype_template(scope, proto);
             SvgNumberListTemplateMethodsDeclaration::initialize_prototype_template(scope, proto);
+        }
+        SvgListKind::Point => {
+            SvgPointListTemplateAccessorsDeclaration::initialize_prototype_template(scope, proto);
+            SvgPointListTemplateMethodsDeclaration::initialize_prototype_template(scope, proto);
         }
     }
 }
@@ -2589,6 +2676,11 @@ pub(super) fn install_svg_element_accessor_bindings<'s>(
         }
         "SVGLineElement" => {
             SvgLineElementPrototypeAccessorsDeclaration::initialize_prototype_template(
+                scope, prototype,
+            );
+        }
+        "SVGPolygonElement" | "SVGPolylineElement" => {
+            SvgAnimatedPointsPrototypeAccessorsDeclaration::initialize_prototype_template(
                 scope, prototype,
             );
         }
