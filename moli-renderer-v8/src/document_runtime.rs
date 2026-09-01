@@ -1282,6 +1282,12 @@ impl super::stylesheet_blocking::StylesheetBlockingReadView for LiveRuntimeDomHo
         self.borrow().document_node_id()
     }
 
+    fn document_is_quirks_mode(&self) -> bool {
+        <DomHost as super::stylesheet_blocking::StylesheetBlockingReadView>::document_is_quirks_mode(
+            self.borrow(),
+        )
+    }
+
     fn document_order_stylesheet_candidate_ids_before(
         &self,
         target_node_id: Option<NodeId>,
@@ -1390,6 +1396,24 @@ mod tests {
             ),
             Some(expected)
         );
+    }
+
+    #[test]
+    fn live_runtime_dom_host_forwards_quirks_mode_for_stylesheet_processing() {
+        let document = HtmlParser::SCRIPTING_ENABLED.parse(
+            Url::parse("https://example.test/page.html").unwrap(),
+            "<html><head><link rel=stylesheet href=app.css></head></html>".to_owned(),
+        );
+        let link = first_element_handle(&document, "link");
+        let host = LiveRuntimeDomHost::from_dom_host(DomHost::from_dom(document));
+
+        let disposition = crate::stylesheet_blocking::stylesheet_link_disposition(
+            &host,
+            NodeId::new(link.index()),
+        )
+        .expect("stylesheet disposition");
+
+        assert!(disposition.options().quirks_mode_mime_compatibility());
     }
 
     #[test]
