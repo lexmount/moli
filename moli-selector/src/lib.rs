@@ -1483,6 +1483,33 @@ mod tests {
     }
 
     #[test]
+    fn dom_api_selectors_design_mode_marks_connected_elements_read_write() {
+        let url = url::Url::parse("https://example.test/").unwrap();
+        let mut host = DomHost::from_dom(NativeDom::new_html(url));
+        host.reset_html_document_shell();
+        let body = host.document_body_handle().unwrap();
+        let paragraph = host.create_element("p");
+        let blocked = host.create_element("div");
+        assert!(host.set_attribute(blocked, "contenteditable", "false"));
+        let detached = host.create_element("section");
+        assert!(host.append_child(body, paragraph));
+        assert!(host.append_child(body, blocked));
+        assert!(host.set_document_design_mode_enabled_for_handle(host.document_handle(), true));
+
+        let engine = QueryEngine;
+        assert!(
+            engine
+                .matches_host(&host, paragraph, ":read-write")
+                .unwrap()
+        );
+        assert!(!engine.matches_host(&host, paragraph, ":read-only").unwrap());
+        assert!(!engine.matches_host(&host, blocked, ":read-write").unwrap());
+        assert!(engine.matches_host(&host, blocked, ":read-only").unwrap());
+        assert!(!engine.matches_host(&host, detached, ":read-write").unwrap());
+        assert!(engine.matches_host(&host, detached, ":read-only").unwrap());
+    }
+
+    #[test]
     fn dom_api_selectors_lang_uses_nearest_language_attribute() {
         let url = url::Url::parse("https://example.test/").unwrap();
         let mut host = DomHost::from_dom(NativeDom::new_html(url));
