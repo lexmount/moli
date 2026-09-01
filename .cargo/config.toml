@@ -1,7 +1,8 @@
-# Pack relative relocations in every Linux GNU linked artifact so the same
-# linker behavior is covered by development, test, and release builds.
-[target.'cfg(all(target_os = "linux", target_env = "gnu"))']
-rustflags = ["-C", "link-arg=-Wl,-z,pack-relative-relocs"]
+# Keep RELR disabled for now. GNU/Linux binaries using packed relative
+# relocations require glibc 2.36 or newer and would not run on supported older
+# distributions such as Ubuntu 22.04, Debian 11, or RHEL 9.
+# [target.'cfg(all(target_os = "linux", target_env = "gnu"))']
+# rustflags = ["-C", "link-arg=-Wl,-z,pack-relative-relocs"]
 
 # Most local tests spin up direct in-process HTTP servers and assert on
 # exact request/response behavior. In this environment, inheriting the
