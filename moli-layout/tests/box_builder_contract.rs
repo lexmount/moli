@@ -99,8 +99,6 @@ impl TestNode {
             replaced_metrics: Some(ReplacedMetrics {
                 intrinsic_width: Some(width),
                 intrinsic_height: Some(height),
-                attribute_width: None,
-                attribute_height: None,
                 intrinsic_ratio: (height > 0.0).then_some(width / height),
             }),
         }

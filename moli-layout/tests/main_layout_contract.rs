@@ -60,7 +60,6 @@ impl FixtureNode {
                 intrinsic_width: Some(width),
                 intrinsic_height: Some(height),
                 intrinsic_ratio: Some(width / height),
-                ..ReplacedMetrics::default()
             }),
         }
     }

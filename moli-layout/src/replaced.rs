@@ -16,7 +16,6 @@ use crate::{LayoutReplacedKind, ReplacedMetrics, style::resolve_stylo_calc_value
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ReplacedContext {
     inherent_size: Size<f32>,
-    attribute_size: Size<Option<f32>>,
     inherent_ratio: Option<f32>,
 }
 
@@ -25,8 +24,6 @@ impl ReplacedContext {
         let mut metrics = metrics.unwrap_or_default();
         metrics.intrinsic_width = valid_dimension(metrics.intrinsic_width);
         metrics.intrinsic_height = valid_dimension(metrics.intrinsic_height);
-        metrics.attribute_width = valid_dimension(metrics.attribute_width);
-        metrics.attribute_height = valid_dimension(metrics.attribute_height);
         metrics.intrinsic_ratio = metrics
             .intrinsic_ratio
             .filter(|ratio| ratio.is_finite() && *ratio > 0.0);
@@ -50,58 +47,21 @@ impl ReplacedContext {
             },
         };
 
-        // Canvas width/height attributes define the intrinsic bitmap
-        // coordinate space independently: specifying only width does not
-        // scale the default 150px height. Inline SVG metrics are already
-        // normalized by the source adapter because a viewBox can provide an
-        // intrinsic ratio even when one or both dimensions are absent.
-        if kind == LayoutReplacedKind::Canvas {
-            metrics.intrinsic_width = metrics.attribute_width.or(Some(default_size.width));
-            metrics.intrinsic_height = metrics.attribute_height.or(Some(default_size.height));
-            metrics.attribute_width = None;
-            metrics.attribute_height = None;
-        }
-        let inherent_ratio = metrics
-            .intrinsic_ratio
-            .or_else(|| {
-                metrics
-                    .intrinsic_width
-                    .zip(metrics.intrinsic_height)
-                    .filter(|(_, height)| *height > 0.0)
-                    .map(|(width, height)| width / height)
-            })
-            .or_else(|| {
-                // HTML dimension attributes provide an aspect-ratio hint for
-                // image-like replaced elements before decoded pixels exist.
-                matches!(kind, LayoutReplacedKind::Image | LayoutReplacedKind::Media)
-                    .then(|| {
-                        metrics
-                            .attribute_width
-                            .zip(metrics.attribute_height)
-                            .filter(|(_, height)| *height > 0.0)
-                            .map(|(width, height)| width / height)
-                    })
-                    .flatten()
-            });
+        let inherent_ratio = metrics.intrinsic_ratio.or_else(|| {
+            metrics
+                .intrinsic_width
+                .zip(metrics.intrinsic_height)
+                .filter(|(_, height)| *height > 0.0)
+                .map(|(width, height)| width / height)
+        });
         let inherent_size = concrete_object_size(
             metrics.intrinsic_width,
             metrics.intrinsic_height,
             inherent_ratio,
             default_size,
         );
-        let attribute_size = Size {
-            width: metrics.attribute_width,
-            height: metrics.attribute_height,
-        };
-        // Canvas dimensions define its intrinsic coordinate space even while
-        // its pixels remain an unavailable placeholder in Phase 4.
-        let inherent_ratio = inherent_ratio.or_else(|| {
-            (kind == LayoutReplacedKind::Canvas)
-                .then_some(inherent_size.width / inherent_size.height)
-        });
         Self {
             inherent_size,
-            attribute_size,
             inherent_ratio,
         }
     }
@@ -109,7 +69,6 @@ impl ReplacedContext {
     pub(crate) fn form_control(size: Size<f32>) -> Self {
         Self {
             inherent_size: size,
-            attribute_size: Size::NONE,
             inherent_ratio: None,
         }
     }
@@ -352,13 +311,6 @@ pub(crate) fn measure_replaced(
             padding_border_sum,
         )
         .unwrap_or(context.inherent_size)
-    } else if context.attribute_size.width.is_some() || context.attribute_size.height.is_some() {
-        apply_aspect_ratio_to_content_size(
-            context.attribute_size,
-            resolved_aspect_ratio,
-            padding_border_sum,
-        )
-        .unwrap_or(context.inherent_size)
     } else {
         context.inherent_size
     };
@@ -519,7 +471,6 @@ mod tests {
                 intrinsic_width: Some(60.0),
                 intrinsic_height: Some(60.0),
                 intrinsic_ratio: Some(1.0),
-                ..ReplacedMetrics::default()
             }),
         )
     }

@@ -2747,6 +2747,121 @@ html,body{{margin:0;padding:0;background:white}}
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn screenshot_cascades_html_dimensions_before_replaced_sizing() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/html-dimension-hints.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0;padding:0}
+.ratio{box-sizing:border-box;border:20px solid blue;display:block;padding:0}
+#author{width:120px;height:auto}
+canvas,input,iframe,object{display:block;margin:0;border:0;padding:0}
+</style>`;
+document.body.innerHTML = `
+<img id=mapped class=ratio width=80 height=40>
+<img id=author class=ratio width=80 height=40>
+<canvas id=canvas width="600.5" height="-1"></canvas>
+<iframe id=frame width="75" height="45"></iframe>
+<object id=object width="70" height="35"></object>
+<input id=hidden-input type=hidden width=90 height=45>
+<input id=dynamic-input type=text width=90 height=45>`;
+'installed'
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+
+        let viewport = moli_layout::PaintViewport::new(800, 1200, 1.0);
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(viewport)?
+            .expect("HTML dimension fixture must retain a layout root");
+        let read_style_and_geometry = r#"(() => {
+const read = id => {
+  const element = document.getElementById(id);
+  const style = getComputedStyle(element);
+  return {style:[style.width,style.height,style.aspectRatio],box:[element.offsetWidth,element.offsetHeight]};
+};
+return JSON.stringify(Object.fromEntries(
+  ['mapped','author','canvas','frame','object','hidden-input','dynamic-input']
+    .map(id => [id,read(id)])));
+})()"#;
+        let initial: serde_json::Value =
+            serde_json::from_str(&page_vm.vm_mut().eval(read_style_and_geometry)?)?;
+        assert_eq!(
+            initial["mapped"],
+            serde_json::json!({"style":["80px","40px","auto 80 / 40"],"box":[80,40]}),
+            "legacy dimensions must enter the presentation-hint cascade while canvas dimensions remain intrinsic",
+        );
+        assert_eq!(
+            initial["author"],
+            serde_json::json!({"style":["120px","auto","auto 80 / 40"],"box":[120,80]}),
+        );
+        assert_eq!(
+            initial["canvas"],
+            serde_json::json!({"style":["auto","auto","auto"],"box":[600,150]}),
+        );
+        assert_eq!(
+            initial["frame"],
+            serde_json::json!({"style":["75px","45px","auto"],"box":[75,45]}),
+        );
+        assert_eq!(
+            initial["object"],
+            serde_json::json!({"style":["70px","35px","auto"],"box":[70,35]}),
+        );
+        assert_eq!(
+            initial["hidden-input"],
+            serde_json::json!({"style":["90px","45px","auto 90 / 45"],"box":[0,0]}),
+        );
+        assert_eq!(
+            initial["dynamic-input"]["style"],
+            serde_json::json!(["auto", "auto", "auto"]),
+            "a text input must ignore image-only dimension hints",
+        );
+        assert!(
+            initial["dynamic-input"]["box"][0]
+                .as_u64()
+                .is_some_and(|width| width > 0)
+                && initial["dynamic-input"]["box"][1]
+                    .as_u64()
+                    .is_some_and(|height| height > 0),
+            "the test must start from a rendered text control without pinning unrelated UA sizing",
+        );
+
+        page_vm
+            .vm_mut()
+            .eval("document.getElementById('mapped').setAttribute('width','60')")?;
+        page_vm
+            .vm_mut()
+            .eval("document.getElementById('dynamic-input').setAttribute('type','image')")?;
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(viewport)?
+            .expect("mutated HTML dimension fixture must retain a layout root");
+        let mutated: serde_json::Value =
+            serde_json::from_str(&page_vm.vm_mut().eval(read_style_and_geometry)?)?;
+        assert_eq!(
+            mutated["mapped"],
+            serde_json::json!({"style":["60px","40px","auto 60 / 40"],"box":[60,40]}),
+            "dimension and input-type mutations must recascade presentation hints",
+        );
+        assert_eq!(
+            mutated["dynamic-input"],
+            serde_json::json!({"style":["90px","45px","auto 90 / 45"],"box":[90,45]}),
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("HTML dimension presentation-hint fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn screenshot_recascades_nearest_table_cell_presentation_style() {
     run_page_vm_async_test(async move {
         let loader =
