@@ -106,7 +106,9 @@ fn new_before_unload_event<'s>(
 pub(crate) fn construct_original_before_unload_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    new_before_unload_event(scope, "beforeunload", true)
+    let event = new_before_unload_event(scope, "beforeunload", true)?;
+    mark_event_trusted(scope, event);
+    Some(event)
 }
 
 pub(in crate::context_bootstrap) fn new_uninitialized_before_unload_event<'s>(
