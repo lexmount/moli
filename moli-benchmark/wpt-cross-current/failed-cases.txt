@@ -3796,7 +3796,6 @@ trusted-types/trusted-types-reporting.html
 trusted-types/trusted-types-secondary-document.html
 trusted-types/trusted-types-svg-script-set-href.html
 uievents/order-of-events/focus-events/focus-automated-blink-webkit.html
-uievents/ui_event_pseudo_target.html
 url/a-element.html?exclude=(file|javascript|mailto)
 url/a-element.html?include=file
 url/a-element.html?include=javascript

@@ -2177,6 +2177,63 @@ fn event_timestamp_uses_performance_origin_and_safe_resolution() {
         r#"{"hasGetter":true,"getterName":"get timeStamp","getterLength":0,"enumerable":true,"configurable":true,"hasOwnTimeStamp":false,"withinNowRange":true,"getterMatchesOwnValue":true,"safeResolution":true}"#
     );
 }
+
+#[test]
+fn ui_event_pseudo_target_is_declared_once_and_inherited() {
+    let mut vm = new_storage_test_vm("https://ui-event-pseudo-target.test/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const descriptor =
+                Object.getOwnPropertyDescriptor(UIEvent.prototype, "pseudoTarget");
+              const getter = descriptor.get;
+              const thrownName = receiver => {
+                try {
+                  getter.call(receiver);
+                  return "none";
+                } catch (error) {
+                  return error && error.name;
+                }
+              };
+              const textEvent = document.createEvent("TextEvent");
+
+              return JSON.stringify({
+                descriptor: [
+                  getter.name,
+                  getter.length,
+                  typeof descriptor.set,
+                  descriptor.enumerable,
+                  descriptor.configurable
+                ],
+                placement: [
+                  Object.prototype.hasOwnProperty.call(Event.prototype, "pseudoTarget"),
+                  Object.prototype.hasOwnProperty.call(UIEvent.prototype, "pseudoTarget"),
+                  Object.prototype.hasOwnProperty.call(MouseEvent.prototype, "pseudoTarget"),
+                  "pseudoTarget" in MouseEvent.prototype
+                ],
+                values: [
+                  new UIEvent("ui").pseudoTarget,
+                  new MouseEvent("mouse").pseudoTarget,
+                  getter.call(textEvent)
+                ],
+                illegalReceivers: [
+                  thrownName(new Event("event")),
+                  thrownName({})
+                ]
+              });
+            })()
+            "#,
+        )
+        .expect("UIEvent pseudoTarget prototype probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"descriptor":["get pseudoTarget",0,"undefined",true,true],"placement":[false,true,false,true],"values":[null,null,null],"illegalReceivers":["TypeError","TypeError"]}"#
+    );
+}
+
 #[test]
 fn performance_entry_accessors_return_entries_sorted_by_start_time() {
     let mut vm = new_storage_test_vm("https://performance-entry-order.test/");

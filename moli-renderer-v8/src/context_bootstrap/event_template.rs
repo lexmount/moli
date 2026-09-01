@@ -20,6 +20,7 @@ use super::{
         focus_event_related_target_getter_function, form_data_event_form_data_getter_function,
         mouse_event_related_target_getter_function, pointer_event_get_predicted_events_callback,
         submit_event_submitter_getter_function, track_event_track_getter_function,
+        ui_event_pseudo_target_getter_function,
     },
     selection_surface::document_get_selection_callback,
     specs::{ConstructorKind, ConstructorSpec},
@@ -185,6 +186,12 @@ struct FormDataEventTemplateAccessorsDeclaration {
 struct UiEventTemplateMethodsDeclaration {
     #[webapi(method = "initUIEvent", length = 0, callback = ui_event_init_callback)]
     init_ui_event: (),
+
+    #[webapi(
+        accessor_property = "pseudoTarget",
+        getter = ui_event_pseudo_target_getter_function
+    )]
+    pseudo_target: (),
 }
 
 #[derive(WebApiFunctionTemplate)]

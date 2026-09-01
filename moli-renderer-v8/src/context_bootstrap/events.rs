@@ -260,6 +260,42 @@ pub(crate) fn event_is_mouse_event<'s>(
     )
 }
 
+fn event_is_ui_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event: v8::Local<'s, v8::Object>,
+) -> bool {
+    matches!(
+        event_subclass_kind(scope, event),
+        Some(
+            EventSubclassKind::UiEvent
+                | EventSubclassKind::FocusEvent
+                | EventSubclassKind::TextEvent
+                | EventSubclassKind::CompositionEvent
+                | EventSubclassKind::MouseEvent
+                | EventSubclassKind::DragEvent
+                | EventSubclassKind::KeyboardEvent
+                | EventSubclassKind::InputEvent
+                | EventSubclassKind::WheelEvent
+                | EventSubclassKind::PointerEvent
+                | EventSubclassKind::TouchEvent
+        )
+    )
+}
+
+pub(super) fn ui_event_pseudo_target_getter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if !event_is_ui_event(scope, args.this()) {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    }
+    // Moli does not currently synthesize UI events whose origin is a CSS
+    // pseudo-element, so every supported UIEvent has the default null value.
+    rv.set(v8::null(scope).into());
+}
+
 fn event_related_target_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,

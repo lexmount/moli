@@ -7823,6 +7823,7 @@ uievents/legacy-domevents-tests/approved/stopPropagation.deferred.effect.html
 uievents/legacy-domevents-tests/submissions/Microsoft/converted/EventListener.dispatch.new.event.html
 uievents/legacy/Event-subclasses-init.html
 uievents/textInput/api.html
+uievents/ui_event_pseudo_target.html
 url/a-element-origin.html
 url/data-uri-fragment.html
 user-timing/clearMarks.html
