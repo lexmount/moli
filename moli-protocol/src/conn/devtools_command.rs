@@ -392,7 +392,7 @@ impl CdpConnection {
             .is_some_and(|browser_context| {
                 browser_context.has_default_bidi_channel_preload_script()
             });
-        let command_owner = CommandOwnerScope::for_implicit_route(Some(route.clone()));
+        let command_owner = CommandOwnerScope::for_route(route.clone());
         let mut initial_runtime_execution_context_ids = Vec::new();
         let mut renderer_output_predecessor = None;
         let pending = match self.start_initial_document_page_ensure_for_owner(&command_owner) {
@@ -492,39 +492,26 @@ impl CdpConnection {
         if self.has_pending_javascript_dialog() {
             return;
         }
-        let mut session_id = context
+        let session_id = context
             .session_id
             .as_ref()
             .map(|session_id| session_id.as_str());
-        let none_session_owner_route = match context.target_id.as_ref() {
+        let owner = match context.target_id.as_ref() {
             Some(target_id) => {
                 let Some(route) = self.target_session_route_for_target_id(target_id.as_str())
                 else {
                     return;
                 };
-                session_id = None;
-                Some(route)
+                CommandOwnerScope::for_route(route)
             }
-            None => None,
+            None => CommandOwnerScope::capture(self, session_id),
         };
-        if let Some(route) = none_session_owner_route {
-            let mut route_scope = self.scoped_none_session_owner_route_override(route);
-            crate::domains::activity::project_protocol_local_command_outputs(
-                route_scope.conn_mut(),
-                session_id,
-                dispatch_context,
-            )
-            .await;
-            let turn_events = dispatch_context.take_protocol_events();
-            protocol_events.extend(turn_events);
-        } else {
-            crate::domains::activity::project_protocol_local_command_outputs(
-                self,
-                session_id,
-                dispatch_context,
-            )
-            .await;
-            protocol_events.extend(dispatch_context.take_protocol_events());
-        }
+        crate::domains::activity::project_protocol_local_command_outputs(
+            self,
+            &owner,
+            dispatch_context,
+        )
+        .await;
+        protocol_events.extend(dispatch_context.take_protocol_events());
     }
 }

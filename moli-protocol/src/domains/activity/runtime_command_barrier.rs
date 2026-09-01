@@ -173,10 +173,10 @@ impl RuntimeCommandCausalOwner {
 }
 
 impl RuntimeCommandOutputRoute {
-    fn capture(conn: &CdpConnection, session_id: Option<&str>) -> Option<Self> {
+    fn capture_for_scope(conn: &CdpConnection, delivery_scope: CommandOwnerScope) -> Option<Self> {
         Some(Self {
-            delivery_scope: CommandOwnerScope::capture(conn, session_id),
-            causal_owner: RuntimeCommandCausalOwner::capture(conn, session_id)?,
+            causal_owner: RuntimeCommandCausalOwner::capture_for_scope(conn, &delivery_scope)?,
+            delivery_scope,
         })
     }
 }
@@ -223,15 +223,17 @@ impl RuntimeCommandOutputBarriers {
     pub(super) async fn route_publication_outputs(
         &mut self,
         conn: &mut CdpConnection,
-        session_id: Option<&str>,
+        delivery_scope: &CommandOwnerScope,
         renderer_cause: Option<&RendererRuntimeCommandCausalIdentity>,
         renderer_output_cursor: Option<RendererOutputCursor>,
         mut outputs: PreparedProtocolOutputs,
         command_context: &mut CommandDispatchContext,
     ) {
-        let Some(route) = RuntimeCommandOutputRoute::capture(conn, session_id) else {
+        let Some(route) =
+            RuntimeCommandOutputRoute::capture_for_scope(conn, delivery_scope.clone())
+        else {
             outputs
-                .project_async(conn, session_id, command_context)
+                .project_async(conn, delivery_scope, command_context)
                 .await;
             return;
         };
@@ -240,7 +242,7 @@ impl RuntimeCommandOutputBarriers {
             .cloned();
         let Some(renderer_cause) = prepared_cause.as_ref().or(renderer_cause) else {
             outputs
-                .project_async(conn, session_id, command_context)
+                .project_async(conn, delivery_scope, command_context)
                 .await;
             return;
         };
@@ -259,7 +261,7 @@ impl RuntimeCommandOutputBarriers {
                 "one renderer Runtime command cause cannot match multiple active barriers"
             );
             outputs
-                .project_async(conn, session_id, command_context)
+                .project_async(conn, delivery_scope, command_context)
                 .await;
             return;
         };
@@ -268,7 +270,7 @@ impl RuntimeCommandOutputBarriers {
                 .take_top_level_location_navigation_for_runtime_command(renderer_cause)
                 .expect("a prepared Runtime-command navigation cause must retain its exact action");
             outputs
-                .project_async(conn, session_id, command_context)
+                .project_async(conn, &route.delivery_scope, command_context)
                 .await;
             causal_outputs
         } else {
@@ -276,7 +278,6 @@ impl RuntimeCommandOutputBarriers {
         };
         self.hold_for_exact_barrier(
             conn,
-            session_id,
             route,
             *barrier_id,
             renderer_output_cursor,
@@ -289,7 +290,6 @@ impl RuntimeCommandOutputBarriers {
     async fn hold_for_exact_barrier(
         &mut self,
         conn: &mut CdpConnection,
-        session_id: Option<&str>,
         route: RuntimeCommandOutputRoute,
         barrier_id: RuntimeCommandOutputBarrierId,
         renderer_output_cursor: Option<RendererOutputCursor>,
@@ -297,7 +297,11 @@ impl RuntimeCommandOutputBarriers {
         command_context: &mut CommandDispatchContext,
     ) {
         let Some(outputs) = outputs
-            .project_before_command_response_and_hold_after(conn, session_id, command_context)
+            .project_before_command_response_and_hold_after(
+                conn,
+                &route.delivery_scope,
+                command_context,
+            )
             .await
         else {
             return;
@@ -424,8 +428,6 @@ impl RuntimeCommandOutputBarriers {
                     .pop_front()
                     .expect("ready held output came from the route front");
                 let route = self.held_routes[route_index].route.clone();
-                let mut scope = route.delivery_scope.enter(conn);
-                let conn = scope.conn_mut();
                 if moli_trace::cdp_runtime_trace_enabled() {
                     tracing::info!(
                         target: "moli_cdp_runtime",
@@ -439,14 +441,14 @@ impl RuntimeCommandOutputBarriers {
                 match held.release_mode {
                     HeldOutputReleaseMode::All => {
                         held.outputs
-                            .project_async(conn, route.delivery_scope.session_id(), command_context)
+                            .project_async(conn, &route.delivery_scope, command_context)
                             .await;
                     }
                     HeldOutputReleaseMode::OwnerActionsOnly => {
                         held.outputs
                             .project_owner_actions_async(
                                 conn,
-                                route.delivery_scope.session_id(),
+                                &route.delivery_scope,
                                 command_context,
                             )
                             .await;
@@ -491,7 +493,8 @@ mod tests {
     use serde_json::Value;
 
     use crate::conn::{
-        BrowserContext, CdpConnection, CommandDispatchContext, RendererCommandDescriptor,
+        BrowserContext, CdpConnection, CommandDispatchContext, CommandOwnerScope,
+        RendererCommandDescriptor,
     };
 
     use super::{
@@ -577,11 +580,12 @@ mod tests {
         fragment: &str,
         command_context: &mut CommandDispatchContext,
     ) {
+        let command_owner = CommandOwnerScope::for_session(SESSION_ID);
         let source_document = loaded_page_source_document(conn);
         let outputs =
             super::super::output_ingress::PreparedProtocolOutputs::from_renderer_owner_action(
                 conn,
-                Some(SESSION_ID),
+                &command_owner,
                 RendererOwnerAction::SameDocumentNavigation(
                     RendererDocumentSourcedSameDocumentNavigation::new(
                         source_document,
@@ -598,7 +602,7 @@ mod tests {
         barriers
             .route_publication_outputs(
                 conn,
-                Some(SESSION_ID),
+                &command_owner,
                 renderer_cause.as_ref(),
                 None,
                 outputs,
@@ -614,6 +618,7 @@ mod tests {
         marker: &str,
         command_context: &mut CommandDispatchContext,
     ) {
+        let command_owner = CommandOwnerScope::for_session(SESSION_ID);
         let cause = renderer_cause_for_permit(conn, permit);
         let owner = conn
             .target_page_residence_identity_for_session(Some(SESSION_ID))
@@ -630,7 +635,7 @@ mod tests {
             );
 
         barriers
-            .route_publication_outputs(conn, Some(SESSION_ID), None, None, outputs, command_context)
+            .route_publication_outputs(conn, &command_owner, None, None, outputs, command_context)
             .await;
     }
 
@@ -750,16 +755,17 @@ mod tests {
         let outputs =
             super::super::output_ingress::PreparedProtocolOutputs::from_renderer_observation(
                 &mut conn,
-                Some(SESSION_ID),
+                &crate::conn::CommandOwnerScope::for_session(SESSION_ID),
                 agent_token,
                 &observation,
             );
         let mut command_context = CommandDispatchContext::default();
+        let command_owner = CommandOwnerScope::for_session(SESSION_ID);
 
         barriers
             .route_publication_outputs(
                 &mut conn,
-                Some(SESSION_ID),
+                &command_owner,
                 Some(&cause),
                 None,
                 outputs,
@@ -938,11 +944,12 @@ mod tests {
                 ),
             );
         let mut command_context = CommandDispatchContext::default();
+        let command_owner = CommandOwnerScope::for_session(SESSION_ID);
 
         barriers
             .route_publication_outputs(
                 &mut conn,
-                Some(SESSION_ID),
+                &command_owner,
                 None,
                 None,
                 outputs,

@@ -98,10 +98,6 @@ pub(crate) enum TracingCommandTaskStep {
 }
 
 impl PendingTracingCommandDispatch {
-    pub(crate) fn session_id(&self) -> Option<&str> {
-        self.session_id.as_deref()
-    }
-
     pub(crate) async fn wait(self) -> CompletedTracingCommandDispatch {
         let completed = match self.pending {
             PendingTracingOperation::Start(pending) => {

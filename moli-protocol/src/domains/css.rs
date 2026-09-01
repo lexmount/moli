@@ -918,16 +918,36 @@ mod tests {
         style_sheet_id
     }
 
-    async fn style_sheet_text_for_id_async(ctx: &mut TestContext, style_sheet_id: &str) -> String {
-        ctx.process_async(json!({
+    async fn style_sheet_text_for_id_async(
+        ctx: &mut TestContext,
+        session_id: Option<&str>,
+        style_sheet_id: &str,
+    ) -> String {
+        let mut command = json!({
             "id": 44,
             "method": "CSS.getStyleSheet",
             "params": { "styleSheetId": style_sheet_id }
-        }))
-        .await;
+        });
+        if let Some(session_id) = session_id {
+            command["sessionId"] = json!(session_id);
+        }
+        ctx.process_async(command).await;
         take_response_by_id(ctx, 44)["result"]["styleSheet"]["text"]
             .as_str()
             .expect("stylesheet text")
+            .to_owned()
+    }
+
+    async fn attach_page_session_async(ctx: &mut TestContext, target_id: &str) -> String {
+        ctx.process_async(json!({
+            "id": 42,
+            "method": "Target.attachToTarget",
+            "params": { "targetId": target_id, "flatten": true }
+        }))
+        .await;
+        take_response_by_id(ctx, 42)["result"]["sessionId"]
+            .as_str()
+            .expect("attached Page session id")
             .to_owned()
     }
 
@@ -1684,65 +1704,26 @@ mod tests {
             .replace_loaded_page(Some(background_page));
         ctx.conn.browser_context = Some(browser_context);
 
-        let background_route = ctx
-            .conn
-            .target_session_route_for_target_id("TID-css-background")
-            .expect("background target route");
-        let active_style_sheet_id = {
-            let active_route = ctx
-                .conn
-                .target_session_route_for_target_id("TID-css-active")
-                .expect("active target route");
-            let previous_route = ctx
-                .conn
-                .replace_none_session_owner_route_override(Some(active_route));
-            let style_sheet_id = inline_style_sheet_id_for_session_async(&mut ctx, None).await;
-            ctx.conn
-                .replace_none_session_owner_route_override(previous_route);
-            style_sheet_id
-        };
-        let style_sheet_id = {
-            let previous_route = ctx
-                .conn
-                .replace_none_session_owner_route_override(Some(background_route.clone()));
-            let style_sheet_id = inline_style_sheet_id_for_session_async(&mut ctx, None).await;
-            ctx.conn
-                .replace_none_session_owner_route_override(previous_route);
-            style_sheet_id
-        };
+        let background_session = attach_page_session_async(&mut ctx, "TID-css-background").await;
+        let active_style_sheet_id = inline_style_sheet_id_for_session_async(&mut ctx, None).await;
+        let style_sheet_id =
+            inline_style_sheet_id_for_session_async(&mut ctx, Some(&background_session)).await;
         let raw = json!({
             "id": 214,
             "method": "CSS.setStyleSheetText",
             "params": {
                 "styleSheetId": style_sheet_id,
                 "text": "body { color: purple; }"
-            }
+            },
+            "sessionId": background_session
         })
         .to_string();
-        let pending = {
-            let previous_route = ctx
-                .conn
-                .replace_none_session_owner_route_override(Some(background_route));
-            let pending = ctx
-                .conn
-                .try_start_pending_command_dispatch(&raw)
-                .expect("background CSS.setStyleSheetText should start pending");
-            ctx.conn
-                .replace_none_session_owner_route_override(previous_route);
-            pending
-        };
-
-        let active_route = ctx
+        let pending = ctx
             .conn
-            .target_session_route_for_target_id("TID-css-active")
-            .expect("active target route");
-        let previous_route = ctx
-            .conn
-            .replace_none_session_owner_route_override(Some(active_route));
+            .try_start_pending_command_dispatch(&raw)
+            .expect("background CSS.setStyleSheetText should start pending");
         let (messages, scheduler_events) =
             complete_pending_command_task_for_test(&mut ctx, pending).await;
-        ctx.conn
-            .replace_none_session_owner_route_override(previous_route);
 
         assert!(
             scheduler_events.is_empty(),
@@ -1758,36 +1739,15 @@ mod tests {
                 "styleSheetId": style_sheet_id,
             })
         );
-        let active_text = {
-            let active_route = ctx
-                .conn
-                .target_session_route_for_target_id("TID-css-active")
-                .expect("active target route");
-            let previous_route = ctx
-                .conn
-                .replace_none_session_owner_route_override(Some(active_route));
-            let text = style_sheet_text_for_id_async(&mut ctx, &active_style_sheet_id).await;
-            ctx.conn
-                .replace_none_session_owner_route_override(previous_route);
-            text
-        };
+        let active_text =
+            style_sheet_text_for_id_async(&mut ctx, None, &active_style_sheet_id).await;
         assert!(
             active_text.contains("color: red"),
             "ambient active page must not receive background CSS completion: {active_text}"
         );
-        let background_text = {
-            let background_route = ctx
-                .conn
-                .target_session_route_for_target_id("TID-css-background")
-                .expect("background target route");
-            let previous_route = ctx
-                .conn
-                .replace_none_session_owner_route_override(Some(background_route));
-            let text = style_sheet_text_for_id_async(&mut ctx, &style_sheet_id).await;
-            ctx.conn
-                .replace_none_session_owner_route_override(previous_route);
-            text
-        };
+        let background_text =
+            style_sheet_text_for_id_async(&mut ctx, Some(&background_session), &style_sheet_id)
+                .await;
         assert!(
             background_text.contains("color: purple"),
             "background CSS completion should use captured owner route: {background_text}"

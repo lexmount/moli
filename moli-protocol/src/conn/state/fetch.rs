@@ -2375,7 +2375,11 @@ mod tests {
                 navigate_id: Some(1),
                 owner: owner_session_id
                     .map(crate::conn::CommandOwnerScope::for_session)
-                    .unwrap_or_else(|| crate::conn::CommandOwnerScope::for_implicit_route(None)),
+                    .unwrap_or_else(|| {
+                        crate::conn::CommandOwnerScope::for_route(
+                            crate::conn::CdpSessionRoute::Browser,
+                        )
+                    }),
                 result_projection: NavigationResultProjection::Cdp(
                     json!({"frameId": "FRAME-1", "loaderId": "LOADER-1"}),
                 ),

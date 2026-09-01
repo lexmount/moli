@@ -2,7 +2,7 @@ use crate::domains::activity::{
     ProtocolOutputPayloads, ProtocolOutputProjectionContext, ProtocolOutputSink, ProtocolOutputSlot,
 };
 use crate::{
-    conn::{BackgroundProtocolEvent, CdpConnection},
+    conn::{BackgroundProtocolEvent, CdpConnection, CommandOwnerScope},
     domains::command_output::protocol_message_background_event_for_target,
     domains::runtime_context_events::{
         RuntimeContextProtocolEvent, apply_runtime_context_protocol_event_side_effects_typed,
@@ -265,12 +265,13 @@ pub(in crate::domains) async fn project_runtime_inspector_post_response_messages
 impl RuntimePreparedOutputs {
     pub(crate) fn from_renderer_runtime_binding_call(
         conn: &CdpConnection,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
         call: moli_core::page::PendingRuntimeBindingCall,
     ) -> Self {
-        let Some(attachment) =
-            conn.target_page_protocol_attachment_identity_for_session(session_id)
-        else {
+        let Some(attachment) = conn.target_page_protocol_attachment_identity_for_route(
+            owner.session_id(),
+            owner.session_owner_route(),
+        ) else {
             return Self::default();
         };
         Self {
@@ -287,14 +288,14 @@ impl RuntimePreparedOutputs {
 
     pub(crate) fn from_renderer_runtime_inspector_message_batches(
         conn: &mut CdpConnection,
-        source_session_id: Option<&str>,
+        source_owner: &CommandOwnerScope,
         batches: &[RendererRuntimeInspectorMessageBatch],
     ) -> Self {
         let mut outputs = Self::default();
         for batch in batches.iter().filter(|batch| !batch.messages.is_empty()) {
             let Some(attachment) = conn
-                .target_page_protocol_attachment_identity_for_renderer_inspector_route(
-                    source_session_id,
+                .target_page_protocol_attachment_identity_for_renderer_inspector_owner(
+                    source_owner,
                     batch.session.wire_session_id(),
                 )
             else {
@@ -356,7 +357,7 @@ impl RuntimePreparedOutputs {
     /// from the retired document are discarded.
     pub(crate) fn from_retired_renderer_runtime_inspector_session_responses(
         conn: &mut CdpConnection,
-        source_session_id: Option<&str>,
+        source_owner: &CommandOwnerScope,
         batches: &[RendererRuntimeInspectorMessageBatch],
     ) -> Self {
         let mut outputs = Self::default();
@@ -365,8 +366,8 @@ impl RuntimePreparedOutputs {
                 continue;
             };
             let Some(protocol_attachment) = conn
-                .target_page_protocol_attachment_identity_for_renderer_inspector_route(
-                    source_session_id,
+                .target_page_protocol_attachment_identity_for_renderer_inspector_owner(
+                    source_owner,
                     batch.session.wire_session_id(),
                 )
             else {
@@ -536,8 +537,12 @@ pub(in crate::domains) fn push_routed_renderer_runtime_inspector_message_batch_b
     batches: Vec<RendererRuntimeInspectorMessageBatch>,
     session_id: Option<&str>,
 ) {
+    let owner = match session_id {
+        Some(session_id) => CommandOwnerScope::for_session(session_id),
+        None => CommandOwnerScope::capture(conn, None),
+    };
     let prepared = RuntimePreparedOutputs::from_renderer_runtime_inspector_message_batches(
-        conn, session_id, &batches,
+        conn, &owner, &batches,
     );
     for batch in prepared
         .inspector_message_batches
@@ -567,7 +572,7 @@ mod tests {
     use serde_json::Value;
     use serde_json::json;
 
-    use crate::conn::{BrowserContext, CdpConnection, CommandDispatchContext};
+    use crate::conn::{BrowserContext, CdpConnection, CommandDispatchContext, CommandOwnerScope};
     use crate::devtools_runtime::AutomationEvent;
     use crate::domains::activity::{ProtocolOutputPayloads, ProtocolOutputProjectionContext};
     use crate::testing::TestContext;
@@ -666,6 +671,10 @@ mod tests {
         renderer_inspector_session_id: Option<&str>,
         messages: Vec<Value>,
     ) -> RuntimePreparedOutputs {
+        let owner = match source_session_id {
+            Some(session_id) => CommandOwnerScope::for_session(session_id),
+            None => CommandOwnerScope::capture(conn, None),
+        };
         let session = renderer_inspector_session_id
             .map_or(DevToolsSessionKey::Primary, |session_id| {
                 DevToolsSessionKey::Attached(session_id.to_owned())
@@ -676,9 +685,7 @@ mod tests {
             renderer_messages(messages),
         )];
         RuntimePreparedOutputs::from_renderer_runtime_inspector_message_batches(
-            conn,
-            source_session_id,
-            &batches,
+            conn, &owner, &batches,
         )
     }
 
@@ -708,7 +715,7 @@ mod tests {
 
         let outputs = RuntimePreparedOutputs::from_renderer_runtime_inspector_message_batches(
             &mut conn,
-            Some("SID-1"),
+            &CommandOwnerScope::for_session("SID-1"),
             &batches,
         );
 
@@ -729,16 +736,13 @@ mod tests {
     ) -> Vec<crate::conn::BackgroundProtocolEvent> {
         let mut prepared =
             ProtocolOutputPayloads::from_slot(RuntimePreparedOutputSlot::from_outputs(outputs));
+        let owner = match drain_session_id {
+            Some(session_id) => crate::conn::CommandOwnerScope::for_session(session_id),
+            None => crate::conn::CommandOwnerScope::capture(conn, None),
+        };
         let mut command_context = CommandDispatchContext::default();
         {
-            let mut context = ProtocolOutputProjectionContext {
-                session_id: drain_session_id,
-                command: &mut command_context,
-                subresource_frame_id: None,
-                subresource_document_url: None,
-                subresource_timestamp: None,
-                subresource_network_request_id: None,
-            };
+            let mut context = ProtocolOutputProjectionContext::new(&owner, &mut command_context);
             super::project_runtime_inspector_messages_async(
                 conn,
                 &mut context,
@@ -803,7 +807,7 @@ mod tests {
         let outputs =
             RuntimePreparedOutputs::from_retired_renderer_runtime_inspector_session_responses(
                 &mut ctx.conn,
-                Some("SID-1"),
+                &CommandOwnerScope::for_session("SID-1"),
                 &[batch],
             );
         let outputs_after_detach = outputs.clone();
@@ -885,15 +889,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn runtime_binding_drain_consumes_prepared_events_without_page_readback() {
         let (mut conn, attachment) = runtime_binding_attachment_fixture();
+        let owner = crate::conn::CommandOwnerScope::for_session("SID-drain-current");
         let mut command_context = CommandDispatchContext::default();
-        let mut context = ProtocolOutputProjectionContext {
-            session_id: Some("SID-drain-current"),
-            command: &mut command_context,
-            subresource_frame_id: None,
-            subresource_document_url: None,
-            subresource_timestamp: None,
-            subresource_network_request_id: None,
-        };
+        let mut context = ProtocolOutputProjectionContext::new(&owner, &mut command_context);
         let mut prepared = prepared_runtime_binding_calls(attachment);
 
         super::project_runtime_binding_calls_async(&mut conn, &mut context, Some(&mut prepared))
@@ -922,15 +920,9 @@ mod tests {
         conn.runtime_session_owner_slot_mut(Some("SID-1"))
             .expect("Runtime binding target")
             .replace_page_attachment_id_for_test();
+        let owner = crate::conn::CommandOwnerScope::for_session("SID-1");
         let mut command_context = CommandDispatchContext::default();
-        let mut context = ProtocolOutputProjectionContext {
-            session_id: Some("SID-1"),
-            command: &mut command_context,
-            subresource_frame_id: None,
-            subresource_document_url: None,
-            subresource_timestamp: None,
-            subresource_network_request_id: None,
-        };
+        let mut context = ProtocolOutputProjectionContext::new(&owner, &mut command_context);
 
         super::project_runtime_binding_calls_async(&mut conn, &mut context, Some(&mut prepared))
             .await;
@@ -957,15 +949,9 @@ mod tests {
         ));
         let mut prepared =
             ProtocolOutputPayloads::from_slot(RuntimePreparedOutputSlot::from_outputs(outputs));
+        let owner = crate::conn::CommandOwnerScope::for_session("SID-unrelated-drain");
         let mut command_context = CommandDispatchContext::default();
-        let mut context = ProtocolOutputProjectionContext {
-            session_id: Some("SID-unrelated-drain"),
-            command: &mut command_context,
-            subresource_frame_id: None,
-            subresource_document_url: None,
-            subresource_timestamp: None,
-            subresource_network_request_id: None,
-        };
+        let mut context = ProtocolOutputProjectionContext::new(&owner, &mut command_context);
 
         super::project_runtime_binding_calls_async(&mut conn, &mut context, Some(&mut prepared))
             .await;
@@ -993,15 +979,9 @@ mod tests {
                 .as_deref(),
             Some("SID-1"),
         );
+        let owner = crate::conn::CommandOwnerScope::capture(&conn, None);
         let mut command_context = CommandDispatchContext::default();
-        let mut context = ProtocolOutputProjectionContext {
-            session_id: None,
-            command: &mut command_context,
-            subresource_frame_id: None,
-            subresource_document_url: None,
-            subresource_timestamp: None,
-            subresource_network_request_id: None,
-        };
+        let mut context = ProtocolOutputProjectionContext::new(&owner, &mut command_context);
 
         super::project_runtime_binding_calls_async(&mut conn, &mut context, Some(&mut prepared))
             .await;

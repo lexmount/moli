@@ -1,6 +1,6 @@
 use super::{
-    CdpConnection, CdpSessionRoute, NoneSessionOwnerRouteOverrideScope,
-    TargetPageProtocolAttachmentIdentity,
+    CdpConnection, CdpSessionRoute, TargetPageProtocolAttachmentIdentity,
+    TargetPageResidenceIdentity,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -11,29 +11,42 @@ pub(crate) struct CommandOwnerScope {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum CommandOwnerIdentity {
     Session(String),
-    ImplicitRoute(CdpSessionRoute),
-    Implicit,
+    Route(CdpSessionRoute),
 }
 
 impl CommandOwnerScope {
     pub(crate) fn capture(conn: &CdpConnection, session_id: Option<&str>) -> Self {
-        let none_session_owner_route = session_id
-            .is_none()
-            .then(|| {
-                conn.none_session_owner_route_override().or_else(|| {
-                    let browser_context = conn.browser_context.as_ref()?;
-                    let target_id = browser_context.active_target_id_owned()?;
-                    Some(CdpSessionRoute::PageTarget {
-                        browser_context_id: browser_context.id.clone(),
-                        target_id,
-                        is_attached_session: false,
-                    })
-                })
-            })
-            .flatten();
         match session_id {
             Some(session_id) => Self::for_session(session_id),
-            None => Self::for_implicit_route(none_session_owner_route),
+            None => Self::for_route(Self::capture_default_route(conn)),
+        }
+    }
+
+    pub(crate) fn capture_for_route(
+        conn: &CdpConnection,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
+    ) -> Self {
+        match (session_id, owner_route) {
+            (Some(session_id), _) => Self::for_session(session_id),
+            (None, Some(route)) => Self::for_route(route.clone()),
+            (None, None) => Self::capture(conn, None),
+        }
+    }
+
+    fn capture_default_route(conn: &CdpConnection) -> CdpSessionRoute {
+        let Some(browser_context) = conn.browser_context.as_ref() else {
+            return CdpSessionRoute::Browser;
+        };
+        match browser_context.active_target_id_owned() {
+            Some(target_id) => CdpSessionRoute::PageTarget {
+                browser_context_id: browser_context.id.clone(),
+                target_id,
+                is_attached_session: false,
+            },
+            None => CdpSessionRoute::BrowserContext {
+                browser_context_id: browser_context.id.clone(),
+            },
         }
     }
 
@@ -43,12 +56,9 @@ impl CommandOwnerScope {
         }
     }
 
-    pub(crate) fn for_implicit_route(session_owner_route: Option<CdpSessionRoute>) -> Self {
+    pub(crate) fn for_route(route: CdpSessionRoute) -> Self {
         Self {
-            identity: match session_owner_route {
-                Some(route) => CommandOwnerIdentity::ImplicitRoute(route),
-                None => CommandOwnerIdentity::Implicit,
-            },
+            identity: CommandOwnerIdentity::Route(route),
         }
     }
 
@@ -56,7 +66,10 @@ impl CommandOwnerScope {
         if let Some(session_id) = attachment.session_id() {
             return Self::for_session(session_id);
         }
-        let page = attachment.page_owner();
+        Self::for_page_residence(attachment.page_owner())
+    }
+
+    pub(crate) fn for_page_residence(page: &TargetPageResidenceIdentity) -> Self {
         let route = match page.target_id() {
             Some(target_id) => CdpSessionRoute::PageTarget {
                 browser_context_id: page.browser_context_id().to_owned(),
@@ -67,34 +80,28 @@ impl CommandOwnerScope {
                 browser_context_id: page.browser_context_id().to_owned(),
             },
         };
-        Self::for_implicit_route(Some(route))
+        Self::for_route(route)
     }
 
     pub(crate) fn session_id(&self) -> Option<&str> {
         match &self.identity {
             CommandOwnerIdentity::Session(session_id) => Some(session_id),
-            CommandOwnerIdentity::ImplicitRoute(_) | CommandOwnerIdentity::Implicit => None,
+            CommandOwnerIdentity::Route(_) => None,
         }
     }
 
-    /// Returns the exact route captured for an implicit-session command.
+    /// Returns the explicit route captured for a command without a session.
     ///
     /// A concrete CDP session remains authoritative through `session_id`; the
-    /// route freezes Chromium's implicit primary Page attachment at command
-    /// admission, so deferred completion cannot follow a later foreground
-    /// selection.
+    /// route freezes Chromium's primary Page attachment at command admission
+    /// whenever no more explicit route was supplied. `Browser` and
+    /// `BrowserContext` remain explicit authorities rather than a missing
+    /// owner that can silently acquire a later active Page.
     pub(crate) fn session_owner_route(&self) -> Option<&CdpSessionRoute> {
         match &self.identity {
-            CommandOwnerIdentity::ImplicitRoute(route) => Some(route),
-            CommandOwnerIdentity::Session(_) | CommandOwnerIdentity::Implicit => None,
+            CommandOwnerIdentity::Route(route) => Some(route),
+            CommandOwnerIdentity::Session(_) => None,
         }
-    }
-
-    pub(crate) fn enter<'a>(
-        &self,
-        conn: &'a mut CdpConnection,
-    ) -> NoneSessionOwnerRouteOverrideScope<'a> {
-        conn.scoped_optional_none_session_owner_route_override(self.session_owner_route().cloned())
     }
 }
 
@@ -104,7 +111,7 @@ mod tests {
     use crate::conn::BrowserContext;
 
     #[test]
-    fn implicit_scope_freezes_the_concrete_active_target() {
+    fn root_page_scope_freezes_the_concrete_active_target() {
         let mut conn = CdpConnection::default();
         let mut browser_context = BrowserContext::new("BID-scope".to_owned());
         browser_context.set_active_target_id("TID-original");
@@ -119,6 +126,30 @@ mod tests {
         assert_eq!(
             conn.target_owner_identity_for_route(scope.session_id(), scope.session_owner_route(),),
             Some(("BID-scope".to_owned(), Some("TID-original".to_owned())))
+        );
+    }
+
+    #[test]
+    fn root_scope_without_a_browser_context_has_explicit_browser_authority() {
+        let conn = CdpConnection::default();
+
+        let scope = CommandOwnerScope::capture(&conn, None);
+
+        assert_eq!(scope.session_owner_route(), Some(&CdpSessionRoute::Browser));
+    }
+
+    #[test]
+    fn root_scope_without_a_page_has_explicit_browser_context_authority() {
+        let mut conn = CdpConnection::default();
+        conn.browser_context = Some(BrowserContext::new("BID-empty".to_owned()));
+
+        let scope = CommandOwnerScope::capture(&conn, None);
+
+        assert_eq!(
+            scope.session_owner_route(),
+            Some(&CdpSessionRoute::BrowserContext {
+                browser_context_id: "BID-empty".to_owned(),
+            })
         );
     }
 }

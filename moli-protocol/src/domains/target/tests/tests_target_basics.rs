@@ -1753,7 +1753,9 @@ async fn same_context_targets_do_not_replay_bare_isolated_worlds_after_switching
         "data:text/html,<title>target-a-replay</title><div id='ok'>target a replay</div>";
     let target_a_commit = ctx
         .conn
-        .prepare_loaded_navigation_commit_for_session_owner(Some("SID-active"))
+        .prepare_loaded_navigation_commit_for_owner(&crate::conn::CommandOwnerScope::for_session(
+            "SID-active",
+        ))
         .expect("target A commit state should be available before navigation");
     assert!(
         target_a_commit.runtime_frontend_enabled,

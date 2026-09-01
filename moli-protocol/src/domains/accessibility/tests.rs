@@ -49,9 +49,10 @@ async fn load_page_async(ctx: &mut TestContext, html: &str) {
 }
 
 async fn complete_child_frame_lifecycle(ctx: &mut TestContext) {
+    let owner = crate::conn::CommandOwnerScope::capture(&ctx.conn, None);
     let pending = ctx
         .conn
-        .start_child_frame_lifecycle_work_for_session_owner(None, std::time::Duration::from_secs(2))
+        .start_child_frame_lifecycle_work_for_owner(owner, std::time::Duration::from_secs(2))
         .expect("loaded page should expose child-frame lifecycle work");
     let completed = pending
         .wait()

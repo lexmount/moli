@@ -47,8 +47,8 @@ async fn install_document_content_test_page(ctx: &mut TestContext, url: &str) {
             "the fixture should not leave buffered Inspector output behind"
         );
     }
-    let (binding, _) = ctx.conn.bind_renderer_document_lifecycle_for_session_owner(
-        Some("SID-1"),
+    let (binding, _) = ctx.conn.bind_renderer_document_lifecycle_for_owner(
+        &crate::conn::CommandOwnerScope::for_session("SID-1"),
         artifacts,
         Some(committed_document),
         "TID-1".to_owned(),
@@ -56,8 +56,10 @@ async fn install_document_content_test_page(ctx: &mut TestContext, url: &str) {
     );
     assert!(binding.is_some(), "renderer lifecycle should bind");
     if let Some(navigation_engine) = navigation_engine {
-        ctx.conn
-            .adopt_loaded_navigation_engine_for_session_owner(Some("SID-1"), navigation_engine);
+        ctx.conn.adopt_loaded_navigation_engine_for_owner(
+            &crate::conn::CommandOwnerScope::for_session("SID-1"),
+            navigation_engine,
+        );
     }
     // The fixture commits an already-running renderer Page directly instead
     // of going through the production navigation command. Route that exact
@@ -1705,12 +1707,10 @@ async fn root_set_document_content_unloads_descendant_frame_before_clearing_pare
         "data:text/html,<body><iframe srcdoc='<body>child</body>'></iframe></body>",
     )
     .await;
+    let owner = crate::conn::CommandOwnerScope::for_session("SID-1");
     let pending = ctx
         .conn
-        .start_child_frame_lifecycle_work_for_session_owner(
-            Some("SID-1"),
-            std::time::Duration::from_secs(2),
-        )
+        .start_child_frame_lifecycle_work_for_owner(owner, std::time::Duration::from_secs(2))
         .expect("loaded page should expose child-frame lifecycle work");
     let completed = pending
         .wait()

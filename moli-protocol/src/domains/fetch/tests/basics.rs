@@ -452,7 +452,7 @@ async fn pending_fetch_enable_keeps_background_owner_route_across_completion() {
     let mut ctx = TestContext::new();
     let background = PageTargetHost::with_url(
         "TID-fetch-background".to_owned(),
-        None,
+        Some("SID-fetch-background".to_owned()),
         "about:blank".to_owned(),
     );
 
@@ -467,20 +467,11 @@ async fn pending_fetch_enable_keeps_background_owner_route_across_completion() {
     )
     .await;
 
-    let background_route = ctx
-        .conn
-        .target_session_route_for_target_id("TID-fetch-background")
-        .expect("background target route");
-    let previous_route = ctx
-        .conn
-        .replace_none_session_owner_route_override(Some(background_route.clone()));
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<title>background fetch</title>",
-        None,
+        Some("SID-fetch-background"),
     )
     .await;
-    ctx.conn
-        .replace_none_session_owner_route_override(previous_route);
     ctx.sent.clear();
     let raw = serde_json::to_string(&json!({
         "id": 1204,
@@ -489,42 +480,33 @@ async fn pending_fetch_enable_keeps_background_owner_route_across_completion() {
             "patterns": [
                 { "urlPattern": "*", "resourceType": "XHR", "requestStage": "Request" }
             ]
-        }
+        },
+        "sessionId": "SID-fetch-background"
     }))
     .expect("Fetch.enable command should serialize");
-    let pending = {
-        let previous_route = ctx
-            .conn
-            .replace_none_session_owner_route_override(Some(background_route));
-        let step = ctx.conn.start_command_dispatch(&raw);
-        ctx.conn
-            .replace_none_session_owner_route_override(previous_route);
-        match step {
-            CdpCommandTaskStep::Pending(pending) => pending,
-            CdpCommandTaskStep::Complete(outcome) => {
-                panic!(
-                    "background Fetch.enable should update the live background page: {:?}",
-                    outcome.into_parts().0
-                )
-            }
+    let pending = match ctx.conn.start_command_dispatch(&raw) {
+        CdpCommandTaskStep::Pending(pending) => pending,
+        CdpCommandTaskStep::Complete(outcome) => {
+            panic!(
+                "background Fetch.enable should update the live background page: {:?}",
+                outcome.into_parts().0
+            )
         }
     };
 
-    let active_route = ctx
-        .conn
-        .target_session_route_for_target_id("TID-fetch-active")
-        .expect("active target route");
-    let previous_route = ctx
-        .conn
-        .replace_none_session_owner_route_override(Some(active_route));
     let (messages, scheduler_events) = ctx
         .complete_command_task_step_for_test(CdpCommandTaskStep::Pending(pending))
         .await;
-    ctx.conn
-        .replace_none_session_owner_route_override(previous_route);
 
     assert!(scheduler_events.is_empty());
-    assert_eq!(messages, vec![json!({ "id": 1204, "result": {} })]);
+    assert_eq!(
+        messages,
+        vec![json!({
+            "id": 1204,
+            "result": {},
+            "sessionId": "SID-fetch-background"
+        })]
+    );
 
     let bc = ctx.conn.browser_context.as_ref().expect("browser context");
     assert_eq!(bc.active_target_id(), Some("TID-fetch-active"));
@@ -1073,7 +1055,9 @@ async fn disable_clears_fetch_state() {
             document_navigation_token: None,
             navigation: crate::conn::NavigationDispatchState {
                 navigate_id: Some(1),
-                owner: crate::conn::CommandOwnerScope::for_implicit_route(None),
+                owner: crate::conn::CommandOwnerScope::for_route(
+                    crate::conn::CdpSessionRoute::Browser,
+                ),
                 result_projection: crate::conn::NavigationResultProjection::Cdp(
                     json!({"frameId": "TID-1", "loaderId": "LID-0000000001"}),
                 ),
@@ -1111,7 +1095,9 @@ async fn disable_clears_fetch_state() {
                 document_navigation_token: None,
                 navigation: crate::conn::NavigationDispatchState {
                     navigate_id: Some(1),
-                    owner: crate::conn::CommandOwnerScope::for_implicit_route(None),
+                    owner: crate::conn::CommandOwnerScope::for_route(
+                        crate::conn::CdpSessionRoute::Browser,
+                    ),
                     result_projection: crate::conn::NavigationResultProjection::Cdp(
                         json!({"frameId": "TID-1", "loaderId": "LID-0000000001"}),
                     ),

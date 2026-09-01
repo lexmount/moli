@@ -27,9 +27,9 @@ use crate::conn::state::{
 };
 use crate::domains::command_output::protocol_message_background_event;
 use crate::domains::runtime_context_events::{
-    RuntimeContextProtocolEvent, apply_runtime_context_protocol_event_side_effects_typed,
+    RuntimeContextProtocolEvent, apply_runtime_context_protocol_event_side_effects_for_owner_typed,
     emit_runtime_context_protocol_background_event_typed,
-    qualify_runtime_context_protocol_event_for_session_owner_typed,
+    qualify_runtime_context_protocol_event_for_owner_typed,
 };
 
 use super::*;
@@ -261,13 +261,14 @@ pub(crate) struct OwnerRuntimeResponse {
 #[derive(Debug)]
 pub(crate) struct ClaimedPendingInspectorAwait {
     command_id: u64,
+    owner: CommandOwnerScope,
     entry: PendingInspectorAwait,
 }
 
 #[derive(Debug)]
 pub(crate) struct ClaimedPendingInspectorAwaitOwner {
     command_id: u64,
-    session_id: Option<String>,
+    owner: CommandOwnerScope,
     bidi_channel_object_group: Option<String>,
     renderer_correlation: Option<RendererCommandCorrelation>,
 }
@@ -276,7 +277,7 @@ impl ClaimedPendingInspectorAwaitOwner {
     fn from_claimed(claimed: &ClaimedPendingInspectorAwait) -> Self {
         Self {
             command_id: claimed.command_id,
-            session_id: claimed.entry.session_id().map(str::to_owned),
+            owner: claimed.owner.clone(),
             bidi_channel_object_group: claimed
                 .entry
                 .bidi_channel_listener()
@@ -286,11 +287,15 @@ impl ClaimedPendingInspectorAwaitOwner {
     }
 
     fn session_id(&self) -> Option<&str> {
-        self.session_id.as_deref()
+        self.owner.session_id()
     }
 
     fn matches_session_owner(&self, session_id: Option<&str>) -> bool {
         self.session_id() == session_id
+    }
+
+    fn matches_owner(&self, owner: &CommandOwnerScope) -> bool {
+        &self.owner == owner
     }
 }
 
@@ -333,7 +338,7 @@ impl OwnerRuntimeResponse {
 }
 
 pub struct PendingRuntimeProtocolMessageDispatch {
-    session_id: Option<String>,
+    owner: CommandOwnerScope,
     route: RuntimeProtocolMessagePageRoute,
     pending: PendingRuntimeProtocolMessageDispatchKind,
     response_route: RuntimeProtocolResponseRoute,
@@ -431,24 +436,24 @@ struct PendingMoliDiagnosticsPageSnapshot {
 }
 
 pub struct PendingRuntimeEnableEventsDispatch {
-    session_id: Option<String>,
+    owner: CommandOwnerScope,
     route: RuntimeProtocolMessagePageRoute,
     pending: moli_core::page::PendingPageCommand,
 }
 
 pub struct PendingRuntimeBindingPageCommandDispatch {
-    session_id: Option<String>,
+    owner: CommandOwnerScope,
     operation: &'static str,
     pending: moli_core::page::PendingPageCommand,
 }
 
 pub struct PendingRuntimeChildDefaultContextLookupDispatch {
-    session_id: Option<String>,
+    owner: CommandOwnerScope,
     pending: moli_core::page::PendingPageCommand,
 }
 
 pub struct CompletedRuntimeProtocolMessageDispatch {
-    session_id: Option<String>,
+    owner: CommandOwnerScope,
     route: RuntimeProtocolMessagePageRoute,
     completion: moli_core::page::CompletedRuntimeInspectorCommandDispatch,
     response_route: RuntimeProtocolResponseRoute,
@@ -477,7 +482,7 @@ struct CompletedMoliDiagnosticsPageSnapshot {
 }
 
 pub struct CompletedRuntimeEnableEventsDispatch {
-    session_id: Option<String>,
+    owner: CommandOwnerScope,
     route: RuntimeProtocolMessagePageRoute,
     completion: moli_core::page::CompletedPageCommand,
 }
@@ -524,13 +529,13 @@ impl RuntimeEnableReplayEvent {
 }
 
 pub struct CompletedRuntimeBindingPageCommandDispatch {
-    session_id: Option<String>,
+    owner: CommandOwnerScope,
     operation: &'static str,
     completion: moli_core::page::CompletedPageCommand,
 }
 
 pub struct CompletedRuntimeChildDefaultContextLookupDispatch {
-    session_id: Option<String>,
+    owner: CommandOwnerScope,
     completion: moli_core::page::CompletedPageCommand,
 }
 
@@ -606,7 +611,7 @@ impl PendingRuntimeProtocolMessageDispatch {
                 .map_err(|error| format!("runtime inspector dispatch failed: {error}"))?,
         };
         Ok(CompletedRuntimeProtocolMessageDispatch {
-            session_id: self.session_id,
+            owner: self.owner,
             route: self.route,
             completion,
             response_route: self.response_route,
@@ -639,6 +644,10 @@ impl PendingServiceWorkerRuntimeProtocolMessageDispatch {
 }
 
 impl CompletedRuntimeProtocolMessageDispatch {
+    pub(crate) fn owner(&self) -> &CommandOwnerScope {
+        &self.owner
+    }
+
     pub(crate) fn session_response_succeeded(&self) -> Option<bool> {
         match &self.completion {
             moli_core::page::CompletedRuntimeInspectorCommandDispatch::OwnerSessionResponse {
@@ -728,7 +737,7 @@ impl PendingRuntimeEnableEventsDispatch {
             .await
             .map_err(|error| format!("runtime enable event replay failed: {error}"))?;
         Ok(CompletedRuntimeEnableEventsDispatch {
-            session_id: self.session_id,
+            owner: self.owner,
             route: self.route,
             completion,
         })
@@ -743,7 +752,7 @@ impl PendingRuntimeBindingPageCommandDispatch {
             .await
             .map_err(|error| format!("{} failed: {error}", self.operation))?;
         Ok(CompletedRuntimeBindingPageCommandDispatch {
-            session_id: self.session_id,
+            owner: self.owner,
             operation: self.operation,
             completion,
         })
@@ -758,7 +767,7 @@ impl PendingRuntimeChildDefaultContextLookupDispatch {
             .await
             .map_err(|error| format!("runtime child default context lookup failed: {error}"))?;
         Ok(CompletedRuntimeChildDefaultContextLookupDispatch {
-            session_id: self.session_id,
+            owner: self.owner,
             completion,
         })
     }
@@ -837,20 +846,22 @@ impl CdpConnection {
         cdp_request_id: u64,
         session_id: Option<&str>,
     ) {
-        self.try_register_pending_inspector_await_with_object_group(
+        let owner = CommandOwnerScope::capture(self, session_id);
+        self.try_register_pending_inspector_await_with_object_group_for_owner(
             cdp_request_id,
-            session_id,
+            &owner,
             None,
         )
         .expect("pending Inspector await frontend command id must be unique per session");
     }
 
-    pub(crate) fn try_register_pending_inspector_await_with_object_group(
+    pub(crate) fn try_register_pending_inspector_await_with_object_group_for_owner(
         &mut self,
         cdp_request_id: u64,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
         object_group: Option<&str>,
     ) -> Result<(), DuplicatePendingRendererCommand> {
+        let session_id = owner.session_id();
         if let Some(owner_session_id) = session_id
             && let Some(target) = self.shared_worker_target_for_session_mut(session_id)
         {
@@ -871,9 +882,13 @@ impl CdpConnection {
                 object_group,
             );
         }
-        self.with_target_devtools_session_state_for_session_mut(session_id, |state| {
-            state.try_register_pending_inspector_await(cdp_request_id, session_id, object_group)
-        })
+        self.with_target_devtools_session_state_for_route_mut(
+            owner.session_id(),
+            owner.session_owner_route(),
+            |state| {
+                state.try_register_pending_inspector_await(cdp_request_id, session_id, object_group)
+            },
+        )
         .unwrap_or(Ok(()))
     }
 
@@ -917,6 +932,36 @@ impl CdpConnection {
         .map_err(|error| error.to_string())
     }
 
+    fn try_register_renderer_call_for_owner(
+        &mut self,
+        owner: &CommandOwnerScope,
+        cdp_request_id: u64,
+        dispatched_attachment_id: Option<RendererAgentAttachmentId>,
+        descriptor: RendererCommandDescriptor,
+    ) -> Result<PreparedRendererCallDispatch, String> {
+        if owner.session_id().is_some() {
+            return self.try_register_renderer_call_for_session_owner(
+                owner.session_id(),
+                cdp_request_id,
+                dispatched_attachment_id,
+                descriptor,
+            );
+        }
+        self.with_target_devtools_session_state_for_route_mut(
+            owner.session_id(),
+            owner.session_owner_route(),
+            |state| {
+                state.try_register_renderer_call(
+                    cdp_request_id,
+                    dispatched_attachment_id,
+                    descriptor,
+                )
+            },
+        )
+        .ok_or_else(|| "UnknownSession".to_owned())?
+        .map_err(|error| error.to_string())
+    }
+
     pub(crate) fn take_renderer_call_for_frontend_for_session_owner(
         &mut self,
         session_id: Option<&str>,
@@ -935,6 +980,25 @@ impl CdpConnection {
         self.with_target_devtools_session_state_for_session_mut(session_id, |state| {
             state.take_renderer_call_for_frontend(cdp_request_id)
         })
+        .flatten()
+    }
+
+    pub(crate) fn take_renderer_call_for_frontend_for_owner(
+        &mut self,
+        owner: &CommandOwnerScope,
+        cdp_request_id: u64,
+    ) -> Option<RendererCommandCorrelation> {
+        if owner.session_id().is_some() {
+            return self.take_renderer_call_for_frontend_for_session_owner(
+                owner.session_id(),
+                cdp_request_id,
+            );
+        }
+        self.with_target_devtools_session_state_for_route_mut(
+            owner.session_id(),
+            owner.session_owner_route(),
+            |state| state.take_renderer_call_for_frontend(cdp_request_id),
+        )
         .flatten()
     }
 
@@ -975,10 +1039,23 @@ impl CdpConnection {
         session_id: Option<&str>,
         cdp_request_id: u64,
     ) -> Option<RendererRuntimeCommandCausalIdentity> {
-        let correlation =
-            self.renderer_call_for_frontend_for_session_owner(session_id, cdp_request_id)?;
+        self.renderer_runtime_command_cause_for_route(session_id, None, cdp_request_id)
+    }
+
+    pub(crate) fn renderer_runtime_command_cause_for_route(
+        &self,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
+        cdp_request_id: u64,
+    ) -> Option<RendererRuntimeCommandCausalIdentity> {
+        let correlation = if session_id.is_some() {
+            self.renderer_call_for_frontend_for_session_owner(session_id, cdp_request_id)
+        } else {
+            self.target_devtools_session_state_for_route(session_id, owner_route)?
+                .renderer_call_for_frontend(cdp_request_id)
+        }?;
         Some(RendererRuntimeCommandCausalIdentity::new(
-            self.target_renderer_runtime_inspector_session_id_for_session(session_id),
+            self.target_renderer_runtime_inspector_session_id_for_route(session_id, owner_route),
             correlation.renderer_call_id().get(),
         ))
     }
@@ -1017,6 +1094,35 @@ impl CdpConnection {
                 dispatched_attachment_id,
             )
         })
+        .flatten()
+    }
+
+    fn take_renderer_call_for_frontend_if_matches_for_owner(
+        &mut self,
+        owner: &CommandOwnerScope,
+        cdp_request_id: u64,
+        renderer_call_id: RendererCallId,
+        dispatched_attachment_id: Option<RendererAgentAttachmentId>,
+    ) -> Option<RendererCommandCorrelation> {
+        if owner.session_id().is_some() {
+            return self.take_renderer_call_for_frontend_if_matches_for_session_owner(
+                owner.session_id(),
+                cdp_request_id,
+                renderer_call_id,
+                dispatched_attachment_id,
+            );
+        }
+        self.with_target_devtools_session_state_for_route_mut(
+            owner.session_id(),
+            owner.session_owner_route(),
+            |state| {
+                state.take_renderer_call_for_frontend_if_matches(
+                    cdp_request_id,
+                    renderer_call_id,
+                    dispatched_attachment_id,
+                )
+            },
+        )
         .flatten()
     }
 
@@ -1089,6 +1195,33 @@ impl CdpConnection {
         .flatten()
     }
 
+    fn take_frontend_command_for_renderer_if_attachment_matches_for_owner(
+        &mut self,
+        owner: &CommandOwnerScope,
+        renderer_call_id: RendererCallId,
+        dispatched_attachment_id: Option<RendererAgentAttachmentId>,
+    ) -> Option<RendererCommandCorrelation> {
+        if owner.session_id().is_some() {
+            return self
+                .take_frontend_command_for_renderer_if_attachment_matches_for_session_owner(
+                    owner.session_id(),
+                    renderer_call_id,
+                    dispatched_attachment_id,
+                );
+        }
+        self.with_target_devtools_session_state_for_route_mut(
+            owner.session_id(),
+            owner.session_owner_route(),
+            |state| {
+                state.take_frontend_command_for_renderer_if_attachment_matches(
+                    renderer_call_id,
+                    dispatched_attachment_id,
+                )
+            },
+        )
+        .flatten()
+    }
+
     fn prepare_renderer_call_for_session_owner(
         &mut self,
         session_id: Option<&str>,
@@ -1142,6 +1275,58 @@ impl CdpConnection {
         }
     }
 
+    fn prepare_renderer_call_for_owner(
+        &mut self,
+        owner: &CommandOwnerScope,
+        descriptor: RendererCommandDescriptor,
+        cdp_request_id: u64,
+        dispatched_attachment_id: Option<RendererAgentAttachmentId>,
+    ) -> Result<
+        (
+            RendererCommandCorrelation,
+            String,
+            RendererRuntimeInspectorResponseSender,
+            RuntimeProtocolResponseRoute,
+        ),
+        String,
+    > {
+        let raw_json = descriptor.frontend_payload().to_owned();
+        let response_delivery = descriptor.response_delivery();
+        let prepared = self.try_register_renderer_call_for_owner(
+            owner,
+            cdp_request_id,
+            dispatched_attachment_id,
+            descriptor,
+        )?;
+        let correlation = prepared.correlation();
+        match self.rewrite_runtime_inspector_command_for_owner(
+            owner,
+            &raw_json,
+            Some((
+                FrontendCommandId::new(cdp_request_id),
+                correlation.renderer_call_id(),
+            )),
+        ) {
+            Ok(raw_json) => {
+                let (correlation, response_sender, response_receiver) = prepared.into_parts();
+                Ok((
+                    correlation,
+                    raw_json,
+                    response_sender,
+                    RuntimeProtocolResponseRoute::for_registered_delivery(
+                        response_delivery,
+                        response_receiver,
+                    ),
+                ))
+            }
+            Err(error) => {
+                let removed = self.take_renderer_call_for_frontend_for_owner(owner, cdp_request_id);
+                debug_assert_eq!(removed, Some(correlation));
+                Err(error)
+            }
+        }
+    }
+
     fn rewrite_runtime_inspector_command_for_session_owner(
         &self,
         session_id: Option<&str>,
@@ -1158,14 +1343,41 @@ impl CdpConnection {
         )
     }
 
-    pub(crate) fn register_runtime_await_job(
+    fn rewrite_runtime_inspector_command_for_owner(
+        &self,
+        owner: &CommandOwnerScope,
+        raw_json: &str,
+        command_id_rewrite: Option<(FrontendCommandId, RendererCallId)>,
+    ) -> Result<String, String> {
+        if owner.session_id().is_some() {
+            return self.rewrite_runtime_inspector_command_for_session_owner(
+                owner.session_id(),
+                raw_json,
+                command_id_rewrite,
+            );
+        }
+        let owner_target_id = self
+            .target_owner_identity_for_route(owner.session_id(), owner.session_owner_route())
+            .and_then(|(_, target_id)| target_id);
+        rewrite_runtime_inspector_command_for_renderer(
+            raw_json,
+            command_id_rewrite,
+            owner_target_id.as_deref(),
+        )
+    }
+
+    pub(crate) fn register_runtime_await_job_for_owner(
         &mut self,
         cdp_request_id: u64,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
         object_group: Option<&str>,
         action: &'static str,
     ) {
-        let owner_route = self.runtime_await_owner_route_for_session(session_id);
+        let session_id = owner.session_id();
+        let owner_route = owner
+            .session_owner_route()
+            .cloned()
+            .or_else(|| self.session_route(session_id));
         let job = RuntimeAwaitJob::new(
             cdp_request_id,
             session_id,
@@ -1287,11 +1499,6 @@ impl CdpConnection {
         &self,
         session_id: Option<&str>,
     ) -> Option<CdpSessionRoute> {
-        if session_id.is_none()
-            && let Some(route) = self.none_session_owner_route_override()
-        {
-            return Some(route);
-        }
         if let Some(route) = self.session_route(session_id) {
             return Some(route);
         }
@@ -1322,6 +1529,7 @@ impl CdpConnection {
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn register_pending_bidi_channel_listener(
         &mut self,
         cdp_request_id: u64,
@@ -1341,6 +1549,31 @@ impl CdpConnection {
                 listener,
             );
         });
+    }
+
+    fn register_pending_bidi_channel_listener_for_owner(
+        &mut self,
+        cdp_request_id: u64,
+        owner: &CommandOwnerScope,
+        listener: BidiChannelListenerResidence,
+    ) {
+        assert_eq!(
+            listener.owner().command_owner(),
+            owner,
+            "BiDi listener residence must be registered under its exact Page owner"
+        );
+        let _ = self.with_target_devtools_session_state_for_route_mut(
+            owner.session_id(),
+            owner.session_owner_route(),
+            |state| {
+                state.register_pending_bidi_channel_listener(
+                    cdp_request_id,
+                    owner.session_id(),
+                    Some(BIDI_SCRIPT_RESULT_OBJECT_GROUP),
+                    listener,
+                );
+            },
+        );
     }
 
     pub(crate) fn publish_bidi_channel_listener_start(
@@ -1382,18 +1615,29 @@ impl CdpConnection {
         let _ = self.remove_pending_inspector_await_for_cancellation(cdp_request_id, session_id);
     }
 
+    pub(crate) fn forget_pending_inspector_await_for_owner(
+        &mut self,
+        cdp_request_id: u64,
+        owner: &CommandOwnerScope,
+    ) {
+        self.cancel_runtime_await_job(cdp_request_id, owner.session_id(), "forgotten");
+        let _ =
+            self.remove_pending_inspector_await_for_cancellation_for_owner(cdp_request_id, owner);
+    }
+
     pub(crate) fn claim_pending_inspector_await_for_scheduler_deferred_reply(
         &mut self,
         cdp_request_id: u64,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
     ) -> Option<ClaimedPendingInspectorAwait> {
         let claimed = self
-            .remove_pending_inspector_await(cdp_request_id, session_id)
+            .remove_pending_inspector_await_for_owner(cdp_request_id, owner)
             .map(|entry| ClaimedPendingInspectorAwait {
                 command_id: cdp_request_id,
+                owner: owner.clone(),
                 entry,
             })?;
-        let key = PendingRendererCommandKey::new(session_id, cdp_request_id);
+        let key = PendingRendererCommandKey::new(owner.session_id(), cdp_request_id);
         match self.claimed_pending_inspector_await_owners.entry(key) {
             Entry::Vacant(entry) => {
                 entry.insert(ClaimedPendingInspectorAwaitOwner::from_claimed(&claimed));
@@ -1433,6 +1677,21 @@ impl CdpConnection {
             .collect()
     }
 
+    fn drain_claimed_pending_inspector_await_owners_for_owner(
+        &mut self,
+        owner: &CommandOwnerScope,
+    ) -> Vec<ClaimedPendingInspectorAwaitOwner> {
+        let to_remove = self
+            .claimed_pending_inspector_await_owners
+            .iter()
+            .filter_map(|(key, claimed)| claimed.matches_owner(owner).then_some(key.clone()))
+            .collect::<Vec<_>>();
+        to_remove
+            .into_iter()
+            .filter_map(|key| self.claimed_pending_inspector_await_owners.remove(&key))
+            .collect()
+    }
+
     fn push_claimed_pending_inspector_await_owner_errors(
         &mut self,
         background_events: &mut Vec<BackgroundProtocolEvent>,
@@ -1442,21 +1701,20 @@ impl CdpConnection {
         for owner in owners {
             self.cancel_runtime_await_job(owner.command_id, owner.session_id(), reason);
             if let Some(correlation) = owner.renderer_correlation {
-                self.discard_renderer_call_for_session_owner_if_matches(
-                    owner.session_id(),
-                    correlation,
+                let _ = self.take_renderer_call_for_frontend_if_matches_for_owner(
+                    &owner.owner,
+                    correlation.frontend_command_id().get(),
+                    correlation.renderer_call_id(),
+                    correlation.dispatched_attachment_id(),
                 );
             }
             if let Some(object_group) = owner.bidi_channel_object_group.as_deref() {
-                self.unregister_runtime_remote_object_group_for_session_owner(
-                    owner.session_id(),
-                    object_group,
-                );
+                self.unregister_runtime_remote_object_group_for_owner(&owner.owner, object_group);
                 continue;
             }
-            let mut response = RuntimeInspectorResponseReady::new(
+            let mut response = RuntimeInspectorResponseReady::for_owner(
                 owner.command_id,
-                owner.session_id(),
+                &owner.owner,
                 Err(reason.to_owned()),
             );
             if let Some(correlation) = owner.renderer_correlation {
@@ -1505,11 +1763,15 @@ impl CdpConnection {
         let Some(claimed) = claimed else {
             return;
         };
-        let ClaimedPendingInspectorAwait { command_id, entry } = claimed;
-        let session_id = entry.session_id().map(str::to_owned);
+        let ClaimedPendingInspectorAwait {
+            command_id,
+            owner,
+            entry,
+        } = claimed;
+        let session_id = owner.session_id().map(str::to_owned);
         self.remove_claimed_pending_inspector_await_owner(command_id, session_id.as_deref());
         self.complete_runtime_await_job(command_id, session_id.as_deref());
-        self.apply_completed_pending_inspector_await_entry(entry, protocol_events);
+        self.apply_completed_pending_inspector_await_entry(&owner, entry, protocol_events);
     }
 
     pub(crate) fn cancel_claimed_pending_inspector_await_for_scheduler_deferred_reply(
@@ -1520,19 +1782,25 @@ impl CdpConnection {
         let Some(claimed) = claimed else {
             return;
         };
-        let ClaimedPendingInspectorAwait { command_id, entry } = claimed;
-        let session_id = entry.session_id().map(str::to_owned);
+        let ClaimedPendingInspectorAwait {
+            command_id,
+            owner,
+            entry,
+        } = claimed;
+        let session_id = owner.session_id().map(str::to_owned);
         self.remove_claimed_pending_inspector_await_owner(command_id, session_id.as_deref());
         self.cancel_runtime_await_job(command_id, session_id.as_deref(), reason);
         if let Some(correlation) = entry.renderer_correlation() {
-            self.discard_renderer_call_for_session_owner_if_matches(
-                session_id.as_deref(),
-                correlation,
+            let _ = self.take_renderer_call_for_frontend_if_matches_for_owner(
+                &owner,
+                correlation.frontend_command_id().get(),
+                correlation.renderer_call_id(),
+                correlation.dispatched_attachment_id(),
             );
         }
         if let Some(listener) = entry.bidi_channel_listener() {
-            self.unregister_runtime_remote_object_group_for_session_owner(
-                entry.session_id(),
+            self.unregister_runtime_remote_object_group_for_owner(
+                &owner,
                 listener.channel_object_group(),
             );
         }
@@ -1540,23 +1808,23 @@ impl CdpConnection {
 
     fn apply_completed_pending_inspector_await_entry(
         &mut self,
+        owner: &CommandOwnerScope,
         entry: PendingInspectorAwait,
         protocol_events: &[BackgroundProtocolEvent],
     ) {
-        let routed_session_id = entry.session_id().map(str::to_owned);
         if let Some(object_group) = entry.object_group() {
             for event in protocol_events {
                 if let Some((_, _, BackgroundCommandResponsePayloadRef::Success { result })) =
                     event.command_response_payload_ref()
                 {
-                    self.register_runtime_remote_object_ids_from_value_for_session_owner_with_group(
-                        routed_session_id.as_deref(),
+                    self.register_runtime_remote_object_ids_from_value_for_owner_with_group(
+                        owner,
                         result,
                         object_group,
                     );
                 } else if let Some(message) = event.protocol_message() {
-                    self.register_runtime_remote_object_ids_from_value_for_session_owner_with_group(
-                        routed_session_id.as_deref(),
+                    self.register_runtime_remote_object_ids_from_value_for_owner_with_group(
+                        owner,
                         message,
                         object_group,
                     );
@@ -1567,21 +1835,15 @@ impl CdpConnection {
                 if let Some((_, _, BackgroundCommandResponsePayloadRef::Success { result })) =
                     event.command_response_payload_ref()
                 {
-                    self.register_runtime_remote_object_ids_from_value_for_session_owner(
-                        routed_session_id.as_deref(),
-                        result,
-                    );
+                    self.register_runtime_remote_object_ids_from_value_for_owner(owner, result);
                 } else if let Some(message) = event.protocol_message() {
-                    self.register_runtime_remote_object_ids_from_value_for_session_owner(
-                        routed_session_id.as_deref(),
-                        message,
-                    );
+                    self.register_runtime_remote_object_ids_from_value_for_owner(owner, message);
                 }
             }
         }
         if let Some(listener) = entry.bidi_channel_listener() {
-            self.unregister_runtime_remote_object_group_for_session_owner(
-                entry.session_id(),
+            self.unregister_runtime_remote_object_group_for_owner(
+                owner,
                 listener.channel_object_group(),
             );
         }
@@ -1608,6 +1870,22 @@ impl CdpConnection {
         .flatten()
     }
 
+    fn remove_pending_inspector_await_for_owner(
+        &mut self,
+        cdp_request_id: u64,
+        owner: &CommandOwnerScope,
+    ) -> Option<PendingInspectorAwait> {
+        if owner.session_id().is_some() {
+            return self.remove_pending_inspector_await(cdp_request_id, owner.session_id());
+        }
+        self.with_target_devtools_session_state_for_route_mut(
+            owner.session_id(),
+            owner.session_owner_route(),
+            |state| state.remove_pending_inspector_await(cdp_request_id),
+        )
+        .flatten()
+    }
+
     fn remove_pending_inspector_await_for_cancellation(
         &mut self,
         cdp_request_id: u64,
@@ -1622,6 +1900,28 @@ impl CdpConnection {
         } else if entry.is_none() {
             let _ =
                 self.take_renderer_call_for_frontend_for_session_owner(session_id, cdp_request_id);
+        }
+        entry
+    }
+
+    fn remove_pending_inspector_await_for_cancellation_for_owner(
+        &mut self,
+        cdp_request_id: u64,
+        owner: &CommandOwnerScope,
+    ) -> Option<PendingInspectorAwait> {
+        let entry = self.remove_pending_inspector_await_for_owner(cdp_request_id, owner);
+        if let Some(correlation) = entry
+            .as_ref()
+            .and_then(PendingInspectorAwait::renderer_correlation)
+        {
+            let _ = self.take_renderer_call_for_frontend_if_matches_for_owner(
+                owner,
+                correlation.frontend_command_id().get(),
+                correlation.renderer_call_id(),
+                correlation.dispatched_attachment_id(),
+            );
+        } else if entry.is_none() {
+            let _ = self.take_renderer_call_for_frontend_for_owner(owner, cdp_request_id);
         }
         entry
     }
@@ -1936,6 +2236,62 @@ impl CdpConnection {
         push_terminated_renderer_call_error_background_events(out, terminated, session_id, reason);
     }
 
+    pub(crate) fn fail_pending_inspector_awaits_for_owner_background_events_into(
+        &mut self,
+        out: &mut Vec<BackgroundProtocolEvent>,
+        claimed_background_events: &mut Vec<BackgroundProtocolEvent>,
+        owner: &CommandOwnerScope,
+        reason: &'static str,
+    ) {
+        if owner.session_id().is_some() {
+            self.fail_pending_inspector_awaits_for_session_owner_background_events_into(
+                out,
+                claimed_background_events,
+                owner.session_id(),
+                reason,
+            );
+            return;
+        }
+
+        let claimed = self.drain_claimed_pending_inspector_await_owners_for_owner(owner);
+        self.push_claimed_pending_inspector_await_owner_errors(
+            claimed_background_events,
+            claimed,
+            reason,
+        );
+        let drained = self
+            .with_target_devtools_session_state_for_route_mut(
+                None,
+                owner.session_owner_route(),
+                |state| state.drain_pending_inspector_awaits(),
+            )
+            .unwrap_or_default();
+        for (cdp_id, entry) in drained {
+            self.cancel_runtime_await_job(cdp_id, entry.session_id(), reason);
+            if let Some(listener) = entry.bidi_channel_listener() {
+                self.unregister_runtime_remote_object_group_for_owner(
+                    owner,
+                    listener.channel_object_group(),
+                );
+                continue;
+            }
+            push_pending_inspector_await_error_background_event(
+                out,
+                cdp_id,
+                entry.session_id(),
+                reason,
+            );
+        }
+        let terminated = self
+            .with_target_devtools_session_state_for_route_mut(
+                None,
+                owner.session_owner_route(),
+                |state| state.terminate_all_renderer_calls(reason),
+            )
+            .unwrap_or_default();
+        push_terminated_renderer_call_error_background_events(out, terminated, None, reason);
+    }
+
     pub(crate) fn validate_runtime_remote_object_ids_for_session_owner(
         &self,
         session_id: Option<&str>,
@@ -1963,6 +2319,35 @@ impl CdpConnection {
         Ok(())
     }
 
+    pub(crate) fn validate_runtime_remote_object_ids_for_owner(
+        &self,
+        owner: &CommandOwnerScope,
+        object_ids: &[String],
+    ) -> Result<(), String> {
+        if owner.session_id().is_some() {
+            return self.validate_runtime_remote_object_ids_for_session_owner(
+                owner.session_id(),
+                object_ids,
+            );
+        }
+        if object_ids.is_empty() {
+            return Ok(());
+        }
+        let Some(owner_identity) = self.runtime_remote_object_owner_identity_for_owner(owner)
+        else {
+            return Ok(());
+        };
+        for object_id in object_ids {
+            if self.runtime_remote_object_id_known_for_owner(owner, object_id) {
+                continue;
+            }
+            if self.runtime_remote_object_id_known_for_different_owner(&owner_identity, object_id) {
+                return Err("Cannot find object with given id".to_owned());
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn runtime_remote_object_id_known_for_session_owner(
         &self,
         session_id: Option<&str>,
@@ -1980,6 +2365,22 @@ impl CdpConnection {
         }
         self.target_devtools_session_state_for_session(session_id)
             .is_some_and(|state| state.has_runtime_remote_object_id(object_id))
+    }
+
+    pub(crate) fn runtime_remote_object_id_known_for_owner(
+        &self,
+        owner: &CommandOwnerScope,
+        object_id: &str,
+    ) -> bool {
+        if owner.session_id().is_some() {
+            return self
+                .runtime_remote_object_id_known_for_session_owner(owner.session_id(), object_id);
+        }
+        self.target_devtools_session_state_for_route(
+            owner.session_id(),
+            owner.session_owner_route(),
+        )
+        .is_some_and(|state| state.has_runtime_remote_object_id(object_id))
     }
 
     pub(crate) fn register_runtime_remote_object_ids_from_value_for_session_owner(
@@ -2002,6 +2403,25 @@ impl CdpConnection {
             session_id,
             owner_route,
             |state| state.register_runtime_remote_object_ids(object_ids),
+        );
+    }
+
+    pub(crate) fn register_runtime_remote_object_ids_from_value_for_owner(
+        &mut self,
+        owner: &CommandOwnerScope,
+        value: &Value,
+    ) {
+        if owner.session_id().is_some() {
+            self.register_runtime_remote_object_ids_from_value_for_session_owner(
+                owner.session_id(),
+                value,
+            );
+            return;
+        }
+        self.register_runtime_remote_object_ids_from_value_for_route(
+            owner.session_id(),
+            owner.session_owner_route(),
+            value,
         );
     }
 
@@ -2034,6 +2454,28 @@ impl CdpConnection {
         );
     }
 
+    pub(crate) fn register_runtime_remote_object_ids_from_value_for_owner_with_group(
+        &mut self,
+        owner: &CommandOwnerScope,
+        value: &Value,
+        object_group: &str,
+    ) {
+        if owner.session_id().is_some() {
+            self.register_runtime_remote_object_ids_from_value_for_session_owner_with_group(
+                owner.session_id(),
+                value,
+                object_group,
+            );
+            return;
+        }
+        self.register_runtime_remote_object_ids_from_value_for_route_with_group(
+            owner.session_id(),
+            owner.session_owner_route(),
+            value,
+            object_group,
+        );
+    }
+
     pub(crate) fn runtime_remote_object_group_for_session_owner(
         &self,
         session_id: Option<&str>,
@@ -2056,6 +2498,23 @@ impl CdpConnection {
         self.target_devtools_session_state_for_session(session_id)?
             .runtime_remote_object_group(object_id)
             .map(str::to_owned)
+    }
+
+    pub(crate) fn runtime_remote_object_group_for_owner(
+        &self,
+        owner: &CommandOwnerScope,
+        object_id: &str,
+    ) -> Option<String> {
+        if owner.session_id().is_some() {
+            return self
+                .runtime_remote_object_group_for_session_owner(owner.session_id(), object_id);
+        }
+        self.target_devtools_session_state_for_route(
+            owner.session_id(),
+            owner.session_owner_route(),
+        )?
+        .runtime_remote_object_group(object_id)
+        .map(str::to_owned)
     }
 
     pub(crate) fn runtime_remote_object_realm_for_session_owner(
@@ -2082,6 +2541,23 @@ impl CdpConnection {
             .map(str::to_owned)
     }
 
+    pub(crate) fn runtime_remote_object_realm_for_owner(
+        &self,
+        owner: &CommandOwnerScope,
+        object_id: &str,
+    ) -> Option<String> {
+        if owner.session_id().is_some() {
+            return self
+                .runtime_remote_object_realm_for_session_owner(owner.session_id(), object_id);
+        }
+        self.target_devtools_session_state_for_route(
+            owner.session_id(),
+            owner.session_owner_route(),
+        )?
+        .runtime_remote_object_realm(object_id)
+        .map(str::to_owned)
+    }
+
     pub(crate) fn runtime_remote_object_alias_for_session_owner(
         &self,
         session_id: Option<&str>,
@@ -2104,6 +2580,49 @@ impl CdpConnection {
         self.target_devtools_session_state_for_session(session_id)?
             .runtime_remote_object_alias(object_id)
             .map(str::to_owned)
+    }
+
+    pub(crate) fn runtime_remote_object_alias_for_owner(
+        &self,
+        owner: &CommandOwnerScope,
+        object_id: &str,
+    ) -> Option<String> {
+        if owner.session_id().is_some() {
+            return self
+                .runtime_remote_object_alias_for_session_owner(owner.session_id(), object_id);
+        }
+        self.target_devtools_session_state_for_route(
+            owner.session_id(),
+            owner.session_owner_route(),
+        )?
+        .runtime_remote_object_alias(object_id)
+        .map(str::to_owned)
+    }
+
+    pub(crate) fn register_runtime_remote_object_alias_for_owner_with_realm(
+        &mut self,
+        owner: &CommandOwnerScope,
+        alias_id: String,
+        object_id: String,
+        realm_id: &str,
+    ) {
+        if owner.session_id().is_some() {
+            self.register_runtime_remote_object_alias_for_session_owner_with_realm(
+                owner.session_id(),
+                alias_id,
+                object_id,
+                realm_id,
+            );
+            return;
+        }
+        let _ = self.with_target_devtools_session_state_for_route_mut(
+            owner.session_id(),
+            owner.session_owner_route(),
+            |state| {
+                state
+                    .register_runtime_remote_object_alias_with_realm(alias_id, object_id, realm_id);
+            },
+        );
     }
 
     pub(crate) fn unregister_runtime_remote_object_ids_for_session_owner(
@@ -2131,6 +2650,25 @@ impl CdpConnection {
         });
     }
 
+    pub(crate) fn unregister_runtime_remote_object_ids_for_owner(
+        &mut self,
+        owner: &CommandOwnerScope,
+        object_ids: &[String],
+    ) {
+        if owner.session_id().is_some() {
+            self.unregister_runtime_remote_object_ids_for_session_owner(
+                owner.session_id(),
+                object_ids,
+            );
+            return;
+        }
+        let _ = self.with_target_devtools_session_state_for_route_mut(
+            owner.session_id(),
+            owner.session_owner_route(),
+            |state| state.unregister_runtime_remote_object_ids(object_ids),
+        );
+    }
+
     pub(crate) fn unregister_runtime_remote_object_group_for_session_owner(
         &mut self,
         session_id: Option<&str>,
@@ -2151,6 +2689,25 @@ impl CdpConnection {
         let _ = self.with_target_devtools_session_state_for_session_mut(session_id, |state| {
             state.unregister_runtime_remote_object_group(object_group);
         });
+    }
+
+    pub(crate) fn unregister_runtime_remote_object_group_for_owner(
+        &mut self,
+        owner: &CommandOwnerScope,
+        object_group: &str,
+    ) {
+        if owner.session_id().is_some() {
+            self.unregister_runtime_remote_object_group_for_session_owner(
+                owner.session_id(),
+                object_group,
+            );
+            return;
+        }
+        let _ = self.with_target_devtools_session_state_for_route_mut(
+            owner.session_id(),
+            owner.session_owner_route(),
+            |state| state.unregister_runtime_remote_object_group(object_group),
+        );
     }
 
     pub(crate) fn clear_runtime_remote_object_tracking_for_session_owner(
@@ -2174,6 +2731,21 @@ impl CdpConnection {
         });
     }
 
+    pub(crate) fn clear_runtime_remote_object_tracking_for_owner(
+        &mut self,
+        owner: &CommandOwnerScope,
+    ) {
+        if owner.session_id().is_some() {
+            self.clear_runtime_remote_object_tracking_for_session_owner(owner.session_id());
+            return;
+        }
+        let _ = self.with_target_devtools_session_state_for_route_mut(
+            owner.session_id(),
+            owner.session_owner_route(),
+            DevToolsSessionState::clear_runtime_remote_object_tracking,
+        );
+    }
+
     pub(crate) fn record_runtime_contexts_reported_for_session_owner(
         &mut self,
         session_id: Option<&str>,
@@ -2195,6 +2767,18 @@ impl CdpConnection {
         });
     }
 
+    pub(crate) fn record_runtime_contexts_reported_for_owner(&mut self, owner: &CommandOwnerScope) {
+        if owner.session_id().is_some() {
+            self.record_runtime_contexts_reported_for_session_owner(owner.session_id());
+            return;
+        }
+        let _ = self.with_target_devtools_session_state_for_route_mut(
+            owner.session_id(),
+            owner.session_owner_route(),
+            DevToolsSessionState::record_runtime_contexts_reported_to_frontend,
+        );
+    }
+
     pub(crate) fn record_runtime_contexts_cleared_for_session_owner(
         &mut self,
         session_id: Option<&str>,
@@ -2214,6 +2798,18 @@ impl CdpConnection {
         let _ = self.with_target_devtools_session_state_for_session_mut(session_id, |state| {
             state.record_runtime_contexts_cleared_for_frontend();
         });
+    }
+
+    pub(crate) fn record_runtime_contexts_cleared_for_owner(&mut self, owner: &CommandOwnerScope) {
+        if owner.session_id().is_some() {
+            self.record_runtime_contexts_cleared_for_session_owner(owner.session_id());
+            return;
+        }
+        let _ = self.with_target_devtools_session_state_for_route_mut(
+            owner.session_id(),
+            owner.session_owner_route(),
+            DevToolsSessionState::record_runtime_contexts_cleared_for_frontend,
+        );
     }
 
     pub(crate) fn record_runtime_context_protocol_event_for_session_owner(
@@ -2253,6 +2849,16 @@ impl CdpConnection {
         }
     }
 
+    pub(crate) fn record_runtime_context_protocol_event_for_owner(
+        &mut self,
+        owner: &CommandOwnerScope,
+        event: &RuntimeContextProtocolEvent,
+    ) {
+        if owner.session_id().is_some() {
+            self.record_runtime_context_protocol_event_for_session_owner(owner.session_id(), event);
+        }
+    }
+
     pub(crate) fn clear_runtime_remote_objects_for_realm_for_session_owner(
         &mut self,
         session_id: Option<&str>,
@@ -2273,6 +2879,25 @@ impl CdpConnection {
         let _ = self.with_target_devtools_session_state_for_session_mut(session_id, |state| {
             state.clear_runtime_remote_objects_for_realm(realm_id);
         });
+    }
+
+    pub(crate) fn clear_runtime_remote_objects_for_realm_for_owner(
+        &mut self,
+        owner: &CommandOwnerScope,
+        realm_id: &str,
+    ) {
+        if owner.session_id().is_some() {
+            self.clear_runtime_remote_objects_for_realm_for_session_owner(
+                owner.session_id(),
+                realm_id,
+            );
+            return;
+        }
+        let _ = self.with_target_devtools_session_state_for_route_mut(
+            owner.session_id(),
+            owner.session_owner_route(),
+            |state| state.clear_runtime_remote_objects_for_realm(realm_id),
+        );
     }
 
     pub(crate) fn register_runtime_remote_object_ids_for_session_owner_with_realm(
@@ -2482,6 +3107,22 @@ impl CdpConnection {
         })
     }
 
+    fn runtime_remote_object_owner_identity_for_owner(
+        &self,
+        owner: &CommandOwnerScope,
+    ) -> Option<RuntimeRemoteObjectOwnerIdentity> {
+        if owner.session_id().is_some() {
+            return self.runtime_remote_object_owner_identity_for_session(owner.session_id());
+        }
+        let (browser_context_id, target_id) =
+            self.target_owner_identity_for_route(owner.session_id(), owner.session_owner_route())?;
+        Some(RuntimeRemoteObjectOwnerIdentity::Page {
+            browser_context_id,
+            target_id,
+            devtools_session_id: None,
+        })
+    }
+
     fn runtime_remote_object_id_known_for_different_owner(
         &self,
         owner: &RuntimeRemoteObjectOwnerIdentity,
@@ -2675,13 +3316,14 @@ impl CdpConnection {
         response_events: &mut Vec<BackgroundProtocolEvent>,
         background_events: &mut Vec<BackgroundProtocolEvent>,
     ) -> bool {
+        let owner = CommandOwnerScope::capture(self, current_session_id);
         let mut current_seen = false;
         for message in messages {
             current_seen |= self
-                .route_runtime_inspector_protocol_message_with_background_events_into(
+                .route_runtime_inspector_protocol_message_for_owner_with_background_events_into(
                     message,
                     current_cmd_id,
-                    current_session_id,
+                    &owner,
                     response_events,
                     background_events,
                 );
@@ -2689,28 +3331,23 @@ impl CdpConnection {
         current_seen
     }
 
-    pub(crate) fn route_renderer_runtime_inspector_messages_with_background_events_into(
+    pub(crate) fn route_renderer_runtime_inspector_messages_for_owner_with_background_events_into(
         &mut self,
         messages: Vec<RendererRuntimeInspectorMessage>,
         current_cmd_id: Option<u64>,
-        current_session_id: Option<&str>,
+        owner: &CommandOwnerScope,
         response_events: &mut Vec<BackgroundProtocolEvent>,
         background_events: &mut Vec<BackgroundProtocolEvent>,
     ) -> bool {
+        let current_session_id = owner.session_id();
         let mut current_seen = false;
         for message in messages {
             match message {
                 RendererRuntimeInspectorMessage::RuntimeContext(event) => {
                     let mut event = RuntimeContextProtocolEvent::from_restore_event(event);
-                    qualify_runtime_context_protocol_event_for_session_owner_typed(
-                        self,
-                        &mut event,
-                        current_session_id,
-                    );
-                    apply_runtime_context_protocol_event_side_effects_typed(
-                        self,
-                        &event,
-                        current_session_id,
+                    qualify_runtime_context_protocol_event_for_owner_typed(self, &mut event, owner);
+                    apply_runtime_context_protocol_event_side_effects_for_owner_typed(
+                        self, &event, owner,
                     );
                     let mut runtime_context_events = Vec::new();
                     emit_runtime_context_protocol_background_event_typed(
@@ -2726,10 +3363,10 @@ impl CdpConnection {
                 }
                 RendererRuntimeInspectorMessage::Protocol(message) => {
                     current_seen |= self
-                        .route_runtime_inspector_protocol_message_with_background_events_into(
+                        .route_runtime_inspector_protocol_message_for_owner_with_background_events_into(
                             message.into_value(),
                             current_cmd_id,
-                            current_session_id,
+                            owner,
                             response_events,
                             background_events,
                         );
@@ -2739,21 +3376,24 @@ impl CdpConnection {
         current_seen
     }
 
-    pub(crate) fn route_renderer_runtime_command_output_into(
+    pub(crate) fn route_renderer_runtime_command_output_for_owner_into(
         &mut self,
         output: RendererRuntimeCommandOutput,
         current_cmd_id: Option<u64>,
-        current_session_id: Option<&str>,
+        owner: &CommandOwnerScope,
         ordered_events: &mut Vec<BackgroundProtocolEvent>,
     ) -> bool {
-        if let Some(attachment_id) = output.renderer_agent_attachment_id()
-            && !self.renderer_agent_attachment_is_current_for_session_owner(
-                current_session_id,
-                attachment_id,
-            )
-        {
+        let current_session_id = owner.session_id();
+        let attachment_is_current =
+            output
+                .renderer_agent_attachment_id()
+                .is_none_or(|attachment_id| {
+                    self.current_renderer_agent_attachment_id_for_owner(owner)
+                        == Some(attachment_id)
+                });
+        if !attachment_is_current {
             tracing::debug!(
-                ?attachment_id,
+                attachment_id = ?output.renderer_agent_attachment_id(),
                 session_id = current_session_id,
                 "dropping renderer command output from a stale attachment"
             );
@@ -2762,18 +3402,21 @@ impl CdpConnection {
         if output.renderer_agent_attachment_id().is_some()
             && let Some(state) = output.v8_state_update().cloned()
         {
-            let _ =
-                self.merge_v8_inspector_session_state_for_session_owner(current_session_id, state);
+            let _ = self.merge_v8_inspector_session_state_for_route(
+                owner.session_id(),
+                owner.session_owner_route(),
+                state,
+            );
         }
         let mut current_seen = false;
         for message in output.into_messages() {
             let mut response_events = Vec::new();
             let mut background_events = Vec::new();
             current_seen |= self
-                .route_renderer_runtime_inspector_messages_with_background_events_into(
+                .route_renderer_runtime_inspector_messages_for_owner_with_background_events_into(
                     vec![message],
                     current_cmd_id,
-                    current_session_id,
+                    owner,
                     &mut response_events,
                     &mut background_events,
                 );
@@ -2783,11 +3426,11 @@ impl CdpConnection {
         current_seen
     }
 
-    pub(crate) fn route_renderer_command_turn_output_into(
+    pub(crate) fn route_renderer_command_turn_output_for_owner_into(
         &mut self,
         output: RendererCommandTurnOutput,
         current_cmd_id: Option<u64>,
-        current_session_id: Option<&str>,
+        owner: &CommandOwnerScope,
         response_flush: &CommandResponseFlushContext,
         ordered_events: &mut Vec<BackgroundProtocolEvent>,
         post_response_events: &mut Vec<BackgroundProtocolEvent>,
@@ -2801,31 +3444,34 @@ impl CdpConnection {
             tracing::error!("Runtime command turn completed with a non-Runtime reply");
             return (false, renderer_output_predecessor);
         };
-        (
-            self.route_renderer_runtime_command_output_into(
-                output,
-                current_cmd_id,
-                current_session_id,
-                ordered_events,
-            ),
-            renderer_output_predecessor,
-        )
+        let response_seen = self.route_renderer_runtime_command_output_for_owner_into(
+            output,
+            current_cmd_id,
+            owner,
+            ordered_events,
+        );
+        (response_seen, renderer_output_predecessor)
     }
 
-    fn route_runtime_inspector_protocol_message_with_background_events_into(
+    fn route_runtime_inspector_protocol_message_for_owner_with_background_events_into(
         &mut self,
-        mut message: Value,
+        message: Value,
         current_cmd_id: Option<u64>,
-        current_session_id: Option<&str>,
+        owner: &CommandOwnerScope,
         response_events: &mut Vec<BackgroundProtocolEvent>,
         background_events: &mut Vec<BackgroundProtocolEvent>,
     ) -> bool {
+        let current_session_id = owner.session_id();
+        let mut message = message;
         let id = message.get("id").and_then(Value::as_u64);
         match id {
             Some(id) => {
-                if let Some(entry) = self.remove_pending_inspector_await(id, current_session_id) {
-                    let owner_route =
-                        self.runtime_await_owner_route_for_session(entry.session_id());
+                let entry = self.remove_pending_inspector_await_for_owner(id, owner);
+                if let Some(entry) = entry {
+                    let owner_route = owner
+                        .session_owner_route()
+                        .cloned()
+                        .or_else(|| self.runtime_await_owner_route_for_session(entry.session_id()));
                     let response = OwnerRuntimeResponse::from_pending_inspector_await(
                         id,
                         entry,
@@ -2840,10 +3486,7 @@ impl CdpConnection {
                     );
                 }
                 if Some(id) == current_cmd_id {
-                    self.register_runtime_remote_object_ids_from_value_for_session_owner(
-                        current_session_id,
-                        &message,
-                    );
+                    self.register_runtime_remote_object_ids_from_value_for_owner(owner, &message);
                     let response =
                         BackgroundCommandResponsePayload::from_owned_runtime_inspector_message(
                             message,
@@ -2894,10 +3537,11 @@ impl CdpConnection {
                         .into_iter()
                         .map(str::to_owned)
                         .collect::<Vec<_>>();
-                    crate::domains::page::emit_page_window_open_background_events(
+                    crate::domains::page::emit_page_window_open_background_events_for_route(
                         self,
                         background_events,
-                        current_session_id,
+                        owner.session_id(),
+                        owner.session_owner_route(),
                         url,
                         window_name,
                         &window_features,
@@ -2905,22 +3549,13 @@ impl CdpConnection {
                     );
                     return false;
                 }
-                self.register_runtime_remote_object_ids_from_value_for_session_owner(
-                    current_session_id,
-                    &message,
-                );
+                self.register_runtime_remote_object_ids_from_value_for_owner(owner, &message);
                 if let Some(mut event) =
                     RuntimeContextProtocolEvent::from_context_protocol_message(message.clone())
                 {
-                    qualify_runtime_context_protocol_event_for_session_owner_typed(
-                        self,
-                        &mut event,
-                        current_session_id,
-                    );
-                    apply_runtime_context_protocol_event_side_effects_typed(
-                        self,
-                        &event,
-                        current_session_id,
+                    qualify_runtime_context_protocol_event_for_owner_typed(self, &mut event, owner);
+                    apply_runtime_context_protocol_event_side_effects_for_owner_typed(
+                        self, &event, owner,
                     );
                     let mut runtime_context_events = Vec::new();
                     emit_runtime_context_protocol_background_event_typed(
@@ -2946,13 +3581,14 @@ impl CdpConnection {
         false
     }
 
-    pub async fn route_scheduler_deferred_runtime_inspector_response_into(
+    pub(crate) async fn route_scheduler_deferred_runtime_inspector_response_into(
         &mut self,
-        response: RuntimeInspectorResponseReady,
-        current_session_id: Option<&str>,
+        mut response: RuntimeInspectorResponseReady,
+        owner: &CommandOwnerScope,
         response_events: &mut Vec<BackgroundProtocolEvent>,
         background_events: &mut Vec<BackgroundProtocolEvent>,
     ) -> (bool, Option<moli_core::RendererOutputFence>) {
+        response.bind_owner(owner);
         let Some(response) = self.resolve_runtime_inspector_response_ready(response) else {
             return (false, None);
         };
@@ -2965,14 +3601,15 @@ impl CdpConnection {
             response.into_renderer_command_output();
         let (renderer_agent_attachment_id, v8_state_update, messages) = output.into_parts();
         let mut ordered_events = Vec::new();
-        let current_seen = self.route_renderer_runtime_command_output_into(
-            RendererRuntimeCommandOutput::from_parts(
-                renderer_agent_attachment_id,
-                v8_state_update,
-                messages,
-            ),
+        let output = RendererRuntimeCommandOutput::from_parts(
+            renderer_agent_attachment_id,
+            v8_state_update,
+            messages,
+        );
+        let current_seen = self.route_renderer_runtime_command_output_for_owner_into(
+            output,
             Some(current_cmd_id),
-            current_session_id,
+            owner,
             &mut ordered_events,
         );
         response_events.extend(ordered_events);
@@ -2982,18 +3619,30 @@ impl CdpConnection {
 
     pub fn route_registered_runtime_inspector_response_into(
         &mut self,
-        response: RuntimeInspectorResponseReady,
+        mut response: RuntimeInspectorResponseReady,
         response_events: &mut Vec<BackgroundProtocolEvent>,
         background_events: &mut Vec<BackgroundProtocolEvent>,
     ) {
+        let owner = response
+            .owner()
+            .cloned()
+            .or_else(|| response.session_id().map(CommandOwnerScope::for_session));
+        let Some(owner) = owner else {
+            tracing::debug!(
+                command_id = response.command_id(),
+                "dropping implicit runtime Inspector response without an exact owner"
+            );
+            return;
+        };
+        response.bind_owner(&owner);
         let Some(response) = self.resolve_runtime_inspector_response_ready(response) else {
             return;
         };
         let message = response.into_protocol_message_for_typed_runtime_route();
-        self.route_runtime_inspector_protocol_message_with_background_events_into(
+        self.route_runtime_inspector_protocol_message_for_owner_with_background_events_into(
             message,
             None,
-            None,
+            &owner,
             response_events,
             background_events,
         );
@@ -3008,23 +3657,35 @@ impl CdpConnection {
         }
         let command_id = response.command_id();
         let session_id = response.session_id().map(str::to_owned);
+        let owner = response.owner().cloned();
         let correlation = if let Some(renderer_call_id) = response.renderer_call_id() {
             let dispatched_attachment_id = response.renderer_agent_attachment_id();
             // A lease can complete immediately before attachment cutover while
             // its response-ready event is still queued. The registry mapping
             // proves that this exact old lease won before rotation; requiring
             // the attachment to remain current here would lose that response.
-            self.take_renderer_call_for_frontend_if_matches_for_session_owner(
-                session_id.as_deref(),
-                command_id,
-                renderer_call_id,
-                dispatched_attachment_id,
-            )
+            match owner.as_ref() {
+                Some(owner) => self.take_renderer_call_for_frontend_if_matches_for_owner(
+                    owner,
+                    command_id,
+                    renderer_call_id,
+                    dispatched_attachment_id,
+                ),
+                None => self.take_renderer_call_for_frontend_if_matches_for_session_owner(
+                    session_id.as_deref(),
+                    command_id,
+                    renderer_call_id,
+                    dispatched_attachment_id,
+                ),
+            }
         } else {
-            self.take_renderer_call_for_frontend_for_session_owner(
-                session_id.as_deref(),
-                command_id,
-            )
+            match owner.as_ref() {
+                Some(owner) => self.take_renderer_call_for_frontend_for_owner(owner, command_id),
+                None => self.take_renderer_call_for_frontend_for_session_owner(
+                    session_id.as_deref(),
+                    command_id,
+                ),
+            }
         };
         let Some(correlation) = correlation else {
             tracing::debug!(
@@ -3064,6 +3725,41 @@ impl CdpConnection {
             let Some(correlation) = self
                 .take_frontend_command_for_renderer_if_attachment_matches_for_session_owner(
                     session_id,
+                    renderer_call_id,
+                    dispatched_attachment_id,
+                )
+            else {
+                continue;
+            };
+            debug_assert_eq!(
+                correlation.dispatched_attachment_id(),
+                dispatched_attachment_id
+            );
+            message.value_mut()["id"] = json!(correlation.frontend_command_id().get());
+        }
+    }
+
+    fn restore_frontend_command_ids_in_runtime_messages_for_owner(
+        &mut self,
+        owner: &CommandOwnerScope,
+        dispatched_attachment_id: Option<RendererAgentAttachmentId>,
+        messages: &mut [RendererRuntimeInspectorMessage],
+    ) {
+        if dispatched_attachment_id.is_some_and(|attachment_id| {
+            self.current_renderer_agent_attachment_id_for_owner(owner) != Some(attachment_id)
+        }) {
+            return;
+        }
+        for message in messages {
+            let RendererRuntimeInspectorMessage::Protocol(message) = message else {
+                continue;
+            };
+            let Some(renderer_call_id) = message.renderer_call_id() else {
+                continue;
+            };
+            let Some(correlation) = self
+                .take_frontend_command_for_renderer_if_attachment_matches_for_owner(
+                    owner,
                     renderer_call_id,
                     dispatched_attachment_id,
                 )
@@ -3228,29 +3924,29 @@ impl CdpConnection {
     fn start_or_enqueue_registered_runtime_inspector_response_ready(
         &self,
         command_id: u64,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
         mut response_rx: RuntimeInspectorResponseReceiver,
     ) -> bool {
         let Some(response_tx) = self.runtime_inspector_response_ready_sender() else {
             return false;
         };
-        let session_id = session_id.map(str::to_owned);
+        let owner = owner.clone();
         // Keep both completion timings on the same response-ready lane. If the
         // renderer callback has already completed, enqueue it immediately; if
         // not, spawn a waiter that will enqueue the same event later.
         match response_rx.try_recv() {
             Ok(completion) => {
-                let _ = response_tx.send(crate::conn::RuntimeInspectorResponseReady::new(
+                let _ = response_tx.send(crate::conn::RuntimeInspectorResponseReady::for_owner(
                     command_id,
-                    session_id.as_deref(),
+                    &owner,
                     Ok(completion),
                 ));
                 return true;
             }
             Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
-                let _ = response_tx.send(crate::conn::RuntimeInspectorResponseReady::new(
+                let _ = response_tx.send(crate::conn::RuntimeInspectorResponseReady::for_owner(
                     command_id,
-                    session_id.as_deref(),
+                    &owner,
                     Err("RuntimeInspectorResponseCanceled".to_owned()),
                 ));
                 return true;
@@ -3261,10 +3957,8 @@ impl CdpConnection {
             let response = response_rx
                 .await
                 .map_err(|_| "RuntimeInspectorResponseCanceled".to_owned());
-            let _ = response_tx.send(crate::conn::RuntimeInspectorResponseReady::new(
-                command_id,
-                session_id.as_deref(),
-                response,
+            let _ = response_tx.send(crate::conn::RuntimeInspectorResponseReady::for_owner(
+                command_id, &owner, response,
             ));
         });
         true
@@ -3291,14 +3985,16 @@ impl CdpConnection {
         }
         let routed_session_id = response.session_id().map(str::to_owned);
         if let Some(object_group) = response.object_group() {
-            self.register_runtime_remote_object_ids_from_value_for_session_owner_with_group(
+            self.register_runtime_remote_object_ids_from_value_for_route_with_group(
                 routed_session_id.as_deref(),
+                response.owner_route(),
                 &response.message,
                 object_group,
             );
         } else {
-            self.register_runtime_remote_object_ids_from_value_for_session_owner(
+            self.register_runtime_remote_object_ids_from_value_for_route(
                 routed_session_id.as_deref(),
+                response.owner_route(),
                 &response.message,
             );
         }
@@ -3408,19 +4104,26 @@ impl CdpConnection {
         BidiChannelListenerRoute::Event(event)
     }
 
-    pub(crate) async fn document_node_snapshot_for_runtime_remote_object_id_async(
+    pub(crate) async fn document_node_snapshot_for_runtime_remote_object_id_for_owner_async(
         &mut self,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
         object_id: &str,
         depth: i32,
         pierce: bool,
     ) -> Result<Option<DocumentNodeObjectSnapshot>, String> {
-        let include_whitespace =
-            crate::domains::dom::dom_agent_includes_whitespace_for_session(self, session_id);
+        let include_whitespace = crate::domains::dom::dom_agent_includes_whitespace_for_route(
+            self,
+            owner.session_id(),
+            owner.session_owner_route(),
+        );
+        let inspector_session_id = self.target_renderer_runtime_inspector_session_id_for_route(
+            owner.session_id(),
+            owner.session_owner_route(),
+        );
         let pending = {
-            let page = self.runtime_session_owner_page_mut(session_id)?;
+            let page = self.runtime_session_owner_page_mut_for_owner(owner)?;
             page.start_document_node_snapshot_for_object_id_in_inspector_session(
-                session_id.map(str::to_owned),
+                inspector_session_id,
                 include_whitespace,
                 object_id,
                 depth,
@@ -3432,20 +4135,20 @@ impl CdpConnection {
             .wait()
             .await
             .map_err(|error| format!("resolve runtime node snapshot failed: {error}"))?;
-        let page = self.runtime_session_owner_page_mut(session_id)?;
+        let page = self.runtime_session_owner_page_mut_for_owner(owner)?;
         page.finish_document_node_snapshot_for_object_id(completion)
             .map_err(|error| format!("resolve runtime node snapshot failed: {error}"))
     }
 
-    pub(crate) async fn document_node_snapshot_for_backend_node_id_async(
+    pub(crate) async fn document_node_snapshot_for_backend_node_id_for_owner_async(
         &mut self,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
         backend_node_id: u32,
         depth: i32,
         pierce: bool,
     ) -> Result<Option<DocumentNodeObjectSnapshot>, String> {
         let pending = {
-            let page = self.runtime_session_owner_page_mut(session_id)?;
+            let page = self.runtime_session_owner_page_mut_for_owner(owner)?;
             page.start_document_node_snapshot_for_backend_node_id(backend_node_id, depth, pierce)
                 .map_err(|error| format!("resolve backend node snapshot failed: {error}"))?
         };
@@ -3453,7 +4156,7 @@ impl CdpConnection {
             .wait()
             .await
             .map_err(|error| format!("resolve backend node snapshot failed: {error}"))?;
-        let page = self.runtime_session_owner_page_mut(session_id)?;
+        let page = self.runtime_session_owner_page_mut_for_owner(owner)?;
         page.finish_document_node_snapshot_for_backend_node_id(completion)
             .map_err(|error| format!("resolve backend node snapshot failed: {error}"))
     }
@@ -3464,10 +4167,23 @@ impl CdpConnection {
         shared_id: &str,
         backend_node_id: u32,
     ) -> Result<(), String> {
-        let inspector_session_id =
-            self.target_renderer_runtime_inspector_session_id_for_session(session_id);
+        let owner = CommandOwnerScope::capture(self, session_id);
+        self.register_document_bidi_node_binding_for_owner_async(&owner, shared_id, backend_node_id)
+            .await
+    }
+
+    pub(crate) async fn register_document_bidi_node_binding_for_owner_async(
+        &mut self,
+        owner: &CommandOwnerScope,
+        shared_id: &str,
+        backend_node_id: u32,
+    ) -> Result<(), String> {
+        let inspector_session_id = self.target_renderer_runtime_inspector_session_id_for_route(
+            owner.session_id(),
+            owner.session_owner_route(),
+        );
         let pending = {
-            let page = self.runtime_session_owner_page_mut(session_id)?;
+            let page = self.runtime_session_owner_page_mut_for_owner(owner)?;
             page.start_register_document_bidi_node_binding(
                 inspector_session_id,
                 shared_id.to_owned(),
@@ -3479,20 +4195,22 @@ impl CdpConnection {
             .wait()
             .await
             .map_err(|error| format!("register BiDi node binding failed: {error}"))?;
-        let page = self.runtime_session_owner_page_mut(session_id)?;
+        let page = self.runtime_session_owner_page_mut_for_owner(owner)?;
         page.finish_register_document_bidi_node_binding(completion)
             .map_err(|error| format!("register BiDi node binding failed: {error}"))
     }
 
-    pub(crate) async fn document_bidi_node_binding_for_session_owner_async(
+    pub(crate) async fn document_bidi_node_binding_for_owner_async(
         &mut self,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
         shared_id: &str,
     ) -> Result<RendererDomBidiNodeBindingResolution, String> {
-        let inspector_session_id =
-            self.target_renderer_runtime_inspector_session_id_for_session(session_id);
+        let inspector_session_id = self.target_renderer_runtime_inspector_session_id_for_route(
+            owner.session_id(),
+            owner.session_owner_route(),
+        );
         let pending = {
-            let page = self.runtime_session_owner_page_mut(session_id)?;
+            let page = self.runtime_session_owner_page_mut_for_owner(owner)?;
             page.start_document_bidi_node_binding(inspector_session_id, shared_id.to_owned())
                 .map_err(|error| format!("resolve BiDi node binding failed: {error}"))?
         };
@@ -3500,7 +4218,7 @@ impl CdpConnection {
             .wait()
             .await
             .map_err(|error| format!("resolve BiDi node binding failed: {error}"))?;
-        let page = self.runtime_session_owner_page_mut(session_id)?;
+        let page = self.runtime_session_owner_page_mut_for_owner(owner)?;
         page.finish_document_bidi_node_binding(completion)
             .map_err(|error| format!("resolve BiDi node binding failed: {error}"))
     }
@@ -3529,17 +4247,19 @@ impl CdpConnection {
             .map_err(|error| format!("resolve BiDi node shared id failed: {error}"))
     }
 
-    pub(crate) async fn runtime_remote_object_for_backend_node_id_async(
+    pub(crate) async fn runtime_remote_object_for_backend_node_id_for_owner_async(
         &mut self,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
         backend_node_id: u32,
         execution_context_id: Option<i64>,
         object_group: Option<&str>,
     ) -> Result<Option<Value>, String> {
-        let inspector_session_id =
-            self.target_renderer_runtime_inspector_session_id_for_session(session_id);
+        let inspector_session_id = self.target_renderer_runtime_inspector_session_id_for_route(
+            owner.session_id(),
+            owner.session_owner_route(),
+        );
         let pending = {
-            let page = self.runtime_session_owner_page_mut(session_id)?;
+            let page = self.runtime_session_owner_page_mut_for_owner(owner)?;
             page.start_resolve_runtime_object_for_backend_node_id_in_inspector_session(
                 inspector_session_id,
                 backend_node_id,
@@ -3552,7 +4272,7 @@ impl CdpConnection {
             .wait()
             .await
             .map_err(|error| format!("resolve runtime object for backend node failed: {error}"))?;
-        let page = self.runtime_session_owner_page_mut(session_id)?;
+        let page = self.runtime_session_owner_page_mut_for_owner(owner)?;
         let result = page
             .finish_resolve_runtime_object_for_backend_node_id(completion)
             .map_err(|error| format!("resolve runtime object for backend node failed: {error}"))?;
@@ -3636,29 +4356,32 @@ impl CdpConnection {
             .await
     }
 
-    pub(crate) fn start_runtime_enable_events_for_session_owner(
+    pub(crate) fn start_runtime_enable_events_for_owner(
         &mut self,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
     ) -> Result<PendingRuntimeEnableEventsDispatch, String> {
-        let route = self.runtime_protocol_message_page_route_for_session_owner(session_id)?;
-        let inspector_session_id =
-            self.target_renderer_runtime_inspector_session_id_for_session(session_id);
-        let page = self.runtime_session_owner_page_mut(session_id)?;
+        let route = self.runtime_protocol_message_page_route_for_owner(owner)?;
+        let inspector_session_id = self.target_renderer_runtime_inspector_session_id_for_route(
+            owner.session_id(),
+            owner.session_owner_route(),
+        );
+        let page = self.runtime_session_owner_page_mut_for_owner(owner)?;
         let pending = page
             .start_runtime_enable_events_for_inspector_session(inspector_session_id.as_deref())
             .map_err(|error| format!("runtime enable event replay failed: {error}"))?;
         Ok(PendingRuntimeEnableEventsDispatch {
-            session_id: session_id.map(str::to_owned),
+            owner: owner.clone(),
             route,
             pending,
         })
     }
 
-    pub(crate) fn complete_runtime_enable_events_for_session_owner(
+    pub(crate) fn complete_runtime_enable_events(
         &mut self,
         completed: CompletedRuntimeEnableEventsDispatch,
     ) -> Result<RuntimeEnableEventsReplay, String> {
-        let session_id = completed.session_id.as_deref();
+        let owner = completed.owner;
+        let session_id = owner.session_id();
         let page = self.runtime_protocol_message_started_page_mut(&completed.route)?;
         let output = page
             .finish_runtime_enable_output(completed.completion)
@@ -3670,21 +4393,25 @@ impl CdpConnection {
             );
         }
         if let Some(state) = v8_state_update
-            && !self.merge_v8_inspector_session_state_for_session_owner(session_id, state)
+            && !self.merge_v8_inspector_session_state_for_route(
+                owner.session_id(),
+                owner.session_owner_route(),
+                state,
+            )
         {
             return Err("Runtime.enable completed after session owner disappeared".to_owned());
         }
         let mut replay = RuntimeEnableEventsReplay::from_renderer_messages(messages);
-        let _ = self.set_renderer_runtime_agent_owns_page_console_api_events_for_session_owner(
-            session_id, true,
+        let _ =
+            self.set_renderer_runtime_agent_owns_page_console_api_events_for_owner(&owner, true);
+        self.ingest_runtime_session_owner_output_updates_for_route(
+            owner.session_id(),
+            owner.session_owner_route(),
         );
-        self.ingest_runtime_session_owner_output_updates(session_id);
         for event in replay.events_mut() {
             match event {
                 RuntimeEnableReplayEvent::Context(event) => {
-                    qualify_runtime_context_protocol_event_for_session_owner_typed(
-                        self, event, session_id,
-                    );
+                    qualify_runtime_context_protocol_event_for_owner_typed(self, event, &owner);
                 }
                 RuntimeEnableReplayEvent::Background(event) => {
                     event.ensure_protocol_session_id(session_id);
@@ -3701,11 +4428,24 @@ impl CdpConnection {
         self.loaded_page_mut_for_protocol_access(session_id)
     }
 
-    fn runtime_session_owner_page_mut_for_interruptible_control(
+    fn runtime_session_owner_page_mut_for_owner(
         &mut self,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
     ) -> Result<&mut Page, String> {
-        self.loaded_page_mut_for_interruptible_protocol_access(session_id)
+        self.loaded_page_mut_for_protocol_access_for_route(
+            owner.session_id(),
+            owner.session_owner_route(),
+        )
+    }
+
+    fn runtime_session_owner_page_mut_for_interruptible_control_for_owner(
+        &mut self,
+        owner: &CommandOwnerScope,
+    ) -> Result<&mut Page, String> {
+        self.loaded_page_mut_for_interruptible_protocol_access_for_route(
+            owner.session_id(),
+            owner.session_owner_route(),
+        )
     }
 
     fn runtime_protocol_message_page_route_for_session_owner(
@@ -3716,6 +4456,28 @@ impl CdpConnection {
             .target_owner_identity_for_session(session_id)
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?;
         let slot = self.runtime_session_owner_slot(session_id)?;
+        let renderer_agent_attachment_id = slot
+            .current_renderer_attachment()
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())?
+            .id();
+        Ok(RuntimeProtocolMessagePageRoute {
+            browser_context_id,
+            target_id,
+            renderer_agent_attachment_id,
+        })
+    }
+
+    fn runtime_protocol_message_page_route_for_owner(
+        &self,
+        owner: &CommandOwnerScope,
+    ) -> Result<RuntimeProtocolMessagePageRoute, String> {
+        let (browser_context_id, target_id) = self
+            .target_owner_identity_for_route(owner.session_id(), owner.session_owner_route())
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())?;
+        let slot = self.runtime_session_owner_slot_for_route(
+            owner.session_id(),
+            owner.session_owner_route(),
+        )?;
         let renderer_agent_attachment_id = slot
             .current_renderer_attachment()
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
@@ -4351,10 +5113,10 @@ impl CdpConnection {
         command_id: u64,
     ) -> Result<Vec<RendererRuntimeInspectorMessage>, String> {
         let descriptor = RendererCommandDescriptor::from_synthesized_payload(raw_json.to_owned())?;
-        let pending = self
-            .start_runtime_protocol_message_for_session_owner_with_deferred_response(
-                session_id, descriptor, command_id,
-            )?;
+        let owner = CommandOwnerScope::capture(self, session_id);
+        let pending = self.start_runtime_protocol_message_for_owner_with_deferred_response(
+            &owner, descriptor, command_id,
+        )?;
         let completed = pending.wait().await?;
         self.complete_runtime_helper_protocol_message_for_session_owner_async(completed, command_id)
             .await
@@ -4389,47 +5151,48 @@ impl CdpConnection {
         Some(RendererRuntimeInspectorMessage::protocol(message))
     }
 
-    pub(crate) fn start_runtime_protocol_message_for_session_owner(
+    pub(crate) fn start_runtime_protocol_message_for_owner(
         &mut self,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
         raw_json: String,
     ) -> Result<PendingRuntimeProtocolMessageDispatch, String> {
-        self.start_runtime_protocol_message_for_session_owner_with_access(
-            session_id,
+        self.start_runtime_protocol_message_for_owner_with_access(
+            owner,
             raw_json,
             RendererInspectorCommandRoute::MainThread,
         )
     }
 
-    pub(crate) fn start_runtime_io_protocol_message_for_session_owner(
+    pub(crate) fn start_runtime_io_protocol_message_for_owner(
         &mut self,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
         raw_json: String,
     ) -> Result<PendingRuntimeProtocolMessageDispatch, String> {
-        self.start_runtime_protocol_message_for_session_owner_with_access(
-            session_id,
+        self.start_runtime_protocol_message_for_owner_with_access(
+            owner,
             raw_json,
             RendererInspectorCommandRoute::Io,
         )
     }
 
-    fn start_runtime_protocol_message_for_session_owner_with_access(
+    fn start_runtime_protocol_message_for_owner_with_access(
         &mut self,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
         raw_json: String,
         inspector_route: RendererInspectorCommandRoute,
     ) -> Result<PendingRuntimeProtocolMessageDispatch, String> {
-        let route = self.runtime_protocol_message_page_route_for_session_owner(session_id)?;
-        let raw_json =
-            self.rewrite_runtime_inspector_command_for_session_owner(session_id, &raw_json, None)?;
-        let inspector_session_id =
-            self.target_renderer_runtime_inspector_session_id_for_session(session_id);
+        let route = self.runtime_protocol_message_page_route_for_owner(owner)?;
+        let raw_json = self.rewrite_runtime_inspector_command_for_owner(owner, &raw_json, None)?;
+        let inspector_session_id = self.target_renderer_runtime_inspector_session_id_for_route(
+            owner.session_id(),
+            owner.session_owner_route(),
+        );
         let page = match inspector_route {
             RendererInspectorCommandRoute::MainThread => {
-                self.runtime_session_owner_page_mut(session_id)?
+                self.runtime_session_owner_page_mut_for_owner(owner)?
             }
             RendererInspectorCommandRoute::Io => {
-                self.runtime_session_owner_page_mut_for_interruptible_control(session_id)?
+                self.runtime_session_owner_page_mut_for_interruptible_control_for_owner(owner)?
             }
         };
         let pending = match inspector_route {
@@ -4445,71 +5208,72 @@ impl CdpConnection {
         }
         .map_err(|error| format!("runtime inspector dispatch failed: {error}"))?;
         Ok(PendingRuntimeProtocolMessageDispatch {
-            session_id: session_id.map(str::to_owned),
+            owner: owner.clone(),
             route,
             pending,
             response_route: RuntimeProtocolResponseRoute::command_reply_without_receiver(),
         })
     }
 
-    pub(crate) fn start_runtime_protocol_message_for_session_owner_with_deferred_response(
+    pub(crate) fn start_runtime_protocol_message_for_owner_with_deferred_response(
         &mut self,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
         descriptor: RendererCommandDescriptor,
         command_id: u64,
     ) -> Result<PendingRuntimeProtocolMessageDispatch, String> {
-        self.start_runtime_protocol_message_for_session_owner_with_deferred_response_and_access(
-            session_id,
+        self.start_runtime_protocol_message_for_owner_with_deferred_response_and_access(
+            owner,
             descriptor,
             command_id,
             RendererInspectorCommandRoute::MainThread,
         )
     }
 
-    pub(crate) fn start_runtime_io_protocol_message_for_session_owner_with_deferred_response(
+    pub(crate) fn start_runtime_io_protocol_message_for_owner_with_deferred_response(
         &mut self,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
         descriptor: RendererCommandDescriptor,
         command_id: u64,
     ) -> Result<PendingRuntimeProtocolMessageDispatch, String> {
-        self.start_runtime_protocol_message_for_session_owner_with_deferred_response_and_access(
-            session_id,
+        self.start_runtime_protocol_message_for_owner_with_deferred_response_and_access(
+            owner,
             descriptor,
             command_id,
             RendererInspectorCommandRoute::Io,
         )
     }
 
-    fn start_runtime_protocol_message_for_session_owner_with_deferred_response_and_access(
+    fn start_runtime_protocol_message_for_owner_with_deferred_response_and_access(
         &mut self,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
         descriptor: RendererCommandDescriptor,
         command_id: u64,
         inspector_route: RendererInspectorCommandRoute,
     ) -> Result<PendingRuntimeProtocolMessageDispatch, String> {
-        let route = self.runtime_protocol_message_page_route_for_session_owner(session_id)?;
+        let route = self.runtime_protocol_message_page_route_for_owner(owner)?;
         let (correlation, raw_json, response_sender, response_route) = self
-            .prepare_renderer_call_for_session_owner(
-                session_id,
+            .prepare_renderer_call_for_owner(
+                owner,
                 descriptor,
                 command_id,
                 Some(route.renderer_agent_attachment_id),
             )?;
-        let inspector_session_id =
-            self.target_renderer_runtime_inspector_session_id_for_session(session_id);
+        let inspector_session_id = self.target_renderer_runtime_inspector_session_id_for_route(
+            owner.session_id(),
+            owner.session_owner_route(),
+        );
         let page_result = match inspector_route {
             RendererInspectorCommandRoute::MainThread => {
-                self.runtime_session_owner_page_mut(session_id)
+                self.runtime_session_owner_page_mut_for_owner(owner)
             }
             RendererInspectorCommandRoute::Io => {
-                self.runtime_session_owner_page_mut_for_interruptible_control(session_id)
+                self.runtime_session_owner_page_mut_for_interruptible_control_for_owner(owner)
             }
         };
         let page = match page_result {
             Ok(page) => page,
             Err(error) => {
-                let removed =
-                    self.take_renderer_call_for_frontend_for_session_owner(session_id, command_id);
+                let removed = self.take_renderer_call_for_frontend_for_owner(owner, command_id);
                 debug_assert_eq!(removed, Some(correlation));
                 return Err(error);
             }
@@ -4523,32 +5287,32 @@ impl CdpConnection {
         ) {
             Ok(pending) => pending,
             Err(error) => {
-                let removed =
-                    self.take_renderer_call_for_frontend_for_session_owner(session_id, command_id);
+                let removed = self.take_renderer_call_for_frontend_for_owner(owner, command_id);
                 debug_assert_eq!(removed, Some(correlation));
                 return Err(format!("runtime inspector dispatch failed: {error}"));
             }
         };
         Ok(PendingRuntimeProtocolMessageDispatch {
-            session_id: session_id.map(str::to_owned),
+            owner: owner.clone(),
             route,
             pending: PendingRuntimeProtocolMessageDispatchKind::Routable(pending),
             response_route,
         })
     }
 
-    pub(crate) fn start_runtime_protocol_message_with_context_resolution_for_session_owner(
+    pub(crate) fn start_runtime_protocol_message_with_context_resolution_for_owner(
         &mut self,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
         action: &str,
         raw_json: String,
     ) -> Result<PendingRuntimeProtocolMessageDispatch, String> {
-        let route = self.runtime_protocol_message_page_route_for_session_owner(session_id)?;
-        let raw_json =
-            self.rewrite_runtime_inspector_command_for_session_owner(session_id, &raw_json, None)?;
-        let inspector_session_id =
-            self.target_renderer_runtime_inspector_session_id_for_session(session_id);
-        let page = self.runtime_session_owner_page_mut(session_id)?;
+        let route = self.runtime_protocol_message_page_route_for_owner(owner)?;
+        let raw_json = self.rewrite_runtime_inspector_command_for_owner(owner, &raw_json, None)?;
+        let inspector_session_id = self.target_renderer_runtime_inspector_session_id_for_route(
+            owner.session_id(),
+            owner.session_owner_route(),
+        );
+        let page = self.runtime_session_owner_page_mut_for_owner(owner)?;
         let pending = page
             .start_runtime_protocol_message_for_inspector_session_with_context_resolution(
                 inspector_session_id,
@@ -4557,35 +5321,36 @@ impl CdpConnection {
             )
             .map_err(|error| format!("runtime inspector dispatch failed: {error}"))?;
         Ok(PendingRuntimeProtocolMessageDispatch {
-            session_id: session_id.map(str::to_owned),
+            owner: owner.clone(),
             route,
             pending: PendingRuntimeProtocolMessageDispatchKind::Page(pending),
             response_route: RuntimeProtocolResponseRoute::command_reply_without_receiver(),
         })
     }
 
-    pub(crate) fn start_runtime_protocol_message_with_context_resolution_for_session_owner_with_deferred_response(
+    pub(crate) fn start_runtime_protocol_message_with_context_resolution_for_owner_with_deferred_response(
         &mut self,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
         action: &str,
         descriptor: RendererCommandDescriptor,
         command_id: u64,
     ) -> Result<PendingRuntimeProtocolMessageDispatch, String> {
-        let route = self.runtime_protocol_message_page_route_for_session_owner(session_id)?;
+        let route = self.runtime_protocol_message_page_route_for_owner(owner)?;
         let (correlation, raw_json, response_sender, response_route) = self
-            .prepare_renderer_call_for_session_owner(
-                session_id,
+            .prepare_renderer_call_for_owner(
+                owner,
                 descriptor,
                 command_id,
                 Some(route.renderer_agent_attachment_id),
             )?;
-        let inspector_session_id =
-            self.target_renderer_runtime_inspector_session_id_for_session(session_id);
-        let page = match self.runtime_session_owner_page_mut(session_id) {
+        let inspector_session_id = self.target_renderer_runtime_inspector_session_id_for_route(
+            owner.session_id(),
+            owner.session_owner_route(),
+        );
+        let page = match self.runtime_session_owner_page_mut_for_owner(owner) {
             Ok(page) => page,
             Err(error) => {
-                let removed =
-                    self.take_renderer_call_for_frontend_for_session_owner(session_id, command_id);
+                let removed = self.take_renderer_call_for_frontend_for_owner(owner, command_id);
                 debug_assert_eq!(removed, Some(correlation));
                 return Err(error);
             }
@@ -4599,25 +5364,25 @@ impl CdpConnection {
         ) {
             Ok(pending) => pending,
             Err(error) => {
-                let removed =
-                    self.take_renderer_call_for_frontend_for_session_owner(session_id, command_id);
+                let removed = self.take_renderer_call_for_frontend_for_owner(owner, command_id);
                 debug_assert_eq!(removed, Some(correlation));
                 return Err(format!("runtime inspector dispatch failed: {error}"));
             }
         };
         Ok(PendingRuntimeProtocolMessageDispatch {
-            session_id: session_id.map(str::to_owned),
+            owner: owner.clone(),
             route,
             pending: PendingRuntimeProtocolMessageDispatchKind::Routable(pending),
             response_route,
         })
     }
 
-    pub(crate) async fn complete_runtime_protocol_message_for_session_owner_async(
+    pub(crate) async fn complete_runtime_protocol_message_async(
         &mut self,
         completed: CompletedRuntimeProtocolMessageDispatch,
     ) -> Result<Option<RendererCommandTurnOutput>, String> {
         let timing_started = moli_trace::cdp_nav_timing_enabled().then(std::time::Instant::now);
+        let owner = completed.owner().clone();
         let completion = match completed.completion {
             moli_core::page::CompletedRuntimeInspectorCommandDispatch::Owner(completion) => {
                 *completion
@@ -4662,8 +5427,8 @@ impl CdpConnection {
         runtime_messages
             .bind_renderer_agent_attachment(completed.route.renderer_agent_attachment_id);
         let runtime_messages = runtime_messages.messages_mut();
-        self.restore_frontend_command_ids_in_runtime_messages(
-            completed.session_id.as_deref(),
+        self.restore_frontend_command_ids_in_runtime_messages_for_owner(
+            &owner,
             Some(completed.route.renderer_agent_attachment_id),
             runtime_messages,
         );
@@ -4688,6 +5453,7 @@ impl CdpConnection {
         let mut events = Vec::new();
         for replay in replays {
             let frontend_session_id = replay.frontend_session_id().map(str::to_owned);
+            let owner = CommandOwnerScope::capture(self, frontend_session_id.as_deref());
             let renderer_inspector_session_id =
                 replay.renderer_inspector_session_id().map(str::to_owned);
             let (correlation, replay, response_delivery, frontend_payload, response_sender) =
@@ -4880,7 +5646,7 @@ impl CdpConnection {
             };
             let pending = match pending {
                 Ok(pending) => PendingRuntimeProtocolMessageDispatch {
-                    session_id: frontend_session_id.clone(),
+                    owner,
                     route,
                     pending,
                     response_route:
@@ -4914,6 +5680,7 @@ impl CdpConnection {
                     continue;
                 }
             };
+            let completed_owner = completed.owner().clone();
             let completion = match completed.completion {
                 moli_core::page::CompletedRuntimeInspectorCommandDispatch::Owner(completion) => {
                     *completion
@@ -4970,10 +5737,10 @@ impl CdpConnection {
                 let _ = response_sender.send_output(output);
                 continue;
             }
-            let _ = self.route_renderer_runtime_command_output_into(
+            let _ = self.route_renderer_runtime_command_output_for_owner_into(
                 output,
                 None,
-                frontend_session_id.as_deref(),
+                &completed_owner,
                 &mut events,
             );
         }
@@ -5064,9 +5831,9 @@ impl CdpConnection {
         command_id: u64,
     ) -> Result<Vec<RendererRuntimeInspectorMessage>, String> {
         let response_rx = completed.take_deferred_response_receiver();
-        let session_id = completed.session_id.clone();
+        let session_id = completed.owner().session_id().map(str::to_owned);
         let output = self
-            .complete_runtime_protocol_message_for_session_owner_async(completed)
+            .complete_runtime_protocol_message_async(completed)
             .await?;
         let response_in_output = output.as_ref().is_some_and(|output| {
             renderer_command_turn_frontend_protocol_response(output, command_id).is_some()
@@ -5118,8 +5885,7 @@ impl CdpConnection {
         background_events: &mut Vec<BackgroundProtocolEvent>,
     ) {
         let (owner, body) = action.into_parts();
-        let mut route_scope = owner.enter(self);
-        if !owner.is_current(route_scope.conn_mut()) {
+        if !owner.is_current(self) {
             tracing::debug!(
                 session_id = owner.session_id(),
                 action = ?body,
@@ -5127,33 +5893,29 @@ impl CdpConnection {
             );
             return;
         }
-        let session_id = owner.session_id().map(str::to_owned);
+        let command_owner = owner.command_owner().clone();
         match body {
             BidiChannelOwnerActionBody::StartListener(listener) => {
-                route_scope
-                    .conn_mut()
-                    .start_bidi_channel_listener_once_for_session_owner_with_background_events_async(
-                        session_id.as_deref(),
-                        BidiChannelListenerResidence::from_boxed(owner, listener),
-                        background_events,
-                    )
-                    .await;
+                self.start_bidi_channel_listener_once_for_owner_with_background_events_async(
+                    &command_owner,
+                    BidiChannelListenerResidence::from_boxed(owner, listener),
+                    background_events,
+                )
+                .await;
             }
             BidiChannelOwnerActionBody::ReleaseObjectGroup(object_group) => {
-                route_scope
-                    .conn_mut()
-                    .release_bidi_channel_object_group_for_session_owner_best_effort_async(
-                        session_id.as_deref(),
-                        &object_group,
-                    )
-                    .await;
+                self.release_bidi_channel_object_group_for_owner_best_effort_async(
+                    &command_owner,
+                    &object_group,
+                )
+                .await;
             }
         }
     }
 
-    pub(crate) async fn release_bidi_channel_object_group_for_session_owner_best_effort_async(
+    pub(crate) async fn release_bidi_channel_object_group_for_owner_best_effort_async(
         &mut self,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
         object_group: &str,
     ) {
         let command_id = self.next_internal_runtime_command_id();
@@ -5167,16 +5929,13 @@ impl CdpConnection {
             Ok(descriptor) => descriptor,
             Err(error) => {
                 tracing::debug!(%error, object_group, "failed to prepare BiDi object group release");
-                self.unregister_runtime_remote_object_group_for_session_owner(
-                    session_id,
-                    object_group,
-                );
+                self.unregister_runtime_remote_object_group_for_owner(owner, object_group);
                 return;
             }
         };
         let pending = match self
-            .start_runtime_protocol_message_with_context_resolution_for_session_owner_with_deferred_response(
-                session_id,
+            .start_runtime_protocol_message_with_context_resolution_for_owner_with_deferred_response(
+                owner,
                 "releaseObjectGroup",
                 descriptor,
                 command_id,
@@ -5188,46 +5947,37 @@ impl CdpConnection {
                     object_group,
                     "failed to start BiDi channel object group release"
                 );
-                self.unregister_runtime_remote_object_group_for_session_owner(
-                    session_id,
-                    object_group,
-                );
+                self.unregister_runtime_remote_object_group_for_owner(owner, object_group);
                 return;
             }
         };
         let mut completed = match pending.wait().await {
             Ok(completed) => completed,
             Err(error) => {
-                self.forget_pending_inspector_await(command_id, session_id);
+                self.forget_pending_inspector_await_for_owner(command_id, owner);
                 tracing::debug!(
                     %error,
                     object_group,
                     "BiDi channel object group release dispatch failed"
                 );
-                self.unregister_runtime_remote_object_group_for_session_owner(
-                    session_id,
-                    object_group,
-                );
+                self.unregister_runtime_remote_object_group_for_owner(owner, object_group);
                 return;
             }
         };
         let mut renderer_response_rx = completed.take_deferred_response_receiver();
         let messages = match self
-            .complete_runtime_protocol_message_for_session_owner_async(completed)
+            .complete_runtime_protocol_message_async(completed)
             .await
         {
             Ok(messages) => messages,
             Err(error) => {
-                self.forget_pending_inspector_await(command_id, session_id);
+                self.forget_pending_inspector_await_for_owner(command_id, owner);
                 tracing::debug!(
                     %error,
                     object_group,
                     "BiDi channel object group release completion failed"
                 );
-                self.unregister_runtime_remote_object_group_for_session_owner(
-                    session_id,
-                    object_group,
-                );
+                self.unregister_runtime_remote_object_group_for_owner(owner, object_group);
                 return;
             }
         };
@@ -5235,10 +5985,10 @@ impl CdpConnection {
         let mut release_post_response_events = Vec::new();
         let response_flush = CommandResponseFlushContext::default();
         let release_response_seen = if let Some(messages) = messages {
-            self.route_renderer_command_turn_output_into(
+            self.route_renderer_command_turn_output_for_owner_into(
                 messages,
                 Some(command_id),
-                session_id,
+                owner,
                 &response_flush,
                 &mut release_events,
                 &mut release_post_response_events,
@@ -5258,9 +6008,9 @@ impl CdpConnection {
         }
         release_events.extend(release_post_response_events);
         if let Some(renderer_response_rx) = renderer_response_rx {
-            let response = RuntimeInspectorResponseReady::new(
+            let response = RuntimeInspectorResponseReady::for_owner(
                 command_id,
-                session_id,
+                owner,
                 renderer_response_rx
                     .await
                     .map_err(|_| "RuntimeInspectorResponseCanceled".to_owned()),
@@ -5272,12 +6022,13 @@ impl CdpConnection {
                     renderer_output_predecessor.is_none(),
                     "internal object-group cleanup cannot discard a concrete output cursor"
                 );
-                let release_response_seen = self.route_renderer_runtime_command_output_into(
-                    output,
-                    Some(command_id),
-                    session_id,
-                    &mut release_events,
-                );
+                let release_response_seen = self
+                    .route_renderer_runtime_command_output_for_owner_into(
+                        output,
+                        Some(command_id),
+                        owner,
+                        &mut release_events,
+                    );
                 if !release_response_seen {
                     tracing::debug!(
                         command_id,
@@ -5286,19 +6037,19 @@ impl CdpConnection {
                 }
             }
         }
-        self.unregister_runtime_remote_object_group_for_session_owner(session_id, object_group);
+        self.unregister_runtime_remote_object_group_for_owner(owner, object_group);
     }
 
-    async fn start_bidi_channel_listener_once_for_session_owner_with_background_events_async(
+    async fn start_bidi_channel_listener_once_for_owner_with_background_events_async(
         &mut self,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
         residence: BidiChannelListenerResidence,
         background_events: &mut Vec<BackgroundProtocolEvent>,
     ) {
         let listener = residence.listener();
         if self.runtime_inspector_response_ready_sender().is_none() {
-            self.release_bidi_channel_object_group_for_session_owner_best_effort_async(
-                session_id,
+            self.release_bidi_channel_object_group_for_owner_best_effort_async(
+                owner,
                 listener.channel_object_group(),
             )
             .await;
@@ -5310,8 +6061,8 @@ impl CdpConnection {
             Ok(descriptor) => descriptor,
             Err(error) => {
                 tracing::debug!(%error, "failed to prepare BiDi channel listener command");
-                self.release_bidi_channel_object_group_for_session_owner_best_effort_async(
-                    session_id,
+                self.release_bidi_channel_object_group_for_owner_best_effort_async(
+                    owner,
                     listener.channel_object_group(),
                 )
                 .await;
@@ -5319,8 +6070,8 @@ impl CdpConnection {
             }
         };
         let pending = match self
-            .start_runtime_protocol_message_with_context_resolution_for_session_owner_with_deferred_response(
-                session_id,
+            .start_runtime_protocol_message_with_context_resolution_for_owner_with_deferred_response(
+                owner,
                 "callFunctionOn",
                 descriptor,
                 command_id,
@@ -5332,20 +6083,20 @@ impl CdpConnection {
                     channel = %listener.properties().channel,
                     "failed to start BiDi channel listener"
                 );
-                self.release_bidi_channel_object_group_for_session_owner_best_effort_async(
-                    session_id,
+                self.release_bidi_channel_object_group_for_owner_best_effort_async(
+                    owner,
                     listener.channel_object_group(),
                 )
                 .await;
                 return;
             }
         };
-        self.register_pending_bidi_channel_listener(command_id, session_id, residence);
+        self.register_pending_bidi_channel_listener_for_owner(command_id, owner, residence);
         let mut completed = match pending.wait().await {
             Ok(completed) => completed,
             Err(error) => {
                 let object_group = self
-                    .remove_pending_inspector_await_for_cancellation(command_id, session_id)
+                    .remove_pending_inspector_await_for_cancellation_for_owner(command_id, owner)
                     .and_then(|entry| {
                         entry
                             .bidi_channel_listener()
@@ -5353,8 +6104,8 @@ impl CdpConnection {
                     });
                 tracing::debug!(%error, "BiDi channel listener dispatch failed");
                 if let Some(object_group) = object_group {
-                    self.release_bidi_channel_object_group_for_session_owner_best_effort_async(
-                        session_id,
+                    self.release_bidi_channel_object_group_for_owner_best_effort_async(
+                        owner,
                         &object_group,
                     )
                     .await;
@@ -5364,13 +6115,13 @@ impl CdpConnection {
         };
         let mut renderer_response_rx = completed.take_deferred_response_receiver();
         let messages = match self
-            .complete_runtime_protocol_message_for_session_owner_async(completed)
+            .complete_runtime_protocol_message_async(completed)
             .await
         {
             Ok(messages) => messages,
             Err(error) => {
                 let object_group = self
-                    .remove_pending_inspector_await_for_cancellation(command_id, session_id)
+                    .remove_pending_inspector_await_for_cancellation_for_owner(command_id, owner)
                     .and_then(|entry| {
                         entry
                             .bidi_channel_listener()
@@ -5378,8 +6129,8 @@ impl CdpConnection {
                     });
                 tracing::debug!(%error, "BiDi channel listener completion failed");
                 if let Some(object_group) = object_group {
-                    self.release_bidi_channel_object_group_for_session_owner_best_effort_async(
-                        session_id,
+                    self.release_bidi_channel_object_group_for_owner_best_effort_async(
+                        owner,
                         &object_group,
                     )
                     .await;
@@ -5391,10 +6142,10 @@ impl CdpConnection {
         let mut listener_post_response_events = Vec::new();
         let response_flush = CommandResponseFlushContext::default();
         let listener_response_seen = if let Some(messages) = messages {
-            self.route_renderer_command_turn_output_into(
+            self.route_renderer_command_turn_output_for_owner_into(
                 messages,
                 Some(command_id),
-                session_id,
+                owner,
                 &response_flush,
                 &mut listener_events,
                 &mut listener_post_response_events,
@@ -5433,13 +6184,13 @@ impl CdpConnection {
             // oneshot is already completed or still pending.
             if self.start_or_enqueue_registered_runtime_inspector_response_ready(
                 command_id,
-                session_id,
+                owner,
                 renderer_response_rx,
             ) {
                 return;
             }
             let object_group = self
-                .remove_pending_inspector_await_for_cancellation(command_id, session_id)
+                .remove_pending_inspector_await_for_cancellation_for_owner(command_id, owner)
                 .and_then(|entry| {
                     entry
                         .bidi_channel_listener()
@@ -5450,8 +6201,8 @@ impl CdpConnection {
                 "BiDi channel listener started without scheduler runtime response hook"
             );
             if let Some(object_group) = object_group {
-                self.release_bidi_channel_object_group_for_session_owner_best_effort_async(
-                    session_id,
+                self.release_bidi_channel_object_group_for_owner_best_effort_async(
+                    owner,
                     &object_group,
                 )
                 .await;
@@ -5459,14 +6210,14 @@ impl CdpConnection {
         }
     }
 
-    pub(crate) async fn runtime_realm_inventory_for_session_owner_async(
+    pub(crate) async fn runtime_realm_inventory_for_owner_async(
         &mut self,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
     ) -> Result<Vec<RuntimeExecutionContextEvent>, String> {
         let target_id = self
-            .target_owner_identity_for_session(session_id)
+            .target_owner_identity_for_route(owner.session_id(), owner.session_owner_route())
             .and_then(|(_, target_id)| target_id);
-        let page = self.runtime_session_owner_page_mut(session_id)?;
+        let page = self.runtime_session_owner_page_mut_for_owner(owner)?;
         let target_id = target_id.as_deref();
         let devtools_target_id = target_id.map(DevToolsTargetId::from);
         let realms = page
@@ -5502,16 +6253,6 @@ impl CdpConnection {
             .map_err(|error| format!("runtime default execution context lookup failed: {error}"))
     }
 
-    pub(crate) async fn runtime_default_or_initial_execution_context_id_for_session_owner_async(
-        &mut self,
-        session_id: Option<&str>,
-    ) -> Result<Option<i64>, String> {
-        let page = self.runtime_session_owner_page_mut(session_id)?;
-        page.default_or_initial_execution_context_id_async()
-            .await
-            .map_err(|error| format!("runtime default execution context lookup failed: {error}"))
-    }
-
     pub(crate) async fn runtime_default_or_initial_execution_context_id_for_owner_async(
         &mut self,
         owner: &CommandOwnerScope,
@@ -5528,16 +6269,16 @@ impl CdpConnection {
             .map_err(|error| format!("runtime default execution context lookup failed: {error}"))
     }
 
-    pub(crate) async fn runtime_ensure_isolated_world_for_session_owner_async(
+    pub(crate) async fn runtime_ensure_isolated_world_for_owner_async(
         &mut self,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
         frame_id: Option<&str>,
         world_name: &str,
     ) -> Result<i64, String> {
         let owner_target_id = self
-            .target_owner_identity_for_session(session_id)
+            .target_owner_identity_for_route(owner.session_id(), owner.session_owner_route())
             .and_then(|(_, target_id)| target_id);
-        let page = self.runtime_session_owner_page_mut(session_id)?;
+        let page = self.runtime_session_owner_page_mut_for_owner(owner)?;
         let result = if let Some(frame_id) = frame_id
             && owner_target_id.as_deref() != Some(frame_id)
         {
@@ -5585,33 +6326,42 @@ impl CdpConnection {
         session_id: Option<&str>,
         frame_id: &str,
     ) -> Result<Option<i64>, String> {
-        let page = self.runtime_session_owner_page_mut(session_id)?;
+        let owner = CommandOwnerScope::capture(self, session_id);
+        self.child_default_execution_context_id_for_frame_id_for_owner_async(&owner, frame_id)
+            .await
+    }
+
+    pub(crate) async fn child_default_execution_context_id_for_frame_id_for_owner_async(
+        &mut self,
+        owner: &CommandOwnerScope,
+        frame_id: &str,
+    ) -> Result<Option<i64>, String> {
+        let page = self.runtime_session_owner_page_mut_for_owner(owner)?;
         page.child_default_execution_context_id_for_frame_id_async(frame_id)
             .await
             .map_err(|error| format!("runtime child default context lookup failed: {error}"))
     }
 
-    pub(crate) fn start_child_default_execution_context_lookup_for_session_owner(
+    pub(crate) fn start_child_default_execution_context_lookup_for_owner(
         &mut self,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
         execution_context_id: i64,
     ) -> Result<PendingRuntimeChildDefaultContextLookupDispatch, String> {
-        let page = self.runtime_session_owner_page_mut(session_id)?;
+        let page = self.runtime_session_owner_page_mut_for_owner(owner)?;
         let pending = page
             .start_child_frame_id_for_default_execution_context_id(execution_context_id)
             .map_err(|error| format!("runtime child default context lookup failed: {error}"))?;
         Ok(PendingRuntimeChildDefaultContextLookupDispatch {
-            session_id: session_id.map(str::to_owned),
+            owner: owner.clone(),
             pending,
         })
     }
 
-    pub(crate) fn complete_child_default_execution_context_lookup_for_session_owner(
+    pub(crate) fn complete_child_default_execution_context_lookup(
         &mut self,
         completed: CompletedRuntimeChildDefaultContextLookupDispatch,
     ) -> Result<bool, String> {
-        let session_id = completed.session_id.as_deref();
-        let page = self.runtime_session_owner_page_mut(session_id)?;
+        let page = self.runtime_session_owner_page_mut_for_owner(&completed.owner)?;
         page.finish_child_frame_id_for_default_execution_context_id(completed.completion)
             .map(|frame_id| frame_id.is_some())
             .map_err(|error| format!("runtime child default context lookup failed: {error}"))
@@ -5753,35 +6503,41 @@ impl CdpConnection {
             .map_err(|error| format!("runtime binding install failed: {error}"))
     }
 
-    pub(crate) fn start_install_runtime_binding_for_session_owner(
+    pub(crate) fn start_install_runtime_binding_for_owner(
         &mut self,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
         name: &str,
         execution_context_name: Option<&str>,
         execution_context_id: Option<i64>,
     ) -> Result<PendingRuntimeBindingPageCommandDispatch, String> {
-        let page = self.runtime_session_owner_page_mut(session_id)?;
+        let page = self.runtime_session_owner_page_mut_for_owner(owner)?;
         let pending = page
             .start_install_runtime_binding(name, execution_context_name, execution_context_id)
             .map_err(|error| format!("runtime binding install failed: {error}"))?;
         Ok(PendingRuntimeBindingPageCommandDispatch {
-            session_id: session_id.map(str::to_owned),
+            owner: owner.clone(),
             operation: "runtime binding install",
             pending,
         })
     }
 
-    pub(crate) fn start_apply_stored_runtime_bindings_for_session_owner(
+    pub(crate) fn start_apply_stored_runtime_bindings_for_owner(
         &mut self,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
     ) -> Result<PendingRuntimeBindingPageCommandDispatch, String> {
-        let stored_runtime_bindings =
-            self.target_runtime_bindings_for_renderer_session_owner(session_id);
-        let session_runtime_bindings =
-            self.target_runtime_bindings_for_current_inspector_session_owner(session_id);
-        let inspector_session_id =
-            self.target_renderer_runtime_inspector_session_id_for_session(session_id);
-        let page = self.runtime_session_owner_page_mut(session_id)?;
+        let stored_runtime_bindings = self.target_runtime_bindings_for_renderer_route(
+            owner.session_id(),
+            owner.session_owner_route(),
+        );
+        let session_runtime_bindings = self.target_runtime_bindings_for_current_inspector_route(
+            owner.session_id(),
+            owner.session_owner_route(),
+        );
+        let inspector_session_id = self.target_renderer_runtime_inspector_session_id_for_route(
+            owner.session_id(),
+            owner.session_owner_route(),
+        );
+        let page = self.runtime_session_owner_page_mut_for_owner(owner)?;
         let pending = page
             .start_set_runtime_binding_state(
                 inspector_session_id,
@@ -5790,7 +6546,7 @@ impl CdpConnection {
             )
             .map_err(|error| format!("runtime binding state update failed: {error}"))?;
         Ok(PendingRuntimeBindingPageCommandDispatch {
-            session_id: session_id.map(str::to_owned),
+            owner: owner.clone(),
             operation: "runtime binding state update",
             pending,
         })
@@ -5800,13 +6556,28 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
     ) -> Result<(), String> {
-        let stored_runtime_bindings =
-            self.target_runtime_bindings_for_renderer_session_owner(session_id);
-        let session_runtime_bindings =
-            self.target_runtime_bindings_for_current_inspector_session_owner(session_id);
-        let inspector_session_id =
-            self.target_renderer_runtime_inspector_session_id_for_session(session_id);
-        let page = self.runtime_session_owner_page_mut(session_id)?;
+        let owner = CommandOwnerScope::capture(self, session_id);
+        self.apply_runtime_binding_state_for_owner_async(&owner)
+            .await
+    }
+
+    pub(crate) async fn apply_runtime_binding_state_for_owner_async(
+        &mut self,
+        owner: &CommandOwnerScope,
+    ) -> Result<(), String> {
+        let stored_runtime_bindings = self.target_runtime_bindings_for_renderer_route(
+            owner.session_id(),
+            owner.session_owner_route(),
+        );
+        let session_runtime_bindings = self.target_runtime_bindings_for_current_inspector_route(
+            owner.session_id(),
+            owner.session_owner_route(),
+        );
+        let inspector_session_id = self.target_renderer_runtime_inspector_session_id_for_route(
+            owner.session_id(),
+            owner.session_owner_route(),
+        );
+        let page = self.runtime_session_owner_page_mut_for_owner(owner)?;
         page.set_runtime_binding_state_async(
             inspector_session_id,
             &stored_runtime_bindings,
@@ -5832,28 +6603,27 @@ impl CdpConnection {
             .map_err(|error| format!("runtime binding removal failed: {error}"))
     }
 
-    pub(crate) fn start_remove_runtime_binding_for_session_owner(
+    pub(crate) fn start_remove_runtime_binding_for_owner(
         &mut self,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
         name: &str,
     ) -> Result<PendingRuntimeBindingPageCommandDispatch, String> {
-        let page = self.runtime_session_owner_page_mut(session_id)?;
+        let page = self.runtime_session_owner_page_mut_for_owner(owner)?;
         let pending = page
             .start_remove_runtime_binding(name)
             .map_err(|error| format!("runtime binding removal failed: {error}"))?;
         Ok(PendingRuntimeBindingPageCommandDispatch {
-            session_id: session_id.map(str::to_owned),
+            owner: owner.clone(),
             operation: "runtime binding removal",
             pending,
         })
     }
 
-    pub(crate) fn complete_runtime_binding_page_command_for_session_owner(
+    pub(crate) fn complete_runtime_binding_page_command(
         &mut self,
         completed: CompletedRuntimeBindingPageCommandDispatch,
     ) -> Result<(), String> {
-        let session_id = completed.session_id.as_deref();
-        let page = self.runtime_session_owner_page_mut(session_id)?;
+        let page = self.runtime_session_owner_page_mut_for_owner(&completed.owner)?;
         page.finish_unit_runtime_page_command(completed.completion, completed.operation)
             .map_err(|error| format!("{} failed: {error}", completed.operation))
     }
@@ -6870,7 +7640,11 @@ mod tests {
         channel: &str,
     ) -> BidiChannelListenerResidence {
         BidiChannelListenerResidence::new(
-            BidiChannelPageOwner::capture(conn, Some(session_id)).expect("test Page attachment"),
+            BidiChannelPageOwner::capture_for_owner(
+                conn,
+                CommandOwnerScope::for_session(session_id),
+            )
+            .expect("test Page attachment"),
             bidi_channel_listener_for_test(channel),
         )
     }
@@ -7041,9 +7815,15 @@ mod tests {
             .and_then(|node_id| u32::try_from(node_id).ok())
             .expect("DOM.describeNode should return backendNodeId");
 
+        let owner = CommandOwnerScope::capture(&ctx.conn, None);
         let snapshot = ctx
             .conn
-            .document_node_snapshot_for_backend_node_id_async(None, backend_node_id, 1, false)
+            .document_node_snapshot_for_backend_node_id_for_owner_async(
+                &owner,
+                backend_node_id,
+                1,
+                false,
+            )
             .await
             .expect("document node id snapshot command should complete")
             .expect("target node snapshot should exist");
@@ -7349,12 +8129,25 @@ mod tests {
 
         conn.register_pending_inspector_await(1, Some("SID-active"));
         conn.register_pending_inspector_await(1, Some("SID-bg"));
-        conn.register_runtime_await_job(1, Some("SID-active"), None, "evaluate");
-        conn.register_runtime_await_job(1, Some("SID-bg"), None, "evaluate");
+        conn.register_runtime_await_job_for_owner(
+            1,
+            &CommandOwnerScope::for_session("SID-active"),
+            None,
+            "evaluate",
+        );
+        conn.register_runtime_await_job_for_owner(
+            1,
+            &CommandOwnerScope::for_session("SID-bg"),
+            None,
+            "evaluate",
+        );
 
         assert_eq!(conn.pending_runtime_await_jobs.len(), 2);
         let claimed = conn
-            .claim_pending_inspector_await_for_scheduler_deferred_reply(1, Some("SID-active"))
+            .claim_pending_inspector_await_for_scheduler_deferred_reply(
+                1,
+                &CommandOwnerScope::for_session("SID-active"),
+            )
             .expect("active session await should be independently claimable");
         assert!(conn.has_claimed_pending_inspector_awaits_for_session_owner(Some("SID-active")));
         assert!(!conn.has_unclaimed_pending_inspector_awaits_for_session_owner(Some("SID-active")));
@@ -7429,9 +8222,9 @@ mod tests {
             )
             .expect("first renderer command should own the frontend id")
             .correlation();
-        conn.try_register_pending_inspector_await_with_object_group(
+        conn.try_register_pending_inspector_await_with_object_group_for_owner(
             17,
-            Some("SID-duplicate-owner"),
+            &CommandOwnerScope::for_session("SID-duplicate-owner"),
             None,
         )
         .expect("await state is registered before renderer dispatch");
@@ -7625,13 +8418,18 @@ mod tests {
         ));
         conn.browser_context = Some(browser_context);
 
-        conn.try_register_pending_inspector_await_with_object_group(
+        conn.try_register_pending_inspector_await_with_object_group_for_owner(
             77,
-            Some("SID-bg"),
+            &CommandOwnerScope::for_session("SID-bg"),
             Some("runtime-group"),
         )
         .unwrap();
-        conn.register_runtime_await_job(77, Some("SID-bg"), Some("runtime-group"), "evaluate");
+        conn.register_runtime_await_job_for_owner(
+            77,
+            &CommandOwnerScope::for_session("SID-bg"),
+            Some("runtime-group"),
+            "evaluate",
+        );
 
         let mut response_events = Vec::new();
         let mut background_events = Vec::new();

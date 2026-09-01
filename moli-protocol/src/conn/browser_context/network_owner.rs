@@ -620,22 +620,6 @@ impl CdpConnection {
             .is_ok_and(|runtime_slot| runtime_slot.has_network_event_listeners())
     }
 
-    pub(crate) fn network_backlog_prepared_delivery_for_session_owner(
-        &mut self,
-        session_id: Option<&str>,
-        trigger_session_id: Option<&str>,
-        primary_session_id: Option<&str>,
-        preferred_request_id: Option<NetworkBacklogPreferredRequestId<'_>>,
-    ) -> Option<TargetNetworkBacklogPreparedDelivery> {
-        self.network_backlog_prepared_delivery_for_route(
-            session_id,
-            None,
-            trigger_session_id,
-            primary_session_id,
-            preferred_request_id,
-        )
-    }
-
     pub(crate) fn network_backlog_prepared_delivery_for_route(
         &mut self,
         session_id: Option<&str>,
@@ -938,9 +922,7 @@ impl CdpConnection {
             self.session_route(session_id),
             Some(CdpSessionRoute::Browser)
         );
-        let is_pre_context_root = session_id.is_none()
-            && self.none_session_owner_route_override().is_none()
-            && self.browser_context.is_none();
+        let is_pre_context_root = session_id.is_none() && self.browser_context.is_none();
         if !is_browser_session && !is_pre_context_root {
             return None;
         }
@@ -1114,15 +1096,13 @@ mod tests {
         conn.browser_context = Some(browser_context);
 
         let (active_fetch_id, active_network_request_id) = conn
-            .allocate_pending_subresource_fetch_request_ids_for_session_owner(Some("SID-active"))
+            .allocate_pending_subresource_fetch_request_ids_for_route(Some("SID-active"), None)
             .expect("active owner should allocate request ids");
         let (background_fetch_id, background_network_request_id) = conn
-            .allocate_pending_subresource_fetch_request_ids_for_session_owner(Some(
-                "SID-background",
-            ))
+            .allocate_pending_subresource_fetch_request_ids_for_route(Some("SID-background"), None)
             .expect("background owner should allocate request ids");
         let (second_active_fetch_id, second_active_network_request_id) = conn
-            .allocate_pending_subresource_fetch_request_ids_for_session_owner(Some("SID-active"))
+            .allocate_pending_subresource_fetch_request_ids_for_route(Some("SID-active"), None)
             .expect("active owner should allocate a second request id");
 
         assert_eq!(active_fetch_id, "INT-SUB-1");

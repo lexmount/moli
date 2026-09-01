@@ -1,6 +1,4 @@
-use url::Url;
-
-use crate::conn::{BackgroundProtocolEvent, CommandDispatchContext};
+use crate::conn::{BackgroundProtocolEvent, CommandDispatchContext, CommandOwnerScope};
 use crate::domains::network::{
     MainDocumentProgressBackgroundEventBarrier, MainDocumentProgressGate,
 };
@@ -11,27 +9,29 @@ use crate::domains::network::{
 /// command. It cannot inspect renderer state, select Page work, retry a
 /// producer, or change the output families owned by the batch.
 pub(in crate::domains) struct ProtocolOutputProjectionContext<'a> {
-    pub(in crate::domains) session_id: Option<&'a str>,
+    owner: &'a CommandOwnerScope,
     pub(in crate::domains) command: &'a mut CommandDispatchContext,
     pub(in crate::domains) subresource_frame_id: Option<&'a str>,
-    pub(in crate::domains) subresource_document_url: Option<&'a Url>,
     pub(in crate::domains) subresource_timestamp: Option<f64>,
     pub(in crate::domains) subresource_network_request_id: Option<&'a str>,
 }
 
 impl<'a> ProtocolOutputProjectionContext<'a> {
     pub(in crate::domains) fn new(
-        session_id: Option<&'a str>,
+        owner: &'a CommandOwnerScope,
         command: &'a mut CommandDispatchContext,
     ) -> Self {
         Self {
-            session_id,
+            owner,
             command,
             subresource_frame_id: None,
-            subresource_document_url: None,
             subresource_timestamp: None,
             subresource_network_request_id: None,
         }
+    }
+
+    pub(in crate::domains) fn owner(&self) -> &CommandOwnerScope {
+        self.owner
     }
 }
 
@@ -56,28 +56,24 @@ impl<'a> MainDocumentBodyCompleteProjection<'a> {
 
 #[cfg(test)]
 mod tests {
-    use url::Url;
-
-    use crate::conn::CommandDispatchContext;
+    use crate::conn::{CommandDispatchContext, CommandOwnerScope};
 
     use super::ProtocolOutputProjectionContext;
 
     #[test]
     fn plans_use_closed_projection_families_with_exact_context() {
-        let document_url = Url::parse("https://example.test/page").unwrap();
+        let owner = CommandOwnerScope::for_session("session-1");
         let mut command = CommandDispatchContext::default();
         let context = ProtocolOutputProjectionContext {
-            session_id: Some("session-1"),
+            owner: &owner,
             command: &mut command,
             subresource_frame_id: Some("frame-1"),
-            subresource_document_url: Some(&document_url),
             subresource_timestamp: Some(12.5),
             subresource_network_request_id: Some("REQ-1"),
         };
 
-        assert_eq!(context.session_id, Some("session-1"));
+        assert_eq!(context.owner().session_id(), Some("session-1"));
         assert_eq!(context.subresource_frame_id, Some("frame-1"));
-        assert_eq!(context.subresource_document_url, Some(&document_url));
         assert_eq!(context.subresource_network_request_id, Some("REQ-1"));
         assert_eq!(context.subresource_timestamp, Some(12.5));
     }

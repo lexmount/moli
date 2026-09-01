@@ -754,12 +754,9 @@ pub(crate) fn emit_pending_network_backlog_activity_background_events(
 pub(crate) fn emit_prepared_renderer_network_live_background_events(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
-    session_id: Option<&str>,
+    owner: &CommandOwnerScope,
     prepared: &mut TargetNetworkBacklogPreparedDelivery,
 ) {
-    let owner = session_id
-        .map(CommandOwnerScope::for_session)
-        .unwrap_or_else(|| CommandOwnerScope::for_implicit_route(None));
     let session_id = owner.session_id();
     let Some((frame_id, snapshot)) = (|| {
         let frame_id = conn
@@ -776,7 +773,7 @@ pub(crate) fn emit_prepared_renderer_network_live_background_events(
     emit_network_delivery_snapshot(
         conn,
         out,
-        &owner,
+        owner,
         &frame_id,
         monotonic_timestamp_seconds(),
         snapshot,
@@ -1135,7 +1132,7 @@ mod tests {
         let mut events = Vec::new();
         let mut conn = CdpConnection::new();
         conn.install_default_browser_target();
-        let owner = crate::conn::CommandOwnerScope::for_implicit_route(None);
+        let owner = crate::conn::CommandOwnerScope::capture(&conn, None);
         emit_network_delivery_snapshot(&mut conn, &mut events, &owner, "FRAME-1", 1.0, snapshot);
         events
             .into_iter()

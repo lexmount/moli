@@ -515,22 +515,25 @@ pub(crate) struct PagePreparedOutputSlot {
 impl PagePreparedOutputs {
     pub(crate) fn from_renderer_javascript_dialog(
         conn: &CdpConnection,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
         dialog: moli_core::page::RendererPendingJavaScriptDialog,
     ) -> Self {
+        let session_id = owner.session_id();
+        let owner_route = owner.session_owner_route();
         let Some(source_attachment) =
-            conn.target_page_protocol_attachment_identity_for_session(session_id)
+            conn.target_page_protocol_attachment_identity_for_route(session_id, owner_route)
         else {
             let _ = dialog.finish(false, String::new());
             return Self::default();
         };
         let Some((root_frame_id, _, _, _)) =
-            conn.target_session_owner_frame_tree_identity(session_id)
+            conn.target_session_owner_frame_tree_identity_for_route(session_id, owner_route)
         else {
             let _ = dialog.finish(false, String::new());
             return Self::default();
         };
-        let Ok(runtime_slot) = conn.runtime_session_owner_slot(session_id) else {
+        let Ok(runtime_slot) = conn.runtime_session_owner_slot_for_route(session_id, owner_route)
+        else {
             let _ = dialog.finish(false, String::new());
             return Self::default();
         };
@@ -547,10 +550,13 @@ impl PagePreparedOutputs {
 
     pub(crate) fn from_renderer_popup_activation(
         conn: &CdpConnection,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
         activation: moli_core::page::RendererPendingPopupActivation,
     ) -> Self {
-        let Some(page_owner) = conn.target_page_residence_identity_for_session(session_id) else {
+        let Some(page_owner) = conn.target_page_residence_identity_for_route(
+            owner.session_id(),
+            owner.session_owner_route(),
+        ) else {
             return Self::default();
         };
         Self {
@@ -563,12 +569,15 @@ impl PagePreparedOutputs {
 
     pub(crate) fn from_renderer_window_open_event(
         conn: &CdpConnection,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
         event: RendererPendingWindowOpenEvent,
     ) -> Self {
         Self {
             window_open_events: vec![popup::PagePreparedWindowOpenEvent::new(
-                conn.subscribed_page_event_session_ids_for_session_owner(session_id),
+                conn.subscribed_page_event_session_ids_for_route(
+                    owner.session_id(),
+                    owner.session_owner_route(),
+                ),
                 event,
             )],
             ..Self::default()
@@ -577,15 +586,18 @@ impl PagePreparedOutputs {
 
     pub(crate) fn from_renderer_same_document_navigation(
         conn: &CdpConnection,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
         navigation: RendererDocumentSourcedSameDocumentNavigation,
     ) -> Self {
-        let Some(owner) = conn.target_page_residence_identity_for_session(session_id) else {
+        let Some(page_owner) = conn.target_page_residence_identity_for_route(
+            owner.session_id(),
+            owner.session_owner_route(),
+        ) else {
             return Self::default();
         };
         Self {
             same_document_navigations: vec![PagePreparedSameDocumentNavigation::new(
-                owner, navigation,
+                page_owner, navigation,
             )],
             ..Self::default()
         }
@@ -593,15 +605,18 @@ impl PagePreparedOutputs {
 
     pub(crate) fn from_renderer_top_level_location_navigation(
         conn: &CdpConnection,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
         navigation: RendererDocumentSourcedTopLevelLocationNavigation,
     ) -> Self {
-        let Some(owner) = conn.target_page_residence_identity_for_session(session_id) else {
+        let Some(page_owner) = conn.target_page_residence_identity_for_route(
+            owner.session_id(),
+            owner.session_owner_route(),
+        ) else {
             return Self::default();
         };
         Self {
             top_level_location_navigation: Some(PagePreparedTopLevelLocationNavigation::new(
-                owner, navigation,
+                page_owner, navigation,
             )),
             ..Self::default()
         }
@@ -618,18 +633,21 @@ impl PagePreparedOutputs {
 
     pub(crate) fn from_renderer_child_frame_tree_event(
         conn: &CdpConnection,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
         source_document: RendererDocumentLifecycleIdentity,
         event: ChildFrameTreeEventSnapshot,
     ) -> Self {
-        let Some(binding) = conn.target_root_document_protocol_attachment_identity_for_session(
+        let session_id = owner.session_id();
+        let owner_route = owner.session_owner_route();
+        let Some(binding) = conn.target_root_document_protocol_attachment_identity_for_route(
             session_id,
+            owner_route,
             source_document,
         ) else {
             return Self::default();
         };
         let Some((root_frame_id, _, security_origin, secure_context_type)) =
-            conn.target_session_owner_frame_tree_identity(session_id)
+            conn.target_session_owner_frame_tree_identity_for_route(session_id, owner_route)
         else {
             return Self::default();
         };
@@ -665,18 +683,21 @@ impl PagePreparedOutputs {
 
     pub(crate) fn from_renderer_child_frame_document_opened(
         conn: &CdpConnection,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
         source_document: RendererDocumentLifecycleIdentity,
         mut event: ChildFrameDocumentOpenedSnapshot,
     ) -> Self {
-        let Some(binding) = conn.target_root_document_protocol_attachment_identity_for_session(
+        let session_id = owner.session_id();
+        let owner_route = owner.session_owner_route();
+        let Some(binding) = conn.target_root_document_protocol_attachment_identity_for_route(
             session_id,
+            owner_route,
             source_document,
         ) else {
             return Self::default();
         };
         let Some((root_frame_id, _, security_origin, secure_context_type)) =
-            conn.target_session_owner_frame_tree_identity(session_id)
+            conn.target_session_owner_frame_tree_identity_for_route(session_id, owner_route)
         else {
             return Self::default();
         };
@@ -702,18 +723,21 @@ impl PagePreparedOutputs {
 
     pub(crate) fn from_renderer_child_frame_document_network(
         conn: &CdpConnection,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
         source_document: RendererDocumentLifecycleIdentity,
         event: ChildFrameDocumentNetworkActivitySnapshot,
     ) -> Self {
-        let Some(binding) = conn.target_root_document_protocol_attachment_identity_for_session(
+        let session_id = owner.session_id();
+        let owner_route = owner.session_owner_route();
+        let Some(binding) = conn.target_root_document_protocol_attachment_identity_for_route(
             session_id,
+            owner_route,
             source_document,
         ) else {
             return Self::default();
         };
         let Some((_, _, security_origin, secure_context_type)) =
-            conn.target_session_owner_frame_tree_identity(session_id)
+            conn.target_session_owner_frame_tree_identity_for_route(session_id, owner_route)
         else {
             return Self::default();
         };
@@ -736,18 +760,21 @@ impl PagePreparedOutputs {
 
     pub(crate) fn from_renderer_child_frame_load(
         conn: &CdpConnection,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
         source_document: RendererDocumentLifecycleIdentity,
         mut event: ChildFrameNavigationSnapshot,
     ) -> Self {
-        let Some(binding) = conn.target_root_document_protocol_attachment_identity_for_session(
+        let session_id = owner.session_id();
+        let owner_route = owner.session_owner_route();
+        let Some(binding) = conn.target_root_document_protocol_attachment_identity_for_route(
             session_id,
+            owner_route,
             source_document,
         ) else {
             return Self::default();
         };
         let Some((root_frame_id, _, security_origin, secure_context_type)) =
-            conn.target_session_owner_frame_tree_identity(session_id)
+            conn.target_session_owner_frame_tree_identity_for_route(session_id, owner_route)
         else {
             return Self::default();
         };
@@ -1189,13 +1216,14 @@ impl PageOutputProjectionStep {
         context: &mut ProtocolOutputProjectionContext<'_>,
         prepared_outputs: Option<&mut ProtocolOutputPayloads>,
     ) {
+        let owner = context.owner().clone();
         match self {
             PageOutputProjectionStep::Download => {
                 let mut events = Vec::new();
                 input::emit_download_activity_background_events_async(
                     conn,
                     &mut events,
-                    context.session_id,
+                    owner.session_id(),
                     prepared_outputs,
                     context.command,
                 )
@@ -1208,8 +1236,8 @@ impl PageOutputProjectionStep {
                     .and_then(PagePreparedOutputSlot::take_document_lifecycle_events)
                 {
                     let (binding, accepted) = conn
-                        .ingest_renderer_document_lifecycle_events_for_session_owner(
-                            context.session_id,
+                        .ingest_renderer_document_lifecycle_events_for_owner(
+                            &owner,
                             renderer_events,
                         );
                     if let Some(binding) = binding {
@@ -1217,7 +1245,7 @@ impl PageOutputProjectionStep {
                         emit_bound_renderer_document_lifecycle_background_events(
                             conn,
                             &mut events,
-                            context.session_id,
+                            &owner,
                             &binding,
                             &accepted,
                         );
@@ -1234,7 +1262,7 @@ impl PageOutputProjectionStep {
                     for change in changes {
                         if conn
                             .apply_renderer_document_title_for_session_owner(
-                                context.session_id,
+                                owner.session_id(),
                                 &change,
                             )
                             .unwrap_or(false)
@@ -1242,7 +1270,7 @@ impl PageOutputProjectionStep {
                             crate::domains::target::emit_target_info_changed_for_session_owner_background_event(
                                 conn,
                                 &mut events,
-                                context.session_id,
+                                owner.session_id(),
                             );
                         }
                     }
@@ -1254,7 +1282,7 @@ impl PageOutputProjectionStep {
                 input::emit_file_chooser_activity_background_events_async(
                     conn,
                     &mut events,
-                    context.session_id,
+                    owner.session_id(),
                     prepared_outputs,
                 )
                 .await;
@@ -1265,7 +1293,7 @@ impl PageOutputProjectionStep {
                 emit_javascript_dialog_activity_background_events_async(
                     conn,
                     &mut events,
-                    context.session_id,
+                    owner.session_id(),
                     prepared_outputs,
                 )
                 .await;
@@ -1289,7 +1317,7 @@ impl PageOutputProjectionStep {
                 emit_popup_activity_background_events_async(
                     conn,
                     &mut events,
-                    context.session_id,
+                    owner.session_id(),
                     prepared_outputs,
                 )
                 .await;
@@ -1312,7 +1340,7 @@ impl PageOutputProjectionStep {
                 emit_same_document_navigation_activity_background_events_async(
                     conn,
                     &mut events,
-                    context.session_id,
+                    owner.session_id(),
                     prepared_outputs,
                 )
                 .await;
@@ -1321,7 +1349,7 @@ impl PageOutputProjectionStep {
             PageOutputProjectionStep::TopLevelLocationNavigation => {
                 publish_prepared_top_level_location_navigation_owner_action(
                     conn,
-                    context.session_id,
+                    owner.session_id(),
                     prepared_outputs,
                 );
             }
@@ -1330,7 +1358,7 @@ impl PageOutputProjectionStep {
                 emit_top_level_history_traversal_activity_background_events_async(
                     conn,
                     &mut events,
-                    context.session_id,
+                    owner.session_id(),
                     prepared_outputs,
                 )
                 .await;
@@ -2360,16 +2388,6 @@ pub(crate) async fn navigate_page_owned_top_level_location_background_events_asy
     .await;
 }
 
-pub(crate) async fn navigate_session_owner_from_renderer_background_events_async(
-    conn: &mut CdpConnection,
-    out: &mut Vec<BackgroundProtocolEvent>,
-    session_id: Option<&str>,
-    url: &str,
-) {
-    let owner = CommandOwnerScope::capture(conn, session_id);
-    navigate_command_owner_from_renderer_background_events_async(conn, out, &owner, url).await;
-}
-
 pub(crate) async fn navigate_command_owner_from_renderer_background_events_async(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
@@ -2446,24 +2464,29 @@ async fn complete_renderer_navigation_step_background_events_async(
     }
 }
 
-pub(crate) fn emit_page_window_open_background_events(
+pub(crate) fn emit_page_window_open_background_events_for_route(
     conn: &CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
     owner_session_id: Option<&str>,
+    owner_route: Option<&crate::conn::CdpSessionRoute>,
     url: &str,
     window_name: &str,
     window_features: &[String],
     user_gesture: bool,
 ) {
-    if !crate::domains::target::popup_activation_creates_new_target(
+    if !crate::domains::target::popup_activation_creates_new_target_for_route(
         conn,
         owner_session_id,
+        owner_route,
         window_name,
     ) {
         return;
     }
-    for event_session_id in conn.page_event_session_ids_for_session_owner(owner_session_id) {
-        if conn.page_domain_enabled_for_session_owner(event_session_id.as_deref()) == Some(true) {
+    for event_session_id in conn.page_event_session_ids_for_route(owner_session_id, owner_route) {
+        let event_owner_route = event_session_id.is_none().then_some(owner_route).flatten();
+        if conn.page_domain_enabled_for_route(event_session_id.as_deref(), event_owner_route)
+            == Some(true)
+        {
             out.push(BackgroundProtocolEvent::page_window_open(
                 event_session_id.as_deref(),
                 url,
@@ -2555,8 +2578,8 @@ mod producer_tests {
             load: None,
             terminated: None,
         };
-        let (binding, initial_events) = conn.bind_renderer_document_lifecycle_for_session_owner(
-            Some(session_id),
+        let (binding, initial_events) = conn.bind_renderer_document_lifecycle_for_owner(
+            &crate::conn::CommandOwnerScope::for_session(session_id),
             RendererPageCreationArtifacts {
                 active_document: identity.document,
                 active_epoch: identity.epoch,
@@ -3568,9 +3591,9 @@ mod producer_tests {
             .into(),
         );
 
+        let owner = crate::conn::CommandOwnerScope::for_session("SID-activity-order");
         let mut command_context = crate::conn::CommandDispatchContext::default();
-        let mut context =
-            ProtocolOutputProjectionContext::new(Some("SID-activity-order"), &mut command_context);
+        let mut context = ProtocolOutputProjectionContext::new(&owner, &mut command_context);
 
         for step in [
             super::PageOutputProjectionStep::FileChooser,
@@ -3703,11 +3726,9 @@ mod producer_tests {
             .into(),
         );
 
+        let owner = crate::conn::CommandOwnerScope::for_session("SID-later-activity-order");
         let mut command_context = crate::conn::CommandDispatchContext::default();
-        let mut context = ProtocolOutputProjectionContext::new(
-            Some("SID-later-activity-order"),
-            &mut command_context,
-        );
+        let mut context = ProtocolOutputProjectionContext::new(&owner, &mut command_context);
 
         for step in [
             super::PageOutputProjectionStep::ChildFrameActivity,
@@ -4464,15 +4485,9 @@ mod producer_tests {
         };
         let mut prepared =
             ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(outputs));
+        let owner = crate::conn::CommandOwnerScope::for_session("SID-1");
         let mut command_context = crate::conn::CommandDispatchContext::default();
-        let mut context = ProtocolOutputProjectionContext {
-            session_id: Some("SID-1"),
-            command: &mut command_context,
-            subresource_frame_id: None,
-            subresource_document_url: None,
-            subresource_timestamp: None,
-            subresource_network_request_id: None,
-        };
+        let mut context = ProtocolOutputProjectionContext::new(&owner, &mut command_context);
 
         super::PageOutputProjectionStep::ChildFrameActivity
             .project_async(&mut conn, &mut context, Some(&mut prepared))
@@ -4753,15 +4768,9 @@ mod producer_tests {
         bc.set_target_url("https://example.test/page".to_owned());
         bc.attach_active_session("SID-1");
         conn.browser_context = Some(bc);
+        let owner = crate::conn::CommandOwnerScope::for_session("SID-1");
         let mut command_context = crate::conn::CommandDispatchContext::default();
-        let mut context = ProtocolOutputProjectionContext {
-            session_id: Some("SID-1"),
-            command: &mut command_context,
-            subresource_frame_id: None,
-            subresource_document_url: None,
-            subresource_timestamp: None,
-            subresource_network_request_id: None,
-        };
+        let mut context = ProtocolOutputProjectionContext::new(&owner, &mut command_context);
 
         super::PageOutputProjectionStep::ChildFrameActivity
             .project_async(&mut conn, &mut context, None)

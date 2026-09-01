@@ -478,12 +478,19 @@ fn start_get_storage_key_for_frame_command(
         }
     };
 
-    let Some((target_id, target_url, _, _)) =
-        conn.target_session_owner_frame_tree_identity(cmd.session_id)
+    let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
+    let Some((target_id, target_url, _, _)) = conn
+        .target_session_owner_frame_tree_identity_for_route(
+            owner_scope.session_id(),
+            owner_scope.session_owner_route(),
+        )
     else {
         let plan = if conn.browser_context.is_none()
             && conn
-                .target_owner_identity_for_session(cmd.session_id)
+                .target_owner_identity_for_route(
+                    owner_scope.session_id(),
+                    owner_scope.session_owner_route(),
+                )
                 .is_none()
         {
             CommandOutputPlan::error(-31998, "BrowserContextNotLoaded")
@@ -494,7 +501,6 @@ fn start_get_storage_key_for_frame_command(
     };
 
     if params.frame_id == target_id {
-        let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
         if let Some(page) =
             loaded_page_mut_for_session(conn, cmd.session_id, owner_scope.session_owner_route())
         {
@@ -520,10 +526,12 @@ fn start_get_storage_key_for_frame_command(
         ));
     }
 
-    if let Err(message) = conn.ensure_document_accessible_for_session_owner(cmd.session_id) {
+    if let Err(message) = conn.ensure_document_accessible_for_route(
+        owner_scope.session_id(),
+        owner_scope.session_owner_route(),
+    ) {
         return StorageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message));
     }
-    let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
     let Some(page) =
         loaded_page_mut_for_session(conn, cmd.session_id, owner_scope.session_owner_route())
     else {

@@ -939,7 +939,13 @@ fn start_devtools_set_viewport_command(
     command: DevToolsSetViewportCommand,
     owner_route: Option<&CdpSessionRoute>,
 ) -> Result<Option<PendingEmulationCommandDispatch>, DevToolsError> {
-    let session_id = command.context.session_id.as_ref().map(|id| id.as_str());
+    let owner_scope = CommandOwnerScope::capture_for_route(
+        conn,
+        command.context.session_id.as_ref().map(|id| id.as_str()),
+        owner_route,
+    );
+    let session_id = owner_scope.session_id();
+    let owner_route = owner_scope.session_owner_route();
     if conn.browser_context.is_none()
         && conn
             .target_owner_identity_for_route(session_id, owner_route)
@@ -961,9 +967,6 @@ fn start_devtools_set_viewport_command(
             "BrowserContextNotLoaded",
         ));
     }
-    let owner_scope = session_id
-        .map(CommandOwnerScope::for_session)
-        .unwrap_or_else(|| CommandOwnerScope::for_implicit_route(owner_route.cloned()));
     let runtime_call_id = conn.next_internal_runtime_command_id();
     let Some(page) = conn
         .loaded_page_mut_for_target_configuration_for_route(session_id, owner_route)
@@ -2638,7 +2641,7 @@ fn single_pending_emulation_dispatch(
 
 fn emulation_command_is_context_wide(conn: &CdpConnection, session_id: Option<&str>) -> bool {
     match session_id {
-        None => conn.none_session_owner_route_override().is_none(),
+        None => true,
         Some(session_id) => matches!(
             conn.session_route(Some(session_id)),
             Some(CdpSessionRoute::Browser)
@@ -2771,6 +2774,9 @@ fn start_session_surface_override_page_command_for_route(
     session_id: Option<&str>,
     owner_route: Option<&CdpSessionRoute>,
 ) -> Result<Vec<PendingEmulationPageCommand>, String> {
+    let owner_scope = CommandOwnerScope::capture_for_route(conn, session_id, owner_route);
+    let session_id = owner_scope.session_id();
+    let owner_route = owner_scope.session_owner_route();
     let script = {
         let Some((browser_context_id, target_id)) =
             conn.target_owner_identity_for_route(session_id, owner_route)
@@ -2791,9 +2797,6 @@ fn start_session_surface_override_page_command_for_route(
     let Some(script) = script else {
         return Ok(Vec::new());
     };
-    let owner_scope = session_id
-        .map(CommandOwnerScope::for_session)
-        .unwrap_or_else(|| CommandOwnerScope::for_implicit_route(owner_route.cloned()));
     let runtime_call_id = conn.next_internal_runtime_command_id();
     let Some(page) = conn
         .loaded_page_mut_for_target_configuration_for_route(session_id, owner_route)

@@ -37,12 +37,13 @@ async fn project_observable_output_async(
     context: &mut ProtocolOutputProjectionContext<'_>,
     prepared_outputs: Option<&mut ProtocolOutputPayloads>,
 ) {
+    let owner = context.owner().clone();
     if let Some(slot) = prepared_outputs.and_then(ProtocolOutputPayloads::observable_mut) {
         slot.emit_activity_background_events_async(
             step,
             conn,
             context.command.protocol_events_mut(),
-            context.session_id,
+            owner.session_id(),
         )
         .await;
     }

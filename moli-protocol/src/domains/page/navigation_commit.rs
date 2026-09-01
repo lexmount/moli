@@ -63,7 +63,6 @@ pub(super) async fn commit_loaded_navigation_async(
         return;
     };
     let is_network_error_page = network_error_page.is_some();
-    let navigation_session_id = state.owner.session_id().map(str::to_owned);
     let (page_creation_artifacts, mut deferred_initial_renderer_document_lifecycle_events) =
         split_renderer_page_creation_lifecycle_at_load_boundary(page_creation_artifacts);
     let mut navigation_activity = MainDocumentNavigationActivity::new(
@@ -94,8 +93,8 @@ pub(super) async fn commit_loaded_navigation_async(
         return;
     };
     if !is_network_error_page {
-        let _ = conn.commit_main_document_resource_for_session_owner(
-            navigation_session_id.as_deref(),
+        let _ = conn.commit_main_document_resource_for_owner(
+            &navigation_activity.state().owner,
             navigation_activity.state().frame_id.clone(),
             navigation_activity.state().loader_id.clone(),
             final_url.clone(),
@@ -109,16 +108,16 @@ pub(super) async fn commit_loaded_navigation_async(
         preload_channel_execution_context_ids: _,
     } = commit;
     let (renderer_document_binding, mut initial_renderer_document_lifecycle_events) = conn
-        .bind_renderer_document_lifecycle_for_session_owner(
-            navigation_activity.state().owner.session_id(),
+        .bind_renderer_document_lifecycle_for_owner(
+            &navigation_activity.state().owner,
             page_creation_artifacts,
             token.cloned(),
             navigation_activity.state().frame_id.clone(),
             navigation_activity.state().loader_id.clone(),
         );
     let load_visibility_barrier_armed = renderer_document_binding.is_some()
-        && conn.begin_renderer_document_load_visibility_barrier_for_session_owner(
-            navigation_activity.state().owner.session_id(),
+        && conn.begin_renderer_document_load_visibility_barrier_for_owner(
+            &navigation_activity.state().owner,
             &navigation_activity.state().loader_id,
         );
     if load_visibility_barrier_armed {
@@ -127,8 +126,8 @@ pub(super) async fn commit_loaded_navigation_async(
         // into the Page output FIFO, even if it is produced before protocol
         // finishes installing this binding. Never read the Page back here:
         // ordered ingress and the commit cursor preserve that handoff.
-        let (_, visible_events) = conn.ingest_renderer_document_lifecycle_events_for_session_owner(
-            navigation_activity.state().owner.session_id(),
+        let (_, visible_events) = conn.ingest_renderer_document_lifecycle_events_for_owner(
+            &navigation_activity.state().owner,
             std::mem::take(&mut deferred_initial_renderer_document_lifecycle_events),
         );
         initial_renderer_document_lifecycle_events.extend(visible_events);
@@ -137,10 +136,7 @@ pub(super) async fn commit_loaded_navigation_async(
         deferred_initial_renderer_document_lifecycle_events,
     );
     if let Some(engine) = navigation_engine {
-        conn.adopt_loaded_navigation_engine_for_session_owner(
-            navigation_session_id.as_deref(),
-            engine,
-        );
+        conn.adopt_loaded_navigation_engine_for_owner(&navigation_activity.state().owner, engine);
     }
 
     // Keep the loaded commit tail boxed: the target/Patchright CDP test thread
@@ -266,7 +262,7 @@ async fn restore_and_commit_loaded_navigation_page_async(
     if let Some(transaction) = committed_renderer_attachment.as_ref() {
         if token != Some(transaction.navigation())
             || transaction.current().agent_token() != page_agent_token
-            || conn.current_renderer_agent_attachment_id_for_session_owner(state.owner.session_id())
+            || conn.current_renderer_agent_attachment_id_for_owner(&state.owner)
                 != Some(transaction.current().id())
         {
             tracing::warn!(
@@ -279,11 +275,7 @@ async fn restore_and_commit_loaded_navigation_page_async(
     }
     let renderer_agent_candidate = match (token, committed_renderer_attachment.as_ref()) {
         (Some(token), None) => {
-            match conn.prepare_renderer_agent_candidate_for_session_owner(
-                state.owner.session_id(),
-                token,
-                &mut page,
-            ) {
+            match conn.prepare_renderer_agent_candidate_for_owner(&state.owner, token, &mut page) {
                 Ok(candidate) => Some(candidate),
                 Err(error) => {
                     tracing::debug!(
@@ -298,9 +290,7 @@ async fn restore_and_commit_loaded_navigation_page_async(
         }
         _ => None,
     };
-    let Some(commit_state) =
-        conn.prepare_loaded_navigation_commit_for_session_owner(state.owner.session_id())
-    else {
+    let Some(commit_state) = conn.prepare_loaded_navigation_commit_for_owner(&state.owner) else {
         return Some(outcome);
     };
     let permission_overrides = conn
@@ -447,8 +437,8 @@ async fn restore_and_commit_loaded_navigation_page_async(
     }
     let page_commit_started = timing_enabled.then(std::time::Instant::now);
     let page_commit = match conn
-        .commit_loaded_navigation_page_for_session_owner_async(
-            state.owner.session_id(),
+        .commit_loaded_navigation_page_for_owner_async(
+            &state.owner,
             page,
             match committed_renderer_attachment {
                 Some(transaction) => {
@@ -492,22 +482,17 @@ async fn restore_and_commit_loaded_navigation_page_async(
             .response_flush()
             .defer_until_response_flush(move || continuation.release());
     }
-    let _ = conn.commit_loaded_navigation_target_identity_for_session_owner(
-        state.owner.session_id(),
+    let _ = conn.commit_loaded_navigation_target_identity_for_owner(
+        &state.owner,
         main_document_commit,
         target_url,
     );
     if commit_state.runtime_frontend_enabled {
-        let _ = conn.set_renderer_runtime_agent_owns_page_console_api_events_for_session_owner(
-            state.owner.session_id(),
-            true,
-        );
+        let _ = conn
+            .set_renderer_runtime_agent_owns_page_console_api_events_for_owner(&state.owner, true);
     }
     if let Some(token) = token {
-        conn.commit_document_navigation_for_session_owner_if_matches(
-            state.owner.session_id(),
-            token,
-        );
+        conn.commit_document_navigation_for_owner_if_matches(&state.owner, token);
     }
     if let Some(started) = page_commit_started {
         tracing::info!(
@@ -523,8 +508,10 @@ async fn restore_and_commit_loaded_navigation_page_async(
         );
     }
     let preload_channel_execution_context_ids = if conn
-        .target_owner_has_bidi_channel_preload_script_for_session(state.owner.session_id())
-    {
+        .target_owner_has_bidi_channel_preload_script_for_route(
+            state.owner.session_id(),
+            state.owner.session_owner_route(),
+        ) {
         dedupe_preload_channel_execution_context_ids(std::mem::take(
             &mut outcome.preload_channel_execution_context_ids,
         ))

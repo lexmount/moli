@@ -272,7 +272,9 @@ async fn completed_mouse_event_does_not_restore_replaced_page_state() {
         .conn
         .target_page_residence_identity_for_session(None)
         .expect("the original Page should have a residence identity");
-    let pending = loaded_page_mut(&mut ctx.conn, None)
+    let pending = ctx
+        .conn
+        .loaded_page_mut_for_protocol_access(None)
         .expect("the original Page should be loaded")
         .start_dispatch_mouse_event_at_point_with_outcome(
             INPUT_HIT_X.into(),
@@ -333,7 +335,7 @@ async fn pending_mouse_event_acknowledges_when_page_is_replaced_before_renderer_
         .expect("the original Page should have a residence identity");
     let page_residence_token = ctx
         .conn
-        .capture_target_page_residence_token_for_session(None)
+        .capture_target_page_residence_token_for_route(None, None)
         .expect("the original Page should expose its attachment lifetime");
 
     let replacement_url = "data:text/html,<body>replacement-before-completion</body>";
@@ -375,7 +377,7 @@ async fn completed_renderer_ack_wins_when_page_replacement_is_already_observable
 
     let page_residence_token = ctx
         .conn
-        .capture_target_page_residence_token_for_session(None)
+        .capture_target_page_residence_token_for_route(None, None)
         .expect("the original Page should expose its attachment lifetime");
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<body>replacement-after-ack</body>",

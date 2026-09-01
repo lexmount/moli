@@ -51,10 +51,7 @@ async fn network_configuration_commands_succeed_while_the_target_is_changing_doc
     let mut ctx = TestContext::new();
     install_network_session_page(&mut ctx, "data:text/html,committed").await;
     ctx.conn
-        .start_document_navigation_for_session_owner(
-            Some("SID-navigation"),
-            "LID-pending".to_owned(),
-        )
+        .start_document_navigation_for_route(Some("SID-navigation"), None, "LID-pending".to_owned())
         .expect("the replacement navigation should start");
 
     ctx.process_async(json!({
@@ -124,8 +121,8 @@ async fn network_configuration_commands_succeed_while_the_target_is_changing_doc
     );
     let configuration = ctx
         .conn
-        .prepared_document_commit_configuration_for_session_owner(
-            Some("SID-navigation"),
+        .prepared_document_commit_configuration_for_owner(
+            &crate::conn::CommandOwnerScope::for_session("SID-navigation"),
             &url::Url::parse("data:text/html,committed").unwrap(),
         )
         .expect("commit configuration should resolve the target resource runtime");
@@ -241,8 +238,8 @@ async fn commit_configuration_resolves_the_exact_target_network_runtime() {
     ] {
         let configuration = ctx
             .conn
-            .prepared_document_commit_configuration_for_session_owner(
-                Some(session_id),
+            .prepared_document_commit_configuration_for_owner(
+                &crate::conn::CommandOwnerScope::for_session(session_id),
                 &url::Url::parse("about:blank").unwrap(),
             )
             .expect("the target-specific resource runtime should resolve");

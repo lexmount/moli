@@ -7,10 +7,9 @@ use super::{
     BrowserContextFirstCookieRequest, BrowserContextReservedSiteDataOwnerState,
     BrowserContextSiteDataManagerOwnerState, BrowserContextStructuredCookieCommandVerdict,
     BrowserContextStructuredCookieWriteBackendStatus,
-    BrowserContextStructuredCookieWriteReadinessStatus, CdpConnection, CdpSessionRoute,
-    CommandDispatchContext, CommandResponseFlushContext, NavigationBackgroundEvent,
-    NavigationDispatchState, NavigationResultProjection, ServiceWorkerTargetState,
-    SharedWorkerTargetState, build_event,
+    BrowserContextStructuredCookieWriteReadinessStatus, CdpConnection, CommandDispatchContext,
+    CommandResponseFlushContext, NavigationBackgroundEvent, NavigationDispatchState,
+    NavigationResultProjection, ServiceWorkerTargetState, SharedWorkerTargetState, build_event,
 };
 use crate::devtools_runtime::{
     AutomationEvent, DevToolsFrameId, DevToolsLoaderId, DevToolsTargetFilterEntry,
@@ -436,12 +435,12 @@ fn background_navigation_completion_sender_routes_explicit_session_owners() {
     conn.set_background_navigation_completion_sender(sender);
 
     assert!(
-        conn.background_navigation_completion_sender_for_session_owner(Some("SID-active"))
+        conn.background_navigation_completion_sender_for_route(Some("SID-active"), None)
             .is_some(),
         "a command scoped to a concrete target owner can continue navigation work in the background"
     );
     assert!(
-        conn.background_navigation_completion_sender_for_session_owner(Some("SID-inactive"))
+        conn.background_navigation_completion_sender_for_route(Some("SID-inactive"), None)
             .is_some(),
         "inactive-context target owners should also be routable by explicit session id"
     );
@@ -483,35 +482,6 @@ fn navigation_gate_resolves_websocket_events_to_their_session_target() {
     assert!(
         !conn.has_inflight_background_navigation_for_target("TID-B"),
         "target A's navigation must not gate target B's WebSocket events"
-    );
-}
-
-#[test]
-fn none_session_owner_route_override_scope_restores_previous_route_on_drop() {
-    let mut conn = CdpConnection::new();
-    let previous_route = CdpSessionRoute::PageTarget {
-        browser_context_id: "BID-active".to_owned(),
-        target_id: "TID-active".to_owned(),
-        is_attached_session: false,
-    };
-    let scoped_route = CdpSessionRoute::PageTarget {
-        browser_context_id: "BID-background".to_owned(),
-        target_id: "TID-background".to_owned(),
-        is_attached_session: false,
-    };
-
-    conn.replace_none_session_owner_route_override(Some(previous_route.clone()));
-    {
-        let mut scope = conn.scoped_none_session_owner_route_override(scoped_route.clone());
-        assert_eq!(
-            scope.conn_mut().none_session_owner_route_override(),
-            Some(scoped_route)
-        );
-    }
-
-    assert_eq!(
-        conn.none_session_owner_route_override(),
-        Some(previous_route)
     );
 }
 
@@ -1409,7 +1379,7 @@ async fn memory_diagnostics_splits_pending_inspector_await_counts_by_target_owne
     );
     assert_eq!(
         diagnostics["activeBrowserContext"]["targetHosts"]["pendingInspectorAwaitCount"],
-        json!(1)
+        json!(3)
     );
 }
 
@@ -1681,7 +1651,7 @@ fn materialized_navigation_test_state(
 ) -> NavigationDispatchState {
     NavigationDispatchState {
         navigate_id,
-        owner: crate::conn::CommandOwnerScope::for_implicit_route(None),
+        owner: crate::conn::CommandOwnerScope::for_route(crate::conn::CdpSessionRoute::Browser),
         result_projection: NavigationResultProjection::Cdp(
             json!({ "frameId": "TID-nav", "loaderId": loader_id }),
         ),

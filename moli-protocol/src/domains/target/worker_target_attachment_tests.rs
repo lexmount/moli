@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 
 use super::*;
 use crate::{
-    conn::{BrowserContext, CdpTargetFilter, CommandDispatchContext},
+    conn::{BrowserContext, CdpTargetFilter, CommandDispatchContext, CommandOwnerScope},
     devtools_runtime::AutomationEvent,
     domains::activity::{ProtocolOutputPayloads, ProtocolOutputProjectionContext},
 };
@@ -66,10 +66,11 @@ async fn drain(
 ) -> Vec<crate::conn::BackgroundProtocolEvent> {
     let mut prepared =
         ProtocolOutputPayloads::from_slot(TargetPreparedOutputSlot::from_outputs(outputs));
+    let owner = CommandOwnerScope::capture(conn, None);
     let mut command = CommandDispatchContext::default();
     emit_target_lifecycle_events(
         conn,
-        &mut ProtocolOutputProjectionContext::new(None, &mut command),
+        &mut ProtocolOutputProjectionContext::new(&owner, &mut command),
         Some(&mut prepared),
     )
     .await;

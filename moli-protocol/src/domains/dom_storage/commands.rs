@@ -470,11 +470,7 @@ fn storage_handles_for_session_owner(
     conn: &CdpConnection,
     session_id: Option<&str>,
 ) -> Result<BrowserContextPageStorageHandles, CommandOutputPlan> {
-    let none_session_owner_route = session_id
-        .is_none()
-        .then(|| conn.none_session_owner_route_override())
-        .flatten();
-    storage_handles_for_route(conn, session_id, none_session_owner_route.as_ref())
+    storage_handles_for_route(conn, session_id, None)
 }
 
 fn storage_handles_for_route(

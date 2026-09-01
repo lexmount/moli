@@ -2056,8 +2056,34 @@ impl CdpConnection {
         intercept_response: bool,
         handle_auth_requests: bool,
     ) -> Result<PendingSubresourceContinueOutcome, String> {
+        self.continue_pending_subresource_fetch_for_route_async(
+            session_id,
+            None,
+            internal_id,
+            url,
+            method,
+            body,
+            headers,
+            intercept_response,
+            handle_auth_requests,
+        )
+        .await
+    }
+
+    pub(crate) async fn continue_pending_subresource_fetch_for_route_async(
+        &mut self,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
+        internal_id: u64,
+        url: Option<Url>,
+        method: Option<String>,
+        body: Option<Option<String>>,
+        headers: Option<Vec<(String, String)>>,
+        intercept_response: bool,
+        handle_auth_requests: bool,
+    ) -> Result<PendingSubresourceContinueOutcome, String> {
         let page = self
-            .runtime_session_owner_slot_mut(session_id)?
+            .runtime_session_owner_slot_mut_for_route(session_id, owner_route)?
             .loaded_page_mut()
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?;
         page.continue_pending_subresource_fetch_async(
@@ -2088,8 +2114,19 @@ impl CdpConnection {
         internal_id: u64,
         auth: SubresourceAuthCredentials,
     ) -> Result<PendingSubresourceContinueOutcome, String> {
+        self.continue_pending_subresource_auth_for_route_async(session_id, None, internal_id, auth)
+            .await
+    }
+
+    pub(crate) async fn continue_pending_subresource_auth_for_route_async(
+        &mut self,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
+        internal_id: u64,
+        auth: SubresourceAuthCredentials,
+    ) -> Result<PendingSubresourceContinueOutcome, String> {
         let page = self
-            .runtime_session_owner_slot_mut(session_id)?
+            .runtime_session_owner_slot_mut_for_route(session_id, owner_route)?
             .loaded_page_mut()
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?;
         page.continue_pending_subresource_auth_async(internal_id, auth)
@@ -2238,8 +2275,26 @@ impl CdpConnection {
         response_code: Option<u16>,
         response_headers: Option<Vec<(String, String)>>,
     ) -> Result<(), String> {
+        self.continue_pending_subresource_response_for_route_async(
+            session_id,
+            None,
+            internal_id,
+            response_code,
+            response_headers,
+        )
+        .await
+    }
+
+    pub(crate) async fn continue_pending_subresource_response_for_route_async(
+        &mut self,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
+        internal_id: u64,
+        response_code: Option<u16>,
+        response_headers: Option<Vec<(String, String)>>,
+    ) -> Result<(), String> {
         let page = self
-            .runtime_session_owner_slot_mut(session_id)?
+            .runtime_session_owner_slot_mut_for_route(session_id, owner_route)?
             .loaded_page_mut()
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?;
         page.continue_pending_subresource_response_async(

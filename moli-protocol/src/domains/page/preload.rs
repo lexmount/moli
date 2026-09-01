@@ -399,7 +399,7 @@ async fn execute_devtools_single_route_preload_command_async(
         Ok(resolved) => resolved,
         Err(error) => return (Err(error), Vec::new(), None),
     };
-    let owner = CommandOwnerScope::for_implicit_route(Some(route));
+    let owner = CommandOwnerScope::for_route(route);
     let mut events = Vec::new();
     let mut command_context = CommandDispatchContext::default();
     let result = match command {
@@ -480,7 +480,7 @@ async fn execute_devtools_browser_context_add_preload_script_command(
             target_id: active_target_id,
             is_attached_session: false,
         };
-        let owner = CommandOwnerScope::for_implicit_route(Some(route));
+        let owner = CommandOwnerScope::for_route(route);
         append_loaded_page_document_start_script_for_owner_async(conn, &owner, &renderer_script)
             .await
             .map_err(|message| devtools_preload_owner_error(&message))?;
@@ -710,7 +710,7 @@ async fn execute_devtools_bidi_browser_context_remove_preload_script_command(
             target_id: active_target_id,
             is_attached_session: false,
         };
-        let owner = CommandOwnerScope::for_implicit_route(Some(route));
+        let owner = CommandOwnerScope::for_route(route);
         remove_loaded_page_document_start_script_for_owner_async(conn, &owner, registry_key)
             .await
             .map_err(|message| devtools_preload_owner_error(&message))?;

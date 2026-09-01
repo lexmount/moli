@@ -232,7 +232,7 @@ fn start_devtools_create_target_command_with_result_host(
     let initial_document_route =
         conn.target_session_route_for_target_id(created_target_id.as_str());
     let pending_initial_document = if let Some(route) = initial_document_route {
-        let owner = crate::conn::CommandOwnerScope::for_implicit_route(Some(route));
+        let owner = crate::conn::CommandOwnerScope::for_route(route);
         conn.start_initial_document_page_ensure_for_owner(&owner)
     } else {
         Ok(None)

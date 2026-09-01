@@ -976,41 +976,18 @@ mod tests {
         )
         .await;
 
-        let background_route = ctx
-            .conn
-            .target_session_route_for_target_id("TID-performance-background")
-            .expect("background Performance route");
-        let previous_route = ctx
-            .conn
-            .replace_none_session_owner_route_override(Some(background_route.clone()));
-        let enable = ctx
-            .conn
-            .start_command_dispatch(r#"{"id":4200,"method":"Performance.enable"}"#);
+        let enable = ctx.conn.start_command_dispatch(
+            r#"{"id":4200,"method":"Performance.enable","sessionId":"SID-performance-background"}"#,
+        );
         let enable_messages = complete_immediate_command_task_step_for_test(enable);
-        ctx.conn
-            .replace_none_session_owner_route_override(previous_route);
         assert_eq!(enable_messages[0]["result"], json!({}));
 
-        let previous_route = ctx
-            .conn
-            .replace_none_session_owner_route_override(Some(background_route));
-        let pending = ctx
-            .conn
-            .start_command_dispatch(r#"{"id":4201,"method":"Performance.getMetrics"}"#);
-        ctx.conn
-            .replace_none_session_owner_route_override(previous_route);
+        let pending = ctx.conn.start_command_dispatch(
+            r#"{"id":4201,"method":"Performance.getMetrics","sessionId":"SID-performance-background"}"#,
+        );
         assert!(matches!(pending, CdpCommandTaskStep::Pending(_)));
 
-        let active_route = ctx
-            .conn
-            .target_session_route_for_target_id("TID-performance-active")
-            .expect("active Performance route");
-        let previous_route = ctx
-            .conn
-            .replace_none_session_owner_route_override(Some(active_route));
         let messages = complete_command_task_step_for_test(&mut ctx, pending, 4201).await;
-        ctx.conn
-            .replace_none_session_owner_route_override(previous_route);
         let response = messages
             .iter()
             .find(|message| message["id"] == json!(4201))
@@ -1019,7 +996,6 @@ mod tests {
             metric_map(response)["Nodes"] >= 8.0,
             "completion must finish the snapshot on the captured background Page"
         );
-        assert_eq!(ctx.conn.none_session_owner_route_override(), None);
     }
 
     #[tokio::test(flavor = "multi_thread")]

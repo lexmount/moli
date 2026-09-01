@@ -4,7 +4,7 @@ use moli_core::page::{
 };
 use serde_json::{Map, Value, json};
 
-use crate::conn::CdpConnection;
+use crate::conn::{CdpConnection, CommandOwnerScope};
 use crate::devtools_runtime::{
     DevToolsError, DevToolsErrorKind, DevToolsRemoteHandleId, DevToolsRemoteValue,
     DevToolsSerializationOptions, webdriver_bidi_node_shared_id_for_backend_node_id,
@@ -26,19 +26,20 @@ pub(super) struct BidiNodeSerializationOptions {
 
 pub(super) async fn bidi_node_snapshot_for_shared_id_async(
     conn: &mut CdpConnection,
+    owner: &CommandOwnerScope,
     shared_id: &str,
     depth: i32,
     pierce: bool,
 ) -> Result<Option<DocumentNodeObjectSnapshot>, DevToolsError> {
     match conn
-        .document_bidi_node_binding_for_session_owner_async(None, shared_id)
+        .document_bidi_node_binding_for_owner_async(owner, shared_id)
         .await
         .map_err(|message| DevToolsError::new(DevToolsErrorKind::Internal, message))?
     {
         RendererDomBidiNodeBindingResolution::BackendNodeId(backend_node_id) => {
             return conn
-                .document_node_snapshot_for_backend_node_id_async(
-                    None,
+                .document_node_snapshot_for_backend_node_id_for_owner_async(
+                    owner,
                     backend_node_id,
                     depth,
                     pierce,
@@ -48,9 +49,11 @@ pub(super) async fn bidi_node_snapshot_for_shared_id_async(
         }
         RendererDomBidiNodeBindingResolution::NotFound => {}
     }
-    conn.document_node_snapshot_for_runtime_remote_object_id_async(None, shared_id, depth, pierce)
-        .await
-        .map_err(|message| DevToolsError::new(DevToolsErrorKind::Internal, message))
+    conn.document_node_snapshot_for_runtime_remote_object_id_for_owner_async(
+        owner, shared_id, depth, pierce,
+    )
+    .await
+    .map_err(|message| DevToolsError::new(DevToolsErrorKind::Internal, message))
 }
 
 pub(super) fn bidi_node_shared_id_for_snapshot(

@@ -84,15 +84,6 @@ impl CdpConnection {
         )
     }
 
-    pub(crate) fn start_child_frame_lifecycle_work_for_session_owner(
-        &mut self,
-        session_id: Option<&str>,
-        timeout: std::time::Duration,
-    ) -> Result<PendingChildFrameLifecycleWork, String> {
-        let owner = CommandOwnerScope::capture(self, session_id);
-        self.start_child_frame_lifecycle_work_for_owner(owner, timeout)
-    }
-
     pub(crate) fn start_child_frame_lifecycle_work_for_owner(
         &mut self,
         owner: CommandOwnerScope,

@@ -29,7 +29,10 @@ pub(in crate::domains) use presence::{
     runtime_console_message_prepared_outputs, runtime_lifecycle_error_prepared_outputs,
 };
 pub(crate) use runtime_cursor::TargetRuntimeObservableState;
-pub(in crate::domains) use runtime_emission::advance_runtime_observable_cursors_to_current_for_session_owner;
+pub(in crate::domains) use runtime_emission::{
+    advance_runtime_observable_cursors_to_current_for_owner,
+    advance_runtime_observable_cursors_to_current_for_session_owner,
+};
 #[cfg(test)]
 pub(in crate::domains) use runtime_queue::RuntimeObservableEmissionSnapshot;
 #[cfg(test)]

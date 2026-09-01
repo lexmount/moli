@@ -1,8 +1,8 @@
 use super::*;
 use crate::DevToolsDocumentLifecycleWaitState;
 use crate::conn::{
-    CdpInitialStoragePartition, LoadedNavigation, NavigationLoadOutcome, PageTargetHost,
-    TargetIdentityState, TargetPageSlot,
+    CdpInitialStoragePartition, CommandOwnerScope, LoadedNavigation, NavigationLoadOutcome,
+    PageTargetHost, TargetIdentityState, TargetPageSlot,
 };
 use moli_core::runtime::storage_partition::StoragePartitionState;
 use std::sync::{
@@ -49,8 +49,11 @@ async fn commit_navigation_outcome_for_session_test(
         NavigationLoadOutcome::ResponseCommitReady(navigation) => {
             let navigation = *navigation;
             let configuration = conn
-                .prepared_document_commit_configuration_for_session_owner(
-                    session_id,
+                .prepared_document_commit_configuration_for_owner(
+                    &match session_id {
+                        Some(session_id) => CommandOwnerScope::for_session(session_id),
+                        None => CommandOwnerScope::capture(conn, None),
+                    },
                     navigation.final_url(),
                 )
                 .expect("test navigation commit configuration should resolve");
@@ -1577,8 +1580,8 @@ fn devtools_document_lifecycle_wait_key_observes_interruption_and_target_loss() 
         ),
         ..started
     };
-    let (_, accepted) = conn.bind_renderer_document_lifecycle_for_session_owner(
-        Some("SID-lifecycle-wait"),
+    let (_, accepted) = conn.bind_renderer_document_lifecycle_for_owner(
+        &crate::conn::CommandOwnerScope::for_session("SID-lifecycle-wait"),
         moli_core::page::RendererPageCreationArtifacts {
             active_document: document,
             active_epoch: epoch,
@@ -1661,8 +1664,8 @@ fn devtools_document_lifecycle_wait_key_observes_interruption_and_target_loss() 
         },
         ..started
     };
-    let (_, accepted) = conn.ingest_renderer_document_lifecycle_events_for_session_owner(
-        Some("SID-lifecycle-wait"),
+    let (_, accepted) = conn.ingest_renderer_document_lifecycle_events_for_owner(
+        &crate::conn::CommandOwnerScope::for_session("SID-lifecycle-wait"),
         vec![terminated],
     );
     assert_eq!(accepted, vec![terminated]);
@@ -1685,8 +1688,8 @@ fn devtools_document_lifecycle_wait_key_observes_interruption_and_target_loss() 
         .runtime_slot
         .set_page_attachment_id_for_test(902);
     conn.browser_context = Some(replacement_context);
-    let (_, accepted) = conn.bind_renderer_document_lifecycle_for_session_owner(
-        Some("SID-lifecycle-wait"),
+    let (_, accepted) = conn.bind_renderer_document_lifecycle_for_owner(
+        &crate::conn::CommandOwnerScope::for_session("SID-lifecycle-wait"),
         moli_core::page::RendererPageCreationArtifacts {
             active_document: document,
             active_epoch: epoch,
@@ -1755,7 +1758,6 @@ fn devtools_target_context_resolves_background_page_without_ambient_route() {
         browser_context_id: None,
     };
 
-    assert_eq!(conn.none_session_owner_route_override(), None);
     let residence = conn
         .page_residence_identity_for_devtools_context(&context)
         .expect("explicit target context should resolve its Page");
@@ -1763,11 +1765,6 @@ fn devtools_target_context_resolves_background_page_without_ambient_route() {
     assert_eq!(
         conn.devtools_context_document_navigation_state(&context),
         crate::DevToolsDocumentNavigationState::PendingNavigation
-    );
-    assert_eq!(
-        conn.none_session_owner_route_override(),
-        None,
-        "explicit lookup must not mutate connection-global routing state"
     );
 }
 

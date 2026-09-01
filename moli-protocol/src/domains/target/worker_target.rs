@@ -31,10 +31,10 @@ use crate::devtools_runtime::{
 };
 use crate::{
     conn::{
-        BackgroundProtocolEvent, CdpConnection, PreparedTargetAttach, PreparedTargetHostDelta,
-        RendererPageResidenceIdentity, ServiceWorkerRuntimeExceptionSnapshot,
-        ServiceWorkerTargetState, SharedWorkerTargetState, TargetPageResidenceIdentity,
-        TargetServiceWorkerProtocolAttachmentIdentity,
+        BackgroundProtocolEvent, CdpConnection, CommandOwnerScope, PreparedTargetAttach,
+        PreparedTargetHostDelta, RendererPageResidenceIdentity,
+        ServiceWorkerRuntimeExceptionSnapshot, ServiceWorkerTargetState, SharedWorkerTargetState,
+        TargetPageResidenceIdentity, TargetServiceWorkerProtocolAttachmentIdentity,
         TargetServiceWorkerProtocolAttachmentRetirement, TargetServiceWorkerRunIdentity,
         TargetServiceWorkerRunRetirement, TargetServiceWorkerRuntimeAttachmentIdentity,
         TargetServiceWorkerVersionIdentity, TargetServiceWorkerVersionRetirement,
@@ -428,19 +428,23 @@ pub(in crate::domains) fn service_worker_target_lifecycle_prepared_outputs_for_e
 
 pub(in crate::domains) fn dedicated_worker_target_lifecycle_prepared_outputs_for_event(
     conn: &mut CdpConnection,
-    session_id: Option<&str>,
+    owner: &CommandOwnerScope,
     event: RendererDedicatedWorkerTargetEvent,
 ) -> TargetPreparedOutputs {
-    let Some(owner_page) = conn.target_page_residence_identity_for_session(session_id) else {
+    let session_id = owner.session_id();
+    let owner_route = owner.session_owner_route();
+    let Some(owner_page) = conn.target_page_residence_identity_for_route(session_id, owner_route)
+    else {
         return TargetPreparedOutputs::default();
     };
     let Some(owner_renderer_page) =
-        conn.renderer_page_residence_identity_for_session_owner(session_id)
+        conn.renderer_page_residence_identity_for_route(session_id, owner_route)
     else {
         return TargetPreparedOutputs::default();
     };
     let browser_context_id = owner_page.browser_context_id().to_owned();
-    let owner_page_network_sessions = conn.network_event_session_ids_for_session_owner(session_id);
+    let owner_page_network_sessions =
+        conn.network_event_session_ids_for_route(session_id, owner_route);
     dedicated_worker_target_lifecycle_outputs_for_events(
         conn,
         browser_context_id,
@@ -2287,12 +2291,13 @@ async fn worker_target_removal_background_events_async(
     conn: &mut CdpConnection,
     outputs: TargetPreparedOutputs,
 ) -> Vec<BackgroundProtocolEvent> {
+    let owner = CommandOwnerScope::capture(conn, None);
     let mut command_context = crate::conn::CommandDispatchContext::default();
     let mut prepared_outputs =
         ProtocolOutputPayloads::from_slot(TargetPreparedOutputSlot::from_outputs(outputs));
     emit_target_lifecycle_events(
         conn,
-        &mut ProtocolOutputProjectionContext::new(None, &mut command_context),
+        &mut ProtocolOutputProjectionContext::new(&owner, &mut command_context),
         Some(&mut prepared_outputs),
     )
     .await;
@@ -2321,9 +2326,10 @@ pub(super) async fn close_shared_worker_target_for_target_close_async(
     let outputs = remove_shared_worker_target(conn, &browser_context_id, instance_id);
     let mut prepared_outputs =
         ProtocolOutputPayloads::from_slot(TargetPreparedOutputSlot::from_outputs(outputs));
+    let owner = CommandOwnerScope::capture(conn, None);
     emit_target_lifecycle_events(
         conn,
-        &mut ProtocolOutputProjectionContext::new(None, command_context),
+        &mut ProtocolOutputProjectionContext::new(&owner, command_context),
         Some(&mut prepared_outputs),
     )
     .await;
@@ -2357,9 +2363,10 @@ pub(super) async fn close_dedicated_worker_target_for_target_close_async(
     );
     let mut prepared_outputs =
         ProtocolOutputPayloads::from_slot(TargetPreparedOutputSlot::from_outputs(outputs));
+    let owner = CommandOwnerScope::capture(conn, None);
     emit_target_lifecycle_events(
         conn,
-        &mut ProtocolOutputProjectionContext::new(None, command_context),
+        &mut ProtocolOutputProjectionContext::new(&owner, command_context),
         Some(&mut prepared_outputs),
     )
     .await;
@@ -3204,10 +3211,11 @@ fn route_worker_runtime_inspector_messages_into(
     response_events: &mut Vec<BackgroundProtocolEvent>,
     background_events: &mut Vec<BackgroundProtocolEvent>,
 ) -> bool {
-    conn.route_renderer_runtime_inspector_messages_with_background_events_into(
+    let owner = crate::conn::CommandOwnerScope::for_session(session_id);
+    conn.route_renderer_runtime_inspector_messages_for_owner_with_background_events_into(
         messages,
         None,
-        Some(session_id),
+        &owner,
         response_events,
         background_events,
     )
@@ -3871,10 +3879,11 @@ mod tests {
     ) -> Vec<crate::conn::BackgroundProtocolEvent> {
         let mut prepared_outputs =
             ProtocolOutputPayloads::from_slot(TargetPreparedOutputSlot::from_outputs(outputs));
+        let owner = CommandOwnerScope::capture(conn, None);
         let mut command_context = crate::conn::CommandDispatchContext::default();
         emit_target_lifecycle_events(
             conn,
-            &mut ProtocolOutputProjectionContext::new(None, &mut command_context),
+            &mut ProtocolOutputProjectionContext::new(&owner, &mut command_context),
             Some(&mut prepared_outputs),
         )
         .await;
@@ -6906,10 +6915,11 @@ mod tests {
         );
         let mut prepared_outputs =
             ProtocolOutputPayloads::from_slot(TargetPreparedOutputSlot::from_outputs(outputs));
+        let owner = CommandOwnerScope::capture(&conn, None);
         let mut command_context = crate::conn::CommandDispatchContext::default();
         emit_target_lifecycle_events(
             &mut conn,
-            &mut ProtocolOutputProjectionContext::new(None, &mut command_context),
+            &mut ProtocolOutputProjectionContext::new(&owner, &mut command_context),
             Some(&mut prepared_outputs),
         )
         .await;

@@ -10,7 +10,7 @@ use serde_json::Value;
 #[cfg(test)]
 use serde_json::json;
 
-use crate::conn::{BackgroundProtocolEvent, CdpConnection, CdpSessionRoute};
+use crate::conn::{BackgroundProtocolEvent, CdpConnection, CdpSessionRoute, CommandOwnerScope};
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum RuntimeContextProtocolEvent {
@@ -210,6 +210,33 @@ pub(crate) fn apply_runtime_context_protocol_event_side_effects_typed(
     }
 }
 
+pub(crate) fn apply_runtime_context_protocol_event_side_effects_for_owner_typed(
+    conn: &mut CdpConnection,
+    event: &RuntimeContextProtocolEvent,
+    owner: &CommandOwnerScope,
+) {
+    if owner.session_id().is_some() {
+        apply_runtime_context_protocol_event_side_effects_typed(conn, event, owner.session_id());
+        return;
+    }
+    conn.record_runtime_context_protocol_event_for_owner(owner, event);
+    match event {
+        RuntimeContextProtocolEvent::Cleared(_) => {
+            conn.clear_runtime_remote_object_tracking_for_owner(owner);
+            conn.record_runtime_contexts_cleared_for_owner(owner);
+        }
+        RuntimeContextProtocolEvent::Created(event) => {
+            conn.record_runtime_contexts_reported_for_owner(owner);
+            record_child_default_context_delivery_for_owner(conn, owner, event);
+        }
+        RuntimeContextProtocolEvent::Destroyed(event) => {
+            if let Some(realm_id) = event.realm_id.as_ref() {
+                conn.clear_runtime_remote_objects_for_realm_for_owner(owner, realm_id.as_str());
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn qualify_runtime_context_protocol_event_for_session_owner(
     conn: &CdpConnection,
@@ -241,6 +268,35 @@ pub(crate) fn qualify_runtime_context_protocol_event_for_session_owner_typed(
 ) {
     qualify_worker_runtime_context_event_for_session_owner(conn, event, session_id);
     let Some((_, Some(target_id))) = conn.runtime_context_owner_identity_for_session(session_id)
+    else {
+        return;
+    };
+    match event {
+        RuntimeContextProtocolEvent::Created(event) => {
+            qualify_runtime_realm_id(&target_id, &mut event.realm_id);
+        }
+        RuntimeContextProtocolEvent::Destroyed(event) => {
+            qualify_runtime_realm_id(&target_id, &mut event.realm_id);
+        }
+        RuntimeContextProtocolEvent::Cleared(_) => {}
+    }
+}
+
+pub(crate) fn qualify_runtime_context_protocol_event_for_owner_typed(
+    conn: &CdpConnection,
+    event: &mut RuntimeContextProtocolEvent,
+    owner: &CommandOwnerScope,
+) {
+    if owner.session_id().is_some() {
+        qualify_runtime_context_protocol_event_for_session_owner_typed(
+            conn,
+            event,
+            owner.session_id(),
+        );
+        return;
+    }
+    let Some((_, Some(target_id))) =
+        conn.target_owner_identity_for_route(owner.session_id(), owner.session_owner_route())
     else {
         return;
     };
@@ -345,9 +401,9 @@ pub(crate) fn emit_runtime_context_protocol_background_event_typed(
 /// must never be suppressed here. Keeping the replay cursor at this boundary
 /// makes repeated `Runtime.enable` calls idempotent without turning the cursor
 /// into a second real-time event arbiter.
-pub(crate) fn should_emit_child_default_context_inventory_replay_once(
+pub(crate) fn should_emit_child_default_context_inventory_replay_once_for_owner(
     conn: &mut CdpConnection,
-    session_id: Option<&str>,
+    owner: &CommandOwnerScope,
     root_frame_id: Option<&str>,
     event: &RuntimeContextProtocolEvent,
 ) -> bool {
@@ -366,14 +422,18 @@ pub(crate) fn should_emit_child_default_context_inventory_replay_once(
         return true;
     }
     if conn
-        .target_devtools_session_state_for_session(session_id)
+        .target_devtools_session_state_for_route(owner.session_id(), owner.session_owner_route())
         .is_some_and(|state| {
             state.has_emitted_child_default_execution_context_id(execution_context_id)
         })
     {
         return false;
     }
-    mark_child_default_context_event_emitted(conn, session_id, execution_context_id);
+    let _ = conn.with_target_devtools_session_state_for_route_mut(
+        owner.session_id(),
+        owner.session_owner_route(),
+        |state| state.mark_child_default_execution_context_id_emitted(execution_context_id),
+    );
     true
 }
 
@@ -405,6 +465,33 @@ fn record_child_default_context_delivery(
     mark_child_default_context_event_emitted(conn, session_id, execution_context_id);
 }
 
+fn record_child_default_context_delivery_for_owner(
+    conn: &mut CdpConnection,
+    owner: &CommandOwnerScope,
+    event: &RuntimeExecutionContextEvent,
+) {
+    let Some(execution_context_id) = child_default_execution_context_id(event) else {
+        return;
+    };
+    let Some(root_frame_id) = conn
+        .runtime_session_owner_frame_id_for_route(owner.session_id(), owner.session_owner_route())
+    else {
+        return;
+    };
+    if event
+        .frame_id
+        .as_ref()
+        .is_none_or(|frame_id| frame_id.as_str() == root_frame_id)
+    {
+        return;
+    }
+    let _ = conn.with_target_devtools_session_state_for_route_mut(
+        owner.session_id(),
+        owner.session_owner_route(),
+        |state| state.mark_child_default_execution_context_id_emitted(execution_context_id),
+    );
+}
+
 fn mark_child_default_context_event_emitted(
     conn: &mut CdpConnection,
     session_id: Option<&str>,
@@ -417,7 +504,7 @@ fn mark_child_default_context_event_emitted(
 
 #[cfg(test)]
 mod tests {
-    use crate::conn::{BrowserContext, CdpConnection};
+    use crate::conn::{BrowserContext, CdpConnection, CommandOwnerScope};
     use crate::conn::{ServiceWorkerTargetState, SharedWorkerTargetState};
     use crate::devtools_runtime::AutomationEvent;
     use moli_core::{RendererOwnerLocalHostId, page::RendererServiceWorkerVersionStatus};
@@ -650,18 +737,18 @@ mod tests {
         super::record_child_default_context_delivery(&mut conn, Some("SID-1"), created);
 
         assert!(
-            !super::should_emit_child_default_context_inventory_replay_once(
+            !super::should_emit_child_default_context_inventory_replay_once_for_owner(
                 &mut conn,
-                Some("SID-1"),
+                &CommandOwnerScope::for_session("SID-1"),
                 Some("TID-1"),
                 &event,
             ),
             "Runtime.enable inventory must not replay a child context already delivered by V8"
         );
         assert!(
-            super::should_emit_child_default_context_inventory_replay_once(
+            super::should_emit_child_default_context_inventory_replay_once_for_owner(
                 &mut conn,
-                Some("SID-other"),
+                &CommandOwnerScope::for_session("SID-other"),
                 Some("TID-1"),
                 &event,
             ),

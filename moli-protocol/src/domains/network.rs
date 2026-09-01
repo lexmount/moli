@@ -178,10 +178,6 @@ enum PendingNetworkCommandKind {
 }
 
 impl PendingNetworkCommandDispatch {
-    pub(crate) fn session_id(&self) -> Option<&str> {
-        self.owner_scope.session_id()
-    }
-
     pub(crate) async fn wait(self) -> CompletedNetworkCommandDispatch {
         let completed = match self.pending {
             PendingNetworkCommandWork::Page {

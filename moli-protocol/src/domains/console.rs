@@ -1,4 +1,4 @@
-use crate::conn::{CdpConnection, Cmd};
+use crate::conn::{CdpConnection, Cmd, CommandOwnerScope};
 
 use crate::domains::actions::ConsoleAction;
 use crate::domains::command_output::CommandOutputPlan;
@@ -51,6 +51,27 @@ pub(crate) fn apply_console_output_state_for_session(
         ConsoleAction::Enable => set_console_enabled(conn, session_id, true),
         ConsoleAction::Disable => set_console_enabled(conn, session_id, false),
         ConsoleAction::ClearMessages => clear_console_messages(conn, session_id),
+    }
+}
+
+pub(crate) fn apply_console_output_state_for_owner(
+    conn: &mut CdpConnection,
+    owner: &CommandOwnerScope,
+    action: ConsoleAction,
+) -> bool {
+    if owner.session_id().is_some_and(|session_id| {
+        conn.shared_worker_target_for_session(Some(session_id))
+            .is_some()
+            || conn
+                .service_worker_target_for_session(Some(session_id))
+                .is_some()
+    }) {
+        return apply_console_output_state_for_session(conn, owner.session_id(), action);
+    }
+    match action {
+        ConsoleAction::Enable => conn.set_console_enabled_for_owner(owner, true),
+        ConsoleAction::Disable => conn.set_console_enabled_for_owner(owner, false),
+        ConsoleAction::ClearMessages => conn.clear_console_messages_for_owner(owner),
     }
 }
 

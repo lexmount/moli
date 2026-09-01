@@ -285,8 +285,8 @@ async fn install_runtime_document_replacement_test_page(ctx: &mut TestContext) -
         .active_page_state_mut()
         .runtime_slot
         .set_loaded_page_for_test(navigation.page);
-    let (binding, initial_events) = ctx.conn.bind_renderer_document_lifecycle_for_session_owner(
-        Some("SID-1"),
+    let (binding, initial_events) = ctx.conn.bind_renderer_document_lifecycle_for_owner(
+        &crate::conn::CommandOwnerScope::for_session("SID-1"),
         artifacts,
         None,
         "TID-1".to_owned(),
@@ -299,8 +299,10 @@ async fn install_runtime_document_replacement_test_page(ctx: &mut TestContext) -
         "prepared data navigation commits at DOMContentLoaded; load remains renderer-owned tail work"
     );
     if let Some(navigation_engine) = navigation_engine {
-        ctx.conn
-            .adopt_loaded_navigation_engine_for_session_owner(Some("SID-1"), navigation_engine);
+        ctx.conn.adopt_loaded_navigation_engine_for_owner(
+            &crate::conn::CommandOwnerScope::for_session("SID-1"),
+            navigation_engine,
+        );
     }
     ctx.enable_dom_events_for_test(Some("SID-1"));
 
@@ -373,8 +375,8 @@ fn take_released_renderer_load_event(
 ) -> moli_core::page::RendererDocumentLifecycleEvent {
     let released = ctx
         .conn
-        .release_renderer_document_load_visibility_barrier_for_session_owner(
-            Some(session_id),
+        .release_renderer_document_load_visibility_barrier_for_owner(
+            &crate::conn::CommandOwnerScope::for_session(session_id),
             LOADER_ID,
         )
         .expect("load visibility barrier should remain active");
@@ -842,8 +844,8 @@ async fn set_lifecycle_events_enabled_replays_loaded_page_events() {
         .active_page_state_mut()
         .runtime_slot
         .set_loaded_page_for_test(navigation.page);
-    let (binding, initial_events) = ctx.conn.bind_renderer_document_lifecycle_for_session_owner(
-        Some("SID-1"),
+    let (binding, initial_events) = ctx.conn.bind_renderer_document_lifecycle_for_owner(
+        &crate::conn::CommandOwnerScope::for_session("SID-1"),
         navigation.page_creation_artifacts,
         None,
         "TID-1".to_owned(),
@@ -852,8 +854,10 @@ async fn set_lifecycle_events_enabled_replays_loaded_page_events() {
     assert!(binding.is_some());
     assert_eq!(initial_events.len(), 2);
     if let Some(navigation_engine) = navigation_engine {
-        ctx.conn
-            .adopt_loaded_navigation_engine_for_session_owner(Some("SID-1"), navigation_engine);
+        ctx.conn.adopt_loaded_navigation_engine_for_owner(
+            &crate::conn::CommandOwnerScope::for_session("SID-1"),
+            navigation_engine,
+        );
     }
     let load_timestamp = wait_for_visible_renderer_load(&mut ctx, "SID-1")
         .await
@@ -916,8 +920,8 @@ async fn set_lifecycle_events_enabled_replays_only_protocol_visible_load_state()
         .active_page_state_mut()
         .runtime_slot
         .set_loaded_page_for_test(navigation.page);
-    let (binding, initial_events) = ctx.conn.bind_renderer_document_lifecycle_for_session_owner(
-        Some("SID-visible"),
+    let (binding, initial_events) = ctx.conn.bind_renderer_document_lifecycle_for_owner(
+        &crate::conn::CommandOwnerScope::for_session("SID-visible"),
         artifacts,
         None,
         "TID-visible".to_owned(),
@@ -926,15 +930,15 @@ async fn set_lifecycle_events_enabled_replays_only_protocol_visible_load_state()
     assert!(binding.is_some());
     assert_eq!(initial_events.len(), 2);
     if let Some(navigation_engine) = navigation_engine {
-        ctx.conn.adopt_loaded_navigation_engine_for_session_owner(
-            Some("SID-visible"),
+        ctx.conn.adopt_loaded_navigation_engine_for_owner(
+            &crate::conn::CommandOwnerScope::for_session("SID-visible"),
             navigation_engine,
         );
     }
     assert!(
         ctx.conn
-            .begin_renderer_document_load_visibility_barrier_for_session_owner(
-                Some("SID-visible"),
+            .begin_renderer_document_load_visibility_barrier_for_owner(
+                &crate::conn::CommandOwnerScope::for_session("SID-visible"),
                 LOADER_ID,
             )
     );
@@ -1018,8 +1022,8 @@ async fn set_lifecycle_events_enabled_is_session_local_for_active_auxiliary_sess
         .runtime_slot
         .set_loaded_page_for_test(navigation.page);
     assert!(browser_context.assign_auxiliary_session_to_target("TID-active", "SID-aux".to_owned()));
-    let (binding, initial_events) = ctx.conn.bind_renderer_document_lifecycle_for_session_owner(
-        Some("SID-aux"),
+    let (binding, initial_events) = ctx.conn.bind_renderer_document_lifecycle_for_owner(
+        &crate::conn::CommandOwnerScope::for_session("SID-aux"),
         artifacts,
         None,
         "TID-active".to_owned(),
@@ -1028,8 +1032,10 @@ async fn set_lifecycle_events_enabled_is_session_local_for_active_auxiliary_sess
     assert!(binding.is_some());
     assert_eq!(initial_events.len(), 2);
     if let Some(navigation_engine) = navigation_engine {
-        ctx.conn
-            .adopt_loaded_navigation_engine_for_session_owner(Some("SID-aux"), navigation_engine);
+        ctx.conn.adopt_loaded_navigation_engine_for_owner(
+            &crate::conn::CommandOwnerScope::for_session("SID-aux"),
+            navigation_engine,
+        );
     }
     let _ = wait_for_visible_renderer_load(&mut ctx, "SID-aux").await;
     ctx.sent.clear();
@@ -1564,7 +1570,7 @@ async fn runtime_document_close_emits_lifecycle_for_repeated_playwright_set_cont
     for iteration in 0..32 {
         let previous_document = ctx
             .conn
-            .target_root_document_lifecycle_identity_for_session(Some("SID-1"))
+            .target_root_document_lifecycle_identity_for_route(Some("SID-1"), None)
             .expect("the previous replacement must retain an exact Document identity");
         let id = 100 + iteration;
         ctx.process_async(json!({

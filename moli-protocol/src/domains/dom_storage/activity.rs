@@ -3,7 +3,7 @@ use moli_core::network::{WebStorageAreaKind, WebStorageMutation, WebStorageMutat
 use serde_json::{Value, json};
 
 use crate::{
-    conn::{BackgroundProtocolEvent, CdpConnection},
+    conn::{BackgroundProtocolEvent, CdpConnection, CommandOwnerScope},
     domains::{
         activity::{
             ProtocolOutputPayloads, ProtocolOutputProjectionContext, ProtocolOutputSink,
@@ -54,14 +54,14 @@ impl DomStoragePreparedOutputs {
     }
 }
 
-pub(in crate::domains) fn append_pending_dom_storage_outputs_for_session_owner(
+pub(in crate::domains) fn append_pending_dom_storage_outputs_for_owner(
     conn: &CdpConnection,
-    session_id: Option<&str>,
+    owner: &CommandOwnerScope,
     sink: &mut (impl ProtocolOutputSink + ?Sized),
 ) {
     let mut outputs = DomStoragePreparedOutputs::default();
     for (event_session_id, subscription) in
-        dom_storage_subscriptions_for_browser_context_owner(conn, session_id)
+        dom_storage_subscriptions_for_browser_context_owner(conn, owner)
     {
         let records = subscription.drain();
         outputs.events.extend(
@@ -75,13 +75,15 @@ pub(in crate::domains) fn append_pending_dom_storage_outputs_for_session_owner(
 
 fn dom_storage_subscriptions_for_browser_context_owner(
     conn: &CdpConnection,
-    session_id: Option<&str>,
+    owner: &CommandOwnerScope,
 ) -> Vec<(Option<String>, WebStorageMutationSubscription)> {
-    let Some((browser_context_id, _)) = conn.target_owner_identity_for_session(session_id) else {
-        return dom_storage_subscriptions_for_session_owner(conn, session_id);
+    let Some((browser_context_id, _)) =
+        conn.target_owner_identity_for_route(owner.session_id(), owner.session_owner_route())
+    else {
+        return dom_storage_subscriptions_for_owner(conn, owner);
     };
     let Some(browser_context) = conn.browser_context_by_id(&browser_context_id) else {
-        return dom_storage_subscriptions_for_session_owner(conn, session_id);
+        return dom_storage_subscriptions_for_owner(conn, owner);
     };
 
     let mut subscriptions = Vec::new();
@@ -110,11 +112,11 @@ fn dom_storage_subscriptions_for_browser_context_owner(
     subscriptions
 }
 
-fn dom_storage_subscriptions_for_session_owner(
+fn dom_storage_subscriptions_for_owner(
     conn: &CdpConnection,
-    session_id: Option<&str>,
+    owner: &CommandOwnerScope,
 ) -> Vec<(Option<String>, WebStorageMutationSubscription)> {
-    conn.page_event_session_ids_for_session_owner(session_id)
+    conn.page_event_session_ids_for_route(owner.session_id(), owner.session_owner_route())
         .into_iter()
         .filter_map(|event_session_id| {
             let subscription = conn

@@ -572,28 +572,20 @@ mod tests {
         .await;
         ctx.expect_error(9, -32000, "StreamHandleNotFound");
 
-        let background_route = ctx
-            .conn
-            .target_session_route_for_target_id("TID-background")
-            .expect("background target route");
-        let previous_route = ctx
-            .conn
-            .replace_none_session_owner_route_override(Some(background_route));
         process_via_command_dispatch(
             &mut ctx,
             json!({
                 "id": 10,
+                "sessionId": "SID-background",
                 "method": "IO.read",
                 "params": { "handle": handle, "size": 10 }
             }),
         )
         .await;
-        ctx.conn
-            .replace_none_session_owner_route_override(previous_route);
         ctx.expect_result(
             10,
             json!({ "base64Encoded": false, "data": "background", "eof": false }),
-            None,
+            Some("SID-background"),
         );
 
         process_via_command_dispatch(

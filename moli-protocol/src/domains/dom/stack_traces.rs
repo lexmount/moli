@@ -23,20 +23,24 @@ pub(super) fn start_set_node_stack_traces_enabled_command(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,
 ) -> Result<Option<PendingDomCommandDispatch>, PendingDomCommandStartError> {
+    let owner = CommandOwnerScope::capture(conn, cmd.session_id);
     let params: SetNodeStackTracesEnabledParams = match cmd.get_params() {
         Ok(Some(params)) => params,
         _ => return Err(PendingDomCommandStartError::invalid_params()),
     };
-    let renderer_inspector_session_id =
-        conn.target_renderer_runtime_inspector_session_id_for_session(cmd.session_id);
-    let page = super::loaded_page_mut_for_session(conn, cmd.session_id)
+    let renderer_inspector_session_id = conn
+        .target_renderer_runtime_inspector_session_id_for_route(
+            owner.session_id(),
+            owner.session_owner_route(),
+        );
+    let page = super::loaded_page_mut_for_owner(conn, &owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
     let pending = page
         .start_set_document_node_stack_traces_enabled(renderer_inspector_session_id, params.enable)
         .map_err(PendingDomCommandStartError::renderer_error)?;
     Ok(Some(PendingDomCommandDispatch {
         command_id: cmd.id,
-        session_id: cmd.session_id.map(str::to_owned),
+        owner_scope: owner,
         kind: PendingDomCommandKind::SetNodeStackTracesEnabled,
         pending: PendingDomCommandWork::Page(pending),
     }))
@@ -46,20 +50,24 @@ pub(super) fn start_get_node_stack_traces_command(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,
 ) -> Result<Option<PendingDomCommandDispatch>, PendingDomCommandStartError> {
+    let owner = CommandOwnerScope::capture(conn, cmd.session_id);
     let params: GetNodeStackTracesParams = match cmd.get_params() {
         Ok(Some(params)) => params,
         _ => return Err(PendingDomCommandStartError::invalid_params()),
     };
-    let renderer_inspector_session_id =
-        conn.target_renderer_runtime_inspector_session_id_for_session(cmd.session_id);
-    let page = super::loaded_page_mut_for_session(conn, cmd.session_id)
+    let renderer_inspector_session_id = conn
+        .target_renderer_runtime_inspector_session_id_for_route(
+            owner.session_id(),
+            owner.session_owner_route(),
+        );
+    let page = super::loaded_page_mut_for_owner(conn, &owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
     let pending = page
         .start_document_node_stack_trace(renderer_inspector_session_id, params.node_id)
         .map_err(PendingDomCommandStartError::renderer_error)?;
     Ok(Some(PendingDomCommandDispatch {
         command_id: cmd.id,
-        session_id: cmd.session_id.map(str::to_owned),
+        owner_scope: owner,
         kind: PendingDomCommandKind::GetNodeStackTraces,
         pending: PendingDomCommandWork::Page(pending),
     }))
@@ -67,11 +75,11 @@ pub(super) fn start_get_node_stack_traces_command(
 
 pub(super) fn complete_set_node_stack_traces_enabled_command(
     conn: &mut CdpConnection,
-    session_id: Option<&str>,
+    owner: &CommandOwnerScope,
     completion: CompletedPageCommand,
     out: &mut DomCommandOutput,
 ) -> DomCommandTaskStep {
-    let Some(page) = super::loaded_page_mut_for_session(conn, session_id) else {
+    let Some(page) = super::loaded_page_mut_for_owner(conn, owner) else {
         out.push_error(-32000, "NoDocumentLoaded");
         return DomCommandTaskStep::Complete;
     };
@@ -88,12 +96,12 @@ pub(super) fn complete_set_node_stack_traces_enabled_command(
 
 pub(super) fn complete_get_node_stack_traces_command(
     conn: &mut CdpConnection,
-    session_id: Option<&str>,
+    owner: &CommandOwnerScope,
     completion: CompletedPageCommand,
     out: &mut DomCommandOutput,
 ) -> DomCommandTaskStep {
     let resolution = {
-        let Some(page) = super::loaded_page_mut_for_session(conn, session_id) else {
+        let Some(page) = super::loaded_page_mut_for_owner(conn, owner) else {
             out.push_error(-32000, "NoDocumentLoaded");
             return DomCommandTaskStep::Complete;
         };

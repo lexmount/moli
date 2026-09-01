@@ -6,7 +6,7 @@ pub(crate) use ordered_stream::{OrderedRendererOutputIngress, RendererOutputIngr
 pub(super) use prepared_outputs::PreparedProtocolOutputs;
 pub(crate) use renderer::ingest_renderer_output_transport_async;
 
-use crate::conn::{CdpConnection, CommandDispatchContext};
+use crate::conn::{CdpConnection, CommandDispatchContext, CommandOwnerScope};
 
 /// Projects protocol-owned output accumulated at a command boundary.
 ///
@@ -16,11 +16,11 @@ use crate::conn::{CdpConnection, CommandDispatchContext};
 /// concrete publications and exact cursor fences.
 pub(crate) async fn project_protocol_local_command_outputs(
     conn: &mut CdpConnection,
-    session_id: Option<&str>,
+    owner: &CommandOwnerScope,
     command: &mut CommandDispatchContext,
 ) {
-    PreparedProtocolOutputs::from_protocol_local_command_boundary(conn, session_id)
+    PreparedProtocolOutputs::from_protocol_local_command_boundary(conn, owner)
         .await
-        .project_async(conn, session_id, command)
+        .project_async(conn, owner, command)
         .await;
 }

@@ -28,7 +28,7 @@ mod tests {
 
     use serde_json::{Value, json};
 
-    use crate::conn::BrowserContext;
+    use crate::conn::{BrowserContext, CommandOwnerScope};
     use crate::testing::TestContext;
 
     async fn with_loaded_document(ctx: &mut TestContext) {
@@ -154,11 +154,9 @@ mod tests {
 
         let navigation = ctx
             .conn
-            .start_document_navigation_for_session_owner(
-                None,
-                "LOADER-debugger-interrupt".to_owned(),
-            )
+            .start_document_navigation_for_route(None, None, "LOADER-debugger-interrupt".to_owned())
             .expect("start cross-Document navigation");
+        let navigation_owner = CommandOwnerScope::capture(&ctx.conn, None);
         assert!(
             ctx.conn
                 .renderer_document_navigation_is_suspended_for_session_owner(None)
@@ -183,10 +181,10 @@ mod tests {
 
         let _ = ctx
             .conn
-            .finish_renderer_document_navigation_for_session_owner(None, &navigation);
+            .finish_renderer_document_navigation_for_owner(&navigation_owner, &navigation);
         ctx.conn
-            .clear_pending_document_navigation_for_session_owner_if_loader_matches(
-                None,
+            .clear_pending_document_navigation_for_owner_if_loader_matches(
+                &navigation_owner,
                 &navigation.loader_id,
             );
     }
@@ -328,7 +326,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn debugger_instrumentation_navigation_publishes_new_context_with_bound_origin() {
+    async fn debugger_instrumentation_navigation_publishes_new_context_and_tears_down_paused() {
         let mut ctx = TestContext::new();
         with_loaded_document(&mut ctx).await;
 
@@ -389,6 +387,11 @@ mod tests {
             json!("data:text/html,<script>globalThis.__instrumentedNavigation = true</script>"),
             "the instrumented replacement script must reach V8"
         );
+
+        // Keep the instrumentation pause active. Connection teardown must
+        // close the in-flight replacement Document's Inspector target and
+        // join its renderer owner without requiring a frontend resume.
+        drop(ctx);
     }
 
     #[tokio::test]

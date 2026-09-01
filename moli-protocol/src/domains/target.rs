@@ -38,12 +38,14 @@ pub(crate) use popup::{
     schedule_initial_document_target_url_navigation_after_debugger_barrier_release_for_target,
     schedule_initial_document_target_url_navigation_after_debugger_resume,
 };
-pub(crate) fn popup_activation_creates_new_target(
+pub(crate) fn popup_activation_creates_new_target_for_route(
     conn: &CdpConnection,
     owner_session_id: Option<&str>,
+    owner_route: Option<&crate::conn::CdpSessionRoute>,
     target_name: &str,
 ) -> bool {
-    if let Some((browser_context_id, _)) = conn.target_owner_identity_for_session(owner_session_id)
+    if let Some((browser_context_id, _)) =
+        conn.target_owner_identity_for_route(owner_session_id, owner_route)
     {
         return conn
             .browser_context_by_id(&browser_context_id)
@@ -1269,7 +1271,7 @@ mod devtools_runtime_entry_tests {
         assert!(
             conn.claim_pending_inspector_await_for_scheduler_deferred_reply(
                 7101,
-                Some("SID-runtime-ready-close"),
+                &crate::conn::CommandOwnerScope::for_session("SID-runtime-ready-close"),
             )
             .is_some(),
             "test must cover scheduler-deferred Runtime await owner cleanup"

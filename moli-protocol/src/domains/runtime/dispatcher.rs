@@ -15,9 +15,8 @@ use crate::devtools_runtime::{
     webdriver_bidi_node_shared_id_for_backend_node_id,
 };
 use moli_core::page::{
-    BidiPreloadChannelHandoff, DocumentNodeObjectSnapshot, DocumentNodeSnapshot,
-    MAX_INSPECTOR_PROTOCOL_VALUE_DEPTH, RendererCommandTurnOutput,
-    RendererDomBidiNodeBindingResolution, RendererRuntimeCommandOutput,
+    BidiPreloadChannelHandoff, DocumentNodeSnapshot, MAX_INSPECTOR_PROTOCOL_VALUE_DEPTH,
+    RendererCommandTurnOutput, RendererDomBidiNodeBindingResolution, RendererRuntimeCommandOutput,
     RendererRuntimeInspectorMessage,
 };
 use moli_page_types::RendererInspectorResponseDelivery;
@@ -32,10 +31,10 @@ use crate::conn::{
     CompletedServiceWorkerRuntimeProtocolMessageDispatch,
     CompletedSharedWorkerRuntimeProtocolMessageDispatch, DevToolsCommandDispatchOutcome,
     DevToolsCommandExecutionOutput, DuplicatePendingRendererCommand, InspectorCommandDispatch,
-    NoneSessionOwnerRouteOverrideScope, ParsedCdpCommand, PendingBidiChannelListener,
-    PendingMoliDiagnosticsDispatch, PendingRuntimeBindingPageCommandDispatch,
-    PendingRuntimeChildDefaultContextLookupDispatch, PendingRuntimeEnableEventsDispatch,
-    PendingRuntimeProtocolMessageDispatch, PendingServiceWorkerRuntimeProtocolMessageDispatch,
+    ParsedCdpCommand, PendingBidiChannelListener, PendingMoliDiagnosticsDispatch,
+    PendingRuntimeBindingPageCommandDispatch, PendingRuntimeChildDefaultContextLookupDispatch,
+    PendingRuntimeEnableEventsDispatch, PendingRuntimeProtocolMessageDispatch,
+    PendingServiceWorkerRuntimeProtocolMessageDispatch,
     PendingSharedWorkerRuntimeProtocolMessageDispatch, ProfilerInspectorCommand,
     RendererCommandDescriptor, RuntimeBindingDefinition, RuntimeEnableReplayEvent,
     RuntimeInspectorAsyncCompletionReceiver, RuntimeInspectorResponseReady,
@@ -47,16 +46,19 @@ use crate::domains::actions::{ConsoleAction, HeapProfilerAction, RuntimeAction};
 use crate::domains::command_output::{
     CommandOutputPlan, devtools_error_from_cdp_error_parts, devtools_error_from_cdp_error_value,
 };
-use crate::domains::console::apply_console_output_state_for_session;
+use crate::domains::console::{
+    apply_console_output_state_for_owner, apply_console_output_state_for_session,
+};
 use crate::domains::observable_output::{
+    advance_runtime_observable_cursors_to_current_for_owner,
     advance_runtime_observable_cursors_to_current_for_session_owner,
     runtime_console_api_called_background_event, runtime_console_message_type_and_text,
     runtime_exception_thrown_background_event,
 };
 use crate::domains::runtime_context_events::{
-    RuntimeContextProtocolEvent, apply_runtime_context_protocol_event_side_effects_typed,
+    RuntimeContextProtocolEvent, apply_runtime_context_protocol_event_side_effects_for_owner_typed,
     emit_runtime_context_protocol_background_event_typed,
-    should_emit_child_default_context_inventory_replay_once,
+    should_emit_child_default_context_inventory_replay_once_for_owner,
 };
 
 const SHARED_WORKER_RUNTIME_BINDING_REPLAY_COMMAND_ID_BASE: u64 = 900_000_000;
@@ -76,9 +78,8 @@ use super::{
         devtools_serialization_options_for_node_probe,
     },
     bindings::{
-        AddBindingParams, clear_runtime_binding_definitions_for_session_owner,
-        persist_runtime_binding_definition_for_session_owner,
-        remove_runtime_binding_definitions_for_session_owner,
+        AddBindingParams, clear_runtime_binding_definitions_for_owner,
+        persist_runtime_binding_definition_for_owner, remove_runtime_binding_definitions_for_owner,
     },
     command_classification::{
         MainRuntimeCommand, MainRuntimeInspectorCommand, RuntimeBindingCommand,
@@ -248,15 +249,6 @@ pub(crate) enum RuntimeCommandTaskStep {
     Complete(CommandOutputPlan),
 }
 
-impl RuntimeCommandTaskStep {
-    fn with_owner_scope(mut self, owner_scope: CommandOwnerScope) -> Self {
-        if let RuntimeCommandTaskStep::Pending(pending) = &mut self {
-            pending.owner_scope = owner_scope;
-        }
-        self
-    }
-}
-
 enum PendingRuntimeCommandKind {
     Inspector {
         pending: PendingRuntimeProtocolMessageDispatch,
@@ -381,7 +373,7 @@ impl RuntimeInspectorRoutedOutput {
     fn register_object_group_for_success(
         &self,
         conn: &mut CdpConnection,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
         object_group: Option<&str>,
     ) {
         let Some(object_group) = object_group else {
@@ -391,14 +383,14 @@ impl RuntimeInspectorRoutedOutput {
             if let Some((_, _, BackgroundCommandResponsePayloadRef::Success { result })) =
                 event.command_response_payload_ref()
             {
-                conn.register_runtime_remote_object_ids_from_value_for_session_owner_with_group(
-                    session_id,
+                conn.register_runtime_remote_object_ids_from_value_for_owner_with_group(
+                    owner,
                     result,
                     object_group,
                 );
             } else if let Some(message) = event.protocol_message() {
-                conn.register_runtime_remote_object_ids_from_value_for_session_owner_with_group(
-                    session_id,
+                conn.register_runtime_remote_object_ids_from_value_for_owner_with_group(
+                    owner,
                     message,
                     object_group,
                 );
@@ -531,6 +523,11 @@ impl PendingRuntimeCommandDispatch {
         self.owner_scope.session_id()
     }
 
+    #[cfg(test)]
+    pub(crate) fn owner_scope(&self) -> &CommandOwnerScope {
+        &self.owner_scope
+    }
+
     pub(crate) fn executes_page_javascript(&self) -> bool {
         matches!(
             self.action,
@@ -602,20 +599,16 @@ impl PendingRuntimeCommandDispatch {
             return false;
         }
         let owner_scope = self.owner_scope.clone();
-        let session_id = self.session_id().map(str::to_owned);
         let mut response_events = Vec::new();
         let mut background_events = Vec::new();
-        let mut route_scope = owner_scope.enter(conn);
-        let (routed, renderer_output_predecessor) = route_scope
-            .conn_mut()
+        let (routed, renderer_output_predecessor) = conn
             .route_scheduler_deferred_runtime_inspector_response_into(
                 response,
-                session_id.as_deref(),
+                &owner_scope,
                 &mut response_events,
                 &mut background_events,
             )
             .await;
-        drop(route_scope);
         if let Some(predecessor) = renderer_output_predecessor {
             let PendingRuntimeCommandKind::InspectorDeferredReply { routed_output, .. } =
                 &mut self.pending
@@ -641,13 +634,12 @@ impl PendingRuntimeCommandDispatch {
         let response = response_rx
             .await
             .map_err(|_| "RuntimeDeferredInspectorResponseCanceled".to_owned());
-        let session_id = self.session_id().map(str::to_owned);
         let routed = self
             .route_scheduler_deferred_inspector_response(
                 conn,
-                crate::conn::RuntimeInspectorResponseReady::new(
+                crate::conn::RuntimeInspectorResponseReady::for_owner(
                     command_id,
-                    session_id.as_deref(),
+                    &self.owner_scope,
                     response,
                 ),
             )
@@ -667,13 +659,10 @@ impl PendingRuntimeCommandDispatch {
                 renderer_response_rx: _,
                 claimed_await,
             } => {
-                let mut route_scope = owner_scope.enter(conn);
-                route_scope
-                    .conn_mut()
-                    .complete_claimed_pending_inspector_await_for_scheduler_deferred_reply(
-                        claimed_await,
-                        routed_output.events(),
-                    );
+                conn.complete_claimed_pending_inspector_await_for_scheduler_deferred_reply(
+                    claimed_await,
+                    routed_output.events(),
+                );
                 CompletedRuntimeCommandKind::InspectorDeferredReplyReady { routed_output }
             }
             _ => {
@@ -696,23 +685,17 @@ impl PendingRuntimeCommandDispatch {
     }
 
     pub(crate) fn forget_scheduler_deferred_inspector_reply(self, conn: &mut CdpConnection) {
-        let session_id = self.owner_scope.session_id().map(str::to_owned);
         let owner_scope = self.owner_scope.clone();
-        let mut route_scope = owner_scope.enter(conn);
         match self.pending {
             PendingRuntimeCommandKind::InspectorDeferredReply { claimed_await, .. } => {
-                route_scope
-                    .conn_mut()
-                    .cancel_claimed_pending_inspector_await_for_scheduler_deferred_reply(
-                        claimed_await,
-                        "forgotten",
-                    );
+                conn.cancel_claimed_pending_inspector_await_for_scheduler_deferred_reply(
+                    claimed_await,
+                    "forgotten",
+                );
             }
             _ => {
                 if let Some(command_id) = self.command_id {
-                    route_scope
-                        .conn_mut()
-                        .forget_pending_inspector_await(command_id, session_id.as_deref());
+                    conn.forget_pending_inspector_await_for_owner(command_id, &owner_scope);
                 }
             }
         }
@@ -878,6 +861,43 @@ fn runtime_object_group_for_command_result(
     }
 }
 
+fn runtime_object_group_for_command_result_for_owner(
+    conn: &CdpConnection,
+    cmd: &Cmd<'_>,
+    owner: &CommandOwnerScope,
+    action: RuntimeAction,
+) -> Option<String> {
+    match action {
+        RuntimeAction::Evaluate => runtime_object_group_from_params(cmd.params).map(str::to_owned),
+        RuntimeAction::CallFunctionOn => runtime_object_group_from_params(cmd.params)
+            .map(str::to_owned)
+            .or_else(|| {
+                conn.runtime_remote_object_group_for_owner(
+                    owner,
+                    runtime_object_id_from_params(cmd.params)?,
+                )
+            }),
+        RuntimeAction::GetProperties => conn.runtime_remote_object_group_for_owner(
+            owner,
+            runtime_object_id_from_params(cmd.params)?,
+        ),
+        RuntimeAction::AwaitPromise => conn.runtime_remote_object_group_for_owner(
+            owner,
+            runtime_promise_object_id_from_params(cmd.params)?,
+        ),
+        RuntimeAction::RunScript => runtime_object_group_from_params(cmd.params).map(str::to_owned),
+        RuntimeAction::QueryObjects => runtime_object_group_from_params(cmd.params)
+            .map(str::to_owned)
+            .or_else(|| {
+                conn.runtime_remote_object_group_for_owner(
+                    owner,
+                    runtime_prototype_object_id_from_params(cmd.params)?,
+                )
+            }),
+        _ => None,
+    }
+}
+
 fn runtime_command_awaits_promise(cmd: &Cmd<'_>, action: RuntimeAction) -> bool {
     action == RuntimeAction::AwaitPromise
         || cmd
@@ -944,19 +964,32 @@ fn start_main_runtime_inspector_command(
     cmd: &Cmd<'_>,
     command: MainRuntimeInspectorCommand,
 ) -> RuntimeCommandTaskStep {
+    let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
+    start_main_runtime_inspector_command_for_owner(conn, cmd, command, owner_scope)
+}
+
+fn start_main_runtime_inspector_command_for_owner(
+    conn: &mut CdpConnection,
+    cmd: &Cmd<'_>,
+    command: MainRuntimeInspectorCommand,
+    owner_scope: CommandOwnerScope,
+) -> RuntimeCommandTaskStep {
     let action = command.action();
     let action_label = action.label();
     let await_promise = runtime_command_awaits_promise(cmd, action);
-    let inspector_json =
-        match prepare_runtime_inspector_payload(conn, cmd, command.payload_preparation()) {
-            Ok(json) => json,
-            Err(message) => {
-                return RuntimeCommandTaskStep::Complete(runtime_inspector_error_plan(
-                    cmd.id, message,
-                ));
-            }
-        };
-    let object_group = runtime_object_group_for_command_result(conn, cmd, action);
+    let inspector_json = match prepare_runtime_inspector_payload_for_owner(
+        conn,
+        cmd,
+        &owner_scope,
+        command.payload_preparation(),
+    ) {
+        Ok(json) => json,
+        Err(message) => {
+            return RuntimeCommandTaskStep::Complete(runtime_inspector_error_plan(cmd.id, message));
+        }
+    };
+    let object_group =
+        runtime_object_group_for_command_result_for_owner(conn, cmd, &owner_scope, action);
     let release_object_ids = if action == RuntimeAction::ReleaseObject {
         cmd.params
             .map(runtime_remote_object_ids_in_map)
@@ -969,12 +1002,11 @@ fn start_main_runtime_inspector_command(
     } else {
         None
     };
-    let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
     let pre_registered_await = match pre_register_runtime_await_if_needed(
         conn,
         await_promise,
         cmd.id,
-        cmd.session_id,
+        &owner_scope,
         object_group.as_deref(),
         action_label,
     ) {
@@ -989,6 +1021,7 @@ fn start_main_runtime_inspector_command(
     let pending = match start_pending_runtime_routable_inspector_dispatch(
         conn,
         cmd,
+        &owner_scope,
         inspector_json,
         if await_promise {
             RendererInspectorResponseDelivery::CommandReply
@@ -998,7 +1031,7 @@ fn start_main_runtime_inspector_command(
     ) {
         Ok(pending) => pending,
         Err(message) => {
-            forget_pre_registered_runtime_await(conn, pre_registered_await, cmd.session_id);
+            forget_pre_registered_runtime_await(conn, pre_registered_await, &owner_scope);
             return RuntimeCommandTaskStep::Complete(runtime_inspector_error_plan(cmd.id, message));
         }
     };
@@ -1048,9 +1081,11 @@ pub(crate) fn start_profiler_inspector_command_dispatch(
     }
 
     let action = dispatch.protocol_method();
+    let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
     let pending = match start_pending_runtime_inspector_dispatch_with_delivery(
         conn,
         cmd,
+        &owner_scope,
         dispatch.into_inspector_json(),
         cmd.terminal_response_delivery(RendererInspectorResponseDelivery::DevToolsSession),
     ) {
@@ -1063,7 +1098,7 @@ pub(crate) fn start_profiler_inspector_command_dispatch(
     RuntimeCommandTaskStep::Pending(Box::new(PendingRuntimeCommandDispatch {
         command_id: cmd.id,
         action,
-        owner_scope: CommandOwnerScope::capture(conn, cmd.session_id),
+        owner_scope,
         object_group: None,
         release_object_ids: Vec::new(),
         release_object_group: None,
@@ -1135,9 +1170,11 @@ pub(crate) fn start_heap_profiler_inspector_command_dispatch(
 
     let method = heap_profiler_action_protocol_method(action);
     let object_group = heap_profiler_object_group_for_command_result(cmd, action);
+    let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
     let pending = match start_pending_runtime_inspector_dispatch_with_delivery(
         conn,
         cmd,
+        &owner_scope,
         cmd.json.to_owned(),
         RendererInspectorResponseDelivery::CommandReply,
     ) {
@@ -1150,7 +1187,7 @@ pub(crate) fn start_heap_profiler_inspector_command_dispatch(
     RuntimeCommandTaskStep::Pending(Box::new(PendingRuntimeCommandDispatch {
         command_id: cmd.id,
         action: method,
-        owner_scope: CommandOwnerScope::capture(conn, cmd.session_id),
+        owner_scope,
         object_group,
         release_object_ids: Vec::new(),
         release_object_group: None,
@@ -1185,11 +1222,13 @@ pub(crate) fn start_debugger_inspector_command_dispatch(
         ));
     }
 
+    let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
     let pending = match cmd.renderer_policy().access() {
         CdpRendererCommandAccess::MainThread => {
             start_pending_runtime_inspector_dispatch_with_delivery(
                 conn,
                 cmd,
+                &owner_scope,
                 inspector_json,
                 cmd.terminal_response_delivery(RendererInspectorResponseDelivery::DevToolsSession),
             )
@@ -1197,6 +1236,7 @@ pub(crate) fn start_debugger_inspector_command_dispatch(
         CdpRendererCommandAccess::Io => start_pending_runtime_io_inspector_dispatch(
             conn,
             cmd,
+            &owner_scope,
             inspector_json,
             cmd.terminal_response_delivery(RendererInspectorResponseDelivery::DevToolsSession),
         ),
@@ -1215,7 +1255,7 @@ pub(crate) fn start_debugger_inspector_command_dispatch(
     RuntimeCommandTaskStep::Pending(Box::new(PendingRuntimeCommandDispatch {
         command_id: cmd.id,
         action: "Debugger.inspectorCommand",
-        owner_scope: CommandOwnerScope::capture(conn, cmd.session_id),
+        owner_scope,
         object_group: None,
         release_object_ids: Vec::new(),
         release_object_group: None,
@@ -1402,9 +1442,11 @@ pub(crate) fn start_console_inspector_command_dispatch(
         ));
     }
 
+    let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
     let pending = match start_pending_runtime_inspector_dispatch_with_delivery(
         conn,
         cmd,
+        &owner_scope,
         cmd.json.to_owned(),
         cmd.terminal_response_delivery(RendererInspectorResponseDelivery::DevToolsSession),
     ) {
@@ -1417,7 +1459,7 @@ pub(crate) fn start_console_inspector_command_dispatch(
     RuntimeCommandTaskStep::Pending(Box::new(PendingRuntimeCommandDispatch {
         command_id: cmd.id,
         action: console_action_protocol_method(action),
-        owner_scope: CommandOwnerScope::capture(conn, cmd.session_id),
+        owner_scope,
         object_group: None,
         release_object_ids: Vec::new(),
         release_object_group: None,
@@ -1589,64 +1631,69 @@ fn try_start_pending_runtime_enable_command(
     cmd: &Cmd<'_>,
 ) -> Option<RuntimeCommandTaskStep> {
     let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
-    let has_loaded_page = match conn.runtime_session_owner_slot(cmd.session_id) {
+    Some(start_runtime_enable_command_for_owner(
+        conn,
+        cmd.id,
+        owner_scope,
+    ))
+}
+
+fn start_runtime_enable_command_for_owner(
+    conn: &mut CdpConnection,
+    command_id: Option<u64>,
+    owner_scope: CommandOwnerScope,
+) -> RuntimeCommandTaskStep {
+    let has_loaded_page = match conn.runtime_session_owner_slot_for_route(
+        owner_scope.session_id(),
+        owner_scope.session_owner_route(),
+    ) {
         Ok(slot) => slot.has_loaded_page(),
-        Err(_) if cmd.session_id.is_some() => {
-            return Some(RuntimeCommandTaskStep::Complete(CommandOutputPlan::error(
+        Err(_) if owner_scope.session_id().is_some() => {
+            return RuntimeCommandTaskStep::Complete(CommandOutputPlan::error(
                 -32001,
                 "Unknown sessionId",
-            )));
+            ));
         }
         Err(_) => {
-            match conn.set_runtime_frontend_enabled_for_session_owner(cmd.session_id, true) {
+            match conn.set_runtime_frontend_enabled_for_owner(&owner_scope, true) {
                 SessionOwnerRuntimeFrontendEnableResult::Handled => {}
                 SessionOwnerRuntimeFrontendEnableResult::UnknownSession => {
-                    return Some(RuntimeCommandTaskStep::Complete(CommandOutputPlan::error(
+                    return RuntimeCommandTaskStep::Complete(CommandOutputPlan::error(
                         -32001,
                         "Unknown sessionId",
-                    )));
+                    ));
                 }
             }
-            return Some(RuntimeCommandTaskStep::Complete(
-                CommandOutputPlan::success(),
-            ));
+            return RuntimeCommandTaskStep::Complete(CommandOutputPlan::success());
         }
     };
     if !has_loaded_page {
         if conn.can_defer_initial_document_page_build() {
-            match conn.set_runtime_frontend_enabled_for_session_owner(cmd.session_id, true) {
+            match conn.set_runtime_frontend_enabled_for_owner(&owner_scope, true) {
                 SessionOwnerRuntimeFrontendEnableResult::Handled => {}
                 SessionOwnerRuntimeFrontendEnableResult::UnknownSession => {
-                    return Some(RuntimeCommandTaskStep::Complete(CommandOutputPlan::error(
+                    return RuntimeCommandTaskStep::Complete(CommandOutputPlan::error(
                         -32001,
                         "Unknown sessionId",
-                    )));
+                    ));
                 }
             }
-            return Some(RuntimeCommandTaskStep::Complete(
-                CommandOutputPlan::success(),
-            ));
+            return RuntimeCommandTaskStep::Complete(CommandOutputPlan::success());
         }
-        return Some(RuntimeCommandTaskStep::Complete(CommandOutputPlan::error(
+        return RuntimeCommandTaskStep::Complete(CommandOutputPlan::error(
             -32000,
             "NoDocumentLoaded",
-        )));
+        ));
     }
-    Some(start_pending_runtime_enable_events_phase(
-        conn,
-        cmd.id,
-        cmd.session_id,
-        owner_scope,
-    ))
+    start_pending_runtime_enable_events_phase(conn, command_id, owner_scope)
 }
 
 fn start_pending_runtime_enable_events_phase(
     conn: &mut CdpConnection,
     command_id: Option<u64>,
-    session_id: Option<&str>,
     owner_scope: CommandOwnerScope,
 ) -> RuntimeCommandTaskStep {
-    match conn.start_runtime_enable_events_for_session_owner(session_id) {
+    match conn.start_runtime_enable_events_for_owner(&owner_scope) {
         Ok(pending) => RuntimeCommandTaskStep::Pending(Box::new(PendingRuntimeCommandDispatch {
             command_id,
             action: "enable",
@@ -1667,9 +1714,9 @@ fn start_pending_runtime_enable_events_phase(
 
 fn runtime_remove_binding_should_skip_live_page_update(
     conn: &CdpConnection,
-    session_id: Option<&str>,
+    owner: &CommandOwnerScope,
 ) -> bool {
-    conn.target_runtime_session_state_for_session(session_id)
+    conn.target_runtime_session_state_for_route(owner.session_id(), owner.session_owner_route())
         .is_some_and(|state| state.runtime_frontend_enabled)
 }
 
@@ -1741,10 +1788,18 @@ fn try_start_pending_runtime_binding_command(
         skip_live_page_update_after_inspector_success: false,
     };
     let live_page_update_unavailable = conn
-        .runtime_session_owner_slot(cmd.session_id)
+        .runtime_session_owner_slot_for_route(
+            owner_scope.session_id(),
+            owner_scope.session_owner_route(),
+        )
         .is_ok_and(|slot| !slot.has_loaded_page())
         || should_persist
-            && conn.renderer_document_navigation_is_suspended_for_session_owner(cmd.session_id);
+            && conn
+                .runtime_session_owner_slot_for_route(
+                    owner_scope.session_id(),
+                    owner_scope.session_owner_route(),
+                )
+                .is_ok_and(|slot| slot.renderer_document_navigation_is_suspended());
     if live_page_update_unavailable {
         task.command_response = Some(RuntimeBindingCommandResponse::empty_success());
         let meta = RuntimeCommandCompletionMeta {
@@ -1763,7 +1818,6 @@ fn try_start_pending_runtime_binding_command(
         return start_pending_runtime_binding_context_lookup_phase(
             conn,
             cmd.id,
-            cmd.session_id,
             task,
             execution_context_id,
             owner_scope,
@@ -1771,7 +1825,7 @@ fn try_start_pending_runtime_binding_command(
     }
     if matches!(task.action, RuntimeBindingCommand::Add)
         || matches!(task.action, RuntimeBindingCommand::Remove)
-            && runtime_remove_binding_should_skip_live_page_update(conn, cmd.session_id)
+            && runtime_remove_binding_should_skip_live_page_update(conn, &owner_scope)
     {
         task.skip_live_page_update_after_inspector_success = true;
     }
@@ -1780,12 +1834,14 @@ fn try_start_pending_runtime_binding_command(
         RuntimeBindingCommand::Add => start_pending_runtime_context_resolved_inspector_dispatch(
             conn,
             cmd,
+            &owner_scope,
             action_label,
             cmd.json.to_owned(),
         ),
         RuntimeBindingCommand::Remove => start_pending_runtime_inspector_dispatch_with_delivery(
             conn,
             cmd,
+            &owner_scope,
             cmd.json.to_owned(),
             RendererInspectorResponseDelivery::CommandReply,
         ),
@@ -1816,6 +1872,7 @@ fn try_start_pending_runtime_binding_command(
 fn start_pending_runtime_routable_inspector_dispatch(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,
+    owner: &CommandOwnerScope,
     inspector_json: String,
     response_delivery: RendererInspectorResponseDelivery,
 ) -> Result<PendingRuntimeProtocolMessageDispatch, String> {
@@ -1824,6 +1881,7 @@ fn start_pending_runtime_routable_inspector_dispatch(
             start_pending_runtime_inspector_dispatch_with_delivery(
                 conn,
                 cmd,
+                owner,
                 inspector_json,
                 response_delivery,
             )
@@ -1831,6 +1889,7 @@ fn start_pending_runtime_routable_inspector_dispatch(
         CdpRendererCommandAccess::Io => start_pending_runtime_io_inspector_dispatch(
             conn,
             cmd,
+            owner,
             inspector_json,
             response_delivery,
         ),
@@ -1843,6 +1902,7 @@ fn start_pending_runtime_routable_inspector_dispatch(
 fn start_pending_runtime_io_inspector_dispatch(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,
+    owner: &CommandOwnerScope,
     inspector_json: String,
     response_delivery: RendererInspectorResponseDelivery,
 ) -> Result<PendingRuntimeProtocolMessageDispatch, String> {
@@ -1852,25 +1912,25 @@ fn start_pending_runtime_io_inspector_dispatch(
             cmd.renderer_policy(),
             response_delivery,
         );
-        conn.start_runtime_io_protocol_message_for_session_owner_with_deferred_response(
-            cmd.session_id,
-            descriptor,
-            command_id,
+        conn.start_runtime_io_protocol_message_for_owner_with_deferred_response(
+            owner, descriptor, command_id,
         )
     } else {
-        conn.start_runtime_io_protocol_message_for_session_owner(cmd.session_id, inspector_json)
+        conn.start_runtime_io_protocol_message_for_owner(owner, inspector_json)
     }
 }
 
 fn start_pending_runtime_context_resolved_inspector_dispatch(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,
+    owner: &CommandOwnerScope,
     action: &'static str,
     inspector_json: String,
 ) -> Result<PendingRuntimeProtocolMessageDispatch, String> {
     start_pending_runtime_context_resolved_inspector_dispatch_with_delivery(
         conn,
         cmd,
+        owner,
         action,
         inspector_json,
         RendererInspectorResponseDelivery::CommandReply,
@@ -1880,6 +1940,7 @@ fn start_pending_runtime_context_resolved_inspector_dispatch(
 fn start_pending_runtime_context_resolved_inspector_dispatch_with_delivery(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,
+    owner: &CommandOwnerScope,
     action: &'static str,
     inspector_json: String,
     response_delivery: RendererInspectorResponseDelivery,
@@ -1890,15 +1951,15 @@ fn start_pending_runtime_context_resolved_inspector_dispatch_with_delivery(
             cmd.renderer_policy(),
             response_delivery,
         );
-        conn.start_runtime_protocol_message_with_context_resolution_for_session_owner_with_deferred_response(
-            cmd.session_id,
+        conn.start_runtime_protocol_message_with_context_resolution_for_owner_with_deferred_response(
+            owner,
             action,
             descriptor,
             command_id,
         )
     } else {
-        conn.start_runtime_protocol_message_with_context_resolution_for_session_owner(
-            cmd.session_id,
+        conn.start_runtime_protocol_message_with_context_resolution_for_owner(
+            owner,
             action,
             inspector_json,
         )
@@ -1908,6 +1969,7 @@ fn start_pending_runtime_context_resolved_inspector_dispatch_with_delivery(
 fn start_pending_runtime_inspector_dispatch_with_delivery(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,
+    owner: &CommandOwnerScope,
     inspector_json: String,
     response_delivery: RendererInspectorResponseDelivery,
 ) -> Result<PendingRuntimeProtocolMessageDispatch, String> {
@@ -1917,13 +1979,11 @@ fn start_pending_runtime_inspector_dispatch_with_delivery(
             cmd.renderer_policy(),
             response_delivery,
         );
-        conn.start_runtime_protocol_message_for_session_owner_with_deferred_response(
-            cmd.session_id,
-            descriptor,
-            command_id,
+        conn.start_runtime_protocol_message_for_owner_with_deferred_response(
+            owner, descriptor, command_id,
         )
     } else {
-        conn.start_runtime_protocol_message_for_session_owner(cmd.session_id, inspector_json)
+        conn.start_runtime_protocol_message_for_owner(owner, inspector_json)
     }
 }
 
@@ -2027,10 +2087,20 @@ fn prepare_pending_devtools_runtime_inspector_json(
     cmd: &Cmd<'_>,
     command: &DevToolsCommand,
 ) -> Result<String, String> {
+    let owner = CommandOwnerScope::capture(conn, cmd.session_id);
+    prepare_pending_devtools_runtime_inspector_json_for_owner(conn, cmd, &owner, command)
+}
+
+fn prepare_pending_devtools_runtime_inspector_json_for_owner(
+    conn: &CdpConnection,
+    cmd: &Cmd<'_>,
+    owner: &CommandOwnerScope,
+    command: &DevToolsCommand,
+) -> Result<String, String> {
     match command {
         DevToolsCommand::EvaluateScript(_) => Ok(cmd.json.to_owned()),
         DevToolsCommand::CallFunction(command) => {
-            prepare_pending_devtools_call_function_json(conn, cmd, command)
+            prepare_pending_devtools_call_function_json_for_owner(conn, cmd, owner, command)
         }
         _ => Err("UnsupportedDevToolsCommand".to_owned()),
     }
@@ -2043,6 +2113,27 @@ fn start_devtools_runtime_command(
     inspector_json: String,
     wait_for_deferred_reply: bool,
     response_delivery: RendererInspectorResponseDelivery,
+) -> RuntimeCommandTaskStep {
+    let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
+    start_devtools_runtime_command_for_owner(
+        conn,
+        cmd,
+        command,
+        inspector_json,
+        wait_for_deferred_reply,
+        response_delivery,
+        owner_scope,
+    )
+}
+
+fn start_devtools_runtime_command_for_owner(
+    conn: &mut CdpConnection,
+    cmd: &Cmd<'_>,
+    command: DevToolsCommand,
+    inspector_json: String,
+    wait_for_deferred_reply: bool,
+    response_delivery: RendererInspectorResponseDelivery,
+    owner_scope: CommandOwnerScope,
 ) -> RuntimeCommandTaskStep {
     let (action, action_label, await_promise) = match &command {
         DevToolsCommand::EvaluateScript(command) => {
@@ -2060,13 +2151,13 @@ fn start_devtools_runtime_command(
             ));
         }
     };
-    let object_group = runtime_object_group_for_command_result(conn, cmd, action);
-    let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
+    let object_group =
+        runtime_object_group_for_command_result_for_owner(conn, cmd, &owner_scope, action);
     let pre_registered_await = match pre_register_runtime_await_if_needed(
         conn,
         await_promise,
         cmd.id,
-        cmd.session_id,
+        &owner_scope,
         object_group.as_deref(),
         action_label,
     ) {
@@ -2081,13 +2172,14 @@ fn start_devtools_runtime_command(
     let pending = match start_pending_runtime_context_resolved_inspector_dispatch_with_delivery(
         conn,
         cmd,
+        &owner_scope,
         action_label,
         inspector_json,
         response_delivery,
     ) {
         Ok(pending) => pending,
         Err(message) => {
-            forget_pre_registered_runtime_await(conn, pre_registered_await, cmd.session_id);
+            forget_pre_registered_runtime_await(conn, pre_registered_await, &owner_scope);
             return RuntimeCommandTaskStep::Complete(runtime_inspector_error_plan(cmd.id, message));
         }
     };
@@ -2108,7 +2200,7 @@ fn pre_register_runtime_await_if_needed(
     conn: &mut CdpConnection,
     await_promise: bool,
     command_id: Option<u64>,
-    session_id: Option<&str>,
+    owner: &CommandOwnerScope,
     object_group: Option<&str>,
     action: &'static str,
 ) -> Result<Option<u64>, DuplicatePendingRendererCommand> {
@@ -2118,23 +2210,23 @@ fn pre_register_runtime_await_if_needed(
     let Some(command_id) = command_id else {
         return Ok(None);
     };
-    conn.try_register_pending_inspector_await_with_object_group(
+    conn.try_register_pending_inspector_await_with_object_group_for_owner(
         command_id,
-        session_id,
+        owner,
         object_group,
     )?;
-    conn.register_runtime_await_job(command_id, session_id, object_group, action);
-    conn.trace_runtime_await_pending_registered(command_id, session_id);
+    conn.register_runtime_await_job_for_owner(command_id, owner, object_group, action);
+    conn.trace_runtime_await_pending_registered(command_id, owner.session_id());
     Ok(Some(command_id))
 }
 
 fn forget_pre_registered_runtime_await(
     conn: &mut CdpConnection,
     command_id: Option<u64>,
-    session_id: Option<&str>,
+    owner: &CommandOwnerScope,
 ) {
     if let Some(command_id) = command_id {
-        conn.forget_pending_inspector_await(command_id, session_id);
+        conn.forget_pending_inspector_await_for_owner(command_id, owner);
     }
 }
 
@@ -2171,14 +2263,14 @@ pub(crate) async fn execute_devtools_runtime_command_async_with_protocol_events(
         }
         DevToolsRuntimeCommandResultKind::Empty => None,
     };
-    let mut route_scope = conn.scoped_none_session_owner_route_override(target.route.clone());
+    let target_owner = CommandOwnerScope::for_route(target.route.clone());
     if let DevToolsCommand::CallFunction(call_function) = &mut command
         && matches!(
             call_function.context.protocol,
             DevToolsProtocol::WebDriverBidi
         )
         && let Err(error) = remap_bidi_node_shared_references_for_target_async(
-            route_scope.conn_mut(),
+            conn,
             &target,
             call_function,
             target_realm.as_ref(),
@@ -2188,11 +2280,11 @@ pub(crate) async fn execute_devtools_runtime_command_async_with_protocol_events(
         return DevToolsCommandExecutionOutput::new(Err(error));
     }
     let validation_result = validate_protocol_neutral_runtime_handle_realms(
-        route_scope.conn_mut(),
+        conn,
+        &target_owner,
         &command,
         target_realm.as_ref(),
     );
-    drop(route_scope);
     if let Err(error) = validation_result {
         return DevToolsCommandExecutionOutput::new(Err(error));
     }
@@ -2240,11 +2332,9 @@ pub(crate) async fn execute_devtools_runtime_command_async_with_protocol_events(
                         );
                     }
                 };
-                let mut route_scope =
-                    conn.scoped_none_session_owner_route_override(target.route.clone());
-                register_devtools_script_result_remote_object(route_scope.conn_mut(), &result);
+                register_devtools_script_result_remote_object(conn, &target_owner, &result);
                 materialize_devtools_script_dom_collection_remote_value_async(
-                    route_scope.conn_mut(),
+                    conn,
                     &mut result,
                     serialization_options.as_ref(),
                     &target,
@@ -2252,14 +2342,14 @@ pub(crate) async fn execute_devtools_runtime_command_async_with_protocol_events(
                 )
                 .await;
                 materialize_devtools_script_deep_serialized_root_value_async(
-                    route_scope.conn_mut(),
+                    conn,
                     &mut result,
                     serialization_options.as_ref(),
                     &target,
                 )
                 .await;
                 materialize_devtools_script_node_remote_value_async(
-                    route_scope.conn_mut(),
+                    conn,
                     &mut result,
                     serialization_options.as_ref(),
                     &target,
@@ -2267,7 +2357,7 @@ pub(crate) async fn execute_devtools_runtime_command_async_with_protocol_events(
                 )
                 .await;
                 materialize_devtools_script_deep_serialized_node_remote_values_async(
-                    route_scope.conn_mut(),
+                    conn,
                     &mut result,
                     serialization_options.as_ref(),
                     &target,
@@ -2276,11 +2366,11 @@ pub(crate) async fn execute_devtools_runtime_command_async_with_protocol_events(
                 .await;
                 materialize_devtools_script_window_remote_value(&mut result, &target);
                 register_devtools_script_result_remote_object_realm(
-                    route_scope.conn_mut(),
+                    conn,
+                    &target_owner,
                     &result,
                     target_realm.as_ref(),
                 );
-                drop(route_scope);
                 return DevToolsCommandExecutionOutput::from_parts(
                     Ok(result),
                     protocol_events,
@@ -2305,9 +2395,7 @@ pub(crate) async fn execute_devtools_runtime_command_async_with_protocol_events(
                 } else {
                     pending.wait().await
                 };
-                let mut route_scope =
-                    conn.scoped_none_session_owner_route_override(target.route.clone());
-                step = complete_pending_runtime_command(route_scope.conn_mut(), completed).await;
+                step = complete_pending_runtime_command(conn, completed).await;
             }
         }
     }
@@ -2369,21 +2457,20 @@ impl CdpConnection {
             }
             DevToolsRuntimeCommandResultKind::Empty => None,
         };
-        let mut route_scope = self.scoped_none_session_owner_route_override(target.route.clone());
+        let target_owner = CommandOwnerScope::for_route(target.route.clone());
         if let DevToolsCommand::CallFunction(call_function) = &mut command
             && matches!(
                 call_function.context.protocol,
                 DevToolsProtocol::WebDriverBidi
             )
             && let Err(error) = remap_bidi_node_shared_references_for_target_async(
-                route_scope.conn_mut(),
+                self,
                 &target,
                 call_function,
                 target_realm.as_ref(),
             )
             .await
         {
-            drop(route_scope);
             return self
                 .complete_devtools_runtime_direct_result(
                     command_context,
@@ -2394,11 +2481,11 @@ impl CdpConnection {
                 .await;
         }
         let validation_result = validate_protocol_neutral_runtime_handle_realms(
-            route_scope.conn_mut(),
+            self,
+            &target_owner,
             &command,
             target_realm.as_ref(),
         );
-        drop(route_scope);
         if let Err(error) = validation_result {
             return self
                 .complete_devtools_runtime_direct_result(
@@ -2431,11 +2518,7 @@ impl CdpConnection {
         &mut self,
         completed: CompletedDevToolsRuntimeCommandDispatch,
     ) -> DevToolsRuntimeCommandTaskStep {
-        let route = completed.state.target.route.clone();
-        let mut route_scope = self.scoped_none_session_owner_route_override(route);
-        let step =
-            complete_pending_runtime_command(route_scope.conn_mut(), completed.completed).await;
-        drop(route_scope);
+        let step = complete_pending_runtime_command(self, completed.completed).await;
         self.complete_devtools_runtime_command_step(
             completed.state,
             step,
@@ -2521,11 +2604,10 @@ impl CdpConnection {
                     .await;
             }
         };
-        let mut route_scope =
-            self.scoped_none_session_owner_route_override(state.target.route.clone());
-        register_devtools_script_result_remote_object(route_scope.conn_mut(), &result);
+        let target_owner = CommandOwnerScope::for_route(state.target.route.clone());
+        register_devtools_script_result_remote_object(self, &target_owner, &result);
         materialize_devtools_script_dom_collection_remote_value_async(
-            route_scope.conn_mut(),
+            self,
             &mut result,
             state.serialization_options.as_ref(),
             &state.target,
@@ -2533,14 +2615,14 @@ impl CdpConnection {
         )
         .await;
         materialize_devtools_script_deep_serialized_root_value_async(
-            route_scope.conn_mut(),
+            self,
             &mut result,
             state.serialization_options.as_ref(),
             &state.target,
         )
         .await;
         materialize_devtools_script_node_remote_value_async(
-            route_scope.conn_mut(),
+            self,
             &mut result,
             state.serialization_options.as_ref(),
             &state.target,
@@ -2548,7 +2630,7 @@ impl CdpConnection {
         )
         .await;
         materialize_devtools_script_deep_serialized_node_remote_values_async(
-            route_scope.conn_mut(),
+            self,
             &mut result,
             state.serialization_options.as_ref(),
             &state.target,
@@ -2557,11 +2639,11 @@ impl CdpConnection {
         .await;
         materialize_devtools_script_window_remote_value(&mut result, &state.target);
         register_devtools_script_result_remote_object_realm(
-            route_scope.conn_mut(),
+            self,
+            &target_owner,
             &result,
             state.target_realm.as_ref(),
         );
-        drop(route_scope);
         self.complete_devtools_runtime_direct_result(
             state.command_context,
             Ok(result),
@@ -2854,12 +2936,10 @@ async fn renderer_locate_nodes_start_node_reference_for_shared_id_async(
     target: &DevToolsRuntimeTarget,
     shared_id: &str,
 ) -> Result<Option<DevToolsDomNodeReference>, DevToolsError> {
-    let mut route_scope = conn.scoped_none_session_owner_route_override(target.route.clone());
-    let result = route_scope
-        .conn_mut()
-        .document_bidi_node_binding_for_session_owner_async(None, shared_id)
+    let owner = CommandOwnerScope::for_route(target.route.clone());
+    let result = conn
+        .document_bidi_node_binding_for_owner_async(&owner, shared_id)
         .await;
-    drop(route_scope);
     match result {
         Ok(RendererDomBidiNodeBindingResolution::BackendNodeId(backend_node_id)) => Ok(Some(
             DevToolsDomNodeReference::BackendNodeId(backend_node_id),
@@ -3265,7 +3345,7 @@ async fn materialize_locate_nodes_result_node_ids_async(
     target: &DevToolsRuntimeTarget,
     result: &mut DevToolsLocateNodesResult,
 ) {
-    let mut route_scope = conn.scoped_none_session_owner_route_override(target.route.clone());
+    let owner = CommandOwnerScope::for_route(target.route.clone());
     for index in 0..result.nodes.len() {
         let shared_id = result.nodes[index]
             .shared_id
@@ -3273,10 +3353,9 @@ async fn materialize_locate_nodes_result_node_ids_async(
             .map(|shared_id| shared_id.as_str().to_owned());
         let mut materialized = false;
         if let Some(shared_id) = shared_id {
-            let snapshot = route_scope
-                .conn_mut()
-                .document_node_snapshot_for_runtime_remote_object_id_async(
-                    None, &shared_id, 0, false,
+            let snapshot = conn
+                .document_node_snapshot_for_runtime_remote_object_id_for_owner_async(
+                    &owner, &shared_id, 0, false,
                 )
                 .await;
             if let Ok(Some(snapshot)) = snapshot {
@@ -3292,11 +3371,14 @@ async fn materialize_locate_nodes_result_node_ids_async(
 
         if !materialized
             && let Some(backend_node_id) = result.nodes[index].backend_node_id
-            && let Some(snapshot) = locate_nodes_snapshot_for_backend_node_id_async(
-                route_scope.conn_mut(),
-                backend_node_id,
-            )
-            .await
+            && let Ok(Some(snapshot)) = conn
+                .document_node_snapshot_for_backend_node_id_for_owner_async(
+                    &owner,
+                    backend_node_id,
+                    0,
+                    false,
+                )
+                .await
         {
             result.nodes[index].node_id =
                 frontend_node_id_for_locate_node_snapshot(&snapshot.snapshot);
@@ -3304,28 +3386,11 @@ async fn materialize_locate_nodes_result_node_ids_async(
                 snapshot.snapshot.backend_node_id.or(Some(backend_node_id));
         }
     }
-    drop(route_scope);
     result.node_ids = result
         .nodes
         .iter()
         .filter_map(|node| node.node_id)
         .collect();
-}
-
-async fn locate_nodes_snapshot_for_backend_node_id_async(
-    conn: &mut CdpConnection,
-    backend_node_id: u32,
-) -> Option<DocumentNodeObjectSnapshot> {
-    let pending = conn
-        .loaded_page_mut_for_protocol_access(None)
-        .ok()?
-        .start_document_node_snapshot_for_backend_node_id(backend_node_id, 0, false)
-        .ok()?;
-    let completion = pending.wait().await.ok()?;
-    conn.loaded_page_mut_for_protocol_access(None)
-        .ok()?
-        .finish_document_node_snapshot_for_backend_node_id(completion)
-        .ok()?
 }
 
 fn frontend_node_id_for_locate_node_snapshot(snapshot: &DocumentNodeSnapshot) -> Option<u32> {
@@ -3687,15 +3752,13 @@ async fn devtools_runtime_context_target_async(
                     .await?,
             )
         } else {
-            let mut route_scope = conn.scoped_none_session_owner_route_override(route.clone());
-            let result = route_scope
-                .conn_mut()
-                .child_default_execution_context_id_for_frame_id_for_session_owner_async(
-                    None,
+            let owner = CommandOwnerScope::for_route(route.clone());
+            let result = conn
+                .child_default_execution_context_id_for_frame_id_for_owner_async(
+                    &owner,
                     target_id.as_str(),
                 )
                 .await;
-            drop(route_scope);
             Some(
                 result
                     .map_err(|message| DevToolsError::new(DevToolsErrorKind::Internal, message))?
@@ -3758,16 +3821,10 @@ async fn devtools_ensure_runtime_world_async(
     frame_id: &DevToolsTargetId,
     world_name: &str,
 ) -> Result<i64, DevToolsError> {
-    let mut route_scope = conn.scoped_none_session_owner_route_override(route);
-    let result = route_scope
-        .conn_mut()
-        .runtime_ensure_isolated_world_for_session_owner_async(
-            None,
-            Some(frame_id.as_str()),
-            world_name,
-        )
+    let owner = CommandOwnerScope::for_route(route);
+    let result = conn
+        .runtime_ensure_isolated_world_for_owner_async(&owner, Some(frame_id.as_str()), world_name)
         .await;
-    drop(route_scope);
     result.map_err(|message| DevToolsError::new(DevToolsErrorKind::Internal, message))
 }
 
@@ -3842,6 +3899,7 @@ async fn remap_bidi_node_shared_references_for_target_async(
     command: &mut DevToolsCallFunctionCommand,
     realm_id: Option<&DevToolsRealmId>,
 ) -> Result<(), DevToolsError> {
+    let owner = CommandOwnerScope::for_route(target.route.clone());
     let mut references = Vec::new();
     if let Some(this_parameter) = command.this_parameter.as_ref() {
         collect_bidi_node_shared_reference_paths(
@@ -3869,12 +3927,9 @@ async fn remap_bidi_node_shared_references_for_target_async(
     let execution_context_id = if let Some(execution_context_id) = target.execution_context_id {
         Some(execution_context_id)
     } else {
-        let mut route_scope = conn.scoped_none_session_owner_route_override(target.route.clone());
-        let result = route_scope
-            .conn_mut()
-            .runtime_default_or_initial_execution_context_id_for_session_owner_async(None)
+        let result = conn
+            .runtime_default_or_initial_execution_context_id_for_owner_async(&owner)
             .await;
-        drop(route_scope);
         Some(
             result
                 .map_err(|message| DevToolsError::new(DevToolsErrorKind::Internal, message))?
@@ -3887,6 +3942,7 @@ async fn remap_bidi_node_shared_references_for_target_async(
     for reference in references {
         let Some(target_shared_id) = remap_bidi_node_shared_id_for_target_async(
             conn,
+            &owner,
             execution_context_id,
             &reference.shared_id,
             realm_id,
@@ -3956,12 +4012,13 @@ fn collect_bidi_node_shared_reference_paths(
 
 async fn remap_bidi_node_shared_id_for_target_async(
     conn: &mut CdpConnection,
+    owner: &CommandOwnerScope,
     execution_context_id: Option<i64>,
     shared_id: &str,
     realm_id: Option<&DevToolsRealmId>,
 ) -> Result<Option<DevToolsRemoteHandleId>, DevToolsError> {
     let is_internal_bidi_node_id = is_webdriver_bidi_node_shared_id(shared_id);
-    let snapshot = bidi_node_snapshot_for_shared_id_async(conn, shared_id, 0, false).await?;
+    let snapshot = bidi_node_snapshot_for_shared_id_async(conn, owner, shared_id, 0, false).await?;
     let Some(snapshot) = snapshot else {
         return if is_internal_bidi_node_id {
             Err(DevToolsError::new(
@@ -3980,8 +4037,8 @@ async fn remap_bidi_node_shared_id_for_target_async(
         ));
     };
     let Some(remote_object) = conn
-        .runtime_remote_object_for_backend_node_id_async(
-            None,
+        .runtime_remote_object_for_backend_node_id_for_owner_async(
+            owner,
             backend_node_id,
             execution_context_id,
             None,
@@ -4005,24 +4062,25 @@ async fn remap_bidi_node_shared_id_for_target_async(
         ));
     };
 
-    register_remapped_bidi_node_remote_object(conn, &remote_object, &object_id, realm_id);
+    register_remapped_bidi_node_remote_object(conn, owner, &remote_object, &object_id, realm_id);
     Ok(Some(DevToolsRemoteHandleId::from(object_id)))
 }
 
 fn register_remapped_bidi_node_remote_object(
     conn: &mut CdpConnection,
+    owner: &CommandOwnerScope,
     remote_object: &Value,
     object_id: &str,
     realm_id: Option<&DevToolsRealmId>,
 ) {
     if let Some(realm_id) = realm_id {
-        conn.register_runtime_remote_object_ids_for_session_owner_with_realm(
-            None,
+        conn.register_runtime_remote_object_ids_for_owner_with_realm(
+            owner,
             vec![object_id.to_owned()],
             realm_id.as_str(),
         );
     } else {
-        conn.register_runtime_remote_object_ids_from_value_for_session_owner(None, remote_object);
+        conn.register_runtime_remote_object_ids_from_value_for_owner(owner, remote_object);
     }
 }
 
@@ -4345,13 +4403,10 @@ async fn release_bidi_channel_object_group_for_target_best_effort_async(
     session_id: Option<&str>,
     object_group: &str,
 ) {
-    let mut route_scope = conn.scoped_none_session_owner_route_override(target.route.clone());
-    route_scope
-        .conn_mut()
-        .release_bidi_channel_object_group_for_session_owner_best_effort_async(
-            session_id,
-            object_group,
-        )
+    let owner = session_id
+        .map(CommandOwnerScope::for_session)
+        .unwrap_or_else(|| CommandOwnerScope::for_route(target.route.clone()));
+    conn.release_bidi_channel_object_group_for_owner_best_effort_async(&owner, object_group)
         .await;
 }
 
@@ -4363,7 +4418,7 @@ fn bidi_channel_page_owner_for_runtime_target(
     let exact_owner = owner
         .session_id()
         .map(CommandOwnerScope::for_session)
-        .unwrap_or_else(|| CommandOwnerScope::for_implicit_route(Some(target.route.clone())));
+        .unwrap_or_else(|| CommandOwnerScope::for_route(target.route.clone()));
     BidiChannelPageOwner::capture_for_owner(conn, exact_owner)
 }
 
@@ -4383,7 +4438,7 @@ async fn create_bidi_channel_proxy_and_start_listener_async(
     let listener_owner = bidi_channel_page_owner_for_runtime_target(
         conn,
         target,
-        &CommandOwnerScope::for_implicit_route(Some(target.route.clone())),
+        &CommandOwnerScope::for_route(target.route.clone()),
     )
     .ok_or_else(|| "NoSuchBidiChannelTarget".to_owned())?;
     let channel_object_group = conn.next_bidi_channel_object_group();
@@ -4571,9 +4626,8 @@ async fn start_protocol_neutral_runtime_command(
     command: DevToolsCommand,
     internal_command_id: u64,
 ) -> RuntimeCommandTaskStep {
-    let session_owner_route = target.route.clone();
-    let mut route_scope = conn.scoped_none_session_owner_route_override(target.route.clone());
-    let step = match command {
+    let owner = CommandOwnerScope::for_route(target.route.clone());
+    match command {
         DevToolsCommand::EvaluateScript(command) => {
             let params = devtools_evaluate_script_params(&command, target.execution_context_id);
             let json =
@@ -4590,18 +4644,17 @@ async fn start_protocol_neutral_runtime_command(
             let cmd = Cmd::from_parsed(&parsed)
                 .expect("synthesized Runtime command must contain a domain separator");
             let command = DevToolsCommand::EvaluateScript(command);
-            match prepare_pending_devtools_runtime_inspector_json(
-                route_scope.conn_mut(),
-                &cmd,
-                &command,
+            match prepare_pending_devtools_runtime_inspector_json_for_owner(
+                conn, &cmd, &owner, &command,
             ) {
-                Ok(inspector_json) => start_devtools_runtime_command(
-                    route_scope.conn_mut(),
+                Ok(inspector_json) => start_devtools_runtime_command_for_owner(
+                    conn,
                     &cmd,
                     command,
                     inspector_json,
                     runtime_command_awaits_promise(&cmd, RuntimeAction::Evaluate),
                     RendererInspectorResponseDelivery::CommandReply,
+                    owner.clone(),
                 ),
                 Err(message) => {
                     RuntimeCommandTaskStep::Complete(runtime_inspector_error_plan(cmd.id, message))
@@ -4611,7 +4664,7 @@ async fn start_protocol_neutral_runtime_command(
         DevToolsCommand::CallFunction(mut command) => {
             if matches!(command.context.protocol, DevToolsProtocol::WebDriverBidi)
                 && let Err(message) = Box::pin(materialize_bidi_channel_argument_proxies_async(
-                    route_scope.conn_mut(),
+                    conn,
                     &target,
                     &mut command,
                 ))
@@ -4623,7 +4676,8 @@ async fn start_protocol_neutral_runtime_command(
                 ));
             }
             match devtools_call_function_params_async(
-                route_scope.conn_mut(),
+                conn,
+                &owner,
                 &command,
                 target.execution_context_id,
             )
@@ -4647,18 +4701,17 @@ async fn start_protocol_neutral_runtime_command(
                     let cmd = Cmd::from_parsed(&parsed)
                         .expect("synthesized Runtime command must contain a domain separator");
                     let command = DevToolsCommand::CallFunction(command);
-                    match prepare_pending_devtools_runtime_inspector_json(
-                        route_scope.conn_mut(),
-                        &cmd,
-                        &command,
+                    match prepare_pending_devtools_runtime_inspector_json_for_owner(
+                        conn, &cmd, &owner, &command,
                     ) {
-                        Ok(inspector_json) => start_devtools_runtime_command(
-                            route_scope.conn_mut(),
+                        Ok(inspector_json) => start_devtools_runtime_command_for_owner(
+                            conn,
                             &cmd,
                             command,
                             inspector_json,
                             runtime_command_awaits_promise(&cmd, RuntimeAction::CallFunctionOn),
                             RendererInspectorResponseDelivery::CommandReply,
+                            owner.clone(),
                         ),
                         Err(message) => RuntimeCommandTaskStep::Complete(
                             runtime_inspector_error_plan(cmd.id, message),
@@ -4693,16 +4746,12 @@ async fn start_protocol_neutral_runtime_command(
             else {
                 unreachable!("Runtime.terminateExecution must use an Inspector command route")
             };
-            start_main_runtime_inspector_command(route_scope.conn_mut(), &cmd, command)
+            start_main_runtime_inspector_command_for_owner(conn, &cmd, command, owner.clone())
         }
         _ => RuntimeCommandTaskStep::Complete(CommandOutputPlan::from_devtools_error(
             DevToolsError::new(DevToolsErrorKind::Unsupported, "UnsupportedDevToolsCommand"),
         )),
-    };
-    drop(route_scope);
-    step.with_owner_scope(CommandOwnerScope::for_implicit_route(Some(
-        session_owner_route,
-    )))
+    }
 }
 
 fn runtime_inspector_command_json(command_id: u64, method: &str, params: &Value) -> String {
@@ -4760,6 +4809,7 @@ fn devtools_evaluate_script_params(
 
 async fn devtools_call_function_params_async(
     conn: &mut CdpConnection,
+    owner: &CommandOwnerScope,
     command: &DevToolsCallFunctionCommand,
     execution_context_id: Option<i64>,
 ) -> Result<Value, String> {
@@ -4802,7 +4852,7 @@ async fn devtools_call_function_params_async(
             map.insert("executionContextId".to_owned(), json!(execution_context_id));
         } else if command.realm_id.is_none() {
             let Some(execution_context_id) = conn
-                .runtime_default_or_initial_execution_context_id_for_session_owner_async(None)
+                .runtime_default_or_initial_execution_context_id_for_owner_async(owner)
                 .await?
             else {
                 return Err("NoDefaultExecutionContext".to_owned());
@@ -5647,6 +5697,7 @@ fn devtools_empty_result_from_response(
 
 fn validate_protocol_neutral_runtime_handle_realms(
     conn: &CdpConnection,
+    owner: &CommandOwnerScope,
     command: &DevToolsCommand,
     target_realm: Option<&DevToolsRealmId>,
 ) -> Result<(), DevToolsError> {
@@ -5660,7 +5711,7 @@ fn validate_protocol_neutral_runtime_handle_realms(
     let references = devtools_call_function_remote_references(command);
 
     for reference in references {
-        if !conn.runtime_remote_object_id_known_for_session_owner(None, &reference.object_id) {
+        if !conn.runtime_remote_object_id_known_for_owner(owner, &reference.object_id) {
             return Err(match reference.kind {
                 RuntimeRemoteReferenceKind::Node => DevToolsError::new(
                     DevToolsErrorKind::NoSuchNode,
@@ -5675,7 +5726,7 @@ fn validate_protocol_neutral_runtime_handle_realms(
         if reference.kind == RuntimeRemoteReferenceKind::Object
             && let Some(target_realm) = target_realm
             && let Some(owner_realm) =
-                conn.runtime_remote_object_realm_for_session_owner(None, &reference.object_id)
+                conn.runtime_remote_object_realm_for_owner(owner, &reference.object_id)
             && owner_realm != target_realm.as_str()
         {
             return Err(DevToolsError::new(
@@ -5689,6 +5740,7 @@ fn validate_protocol_neutral_runtime_handle_realms(
 
 fn register_devtools_script_result_remote_object_realm(
     conn: &mut CdpConnection,
+    owner: &CommandOwnerScope,
     result: &DevToolsCommandResult,
     realm_id: Option<&DevToolsRealmId>,
 ) {
@@ -5702,18 +5754,18 @@ fn register_devtools_script_result_remote_object_realm(
         return;
     };
     if let Some(object_id) =
-        conn.runtime_remote_object_alias_for_session_owner(None, remote_object_id.as_str())
+        conn.runtime_remote_object_alias_for_owner(owner, remote_object_id.as_str())
     {
-        conn.register_runtime_remote_object_alias_for_session_owner_with_realm(
-            None,
+        conn.register_runtime_remote_object_alias_for_owner_with_realm(
+            owner,
             remote_object_id.as_str().to_owned(),
             object_id,
             realm_id.as_str(),
         );
         return;
     }
-    conn.register_runtime_remote_object_ids_for_session_owner_with_realm(
-        None,
+    conn.register_runtime_remote_object_ids_for_owner_with_realm(
+        owner,
         vec![remote_object_id.as_str().to_owned()],
         realm_id.as_str(),
     );
@@ -5721,6 +5773,7 @@ fn register_devtools_script_result_remote_object_realm(
 
 fn register_devtools_script_result_remote_object(
     conn: &mut CdpConnection,
+    owner: &CommandOwnerScope,
     result: &DevToolsCommandResult,
 ) {
     let Some(value) = devtools_script_result_remote_value(result) else {
@@ -5729,8 +5782,8 @@ fn register_devtools_script_result_remote_object(
     let Some(remote_object_id) = value.handle.as_ref().or(value.shared_id.as_ref()) else {
         return;
     };
-    conn.register_runtime_remote_object_ids_from_value_for_session_owner(
-        None,
+    conn.register_runtime_remote_object_ids_from_value_for_owner(
+        owner,
         &json!({ "objectId": remote_object_id.as_str() }),
     );
 }
@@ -5826,7 +5879,6 @@ async fn devtools_probe_remote_value_async(
     target: DevToolsRuntimeTarget,
     command: DevToolsCommand,
 ) -> Result<Option<DevToolsRemoteValue>, DevToolsError> {
-    let target_route = target.route.clone();
     let result_ownership = devtools_runtime_result_ownership(&command);
     let internal_command_id = conn.next_internal_runtime_command_id();
     let mut step =
@@ -5857,36 +5909,9 @@ async fn devtools_probe_remote_value_async(
             }
             RuntimeCommandTaskStep::Pending(pending) => {
                 let completed = pending.wait().await;
-                let mut scope = RuntimeProbeCompletionScope::enter(conn, target_route.clone());
-                step = complete_pending_runtime_command(scope.conn_mut(), completed).await;
+                step = complete_pending_runtime_command(conn, completed).await;
             }
         }
-    }
-}
-
-struct RuntimeProbeCompletionScope<'a> {
-    route_scope: NoneSessionOwnerRouteOverrideScope<'a>,
-}
-
-impl<'a> RuntimeProbeCompletionScope<'a> {
-    fn enter(conn: &'a mut CdpConnection, target_route: CdpSessionRoute) -> Self {
-        Self {
-            route_scope: conn.scoped_none_session_owner_route_override(target_route),
-        }
-    }
-
-    fn conn_mut(&mut self) -> &mut CdpConnection {
-        self.route_scope.conn_mut()
-    }
-
-    fn restore(&mut self) {
-        self.route_scope.restore();
-    }
-}
-
-impl Drop for RuntimeProbeCompletionScope<'_> {
-    fn drop(&mut self) {
-        self.restore();
     }
 }
 
@@ -6254,6 +6279,7 @@ async fn materialize_devtools_script_node_remote_value_async(
     target: &DevToolsRuntimeTarget,
     realm_id: Option<&DevToolsRealmId>,
 ) {
+    let owner = CommandOwnerScope::for_route(target.route.clone());
     let Some(value) = devtools_script_result_remote_value_mut(result) else {
         return;
     };
@@ -6266,7 +6292,9 @@ async fn materialize_devtools_script_node_remote_value_async(
     if value.remote_subtype.as_deref() != Some("node") && !is_attribute_node {
         return;
     }
-    if materialize_devtools_script_node_remote_value_from_deep_serialized(conn, value, realm_id) {
+    if materialize_devtools_script_node_remote_value_from_deep_serialized(
+        conn, &owner, value, realm_id,
+    ) {
         return;
     }
     let Some(shared_id) = value
@@ -6278,8 +6306,8 @@ async fn materialize_devtools_script_node_remote_value_async(
     };
     let node_options = bidi_node_serialization_options(serialization_options);
     let object_snapshot = match conn
-        .document_node_snapshot_for_runtime_remote_object_id_async(
-            None,
+        .document_node_snapshot_for_runtime_remote_object_id_for_owner_async(
+            &owner,
             &shared_id,
             node_options.snapshot_depth,
             true,
@@ -6334,8 +6362,8 @@ async fn materialize_devtools_script_node_remote_value_async(
     else {
         return;
     };
-    register_bidi_node_bindings_for_snapshot_tree(conn, &object_snapshot.snapshot).await;
-    register_bidi_node_shared_id_alias(conn, &canonical_shared_id, &shared_id, realm_id);
+    register_bidi_node_bindings_for_snapshot_tree(conn, &owner, &object_snapshot.snapshot).await;
+    register_bidi_node_shared_id_alias(conn, &owner, &canonical_shared_id, &shared_id, realm_id);
     value.node_id = object_snapshot.snapshot.frontend_node_id;
     value.backend_node_id = object_snapshot.snapshot.backend_node_id;
     value.shared_id = Some(canonical_shared_id);
@@ -6597,6 +6625,7 @@ async fn materialize_bidi_dom_collection_entries_async(
     node_options: &BidiNodeSerializationOptions,
     realm_id: Option<&DevToolsRealmId>,
 ) -> Vec<Value> {
+    let owner = CommandOwnerScope::for_route(target.route.clone());
     let mut entries = Vec::new();
     for index in 0..length {
         let js_path = [json!({
@@ -6636,14 +6665,16 @@ async fn materialize_bidi_dom_collection_entries_async(
         if let Some(remote) =
             bidi_node_remote_value_from_deep_serialized_remote_value(&remote_value)
         {
-            register_devtools_script_remote_object_realm(conn, &object_id, realm_id);
-            register_bidi_node_remote_value_shared_id_alias(conn, &remote, &object_id, realm_id);
+            register_devtools_script_remote_object_realm(conn, &owner, &object_id, realm_id);
+            register_bidi_node_remote_value_shared_id_alias(
+                conn, &owner, &remote, &object_id, realm_id,
+            );
             entries.push(remote);
             continue;
         }
         let object_snapshot = match conn
-            .document_node_snapshot_for_runtime_remote_object_id_async(
-                None,
+            .document_node_snapshot_for_runtime_remote_object_id_for_owner_async(
+                &owner,
                 &object_id,
                 node_options.snapshot_depth,
                 true,
@@ -6664,12 +6695,13 @@ async fn materialize_bidi_dom_collection_entries_async(
         let Some(object_snapshot) = object_snapshot else {
             continue;
         };
-        register_devtools_script_remote_object_realm(conn, &object_id, realm_id);
+        register_devtools_script_remote_object_realm(conn, &owner, &object_id, realm_id);
         let Some(shared_id) = bidi_node_shared_id_for_snapshot(&object_snapshot.snapshot) else {
             continue;
         };
-        register_bidi_node_bindings_for_snapshot_tree(conn, &object_snapshot.snapshot).await;
-        register_bidi_node_shared_id_alias(conn, &shared_id, &object_id, realm_id);
+        register_bidi_node_bindings_for_snapshot_tree(conn, &owner, &object_snapshot.snapshot)
+            .await;
+        register_bidi_node_shared_id_alias(conn, &owner, &shared_id, &object_id, realm_id);
         entries.push(bidi_node_remote_value_from_snapshot(
             &object_snapshot.snapshot,
             shared_id,
@@ -6688,6 +6720,7 @@ async fn materialize_devtools_script_deep_serialized_node_remote_value_async(
     serialization_options: Option<&DevToolsSerializationOptions>,
     realm_id: Option<&DevToolsRealmId>,
 ) -> Option<Value> {
+    let owner = CommandOwnerScope::for_route(target.route.clone());
     let remote_value = match devtools_deep_serialized_path_remote_value_async(
         conn,
         target,
@@ -6713,14 +6746,16 @@ async fn materialize_devtools_script_deep_serialized_node_remote_value_async(
         .as_ref()
         .map(|shared_id| shared_id.as_str().to_owned())?;
     if let Some(remote) = bidi_node_remote_value_from_deep_serialized_remote_value(&remote_value) {
-        register_devtools_script_remote_object_realm(conn, &object_id, realm_id);
-        register_bidi_node_remote_value_shared_id_alias(conn, &remote, &object_id, realm_id);
+        register_devtools_script_remote_object_realm(conn, &owner, &object_id, realm_id);
+        register_bidi_node_remote_value_shared_id_alias(
+            conn, &owner, &remote, &object_id, realm_id,
+        );
         return Some(remote);
     }
 
     let object_snapshot = match conn
-        .document_node_snapshot_for_runtime_remote_object_id_async(
-            None,
+        .document_node_snapshot_for_runtime_remote_object_id_for_owner_async(
+            &owner,
             &object_id,
             node_options.snapshot_depth,
             true,
@@ -6740,10 +6775,11 @@ async fn materialize_devtools_script_deep_serialized_node_remote_value_async(
     };
 
     if let Some(object_snapshot) = object_snapshot {
-        register_devtools_script_remote_object_realm(conn, &object_id, realm_id);
+        register_devtools_script_remote_object_realm(conn, &owner, &object_id, realm_id);
         let shared_id = bidi_node_shared_id_for_snapshot(&object_snapshot.snapshot)?;
-        register_bidi_node_bindings_for_snapshot_tree(conn, &object_snapshot.snapshot).await;
-        register_bidi_node_shared_id_alias(conn, &shared_id, &object_id, realm_id);
+        register_bidi_node_bindings_for_snapshot_tree(conn, &owner, &object_snapshot.snapshot)
+            .await;
+        register_bidi_node_shared_id_alias(conn, &owner, &shared_id, &object_id, realm_id);
         return Some(bidi_node_remote_value_from_snapshot(
             &object_snapshot.snapshot,
             shared_id,
@@ -6774,7 +6810,7 @@ async fn materialize_devtools_script_deep_serialized_node_remote_value_async(
                     return None;
                 }
             };
-        register_devtools_script_remote_object_realm(conn, &object_id, realm_id);
+        register_devtools_script_remote_object_realm(conn, &owner, &object_id, realm_id);
         return Some(json!({
             "type": "node",
             "sharedId": object_id,
@@ -6796,7 +6832,7 @@ async fn materialize_devtools_script_deep_serialized_node_remote_value_async(
                 return None;
             }
         };
-    register_devtools_script_remote_object_realm(conn, &object_id, realm_id);
+    register_devtools_script_remote_object_realm(conn, &owner, &object_id, realm_id);
     Some(json!({
         "type": "node",
         "sharedId": object_id,
@@ -6868,6 +6904,7 @@ async fn devtools_deep_serialized_path_remote_value_async(
 
 fn materialize_devtools_script_node_remote_value_from_deep_serialized(
     conn: &mut CdpConnection,
+    owner: &CommandOwnerScope,
     value: &mut DevToolsRemoteValue,
     realm_id: Option<&DevToolsRealmId>,
 ) -> bool {
@@ -6887,6 +6924,7 @@ fn materialize_devtools_script_node_remote_value_from_deep_serialized(
     if let Some(original_object_id) = original_object_id.as_deref() {
         register_bidi_node_remote_value_shared_id_alias(
             conn,
+            owner,
             &remote,
             original_object_id,
             realm_id,
@@ -6901,6 +6939,7 @@ fn materialize_devtools_script_node_remote_value_from_deep_serialized(
 
 fn register_bidi_node_remote_value_shared_id_alias(
     conn: &mut CdpConnection,
+    owner: &CommandOwnerScope,
     remote: &Value,
     remote_object_id: &str,
     realm_id: Option<&DevToolsRealmId>,
@@ -6910,6 +6949,7 @@ fn register_bidi_node_remote_value_shared_id_alias(
     };
     register_bidi_node_shared_id_alias(
         conn,
+        owner,
         &DevToolsRemoteHandleId::from(shared_id.to_owned()),
         remote_object_id,
         realm_id,
@@ -6918,6 +6958,7 @@ fn register_bidi_node_remote_value_shared_id_alias(
 
 async fn register_bidi_node_bindings_for_snapshot_tree(
     conn: &mut CdpConnection,
+    owner: &CommandOwnerScope,
     snapshot: &DocumentNodeSnapshot,
 ) {
     let mut entries = Vec::new();
@@ -6935,8 +6976,8 @@ async fn register_bidi_node_bindings_for_snapshot_tree(
 
     for (shared_id, backend_node_id) in entries {
         if let Err(error) = conn
-            .register_document_bidi_node_binding_for_session_owner_async(
-                None,
+            .register_document_bidi_node_binding_for_owner_async(
+                owner,
                 shared_id.as_str(),
                 backend_node_id,
             )
@@ -7033,14 +7074,15 @@ async fn devtools_detached_node_value_async(
 
 fn register_devtools_script_remote_object_realm(
     conn: &mut CdpConnection,
+    owner: &CommandOwnerScope,
     remote_object_id: &str,
     realm_id: Option<&DevToolsRealmId>,
 ) {
     let Some(realm_id) = realm_id else {
         return;
     };
-    conn.register_runtime_remote_object_ids_for_session_owner_with_realm(
-        None,
+    conn.register_runtime_remote_object_ids_for_owner_with_realm(
+        owner,
         vec![remote_object_id.to_owned()],
         realm_id.as_str(),
     );
@@ -7048,6 +7090,7 @@ fn register_devtools_script_remote_object_realm(
 
 fn register_bidi_node_shared_id_alias(
     conn: &mut CdpConnection,
+    owner: &CommandOwnerScope,
     shared_id: &DevToolsRemoteHandleId,
     remote_object_id: &str,
     realm_id: Option<&DevToolsRealmId>,
@@ -7059,8 +7102,8 @@ fn register_bidi_node_shared_id_alias(
     {
         return;
     }
-    conn.register_runtime_remote_object_alias_for_session_owner_with_realm(
-        None,
+    conn.register_runtime_remote_object_alias_for_owner_with_realm(
+        owner,
         shared_id.as_str().to_owned(),
         remote_object_id.to_owned(),
         realm_id.as_str(),
@@ -7126,31 +7169,25 @@ async fn execute_devtools_release_objects_command_async(
         devtools_runtime_target_async(conn, &DevToolsCommand::ReleaseObjects(command.clone()))
             .await?;
     let target_realm = devtools_realm_id_for_runtime_target_async(conn, &target).await;
-    let mut route_scope = conn.scoped_none_session_owner_route_override(target.route);
-    let result = release_devtools_objects_on_current_route_async(
-        route_scope.conn_mut(),
-        &command.handles,
-        target_realm.as_ref(),
-    )
-    .await;
-    drop(route_scope);
-    result?;
+    let owner = CommandOwnerScope::for_route(target.route);
+    release_devtools_objects_for_owner_async(conn, &owner, &command.handles, target_realm.as_ref())
+        .await?;
     Ok(DevToolsCommandResult::Empty)
 }
 
-async fn release_devtools_objects_on_current_route_async(
+async fn release_devtools_objects_for_owner_async(
     conn: &mut CdpConnection,
+    owner: &CommandOwnerScope,
     handles: &[DevToolsRemoteHandleId],
     target_realm: Option<&DevToolsRealmId>,
 ) -> Result<(), DevToolsError> {
     for handle in handles {
         let object_id = handle.as_str().to_owned();
-        if !conn.runtime_remote_object_id_known_for_session_owner(None, &object_id) {
+        if !conn.runtime_remote_object_id_known_for_owner(owner, &object_id) {
             continue;
         }
         if let Some(target_realm) = target_realm
-            && let Some(owner_realm) =
-                conn.runtime_remote_object_realm_for_session_owner(None, &object_id)
+            && let Some(owner_realm) = conn.runtime_remote_object_realm_for_owner(owner, &object_id)
             && owner_realm != target_realm.as_str()
         {
             continue;
@@ -7158,33 +7195,34 @@ async fn release_devtools_objects_on_current_route_async(
         let params = json!({ "objectId": object_id });
         let command_id = conn.next_internal_runtime_command_id();
         let raw_json = runtime_inspector_command_json(command_id, "Runtime.releaseObject", &params);
-        let response = dispatch_runtime_inspector_command_response_for_current_route_async(
-            conn, raw_json, command_id,
+        let response = dispatch_runtime_inspector_command_response_for_owner_async(
+            conn, owner, raw_json, command_id,
         )
         .await?;
         if let BackgroundCommandResponsePayload::Error { code, message, .. } = response {
             let error = devtools_error_from_cdp_error_parts(Some(i64::from(code)), &message);
             if matches!(error.kind, DevToolsErrorKind::NoSuchHandle) {
-                conn.unregister_runtime_remote_object_ids_for_session_owner(None, &[object_id]);
+                conn.unregister_runtime_remote_object_ids_for_owner(owner, &[object_id]);
                 continue;
             }
             return Err(error);
         }
-        conn.unregister_runtime_remote_object_ids_for_session_owner(None, &[object_id]);
+        conn.unregister_runtime_remote_object_ids_for_owner(owner, &[object_id]);
     }
     Ok(())
 }
 
-async fn dispatch_runtime_inspector_command_response_for_current_route_async(
+async fn dispatch_runtime_inspector_command_response_for_owner_async(
     conn: &mut CdpConnection,
+    owner: &CommandOwnerScope,
     raw_json: String,
     command_id: u64,
 ) -> Result<BackgroundCommandResponsePayload, DevToolsError> {
     let descriptor = RendererCommandDescriptor::from_synthesized_payload(raw_json)
         .map_err(|message| DevToolsError::new(DevToolsErrorKind::Internal, message))?;
     let pending = conn
-        .start_runtime_protocol_message_for_session_owner_with_deferred_response(
-            None, descriptor, command_id,
+        .start_runtime_protocol_message_for_owner_with_deferred_response(
+            owner, descriptor, command_id,
         )
         .map_err(|message| DevToolsError::new(DevToolsErrorKind::Internal, message))?;
     let mut completed = pending
@@ -7198,7 +7236,7 @@ async fn dispatch_runtime_inspector_command_response_for_current_route_async(
         )
     })?;
     let output = conn
-        .complete_runtime_protocol_message_for_session_owner_async(completed)
+        .complete_runtime_protocol_message_async(completed)
         .await
         .map_err(|message| DevToolsError::new(DevToolsErrorKind::Internal, message))?;
     if let Some(message) = output
@@ -7207,9 +7245,9 @@ async fn dispatch_runtime_inspector_command_response_for_current_route_async(
     {
         return Ok(BackgroundCommandResponsePayload::from_runtime_inspector_message(message));
     }
-    let response = RuntimeInspectorResponseReady::new(
+    let response = RuntimeInspectorResponseReady::for_owner(
         command_id,
-        None,
+        owner,
         response_rx
             .await
             .map_err(|_| "RuntimeInspectorResponseCanceled".to_owned()),
@@ -7223,7 +7261,7 @@ async fn dispatch_runtime_inspector_command_response_for_current_route_async(
     if response
         .renderer_agent_attachment_id()
         .is_some_and(|attachment_id| {
-            !conn.renderer_agent_attachment_is_current_for_session_owner(None, attachment_id)
+            conn.current_renderer_agent_attachment_id_for_owner(owner) != Some(attachment_id)
         })
     {
         response.replace_with_error("Execution context was destroyed by navigation");
@@ -7401,14 +7439,10 @@ async fn devtools_realms_for_route_async(
             .into_iter()
             .collect());
     }
-    let mut route_scope = conn.scoped_none_session_owner_route_override(route);
-    let result = route_scope
-        .conn_mut()
-        .runtime_realm_inventory_for_session_owner_async(None)
+    let owner = CommandOwnerScope::for_route(route);
+    conn.runtime_realm_inventory_for_owner_async(&owner)
         .await
-        .map_err(|message| DevToolsError::new(DevToolsErrorKind::Internal, message));
-    drop(route_scope);
-    result
+        .map_err(|message| DevToolsError::new(DevToolsErrorKind::Internal, message))
 }
 
 fn shared_worker_target_runtime_realm(
@@ -7593,16 +7627,12 @@ fn cdp_remote_object_value(remote: &Value) -> Value {
 fn start_pending_runtime_binding_context_lookup_phase(
     conn: &mut CdpConnection,
     command_id: Option<u64>,
-    session_id: Option<&str>,
     task: RuntimeBindingCommandTask,
     execution_context_id: i64,
     owner_scope: CommandOwnerScope,
 ) -> Option<RuntimeCommandTaskStep> {
     let pending = conn
-        .start_child_default_execution_context_lookup_for_session_owner(
-            session_id,
-            execution_context_id,
-        )
+        .start_child_default_execution_context_lookup_for_owner(&owner_scope, execution_context_id)
         .ok()?;
     Some(RuntimeCommandTaskStep::Pending(Box::new(
         PendingRuntimeCommandDispatch {
@@ -7638,15 +7668,15 @@ fn start_pending_runtime_binding_inspector_phase(
                     task.renderer_policy,
                     RendererInspectorResponseDelivery::CommandReply,
                 );
-                conn.start_runtime_protocol_message_with_context_resolution_for_session_owner_with_deferred_response(
-                    completed.session_id(),
+                conn.start_runtime_protocol_message_with_context_resolution_for_owner_with_deferred_response(
+                    &completed.owner_scope,
                     "addBinding",
                     descriptor,
                     command_id,
                 )
             } else {
-                conn.start_runtime_protocol_message_with_context_resolution_for_session_owner(
-                    completed.session_id(),
+                conn.start_runtime_protocol_message_with_context_resolution_for_owner(
+                    &completed.owner_scope,
                     "addBinding",
                     inspector_json,
                 )
@@ -7659,14 +7689,14 @@ fn start_pending_runtime_binding_inspector_phase(
                     task.renderer_policy,
                     RendererInspectorResponseDelivery::CommandReply,
                 );
-                conn.start_runtime_protocol_message_for_session_owner_with_deferred_response(
-                    completed.session_id(),
+                conn.start_runtime_protocol_message_for_owner_with_deferred_response(
+                    &completed.owner_scope,
                     descriptor,
                     command_id,
                 )
             } else {
-                conn.start_runtime_protocol_message_for_session_owner(
-                    completed.session_id(),
+                conn.start_runtime_protocol_message_for_owner(
+                    &completed.owner_scope,
                     inspector_json,
                 )
             }
@@ -7690,7 +7720,6 @@ fn start_pending_runtime_binding_inspector_phase(
             match start_pending_runtime_binding_page_phase(
                 conn,
                 completed.command_id,
-                completed.session_id(),
                 task.clone(),
                 completed.owner_scope.clone(),
             ) {
@@ -7708,24 +7737,23 @@ fn start_pending_runtime_binding_inspector_phase(
 fn start_pending_runtime_binding_page_phase(
     conn: &mut CdpConnection,
     command_id: Option<u64>,
-    session_id: Option<&str>,
     task: RuntimeBindingCommandTask,
     owner_scope: CommandOwnerScope,
 ) -> Option<PendingRuntimeCommandDispatch> {
     let pending = match task.phase {
         RuntimeBindingPhase::LivePageUpdate => match task.action {
-            RuntimeBindingCommand::Add => conn.start_install_runtime_binding_for_session_owner(
-                session_id,
+            RuntimeBindingCommand::Add => conn.start_install_runtime_binding_for_owner(
+                &owner_scope,
                 &task.name,
                 task.execution_context_name.as_deref(),
                 task.execution_context_id,
             ),
             RuntimeBindingCommand::Remove => {
-                conn.start_remove_runtime_binding_for_session_owner(session_id, &task.name)
+                conn.start_remove_runtime_binding_for_owner(&owner_scope, &task.name)
             }
         },
         RuntimeBindingPhase::StoredBindingsApply => {
-            conn.start_apply_stored_runtime_bindings_for_session_owner(session_id)
+            conn.start_apply_stored_runtime_bindings_for_owner(&owner_scope)
         }
     }
     .ok()?;
@@ -7747,18 +7775,44 @@ fn prepare_runtime_inspector_payload(
     cmd: &Cmd<'_>,
     preparation: RuntimeInspectorPayloadPreparation,
 ) -> Result<String, String> {
+    let owner = CommandOwnerScope::capture(conn, cmd.session_id);
+    prepare_runtime_inspector_payload_for_owner(conn, cmd, &owner, preparation)
+}
+
+fn prepare_runtime_inspector_payload_for_owner(
+    conn: &CdpConnection,
+    cmd: &Cmd<'_>,
+    owner: &CommandOwnerScope,
+    preparation: RuntimeInspectorPayloadPreparation,
+) -> Result<String, String> {
     match preparation {
         RuntimeInspectorPayloadPreparation::Passthrough => Ok(cmd.json.to_owned()),
         RuntimeInspectorPayloadPreparation::ValidateObjectOwner => {
-            validate_pending_runtime_object_ownership(conn, cmd)?;
+            let object_ids = cmd
+                .params
+                .map(runtime_remote_object_ids_in_map)
+                .unwrap_or_default();
+            conn.validate_runtime_remote_object_ids_for_owner(owner, &object_ids)?;
             Ok(cmd.json.to_owned())
         }
         RuntimeInspectorPayloadPreparation::ValidatePrototypeOwner => {
-            validate_pending_runtime_prototype_object_ownership(conn, cmd)?;
+            let object_ids = runtime_prototype_object_id_from_params(cmd.params)
+                .map(|object_id| vec![object_id.to_owned()])
+                .unwrap_or_default();
+            conn.validate_runtime_remote_object_ids_for_owner(owner, &object_ids)?;
             Ok(cmd.json.to_owned())
         }
         RuntimeInspectorPayloadPreparation::PrepareCallFunctionOn => {
-            prepare_pending_runtime_call_function_on_json(conn, cmd)
+            let (browser_context_id, target_id) = conn
+                .target_owner_identity_for_route(owner.session_id(), owner.session_owner_route())
+                .map(|(browser_context_id, target_id)| (Some(browser_context_id), target_id))
+                .unwrap_or((None, None));
+            let command = build_cdp_call_function_command(
+                cmd,
+                target_id.as_deref(),
+                browser_context_id.as_deref(),
+            );
+            prepare_pending_devtools_call_function_json_for_owner(conn, cmd, owner, &command)
         }
     }
 }
@@ -7838,17 +7892,6 @@ fn devtools_runtime_owner_identity_for_session(
         .unwrap_or((None, None))
 }
 
-fn prepare_pending_runtime_call_function_on_json(
-    conn: &CdpConnection,
-    cmd: &Cmd<'_>,
-) -> Result<String, String> {
-    let (browser_context_id, target_id) =
-        devtools_runtime_owner_identity_for_session(conn, cmd.session_id);
-    let command =
-        build_cdp_call_function_command(cmd, target_id.as_deref(), browser_context_id.as_deref());
-    prepare_pending_devtools_call_function_json(conn, cmd, &command)
-}
-
 fn build_cdp_call_function_command(
     cmd: &Cmd<'_>,
     target_id: Option<&str>,
@@ -7904,35 +7947,15 @@ fn cdp_call_function_arguments_from_params(params: Option<&Map<String, Value>>) 
         .unwrap_or_default()
 }
 
-fn prepare_pending_devtools_call_function_json(
+fn prepare_pending_devtools_call_function_json_for_owner(
     conn: &CdpConnection,
     cmd: &Cmd<'_>,
+    owner: &CommandOwnerScope,
     command: &DevToolsCallFunctionCommand,
 ) -> Result<String, String> {
     let object_ids = devtools_call_function_remote_object_ids(command);
-    conn.validate_runtime_remote_object_ids_for_session_owner(cmd.session_id, &object_ids)?;
+    conn.validate_runtime_remote_object_ids_for_owner(owner, &object_ids)?;
     Ok(cmd.json.to_owned())
-}
-
-fn validate_pending_runtime_object_ownership(
-    conn: &CdpConnection,
-    cmd: &Cmd<'_>,
-) -> Result<(), String> {
-    let object_ids = cmd
-        .params
-        .map(runtime_remote_object_ids_in_map)
-        .unwrap_or_default();
-    conn.validate_runtime_remote_object_ids_for_session_owner(cmd.session_id, &object_ids)
-}
-
-fn validate_pending_runtime_prototype_object_ownership(
-    conn: &CdpConnection,
-    cmd: &Cmd<'_>,
-) -> Result<(), String> {
-    let object_ids = runtime_prototype_object_id_from_params(cmd.params)
-        .map(|object_id| vec![object_id.to_owned()])
-        .unwrap_or_default();
-    conn.validate_runtime_remote_object_ids_for_session_owner(cmd.session_id, &object_ids)
 }
 
 pub(crate) async fn complete_pending_runtime_command(
@@ -7944,21 +7967,6 @@ pub(crate) async fn complete_pending_runtime_command(
 }
 
 pub(crate) async fn complete_pending_runtime_command_at_response_boundary(
-    conn: &mut CdpConnection,
-    completed: CompletedRuntimeCommandDispatch,
-    response_flush: &crate::conn::CommandResponseFlushContext,
-) -> RuntimeCommandTaskStep {
-    let owner_scope = completed.owner_scope.clone();
-    let mut route_scope = owner_scope.enter(conn);
-    Box::pin(complete_pending_runtime_command_inner(
-        route_scope.conn_mut(),
-        completed,
-        response_flush,
-    ))
-    .await
-}
-
-async fn complete_pending_runtime_command_inner(
     conn: &mut CdpConnection,
     completed: CompletedRuntimeCommandDispatch,
     response_flush: &crate::conn::CommandResponseFlushContext,
@@ -8050,16 +8058,16 @@ async fn complete_pending_runtime_command_inner(
 async fn route_registered_runtime_response_receiver_into(
     conn: &mut CdpConnection,
     command_id: Option<u64>,
-    session_id: Option<&str>,
+    owner: &CommandOwnerScope,
     response_rx: RuntimeInspectorAsyncCompletionReceiver,
     routed_output: &mut RuntimeInspectorRoutedOutput,
 ) -> bool {
     let Some(command_id) = command_id else {
         return false;
     };
-    let response = RuntimeInspectorResponseReady::new(
+    let response = RuntimeInspectorResponseReady::for_owner(
         command_id,
-        session_id,
+        owner,
         response_rx
             .await
             .map_err(|_| "RuntimeInspectorResponseCanceled".to_owned()),
@@ -8075,7 +8083,7 @@ async fn route_registered_runtime_response_receiver_into(
         conn,
         output,
         Some(command_id),
-        session_id,
+        owner,
         routed_output,
     )
     .await
@@ -8085,14 +8093,14 @@ async fn route_runtime_command_output_into_routed_output(
     conn: &mut CdpConnection,
     output: RendererRuntimeCommandOutput,
     command_id: Option<u64>,
-    session_id: Option<&str>,
+    owner: &CommandOwnerScope,
     routed_output: &mut RuntimeInspectorRoutedOutput,
 ) -> bool {
     let mut ordered_events = Vec::new();
-    let saw_current_response = conn.route_renderer_runtime_command_output_into(
+    let saw_current_response = conn.route_renderer_runtime_command_output_for_owner_into(
         output,
         command_id,
-        session_id,
+        owner,
         &mut ordered_events,
     );
     routed_output.append_ordered_events(ordered_events);
@@ -8103,17 +8111,17 @@ async fn route_renderer_command_turn_output_into_routed_output(
     conn: &mut CdpConnection,
     output: RendererCommandTurnOutput,
     command_id: Option<u64>,
-    session_id: Option<&str>,
+    owner: &CommandOwnerScope,
     response_flush: &crate::conn::CommandResponseFlushContext,
     routed_output: &mut RuntimeInspectorRoutedOutput,
 ) -> bool {
     let mut ordered_events = Vec::new();
     let mut post_response_events = Vec::new();
     let (saw_current_response, renderer_output_predecessor) = conn
-        .route_renderer_command_turn_output_into(
+        .route_renderer_command_turn_output_for_owner_into(
             output,
             command_id,
-            session_id,
+            owner,
             response_flush,
             &mut ordered_events,
             &mut post_response_events,
@@ -8130,7 +8138,7 @@ fn route_inspector_messages_into_routed_output(
     conn: &mut CdpConnection,
     messages: Vec<RendererRuntimeInspectorMessage>,
     command_id: Option<u64>,
-    session_id: Option<&str>,
+    owner: &CommandOwnerScope,
     routed_output: &mut RuntimeInspectorRoutedOutput,
 ) -> bool {
     let mut saw_current_response = false;
@@ -8138,10 +8146,10 @@ fn route_inspector_messages_into_routed_output(
         let mut response_events = Vec::new();
         let mut background_events = Vec::new();
         saw_current_response |= conn
-            .route_renderer_runtime_inspector_messages_with_background_events_into(
+            .route_renderer_runtime_inspector_messages_for_owner_with_background_events_into(
                 vec![message],
                 command_id,
-                session_id,
+                owner,
                 &mut response_events,
                 &mut background_events,
             );
@@ -8171,7 +8179,7 @@ async fn complete_pending_runtime_inspector_command(
             let response_delivery = completed_protocol.response_delivery();
             let renderer_response_rx = completed_protocol.take_deferred_response_receiver();
             match conn
-                .complete_runtime_protocol_message_for_session_owner_async(completed_protocol)
+                .complete_runtime_protocol_message_async(completed_protocol)
                 .await
             {
                 Ok(messages) => (
@@ -8183,7 +8191,10 @@ async fn complete_pending_runtime_inspector_command(
                 ),
                 Err(message) => {
                     if let Some(command_id) = completed.command_id {
-                        conn.forget_pending_inspector_await(command_id, completed.session_id());
+                        conn.forget_pending_inspector_await_for_owner(
+                            command_id,
+                            &completed.owner_scope,
+                        );
                     }
                     if session_response_succeeded.is_some() {
                         tracing::debug!(
@@ -8201,11 +8212,10 @@ async fn complete_pending_runtime_inspector_command(
                         )
                     } else {
                         if let Some(command_id) = completed.command_id {
-                            let correlation = conn
-                                .take_renderer_call_for_frontend_for_session_owner(
-                                    completed.session_id(),
-                                    command_id,
-                                );
+                            let correlation = conn.take_renderer_call_for_frontend_for_owner(
+                                &completed.owner_scope,
+                                command_id,
+                            );
                             if correlation.is_none() {
                                 tracing::debug!(
                                     command_id,
@@ -8228,11 +8238,9 @@ async fn complete_pending_runtime_inspector_command(
         }
         Err(message) => {
             if let Some(command_id) = completed.command_id {
-                conn.forget_pending_inspector_await(command_id, completed.session_id());
-                let correlation = conn.take_renderer_call_for_frontend_for_session_owner(
-                    completed.session_id(),
-                    command_id,
-                );
+                conn.forget_pending_inspector_await_for_owner(command_id, &completed.owner_scope);
+                let correlation = conn
+                    .take_renderer_call_for_frontend_for_owner(&completed.owner_scope, command_id);
                 if correlation.is_none() {
                     tracing::debug!(
                         command_id,
@@ -8274,7 +8282,7 @@ async fn complete_pending_runtime_inspector_command(
             conn,
             messages,
             completed.command_id,
-            completed.session_id(),
+            &completed.owner_scope,
             response_flush,
             &mut routed_output,
         )
@@ -8297,8 +8305,12 @@ async fn complete_pending_runtime_inspector_command(
     if !saw_current_response
         && renderer_response_rx.is_some()
         && completed.command_id.is_some_and(|command_id| {
-            conn.renderer_runtime_command_cause_for_frontend(completed.session_id(), command_id)
-                .is_none()
+            conn.renderer_runtime_command_cause_for_route(
+                completed.session_id(),
+                completed.owner_scope.session_owner_route(),
+                command_id,
+            )
+            .is_none()
         })
     {
         renderer_response_rx.take();
@@ -8317,7 +8329,7 @@ async fn complete_pending_runtime_inspector_command(
         let saw_deferred_response = route_registered_runtime_response_receiver_into(
             conn,
             completed.command_id,
-            completed.session_id(),
+            &completed.owner_scope,
             renderer_response_rx,
             &mut routed_output,
         )
@@ -8348,13 +8360,13 @@ async fn complete_pending_runtime_inspector_command(
     if succeeded {
         routed_output.register_object_group_for_success(
             conn,
-            completed.session_id(),
+            &completed.owner_scope,
             completed.object_group.as_deref(),
         );
     }
     if succeeded {
         if let Some(console_action) = console_action_from_protocol_method(completed.action)
-            && !apply_console_output_state_for_session(conn, completed.session_id(), console_action)
+            && !apply_console_output_state_for_owner(conn, &completed.owner_scope, console_action)
         {
             let message = format!("ConsoleCommandCompletionFailed: {}", completed.action);
             if session_response_succeeded.is_some() {
@@ -8372,15 +8384,13 @@ async fn complete_pending_runtime_inspector_command(
             }
         }
         if completed.action == "discardConsoleEntries" {
-            advance_runtime_observable_cursors_to_current_for_session_owner(
-                conn,
-                completed.session_id(),
-            );
+            advance_runtime_observable_cursors_to_current_for_owner(conn, &completed.owner_scope);
         }
         if completed.action == "disable" {
-            if let Err(message) =
-                apply_runtime_disable_projection_after_success(conn, completed.session_id())
-            {
+            if let Err(message) = apply_runtime_disable_projection_after_success_for_owner(
+                conn,
+                &completed.owner_scope,
+            ) {
                 if session_response_succeeded.is_some() {
                     tracing::warn!(
                         command_id = completed.command_id,
@@ -8396,7 +8406,7 @@ async fn complete_pending_runtime_inspector_command(
                 }
             }
             if let Err(message) = conn
-                .apply_runtime_binding_state_for_session_owner_async(completed.session_id())
+                .apply_runtime_binding_state_for_owner_async(&completed.owner_scope)
                 .await
             {
                 if session_response_succeeded.is_some() {
@@ -8415,14 +8425,14 @@ async fn complete_pending_runtime_inspector_command(
             }
         }
         if !completed.release_object_ids.is_empty() {
-            conn.unregister_runtime_remote_object_ids_for_session_owner(
-                completed.session_id(),
+            conn.unregister_runtime_remote_object_ids_for_owner(
+                &completed.owner_scope,
                 &completed.release_object_ids,
             );
         }
         if let Some(object_group) = completed.release_object_group.as_deref() {
-            conn.unregister_runtime_remote_object_group_for_session_owner(
-                completed.session_id(),
+            conn.unregister_runtime_remote_object_group_for_owner(
+                &completed.owner_scope,
                 object_group,
             );
         }
@@ -8456,7 +8466,7 @@ fn pending_runtime_deferred_inspector_reply_command(
     let claimed_await = completed.command_id.and_then(|command_id| {
         conn.claim_pending_inspector_await_for_scheduler_deferred_reply(
             command_id,
-            completed.session_id(),
+            &completed.owner_scope,
         )
     });
     RuntimeCommandTaskStep::Pending(Box::new(PendingRuntimeCommandDispatch {
@@ -8535,28 +8545,29 @@ fn complete_pending_runtime_enable_command(
     completed_enable: Result<CompletedRuntimeEnableEventsDispatch, String>,
 ) -> CommandOutputPlan {
     let replay = match completed_enable {
-        Ok(completed_enable) => {
-            match conn.complete_runtime_enable_events_for_session_owner(completed_enable) {
-                Ok(replay) => replay,
-                Err(message) => return CommandOutputPlan::error(-32000, message),
-            }
-        }
+        Ok(completed_enable) => match conn.complete_runtime_enable_events(completed_enable) {
+            Ok(replay) => replay,
+            Err(message) => return CommandOutputPlan::error(-32000, message),
+        },
         Err(message) => return CommandOutputPlan::error(-32000, message),
     };
     if let Err(message) =
-        apply_runtime_enable_projection_after_success(conn, completed.session_id())
+        apply_runtime_enable_projection_after_success(conn, &completed.owner_scope)
     {
         return CommandOutputPlan::error(-32000, message);
     }
-    let frame_id = conn.runtime_session_owner_frame_id(completed.session_id());
+    let frame_id = conn.runtime_session_owner_frame_id_for_route(
+        completed.owner_scope.session_id(),
+        completed.owner_scope.session_owner_route(),
+    );
 
     let mut plan = CommandOutputPlan::success();
     for event in replay.into_events() {
         match event {
             RuntimeEnableReplayEvent::Context(event) => {
-                if !should_emit_child_default_context_inventory_replay_once(
+                if !should_emit_child_default_context_inventory_replay_once_for_owner(
                     conn,
-                    completed.session_id(),
+                    &completed.owner_scope,
                     frame_id.as_deref(),
                     &event,
                 ) {
@@ -8566,10 +8577,10 @@ fn complete_pending_runtime_enable_command(
                 // context producer. Record delivery only after the replay
                 // cursor accepts this exact event; marking it while merely
                 // preparing the replay would suppress the first delivery.
-                apply_runtime_context_protocol_event_side_effects_typed(
+                apply_runtime_context_protocol_event_side_effects_for_owner_typed(
                     conn,
                     &event,
-                    completed.session_id(),
+                    &completed.owner_scope,
                 );
                 let mut background_events = Vec::new();
                 emit_runtime_context_protocol_background_event_typed(
@@ -8591,9 +8602,9 @@ fn complete_pending_runtime_enable_command(
 
 fn apply_runtime_enable_projection_after_success(
     conn: &mut CdpConnection,
-    session_id: Option<&str>,
+    owner: &CommandOwnerScope,
 ) -> Result<(), String> {
-    match conn.set_runtime_frontend_enabled_for_session_owner(session_id, true) {
+    match conn.set_runtime_frontend_enabled_for_owner(owner, true) {
         SessionOwnerRuntimeFrontendEnableResult::Handled => Ok(()),
         SessionOwnerRuntimeFrontendEnableResult::UnknownSession => {
             Err("Runtime.enable succeeded after session owner disappeared".to_owned())
@@ -8608,17 +8619,17 @@ fn complete_pending_runtime_binding_context_lookup_command(
     completed_lookup: Result<CompletedRuntimeChildDefaultContextLookupDispatch, String>,
 ) -> RuntimeCommandTaskStep {
     let is_child_default_context = match completed_lookup {
-        Ok(completed_lookup) => match conn
-            .complete_child_default_execution_context_lookup_for_session_owner(completed_lookup)
-        {
-            Ok(is_child_default_context) => is_child_default_context,
-            Err(message) => {
-                return RuntimeCommandTaskStep::Complete(runtime_inspector_error_plan(
-                    completed.command_id,
-                    message,
-                ));
+        Ok(completed_lookup) => {
+            match conn.complete_child_default_execution_context_lookup(completed_lookup) {
+                Ok(is_child_default_context) => is_child_default_context,
+                Err(message) => {
+                    return RuntimeCommandTaskStep::Complete(runtime_inspector_error_plan(
+                        completed.command_id,
+                        message,
+                    ));
+                }
             }
-        },
+        }
         Err(message) => {
             return RuntimeCommandTaskStep::Complete(runtime_inspector_error_plan(
                 completed.command_id,
@@ -8630,7 +8641,7 @@ fn complete_pending_runtime_binding_context_lookup_command(
     if !is_child_default_context {
         if matches!(task.action, RuntimeBindingCommand::Add)
             || matches!(task.action, RuntimeBindingCommand::Remove)
-                && runtime_remove_binding_should_skip_live_page_update(conn, completed.session_id())
+                && runtime_remove_binding_should_skip_live_page_update(conn, &completed.owner_scope)
         {
             task.skip_live_page_update_after_inspector_success = true;
         }
@@ -8641,7 +8652,6 @@ fn complete_pending_runtime_binding_context_lookup_command(
     match start_pending_runtime_binding_page_phase(
         conn,
         completed.command_id,
-        completed.session_id(),
         task.clone(),
         completed.owner_scope.clone(),
     ) {
@@ -8661,7 +8671,7 @@ async fn complete_pending_runtime_binding_inspector_command(
         Ok(mut completed_protocol) => {
             let renderer_response_rx = completed_protocol.take_deferred_response_receiver();
             match conn
-                .complete_runtime_protocol_message_for_session_owner_async(completed_protocol)
+                .complete_runtime_protocol_message_async(completed_protocol)
                 .await
             {
                 Ok(messages) => (messages, renderer_response_rx),
@@ -8686,7 +8696,7 @@ async fn complete_pending_runtime_binding_inspector_command(
             conn,
             messages,
             completed.command_id,
-            completed.session_id(),
+            &completed.owner_scope,
             response_flush,
             &mut routed_output,
         )
@@ -8701,7 +8711,7 @@ async fn complete_pending_runtime_binding_inspector_command(
         route_registered_runtime_response_receiver_into(
             conn,
             completed.command_id,
-            completed.session_id(),
+            &completed.owner_scope,
             renderer_response_rx,
             &mut routed_output,
         )
@@ -8727,7 +8737,6 @@ async fn complete_pending_runtime_binding_inspector_command(
     match start_pending_runtime_binding_page_phase(
         conn,
         completed.command_id,
-        completed.session_id(),
         task.clone(),
         completed.owner_scope.clone(),
     ) {
@@ -8744,8 +8753,7 @@ fn complete_pending_runtime_binding_page_command(
 ) -> RuntimeCommandTaskStep {
     match completed_page {
         Ok(completed_page) => {
-            if let Err(message) =
-                conn.complete_runtime_binding_page_command_for_session_owner(completed_page)
+            if let Err(message) = conn.complete_runtime_binding_page_command(completed_page)
                 && message != "NoDocumentLoaded"
             {
                 tracing::warn!(
@@ -8780,15 +8788,15 @@ fn complete_runtime_binding_after_live_update(
 ) -> RuntimeCommandTaskStep {
     if task.should_persist {
         let persistence = match task.action {
-            RuntimeBindingCommand::Add => persist_runtime_binding_definition_for_session_owner(
+            RuntimeBindingCommand::Add => persist_runtime_binding_definition_for_owner(
                 conn,
-                completed.session_id(),
+                &completed.owner_scope,
                 task.name.clone(),
                 task.execution_context_name.clone(),
             ),
-            RuntimeBindingCommand::Remove => remove_runtime_binding_definitions_for_session_owner(
+            RuntimeBindingCommand::Remove => remove_runtime_binding_definitions_for_owner(
                 conn,
-                completed.session_id(),
+                &completed.owner_scope,
                 &task.name,
             ),
         };
@@ -8804,7 +8812,6 @@ fn complete_runtime_binding_after_live_update(
         if let Some(pending) = start_pending_runtime_binding_page_phase(
             conn,
             completed.command_id,
-            completed.session_id(),
             task.clone(),
             completed.owner_scope.clone(),
         ) {
@@ -9189,12 +9196,12 @@ fn start_pending_shared_worker_runtime_inspector_command(
     } else {
         None
     };
-    let session_owner_route = conn.session_route(cmd.session_id);
+    let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
     let pre_registered_await = pre_register_runtime_await_if_needed(
         conn,
         await_promise,
         cmd.id,
-        cmd.session_id,
+        &owner_scope,
         object_group.as_deref(),
         action.label(),
     )
@@ -9202,7 +9209,7 @@ fn start_pending_shared_worker_runtime_inspector_command(
     let pending = match start_shared_worker_frontend_inspector_dispatch(conn, cmd, inspector_json) {
         Ok(pending) => pending,
         Err(message) => {
-            forget_pre_registered_runtime_await(conn, pre_registered_await, cmd.session_id);
+            forget_pre_registered_runtime_await(conn, pre_registered_await, &owner_scope);
             return Err(message);
         }
     };
@@ -9211,10 +9218,7 @@ fn start_pending_shared_worker_runtime_inspector_command(
         PendingRuntimeCommandDispatch {
             command_id: cmd.id,
             action: action.label(),
-            owner_scope: cmd
-                .session_id
-                .map(CommandOwnerScope::for_session)
-                .unwrap_or_else(|| CommandOwnerScope::for_implicit_route(session_owner_route)),
+            owner_scope,
             object_group,
             release_object_ids,
             release_object_group,
@@ -9254,12 +9258,12 @@ fn start_pending_service_worker_runtime_inspector_command(
     } else {
         None
     };
-    let session_owner_route = conn.session_route(cmd.session_id);
+    let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
     let pre_registered_await = pre_register_runtime_await_if_needed(
         conn,
         await_promise,
         cmd.id,
-        cmd.session_id,
+        &owner_scope,
         object_group.as_deref(),
         action.label(),
     )
@@ -9268,7 +9272,7 @@ fn start_pending_service_worker_runtime_inspector_command(
     {
         Ok(pending) => pending,
         Err(message) => {
-            forget_pre_registered_runtime_await(conn, pre_registered_await, cmd.session_id);
+            forget_pre_registered_runtime_await(conn, pre_registered_await, &owner_scope);
             return Err(message);
         }
     };
@@ -9276,10 +9280,7 @@ fn start_pending_service_worker_runtime_inspector_command(
         PendingRuntimeCommandDispatch {
             command_id: cmd.id,
             action: action.label(),
-            owner_scope: cmd
-                .session_id
-                .map(CommandOwnerScope::for_session)
-                .unwrap_or_else(|| CommandOwnerScope::for_implicit_route(session_owner_route)),
+            owner_scope,
             object_group,
             release_object_ids,
             release_object_group,
@@ -9456,7 +9457,7 @@ async fn complete_pending_shared_worker_runtime_inspector_command(
         conn,
         messages,
         completed.command_id,
-        completed.session_id(),
+        &completed.owner_scope,
         &mut routed_output,
     );
     if !completed.wait_for_deferred_reply
@@ -9465,7 +9466,7 @@ async fn complete_pending_shared_worker_runtime_inspector_command(
         saw_current_response |= route_registered_runtime_response_receiver_into(
             conn,
             completed.command_id,
-            completed.session_id(),
+            &completed.owner_scope,
             renderer_response_rx,
             &mut routed_output,
         )
@@ -9519,7 +9520,7 @@ async fn complete_pending_shared_worker_runtime_inspector_command(
     if succeeded {
         routed_output.register_object_group_for_success(
             conn,
-            completed.session_id(),
+            &completed.owner_scope,
             completed.object_group.as_deref(),
         );
     }
@@ -9593,7 +9594,7 @@ async fn complete_pending_service_worker_runtime_inspector_command(
         conn,
         messages,
         completed.command_id,
-        completed.session_id(),
+        &completed.owner_scope,
         &mut routed_output,
     );
     if !completed.wait_for_deferred_reply
@@ -9602,7 +9603,7 @@ async fn complete_pending_service_worker_runtime_inspector_command(
         saw_current_response |= route_registered_runtime_response_receiver_into(
             conn,
             completed.command_id,
-            completed.session_id(),
+            &completed.owner_scope,
             renderer_response_rx,
             &mut routed_output,
         )
@@ -9638,7 +9639,7 @@ async fn complete_pending_service_worker_runtime_inspector_command(
     if succeeded {
         routed_output.register_object_group_for_success(
             conn,
-            completed.session_id(),
+            &completed.owner_scope,
             completed.object_group.as_deref(),
         );
     }
@@ -10194,8 +10195,11 @@ fn build_service_worker_execution_context_created_event(
     ))
 }
 
-fn disable_command_output_plan_sync(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> CommandOutputPlan {
-    match apply_runtime_disable_projection_after_success(conn, cmd.session_id) {
+fn disable_command_output_plan_sync_for_owner(
+    conn: &mut CdpConnection,
+    owner: &CommandOwnerScope,
+) -> CommandOutputPlan {
+    match apply_runtime_disable_projection_after_success_for_owner(conn, owner) {
         Ok(()) => CommandOutputPlan::success(),
         Err(_) => CommandOutputPlan::error(-32001, "Unknown sessionId"),
     }
@@ -10205,18 +10209,37 @@ fn start_pending_runtime_disable_command(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,
 ) -> RuntimeCommandTaskStep {
+    let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
+    let response_delivery =
+        cmd.terminal_response_delivery(RendererInspectorResponseDelivery::DevToolsSession);
+    start_runtime_disable_command_for_owner(conn, cmd, owner_scope, response_delivery)
+}
+
+fn start_runtime_disable_command_for_owner(
+    conn: &mut CdpConnection,
+    cmd: &Cmd<'_>,
+    owner_scope: CommandOwnerScope,
+    response_delivery: RendererInspectorResponseDelivery,
+) -> RuntimeCommandTaskStep {
     if !conn
-        .runtime_session_owner_slot(cmd.session_id)
+        .runtime_session_owner_slot_for_route(
+            owner_scope.session_id(),
+            owner_scope.session_owner_route(),
+        )
         .is_ok_and(|slot| slot.has_loaded_page())
     {
-        return RuntimeCommandTaskStep::Complete(disable_command_output_plan_sync(conn, cmd));
+        return RuntimeCommandTaskStep::Complete(disable_command_output_plan_sync_for_owner(
+            conn,
+            &owner_scope,
+        ));
     }
 
     let pending = match start_pending_runtime_inspector_dispatch_with_delivery(
         conn,
         cmd,
+        &owner_scope,
         cmd.json.to_owned(),
-        cmd.terminal_response_delivery(RendererInspectorResponseDelivery::DevToolsSession),
+        response_delivery,
     ) {
         Ok(pending) => pending,
         Err(message) => {
@@ -10227,7 +10250,7 @@ fn start_pending_runtime_disable_command(
     RuntimeCommandTaskStep::Pending(Box::new(PendingRuntimeCommandDispatch {
         command_id: cmd.id,
         action: "disable",
-        owner_scope: CommandOwnerScope::capture(conn, cmd.session_id),
+        owner_scope,
         object_group: None,
         release_object_ids: Vec::new(),
         release_object_group: None,
@@ -10235,6 +10258,36 @@ fn start_pending_runtime_disable_command(
         wait_for_deferred_reply: false,
         pending: PendingRuntimeCommandKind::Inspector { pending },
     }))
+}
+
+pub(crate) async fn execute_runtime_listener_command_for_owner(
+    conn: &mut CdpConnection,
+    owner: CommandOwnerScope,
+    enabled: bool,
+) -> CommandOutputPlan {
+    let mut step = if enabled {
+        start_runtime_enable_command_for_owner(conn, Some(0), owner)
+    } else {
+        let raw = r#"{"id":0,"method":"Runtime.disable","params":{}}"#;
+        let parsed = ParsedCdpCommand::parse_str(raw.to_owned())
+            .expect("internal Runtime.disable command must be valid CDP");
+        let cmd = Cmd::from_parsed(&parsed)
+            .expect("internal Runtime.disable command must produce a command view");
+        start_runtime_disable_command_for_owner(
+            conn,
+            &cmd,
+            owner,
+            RendererInspectorResponseDelivery::CommandReply,
+        )
+    };
+    loop {
+        match step {
+            RuntimeCommandTaskStep::Complete(plan) => return plan,
+            RuntimeCommandTaskStep::Pending(pending) => {
+                step = complete_pending_runtime_command(conn, pending.wait().await).await;
+            }
+        }
+    }
 }
 
 fn start_runtime_run_if_waiting_for_debugger_command(
@@ -10248,9 +10301,11 @@ fn start_runtime_run_if_waiting_for_debugger_command(
         return RuntimeCommandTaskStep::Complete(CommandOutputPlan::success());
     }
 
+    let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
     let pending = match start_pending_runtime_inspector_dispatch_with_delivery(
         conn,
         cmd,
+        &owner_scope,
         cmd.json.to_owned(),
         cmd.terminal_response_delivery(RendererInspectorResponseDelivery::DevToolsSession),
     ) {
@@ -10266,7 +10321,7 @@ fn start_runtime_run_if_waiting_for_debugger_command(
     RuntimeCommandTaskStep::Pending(Box::new(PendingRuntimeCommandDispatch {
         command_id: cmd.id,
         action: "runIfWaitingForDebugger",
-        owner_scope: CommandOwnerScope::capture(conn, cmd.session_id),
+        owner_scope,
         object_group: None,
         release_object_ids: Vec::new(),
         release_object_group: None,
@@ -10276,18 +10331,18 @@ fn start_runtime_run_if_waiting_for_debugger_command(
     }))
 }
 
-fn apply_runtime_disable_projection_after_success(
+fn apply_runtime_disable_projection_after_success_for_owner(
     conn: &mut CdpConnection,
-    session_id: Option<&str>,
+    owner: &CommandOwnerScope,
 ) -> Result<(), String> {
     let was_enabled = conn
-        .target_runtime_session_state_for_session(session_id)
+        .target_runtime_session_state_for_route(owner.session_id(), owner.session_owner_route())
         .is_some_and(|state| state.runtime_frontend_enabled);
-    match conn.set_runtime_frontend_enabled_for_session_owner(session_id, false) {
+    match conn.set_runtime_frontend_enabled_for_owner(owner, false) {
         SessionOwnerRuntimeFrontendEnableResult::Handled => {
-            advance_runtime_observable_cursors_to_current_for_session_owner(conn, session_id);
+            advance_runtime_observable_cursors_to_current_for_owner(conn, owner);
             if was_enabled {
-                clear_runtime_binding_definitions_for_session_owner(conn, session_id)?;
+                clear_runtime_binding_definitions_for_owner(conn, owner)?;
             }
             Ok(())
         }
@@ -10308,9 +10363,11 @@ fn start_runtime_discard_console_entries_command(
         advance_runtime_observable_cursors_to_current_for_session_owner(conn, cmd.session_id);
         return RuntimeCommandTaskStep::Complete(CommandOutputPlan::success());
     }
+    let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
     let pending = match start_pending_runtime_inspector_dispatch_with_delivery(
         conn,
         cmd,
+        &owner_scope,
         cmd.json.to_owned(),
         cmd.terminal_response_delivery(RendererInspectorResponseDelivery::DevToolsSession),
     ) {
@@ -10322,7 +10379,7 @@ fn start_runtime_discard_console_entries_command(
     RuntimeCommandTaskStep::Pending(Box::new(PendingRuntimeCommandDispatch {
         command_id: cmd.id,
         action: "discardConsoleEntries",
-        owner_scope: CommandOwnerScope::capture(conn, cmd.session_id),
+        owner_scope,
         object_group: None,
         release_object_ids: Vec::new(),
         release_object_group: None,
@@ -10345,7 +10402,8 @@ mod protocol_neutral_tests {
     use serde_json::{Value, json};
 
     use crate::conn::{
-        BrowserContext, CdpConnection, CdpSessionRoute, Cmd, SharedWorkerTargetState,
+        BrowserContext, CdpConnection, CdpSessionRoute, Cmd, CommandOwnerScope,
+        SharedWorkerTargetState,
     };
     use crate::domains::actions::ConsoleAction;
     use crate::testing::TestContext;
@@ -10355,7 +10413,7 @@ mod protocol_neutral_tests {
         devtools_serialization_options_for_node_probe,
     };
     use super::{
-        DevToolsRuntimeTarget, RuntimeCommandTaskStep, RuntimeProbeCompletionScope,
+        DevToolsRuntimeTarget, RuntimeCommandTaskStep,
         apply_shared_worker_runtime_completion_projection, build_cdp_call_function_command,
         build_cdp_evaluate_script_command, cdp_call_argument_from_devtools_argument,
         devtools_call_function_cdp_arguments, devtools_call_function_declaration,
@@ -11288,50 +11346,6 @@ mod protocol_neutral_tests {
     }
 
     #[test]
-    fn runtime_probe_completion_scope_restores_on_drop() {
-        let mut conn = CdpConnection::new();
-        let previous_route = Some(CdpSessionRoute::Browser);
-        conn.replace_none_session_owner_route_override(previous_route.clone());
-
-        let target_route = CdpSessionRoute::PageTarget {
-            browser_context_id: "BID-active".to_owned(),
-            target_id: "TID-active".to_owned(),
-            is_attached_session: false,
-        };
-        {
-            let mut scope = RuntimeProbeCompletionScope::enter(&mut conn, target_route.clone());
-            assert_eq!(
-                scope.conn_mut().none_session_owner_route_override(),
-                Some(target_route)
-            );
-        }
-
-        assert_eq!(conn.none_session_owner_route_override(), previous_route);
-    }
-
-    #[test]
-    fn none_session_owner_route_override_scope_restores_on_drop() {
-        let mut conn = CdpConnection::new();
-        let previous_route = Some(CdpSessionRoute::Browser);
-        conn.replace_none_session_owner_route_override(previous_route.clone());
-
-        let target_route = CdpSessionRoute::PageTarget {
-            browser_context_id: "BID-active".to_owned(),
-            target_id: "TID-active".to_owned(),
-            is_attached_session: false,
-        };
-        {
-            let mut scope = conn.scoped_none_session_owner_route_override(target_route.clone());
-            assert_eq!(
-                scope.conn_mut().none_session_owner_route_override(),
-                Some(target_route)
-            );
-        }
-
-        assert_eq!(conn.none_session_owner_route_override(), previous_route);
-    }
-
-    #[test]
     fn devtools_runtime_entry_routes_evaluate_command_to_inspector_error_plan() {
         let mut conn = CdpConnection::new();
         let params = json!({"expression": "1 + 1"});
@@ -11368,9 +11382,9 @@ mod protocol_neutral_tests {
         browser_context.set_active_target_id("TID-duplicate".to_owned());
         browser_context.attach_active_session("SID-duplicate".to_owned());
         conn.browser_context = Some(browser_context);
-        conn.try_register_pending_inspector_await_with_object_group(
+        conn.try_register_pending_inspector_await_with_object_group_for_owner(
             77,
-            Some("SID-duplicate"),
+            &CommandOwnerScope::for_session("SID-duplicate"),
             Some("original-group"),
         )
         .unwrap();

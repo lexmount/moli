@@ -83,32 +83,36 @@ impl CdpConnection {
         SessionOwnerInspectorEnableResult::Handled
     }
 
-    pub(crate) fn set_runtime_frontend_enabled_for_session_owner(
+    pub(crate) fn set_runtime_frontend_enabled_for_owner(
         &mut self,
-        session_id: Option<&str>,
+        owner: &crate::conn::CommandOwnerScope,
         enabled: bool,
     ) -> SessionOwnerRuntimeFrontendEnableResult {
         let result = self
-            .with_target_session_owner_mut(session_id, |owner| {
-                owner.set_runtime_frontend_enabled(enabled)
-            })
+            .with_target_session_owner_mut_for_route(
+                owner.session_id(),
+                owner.session_owner_route(),
+                |owner| owner.set_runtime_frontend_enabled(enabled),
+            )
             .unwrap_or(SessionOwnerRuntimeFrontendEnableResult::UnknownSession);
         if matches!(result, SessionOwnerRuntimeFrontendEnableResult::Handled) && !enabled {
-            let _ = self.set_renderer_runtime_agent_owns_page_console_api_events_for_session_owner(
-                session_id, false,
+            let _ = self
+                .set_renderer_runtime_agent_owns_page_console_api_events_for_owner(owner, false);
+            let _ = self.with_target_devtools_session_state_for_route_mut(
+                owner.session_id(),
+                owner.session_owner_route(),
+                |state| state.clear_child_default_context_emission_state(),
             );
-            let _ = self.with_target_devtools_session_state_for_session_mut(session_id, |state| {
-                state.clear_child_default_context_emission_state();
-            });
         }
         result
     }
 
-    pub(crate) fn set_renderer_runtime_agent_owns_page_console_api_events_for_session_owner(
+    pub(crate) fn set_renderer_runtime_agent_owns_page_console_api_events_for_owner(
         &mut self,
-        session_id: Option<&str>,
+        owner: &crate::conn::CommandOwnerScope,
         owns: bool,
     ) -> bool {
+        let session_id = owner.session_id();
         if session_id.is_some_and(|session_id| {
             self.shared_worker_target_for_session(Some(session_id))
                 .is_some()
@@ -120,22 +124,27 @@ impl CdpConnection {
         }
         let owns = owns
             && self
-                .runtime_session_owner_slot(session_id)
+                .runtime_session_owner_slot_for_route(session_id, owner.session_owner_route())
                 .is_ok_and(|slot| slot.has_loaded_page());
-        self.with_target_devtools_session_state_for_session_mut(session_id, |state| {
-            state
-                .console_output_session_state
-                .renderer_runtime_agent_owns_page_console_api_events = owns;
-        })
+        self.with_target_devtools_session_state_for_route_mut(
+            session_id,
+            owner.session_owner_route(),
+            |state| {
+                state
+                    .console_output_session_state
+                    .renderer_runtime_agent_owns_page_console_api_events = owns;
+            },
+        )
         .is_some()
     }
 
-    pub(crate) fn merge_v8_inspector_session_state_for_session_owner(
+    pub(crate) fn merge_v8_inspector_session_state_for_route(
         &mut self,
         session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
         state: V8InspectorSessionState,
     ) -> bool {
-        self.with_target_devtools_session_state_for_session_mut(session_id, |session| {
+        self.with_target_devtools_session_state_for_route_mut(session_id, owner_route, |session| {
             session.inspector_session_state.v8_state = Some(state);
         })
         .is_some()
@@ -145,11 +154,9 @@ impl CdpConnection {
         let Some(route) = self.target_session_route_for_target_id(target_id) else {
             return false;
         };
-        let mut route_scope = self.scoped_none_session_owner_route_override(route);
+        let owner = crate::conn::CommandOwnerScope::for_route(route);
         let enabled = matches!(
-            route_scope
-                .conn_mut()
-                .set_runtime_frontend_enabled_for_session_owner(None, true),
+            self.set_runtime_frontend_enabled_for_owner(&owner, true),
             SessionOwnerRuntimeFrontendEnableResult::Handled
         );
         enabled
@@ -196,21 +203,11 @@ impl CdpConnection {
                 .await,
             );
         }
-        let mut route_scope = self.scoped_none_session_owner_route_override(route);
-        let conn = route_scope.conn_mut();
-        let _ = conn.set_runtime_frontend_enabled_for_session_owner(None, true);
-        let outcome = conn
-            .process_message_with_turn_outcome_async(
-                &json!({
-                    "id": 0_u64,
-                    "method": "Runtime.enable",
-                    "params": {}
-                })
-                .to_string(),
-            )
-            .await;
-        let _ = conn.set_runtime_frontend_enabled_for_session_owner(None, true);
-        Some(outcome)
+        let owner = crate::conn::CommandOwnerScope::for_route(route);
+        Some(
+            self.execute_page_runtime_listener_command_for_owner(owner, true)
+                .await,
+        )
     }
 
     pub async fn disable_runtime_listener_for_target(
@@ -252,19 +249,43 @@ impl CdpConnection {
                 .await,
             );
         }
-        let previous_route = self.replace_none_session_owner_route_override(Some(route));
-        let outcome = self
-            .process_message_with_turn_outcome_async(
-                &json!({
-                    "id": 0_u64,
-                    "method": "Runtime.disable",
-                    "params": {}
-                })
-                .to_string(),
-            )
-            .await;
-        self.replace_none_session_owner_route_override(previous_route);
-        Some(outcome)
+        let owner = crate::conn::CommandOwnerScope::for_route(route);
+        Some(
+            self.execute_page_runtime_listener_command_for_owner(owner, false)
+                .await,
+        )
+    }
+
+    async fn execute_page_runtime_listener_command_for_owner(
+        &mut self,
+        owner: crate::conn::CommandOwnerScope,
+        enabled: bool,
+    ) -> CdpRendererOwnerTurnOutcome {
+        let session_id = owner.session_id().map(str::to_owned);
+        let plan = crate::domains::runtime::execute_runtime_listener_command_for_owner(
+            self,
+            owner.clone(),
+            enabled,
+        )
+        .await;
+        let mut command_context = crate::conn::CommandDispatchContext::default();
+        crate::domains::activity::project_protocol_local_command_outputs(
+            self,
+            &owner,
+            &mut command_context,
+        )
+        .await;
+        match self.complete_with_output_plan(
+            &mut command_context,
+            plan,
+            Some(0),
+            session_id.as_deref(),
+        ) {
+            crate::conn::CdpCommandTaskStep::Complete(outcome) => outcome,
+            crate::conn::CdpCommandTaskStep::Pending(_) => {
+                unreachable!("a completed Runtime listener plan cannot become pending")
+            }
+        }
     }
 
     fn service_worker_runtime_listener_session_for_route(

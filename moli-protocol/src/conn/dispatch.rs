@@ -8,13 +8,11 @@ use super::*;
 
 pub struct PendingCdpCommandDispatch {
     inner: PendingCdpCommandDispatchKind,
-    owner_scope: Option<CommandOwnerScope>,
     scheduler_events: Vec<CdpSchedulerEvent>,
 }
 
 pub struct CompletedCdpCommandDispatch {
     inner: CompletedCdpCommandDispatchKind,
-    owner_scope: Option<CommandOwnerScope>,
 }
 
 pub enum CdpCommandTaskStep {
@@ -105,31 +103,6 @@ impl PendingCdpCommandDispatchKind {
             Self::Tracing(_) => "Tracing",
         }
     }
-
-    fn owner_scope_capture_session_id(&self) -> Option<Option<&str>> {
-        match self {
-            Self::Input(pending) => Some(pending.session_id()),
-            Self::Dom(pending) => Some(pending.session_id()),
-            Self::Tracing(pending) => Some(pending.session_id()),
-            Self::Runtime(_)
-            | Self::Autofill(_)
-            | Self::Accessibility(_)
-            | Self::Css(_)
-            | Self::DomDebugger(_)
-            | Self::DomSnapshot(_)
-            | Self::Performance(_)
-            | Self::DomStorage(_)
-            | Self::Page(_)
-            | Self::Emulation(_)
-            | Self::Storage(_)
-            | Self::Fetch(_)
-            | Self::Io(_)
-            | Self::Security(_)
-            | Self::Browser(_)
-            | Self::Target(_) => None,
-            Self::Network(pending) => Some(pending.session_id()),
-        }
-    }
 }
 
 impl CompletedCdpCommandDispatchKind {
@@ -160,20 +133,9 @@ impl CompletedCdpCommandDispatchKind {
 }
 
 impl PendingCdpCommandDispatch {
-    fn new(
-        conn: &CdpConnection,
-        inner: PendingCdpCommandDispatchKind,
-        scheduler_events: Vec<CdpSchedulerEvent>,
-    ) -> Self {
-        let owner_scope = inner
-            // These domain-local session ids are still used for CDP response
-            // routing and session-local lookups. Target ownership for their
-            // pending completion is captured here by the wrapper.
-            .owner_scope_capture_session_id()
-            .map(|session_id| CommandOwnerScope::capture(conn, session_id));
+    fn new(inner: PendingCdpCommandDispatchKind, scheduler_events: Vec<CdpSchedulerEvent>) -> Self {
         Self {
             inner,
-            owner_scope,
             scheduler_events,
         }
     }
@@ -204,6 +166,14 @@ impl PendingCdpCommandDispatch {
     pub fn session_id(&self) -> Option<&str> {
         match &self.inner {
             PendingCdpCommandDispatchKind::Runtime(pending) => pending.session_id(),
+            _ => None,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn runtime_command_owner_scope(&self) -> Option<&CommandOwnerScope> {
+        match &self.inner {
+            PendingCdpCommandDispatchKind::Runtime(pending) => Some(pending.owner_scope()),
             _ => None,
         }
     }
@@ -270,7 +240,6 @@ impl PendingCdpCommandDispatch {
                 inner: CompletedCdpCommandDispatchKind::Runtime(Box::new(
                     pending.complete_scheduler_deferred_inspector_reply(conn),
                 )),
-                owner_scope: None,
             },
             _ => {
                 unreachable!(
@@ -368,10 +337,7 @@ impl PendingCdpCommandDispatch {
                 elapsed_us = %started.elapsed().as_micros(),
             );
         }
-        CompletedCdpCommandDispatch {
-            inner,
-            owner_scope: self.owner_scope,
-        }
+        CompletedCdpCommandDispatch { inner }
     }
 }
 
@@ -434,7 +400,7 @@ impl CdpConnection {
         )
     }
 
-    fn complete_with_output_plan(
+    pub(super) fn complete_with_output_plan(
         &mut self,
         command_context: &mut CommandDispatchContext,
         plan: CommandOutputPlan,
@@ -455,7 +421,6 @@ impl CdpConnection {
     fn pending_step(&mut self, inner: PendingCdpCommandDispatchKind) -> CdpCommandTaskStep {
         let scheduler_events = self.take_scheduler_events();
         CdpCommandTaskStep::Pending(Box::new(PendingCdpCommandDispatch::new(
-            self,
             inner,
             scheduler_events,
         )))
@@ -918,22 +883,6 @@ impl CdpConnection {
 
     pub async fn complete_pending_command_dispatch_with_context(
         &mut self,
-        mut completed: CompletedCdpCommandDispatch,
-        command_context: &mut CommandDispatchContext,
-    ) -> CdpCommandTaskStep {
-        if let Some(owner_scope) = completed.owner_scope.take() {
-            let mut scope = owner_scope.enter(self);
-            return scope
-                .conn_mut()
-                .complete_pending_command_dispatch_in_current_owner(completed, command_context)
-                .await;
-        }
-        self.complete_pending_command_dispatch_in_current_owner(completed, command_context)
-            .await
-    }
-
-    async fn complete_pending_command_dispatch_in_current_owner(
-        &mut self,
         completed: CompletedCdpCommandDispatch,
         command_context: &mut CommandDispatchContext,
     ) -> CdpCommandTaskStep {
@@ -1370,6 +1319,7 @@ impl CdpConnection {
             .ok()
             .and_then(ParsedCdpCommand::command_output_session_id)
             .map(str::to_owned);
+        let output_owner = CommandOwnerScope::capture(self, output_session_id.as_deref());
         let mut protocol_events = Vec::new();
         let mut post_renderer_output_events = Vec::new();
         let mut renderer_output_boundary = None;
@@ -1431,7 +1381,7 @@ impl CdpConnection {
         Box::pin(
             crate::domains::activity::project_protocol_local_command_outputs(
                 self,
-                output_session_id.as_deref(),
+                &output_owner,
                 &mut command_context,
             ),
         )

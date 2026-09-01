@@ -226,7 +226,7 @@ impl MainDocumentNavigationActivity {
             page::emit_bound_renderer_document_lifecycle_background_events(
                 conn,
                 &mut renderer_lifecycle_events,
-                self.state.owner.session_id(),
+                &self.state.owner,
                 binding,
                 &initial_renderer_document_lifecycle_events,
             );
@@ -234,8 +234,8 @@ impl MainDocumentNavigationActivity {
         }
 
         if terminated_before_domcontentloaded {
-            conn.cancel_renderer_document_load_visibility_barrier_for_session_owner(
-                self.state.owner.session_id(),
+            conn.cancel_renderer_document_load_visibility_barrier_for_owner(
+                &self.state.owner,
                 &self.state.loader_id,
             );
             return;
@@ -270,8 +270,8 @@ impl MainDocumentNavigationActivity {
         let timing_enabled = moli_trace::cdp_nav_timing_enabled();
         let timing_started = std::time::Instant::now();
         if !self.is_still_current(conn) {
-            conn.cancel_renderer_document_load_visibility_barrier_for_session_owner(
-                self.state.owner.session_id(),
+            conn.cancel_renderer_document_load_visibility_barrier_for_owner(
+                &self.state.owner,
                 &self.state.loader_id,
             );
             if timing_enabled {
@@ -288,9 +288,7 @@ impl MainDocumentNavigationActivity {
             .emit_renderer_load_completion_async(conn, out, renderer_document)
             .await;
         if post_load_observation_armed {
-            conn.settle_root_frame_stopped_loading_observation(
-                self.state.owner.session_id(),
-            )
+            conn.settle_root_frame_stopped_loading_observation_for_owner(&self.state.owner)
             .expect(
                 "an armed root post-load observation must settle its exact stopped-loading fact",
             );
@@ -321,8 +319,11 @@ impl MainDocumentNavigationActivity {
                 token,
             );
         }
-        conn.runtime_session_owner_target_url(self.state.owner.session_id())
-            .is_some_and(|url| url == self.final_url.as_str())
+        conn.runtime_session_owner_target_url_for_route(
+            self.state.owner.session_id(),
+            self.state.owner.session_owner_route(),
+        )
+        .is_some_and(|url| url == self.final_url.as_str())
     }
 
     async fn emit_download_navigation_commit_into_buffer_async(
@@ -474,16 +475,11 @@ impl MainDocumentNavigationActivity {
         _renderer_document: Option<RendererDocumentLifecycleIdentity>,
     ) -> bool {
         self.emit_renderer_load_boundary_facts(conn, out);
-        let armed = conn.arm_root_post_load_observation_for_session_owner(
-            self.state.owner.session_id(),
-            &self.state.loader_id,
-        );
+        let armed =
+            conn.arm_root_post_load_observation_for_owner(&self.state.owner, &self.state.loader_id);
         if armed {
             let mut network_idle_events = Vec::new();
-            conn.emit_root_network_idle_for_session_owner(
-                self.state.owner.session_id(),
-                &mut network_idle_events,
-            );
+            conn.emit_root_network_idle_for_owner(&self.state.owner, &mut network_idle_events);
             out.extend_background_events(network_idle_events);
         }
         armed
@@ -506,13 +502,13 @@ impl MainDocumentNavigationActivity {
         let renderer_events =
             std::mem::take(&mut self.deferred_initial_renderer_document_lifecycle_events);
         let (binding, mut accepted_events) = conn
-            .ingest_renderer_document_lifecycle_events_for_session_owner(
-                self.state.owner.session_id(),
+            .ingest_renderer_document_lifecycle_events_for_owner(
+                &self.state.owner,
                 renderer_events,
             );
         accepted_events.extend(
-            conn.release_renderer_document_load_visibility_barrier_for_session_owner(
-                self.state.owner.session_id(),
+            conn.release_renderer_document_load_visibility_barrier_for_owner(
+                &self.state.owner,
                 &self.state.loader_id,
             )
             .unwrap_or_default(),
@@ -522,7 +518,7 @@ impl MainDocumentNavigationActivity {
             page::emit_bound_renderer_document_lifecycle_background_events(
                 conn,
                 &mut renderer_lifecycle_events,
-                self.state.owner.session_id(),
+                &self.state.owner,
                 binding,
                 &accepted_events,
             );
@@ -676,11 +672,16 @@ impl DeferredMainDocumentLoadCompletionAdmission {
     ) -> DeferredMainDocumentLoadCompletionActivity {
         let is_current = self.is_still_current_for_scheduler(conn);
         let renderer_page_residence_identity = is_current
-            .then(|| conn.renderer_page_residence_identity_for_session_owner(self.session_id()))
+            .then(|| {
+                conn.renderer_page_residence_identity_for_route(
+                    self.owner_scope().session_id(),
+                    self.owner_scope().session_owner_route(),
+                )
+            })
             .flatten();
         let lifecycle_observer = if is_current {
-            conn.register_exact_renderer_document_lifecycle_observer_for_session_owner(
-                self.session_id(),
+            conn.register_exact_renderer_document_lifecycle_observer_for_owner(
+                self.owner_scope(),
                 self.state.renderer_document_binding.as_ref(),
                 RendererDocumentLifecycleMilestone::Load,
             )
@@ -838,8 +839,8 @@ impl CompletedDeferredMainDocumentLoadCompletionActivity {
             }
             RendererDocumentLifecycleObservation::Superseded
             | RendererDocumentLifecycleObservation::Unavailable => {
-                conn.cancel_renderer_document_load_visibility_barrier_for_session_owner(
-                    self.session_id(),
+                conn.cancel_renderer_document_load_visibility_barrier_for_owner(
+                    self.owner_scope(),
                     &self.state.navigation_activity.state.loader_id,
                 );
                 return;
@@ -1003,8 +1004,8 @@ mod tests {
             ),
             ..started
         };
-        let (binding, accepted) = conn.bind_renderer_document_lifecycle_for_session_owner(
-            Some("SID-nav"),
+        let (binding, accepted) = conn.bind_renderer_document_lifecycle_for_owner(
+            &crate::conn::CommandOwnerScope::for_session("SID-nav"),
             moli_core::page::RendererPageCreationArtifacts {
                 active_document: document,
                 active_epoch: epoch,
@@ -1480,8 +1481,8 @@ mod tests {
     #[tokio::test]
     async fn deferred_load_observer_waits_for_load_not_domcontentloaded() {
         let (mut conn, binding, started) = connection_with_dcl_only_renderer_lifecycle();
-        let observer = conn.register_exact_renderer_document_lifecycle_observer_for_session_owner(
-            Some("SID-nav"),
+        let observer = conn.register_exact_renderer_document_lifecycle_observer_for_owner(
+            &CommandOwnerScope::for_session("SID-nav"),
             Some(&binding),
             RendererDocumentLifecycleMilestone::Load,
         );
@@ -1492,8 +1493,8 @@ mod tests {
         );
 
         let load = renderer_load_event_for_test(started);
-        let (_, accepted) = conn.ingest_renderer_document_lifecycle_events_for_session_owner(
-            Some("SID-nav"),
+        let (_, accepted) = conn.ingest_renderer_document_lifecycle_events_for_owner(
+            &crate::conn::CommandOwnerScope::for_session("SID-nav"),
             vec![load],
         );
         assert_eq!(accepted, vec![load]);
@@ -1511,8 +1512,8 @@ mod tests {
         let work = take_deferred_load_work_for_test(&mut conn);
 
         let load = renderer_load_event_for_test(started);
-        let _ = conn.ingest_renderer_document_lifecycle_events_for_session_owner(
-            Some("SID-nav"),
+        let _ = conn.ingest_renderer_document_lifecycle_events_for_owner(
+            &crate::conn::CommandOwnerScope::for_session("SID-nav"),
             vec![load],
         );
         let pending = work.start_main_document_load_wait();
@@ -1568,8 +1569,8 @@ mod tests {
         );
 
         let load = renderer_load_event_for_test(started);
-        let _ = conn.ingest_renderer_document_lifecycle_events_for_session_owner(
-            Some("SID-nav"),
+        let _ = conn.ingest_renderer_document_lifecycle_events_for_owner(
+            &crate::conn::CommandOwnerScope::for_session("SID-nav"),
             vec![load],
         );
         assert!(
@@ -1596,14 +1597,14 @@ mod tests {
     #[tokio::test]
     async fn deferred_load_observer_reports_exact_document_interruption() {
         let (mut conn, binding, started) = connection_with_dcl_only_renderer_lifecycle();
-        let observer = conn.register_exact_renderer_document_lifecycle_observer_for_session_owner(
-            Some("SID-nav"),
+        let observer = conn.register_exact_renderer_document_lifecycle_observer_for_owner(
+            &CommandOwnerScope::for_session("SID-nav"),
             Some(&binding),
             RendererDocumentLifecycleMilestone::Load,
         );
         let terminated = renderer_termination_event_for_test(started);
-        let _ = conn.ingest_renderer_document_lifecycle_events_for_session_owner(
-            Some("SID-nav"),
+        let _ = conn.ingest_renderer_document_lifecycle_events_for_owner(
+            &crate::conn::CommandOwnerScope::for_session("SID-nav"),
             vec![terminated],
         );
 
@@ -1616,12 +1617,12 @@ mod tests {
     #[tokio::test]
     async fn newer_document_navigation_supersedes_deferred_load_observer() {
         let (mut conn, binding, _) = connection_with_dcl_only_renderer_lifecycle();
-        let observer = conn.register_exact_renderer_document_lifecycle_observer_for_session_owner(
-            Some("SID-nav"),
+        let observer = conn.register_exact_renderer_document_lifecycle_observer_for_owner(
+            &CommandOwnerScope::for_session("SID-nav"),
             Some(&binding),
             RendererDocumentLifecycleMilestone::Load,
         );
-        conn.start_document_navigation_for_session_owner(Some("SID-nav"), "LID-2".to_owned())
+        conn.start_document_navigation_for_route(Some("SID-nav"), None, "LID-2".to_owned())
             .expect("replacement navigation token");
 
         assert_eq!(
@@ -1633,8 +1634,8 @@ mod tests {
     #[tokio::test]
     async fn losing_page_slot_terminates_deferred_load_observer() {
         let (mut conn, binding, _) = connection_with_dcl_only_renderer_lifecycle();
-        let observer = conn.register_exact_renderer_document_lifecycle_observer_for_session_owner(
-            Some("SID-nav"),
+        let observer = conn.register_exact_renderer_document_lifecycle_observer_for_owner(
+            &CommandOwnerScope::for_session("SID-nav"),
             Some(&binding),
             RendererDocumentLifecycleMilestone::Load,
         );
@@ -1653,7 +1654,7 @@ mod tests {
         conn.enqueue_deferred_main_document_load_completion(old_completion);
         let work = take_deferred_load_work_for_test(&mut conn);
 
-        conn.start_document_navigation_for_session_owner(Some("SID-nav"), "LID-2".to_owned())
+        conn.start_document_navigation_for_route(Some("SID-nav"), None, "LID-2".to_owned())
             .expect("replacement navigation token");
 
         assert!(

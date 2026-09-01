@@ -1,6 +1,6 @@
 use crate::conn::{
-    CdpConnection, DocumentBodySource, DocumentNavigationToken, FetchAuthChallenge,
-    NavigationDispatchState, NavigationLoadOutcome, PendingFetchNavigation,
+    CdpConnection, CommandOwnerScope, DocumentBodySource, DocumentNavigationToken,
+    FetchAuthChallenge, NavigationDispatchState, NavigationLoadOutcome, PendingFetchNavigation,
     PendingSubresourceFetchAuthStage, PendingSubresourceFetchAuthStageChain,
     PendingSubresourceFetchOwnerKind, PendingSubresourceFetchRequest, decode_data_url_response,
 };
@@ -37,8 +37,9 @@ fn prepare_navigation_response_stage(
         return true;
     }
     let Some(response_stage) = conn
-        .target_fetch_subresource_interception_snapshot_for_session_owner(
+        .target_fetch_subresource_interception_snapshot_for_route(
             pending.navigation.owner.session_id(),
+            pending.navigation.owner.session_owner_route(),
         )
         .and_then(|snapshot| {
             snapshot
@@ -64,10 +65,12 @@ pub(crate) async fn load_or_pause_navigation_for_auth_into_buffer_async(
     auth: Option<SubresourceAuthCredentials>,
     prior_network_observation_journal: Option<NetworkObservationJournal>,
 ) {
+    let navigate_owner = pending.navigation.owner.clone();
     let navigate_session_id = pending.navigation.owner.session_id().map(str::to_owned);
     network::record_main_document_request_body(conn, &pending.navigation);
-    let should_handle_auth = conn.target_fetch_matches_auth_required_for_session_owner(
+    let should_handle_auth = conn.target_fetch_matches_auth_required_for_route(
         navigate_session_id.as_deref(),
+        navigate_owner.session_owner_route(),
         &pending.navigation.requested_url,
     ) && pending.navigation.requested_url.scheme() != "data";
 
@@ -79,8 +82,9 @@ pub(crate) async fn load_or_pause_navigation_for_auth_into_buffer_async(
         let has_auth_credentials = auth.is_some();
         if pending.intercept_response && navigation_response_stage_auth_can_stream(auth.as_ref()) {
             match conn
-                .fetch_navigation_streaming_raw_response_for_session_owner_async(
+                .fetch_navigation_streaming_raw_response_for_route_async(
                     navigate_session_id.as_deref(),
+                    navigate_owner.session_owner_route(),
                     pending.navigation.request_load_policy,
                     &method,
                     &raw_url,
@@ -136,8 +140,9 @@ pub(crate) async fn load_or_pause_navigation_for_auth_into_buffer_async(
             // before libcurl has completed the credential retry, so keep
             // credential replay on the buffered path until the fetch runtime
             // can mark intermediate auth responses separately.
-            conn.fetch_navigation_auth_raw_response_for_session_owner_async(
+            conn.fetch_navigation_auth_raw_response_for_route_async(
                 navigate_session_id.as_deref(),
+                navigate_owner.session_owner_route(),
                 pending.navigation.request_load_policy,
                 &method,
                 &raw_url,
@@ -148,8 +153,9 @@ pub(crate) async fn load_or_pause_navigation_for_auth_into_buffer_async(
             .await
         } else {
             match conn
-                .fetch_navigation_streaming_raw_response_for_session_owner_async(
+                .fetch_navigation_streaming_raw_response_for_route_async(
                     navigate_session_id.as_deref(),
+                    navigate_owner.session_owner_route(),
                     pending.navigation.request_load_policy,
                     &method,
                     &raw_url,
@@ -219,8 +225,9 @@ pub(crate) async fn load_or_pause_navigation_for_auth_into_buffer_async(
 
     if pending.intercept_response && pending.navigation.requested_url.scheme() != "data" {
         match conn
-            .fetch_navigation_streaming_raw_response_for_session_owner_async(
+            .fetch_navigation_streaming_raw_response_for_route_async(
                 navigate_session_id.as_deref(),
+                navigate_owner.session_owner_route(),
                 pending.navigation.request_load_policy,
                 &pending.navigation.request_method,
                 pending.navigation.requested_url.as_str(),
@@ -740,7 +747,7 @@ pub(crate) async fn continue_navigation_without_request_pause_into_buffer_async(
 
 pub(crate) async fn continue_subresource_without_fetch_pause_async(
     conn: &mut CdpConnection,
-    session_id: Option<&str>,
+    owner: &CommandOwnerScope,
     request_id: Option<String>,
     page_owner: crate::conn::TargetPageResidenceIdentity,
     internal_id: u64,
@@ -752,6 +759,8 @@ pub(crate) async fn continue_subresource_without_fetch_pause_async(
     handle_auth_requests: bool,
     owner_kind: PendingSubresourceFetchOwnerKind,
 ) {
+    let session_id = owner.session_id();
+    let owner_route = owner.session_owner_route();
     let pending = PendingSubresourceFetchRequest {
         residence: crate::conn::PendingSubresourceFetchResidence::InstalledPage(page_owner),
         owner_session_id: None,
@@ -767,8 +776,9 @@ pub(crate) async fn continue_subresource_without_fetch_pause_async(
         request_stage_chain: None,
     };
     if conn
-        .continue_pending_subresource_fetch_for_session_owner_async(
+        .continue_pending_subresource_fetch_for_route_async(
             session_id,
+            owner_route,
             internal_id,
             None,
             None,
@@ -780,8 +790,11 @@ pub(crate) async fn continue_subresource_without_fetch_pause_async(
         .await
         .is_ok()
     {
-        conn.register_in_flight_subresource_fetch_request_for_session_owner(
-            session_id, request_id, pending,
+        conn.register_in_flight_subresource_fetch_request_for_route(
+            session_id,
+            owner_route,
+            request_id,
+            pending,
         );
     }
 }
@@ -862,8 +875,9 @@ fn register_navigation_auth_required_event(
     let auth_sessions = conn
         .target_fetch_subresource_interception_snapshot_for_target(&pending.navigation.frame_id)
         .or_else(|| {
-            conn.target_fetch_subresource_interception_snapshot_for_session_owner(
+            conn.target_fetch_subresource_interception_snapshot_for_route(
                 pending.navigation.owner.session_id(),
+                pending.navigation.owner.session_owner_route(),
             )
         })
         .map(|snapshot| {
@@ -888,8 +902,9 @@ fn register_navigation_auth_required_event(
         );
         let mut remaining_sessions = Vec::new();
         for session in auth_sessions.into_iter().skip(1) {
-            let Ok(next_request_id) = conn.allocate_fetch_navigation_request_id_for_session_owner(
+            let Ok(next_request_id) = conn.allocate_fetch_navigation_request_id_for_route(
                 pending.navigation.owner.session_id(),
+                pending.navigation.owner.session_owner_route(),
             ) else {
                 break;
             };
@@ -915,8 +930,13 @@ fn register_navigation_auth_required_event(
         .owner_session_id
         .as_deref()
         .or(pending.navigation.owner.session_id());
-    conn.register_pending_fetch_auth_navigation_for_session_owner(
+    let pending_owner_route = pending_owner_session_id
+        .is_none()
+        .then(|| pending.navigation.owner.session_owner_route())
+        .flatten();
+    conn.register_pending_fetch_auth_navigation_for_route(
         pending_owner_session_id,
+        pending_owner_route,
         pending.fetch_request_id.clone(),
         pending_auth.clone(),
     );
@@ -929,15 +949,21 @@ fn register_navigation_auth_required_event(
 
 pub(crate) async fn continue_subresource_for_response_stage_async(
     conn: &mut CdpConnection,
+    owner: &CommandOwnerScope,
     session_id: Option<&str>,
     request_id: String,
     pending: PendingSubresourceFetchRequest,
     handle_auth_requests: bool,
     response_stage_blocked_intercepts: Vec<DevToolsNetworkInterceptId>,
 ) {
+    let owner_route = session_id
+        .is_none()
+        .then(|| owner.session_owner_route())
+        .flatten();
     if conn
-        .continue_pending_subresource_fetch_for_session_owner_async(
+        .continue_pending_subresource_fetch_for_route_async(
             session_id,
+            owner_route,
             pending.internal_id,
             None,
             None,
@@ -949,8 +975,9 @@ pub(crate) async fn continue_subresource_for_response_stage_async(
         .await
         .is_ok()
     {
-        conn.register_in_flight_response_stage_subresource_fetch_request_for_session_owner(
+        conn.register_in_flight_response_stage_subresource_fetch_request_for_route(
             session_id,
+            owner_route,
             Some(request_id),
             pending,
             response_stage_blocked_intercepts,
@@ -960,14 +987,20 @@ pub(crate) async fn continue_subresource_for_response_stage_async(
 
 pub(crate) async fn continue_subresource_for_deferred_response_stage_async(
     conn: &mut CdpConnection,
+    owner: &CommandOwnerScope,
     session_id: Option<&str>,
     request_id: String,
     pending: PendingSubresourceFetchRequest,
     handle_auth_requests: bool,
 ) {
+    let owner_route = session_id
+        .is_none()
+        .then(|| owner.session_owner_route())
+        .flatten();
     if conn
-        .continue_pending_subresource_fetch_for_session_owner_async(
+        .continue_pending_subresource_fetch_for_route_async(
             session_id,
+            owner_route,
             pending.internal_id,
             None,
             None,
@@ -979,8 +1012,9 @@ pub(crate) async fn continue_subresource_for_deferred_response_stage_async(
         .await
         .is_ok()
     {
-        conn.register_in_flight_deferred_response_stage_subresource_fetch_request_for_session_owner(
+        conn.register_in_flight_deferred_response_stage_subresource_fetch_request_for_route(
             session_id,
+            owner_route,
             Some(request_id),
             pending,
         );

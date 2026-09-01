@@ -2,7 +2,7 @@ use moli_core::page::{
     RendererDevToolsAgentToken, RendererDomMutationEvent, RendererDomMutationEventBatch,
 };
 
-use crate::conn::{BackgroundProtocolEvent, CdpConnection};
+use crate::conn::{BackgroundProtocolEvent, CdpConnection, CommandOwnerScope};
 use crate::domains::activity::{
     ProtocolOutputPayloads, ProtocolOutputProjectionContext, ProtocolOutputSink, ProtocolOutputSlot,
 };
@@ -68,13 +68,13 @@ fn append_dom_mutation_batches_to_background_events(
 impl DomPreparedOutputs {
     pub(in crate::domains) fn from_renderer_dom_mutation_event_batches_for_stream(
         conn: &CdpConnection,
-        source_session_id: Option<&str>,
+        source_owner: &CommandOwnerScope,
         source_renderer_agent: RendererDevToolsAgentToken,
         batches: &[RendererDomMutationEventBatch],
     ) -> Self {
         Self::from_renderer_dom_mutation_event_batches_with_source_agent(
             conn,
-            source_session_id,
+            source_owner,
             source_renderer_agent,
             batches,
         )
@@ -82,12 +82,15 @@ impl DomPreparedOutputs {
 
     fn from_renderer_dom_mutation_event_batches_with_source_agent(
         conn: &CdpConnection,
-        source_session_id: Option<&str>,
+        source_owner: &CommandOwnerScope,
         source_renderer_agent: RendererDevToolsAgentToken,
         batches: &[RendererDomMutationEventBatch],
     ) -> Self {
         let current_attachment = conn
-            .runtime_session_owner_slot(source_session_id)
+            .runtime_session_owner_slot_for_route(
+                source_owner.session_id(),
+                source_owner.session_owner_route(),
+            )
             .ok()
             .and_then(|slot| slot.current_renderer_attachment());
         Self {
@@ -113,8 +116,8 @@ impl DomPreparedOutputs {
                         return None;
                     }
                     let attachment = conn
-                        .target_page_protocol_attachment_identity_for_renderer_inspector_route(
-                            source_session_id,
+                        .target_page_protocol_attachment_identity_for_renderer_inspector_owner(
+                            source_owner,
                             batch.session.wire_session_id(),
                         )?;
                     Some(DomMutationBatch {

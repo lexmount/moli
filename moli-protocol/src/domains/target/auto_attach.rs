@@ -1290,7 +1290,7 @@ async fn ensure_initial_document_for_attached_page_targets_async(
         let Some(route) = conn.target_session_route_for_target_id(target_id) else {
             continue;
         };
-        let owner = crate::conn::CommandOwnerScope::for_implicit_route(Some(route));
+        let owner = crate::conn::CommandOwnerScope::for_route(route);
         let pending = match conn.start_initial_document_page_ensure_for_owner(&owner) {
             Ok(pending) => pending,
             Err(message) => {

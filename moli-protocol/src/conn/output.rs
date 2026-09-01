@@ -22,7 +22,7 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc::UnboundedSender;
 
 use super::{
-    CdpConnection, DevToolsDocumentLifecycleWaitKey,
+    CdpConnection, CommandOwnerScope, DevToolsDocumentLifecycleWaitKey,
     state::{BrowserContext, DocumentNavigationToken},
 };
 
@@ -35,6 +35,7 @@ pub type BackgroundEventSender = UnboundedSender<BackgroundProtocolEvent>;
 pub struct RuntimeInspectorResponseReady {
     frontend_command_id: FrontendCommandId,
     session_key: DevToolsSessionKey,
+    owner: Option<CommandOwnerScope>,
     expected_renderer_call_id: Option<RendererCallId>,
     response: Result<RendererRuntimeInspectorAsyncCompletion, String>,
 }
@@ -48,6 +49,21 @@ impl RuntimeInspectorResponseReady {
         Self {
             frontend_command_id: FrontendCommandId::new(command_id),
             session_key: DevToolsSessionKey::from_wire_session_id(session_id),
+            owner: None,
+            expected_renderer_call_id: None,
+            response,
+        }
+    }
+
+    pub(crate) fn for_owner(
+        command_id: u64,
+        owner: &CommandOwnerScope,
+        response: Result<RendererRuntimeInspectorAsyncCompletion, String>,
+    ) -> Self {
+        Self {
+            frontend_command_id: FrontendCommandId::new(command_id),
+            session_key: DevToolsSessionKey::from_wire_session_id(owner.session_id()),
+            owner: Some(owner.clone()),
             expected_renderer_call_id: None,
             response,
         }
@@ -59,6 +75,26 @@ impl RuntimeInspectorResponseReady {
 
     pub fn session_id(&self) -> Option<&str> {
         self.session_key.wire_session_id()
+    }
+
+    pub(crate) fn owner(&self) -> Option<&CommandOwnerScope> {
+        self.owner.as_ref()
+    }
+
+    pub(crate) fn bind_owner(&mut self, owner: &CommandOwnerScope) {
+        assert_eq!(
+            self.session_id(),
+            owner.session_id(),
+            "runtime Inspector response owner must preserve its wire session"
+        );
+        if let Some(current) = self.owner.as_ref() {
+            assert_eq!(
+                current, owner,
+                "runtime Inspector response owner cannot change"
+            );
+        } else {
+            self.owner = Some(owner.clone());
+        }
     }
 
     pub fn error(&self) -> Option<&str> {

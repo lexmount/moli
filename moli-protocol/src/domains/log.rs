@@ -516,8 +516,8 @@ mod tests {
                 .is_some()
         );
 
-        let prepared =
-            live_log_prepared_outputs_for_renderer_network_fact(&ctx.conn, Some("SID-1"));
+        let owner = crate::conn::CommandOwnerScope::for_session("SID-1");
+        let prepared = live_log_prepared_outputs_for_renderer_network_fact(&ctx.conn, &owner);
         let mut slot = ObservablePreparedOutputSlot::from_outputs(prepared);
         let mut events = Vec::new();
         slot.emit_activity_background_events_async(

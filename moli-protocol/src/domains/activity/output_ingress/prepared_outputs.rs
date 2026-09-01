@@ -7,7 +7,7 @@ use super::super::output_payloads::{ProtocolOutputPayload, ProtocolOutputPayload
 use super::super::output_slot::{
     ProtocolOutputDelivery, ProtocolOutputResponseOrder, ProtocolOutputSink, ProtocolOutputSlot,
 };
-use crate::conn::{CdpConnection, CommandDispatchContext};
+use crate::conn::{CdpConnection, CommandDispatchContext, CommandOwnerScope};
 use crate::domains::page::{PagePreparedOutputSlot, SLOT_TOP_LEVEL_LOCATION_NAVIGATION};
 
 /// One move-owned protocol projection batch prepared from concrete output.
@@ -42,14 +42,16 @@ impl PreparedProtocolOutputs {
     /// and `Log.enable` retain their independent Chromium-compatible policies.
     pub(in crate::domains::activity) fn from_renderer_network_observation(
         conn: &mut CdpConnection,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
         source_renderer_page: Option<crate::conn::RendererPageResidenceIdentity>,
         source_document: moli_core::RendererDocumentLifecycleIdentity,
         item: &moli_core::page::ScriptNetworkOutputItem,
     ) -> Option<Self> {
+        let session_id = owner.session_id();
         let renderer_live = conn
-            .ingest_renderer_page_network_output_item_and_prepare_live_delivery_for_session_owner(
+            .ingest_renderer_page_network_output_item_and_prepare_live_delivery_for_route(
                 session_id,
+                owner.session_owner_route(),
                 source_renderer_page,
                 source_document,
                 item,
@@ -57,7 +59,7 @@ impl PreparedProtocolOutputs {
 
         let mut prepared = Self::empty();
         crate::domains::observable_output::live_log_prepared_outputs_for_renderer_network_fact(
-            conn, session_id,
+            conn, owner,
         )
         .append_to_output_sink(&mut prepared);
         crate::domains::network::NetworkPreparedOutputs::from_renderer_live_delivery(renderer_live)
@@ -68,7 +70,7 @@ impl PreparedProtocolOutputs {
 
     pub(in crate::domains::activity) fn from_renderer_observation(
         conn: &mut CdpConnection,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
         source_renderer_agent: moli_core::page::RendererDevToolsAgentToken,
         observation: &RendererProtocolObservation,
     ) -> Self {
@@ -97,14 +99,14 @@ impl PreparedProtocolOutputs {
             ),
             RendererProtocolObservation::RuntimeBinding(call) => {
                 crate::domains::runtime::RuntimePreparedOutputs::
-                    from_renderer_runtime_binding_call(conn, session_id, call.clone())
+                    from_renderer_runtime_binding_call(conn, owner, call.clone())
                 .append_to_output_sink(&mut prepared);
             }
             RendererProtocolObservation::DomMutations(batch) => {
                 crate::domains::dom::DomPreparedOutputs::
                     from_renderer_dom_mutation_event_batches_for_stream(
                         conn,
-                        session_id,
+                        owner,
                         source_renderer_agent,
                         std::slice::from_ref(batch),
                     )
@@ -112,15 +114,15 @@ impl PreparedProtocolOutputs {
             }
             RendererProtocolObservation::RuntimeInspector(batch) => {
                 let source_batches = vec![batch.clone()];
-                let batches = conn.route_current_renderer_inspector_output_for_session_owner(
-                    session_id,
+                let batches = conn.route_current_renderer_inspector_output_for_owner(
+                    owner,
                     source_batches.clone(),
                 );
                 if batches.is_empty() {
                     crate::domains::runtime::RuntimePreparedOutputs::
                         from_retired_renderer_runtime_inspector_session_responses(
                             conn,
-                            session_id,
+                            owner,
                             &source_batches,
                         )
                         .append_to_output_sink(&mut prepared);
@@ -129,7 +131,7 @@ impl PreparedProtocolOutputs {
                 crate::domains::runtime::RuntimePreparedOutputs::
                     from_renderer_runtime_inspector_message_batches(
                         conn,
-                        session_id,
+                        owner,
                         &batches,
                     )
                     .append_to_output_sink(&mut prepared);
@@ -138,7 +140,7 @@ impl PreparedProtocolOutputs {
                 crate::domains::observable_output::runtime_console_message_prepared_outputs(
                     conn,
                     message.clone(),
-                    session_id,
+                    owner,
                 )
                 .append_to_output_sink(&mut prepared);
             }
@@ -150,14 +152,14 @@ impl PreparedProtocolOutputs {
                     conn,
                     *source_document,
                     issue.clone(),
-                    session_id,
+                    owner,
                 )
                 .append_to_output_sink(&mut prepared);
             }
             RendererProtocolObservation::WindowOpen(event) => {
                 crate::domains::page::PagePreparedOutputs::from_renderer_window_open_event(
                     conn,
-                    session_id,
+                    owner,
                     event.clone(),
                 )
                 .append_to_window_open_output_sink(&mut prepared);
@@ -170,7 +172,7 @@ impl PreparedProtocolOutputs {
                     conn,
                     text.clone(),
                     *execution_context_id,
-                    session_id,
+                    owner,
                 )
                 .append_to_output_sink(&mut prepared);
             }
@@ -180,25 +182,24 @@ impl PreparedProtocolOutputs {
 
     pub(in crate::domains::activity) async fn from_protocol_local_command_boundary(
         conn: &mut CdpConnection,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
     ) -> Self {
         let mut outputs = Self::empty();
-        outputs
-            .append_protocol_local_outputs(conn, session_id)
-            .await;
+        outputs.append_protocol_local_outputs(conn, owner).await;
         outputs
     }
 
     pub(in crate::domains::activity) async fn from_renderer_owner_action(
         conn: &mut CdpConnection,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
         action: RendererOwnerAction,
     ) -> Self {
+        let session_id = owner.session_id();
         let mut prepared = Self::empty();
         match action {
             RendererOwnerAction::FileChooser(activation) => {
                 crate::domains::input::InputPreparedOutputs::from_renderer_file_chooser_activation(
-                    conn, session_id, activation,
+                    conn, owner, activation,
                 )
                 .append_to_output_sink(&mut prepared);
             }
@@ -210,13 +211,13 @@ impl PreparedProtocolOutputs {
             }
             RendererOwnerAction::JavaScriptDialog(dialog) => {
                 crate::domains::page::PagePreparedOutputs::from_renderer_javascript_dialog(
-                    conn, session_id, dialog,
+                    conn, owner, dialog,
                 )
                 .append_to_javascript_dialog_output_sink(&mut prepared);
             }
             RendererOwnerAction::Popup(activation) => {
                 crate::domains::page::PagePreparedOutputs::from_renderer_popup_activation(
-                    conn, session_id, activation,
+                    conn, owner, activation,
                 )
                 .append_to_popup_output_sink(&mut prepared);
             }
@@ -226,7 +227,7 @@ impl PreparedProtocolOutputs {
             } => {
                 crate::domains::page::PagePreparedOutputs::from_renderer_child_frame_tree_event(
                     conn,
-                    session_id,
+                    owner,
                     source_document,
                     event,
                 )
@@ -239,7 +240,7 @@ impl PreparedProtocolOutputs {
                 crate::domains::page::PagePreparedOutputs::
                     from_renderer_child_frame_document_opened(
                         conn,
-                        session_id,
+                        owner,
                         source_document,
                         event,
                     )
@@ -252,7 +253,7 @@ impl PreparedProtocolOutputs {
                 crate::domains::page::PagePreparedOutputs::
                     from_renderer_child_frame_document_network(
                         conn,
-                        session_id,
+                        owner,
                         source_document,
                         event,
                     )
@@ -264,7 +265,7 @@ impl PreparedProtocolOutputs {
             } => {
                 crate::domains::page::PagePreparedOutputs::from_renderer_child_frame_load(
                     conn,
-                    session_id,
+                    owner,
                     source_document,
                     event,
                 )
@@ -272,7 +273,7 @@ impl PreparedProtocolOutputs {
             }
             RendererOwnerAction::SameDocumentNavigation(navigation) => {
                 crate::domains::page::PagePreparedOutputs::from_renderer_same_document_navigation(
-                    conn, session_id, navigation,
+                    conn, owner, navigation,
                 )
                 .append_to_same_document_navigation_output_sink(&mut prepared);
             }
@@ -280,7 +281,7 @@ impl PreparedProtocolOutputs {
                 crate::domains::page::PagePreparedOutputs::
                     from_renderer_top_level_location_navigation(
                         conn,
-                        session_id,
+                        owner,
                         navigation,
                     )
                     .append_to_top_level_location_navigation_output_sink(&mut prepared);
@@ -297,7 +298,7 @@ impl PreparedProtocolOutputs {
                 crate::domains::fetch::
                     subresource_fetch_pause_prepared_outputs_for_renderer_record_async(
                         conn,
-                        session_id,
+                        owner,
                         source_document,
                         *info,
                     )
@@ -311,7 +312,7 @@ impl PreparedProtocolOutputs {
                 crate::domains::network::NetworkPreparedOutputs::
                     from_renderer_subresource_continue(
                         conn,
-                        session_id,
+                        owner,
                         source_document,
                         *event,
                     )
@@ -325,7 +326,7 @@ impl PreparedProtocolOutputs {
                 crate::domains::fetch::
                     detached_parser_script_fetch_pause_prepared_outputs_for_renderer_record_async(
                         conn,
-                        session_id,
+                        owner,
                         source_document,
                         *info,
                         continuation,
@@ -335,7 +336,7 @@ impl PreparedProtocolOutputs {
             }
             RendererOwnerAction::SharedWorkerTargetLifecycle(event) => {
                 if let Some((browser_context_id, _)) =
-                    conn.target_owner_identity_for_session(session_id)
+                    conn.target_owner_identity_for_route(session_id, owner.session_owner_route())
                 {
                     crate::domains::target::
                         shared_worker_target_lifecycle_prepared_outputs_for_event(
@@ -350,7 +351,7 @@ impl PreparedProtocolOutputs {
             }
             RendererOwnerAction::ServiceWorkerTargetLifecycle(event) => {
                 if let Some((browser_context_id, _)) =
-                    conn.target_owner_identity_for_session(session_id)
+                    conn.target_owner_identity_for_route(session_id, owner.session_owner_route())
                 {
                     crate::domains::target::
                         service_worker_target_lifecycle_prepared_outputs_for_event(
@@ -367,7 +368,7 @@ impl PreparedProtocolOutputs {
                 crate::domains::target::
                     dedicated_worker_target_lifecycle_prepared_outputs_for_event(
                         conn,
-                        session_id,
+                        owner,
                         event,
                     )
                     .append_to_dedicated_worker_target_lifecycle_output_sink(&mut prepared);
@@ -423,10 +424,11 @@ impl PreparedProtocolOutputs {
     async fn project_slots_async(
         &mut self,
         conn: &mut CdpConnection,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
         command_context: &mut CommandDispatchContext,
         slots: Vec<ProtocolOutputSlot>,
     ) {
+        let session_id = owner.session_id();
         for slot in slots {
             let trace_started =
                 moli_trace::cdp_runtime_trace_enabled().then(std::time::Instant::now);
@@ -441,7 +443,7 @@ impl PreparedProtocolOutputs {
             }
             slot.project_async(
                 conn,
-                &mut ProtocolOutputProjectionContext::new(session_id, command_context),
+                &mut ProtocolOutputProjectionContext::new(owner, command_context),
                 Some(&mut self.payloads),
             )
             .await;
@@ -461,27 +463,24 @@ impl PreparedProtocolOutputs {
     fn emit_root_network_idle_if_ready(
         &mut self,
         conn: &mut CdpConnection,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
         command_context: &mut CommandDispatchContext,
     ) {
         if std::mem::take(&mut self.emit_root_network_idle_after_projection) {
-            conn.emit_root_network_idle_for_session_owner(
-                session_id,
-                command_context.protocol_events_mut(),
-            );
+            conn.emit_root_network_idle_for_owner(owner, command_context.protocol_events_mut());
         }
     }
 
     pub(in crate::domains::activity) async fn project_async(
         mut self,
         conn: &mut CdpConnection,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
         command_context: &mut CommandDispatchContext,
     ) {
         let slots = std::mem::take(&mut self.ordered_slots);
-        self.project_slots_async(conn, session_id, command_context, slots)
+        self.project_slots_async(conn, owner, command_context, slots)
             .await;
-        self.emit_root_network_idle_if_ready(conn, session_id, command_context);
+        self.emit_root_network_idle_if_ready(conn, owner, command_context);
     }
 
     /// Projects output explicitly allowed before a Runtime command response
@@ -494,7 +493,7 @@ impl PreparedProtocolOutputs {
     pub(in crate::domains::activity) async fn project_before_command_response_and_hold_after(
         mut self,
         conn: &mut CdpConnection,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
         command_context: &mut CommandDispatchContext,
     ) -> Option<Self> {
         let mut before_response = Vec::new();
@@ -505,12 +504,12 @@ impl PreparedProtocolOutputs {
                 ProtocolOutputResponseOrder::AfterResponse => after_response.push(slot),
             }
         }
-        self.project_slots_async(conn, session_id, command_context, before_response)
+        self.project_slots_async(conn, owner, command_context, before_response)
             .await;
         // A concrete body-finished fact can make the exact committed Document
         // idle. Emit that derived lifecycle event after the corresponding
         // Network output and at the same pre-response boundary.
-        self.emit_root_network_idle_if_ready(conn, session_id, command_context);
+        self.emit_root_network_idle_if_ready(conn, owner, command_context);
         self.ordered_slots = after_response;
         (!self.ordered_slots.is_empty()).then_some(self)
     }
@@ -520,14 +519,14 @@ impl PreparedProtocolOutputs {
     pub(in crate::domains::activity) async fn project_owner_actions_async(
         mut self,
         conn: &mut CdpConnection,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
         command_context: &mut CommandDispatchContext,
     ) {
         let owner_actions = std::mem::take(&mut self.ordered_slots)
             .into_iter()
             .filter(|slot| slot.delivery() == ProtocolOutputDelivery::OwnerAction)
             .collect();
-        self.project_slots_async(conn, session_id, command_context, owner_actions)
+        self.project_slots_async(conn, owner, command_context, owner_actions)
             .await;
     }
 
@@ -540,10 +539,10 @@ impl PreparedProtocolOutputs {
     async fn append_protocol_local_outputs(
         &mut self,
         conn: &mut CdpConnection,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
     ) {
-        crate::domains::dom_storage::append_pending_dom_storage_outputs_for_session_owner(
-            conn, session_id, self,
+        crate::domains::dom_storage::append_pending_dom_storage_outputs_for_owner(
+            conn, owner, self,
         );
     }
 }

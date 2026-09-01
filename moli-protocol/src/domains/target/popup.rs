@@ -313,7 +313,7 @@ async fn ensure_popup_initial_document_page_async(
     let Some(route) = conn.target_session_route_for_target_id(target_id) else {
         return false;
     };
-    let owner = CommandOwnerScope::for_implicit_route(Some(route));
+    let owner = CommandOwnerScope::for_route(route);
     {
         let pending = match conn.start_initial_document_page_ensure_for_owner(&owner) {
             Ok(pending) => pending,
@@ -417,7 +417,7 @@ pub(super) async fn start_target_url_navigation_if_allowed_background_events_asy
     else {
         return;
     };
-    let owner_scope = CommandOwnerScope::for_implicit_route(Some(route));
+    let owner_scope = CommandOwnerScope::for_route(route);
     crate::domains::page::navigate_command_owner_from_renderer_background_events_async(
         conn,
         out,

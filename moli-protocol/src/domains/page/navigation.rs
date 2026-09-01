@@ -1092,7 +1092,7 @@ fn start_protocol_neutral_navigation_command(
             is_download: None,
         },
     };
-    let command_owner = CommandOwnerScope::for_implicit_route(Some(route.clone()));
+    let command_owner = CommandOwnerScope::for_route(route.clone());
     let reloaded_after_crash_session_ids = reloaded_after_crash_session_ids(conn, &command_owner);
     let step = match command {
         DevToolsCommand::Navigate(command) => {
@@ -3365,10 +3365,8 @@ pub(crate) async fn complete_materialized_navigation_into_buffer_async(
     navigation: network::MaterializedNavigationLoadOutcome,
     command_context: &mut crate::conn::CommandDispatchContext,
 ) {
-    let owner = state.owner.clone();
-    let mut route_scope = owner.enter(conn);
     complete_materialized_navigation_into_buffer_inner_async(
-        route_scope.conn_mut(),
+        conn,
         out,
         token,
         state,
@@ -3386,13 +3384,14 @@ async fn complete_materialized_navigation_into_buffer_inner_async(
     navigation: network::MaterializedNavigationLoadOutcome,
     command_context: &mut crate::conn::CommandDispatchContext,
 ) {
-    let navigation_session_id = state.owner.session_id().map(str::to_owned);
+    let navigation_owner = state.owner.clone();
+    let navigation_session_id = navigation_owner.session_id().map(str::to_owned);
     let navigation_loader_id = state.loader_id.clone();
     match navigation {
         network::MaterializedNavigationLoadOutcome::ResponseCommitReady(navigation) => {
             let navigation = *navigation;
-            let update_result = match conn.prepared_document_commit_configuration_for_session_owner(
-                state.owner.session_id(),
+            let update_result = match conn.prepared_document_commit_configuration_for_owner(
+                &state.owner,
                 navigation.final_url(),
             ) {
                 Ok(configuration) => navigation.update_commit_configuration(configuration).await,
@@ -3402,14 +3401,14 @@ async fn complete_materialized_navigation_into_buffer_inner_async(
                 push_navigation_commit_error(out, &state, error);
             } else {
                 let renderer_page = navigation.renderer_page_residence_identity();
-                let candidate = conn.prepare_renderer_agent_candidate_token_for_session_owner(
-                    state.owner.session_id(),
+                let candidate = conn.prepare_renderer_agent_candidate_token_for_owner(
+                    &state.owner,
                     &token,
                     navigation.renderer_devtools_agent_token(),
                 );
                 match candidate.and_then(|candidate| {
-                    conn.commit_renderer_agent_candidate_for_session_owner(
-                        state.owner.session_id(),
+                    conn.commit_renderer_agent_candidate_for_owner(
+                        &state.owner,
                         candidate,
                         renderer_page,
                     )
@@ -3434,8 +3433,8 @@ async fn complete_materialized_navigation_into_buffer_inner_async(
                             }
                             Err(error) => {
                                 if let Err(rollback_error) = conn
-                                    .rollback_committed_renderer_agent_candidate_for_session_owner(
-                                        state.owner.session_id(),
+                                    .rollback_committed_renderer_agent_candidate_for_owner(
+                                        &state.owner,
                                         transaction,
                                     )
                                 {
@@ -3474,15 +3473,11 @@ async fn complete_materialized_navigation_into_buffer_inner_async(
             .await;
         }
         network::MaterializedNavigationLoadOutcome::Download(navigation) => {
-            let _ = conn.clear_pending_navigation_history_update_for_session_owner(
-                state.owner.session_id(),
-            );
+            let _ = conn.clear_pending_navigation_history_update_for_owner(&state.owner);
             commit_download_navigation_async(conn, out, state, navigation, command_context).await;
         }
         network::MaterializedNavigationLoadOutcome::Failed(navigation) => {
-            let _ = conn.clear_pending_navigation_history_update_for_session_owner(
-                state.owner.session_id(),
-            );
+            let _ = conn.clear_pending_navigation_history_update_for_owner(&state.owner);
             let network::MaterializedFailedDocumentProgress {
                 error_text,
                 document_policy,
@@ -3491,8 +3486,8 @@ async fn complete_materialized_navigation_into_buffer_inner_async(
             } = navigation;
             if document_policy.invalidates_committed_document() {
                 let _ = conn
-                    .discard_loaded_page_after_failed_navigation_for_session_owner_async(
-                        state.owner.session_id(),
+                    .discard_loaded_page_after_failed_navigation_for_owner_async(
+                        &state.owner,
                         &state.requested_url,
                     )
                     .await;
@@ -3506,13 +3501,13 @@ async fn complete_materialized_navigation_into_buffer_inner_async(
         }
     }
     let primary_protocol_session_id = conn
-        .runtime_session_owner_primary_session_id(navigation_session_id.as_deref())
+        .runtime_session_owner_primary_session_id_for_route(
+            navigation_owner.session_id(),
+            navigation_owner.session_owner_route(),
+        )
         .or_else(|| navigation_session_id.clone());
     let (routed_renderer_output, renderer_call_replacements) = conn
-        .finish_renderer_document_navigation_for_session_owner(
-            navigation_session_id.as_deref(),
-            &token,
-        )
+        .finish_renderer_document_navigation_for_owner(&navigation_owner, &token)
         .map(|finish| (finish.released_output, finish.renderer_call_replacements))
         .unwrap_or_default();
     if !routed_renderer_output.is_empty() {
@@ -3544,8 +3539,8 @@ async fn complete_materialized_navigation_into_buffer_inner_async(
             ),
         }
     }
-    conn.clear_pending_document_navigation_for_session_owner_if_loader_matches(
-        navigation_session_id.as_deref(),
+    conn.clear_pending_document_navigation_for_owner_if_loader_matches(
+        &navigation_owner,
         &navigation_loader_id,
     );
 }

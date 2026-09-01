@@ -537,15 +537,12 @@ pub(super) async fn complete_crash_command_dispatch(
             .as_deref()
             .map(CommandOwnerScope::for_session)
             .unwrap_or_else(|| owner.clone());
-        let mut route_scope = inspector_owner.enter(conn);
-        route_scope
-            .conn_mut()
-            .fail_pending_inspector_awaits_for_session_owner_background_events_into(
-                &mut pending_await_events,
-                command_context.protocol_events_mut(),
-                inspector_session_id.as_deref(),
-                "Page crashed",
-            );
+        conn.fail_pending_inspector_awaits_for_owner_background_events_into(
+            &mut pending_await_events,
+            command_context.protocol_events_mut(),
+            &inspector_owner,
+            "Page crashed",
+        );
     }
     out.extend(pending_await_events);
 
@@ -660,17 +657,12 @@ pub(super) async fn complete_close_command_dispatch(
     ) = take_pending_fetch_state_for_owner(conn, owner);
 
     let mut pending_await_events = Vec::new();
-    {
-        let mut route_scope = owner.enter(conn);
-        route_scope
-            .conn_mut()
-            .fail_pending_inspector_awaits_for_session_owner_background_events_into(
-                &mut pending_await_events,
-                command_context.protocol_events_mut(),
-                session_id,
-                "Page closed",
-            );
-    }
+    conn.fail_pending_inspector_awaits_for_owner_background_events_into(
+        &mut pending_await_events,
+        command_context.protocol_events_mut(),
+        owner,
+        "Page closed",
+    );
     out.extend(pending_await_events);
 
     let renderer_output_predecessor = fail_pending_fetch_state_for_owner_background_events_async(

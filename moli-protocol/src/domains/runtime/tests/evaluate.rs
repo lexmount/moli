@@ -2328,7 +2328,9 @@ async fn page_navigate_network_failure_commits_error_document() {
         .expect("loaded renderer Page residence");
     let before_renderer_attachment = ctx
         .conn
-        .current_renderer_agent_attachment_id_for_session_owner(Some("SID-1"))
+        .current_renderer_agent_attachment_id_for_owner(
+            &crate::conn::CommandOwnerScope::for_session("SID-1"),
+        )
         .expect("loaded renderer attachment");
     ctx.sent.clear();
 
@@ -2445,7 +2447,7 @@ async fn page_navigate_network_failure_commits_error_document() {
     );
     let error_document_loader_id = ctx
         .conn
-        .target_session_owner_frame_tree_loader_id(Some("SID-1"))
+        .target_session_owner_frame_tree_loader_id_for_route(Some("SID-1"), None)
         .expect("error Document loader id");
     let stale_request_id = "REQ-before-network-error";
     let stale_body_completion = BackgroundNavigationCompletion::main_document_body(
@@ -2489,7 +2491,7 @@ async fn page_navigate_network_failure_commits_error_document() {
     assert!(stale_completion_scheduler_events.is_empty());
     assert_eq!(
         ctx.conn
-            .target_session_owner_frame_tree_loader_id(Some("SID-1"))
+            .target_session_owner_frame_tree_loader_id_for_route(Some("SID-1"), None)
             .as_deref(),
         Some(error_document_loader_id.as_str()),
         "stale body completion must not replace the error Document loader"
@@ -2525,8 +2527,9 @@ async fn page_navigate_network_failure_commits_error_document() {
         "the error Document must not reuse the retired renderer Page"
     );
     assert_ne!(
-        ctx.conn
-            .current_renderer_agent_attachment_id_for_session_owner(Some("SID-1")),
+        ctx.conn.current_renderer_agent_attachment_id_for_owner(
+            &crate::conn::CommandOwnerScope::for_session("SID-1"),
+        ),
         Some(before_renderer_attachment),
         "the error Document must own a replacement realm/Inspector attachment"
     );
@@ -8089,7 +8092,9 @@ fn replay_policy_command_rotates_lease_and_completes_on_replacement_attachment()
         .await;
         let old_attachment = ctx
             .conn
-            .current_renderer_agent_attachment_id_for_session_owner(Some("SID-1"))
+            .current_renderer_agent_attachment_id_for_owner(
+                &crate::conn::CommandOwnerScope::for_session("SID-1"),
+            )
             .expect("old Page attachment");
         let frontend_id = 9_021;
         let payload = json!({
@@ -8126,7 +8131,9 @@ fn replay_policy_command_rotates_lease_and_completes_on_replacement_attachment()
 
         let new_attachment = ctx
             .conn
-            .current_renderer_agent_attachment_id_for_session_owner(Some("SID-1"))
+            .current_renderer_agent_attachment_id_for_owner(
+                &crate::conn::CommandOwnerScope::for_session("SID-1"),
+            )
             .expect("replacement Page attachment");
         assert_ne!(new_attachment, old_attachment);
         assert!(

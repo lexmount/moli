@@ -175,9 +175,7 @@ async fn close_target_inner_async(
         let owner_scope = session_id
             .as_deref()
             .map(crate::conn::CommandOwnerScope::for_session)
-            .unwrap_or_else(|| {
-                crate::conn::CommandOwnerScope::for_implicit_route(Some(target_route))
-            });
+            .unwrap_or_else(|| crate::conn::CommandOwnerScope::for_route(target_route));
         let renderer_output_predecessor =
             events::fail_pending_fetch_state_for_target_background_events_async(
                 conn,

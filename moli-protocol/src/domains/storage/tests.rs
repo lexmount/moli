@@ -860,7 +860,7 @@ async fn pending_storage_key_keeps_background_owner_route_across_completion() {
 
     let mut background = PageTargetHost::with_url(
         "TID-storage-background".to_owned(),
-        None,
+        Some("SID-storage-background".to_owned()),
         background_page.final_url().as_str().to_owned(),
     );
     background.replace_loaded_page(Some(background_page));
@@ -874,52 +874,33 @@ async fn pending_storage_key_keeps_background_owner_route_across_completion() {
     bc.insert_page_target_host(background);
     ctx.conn.browser_context = Some(bc);
 
-    let background_route = ctx
-        .conn
-        .target_session_route_for_target_id("TID-storage-background")
-        .expect("background target route");
     let raw = serde_json::to_string(&json!({
         "id": 104,
         "method": "Storage.getStorageKeyForFrame",
-        "params": { "frameId": "TID-storage-background" }
+        "params": { "frameId": "TID-storage-background" },
+        "sessionId": "SID-storage-background"
     }))
     .unwrap();
-    let pending = {
-        let previous_route = ctx
-            .conn
-            .replace_none_session_owner_route_override(Some(background_route.clone()));
-        let step = ctx.conn.start_command_dispatch(&raw);
-        ctx.conn
-            .replace_none_session_owner_route_override(previous_route);
-        match step {
-            CdpCommandTaskStep::Pending(pending) => pending,
-            CdpCommandTaskStep::Complete(outcome) => {
-                panic!(
-                    "background Storage.getStorageKeyForFrame should snapshot the live background page: {:?}",
-                    outcome.into_parts().0
-                )
-            }
+    let pending = match ctx.conn.start_command_dispatch(&raw) {
+        CdpCommandTaskStep::Pending(pending) => pending,
+        CdpCommandTaskStep::Complete(outcome) => {
+            panic!(
+                "background Storage.getStorageKeyForFrame should snapshot the live background page: {:?}",
+                outcome.into_parts().0
+            )
         }
     };
 
-    let active_route = ctx
-        .conn
-        .target_session_route_for_target_id("TID-storage-active")
-        .expect("active target route");
-    let previous_route = ctx
-        .conn
-        .replace_none_session_owner_route_override(Some(active_route));
     let (messages, scheduler_events) = ctx
         .complete_command_task_step_for_test(CdpCommandTaskStep::Pending(pending))
         .await;
-    ctx.conn
-        .replace_none_session_owner_route_override(previous_route);
 
     assert!(scheduler_events.is_empty());
     assert_eq!(
         messages,
         vec![json!({
             "id": 104,
+            "sessionId": "SID-storage-background",
             "result": {
                 "storageKey": first_party_storage_key_for_origin(&background_origin)
             }

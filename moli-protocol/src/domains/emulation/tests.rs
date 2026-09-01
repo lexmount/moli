@@ -727,15 +727,16 @@ async fn idle_override_updates_idle_detector_and_clear_restores_actual_state() {
     }));
 
     ctx.conn
-        .start_document_navigation_for_session_owner(
+        .start_document_navigation_for_route(
             Some("SID-1"),
+            None,
             "LID-idle-cross-document".to_owned(),
         )
         .expect("cross-Document navigation should enter the pending state");
     let configuration = ctx
         .conn
-        .prepared_document_commit_configuration_for_session_owner(
-            Some("SID-1"),
+        .prepared_document_commit_configuration_for_owner(
+            &crate::conn::CommandOwnerScope::for_session("SID-1"),
             &url::Url::parse("http://127.0.0.1:65530/same-site-different-origin").unwrap(),
         )
         .expect("commit configuration should resolve the target resource runtime");
@@ -748,8 +749,8 @@ async fn idle_override_updates_idle_detector_and_clear_restores_actual_state() {
     );
     let cross_site_configuration = ctx
         .conn
-        .prepared_document_commit_configuration_for_session_owner(
-            Some("SID-1"),
+        .prepared_document_commit_configuration_for_owner(
+            &crate::conn::CommandOwnerScope::for_session("SID-1"),
             &url::Url::parse("http://idle-override-cross-site.test/").unwrap(),
         )
         .expect("cross-site commit configuration should resolve the target resource runtime");

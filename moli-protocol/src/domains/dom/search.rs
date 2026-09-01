@@ -80,14 +80,20 @@ pub(super) fn build_cdp_discard_search_results_command(
 pub(super) fn start_devtools_perform_search_command(
     conn: &mut CdpConnection,
     command_id: Option<u64>,
-    command_session_id: Option<&str>,
+    owner: &CommandOwnerScope,
     command: DevToolsPerformSearchCommand,
 ) -> Result<Option<PendingDomCommandDispatch>, PendingDomCommandStartError> {
-    let renderer_inspector_session_id =
-        conn.target_renderer_runtime_inspector_session_id_for_session(command_session_id);
-    let include_whitespace =
-        super::dom_agent_includes_whitespace_for_session(conn, command_session_id);
-    let Some(page) = super::loaded_page_mut_for_session(conn, command_session_id) else {
+    let renderer_inspector_session_id = conn
+        .target_renderer_runtime_inspector_session_id_for_route(
+            owner.session_id(),
+            owner.session_owner_route(),
+        );
+    let include_whitespace = super::dom_agent_includes_whitespace_for_route(
+        conn,
+        owner.session_id(),
+        owner.session_owner_route(),
+    );
+    let Some(page) = super::loaded_page_mut_for_owner(conn, owner) else {
         return Ok(None);
     };
     let pending = page
@@ -101,7 +107,7 @@ pub(super) fn start_devtools_perform_search_command(
 
     Ok(Some(PendingDomCommandDispatch {
         command_id,
-        session_id: command_session_id.map(str::to_owned),
+        owner_scope: owner.clone(),
         kind: PendingDomCommandKind::PerformSearchLive,
         pending: PendingDomCommandWork::Page(pending),
     }))
@@ -110,12 +116,15 @@ pub(super) fn start_devtools_perform_search_command(
 pub(super) fn start_devtools_get_search_results_command(
     conn: &mut CdpConnection,
     command_id: Option<u64>,
-    command_session_id: Option<&str>,
+    owner: &CommandOwnerScope,
     command: DevToolsGetSearchResultsCommand,
 ) -> Result<Option<PendingDomCommandDispatch>, PendingDomCommandStartError> {
-    let renderer_inspector_session_id =
-        conn.target_renderer_runtime_inspector_session_id_for_session(command_session_id);
-    let Some(page) = super::loaded_page_mut_for_session(conn, command_session_id) else {
+    let renderer_inspector_session_id = conn
+        .target_renderer_runtime_inspector_session_id_for_route(
+            owner.session_id(),
+            owner.session_owner_route(),
+        );
+    let Some(page) = super::loaded_page_mut_for_owner(conn, owner) else {
         return Ok(None);
     };
     let pending = page
@@ -128,7 +137,7 @@ pub(super) fn start_devtools_get_search_results_command(
         .map_err(PendingDomCommandStartError::renderer_error)?;
     Ok(Some(PendingDomCommandDispatch {
         command_id,
-        session_id: command_session_id.map(str::to_owned),
+        owner_scope: owner.clone(),
         kind: PendingDomCommandKind::GetSearchResultsLive,
         pending: PendingDomCommandWork::Page(pending),
     }))
@@ -137,12 +146,15 @@ pub(super) fn start_devtools_get_search_results_command(
 pub(super) fn start_devtools_discard_search_results_command(
     conn: &mut CdpConnection,
     command_id: Option<u64>,
-    command_session_id: Option<&str>,
+    owner: &CommandOwnerScope,
     command: DevToolsDiscardSearchResultsCommand,
 ) -> Result<Option<PendingDomCommandDispatch>, PendingDomCommandStartError> {
-    let renderer_inspector_session_id =
-        conn.target_renderer_runtime_inspector_session_id_for_session(command_session_id);
-    let Some(page) = super::loaded_page_mut_for_session(conn, command_session_id) else {
+    let renderer_inspector_session_id = conn
+        .target_renderer_runtime_inspector_session_id_for_route(
+            owner.session_id(),
+            owner.session_owner_route(),
+        );
+    let Some(page) = super::loaded_page_mut_for_owner(conn, owner) else {
         return Ok(None);
     };
     let pending = page
@@ -150,7 +162,7 @@ pub(super) fn start_devtools_discard_search_results_command(
         .map_err(PendingDomCommandStartError::renderer_error)?;
     Ok(Some(PendingDomCommandDispatch {
         command_id,
-        session_id: command_session_id.map(str::to_owned),
+        owner_scope: owner.clone(),
         kind: PendingDomCommandKind::DiscardSearchResultsLive,
         pending: PendingDomCommandWork::Page(pending),
     }))
@@ -169,7 +181,8 @@ pub(super) fn complete_non_pending_perform_search_command(
         }
     };
     let session_id = command.context.session_id.as_ref().map(|id| id.as_str());
-    if super::loaded_page_mut_for_session(conn, session_id).is_some() {
+    let owner = CommandOwnerScope::capture(conn, session_id);
+    if super::loaded_page_mut_for_owner(conn, &owner).is_some() {
         out.push_error(-32000, "MissingDomCommand");
         return true;
     }
@@ -186,12 +199,12 @@ pub(super) fn complete_non_pending_discard_search_results_command(
 
 pub(super) fn complete_perform_search_live(
     conn: &mut CdpConnection,
-    session_id: Option<&str>,
+    owner: &CommandOwnerScope,
     completion: CompletedPageCommand,
     out: &mut DomCommandOutput,
 ) -> DomCommandTaskStep {
     let search = {
-        let Some(page) = super::loaded_page_mut_for_session(conn, session_id) else {
+        let Some(page) = super::loaded_page_mut_for_owner(conn, owner) else {
             out.push_error(-32000, "NoDocumentLoaded");
             return DomCommandTaskStep::Complete;
         };
@@ -212,12 +225,12 @@ pub(super) fn complete_perform_search_live(
 
 pub(super) fn complete_get_search_results_live(
     conn: &mut CdpConnection,
-    session_id: Option<&str>,
+    owner: &CommandOwnerScope,
     completion: CompletedPageCommand,
     out: &mut DomCommandOutput,
 ) -> DomCommandTaskStep {
     let resolution = {
-        let Some(page) = super::loaded_page_mut_for_session(conn, session_id) else {
+        let Some(page) = super::loaded_page_mut_for_owner(conn, owner) else {
             out.push_error(-32000, "NoDocumentLoaded");
             return DomCommandTaskStep::Complete;
         };
@@ -251,11 +264,11 @@ pub(super) fn complete_get_search_results_live(
 
 pub(super) fn complete_discard_search_results_live(
     conn: &mut CdpConnection,
-    session_id: Option<&str>,
+    owner: &CommandOwnerScope,
     completion: CompletedPageCommand,
     out: &mut DomCommandOutput,
 ) -> DomCommandTaskStep {
-    let Some(page) = super::loaded_page_mut_for_session(conn, session_id) else {
+    let Some(page) = super::loaded_page_mut_for_owner(conn, owner) else {
         out.push_success();
         return DomCommandTaskStep::Complete;
     };
@@ -275,7 +288,7 @@ mod protocol_neutral_tests {
     use crate::devtools_runtime::DevToolsProtocol;
     use serde_json::{Value, json};
 
-    use crate::conn::{CdpConnection, Cmd};
+    use crate::conn::{CdpConnection, Cmd, CommandOwnerScope};
 
     #[test]
     fn cdp_perform_search_builds_protocol_neutral_command() {
@@ -320,12 +333,9 @@ mod protocol_neutral_tests {
             panic!("valid performSearch command");
         };
 
-        let result = super::start_devtools_perform_search_command(
-            &mut conn,
-            cmd.id,
-            cmd.session_id,
-            command,
-        );
+        let owner = CommandOwnerScope::for_session("SID-dom");
+        let result =
+            super::start_devtools_perform_search_command(&mut conn, cmd.id, &owner, command);
 
         let Ok(None) = result else {
             panic!("performSearch without a loaded page should stay on sync empty-result path");

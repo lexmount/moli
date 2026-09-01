@@ -81,7 +81,7 @@ impl NetworkPreparedOutputs {
 
     pub(crate) fn from_renderer_subresource_continue(
         conn: &mut CdpConnection,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
         source_document: moli_core::RendererDocumentLifecycleIdentity,
         event: moli_core::page::PendingSubresourceContinueEvent,
     ) -> Self {
@@ -89,7 +89,7 @@ impl NetworkPreparedOutputs {
             pending_subresource_continue_actions:
                 prepare_subresource_continue_action_for_renderer_record(
                     conn,
-                    session_id,
+                    owner,
                     source_document,
                     event,
                 )
@@ -306,11 +306,11 @@ impl NetworkPreparedOutputSlot {
         &mut self,
         conn: &mut CdpConnection,
         out: &mut Vec<crate::conn::BackgroundProtocolEvent>,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
     ) {
         if let Some(actions) = self.take_pending_subresource_continue_actions() {
             flush_prepared_subresource_continue_actions_background_events_async(
-                conn, out, session_id, actions,
+                conn, out, owner, actions,
             )
             .await;
         }
@@ -341,12 +341,12 @@ impl NetworkPreparedOutputSlot {
         &mut self,
         conn: &mut CdpConnection,
         out: &mut Vec<crate::conn::BackgroundProtocolEvent>,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
     ) {
         super::emit_prepared_renderer_network_live_background_events(
             conn,
             out,
-            session_id,
+            owner,
             self.outputs.renderer_live_mut(),
         );
     }
@@ -368,13 +368,14 @@ impl NetworkOutputProjectionStep {
         context: &mut ProtocolOutputProjectionContext<'_>,
         prepared_outputs: Option<&mut ProtocolOutputPayloads>,
     ) {
+        let owner = context.owner().clone();
         match self {
             NetworkOutputProjectionStep::PendingSubresourceContinueEvents => {
                 if let Some(slot) = prepared_outputs.and_then(ProtocolOutputPayloads::network_mut) {
                     slot.emit_pending_subresource_continue_background_events(
                         conn,
                         context.command.protocol_events_mut(),
-                        context.session_id,
+                        &owner,
                     )
                     .await;
                 }
@@ -384,13 +385,12 @@ impl NetworkOutputProjectionStep {
                     slot.emit_renderer_live_background_events(
                         conn,
                         context.command.protocol_events_mut(),
-                        context.session_id,
+                        &owner,
                     );
                 }
             }
             NetworkOutputProjectionStep::NetworkBacklog => {
                 if let Some(slot) = prepared_outputs.and_then(ProtocolOutputPayloads::network_mut) {
-                    let owner = CommandOwnerScope::capture(conn, context.session_id);
                     slot.emit_backlog_activity_background_events(
                         conn,
                         context.command.protocol_events_mut(),
@@ -407,12 +407,14 @@ impl NetworkOutputProjectionStep {
                     .and_then(NetworkPreparedOutputSlot::take_subresource_fetch_pauses)
                 {
                     let mut events = Vec::new();
-                    let network_session_ids =
-                        conn.network_event_session_ids_for_session_owner(context.session_id);
+                    let network_session_ids = conn.network_event_session_ids_for_route(
+                        owner.session_id(),
+                        owner.session_owner_route(),
+                    );
                     fetch::emit_subresource_fetch_pause_outputs(
                         conn,
                         &mut events,
-                        context.session_id,
+                        &owner,
                         &network_session_ids,
                         pauses,
                     );
@@ -461,29 +463,6 @@ pub(in crate::domains) async fn project_subresource_fetch_interception_async(
     NetworkOutputProjectionStep::SubresourceFetchInterception
         .project_async(conn, context, prepared_outputs)
         .await;
-}
-
-pub(in crate::domains) fn network_backlog_prepared_outputs(
-    conn: &mut CdpConnection,
-    session_id: Option<&str>,
-    preferred_request_id: Option<super::NetworkBacklogPreferredRequestId<'_>>,
-) -> NetworkPreparedOutputs {
-    let mut outputs = NetworkPreparedOutputs::default();
-    let primary_session_id = conn.runtime_session_owner_primary_session_id(session_id);
-    if let Some(backlog) = conn.network_backlog_prepared_delivery_for_session_owner(
-        session_id,
-        session_id,
-        primary_session_id.as_deref(),
-        preferred_request_id,
-    ) {
-        outputs.extend(NetworkPreparedOutputs {
-            pending_subresource_continue_actions: Vec::new(),
-            renderer_live: TargetNetworkBacklogPreparedDelivery::default(),
-            backlog,
-            subresource_fetch_pauses: Vec::new(),
-        });
-    }
-    outputs
 }
 
 pub(in crate::domains) fn network_backlog_prepared_outputs_for_owner(
@@ -634,8 +613,9 @@ mod tests {
             request_stage_chain: None,
         };
         assert!(
-            conn.register_in_flight_subresource_fetch_request_for_session_owner(
+            conn.register_in_flight_subresource_fetch_request_for_route(
                 Some("SID-1"),
+                None,
                 Some("fetch-req-1".to_owned()),
                 pending,
             ),
@@ -669,15 +649,9 @@ mod tests {
                     action,
                 ]),
             ));
+        let owner = CommandOwnerScope::for_session("SID-1");
         let mut command_context = CommandDispatchContext::default();
-        let mut context = ProtocolOutputProjectionContext {
-            session_id: Some("SID-1"),
-            command: &mut command_context,
-            subresource_frame_id: None,
-            subresource_document_url: None,
-            subresource_timestamp: None,
-            subresource_network_request_id: None,
-        };
+        let mut context = ProtocolOutputProjectionContext::new(&owner, &mut command_context);
 
         super::NetworkOutputProjectionStep::PendingSubresourceContinueEvents
             .project_async(&mut conn, &mut context, Some(&mut prepared))
@@ -720,13 +694,12 @@ mod tests {
             .target_page_residence_identity_for_session(Some("SID-collision"))
             .expect("old Page residence should exist");
         let reused_handle = SubresourceNetworkRequestHandle::new(9);
-        assert!(
-            conn.register_in_flight_subresource_fetch_request_for_session_owner(
-                Some("SID-collision"),
-                Some("FETCH-old".to_owned()),
-                pending_request_for_page(old_owner, 7, "NETWORK-old", reused_handle),
-            )
-        );
+        assert!(conn.register_in_flight_subresource_fetch_request_for_route(
+            Some("SID-collision"),
+            None,
+            Some("FETCH-old".to_owned()),
+            pending_request_for_page(old_owner, 7, "NETWORK-old", reused_handle),
+        ));
         let event =
             PendingSubresourceContinueEvent::ResponsePaused(PendingSubresourceResponseInfo {
                 internal_id: 7,
@@ -757,19 +730,19 @@ mod tests {
         let replacement_owner = conn
             .target_page_residence_identity_for_session(Some("SID-collision"))
             .expect("replacement Page residence should exist");
-        assert!(
-            conn.register_in_flight_subresource_fetch_request_for_session_owner(
-                Some("SID-collision"),
-                Some("FETCH-new".to_owned()),
-                pending_request_for_page(replacement_owner, 7, "NETWORK-new", reused_handle),
-            )
-        );
+        assert!(conn.register_in_flight_subresource_fetch_request_for_route(
+            Some("SID-collision"),
+            None,
+            Some("FETCH-new".to_owned()),
+            pending_request_for_page(replacement_owner, 7, "NETWORK-new", reused_handle),
+        ));
 
         let mut out = Vec::new();
+        let command_owner = CommandOwnerScope::for_session("SID-collision");
         crate::domains::activity::flush_prepared_subresource_continue_actions_background_events_async(
             &mut conn,
             &mut out,
-            Some("SID-collision"),
+            &command_owner,
             vec![old_action],
         )
         .await;
@@ -779,11 +752,8 @@ mod tests {
             "stale continuation must not project an event for the replacement request"
         );
         assert_eq!(
-            conn.in_flight_subresource_fetch_request_id_for_session_owner(
-                Some("SID-collision"),
-                7,
-            )
-            .as_deref(),
+            conn.in_flight_subresource_fetch_request_id_for_route(Some("SID-collision"), None, 7,)
+                .as_deref(),
             Some("FETCH-new"),
             "stale apply must not claim the replacement request even when both renderer IDs collide"
         );
@@ -808,15 +778,9 @@ mod tests {
             ProtocolOutputPayloads::from_slot(super::NetworkPreparedOutputSlot::from_outputs(
                 NetworkPreparedOutputs::from_subresource_fetch_interception_for_test(page_owner),
             ));
+        let owner = CommandOwnerScope::for_session("SID-1");
         let mut command_context = CommandDispatchContext::default();
-        let mut context = ProtocolOutputProjectionContext {
-            session_id: Some("SID-1"),
-            command: &mut command_context,
-            subresource_frame_id: None,
-            subresource_document_url: None,
-            subresource_timestamp: None,
-            subresource_network_request_id: None,
-        };
+        let mut context = ProtocolOutputProjectionContext::new(&owner, &mut command_context);
 
         super::NetworkOutputProjectionStep::SubresourceFetchInterception
             .project_async(&mut conn, &mut context, Some(&mut prepared))
@@ -872,15 +836,9 @@ mod tests {
             ProtocolOutputPayloads::from_slot(super::NetworkPreparedOutputSlot::from_outputs(
                 NetworkPreparedOutputs::from_subresource_fetch_interception_for_test(page_owner),
             ));
+        let owner = CommandOwnerScope::for_session("SID-1");
         let mut command_context = CommandDispatchContext::default();
-        let mut context = ProtocolOutputProjectionContext {
-            session_id: Some("SID-1"),
-            command: &mut command_context,
-            subresource_frame_id: None,
-            subresource_document_url: None,
-            subresource_timestamp: None,
-            subresource_network_request_id: None,
-        };
+        let mut context = ProtocolOutputProjectionContext::new(&owner, &mut command_context);
 
         super::NetworkOutputProjectionStep::SubresourceFetchInterception
             .project_async(&mut conn, &mut context, Some(&mut prepared))
@@ -900,8 +858,9 @@ mod tests {
     #[test]
     fn network_backlog_prepared_outputs_are_absent_without_loaded_observed_page() {
         let mut conn = crate::conn::CdpConnection::default();
+        let owner = CommandOwnerScope::capture(&conn, None);
         assert_eq!(
-            super::network_backlog_prepared_outputs(&mut conn, None, None).outputs(),
+            super::network_backlog_prepared_outputs_for_owner(&mut conn, &owner, None,).outputs(),
             &[]
         );
     }

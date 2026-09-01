@@ -22,11 +22,11 @@ impl PopupTargetActivationAction {
     ) -> Option<Self> {
         let route = conn.target_session_route_for_target_id(target_id)?;
         (route.browser_context_id() == Some(browser_context_id)).then(|| Self {
-            owner_scope: CommandOwnerScope::for_implicit_route(Some(CdpSessionRoute::PageTarget {
+            owner_scope: CommandOwnerScope::for_route(CdpSessionRoute::PageTarget {
                 browser_context_id: browser_context_id.to_owned(),
                 target_id: target_id.to_owned(),
                 is_attached_session: false,
-            })),
+            }),
             browser_context_id: browser_context_id.to_owned(),
             target_id: target_id.to_owned(),
         })

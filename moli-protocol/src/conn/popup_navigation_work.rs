@@ -41,11 +41,11 @@ impl PopupTargetNavigationOwnerAction {
             // Activation has an independent owner action. Unlike a frozen
             // Stable PageTarget route keeps this exact target addressable if
             // the independent activation action changes its residence first.
-            owner_scope: CommandOwnerScope::for_implicit_route(Some(CdpSessionRoute::PageTarget {
+            owner_scope: CommandOwnerScope::for_route(CdpSessionRoute::PageTarget {
                 browser_context_id: browser_context_id.to_owned(),
                 target_id: target_id.to_owned(),
                 is_attached_session: false,
-            })),
+            }),
             browser_context_id: browser_context_id.to_owned(),
             target_id: target_id.to_owned(),
             url,

@@ -3,7 +3,9 @@ use moli_core::page::{
     RendererPendingFileChooserActivation,
 };
 
-use crate::conn::{BackgroundProtocolEvent, CdpConnection, TargetPageResidenceIdentity};
+use crate::conn::{
+    BackgroundProtocolEvent, CdpConnection, CommandOwnerScope, TargetPageResidenceIdentity,
+};
 use crate::devtools_runtime::{
     DevToolsRemoteHandleId, webdriver_bidi_node_shared_id_for_backend_node_id,
 };
@@ -29,11 +31,13 @@ pub(super) struct PreparedFileChooserActivation {
 impl PreparedFileChooserActivation {
     pub(super) fn capture(
         conn: &CdpConnection,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
         page_owner: TargetPageResidenceIdentity,
         activation: RendererPendingFileChooserActivation,
     ) -> Option<Self> {
-        if !conn.target_page_residence_identity_is_current_for_session(session_id, &page_owner) {
+        if !conn
+            .target_page_residence_identity_is_current_for_session(owner.session_id(), &page_owner)
+        {
             return None;
         }
         let source_document = activation.source_document();
@@ -41,8 +45,11 @@ impl PreparedFileChooserActivation {
             .source_frame_id()
             .map(str::to_owned)
             .or_else(|| {
-                conn.target_session_owner_frame_tree_identity(session_id)
-                    .map(|(frame_id, _, _, _)| frame_id)
+                conn.target_session_owner_frame_tree_identity_for_route(
+                    owner.session_id(),
+                    owner.session_owner_route(),
+                )
+                .map(|(frame_id, _, _, _)| frame_id)
             })?;
         Some(Self {
             page_owner,

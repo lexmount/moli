@@ -1139,7 +1139,7 @@ async fn response_body_stream_taken_blocks_chained_bidi_response_stage_pause() {
     let api_url = Url::parse(&hit_url).unwrap();
     let response_pause_sessions = ctx
         .conn
-        .target_fetch_subresource_interception_snapshot_for_session_owner(Some("SID-1"))
+        .target_fetch_subresource_interception_snapshot_for_route(Some("SID-1"), None)
         .expect("active target fetch snapshot")
         .matching_response_stage_pause_sessions(
             Some("SID-1"),
@@ -6992,7 +6992,7 @@ async fn cdp_fetch_then_bidi_network_intercept_response_stage_chain_completes() 
     let api_url = Url::parse(&hit_url).unwrap();
     let response_pause_sessions = ctx
         .conn
-        .target_fetch_subresource_interception_snapshot_for_session_owner(Some("SID-1"))
+        .target_fetch_subresource_interception_snapshot_for_route(Some("SID-1"), None)
         .expect("active target fetch snapshot")
         .matching_response_stage_pause_sessions(
             Some("SID-1"),
@@ -7072,10 +7072,11 @@ async fn cdp_fetch_then_bidi_network_intercept_response_stage_chain_completes() 
         .as_str()
         .expect("CDP response-stage request id")
         .to_owned();
+    let cdp_owner = crate::conn::CommandOwnerScope::for_session("SID-1");
     let pending_cdp_pause =
         crate::domains::fetch::state::pending_subresource_response_request_for_action_session(
             &mut ctx.conn,
-            Some("SID-1"),
+            &cdp_owner,
             Some("SID-1"),
             &cdp_request_id,
         )

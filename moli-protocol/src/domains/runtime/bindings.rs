@@ -1,6 +1,6 @@
 use serde::Deserialize;
 
-use crate::conn::CdpConnection;
+use crate::conn::{CdpConnection, CommandOwnerScope};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -12,35 +12,41 @@ pub(super) struct AddBindingParams {
     pub(super) execution_context_id: Option<i64>,
 }
 
-pub(super) fn persist_runtime_binding_definition_for_session_owner(
+pub(super) fn persist_runtime_binding_definition_for_owner(
     conn: &mut CdpConnection,
-    session_id: Option<&str>,
+    owner: &CommandOwnerScope,
     name: String,
     execution_context_name: Option<String>,
 ) -> Result<(), String> {
-    conn.with_target_devtools_session_state_for_session_mut(session_id, |state| {
-        state.upsert_runtime_binding_definition(name, execution_context_name);
-    })
+    conn.with_target_devtools_session_state_for_route_mut(
+        owner.session_id(),
+        owner.session_owner_route(),
+        |state| state.upsert_runtime_binding_definition(name, execution_context_name),
+    )
     .ok_or_else(|| "BrowserContextNotLoaded".to_owned())
 }
 
-pub(super) fn remove_runtime_binding_definitions_for_session_owner(
+pub(super) fn remove_runtime_binding_definitions_for_owner(
     conn: &mut CdpConnection,
-    session_id: Option<&str>,
+    owner: &CommandOwnerScope,
     name: &str,
 ) -> Result<(), String> {
-    conn.with_target_devtools_session_state_for_session_mut(session_id, |state| {
-        state.remove_runtime_binding_definitions(name);
-    })
+    conn.with_target_devtools_session_state_for_route_mut(
+        owner.session_id(),
+        owner.session_owner_route(),
+        |state| state.remove_runtime_binding_definitions(name),
+    )
     .ok_or_else(|| "BrowserContextNotLoaded".to_owned())
 }
 
-pub(super) fn clear_runtime_binding_definitions_for_session_owner(
+pub(super) fn clear_runtime_binding_definitions_for_owner(
     conn: &mut CdpConnection,
-    session_id: Option<&str>,
+    owner: &CommandOwnerScope,
 ) -> Result<(), String> {
-    conn.with_target_devtools_session_state_for_session_mut(session_id, |state| {
-        state.clear_runtime_binding_definitions();
-    })
+    conn.with_target_devtools_session_state_for_route_mut(
+        owner.session_id(),
+        owner.session_owner_route(),
+        |state| state.clear_runtime_binding_definitions(),
+    )
     .ok_or_else(|| "BrowserContextNotLoaded".to_owned())
 }

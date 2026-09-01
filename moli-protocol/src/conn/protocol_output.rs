@@ -246,9 +246,10 @@ impl CdpConnection {
         session_id: Option<&str>,
     ) -> CdpTurnOutcome {
         let mut command_context = super::CommandDispatchContext::default();
+        let owner = super::CommandOwnerScope::capture(self, session_id);
         crate::domains::activity::project_protocol_local_command_outputs(
             self,
-            session_id,
+            &owner,
             &mut command_context,
         )
         .await;
