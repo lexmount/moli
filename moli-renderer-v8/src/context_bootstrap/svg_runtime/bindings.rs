@@ -577,6 +577,27 @@ macro_rules! define_svg_enumeration_constants {
 }
 
 define_svg_enumeration_constants!(
+    SvgPreserveAspectRatioTemplateConstantsDeclaration,
+    "SVGPreserveAspectRatio",
+    {
+        preserve_aspect_ratio_unknown => "SVG_PRESERVEASPECTRATIO_UNKNOWN" = SVG_PRESERVE_ASPECT_RATIO_UNKNOWN,
+        preserve_aspect_ratio_none => "SVG_PRESERVEASPECTRATIO_NONE" = SVG_PRESERVE_ASPECT_RATIO_NONE,
+        preserve_aspect_ratio_x_min_y_min => "SVG_PRESERVEASPECTRATIO_XMINYMIN" = SVG_PRESERVE_ASPECT_RATIO_X_MIN_Y_MIN,
+        preserve_aspect_ratio_x_mid_y_min => "SVG_PRESERVEASPECTRATIO_XMIDYMIN" = SVG_PRESERVE_ASPECT_RATIO_X_MID_Y_MIN,
+        preserve_aspect_ratio_x_max_y_min => "SVG_PRESERVEASPECTRATIO_XMAXYMIN" = SVG_PRESERVE_ASPECT_RATIO_X_MAX_Y_MIN,
+        preserve_aspect_ratio_x_min_y_mid => "SVG_PRESERVEASPECTRATIO_XMINYMID" = SVG_PRESERVE_ASPECT_RATIO_X_MIN_Y_MID,
+        preserve_aspect_ratio_x_mid_y_mid => "SVG_PRESERVEASPECTRATIO_XMIDYMID" = SVG_PRESERVE_ASPECT_RATIO_X_MID_Y_MID,
+        preserve_aspect_ratio_x_max_y_mid => "SVG_PRESERVEASPECTRATIO_XMAXYMID" = SVG_PRESERVE_ASPECT_RATIO_X_MAX_Y_MID,
+        preserve_aspect_ratio_x_min_y_max => "SVG_PRESERVEASPECTRATIO_XMINYMAX" = SVG_PRESERVE_ASPECT_RATIO_X_MIN_Y_MAX,
+        preserve_aspect_ratio_x_mid_y_max => "SVG_PRESERVEASPECTRATIO_XMIDYMAX" = SVG_PRESERVE_ASPECT_RATIO_X_MID_Y_MAX,
+        preserve_aspect_ratio_x_max_y_max => "SVG_PRESERVEASPECTRATIO_XMAXYMAX" = SVG_PRESERVE_ASPECT_RATIO_X_MAX_Y_MAX,
+        meet_or_slice_unknown => "SVG_MEETORSLICE_UNKNOWN" = SVG_MEET_OR_SLICE_UNKNOWN,
+        meet_or_slice_meet => "SVG_MEETORSLICE_MEET" = SVG_MEET_OR_SLICE_MEET,
+        meet_or_slice_slice => "SVG_MEETORSLICE_SLICE" = SVG_MEET_OR_SLICE_SLICE,
+    }
+);
+
+define_svg_enumeration_constants!(
     SvgComponentTransferFunctionElementTemplateConstantsDeclaration,
     "SVGComponentTransferFunctionElement",
     {
@@ -974,6 +995,62 @@ struct SvgAnimatedAngleTemplateAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::SVGAnimatedRect, enumerable)]
+struct SvgAnimatedRectTemplateAccessorsDeclaration {
+    #[webapi(
+        accessor_property = "baseVal",
+        getter = svg_animated_rect_getter,
+        data = callback_data_index_value(scope, 0)
+    )]
+    base_val: (),
+
+    #[webapi(
+        accessor_property = "animVal",
+        getter = svg_animated_rect_getter,
+        data = callback_data_index_value(scope, 1)
+    )]
+    anim_val: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::SVGPreserveAspectRatio, enumerable)]
+struct SvgPreserveAspectRatioTemplateAccessorsDeclaration {
+    #[webapi(
+        accessor_property = "align",
+        getter = svg_preserve_aspect_ratio_getter,
+        setter = svg_preserve_aspect_ratio_setter,
+        data = callback_data_index_value(scope, 0)
+    )]
+    align: (),
+
+    #[webapi(
+        accessor_property = "meetOrSlice",
+        getter = svg_preserve_aspect_ratio_getter,
+        setter = svg_preserve_aspect_ratio_setter,
+        data = callback_data_index_value(scope, 1)
+    )]
+    meet_or_slice: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::SVGAnimatedPreserveAspectRatio, enumerable)]
+struct SvgAnimatedPreserveAspectRatioTemplateAccessorsDeclaration {
+    #[webapi(
+        accessor_property = "baseVal",
+        getter = svg_animated_preserve_aspect_ratio_getter,
+        data = callback_data_index_value(scope, 0)
+    )]
+    base_val: (),
+
+    #[webapi(
+        accessor_property = "animVal",
+        getter = svg_animated_preserve_aspect_ratio_getter,
+        data = callback_data_index_value(scope, 1)
+    )]
+    anim_val: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::SVGNumber, enumerable)]
 struct SvgNumberTemplateAccessorsDeclaration {
     #[webapi(
@@ -1250,6 +1327,35 @@ struct SvgGraphicsElementPrototypeAccessorsDeclaration {
 struct SvgGeometryElementPrototypeAccessorsDeclaration {
     #[webapi(accessor_property = "pathLength", getter = svg_geometry_path_length_getter)]
     path_length: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(name = "SVGFitToViewBox", enumerable)]
+struct SvgFitToViewBoxPrototypeAccessorsDeclaration {
+    #[webapi(
+        accessor_property = "viewBox",
+        getter = svg_fit_to_view_box_getter,
+        data = callback_data_index_value(scope, 0)
+    )]
+    view_box: (),
+
+    #[webapi(
+        accessor_property = "preserveAspectRatio",
+        getter = svg_fit_to_view_box_getter,
+        data = callback_data_index_value(scope, 1)
+    )]
+    preserve_aspect_ratio: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::SVGImageElement, enumerable)]
+struct SvgImagePreserveAspectRatioPrototypeAccessorsDeclaration {
+    #[webapi(
+        accessor_property = "preserveAspectRatio",
+        getter = svg_fit_to_view_box_getter,
+        data = callback_data_index_value(scope, 1)
+    )]
+    preserve_aspect_ratio: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -1829,6 +1935,34 @@ pub(super) fn install_svg_animated_angle_bindings<'s>(
     SvgAnimatedAngleTemplateAccessorsDeclaration::initialize_prototype_template(scope, proto);
 }
 
+pub(super) fn install_svg_animated_rect_bindings<'s>(
+    scope: &mut v8::PinScope<'s, '_, ()>,
+    template: v8::Local<'s, v8::FunctionTemplate>,
+) {
+    let proto = template.prototype_template(scope);
+    SvgAnimatedRectTemplateAccessorsDeclaration::initialize_prototype_template(scope, proto);
+}
+
+pub(super) fn install_svg_preserve_aspect_ratio_bindings<'s>(
+    scope: &mut v8::PinScope<'s, '_, ()>,
+    template: v8::Local<'s, v8::FunctionTemplate>,
+) {
+    let proto = template.prototype_template(scope);
+    SvgPreserveAspectRatioTemplateConstantsDeclaration::initialize_template(scope, template);
+    SvgPreserveAspectRatioTemplateAccessorsDeclaration::initialize_prototype_template(scope, proto);
+    SvgPreserveAspectRatioTemplateConstantsDeclaration::initialize_prototype_template(scope, proto);
+}
+
+pub(super) fn install_svg_animated_preserve_aspect_ratio_bindings<'s>(
+    scope: &mut v8::PinScope<'s, '_, ()>,
+    template: v8::Local<'s, v8::FunctionTemplate>,
+) {
+    let proto = template.prototype_template(scope);
+    SvgAnimatedPreserveAspectRatioTemplateAccessorsDeclaration::initialize_prototype_template(
+        scope, proto,
+    );
+}
+
 pub(super) fn install_svg_number_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
@@ -2084,6 +2218,18 @@ pub(super) fn install_svg_element_accessor_bindings<'s>(
     let prototype = template.prototype_template(scope);
     if matches!(
         interface_name,
+        "SVGSVGElement"
+            | "SVGSymbolElement"
+            | "SVGMarkerElement"
+            | "SVGPatternElement"
+            | "SVGViewElement"
+    ) {
+        SvgFitToViewBoxPrototypeAccessorsDeclaration::initialize_prototype_template(
+            scope, prototype,
+        );
+    }
+    if matches!(
+        interface_name,
         "SVGFEBlendElement"
             | "SVGFEColorMatrixElement"
             | "SVGFECompositeElement"
@@ -2256,6 +2402,11 @@ pub(super) fn install_svg_element_accessor_bindings<'s>(
             SvgUriReferencePrototypeAccessorsDeclaration::initialize_prototype_template(
                 scope, prototype,
             );
+            if interface_name == "SVGImageElement" {
+                SvgImagePreserveAspectRatioPrototypeAccessorsDeclaration::initialize_prototype_template(
+                    scope, prototype,
+                );
+            }
         }
         "SVGForeignObjectElement" => {
             SvgGraphicsBoxElementPrototypeAccessorsDeclaration::initialize_prototype_template(

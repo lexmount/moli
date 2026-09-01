@@ -62,6 +62,8 @@ const SVG_LENGTH_ACCESSOR_NAMES: &[&str] = &[
     "valueAsString",
 ];
 const SVG_ANIMATED_ACCESSOR_NAMES: &[&str] = &["baseVal", "animVal"];
+const SVG_FIT_TO_VIEW_BOX_ACCESSOR_NAMES: &[&str] = &["viewBox", "preserveAspectRatio"];
+const SVG_PRESERVE_ASPECT_RATIO_ACCESSOR_NAMES: &[&str] = &["align", "meetOrSlice"];
 const SVG_TRANSFORM_ACCESSOR_NAMES: &[&str] = &["type", "matrix", "angle"];
 const SVG_MATRIX_ACCESSOR_NAMES: &[&str] = &["a", "b", "c", "d", "e", "f"];
 
@@ -133,6 +135,103 @@ fn require_svg_receiver<'s>(
         &format!("{interface}.{member} called on incompatible receiver."),
     );
     false
+}
+
+fn require_svg_fit_to_view_box_receiver<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+    member: &str,
+) -> bool {
+    let Ok((runtime_ptr, handle)) =
+        crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, receiver)
+    else {
+        webidl::throw_type_error(
+            scope,
+            &format!("SVGFitToViewBox.{member} called on incompatible receiver."),
+        );
+        return false;
+    };
+    let is_supported_element = unsafe { &*runtime_ptr }
+        .dom_host()
+        .node(handle)
+        .is_some_and(|node| {
+            node.namespace() == Some(crate::native_bridge::document::SVG_NS)
+                && node.local_name().is_some_and(|local_name| match member {
+                    "viewBox" => {
+                        matches!(local_name, "svg" | "symbol" | "marker" | "pattern" | "view")
+                    }
+                    "preserveAspectRatio" => matches!(
+                        local_name,
+                        "svg" | "symbol" | "marker" | "pattern" | "view" | "image"
+                    ),
+                    _ => false,
+                })
+        });
+    if !is_supported_element {
+        webidl::throw_type_error(
+            scope,
+            &format!("SVGFitToViewBox.{member} called on incompatible receiver."),
+        );
+    }
+    is_supported_element
+}
+
+pub(super) fn svg_fit_to_view_box_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some(member) = callback_data_item(
+        scope,
+        &args,
+        SVG_FIT_TO_VIEW_BOX_ACCESSOR_NAMES,
+        "SVGFitToViewBox attributes",
+    ) else {
+        rv.set_undefined();
+        return;
+    };
+    let owner = args.this();
+    if !require_svg_fit_to_view_box_receiver(scope, owner, member) {
+        return;
+    }
+    let (slot, value) = match member {
+        "viewBox" => {
+            let slot = SVG_FIT_VIEW_BOX_SLOT;
+            if let Some(value) = get_private_value(scope, owner, slot) {
+                if let Ok(animated) = v8::Local::<v8::Object>::try_from(value) {
+                    sync_svg_animated_rect_from_owner_attribute(scope, animated, owner);
+                }
+                (slot, value)
+            } else {
+                (
+                    slot,
+                    build_svg_animated_rect_for_view_box(scope, owner).into(),
+                )
+            }
+        }
+        "preserveAspectRatio" => {
+            let slot = SVG_FIT_PRESERVE_ASPECT_RATIO_SLOT;
+            if let Some(value) = get_private_value(scope, owner, slot) {
+                if let Ok(animated) = v8::Local::<v8::Object>::try_from(value) {
+                    sync_svg_animated_preserve_aspect_ratio_from_owner_attribute(
+                        scope, animated, owner,
+                    );
+                }
+                (slot, value)
+            } else {
+                (
+                    slot,
+                    build_svg_animated_preserve_aspect_ratio(scope, owner).into(),
+                )
+            }
+        }
+        _ => {
+            rv.set_undefined();
+            return;
+        }
+    };
+    set_private_value(scope, owner, slot, value);
+    rv.set(value);
 }
 
 pub(super) fn svg_element_class_name_getter<'s>(
@@ -1112,6 +1211,192 @@ pub(super) fn svg_animated_angle_getter<'s>(
     rv.set(
         get_private_value(scope, args.this(), slot).unwrap_or_else(|| v8::undefined(scope).into()),
     );
+}
+
+pub(super) fn svg_animated_rect_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some(name) = callback_data_item(
+        scope,
+        &args,
+        SVG_ANIMATED_ACCESSOR_NAMES,
+        "SVGAnimatedRect attributes",
+    ) else {
+        rv.set_undefined();
+        return;
+    };
+    if !require_svg_receiver(
+        scope,
+        args.this(),
+        SVG_ANIMATED_RECT_BASE_VAL_SLOT,
+        "SVGAnimatedRect",
+        &format!("{name} getter"),
+    ) {
+        return;
+    }
+    let slot = match name {
+        "baseVal" => SVG_ANIMATED_RECT_BASE_VAL_SLOT,
+        "animVal" => SVG_ANIMATED_RECT_ANIM_VAL_SLOT,
+        _ => {
+            rv.set_undefined();
+            return;
+        }
+    };
+    rv.set(
+        get_private_value(scope, args.this(), slot).unwrap_or_else(|| v8::undefined(scope).into()),
+    );
+}
+
+pub(super) fn svg_animated_preserve_aspect_ratio_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some(name) = callback_data_item(
+        scope,
+        &args,
+        SVG_ANIMATED_ACCESSOR_NAMES,
+        "SVGAnimatedPreserveAspectRatio attributes",
+    ) else {
+        rv.set_undefined();
+        return;
+    };
+    if !require_svg_receiver(
+        scope,
+        args.this(),
+        SVG_ANIMATED_PRESERVE_ASPECT_RATIO_BASE_VAL_SLOT,
+        "SVGAnimatedPreserveAspectRatio",
+        &format!("{name} getter"),
+    ) {
+        return;
+    }
+    let slot = match name {
+        "baseVal" => SVG_ANIMATED_PRESERVE_ASPECT_RATIO_BASE_VAL_SLOT,
+        "animVal" => SVG_ANIMATED_PRESERVE_ASPECT_RATIO_ANIM_VAL_SLOT,
+        _ => {
+            rv.set_undefined();
+            return;
+        }
+    };
+    rv.set(
+        get_private_value(scope, args.this(), slot).unwrap_or_else(|| v8::undefined(scope).into()),
+    );
+}
+
+pub(super) fn svg_preserve_aspect_ratio_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some(name) = callback_data_item(
+        scope,
+        &args,
+        SVG_PRESERVE_ASPECT_RATIO_ACCESSOR_NAMES,
+        "SVGPreserveAspectRatio attributes",
+    ) else {
+        rv.set_undefined();
+        return;
+    };
+    let aspect_ratio = args.this();
+    if !require_svg_receiver(
+        scope,
+        aspect_ratio,
+        SVG_PRESERVE_ASPECT_RATIO_ALIGN_SLOT,
+        "SVGPreserveAspectRatio",
+        &format!("{name} getter"),
+    ) {
+        return;
+    }
+    sync_svg_preserve_aspect_ratio_from_owner_attribute(scope, aspect_ratio);
+    let (slot, initial_value) = match name {
+        "align" => (
+            SVG_PRESERVE_ASPECT_RATIO_ALIGN_SLOT,
+            SVG_PRESERVE_ASPECT_RATIO_X_MID_Y_MID,
+        ),
+        "meetOrSlice" => (
+            SVG_PRESERVE_ASPECT_RATIO_MEET_OR_SLICE_SLOT,
+            SVG_MEET_OR_SLICE_MEET,
+        ),
+        _ => {
+            rv.set_undefined();
+            return;
+        }
+    };
+    let value = svg_number_slot(scope, aspect_ratio, slot).unwrap_or(initial_value as f64) as u32;
+    rv.set(v8::Integer::new_from_unsigned(scope, value).into());
+}
+
+pub(super) fn svg_preserve_aspect_ratio_setter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some(name) = callback_data_item(
+        scope,
+        &args,
+        SVG_PRESERVE_ASPECT_RATIO_ACCESSOR_NAMES,
+        "SVGPreserveAspectRatio attributes",
+    ) else {
+        return;
+    };
+    let aspect_ratio = args.this();
+    if !require_svg_receiver(
+        scope,
+        aspect_ratio,
+        SVG_PRESERVE_ASPECT_RATIO_ALIGN_SLOT,
+        "SVGPreserveAspectRatio",
+        &format!("{name} setter"),
+    ) {
+        return;
+    }
+    if get_private_value(
+        scope,
+        aspect_ratio,
+        SVG_PRESERVE_ASPECT_RATIO_READ_ONLY_SLOT,
+    )
+    .is_some_and(|value| value.boolean_value(scope))
+    {
+        throw_dom_exception(
+            scope,
+            "NoModificationAllowedError",
+            7,
+            "The SVG preserveAspectRatio value is read-only.",
+        );
+        return;
+    }
+    let value = match webidl::convert::<webidl::UnsignedShort>(
+        scope,
+        args.get(0),
+        webidl::Context::member("SVGPreserveAspectRatio", name),
+    ) {
+        Ok(value) => u32::from(value.0),
+        Err(error) => {
+            webidl::throw_error(scope, &error);
+            return;
+        }
+    };
+    let slot = match name {
+        "align"
+            if (SVG_PRESERVE_ASPECT_RATIO_NONE..=SVG_PRESERVE_ASPECT_RATIO_X_MAX_Y_MAX)
+                .contains(&value) =>
+        {
+            SVG_PRESERVE_ASPECT_RATIO_ALIGN_SLOT
+        }
+        "meetOrSlice" if (SVG_MEET_OR_SLICE_MEET..=SVG_MEET_OR_SLICE_SLICE).contains(&value) => {
+            SVG_PRESERVE_ASPECT_RATIO_MEET_OR_SLICE_SLOT
+        }
+        _ => return,
+    };
+    sync_svg_preserve_aspect_ratio_from_owner_attribute(scope, aspect_ratio);
+    set_private_value(
+        scope,
+        aspect_ratio,
+        slot,
+        v8::Integer::new_from_unsigned(scope, value).into(),
+    );
+    reflect_svg_preserve_aspect_ratio_to_owner_attribute(scope, aspect_ratio);
 }
 
 pub(super) fn svg_animated_length_list_getter<'s>(

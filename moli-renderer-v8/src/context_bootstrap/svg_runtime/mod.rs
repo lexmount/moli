@@ -43,6 +43,20 @@ const SVG_MARKER_UNITS_SLOT: &str = "__moliSvgMarkerUnits";
 const SVG_MARKER_ORIENT_TYPE_SLOT: &str = "__moliSvgMarkerOrientType";
 const SVG_ANIMATED_ANGLE_BASE_VAL_SLOT: &str = "__moliSvgAnimatedAngleBaseVal";
 const SVG_ANIMATED_ANGLE_ANIM_VAL_SLOT: &str = "__moliSvgAnimatedAngleAnimVal";
+const SVG_FIT_VIEW_BOX_SLOT: &str = "__moliSvgFitViewBox";
+const SVG_FIT_PRESERVE_ASPECT_RATIO_SLOT: &str = "__moliSvgFitPreserveAspectRatio";
+const SVG_ANIMATED_RECT_BASE_VAL_SLOT: &str = "__moliSvgAnimatedRectBaseVal";
+const SVG_ANIMATED_RECT_ANIM_VAL_SLOT: &str = "__moliSvgAnimatedRectAnimVal";
+const SVG_ANIMATED_PRESERVE_ASPECT_RATIO_BASE_VAL_SLOT: &str =
+    "__moliSvgAnimatedPreserveAspectRatioBaseVal";
+const SVG_ANIMATED_PRESERVE_ASPECT_RATIO_ANIM_VAL_SLOT: &str =
+    "__moliSvgAnimatedPreserveAspectRatioAnimVal";
+const SVG_PRESERVE_ASPECT_RATIO_ALIGN_SLOT: &str = "__moliSvgPreserveAspectRatioAlign";
+const SVG_PRESERVE_ASPECT_RATIO_MEET_OR_SLICE_SLOT: &str =
+    "__moliSvgPreserveAspectRatioMeetOrSlice";
+const SVG_PRESERVE_ASPECT_RATIO_OWNER_ELEMENT_SLOT: &str =
+    "__moliSvgPreserveAspectRatioOwnerElement";
+const SVG_PRESERVE_ASPECT_RATIO_READ_ONLY_SLOT: &str = "__moliSvgPreserveAspectRatioReadOnly";
 const SVG_ANGLE_OWNER_ELEMENT_SLOT: &str = "__moliSvgAngleOwnerElement";
 const SVG_ANGLE_OWNER_ATTRIBUTE_SLOT: &str = "__moliSvgAngleOwnerAttribute";
 const SVG_ANGLE_UNIT_TYPE_SLOT: &str = "__moliSvgAngleUnitType";
@@ -356,6 +370,22 @@ const SVG_ANGLE_TYPE_UNSPECIFIED: u32 = 1;
 const SVG_ANGLE_TYPE_DEG: u32 = 2;
 const SVG_ANGLE_TYPE_RAD: u32 = 3;
 const SVG_ANGLE_TYPE_GRAD: u32 = 4;
+
+const SVG_PRESERVE_ASPECT_RATIO_UNKNOWN: u32 = 0;
+const SVG_PRESERVE_ASPECT_RATIO_NONE: u32 = 1;
+const SVG_PRESERVE_ASPECT_RATIO_X_MIN_Y_MIN: u32 = 2;
+const SVG_PRESERVE_ASPECT_RATIO_X_MID_Y_MIN: u32 = 3;
+const SVG_PRESERVE_ASPECT_RATIO_X_MAX_Y_MIN: u32 = 4;
+const SVG_PRESERVE_ASPECT_RATIO_X_MIN_Y_MID: u32 = 5;
+const SVG_PRESERVE_ASPECT_RATIO_X_MID_Y_MID: u32 = 6;
+const SVG_PRESERVE_ASPECT_RATIO_X_MAX_Y_MID: u32 = 7;
+const SVG_PRESERVE_ASPECT_RATIO_X_MIN_Y_MAX: u32 = 8;
+const SVG_PRESERVE_ASPECT_RATIO_X_MID_Y_MAX: u32 = 9;
+const SVG_PRESERVE_ASPECT_RATIO_X_MAX_Y_MAX: u32 = 10;
+
+const SVG_MEET_OR_SLICE_UNKNOWN: u32 = 0;
+const SVG_MEET_OR_SLICE_MEET: u32 = 1;
+const SVG_MEET_OR_SLICE_SLICE: u32 = 2;
 
 const SVG_MARKER_UNITS_UNKNOWN: u32 = 0;
 const SVG_MARKER_UNITS_USER_SPACE_ON_USE: u32 = 1;
@@ -805,6 +835,13 @@ pub(in crate::context_bootstrap) fn install_svg_template_bindings<'s>(
         "SVGAnimatedBoolean" => bindings::install_svg_animated_boolean_bindings(scope, template),
         "SVGAnimatedLength" => bindings::install_svg_animated_length_bindings(scope, template),
         "SVGAnimatedAngle" => bindings::install_svg_animated_angle_bindings(scope, template),
+        "SVGAnimatedRect" => bindings::install_svg_animated_rect_bindings(scope, template),
+        "SVGPreserveAspectRatio" => {
+            bindings::install_svg_preserve_aspect_ratio_bindings(scope, template)
+        }
+        "SVGAnimatedPreserveAspectRatio" => {
+            bindings::install_svg_animated_preserve_aspect_ratio_bindings(scope, template)
+        }
         "SVGLengthList" => bindings::install_svg_length_list_bindings(scope, template),
         "SVGAnimatedLengthList" => {
             bindings::install_svg_animated_length_list_bindings(scope, template)
