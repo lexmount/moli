@@ -587,6 +587,12 @@ impl Element {
         self.control_state().indeterminate()
     }
 
+    pub fn blocks_form_submission(&self) -> bool {
+        matches!(self.local_name(), "select" | "textarea")
+            && self.namespace() == "http://www.w3.org/1999/xhtml"
+            && self.control_state().blocks_form_submission()
+    }
+
     pub fn script_async(&self) -> bool {
         self.has_attribute("async") || self.control_state().script_force_async()
     }
@@ -795,6 +801,15 @@ impl Element {
             return false;
         }
         self.control_state_mut().set_indeterminate(indeterminate)
+    }
+
+    pub fn set_blocks_form_submission(&mut self, blocks: bool) -> bool {
+        if self.namespace() != "http://www.w3.org/1999/xhtml"
+            || !matches!(self.local_name(), "select" | "textarea")
+        {
+            return false;
+        }
+        self.control_state_mut().set_blocks_form_submission(blocks)
     }
 
     pub fn set_script_force_async(&mut self, force_async: bool) -> bool {
