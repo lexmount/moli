@@ -768,12 +768,21 @@ fn require_svg_graphics_element_receiver<'s>(
     receiver: v8::Local<'s, v8::Object>,
     member: &str,
 ) -> bool {
+    require_svg_interface_receiver(scope, receiver, "SVGGraphicsElement", member)
+}
+
+fn require_svg_interface_receiver<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+    interface: &str,
+    member: &str,
+) -> bool {
     let Ok((runtime_ptr, handle)) =
         crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, receiver)
     else {
         webidl::throw_type_error(
             scope,
-            &format!("SVGGraphicsElement.{member} called on incompatible receiver."),
+            &format!("{interface}.{member} called on incompatible receiver."),
         );
         return false;
     };
@@ -786,12 +795,12 @@ fn require_svg_graphics_element_receiver<'s>(
     else {
         webidl::throw_type_error(
             scope,
-            &format!("SVGGraphicsElement.{member} called on incompatible receiver."),
+            &format!("{interface}.{member} called on incompatible receiver."),
         );
         return false;
     };
     loop {
-        if interface_name == "SVGGraphicsElement" {
+        if interface_name == interface {
             return true;
         }
         let Some(parent) =
@@ -804,7 +813,7 @@ fn require_svg_graphics_element_receiver<'s>(
     }
     webidl::throw_type_error(
         scope,
-        &format!("SVGGraphicsElement.{member} called on incompatible receiver."),
+        &format!("{interface}.{member} called on incompatible receiver."),
     );
     false
 }
@@ -907,6 +916,37 @@ pub(super) fn svg_element_animated_enumeration_getter<'s>(
     }
     let value = build_svg_animated_enumeration_for_property(scope, holder, property);
     set_private_value(scope, holder, property.cache_slot, value.into());
+    rv.set(value.into());
+}
+
+pub(super) fn svg_element_animated_number_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some(property) = callback_data_item(
+        scope,
+        &args,
+        SVG_ANIMATED_NUMBER_PROPERTIES,
+        "SVG animated number properties",
+    ) else {
+        rv.set_undefined();
+        return;
+    };
+    let holder = args.this();
+    if !require_svg_interface_receiver(scope, holder, property.interface, property.name) {
+        return;
+    }
+    let cache_slot = svg_animated_number_cache_slot(property);
+    if let Some(value) = get_private_value(scope, holder, &cache_slot) {
+        if let Ok(animated) = v8::Local::<v8::Object>::try_from(value) {
+            sync_svg_animated_number_from_property(scope, animated);
+        }
+        rv.set(value);
+        return;
+    }
+    let value = build_svg_animated_number_for_property(scope, holder, property);
+    set_private_value(scope, holder, &cache_slot, value.into());
     rv.set(value.into());
 }
 
@@ -1722,7 +1762,11 @@ pub(super) fn svg_animated_number_getter<'s>(
             return;
         }
     };
-    let value = svg_number_slot(scope, args.this(), slot).unwrap_or(0.0);
+    sync_svg_animated_number_from_stored_owner_attribute(scope, args.this());
+    let initial_value = svg_animated_number_property_for_object(scope, args.this())
+        .map(|property| property.initial_value)
+        .unwrap_or_default();
+    let value = svg_number_slot(scope, args.this(), slot).unwrap_or(initial_value);
     rv.set(v8::Number::new(scope, value).into());
 }
 
@@ -1911,7 +1955,7 @@ pub(super) fn svg_animated_number_setter<'s>(
     {
         return;
     }
-    let value = match webidl::convert::<webidl::UnrestrictedDouble>(
+    let value = match webidl::convert::<webidl::Double>(
         scope,
         args.get(0),
         webidl::Context::member("SVGAnimatedNumber", "baseVal"),
@@ -1922,18 +1966,7 @@ pub(super) fn svg_animated_number_setter<'s>(
             return;
         }
     };
-    set_private_value(
-        scope,
-        args.this(),
-        SVG_ANIMATED_NUMBER_BASE_VAL_SLOT,
-        v8::Number::new(scope, value).into(),
-    );
-    set_private_value(
-        scope,
-        args.this(),
-        SVG_ANIMATED_NUMBER_ANIM_VAL_SLOT,
-        v8::Number::new(scope, value).into(),
-    );
+    set_svg_animated_number_values(scope, args.this(), value);
     reflect_svg_animated_number_to_owner_attribute(scope, args.this());
 }
 

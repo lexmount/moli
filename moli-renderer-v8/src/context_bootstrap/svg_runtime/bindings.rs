@@ -1301,6 +1301,152 @@ struct SvgMatrixTemplateAccessorsDeclaration {
     f: (),
 }
 
+macro_rules! define_svg_animated_number_accessors {
+    (
+        $declaration:ident,
+        $interface:literal,
+        $(($field:ident, $name:literal, $index:literal)),+ $(,)?
+    ) => {
+        #[derive(WebApiFunctionTemplate)]
+        #[webapi(name = $interface, enumerable)]
+        struct $declaration {
+            $(
+                #[webapi(
+                    accessor_property = $name,
+                    getter = svg_element_animated_number_getter,
+                    data = callback_data_index_value(scope, $index)
+                )]
+                $field: (),
+            )+
+        }
+    };
+}
+
+define_svg_animated_number_accessors!(
+    SvgComponentTransferFunctionAnimatedNumberAccessorsDeclaration,
+    "SVGComponentTransferFunctionElement",
+    (slope, "slope", 0),
+    (intercept, "intercept", 1),
+    (amplitude, "amplitude", 2),
+    (exponent, "exponent", 3),
+    (offset, "offset", 4),
+);
+
+define_svg_animated_number_accessors!(
+    SvgFeCompositeAnimatedNumberAccessorsDeclaration,
+    "SVGFECompositeElement",
+    (k1, "k1", 5),
+    (k2, "k2", 6),
+    (k3, "k3", 7),
+    (k4, "k4", 8),
+);
+
+define_svg_animated_number_accessors!(
+    SvgFeConvolveMatrixAnimatedNumberAccessorsDeclaration,
+    "SVGFEConvolveMatrixElement",
+    (divisor, "divisor", 9),
+    (bias, "bias", 10),
+    (kernel_unit_length_x, "kernelUnitLengthX", 11),
+    (kernel_unit_length_y, "kernelUnitLengthY", 12),
+);
+
+define_svg_animated_number_accessors!(
+    SvgFeDiffuseLightingAnimatedNumberAccessorsDeclaration,
+    "SVGFEDiffuseLightingElement",
+    (surface_scale, "surfaceScale", 13),
+    (diffuse_constant, "diffuseConstant", 14),
+    (kernel_unit_length_x, "kernelUnitLengthX", 15),
+    (kernel_unit_length_y, "kernelUnitLengthY", 16),
+);
+
+define_svg_animated_number_accessors!(
+    SvgFeDisplacementMapAnimatedNumberAccessorsDeclaration,
+    "SVGFEDisplacementMapElement",
+    (scale, "scale", 17),
+);
+
+define_svg_animated_number_accessors!(
+    SvgFeDistantLightAnimatedNumberAccessorsDeclaration,
+    "SVGFEDistantLightElement",
+    (azimuth, "azimuth", 18),
+    (elevation, "elevation", 19),
+);
+
+define_svg_animated_number_accessors!(
+    SvgFeDropShadowAnimatedNumberAccessorsDeclaration,
+    "SVGFEDropShadowElement",
+    (dx, "dx", 20),
+    (dy, "dy", 21),
+    (std_deviation_x, "stdDeviationX", 22),
+    (std_deviation_y, "stdDeviationY", 23),
+);
+
+define_svg_animated_number_accessors!(
+    SvgFeGaussianBlurAnimatedNumberAccessorsDeclaration,
+    "SVGFEGaussianBlurElement",
+    (std_deviation_x, "stdDeviationX", 24),
+    (std_deviation_y, "stdDeviationY", 25),
+);
+
+define_svg_animated_number_accessors!(
+    SvgFeMorphologyAnimatedNumberAccessorsDeclaration,
+    "SVGFEMorphologyElement",
+    (radius_x, "radiusX", 26),
+    (radius_y, "radiusY", 27),
+);
+
+define_svg_animated_number_accessors!(
+    SvgFeOffsetAnimatedNumberAccessorsDeclaration,
+    "SVGFEOffsetElement",
+    (dx, "dx", 28),
+    (dy, "dy", 29),
+);
+
+define_svg_animated_number_accessors!(
+    SvgFePointLightAnimatedNumberAccessorsDeclaration,
+    "SVGFEPointLightElement",
+    (x, "x", 30),
+    (y, "y", 31),
+    (z, "z", 32),
+);
+
+define_svg_animated_number_accessors!(
+    SvgFeSpecularLightingAnimatedNumberAccessorsDeclaration,
+    "SVGFESpecularLightingElement",
+    (surface_scale, "surfaceScale", 33),
+    (specular_constant, "specularConstant", 34),
+    (specular_exponent, "specularExponent", 35),
+    (kernel_unit_length_x, "kernelUnitLengthX", 36),
+    (kernel_unit_length_y, "kernelUnitLengthY", 37),
+);
+
+define_svg_animated_number_accessors!(
+    SvgFeSpotLightAnimatedNumberAccessorsDeclaration,
+    "SVGFESpotLightElement",
+    (x, "x", 38),
+    (y, "y", 39),
+    (z, "z", 40),
+    (points_at_x, "pointsAtX", 41),
+    (points_at_y, "pointsAtY", 42),
+    (points_at_z, "pointsAtZ", 43),
+    (specular_exponent, "specularExponent", 44),
+    (limiting_cone_angle, "limitingConeAngle", 45),
+);
+
+define_svg_animated_number_accessors!(
+    SvgFeTurbulenceAnimatedNumberAccessorsDeclaration,
+    "SVGFETurbulenceElement",
+    (base_frequency_x, "baseFrequencyX", 46),
+    (base_frequency_y, "baseFrequencyY", 47),
+    (seed, "seed", 48),
+);
+
+define_svg_animated_number_accessors!(
+    SvgStopAnimatedNumberAccessorsDeclaration,
+    "SVGStopElement",
+    (offset, "offset", 49),
+);
+
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::SVGGraphicsElement, enumerable)]
 struct SvgGraphicsElementPrototypeAccessorsDeclaration {
@@ -2210,12 +2356,73 @@ pub(super) fn install_svg_svg_element_bindings(
     SvgSvgElementTemplateMethodsDeclaration::initialize_prototype_template(scope, proto);
 }
 
+fn install_svg_animated_number_element_bindings<'s>(
+    scope: &mut v8::PinScope<'s, '_, ()>,
+    prototype: v8::Local<'s, v8::ObjectTemplate>,
+    interface_name: &str,
+) {
+    macro_rules! install_accessors {
+        ($declaration:ty) => {
+            <$declaration>::initialize_prototype_template(scope, prototype)
+        };
+    }
+    match interface_name {
+        "SVGComponentTransferFunctionElement" => {
+            install_accessors!(SvgComponentTransferFunctionAnimatedNumberAccessorsDeclaration);
+        }
+        "SVGFECompositeElement" => {
+            install_accessors!(SvgFeCompositeAnimatedNumberAccessorsDeclaration);
+        }
+        "SVGFEConvolveMatrixElement" => {
+            install_accessors!(SvgFeConvolveMatrixAnimatedNumberAccessorsDeclaration);
+        }
+        "SVGFEDiffuseLightingElement" => {
+            install_accessors!(SvgFeDiffuseLightingAnimatedNumberAccessorsDeclaration);
+        }
+        "SVGFEDisplacementMapElement" => {
+            install_accessors!(SvgFeDisplacementMapAnimatedNumberAccessorsDeclaration);
+        }
+        "SVGFEDistantLightElement" => {
+            install_accessors!(SvgFeDistantLightAnimatedNumberAccessorsDeclaration);
+        }
+        "SVGFEDropShadowElement" => {
+            install_accessors!(SvgFeDropShadowAnimatedNumberAccessorsDeclaration);
+        }
+        "SVGFEGaussianBlurElement" => {
+            install_accessors!(SvgFeGaussianBlurAnimatedNumberAccessorsDeclaration);
+        }
+        "SVGFEMorphologyElement" => {
+            install_accessors!(SvgFeMorphologyAnimatedNumberAccessorsDeclaration);
+        }
+        "SVGFEOffsetElement" => {
+            install_accessors!(SvgFeOffsetAnimatedNumberAccessorsDeclaration);
+        }
+        "SVGFEPointLightElement" => {
+            install_accessors!(SvgFePointLightAnimatedNumberAccessorsDeclaration);
+        }
+        "SVGFESpecularLightingElement" => {
+            install_accessors!(SvgFeSpecularLightingAnimatedNumberAccessorsDeclaration);
+        }
+        "SVGFESpotLightElement" => {
+            install_accessors!(SvgFeSpotLightAnimatedNumberAccessorsDeclaration);
+        }
+        "SVGFETurbulenceElement" => {
+            install_accessors!(SvgFeTurbulenceAnimatedNumberAccessorsDeclaration);
+        }
+        "SVGStopElement" => {
+            install_accessors!(SvgStopAnimatedNumberAccessorsDeclaration);
+        }
+        _ => {}
+    }
+}
+
 pub(super) fn install_svg_element_accessor_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
     interface_name: &str,
 ) {
     let prototype = template.prototype_template(scope);
+    install_svg_animated_number_element_bindings(scope, prototype, interface_name);
     if matches!(
         interface_name,
         "SVGSVGElement"
@@ -2234,8 +2441,13 @@ pub(super) fn install_svg_element_accessor_bindings<'s>(
             | "SVGFEColorMatrixElement"
             | "SVGFECompositeElement"
             | "SVGFEConvolveMatrixElement"
+            | "SVGFEDiffuseLightingElement"
             | "SVGFEDisplacementMapElement"
+            | "SVGFEDropShadowElement"
+            | "SVGFEGaussianBlurElement"
             | "SVGFEMorphologyElement"
+            | "SVGFEOffsetElement"
+            | "SVGFESpecularLightingElement"
             | "SVGFETurbulenceElement"
     ) {
         SvgFilterPrimitiveStandardAttributesPrototypeAccessorsDeclaration::initialize_prototype_template(
