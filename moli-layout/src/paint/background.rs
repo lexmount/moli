@@ -527,7 +527,7 @@ fn css_image_concrete_object_size(
             (None, None, None) => (default_object.width, default_object.height),
         }
     } else {
-        (resource.intrinsic_width, resource.intrinsic_height)
+        (resource.concrete_width, resource.concrete_height)
     };
     (width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0)
         .then_some((width, height))

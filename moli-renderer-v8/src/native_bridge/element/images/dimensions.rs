@@ -56,7 +56,7 @@ fn image_width_value<'s>(
     element_attribute(runtime, handle, "width")
         .map(|value| parse_non_negative_dimension(Some(value)))
         .filter(|value| *value > 0)
-        .or_else(|| image_intrinsic_dimensions(runtime, handle).map(|(width, _)| width))
+        .or_else(|| image_natural_dimensions(runtime, handle).map(|(width, _)| width))
         .unwrap_or(0)
 }
 
@@ -72,7 +72,7 @@ fn image_height_value<'s>(
     element_attribute(runtime, handle, "height")
         .map(|value| parse_non_negative_dimension(Some(value)))
         .filter(|value| *value > 0)
-        .or_else(|| image_intrinsic_dimensions(runtime, handle).map(|(_, height)| height))
+        .or_else(|| image_natural_dimensions(runtime, handle).map(|(_, height)| height))
         .unwrap_or(0)
 }
 
@@ -102,11 +102,11 @@ fn set_image_unsigned_long_attribute_on_object<'s>(
     set_reflected_attribute(scope, runtime_ptr, handle, attribute, &value.to_string());
 }
 
-pub(crate) fn image_intrinsic_dimensions(
+pub(crate) fn image_natural_dimensions(
     runtime: &JsContextHost,
     handle: DomHandle,
 ) -> Option<(u32, u32)> {
-    runtime.image_resource_intrinsic_dimensions(handle)
+    runtime.image_resource_natural_dimensions(handle)
 }
 
 pub(in crate::native_bridge) fn image_natural_width_getter_function<'s>(
@@ -133,7 +133,7 @@ fn image_natural_width_value<'s>(
     else {
         return 0;
     };
-    image_intrinsic_dimensions(unsafe { &*runtime_ptr }, handle)
+    image_natural_dimensions(unsafe { &*runtime_ptr }, handle)
         .map(|(width, _)| width)
         .unwrap_or(0)
 }
@@ -146,7 +146,7 @@ fn image_natural_height_value<'s>(
     else {
         return 0;
     };
-    image_intrinsic_dimensions(unsafe { &*runtime_ptr }, handle)
+    image_natural_dimensions(unsafe { &*runtime_ptr }, handle)
         .map(|(_, height)| height)
         .unwrap_or(0)
 }

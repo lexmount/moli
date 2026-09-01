@@ -6,9 +6,9 @@ use moli_layout::{
     LayoutFormControlKind, LayoutInlineAlignment, LayoutInputControlKind, LayoutListRole,
     LayoutNamespace, LayoutPosition, LayoutPseudo, LayoutReplacedKind, LayoutSource,
     LayoutSourceKind, LayoutStyleResolver, LayoutTableRole, PaintColor, PaintFragment, PaintRect,
-    PaintViewport, ReplacedMetrics, ResolvedLayoutElementStyles, ResolvedLayoutPseudoStyle,
-    ResolvedLayoutStyle, ScreenshotLayoutRequest, build_layout_world, build_screenshot_snapshot,
-    normalize_layout_source,
+    PaintViewport, ReplacedMetrics, ReplacedNaturalSizing, ResolvedLayoutElementStyles,
+    ResolvedLayoutPseudoStyle, ResolvedLayoutStyle, ScreenshotLayoutRequest, build_layout_world,
+    build_screenshot_snapshot, normalize_layout_source,
 };
 use style::Atom;
 use taffy::{Dimension, Display, FlexDirection, Rect, Size, Style, style_helpers::length};
@@ -97,11 +97,13 @@ impl TestNode {
                 Some(LayoutReplacedKind::Image),
             )),
             replaced_metrics: Some(ReplacedMetrics {
-                intrinsic_width: Some(width),
-                intrinsic_height: Some(height),
+                natural_sizing: Some(ReplacedNaturalSizing {
+                    width: Some(width),
+                    height: Some(height),
+                    ratio: (height > 0.0).then_some(width / height),
+                }),
                 attribute_width: None,
                 attribute_height: None,
-                intrinsic_ratio: (height > 0.0).then_some(width / height),
             }),
         }
     }

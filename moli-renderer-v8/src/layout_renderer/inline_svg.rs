@@ -7,7 +7,9 @@
 
 use std::sync::Arc;
 
-use moli_layout::{LayoutImageResource, PaintColor, ReplacedMetrics, ResolvedLayoutStyle};
+use moli_layout::{
+    LayoutImageResource, PaintColor, ReplacedMetrics, ReplacedNaturalSizing, ResolvedLayoutStyle,
+};
 use style::color::ColorSpace;
 use style::values::computed::{SVGPaint, SVGPaintKind};
 use style_traits::ToCss;
@@ -27,11 +29,13 @@ pub(super) fn replaced_metrics(element: &Element) -> ReplacedMetrics {
         element.attribute("viewBox"),
     );
     ReplacedMetrics {
-        intrinsic_width: metadata.intrinsic_width,
-        intrinsic_height: metadata.intrinsic_height,
+        natural_sizing: Some(ReplacedNaturalSizing {
+            width: metadata.intrinsic_width,
+            height: metadata.intrinsic_height,
+            ratio: metadata.intrinsic_ratio,
+        }),
         attribute_width: None,
         attribute_height: None,
-        intrinsic_ratio: metadata.intrinsic_ratio,
     }
 }
 
@@ -80,8 +84,8 @@ pub(super) fn replaced_resource(
     // context-free metadata probe (which deliberately cannot resolve `em`).
     let tree_size = svg.tree().size();
     Some(LayoutImageResource {
-        intrinsic_width: tree_size.width(),
-        intrinsic_height: tree_size.height(),
+        concrete_width: tree_size.width(),
+        concrete_height: tree_size.height(),
         pixels: None,
         svg: Some(svg),
     })

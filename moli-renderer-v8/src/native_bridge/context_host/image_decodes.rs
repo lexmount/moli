@@ -5,7 +5,7 @@ use super::{
 use crate::{
     document_runtime::DomHandle,
     frame_owner_model::FrameDocumentTaskOwner,
-    native_bridge::element::{image_intrinsic_dimensions, image_selected_request_key},
+    native_bridge::element::{image_natural_dimensions, image_selected_request_key},
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -343,5 +343,5 @@ fn image_source_can_decode(runtime: &JsContextHost, handle: DomHandle, source: &
     {
         return false;
     }
-    runtime.image_resource_is_ready(handle) && image_intrinsic_dimensions(runtime, handle).is_some()
+    runtime.image_resource_is_ready(handle) && image_natural_dimensions(runtime, handle).is_some()
 }

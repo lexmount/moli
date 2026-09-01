@@ -8,8 +8,8 @@ use moli_layout::{
     LayoutReplacedKind, LayoutSource, LayoutSourceKind, LayoutStyleResolver, LayoutTableData,
     LayoutTableRole, LayoutTextSelection, PaintBrush, PaintColor, PaintFragment, PaintRect,
     PaintShape, PaintSnapshot, PaintTransform2D, PaintViewport, ReplacedMetrics,
-    ResolvedLayoutElementStyles, ResolvedLayoutPseudoStyle, ResolvedLayoutStyle,
-    ScreenshotLayoutRequest, build_screenshot_snapshot,
+    ReplacedNaturalSizing, ResolvedLayoutElementStyles, ResolvedLayoutPseudoStyle,
+    ResolvedLayoutStyle, ScreenshotLayoutRequest, build_screenshot_snapshot,
 };
 use style::Atom;
 use taffy::{
@@ -610,9 +610,11 @@ fn float_descendant_of_structural_inline_rounds_with_its_ifc_owner() {
             Vec::new(),
         )
         .with_metrics(ReplacedMetrics {
-            intrinsic_width: Some(166.0),
-            intrinsic_height: Some(42.0),
-            intrinsic_ratio: Some(166.0 / 42.0),
+            natural_sizing: Some(ReplacedNaturalSizing {
+                width: Some(166.0),
+                height: Some(42.0),
+                ratio: Some(166.0 / 42.0),
+            }),
             ..ReplacedMetrics::default()
         }),
     ]);
@@ -921,11 +923,13 @@ fn degenerate_css_ratio_falls_back_to_the_replaced_intrinsic_ratio() {
             Vec::new(),
         )
         .with_metrics(ReplacedMetrics {
-            intrinsic_width: Some(80.0),
-            intrinsic_height: Some(40.0),
+            natural_sizing: Some(ReplacedNaturalSizing {
+                width: Some(80.0),
+                height: Some(40.0),
+                ratio: Some(2.0),
+            }),
             attribute_width: None,
             attribute_height: None,
-            intrinsic_ratio: Some(2.0),
         }),
     ]);
     let mut styles = Styles::default();
@@ -969,8 +973,8 @@ fn fractional_replaced_images_project_contiguous_pre_transform_destinations() {
         .expect("fixture SVG should parse"),
     );
     let image = LayoutImageResource {
-        intrinsic_width: 96.0,
-        intrinsic_height: 12.0,
+        concrete_width: 96.0,
+        concrete_height: 12.0,
         pixels: None,
         svg: Some(svg),
     };
@@ -993,9 +997,11 @@ fn fractional_replaced_images_project_contiguous_pre_transform_destinations() {
             Vec::new(),
         )
         .with_metrics(ReplacedMetrics {
-            intrinsic_width: Some(96.0),
-            intrinsic_height: Some(12.0),
-            intrinsic_ratio: Some(8.0),
+            natural_sizing: Some(ReplacedNaturalSizing {
+                width: Some(96.0),
+                height: Some(12.0),
+                ratio: Some(8.0),
+            }),
             ..ReplacedMetrics::default()
         })
         .with_image(image.clone())

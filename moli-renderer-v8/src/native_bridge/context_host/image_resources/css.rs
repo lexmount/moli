@@ -5,9 +5,7 @@ use parking_lot::Mutex;
 use super::{
     ImageResponseDescriptor,
     decode::{DecodedImageContent, ReadyDecodedImage},
-    state::{
-        ReadyImageForLayout, ReadyImageResource, ReadyImageResourceIndex, intrinsic_dimensions,
-    },
+    state::{ReadyImageForLayout, ReadyImageResource, ReadyImageResourceIndex, resource_sizing},
 };
 use crate::{
     document_runtime::DomHandle,
@@ -246,10 +244,8 @@ impl CssImageResourceStore {
         let CssImageResourceState::Ready(resource) = &slot.state else {
             return None;
         };
-        let (intrinsic_width, intrinsic_height) = intrinsic_dimensions(resource);
         Some(ReadyImageForLayout {
-            intrinsic_width,
-            intrinsic_height,
+            sizing: resource_sizing(resource),
             pixels: resource.pixels.clone(),
             svg: resource.svg.clone(),
         })

@@ -154,6 +154,7 @@ mod parser_written_script_residence;
 mod popup_document_completion;
 mod preferred_aspect_ratio;
 mod rendering_update;
+mod replaced_natural_sizing;
 mod service_worker;
 mod service_worker_client_message;
 mod service_worker_internal;

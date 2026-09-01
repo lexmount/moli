@@ -404,20 +404,34 @@ impl LayoutPseudo {
     }
 }
 
-/// Replaced-element inputs known without decoding or querying a paint backend.
+/// Natural dimensions and aspect ratio exposed by replaced content.
 ///
-/// Attribute dimensions remain distinct from intrinsic dimensions because CSS
-/// replaced sizing gives them different precedence. An unavailable HTML image
-/// has no intrinsic dimensions and represents no content, while replaced
-/// categories with a CSS default object size (for example canvas) keep their
-/// category-specific fallback.
+/// Width, height, and ratio deliberately remain independent. In particular,
+/// an external SVG can have one natural dimension and no natural ratio; its
+/// concrete object size may use the CSS 300x150 default without manufacturing
+/// a ratio from that fallback. This mirrors Blink's `NaturalSizingInfo` model.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ReplacedNaturalSizing {
+    pub width: Option<f32>,
+    pub height: Option<f32>,
+    pub ratio: Option<f32>,
+}
+
+/// Replaced-element inputs known without querying a paint backend.
+///
+/// `natural_sizing: None` means that an HTML image resource is unavailable and
+/// therefore represents no content. `Some(Default::default())` is distinct: it
+/// represents available content with no natural dimensions or ratio, for
+/// which CSS Images supplies the default concrete object size.
+///
+/// Attribute dimensions remain separate because CSS replaced sizing gives
+/// them different precedence and may use a complete pair as an aspect-ratio
+/// hint.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ReplacedMetrics {
-    pub intrinsic_width: Option<f32>,
-    pub intrinsic_height: Option<f32>,
+    pub natural_sizing: Option<ReplacedNaturalSizing>,
     pub attribute_width: Option<f32>,
     pub attribute_height: Option<f32>,
-    pub intrinsic_ratio: Option<f32>,
 }
 
 /// Pass-local view of one renderer-owned decoded image resource.
@@ -426,8 +440,10 @@ pub struct ReplacedMetrics {
 /// but this value contains no DOM callback or retained layout state.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LayoutImageResource {
-    pub intrinsic_width: f32,
-    pub intrinsic_height: f32,
+    /// Concrete source width used when fitting decoded content into its CSS box.
+    pub concrete_width: f32,
+    /// Concrete source height used when fitting decoded content into its CSS box.
+    pub concrete_height: f32,
     pub pixels: Option<Arc<moli_image::RgbaImage>>,
     pub svg: Option<Arc<moli_image::SvgImage>>,
 }

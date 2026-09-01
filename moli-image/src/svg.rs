@@ -407,6 +407,13 @@ mod tests {
         assert!((explicit.intrinsic_height.unwrap() - 96.0).abs() < 0.001);
         assert_eq!(explicit.concrete_dimensions(), Some((192, 96)));
 
+        let width_only =
+            probe_svg_image(br#"<svg xmlns="http://www.w3.org/2000/svg" width="20px"/>"#).unwrap();
+        assert_eq!(width_only.intrinsic_width, Some(20.0));
+        assert_eq!(width_only.intrinsic_height, None);
+        assert_eq!(width_only.intrinsic_ratio, None);
+        assert_eq!(width_only.concrete_dimensions(), Some((20, 150)));
+
         let ratio_only =
             probe_svg_image(br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"/>"#)
                 .unwrap();

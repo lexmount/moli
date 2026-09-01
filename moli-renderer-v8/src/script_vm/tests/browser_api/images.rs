@@ -161,7 +161,7 @@ async fn render_image_decode_requires_both_real_layout_and_image_fetch() {
             .borrow()
             .ready_image_for_layout(image)
             .expect("successful local image retains metadata");
-        assert_eq!((ready.intrinsic_width, ready.intrinsic_height), (1.0, 1.0));
+        assert_eq!(ready.sizing.concrete_dimensions(), (1.0, 1.0));
         assert_eq!(
             ready.pixels.is_some(),
             expect_pixels,
