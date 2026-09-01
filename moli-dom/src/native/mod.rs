@@ -2777,7 +2777,8 @@ mod tests {
             .expect("second template content owner document");
         assert_eq!(second_content_owner, content_owner);
 
-        let nested_content = dom.create_template_contents_fragment_for_document(content_owner);
+        let nested_content =
+            dom.create_template_contents_fragment_for_document(content_owner, None);
         assert_eq!(
             dom.node(nested_content).and_then(Node::owner_document),
             Some(content_owner)
