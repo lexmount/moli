@@ -117,7 +117,7 @@ promise_test(async function () {
   assert_equals(outcome.value, "dynamic-import-ok");
   assert_true(
     outcome.events.some(event => event.disposition === "report" &&
-      event.effectiveDirective === "script-src" &&
+      event.effectiveDirective === "script-src-elem" &&
       event.instance &&
       event.blockedURI.includes("/report-to-dynamic-dependency.js")),
     "SharedWorker report-only CSP should dispatch a dynamic import SecurityPolicyViolationEvent",
@@ -126,7 +126,7 @@ promise_test(async function () {
   const match = await wait_for_csp_report(token, report => {
     return report.type === "csp-violation" &&
       report.body.disposition === "report" &&
-      report.body.effectiveDirective === "script-src" &&
+      report.body.effectiveDirective === "script-src-elem" &&
       report.body.blockedURL.includes("/report-to-dynamic-dependency.js");
   });
   assert_true(

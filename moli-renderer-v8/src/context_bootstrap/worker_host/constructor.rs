@@ -149,7 +149,7 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
             return;
         };
         let global = scope.get_current_context().global(scope);
-        let document_content_security_policies =
+        let document_meta_content_security_policies =
             current_document_content_security_policies(scope, global);
         let document_referrer_policy = current_document_referrer_policy(scope, global);
         let host = unsafe { &mut *host_ptr };
@@ -184,6 +184,18 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
             crate::native_bridge::WorkerOwnerScope::Top
         };
         let dispatch_scope = crate::native_bridge::OwnerDispatchScope::from(owner_scope);
+        let mut document_content_security_policies = if let Some(handle) = child_handle {
+            host.child_browsing_context_content_security_policies(handle)
+                .map(<[String]>::to_vec)
+                .unwrap_or_else(|| host.document_content_security_policies().to_vec())
+        } else if let Some(policies) =
+            host.active_lightweight_popup_content_security_policies(scope)
+        {
+            policies.to_vec()
+        } else {
+            host.document_content_security_policies().to_vec()
+        };
+        document_content_security_policies.extend(document_meta_content_security_policies);
         let Some(creator_document_loader) =
             host.document_resource_loader_for_dispatch_scope(dispatch_scope)
         else {
@@ -421,6 +433,7 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
                     worker_options.worker_type,
                     worker_options.credentials_mode,
                     document_referrer_policy,
+                    document_content_security_policies,
                     worker_options.name.clone(),
                     reserved_service_worker_client_id,
                 )

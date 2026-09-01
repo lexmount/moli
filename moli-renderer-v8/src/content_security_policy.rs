@@ -43,6 +43,7 @@ pub(crate) enum ContentSecurityPolicyResourceKind {
     DocumentStyleElement,
     WorkerConstructor,
     WorkerConnect,
+    WorkerDynamicModuleImport,
     WorkerScript,
     WorkerStaticModuleImport,
 }
@@ -1902,7 +1903,7 @@ impl ContentSecurityPolicyResourceKind {
             Self::DocumentImage => IMG_SRC,
             Self::DocumentManifest => MANIFEST_SRC,
             Self::DocumentMedia => MEDIA_SRC,
-            Self::DocumentScriptElement => SCRIPT_SRC_ELEM,
+            Self::DocumentScriptElement | Self::WorkerDynamicModuleImport => SCRIPT_SRC_ELEM,
             Self::DocumentStyleElement => STYLE_SRC_ELEM,
             Self::WorkerConstructor | Self::WorkerStaticModuleImport => WORKER_SRC,
             Self::WorkerConnect => CONNECT_SRC,
@@ -1921,6 +1922,7 @@ impl ContentSecurityPolicyResourceKind {
             Self::DocumentStyleElement => &[STYLE_SRC_ELEM, STYLE_SRC, DEFAULT_SRC],
             Self::WorkerConstructor => &[WORKER_SRC, CHILD_SRC, SCRIPT_SRC, DEFAULT_SRC],
             Self::WorkerConnect => &[CONNECT_SRC, DEFAULT_SRC],
+            Self::WorkerDynamicModuleImport => &[SCRIPT_SRC_ELEM, SCRIPT_SRC, DEFAULT_SRC],
             Self::WorkerScript => &[SCRIPT_SRC, DEFAULT_SRC],
             Self::WorkerStaticModuleImport => &[WORKER_SRC, CHILD_SRC, SCRIPT_SRC, DEFAULT_SRC],
         }
@@ -2363,6 +2365,44 @@ mod tests {
             ContentSecurityPolicyResourceKind::WorkerScript,
             "https://cdn.test/worker-import.js"
         ));
+    }
+
+    #[test]
+    fn worker_module_imports_use_their_request_specific_directive_fallbacks() {
+        let cross_origin = "https://cdn.test/worker-import.js";
+
+        assert!(!allowed(
+            "worker-src 'self'; script-src *",
+            ContentSecurityPolicyResourceKind::WorkerStaticModuleImport,
+            cross_origin,
+        ));
+        assert!(allowed(
+            "worker-src *; script-src 'self'",
+            ContentSecurityPolicyResourceKind::WorkerStaticModuleImport,
+            cross_origin,
+        ));
+        assert!(!allowed(
+            "script-src-elem 'self'; script-src *",
+            ContentSecurityPolicyResourceKind::WorkerDynamicModuleImport,
+            cross_origin,
+        ));
+        assert!(allowed(
+            "worker-src 'self'; script-src *",
+            ContentSecurityPolicyResourceKind::WorkerDynamicModuleImport,
+            cross_origin,
+        ));
+
+        let violation = content_security_policy_url_violation_with_redirect_status_disposition_and_reporting_endpoints(
+            &["script-src 'self'".to_owned()],
+            &protected_url(),
+            &request_url(cross_origin),
+            ContentSecurityPolicyResourceKind::WorkerDynamicModuleImport,
+            ContentSecurityPolicyRedirectStatus::NoRedirect,
+            ContentSecurityPolicyDisposition::Enforce,
+            &ContentSecurityPolicyReportingEndpoints::default(),
+        )
+        .expect("script-src fallback should block the cross-origin dynamic import");
+        assert_eq!(violation.effective_directive, "script-src-elem");
     }
 
     #[test]

@@ -611,7 +611,7 @@ fn start_worker_module_graph_fetch(
             worker_global_content_security_policies,
             worker_global_content_security_report_only_policies,
             worker_global_content_security_reporting_endpoints,
-            crate::content_security_policy::ContentSecurityPolicyResourceKind::WorkerScript,
+            crate::content_security_policy::ContentSecurityPolicyResourceKind::WorkerDynamicModuleImport,
         ),
     };
     let initial_csp_report_only_violation =
