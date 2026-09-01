@@ -2045,25 +2045,42 @@ fn document_design_mode_controls_content_editable_without_crossing_shadow_roots(
   const inside = document.createElement('span');
   root.appendChild(inside);
   document.body.append(inherited, disabled);
-  const before = [document.designMode, inherited.isContentEditable].join(':');
+  const before = [
+    document.designMode,
+    inherited.isContentEditable,
+    inherited.matches(':read-write'),
+    inherited.matches(':read-only')
+  ].join(':');
   document.designMode = 'ON';
   const enabled = [
     document.designMode,
     inherited.isContentEditable,
     disabled.isContentEditable,
-    inside.isContentEditable
+    inside.isContentEditable,
+    inherited.matches(':read-write'),
+    inherited.matches(':read-only'),
+    disabled.matches(':read-write'),
+    inside.matches(':read-write')
   ].join(':');
   document.designMode = 'invalid';
   const afterInvalid = document.designMode;
   document.designMode = 'off';
-  const disabledAgain = [document.designMode, inherited.isContentEditable].join(':');
+  const disabledAgain = [
+    document.designMode,
+    inherited.isContentEditable,
+    inherited.matches(':read-write'),
+    inherited.matches(':read-only')
+  ].join(':');
   return [before, enabled, afterInvalid, disabledAgain].join('|');
 })()
 "#,
         )
         .expect("Document designMode contenteditable probe should evaluate");
 
-    assert_eq!(result, "off:false|on:true:false:false|on|off:false");
+    assert_eq!(
+        result,
+        "off:false:false:true|on:true:false:false:true:false:false:false|on|off:false:false:true"
+    );
 }
 
 #[test]

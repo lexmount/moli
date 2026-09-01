@@ -993,6 +993,15 @@ impl DomHost {
             .map(Document::scripting_enabled)
     }
 
+    pub fn document_design_mode_enabled_for_handle(
+        &self,
+        document_handle: DomHandle,
+    ) -> Option<bool> {
+        self.node(document_handle)
+            .and_then(Node::as_document)
+            .map(Document::design_mode_enabled)
+    }
+
     pub fn document_base_url(&self) -> Option<Url> {
         self.document_base_url_for_handle(self.document_handle())
     }
@@ -1170,6 +1179,25 @@ impl DomHost {
         }
         document.set_scripting_enabled(scripting_enabled);
         self.record_mutation(MutationScope::LocalState);
+        true
+    }
+
+    pub fn set_document_design_mode_enabled_for_handle(
+        &mut self,
+        document_handle: DomHandle,
+        design_mode_enabled: bool,
+    ) -> bool {
+        let Some(document) = self
+            .node_mut(document_handle)
+            .and_then(|node| node.data_mut().as_document_mut())
+        else {
+            return false;
+        };
+        if document.design_mode_enabled() == design_mode_enabled {
+            return false;
+        }
+        document.set_design_mode_enabled(design_mode_enabled);
+        self.record_mutation(MutationScope::QueryState);
         true
     }
 
