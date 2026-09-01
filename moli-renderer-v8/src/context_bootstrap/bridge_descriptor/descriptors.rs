@@ -132,9 +132,41 @@ const NODE_BRIDGE_DESCRIPTORS: &[BridgeDescriptor] = &[
         SVG_GEOMETRY_RUNTIME_INSTALL_GROUPS,
     ),
     descriptor(
+        web_api_interfaces::SVGComponentTransferFunctionElement::DESCRIPTOR,
+        ELEMENT_GROUPS,
+    ),
+    descriptor(
+        web_api_interfaces::SVGFEFuncAElement::DESCRIPTOR,
+        ELEMENT_GROUPS,
+    ),
+    descriptor(
+        web_api_interfaces::SVGFEFuncBElement::DESCRIPTOR,
+        ELEMENT_GROUPS,
+    ),
+    descriptor(
+        web_api_interfaces::SVGFEFuncGElement::DESCRIPTOR,
+        ELEMENT_GROUPS,
+    ),
+    descriptor(
+        web_api_interfaces::SVGFEFuncRElement::DESCRIPTOR,
+        ELEMENT_GROUPS,
+    ),
+    descriptor(web_api_interfaces::SVGFEBlendElement::DESCRIPTOR, ELEMENT_GROUPS),
+    descriptor(
+        web_api_interfaces::SVGFEColorMatrixElement::DESCRIPTOR,
+        ELEMENT_GROUPS,
+    ),
+    descriptor(web_api_interfaces::SVGFECompositeElement::DESCRIPTOR, ELEMENT_GROUPS),
+    descriptor(
         web_api_interfaces::SVGFEConvolveMatrixElement::DESCRIPTOR,
         ELEMENT_GROUPS,
     ),
+    descriptor(
+        web_api_interfaces::SVGFEDisplacementMapElement::DESCRIPTOR,
+        ELEMENT_GROUPS,
+    ),
+    descriptor(web_api_interfaces::SVGFEMorphologyElement::DESCRIPTOR, ELEMENT_GROUPS),
+    descriptor(web_api_interfaces::SVGFETurbulenceElement::DESCRIPTOR, ELEMENT_GROUPS),
     descriptor(
         web_api_interfaces::SVGForeignObjectElement::DESCRIPTOR,
         ELEMENT_GROUPS,
@@ -232,6 +264,10 @@ const NODE_BRIDGE_DESCRIPTORS: &[BridgeDescriptor] = &[
     ),
     descriptor(
         web_api_interfaces::SVGTextContentElement::DESCRIPTOR,
+        ELEMENT_GROUPS,
+    ),
+    descriptor(
+        web_api_interfaces::SVGTextPathElement::DESCRIPTOR,
         ELEMENT_GROUPS,
     ),
     descriptor(

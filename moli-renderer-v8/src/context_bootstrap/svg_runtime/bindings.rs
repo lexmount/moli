@@ -561,6 +561,147 @@ struct SvgGradientElementTemplateConstantsDeclaration {
     spread_method_repeat: (),
 }
 
+macro_rules! define_svg_enumeration_constants {
+    ($declaration:ident, $interface:literal, {
+        $($field:ident => $constant:literal = $value:expr),+ $(,)?
+    }) => {
+        #[derive(WebApiFunctionTemplate)]
+        #[webapi(name = $interface, enumerable)]
+        struct $declaration {
+            $(
+                #[webapi(constant = $constant, value = $value)]
+                $field: (),
+            )+
+        }
+    };
+}
+
+define_svg_enumeration_constants!(
+    SvgComponentTransferFunctionElementTemplateConstantsDeclaration,
+    "SVGComponentTransferFunctionElement",
+    {
+        unknown => "SVG_FECOMPONENTTRANSFER_TYPE_UNKNOWN" = SVG_COMPONENT_TRANSFER_TYPE_UNKNOWN,
+        identity => "SVG_FECOMPONENTTRANSFER_TYPE_IDENTITY" = SVG_COMPONENT_TRANSFER_TYPE_IDENTITY,
+        table => "SVG_FECOMPONENTTRANSFER_TYPE_TABLE" = SVG_COMPONENT_TRANSFER_TYPE_TABLE,
+        discrete => "SVG_FECOMPONENTTRANSFER_TYPE_DISCRETE" = SVG_COMPONENT_TRANSFER_TYPE_DISCRETE,
+        linear => "SVG_FECOMPONENTTRANSFER_TYPE_LINEAR" = SVG_COMPONENT_TRANSFER_TYPE_LINEAR,
+        gamma => "SVG_FECOMPONENTTRANSFER_TYPE_GAMMA" = SVG_COMPONENT_TRANSFER_TYPE_GAMMA,
+    }
+);
+
+define_svg_enumeration_constants!(
+    SvgFeBlendElementTemplateConstantsDeclaration,
+    "SVGFEBlendElement",
+    {
+        unknown => "SVG_FEBLEND_MODE_UNKNOWN" = SVG_FE_BLEND_MODE_UNKNOWN,
+        normal => "SVG_FEBLEND_MODE_NORMAL" = SVG_FE_BLEND_MODE_NORMAL,
+        multiply => "SVG_FEBLEND_MODE_MULTIPLY" = SVG_FE_BLEND_MODE_MULTIPLY,
+        screen => "SVG_FEBLEND_MODE_SCREEN" = SVG_FE_BLEND_MODE_SCREEN,
+        darken => "SVG_FEBLEND_MODE_DARKEN" = SVG_FE_BLEND_MODE_DARKEN,
+        lighten => "SVG_FEBLEND_MODE_LIGHTEN" = SVG_FE_BLEND_MODE_LIGHTEN,
+        overlay => "SVG_FEBLEND_MODE_OVERLAY" = SVG_FE_BLEND_MODE_OVERLAY,
+        color_dodge => "SVG_FEBLEND_MODE_COLOR_DODGE" = SVG_FE_BLEND_MODE_COLOR_DODGE,
+        color_burn => "SVG_FEBLEND_MODE_COLOR_BURN" = SVG_FE_BLEND_MODE_COLOR_BURN,
+        hard_light => "SVG_FEBLEND_MODE_HARD_LIGHT" = SVG_FE_BLEND_MODE_HARD_LIGHT,
+        soft_light => "SVG_FEBLEND_MODE_SOFT_LIGHT" = SVG_FE_BLEND_MODE_SOFT_LIGHT,
+        difference => "SVG_FEBLEND_MODE_DIFFERENCE" = SVG_FE_BLEND_MODE_DIFFERENCE,
+        exclusion => "SVG_FEBLEND_MODE_EXCLUSION" = SVG_FE_BLEND_MODE_EXCLUSION,
+        hue => "SVG_FEBLEND_MODE_HUE" = SVG_FE_BLEND_MODE_HUE,
+        saturation => "SVG_FEBLEND_MODE_SATURATION" = SVG_FE_BLEND_MODE_SATURATION,
+        color => "SVG_FEBLEND_MODE_COLOR" = SVG_FE_BLEND_MODE_COLOR,
+        luminosity => "SVG_FEBLEND_MODE_LUMINOSITY" = SVG_FE_BLEND_MODE_LUMINOSITY,
+    }
+);
+
+define_svg_enumeration_constants!(
+    SvgFeColorMatrixElementTemplateConstantsDeclaration,
+    "SVGFEColorMatrixElement",
+    {
+        unknown => "SVG_FECOLORMATRIX_TYPE_UNKNOWN" = SVG_FE_COLOR_MATRIX_TYPE_UNKNOWN,
+        matrix => "SVG_FECOLORMATRIX_TYPE_MATRIX" = SVG_FE_COLOR_MATRIX_TYPE_MATRIX,
+        saturate => "SVG_FECOLORMATRIX_TYPE_SATURATE" = SVG_FE_COLOR_MATRIX_TYPE_SATURATE,
+        hue_rotate => "SVG_FECOLORMATRIX_TYPE_HUEROTATE" = SVG_FE_COLOR_MATRIX_TYPE_HUE_ROTATE,
+        luminance_to_alpha => "SVG_FECOLORMATRIX_TYPE_LUMINANCETOALPHA" = SVG_FE_COLOR_MATRIX_TYPE_LUMINANCE_TO_ALPHA,
+    }
+);
+
+define_svg_enumeration_constants!(
+    SvgFeCompositeElementTemplateConstantsDeclaration,
+    "SVGFECompositeElement",
+    {
+        unknown => "SVG_FECOMPOSITE_OPERATOR_UNKNOWN" = SVG_FE_COMPOSITE_OPERATOR_UNKNOWN,
+        over => "SVG_FECOMPOSITE_OPERATOR_OVER" = SVG_FE_COMPOSITE_OPERATOR_OVER,
+        input => "SVG_FECOMPOSITE_OPERATOR_IN" = SVG_FE_COMPOSITE_OPERATOR_IN,
+        out => "SVG_FECOMPOSITE_OPERATOR_OUT" = SVG_FE_COMPOSITE_OPERATOR_OUT,
+        atop => "SVG_FECOMPOSITE_OPERATOR_ATOP" = SVG_FE_COMPOSITE_OPERATOR_ATOP,
+        xor => "SVG_FECOMPOSITE_OPERATOR_XOR" = SVG_FE_COMPOSITE_OPERATOR_XOR,
+        lighter => "SVG_FECOMPOSITE_OPERATOR_LIGHTER" = SVG_FE_COMPOSITE_OPERATOR_LIGHTER,
+        arithmetic => "SVG_FECOMPOSITE_OPERATOR_ARITHMETIC" = SVG_FE_COMPOSITE_OPERATOR_ARITHMETIC,
+    }
+);
+
+define_svg_enumeration_constants!(
+    SvgFeConvolveMatrixElementTemplateConstantsDeclaration,
+    "SVGFEConvolveMatrixElement",
+    {
+        unknown => "SVG_EDGEMODE_UNKNOWN" = SVG_EDGE_MODE_UNKNOWN,
+        duplicate => "SVG_EDGEMODE_DUPLICATE" = SVG_EDGE_MODE_DUPLICATE,
+        wrap => "SVG_EDGEMODE_WRAP" = SVG_EDGE_MODE_WRAP,
+        none => "SVG_EDGEMODE_NONE" = SVG_EDGE_MODE_NONE,
+    }
+);
+
+define_svg_enumeration_constants!(
+    SvgFeDisplacementMapElementTemplateConstantsDeclaration,
+    "SVGFEDisplacementMapElement",
+    {
+        unknown => "SVG_CHANNEL_UNKNOWN" = SVG_CHANNEL_UNKNOWN,
+        red => "SVG_CHANNEL_R" = SVG_CHANNEL_R,
+        green => "SVG_CHANNEL_G" = SVG_CHANNEL_G,
+        blue => "SVG_CHANNEL_B" = SVG_CHANNEL_B,
+        alpha => "SVG_CHANNEL_A" = SVG_CHANNEL_A,
+    }
+);
+
+define_svg_enumeration_constants!(
+    SvgFeMorphologyElementTemplateConstantsDeclaration,
+    "SVGFEMorphologyElement",
+    {
+        unknown => "SVG_MORPHOLOGY_OPERATOR_UNKNOWN" = SVG_MORPHOLOGY_OPERATOR_UNKNOWN,
+        erode => "SVG_MORPHOLOGY_OPERATOR_ERODE" = SVG_MORPHOLOGY_OPERATOR_ERODE,
+        dilate => "SVG_MORPHOLOGY_OPERATOR_DILATE" = SVG_MORPHOLOGY_OPERATOR_DILATE,
+    }
+);
+
+define_svg_enumeration_constants!(
+    SvgFeTurbulenceElementTemplateConstantsDeclaration,
+    "SVGFETurbulenceElement",
+    {
+        turbulence_unknown => "SVG_TURBULENCE_TYPE_UNKNOWN" = SVG_TURBULENCE_TYPE_UNKNOWN,
+        fractal_noise => "SVG_TURBULENCE_TYPE_FRACTALNOISE" = SVG_TURBULENCE_TYPE_FRACTAL_NOISE,
+        turbulence => "SVG_TURBULENCE_TYPE_TURBULENCE" = SVG_TURBULENCE_TYPE_TURBULENCE,
+        stitch_unknown => "SVG_STITCHTYPE_UNKNOWN" = SVG_STITCH_TYPE_UNKNOWN,
+        stitch => "SVG_STITCHTYPE_STITCH" = SVG_STITCH_TYPE_STITCH,
+        no_stitch => "SVG_STITCHTYPE_NOSTITCH" = SVG_STITCH_TYPE_NO_STITCH,
+    }
+);
+
+define_svg_enumeration_constants!(
+    SvgTextPathElementTemplateConstantsDeclaration,
+    "SVGTextPathElement",
+    {
+        method_unknown => "TEXTPATH_METHODTYPE_UNKNOWN" = SVG_TEXT_PATH_METHOD_TYPE_UNKNOWN,
+        method_align => "TEXTPATH_METHODTYPE_ALIGN" = SVG_TEXT_PATH_METHOD_TYPE_ALIGN,
+        method_stretch => "TEXTPATH_METHODTYPE_STRETCH" = SVG_TEXT_PATH_METHOD_TYPE_STRETCH,
+        spacing_unknown => "TEXTPATH_SPACINGTYPE_UNKNOWN" = SVG_TEXT_PATH_SPACING_TYPE_UNKNOWN,
+        spacing_auto => "TEXTPATH_SPACINGTYPE_AUTO" = SVG_TEXT_PATH_SPACING_TYPE_AUTO,
+        spacing_exact => "TEXTPATH_SPACINGTYPE_EXACT" = SVG_TEXT_PATH_SPACING_TYPE_EXACT,
+        side_unknown => "TEXTPATH_SIDETYPE_UNKNOWN" = SVG_TEXT_PATH_SIDE_TYPE_UNKNOWN,
+        side_left => "TEXTPATH_SIDETYPE_LEFT" = SVG_TEXT_PATH_SIDE_TYPE_LEFT,
+        side_right => "TEXTPATH_SIDETYPE_RIGHT" = SVG_TEXT_PATH_SIDE_TYPE_RIGHT,
+    }
+);
+
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::SVGMarkerElement, enumerable)]
 struct SvgMarkerElementTemplateMethodsDeclaration {
@@ -1176,13 +1317,136 @@ struct SvgFilterElementPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::SVGComponentTransferFunctionElement, enumerable)]
+struct SvgComponentTransferFunctionElementPrototypeAccessorsDeclaration {
+    #[webapi(
+        accessor_property = "type",
+        getter = svg_element_animated_enumeration_getter,
+        data = callback_data_index_value(scope, 12)
+    )]
+    transfer_type: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::SVGFEBlendElement, enumerable)]
+struct SvgFeBlendElementPrototypeAccessorsDeclaration {
+    #[webapi(
+        accessor_property = "mode",
+        getter = svg_element_animated_enumeration_getter,
+        data = callback_data_index_value(scope, 13)
+    )]
+    mode: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::SVGFEColorMatrixElement, enumerable)]
+struct SvgFeColorMatrixElementPrototypeAccessorsDeclaration {
+    #[webapi(
+        accessor_property = "type",
+        getter = svg_element_animated_enumeration_getter,
+        data = callback_data_index_value(scope, 14)
+    )]
+    color_matrix_type: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::SVGFECompositeElement, enumerable)]
+struct SvgFeCompositeElementPrototypeAccessorsDeclaration {
+    #[webapi(
+        accessor_property = "operator",
+        getter = svg_element_animated_enumeration_getter,
+        data = callback_data_index_value(scope, 15)
+    )]
+    operator: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::SVGFEConvolveMatrixElement, enumerable)]
 struct SvgFeConvolveMatrixElementPrototypeAccessorsDeclaration {
+    #[webapi(
+        accessor_property = "edgeMode",
+        getter = svg_element_animated_enumeration_getter,
+        data = callback_data_index_value(scope, 16)
+    )]
+    edge_mode: (),
+
     #[webapi(
         accessor_property = "preserveAlpha",
         getter = svg_fe_convolve_matrix_preserve_alpha_getter
     )]
     preserve_alpha: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::SVGFEDisplacementMapElement, enumerable)]
+struct SvgFeDisplacementMapElementPrototypeAccessorsDeclaration {
+    #[webapi(
+        accessor_property = "xChannelSelector",
+        getter = svg_element_animated_enumeration_getter,
+        data = callback_data_index_value(scope, 17)
+    )]
+    x_channel_selector: (),
+
+    #[webapi(
+        accessor_property = "yChannelSelector",
+        getter = svg_element_animated_enumeration_getter,
+        data = callback_data_index_value(scope, 18)
+    )]
+    y_channel_selector: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::SVGFEMorphologyElement, enumerable)]
+struct SvgFeMorphologyElementPrototypeAccessorsDeclaration {
+    #[webapi(
+        accessor_property = "operator",
+        getter = svg_element_animated_enumeration_getter,
+        data = callback_data_index_value(scope, 19)
+    )]
+    operator: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::SVGFETurbulenceElement, enumerable)]
+struct SvgFeTurbulenceElementPrototypeAccessorsDeclaration {
+    #[webapi(
+        accessor_property = "stitchTiles",
+        getter = svg_element_animated_enumeration_getter,
+        data = callback_data_index_value(scope, 20)
+    )]
+    stitch_tiles: (),
+
+    #[webapi(
+        accessor_property = "type",
+        getter = svg_element_animated_enumeration_getter,
+        data = callback_data_index_value(scope, 21)
+    )]
+    turbulence_type: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::SVGTextPathElement, enumerable)]
+struct SvgTextPathElementPrototypeAccessorsDeclaration {
+    #[webapi(
+        accessor_property = "method",
+        getter = svg_element_animated_enumeration_getter,
+        data = callback_data_index_value(scope, 22)
+    )]
+    method: (),
+
+    #[webapi(
+        accessor_property = "spacing",
+        getter = svg_element_animated_enumeration_getter,
+        data = callback_data_index_value(scope, 23)
+    )]
+    spacing: (),
+
+    #[webapi(
+        accessor_property = "side",
+        getter = svg_element_animated_enumeration_getter,
+        data = callback_data_index_value(scope, 24)
+    )]
+    side: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -1466,6 +1730,50 @@ pub(super) fn install_svg_gradient_element_bindings<'s>(
     SvgGradientElementTemplateConstantsDeclaration::initialize_prototype_template(scope, prototype);
 }
 
+pub(super) fn install_svg_enumeration_constant_bindings<'s>(
+    scope: &mut v8::PinScope<'s, '_, ()>,
+    template: v8::Local<'s, v8::FunctionTemplate>,
+    interface_name: &str,
+) {
+    let prototype = template.prototype_template(scope);
+    macro_rules! install_constants {
+        ($declaration:ty) => {{
+            <$declaration>::initialize_template(scope, template);
+            <$declaration>::initialize_prototype_template(scope, prototype);
+        }};
+    }
+    match interface_name {
+        "SVGComponentTransferFunctionElement" => {
+            install_constants!(SvgComponentTransferFunctionElementTemplateConstantsDeclaration);
+        }
+        "SVGFEBlendElement" => {
+            install_constants!(SvgFeBlendElementTemplateConstantsDeclaration);
+        }
+        "SVGFEColorMatrixElement" => {
+            install_constants!(SvgFeColorMatrixElementTemplateConstantsDeclaration);
+        }
+        "SVGFECompositeElement" => {
+            install_constants!(SvgFeCompositeElementTemplateConstantsDeclaration);
+        }
+        "SVGFEConvolveMatrixElement" => {
+            install_constants!(SvgFeConvolveMatrixElementTemplateConstantsDeclaration);
+        }
+        "SVGFEDisplacementMapElement" => {
+            install_constants!(SvgFeDisplacementMapElementTemplateConstantsDeclaration);
+        }
+        "SVGFEMorphologyElement" => {
+            install_constants!(SvgFeMorphologyElementTemplateConstantsDeclaration);
+        }
+        "SVGFETurbulenceElement" => {
+            install_constants!(SvgFeTurbulenceElementTemplateConstantsDeclaration);
+        }
+        "SVGTextPathElement" => {
+            install_constants!(SvgTextPathElementTemplateConstantsDeclaration);
+        }
+        _ => {}
+    }
+}
+
 pub(super) fn install_svg_value_list_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
@@ -1596,8 +1904,43 @@ pub(super) fn install_svg_element_accessor_bindings<'s>(
                 scope, prototype,
             );
         }
+        "SVGComponentTransferFunctionElement" => {
+            SvgComponentTransferFunctionElementPrototypeAccessorsDeclaration::initialize_prototype_template(
+                scope, prototype,
+            );
+        }
+        "SVGFEBlendElement" => {
+            SvgFeBlendElementPrototypeAccessorsDeclaration::initialize_prototype_template(
+                scope, prototype,
+            );
+        }
+        "SVGFEColorMatrixElement" => {
+            SvgFeColorMatrixElementPrototypeAccessorsDeclaration::initialize_prototype_template(
+                scope, prototype,
+            );
+        }
+        "SVGFECompositeElement" => {
+            SvgFeCompositeElementPrototypeAccessorsDeclaration::initialize_prototype_template(
+                scope, prototype,
+            );
+        }
         "SVGFEConvolveMatrixElement" => {
             SvgFeConvolveMatrixElementPrototypeAccessorsDeclaration::initialize_prototype_template(
+                scope, prototype,
+            );
+        }
+        "SVGFEDisplacementMapElement" => {
+            SvgFeDisplacementMapElementPrototypeAccessorsDeclaration::initialize_prototype_template(
+                scope, prototype,
+            );
+        }
+        "SVGFEMorphologyElement" => {
+            SvgFeMorphologyElementPrototypeAccessorsDeclaration::initialize_prototype_template(
+                scope, prototype,
+            );
+        }
+        "SVGFETurbulenceElement" => {
+            SvgFeTurbulenceElementPrototypeAccessorsDeclaration::initialize_prototype_template(
                 scope, prototype,
             );
         }
@@ -1608,6 +1951,14 @@ pub(super) fn install_svg_element_accessor_bindings<'s>(
         }
         "SVGTextPositioningElement" => {
             SvgTextPositioningElementPrototypeAccessorsDeclaration::initialize_prototype_template(
+                scope, prototype,
+            );
+        }
+        "SVGTextPathElement" => {
+            SvgTextPathElementPrototypeAccessorsDeclaration::initialize_prototype_template(
+                scope, prototype,
+            );
+            SvgUriReferencePrototypeAccessorsDeclaration::initialize_prototype_template(
                 scope, prototype,
             );
         }
