@@ -182,6 +182,8 @@ impl LayoutWritingMode {
             StyloWritingMode::HorizontalTb => Self::HorizontalTb,
             StyloWritingMode::VerticalRl => Self::VerticalRl,
             StyloWritingMode::VerticalLr => Self::VerticalLr,
+            StyloWritingMode::SidewaysRl => Self::SidewaysRl,
+            StyloWritingMode::SidewaysLr => Self::SidewaysLr,
         }
     }
 
