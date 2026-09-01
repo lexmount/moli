@@ -344,6 +344,7 @@ pub(crate) fn construct_original_before_unload_event<'s>(
     let event = new_uninitialized_before_unload_event(scope)?;
     let backing = event_backing(scope, event);
     base::initialize_event_object(scope, backing, "beforeunload", false, true);
+    mark_event_trusted(scope, event);
     Some(event)
 }
 
