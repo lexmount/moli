@@ -3811,3 +3811,37 @@ fn document_named_item_does_not_shadow_legacy_unforgeable_location() {
         r#"{"whileConnected":[true,true,true],"afterRemoval":true}"#
     );
 }
+
+#[test]
+fn iframe_in_shadow_tree_is_not_a_window_child_property() {
+    let mut vm = new_storage_test_vm("https://shadow-iframe-named-property.test/");
+
+    let result = vm
+        .eval(
+            r#"
+const host = document.createElement('div');
+(document.body || document.documentElement || document).appendChild(host);
+const shadow = host.attachShadow({ mode: 'open' });
+const shadowFrame = document.createElement('iframe');
+shadowFrame.name = 'shadowTarget';
+shadow.appendChild(shadowFrame);
+const lightFrame = document.createElement('iframe');
+lightFrame.name = 'lightTarget';
+(document.body || document.documentElement || document).appendChild(lightFrame);
+[
+  window.length,
+  window.frames.length,
+  window[0] === lightFrame.contentWindow,
+  window[1] === undefined,
+  'shadowTarget' in window,
+  window.shadowTarget === undefined,
+  shadowFrame.contentWindow !== null,
+  'lightTarget' in window,
+  window.lightTarget === lightFrame.contentWindow
+].join('|')
+"#,
+        )
+        .expect("shadow iframe named property probe should evaluate");
+
+    assert_eq!(result, "1|1|true|true|false|true|true|true|true");
+}
