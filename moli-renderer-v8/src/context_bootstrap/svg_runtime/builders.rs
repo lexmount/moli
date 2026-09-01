@@ -646,36 +646,16 @@ pub(super) fn parse_svg_animated_enumeration(
     kind: SvgAnimatedEnumerationKind,
     value: &str,
 ) -> Option<u32> {
-    match (kind, value) {
-        (SvgAnimatedEnumerationKind::UnitType, "userSpaceOnUse") => {
-            Some(SVG_UNIT_TYPE_USER_SPACE_ON_USE)
-        }
-        (SvgAnimatedEnumerationKind::UnitType, "objectBoundingBox") => {
-            Some(SVG_UNIT_TYPE_OBJECT_BOUNDING_BOX)
-        }
-        (SvgAnimatedEnumerationKind::SpreadMethod, "pad") => Some(SVG_SPREAD_METHOD_PAD),
-        (SvgAnimatedEnumerationKind::SpreadMethod, "reflect") => Some(SVG_SPREAD_METHOD_REFLECT),
-        (SvgAnimatedEnumerationKind::SpreadMethod, "repeat") => Some(SVG_SPREAD_METHOD_REPEAT),
-        (SvgAnimatedEnumerationKind::LengthAdjust, "spacing") => Some(SVG_LENGTH_ADJUST_SPACING),
-        (SvgAnimatedEnumerationKind::LengthAdjust, "spacingAndGlyphs") => {
-            Some(SVG_LENGTH_ADJUST_SPACING_AND_GLYPHS)
-        }
-        (SvgAnimatedEnumerationKind::MarkerUnits, "userSpaceOnUse") => {
-            Some(SVG_MARKER_UNITS_USER_SPACE_ON_USE)
-        }
-        (SvgAnimatedEnumerationKind::MarkerUnits, "strokeWidth") => {
-            Some(SVG_MARKER_UNITS_STROKE_WIDTH)
-        }
-        (SvgAnimatedEnumerationKind::MarkerOrient, "auto") => Some(SVG_MARKER_ORIENT_AUTO),
-        (SvgAnimatedEnumerationKind::MarkerOrient, "auto-start-reverse") => {
-            Some(SVG_MARKER_ORIENT_AUTO_START_REVERSE)
-        }
-        (SvgAnimatedEnumerationKind::MarkerOrient, value)
-            if parse_svg_angle_value(value).is_some() =>
-        {
-            Some(SVG_MARKER_ORIENT_ANGLE)
-        }
-        _ => None,
+    match kind {
+        SvgAnimatedEnumerationKind::Keywords(values) => values
+            .iter()
+            .find_map(|(keyword, enumerated)| (*keyword == value).then_some(*enumerated)),
+        SvgAnimatedEnumerationKind::MarkerOrient => match value {
+            "auto" => Some(SVG_MARKER_ORIENT_AUTO),
+            "auto-start-reverse" => Some(SVG_MARKER_ORIENT_AUTO_START_REVERSE),
+            value if parse_svg_angle_value(value).is_some() => Some(SVG_MARKER_ORIENT_ANGLE),
+            _ => None,
+        },
     }
 }
 
@@ -683,32 +663,16 @@ pub(super) fn serialize_svg_animated_enumeration(
     kind: SvgAnimatedEnumerationKind,
     value: u32,
 ) -> Option<&'static str> {
-    match (kind, value) {
-        (SvgAnimatedEnumerationKind::UnitType, SVG_UNIT_TYPE_USER_SPACE_ON_USE) => {
-            Some("userSpaceOnUse")
-        }
-        (SvgAnimatedEnumerationKind::UnitType, SVG_UNIT_TYPE_OBJECT_BOUNDING_BOX) => {
-            Some("objectBoundingBox")
-        }
-        (SvgAnimatedEnumerationKind::SpreadMethod, SVG_SPREAD_METHOD_PAD) => Some("pad"),
-        (SvgAnimatedEnumerationKind::SpreadMethod, SVG_SPREAD_METHOD_REFLECT) => Some("reflect"),
-        (SvgAnimatedEnumerationKind::SpreadMethod, SVG_SPREAD_METHOD_REPEAT) => Some("repeat"),
-        (SvgAnimatedEnumerationKind::LengthAdjust, SVG_LENGTH_ADJUST_SPACING) => Some("spacing"),
-        (SvgAnimatedEnumerationKind::LengthAdjust, SVG_LENGTH_ADJUST_SPACING_AND_GLYPHS) => {
-            Some("spacingAndGlyphs")
-        }
-        (SvgAnimatedEnumerationKind::MarkerUnits, SVG_MARKER_UNITS_USER_SPACE_ON_USE) => {
-            Some("userSpaceOnUse")
-        }
-        (SvgAnimatedEnumerationKind::MarkerUnits, SVG_MARKER_UNITS_STROKE_WIDTH) => {
-            Some("strokeWidth")
-        }
-        (SvgAnimatedEnumerationKind::MarkerOrient, SVG_MARKER_ORIENT_AUTO) => Some("auto"),
-        (SvgAnimatedEnumerationKind::MarkerOrient, SVG_MARKER_ORIENT_ANGLE) => Some("0"),
-        (SvgAnimatedEnumerationKind::MarkerOrient, SVG_MARKER_ORIENT_AUTO_START_REVERSE) => {
-            Some("auto-start-reverse")
-        }
-        _ => None,
+    match kind {
+        SvgAnimatedEnumerationKind::Keywords(values) => values
+            .iter()
+            .find_map(|(keyword, enumerated)| (*enumerated == value).then_some(*keyword)),
+        SvgAnimatedEnumerationKind::MarkerOrient => match value {
+            SVG_MARKER_ORIENT_AUTO => Some("auto"),
+            SVG_MARKER_ORIENT_ANGLE => Some("0"),
+            SVG_MARKER_ORIENT_AUTO_START_REVERSE => Some("auto-start-reverse"),
+            _ => None,
+        },
     }
 }
 
