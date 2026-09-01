@@ -1180,6 +1180,90 @@ fn indexed_db_roundtrips_blob_file_and_array_buffer_values() {
 }
 
 #[test]
+fn indexed_db_roundtrips_file_list_with_file_graph_identity() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://indexeddb-file-list-value.test/");
+
+    vm.eval(
+        r#"
+(() => {
+  globalThis.__indexedDbFileListResult = "pending";
+  const dbName = `file-list-${Math.random()}`;
+  const open = indexedDB.open(dbName, 1);
+  open.onerror = () => {
+    globalThis.__indexedDbFileListResult = `open-error:${open.error && open.error.name}`;
+  };
+  open.onupgradeneeded = () => {
+    open.result.createObjectStore("values", { keyPath: "id" });
+  };
+  open.onsuccess = () => {
+    const db = open.result;
+    const transfer = new DataTransfer();
+    const file = new File(["FILE_LIST_IDB"], "list.txt", {
+      type: "text/list",
+      lastModified: 77
+    });
+    file.expando = "not serialized";
+    transfer.items.add(file);
+    const list = transfer.files;
+    list.expando = "not serialized";
+
+    const writeTx = db.transaction("values", "readwrite");
+    writeTx.onerror = () => {
+      globalThis.__indexedDbFileListResult =
+        `write-error:${writeTx.error && writeTx.error.name}`;
+    };
+    writeTx.objectStore("values").put({
+      id: 1,
+      list,
+      listAlias: list,
+      file
+    });
+    writeTx.oncomplete = () => {
+      const get = db.transaction("values").objectStore("values").get(1);
+      get.onerror = () => {
+        globalThis.__indexedDbFileListResult = `get-error:${get.error && get.error.name}`;
+      };
+      get.onsuccess = () => {
+        const row = get.result;
+        row.file.text().then(text => {
+          globalThis.__indexedDbFileListResult = JSON.stringify({
+            listBrand: row.list instanceof FileList,
+            listPrototype: Object.getPrototypeOf(row.list) === FileList.prototype,
+            listDistinct: row.list !== list,
+            listAlias: row.list === row.listAlias,
+            listLength: row.list.length,
+            itemMatchesFile: row.list.item(0) === row.file,
+            indexedMatchesFile: row.list[0] === row.file,
+            fileBrand: row.file instanceof File && row.file instanceof Blob,
+            fileDistinct: row.file !== file,
+            fileMetadata: [row.file.name, row.file.type, row.file.lastModified, row.file.size],
+            text,
+            expandosExcluded:
+              row.list.expando === undefined && row.file.expando === undefined
+          });
+        }, error => {
+          globalThis.__indexedDbFileListResult = `file-error:${error && error.name}`;
+        });
+      };
+    };
+  };
+  return "scheduled";
+})()
+"#,
+    )
+    .expect("indexeddb FileList workflow should schedule");
+
+    let result = vm
+        .eval_after_selected_page_tasks("String(globalThis.__indexedDbFileListResult)")
+        .expect("indexeddb FileList result should be readable");
+
+    assert_eq!(
+        result,
+        r#"{"listBrand":true,"listPrototype":true,"listDistinct":true,"listAlias":true,"listLength":1,"itemMatchesFile":true,"indexedMatchesFile":true,"fileBrand":true,"fileDistinct":true,"fileMetadata":["list.txt","text/list",77,13],"text":"FILE_LIST_IDB","expandosExcluded":true}"#,
+    );
+}
+
+#[test]
 fn indexed_db_roundtrips_opfs_handles_with_durable_external_objects() {
     let mut vm = new_storage_page_task_executor_test_vm("https://indexeddb-opfs-handle.test/");
 
