@@ -143,6 +143,46 @@ struct SvgAnimatedAngleObjectDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
+#[webapi(
+    interface = web_api_interfaces::SVGAnimatedRect,
+    fallback_to_string_tag = "SVGAnimatedRect"
+)]
+struct SvgAnimatedRectObjectDeclaration<'scope> {
+    #[webapi(slot = SVG_ANIMATED_RECT_BASE_VAL_SLOT)]
+    base_val: v8::Local<'scope, v8::Object>,
+    #[webapi(slot = SVG_ANIMATED_RECT_ANIM_VAL_SLOT)]
+    anim_val: v8::Local<'scope, v8::Object>,
+}
+
+#[derive(WebApiObject)]
+#[webapi(
+    interface = web_api_interfaces::SVGPreserveAspectRatio,
+    fallback_to_string_tag = "SVGPreserveAspectRatio"
+)]
+struct SvgPreserveAspectRatioObjectDeclaration<'scope> {
+    #[webapi(slot = SVG_PRESERVE_ASPECT_RATIO_ALIGN_SLOT)]
+    align: u32,
+    #[webapi(slot = SVG_PRESERVE_ASPECT_RATIO_MEET_OR_SLICE_SLOT)]
+    meet_or_slice: u32,
+    #[webapi(slot = SVG_PRESERVE_ASPECT_RATIO_OWNER_ELEMENT_SLOT)]
+    owner: v8::Local<'scope, v8::Object>,
+    #[webapi(slot = SVG_PRESERVE_ASPECT_RATIO_READ_ONLY_SLOT)]
+    read_only: bool,
+}
+
+#[derive(WebApiObject)]
+#[webapi(
+    interface = web_api_interfaces::SVGAnimatedPreserveAspectRatio,
+    fallback_to_string_tag = "SVGAnimatedPreserveAspectRatio"
+)]
+struct SvgAnimatedPreserveAspectRatioObjectDeclaration<'scope> {
+    #[webapi(slot = SVG_ANIMATED_PRESERVE_ASPECT_RATIO_BASE_VAL_SLOT)]
+    base_val: v8::Local<'scope, v8::Object>,
+    #[webapi(slot = SVG_ANIMATED_PRESERVE_ASPECT_RATIO_ANIM_VAL_SLOT)]
+    anim_val: v8::Local<'scope, v8::Object>,
+}
+
+#[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::SVGLength, fallback_to_string_tag = "SVGLength")]
 struct SvgLengthObjectDeclaration {
     #[webapi(slot = SVG_LENGTH_UNIT_TYPE_SLOT)]
@@ -1126,6 +1166,34 @@ pub(super) fn build_svg_animated_angle_for_attribute<'s>(
     SvgAnimatedAngleObjectDeclaration::new(base_val, anim_val)
         .bind(scope)
         .expect("SVGAnimatedAngle declaration should bind")
+}
+
+pub(super) fn build_svg_animated_rect_for_view_box<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+) -> v8::Local<'s, v8::Object> {
+    let values = svg_view_box_attribute_value(scope, owner);
+    let base_val = super::rect::build_svg_view_box_rect(scope, owner, values, false);
+    let anim_val = super::rect::build_svg_view_box_rect(scope, owner, values, true);
+    SvgAnimatedRectObjectDeclaration::new(base_val, anim_val)
+        .bind(scope)
+        .expect("SVGAnimatedRect declaration should bind")
+}
+
+pub(super) fn build_svg_animated_preserve_aspect_ratio<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+) -> v8::Local<'s, v8::Object> {
+    let [align, meet_or_slice] = svg_preserve_aspect_ratio_attribute_value(scope, owner);
+    let base_val = SvgPreserveAspectRatioObjectDeclaration::new(align, meet_or_slice, owner, false)
+        .bind(scope)
+        .expect("SVGPreserveAspectRatio base value declaration should bind");
+    let anim_val = SvgPreserveAspectRatioObjectDeclaration::new(align, meet_or_slice, owner, true)
+        .bind(scope)
+        .expect("SVGPreserveAspectRatio animated value declaration should bind");
+    SvgAnimatedPreserveAspectRatioObjectDeclaration::new(base_val, anim_val)
+        .bind(scope)
+        .expect("SVGAnimatedPreserveAspectRatio declaration should bind")
 }
 
 pub(super) fn build_svg_angle<'s>(scope: &mut v8::PinScope<'s, '_>) -> v8::Local<'s, v8::Object> {
@@ -2858,6 +2926,248 @@ fn svg_animated_length_attribute_value<'s>(
         .unwrap_or_default()
 }
 
+pub(super) fn sync_svg_animated_rect_from_owner_attribute<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    animated: v8::Local<'s, v8::Object>,
+    owner: v8::Local<'s, v8::Object>,
+) {
+    let values = svg_view_box_attribute_value(scope, owner);
+    for slot in [
+        SVG_ANIMATED_RECT_BASE_VAL_SLOT,
+        SVG_ANIMATED_RECT_ANIM_VAL_SLOT,
+    ] {
+        if let Some(rect) = get_private_value(scope, animated, slot)
+            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+        {
+            super::rect::set_svg_view_box_rect_values(scope, rect, values);
+        }
+    }
+}
+
+pub(super) fn sync_svg_view_box_rect_from_owner<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    rect: v8::Local<'s, v8::Object>,
+) {
+    let Some(owner) = super::rect::svg_view_box_rect_owner(scope, rect) else {
+        return;
+    };
+    if let Some(animated) = get_private_value(scope, owner, SVG_FIT_VIEW_BOX_SLOT)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+    {
+        sync_svg_animated_rect_from_owner_attribute(scope, animated, owner);
+    } else {
+        let values = svg_view_box_attribute_value(scope, owner);
+        super::rect::set_svg_view_box_rect_values(scope, rect, values);
+    }
+}
+
+pub(super) fn reflect_svg_view_box_rect_mutation<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    rect: v8::Local<'s, v8::Object>,
+) {
+    let Some(owner) = super::rect::svg_view_box_rect_owner(scope, rect) else {
+        return;
+    };
+    let values = super::rect::svg_view_box_rect_values(scope, rect);
+    // Keep float round trips, including integral values outside the i64 range.
+    let serialized = values
+        .map(|value| {
+            if value == 0.0 {
+                "0".to_owned()
+            } else {
+                (value as f32).to_string()
+            }
+        })
+        .join(" ");
+    set_svg_owner_attribute_value(scope, owner, "viewBox", &serialized);
+    if let Some(animated) = get_private_value(scope, owner, SVG_FIT_VIEW_BOX_SLOT)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+    {
+        sync_svg_animated_rect_from_owner_attribute(scope, animated, owner);
+    }
+}
+
+fn svg_view_box_attribute_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+) -> [f64; 4] {
+    svg_owner_attribute_value(scope, owner, "viewBox")
+        .as_deref()
+        .and_then(parse_svg_view_box_value)
+        .unwrap_or([0.0; 4])
+}
+
+fn parse_svg_view_box_value(raw: &str) -> Option<[f64; 4]> {
+    let values = svg_geometry::parse_number_list(raw)?;
+    let [x, y, width, height] = values.as_slice() else {
+        return None;
+    };
+    if *width < 0.0 || *height < 0.0 {
+        return None;
+    }
+    let values = [*x, *y, *width, *height].map(|value| f64::from(value as f32));
+    values
+        .iter()
+        .all(|value| value.is_finite())
+        .then_some(values)
+}
+
+pub(super) fn sync_svg_animated_preserve_aspect_ratio_from_owner_attribute<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    animated: v8::Local<'s, v8::Object>,
+    owner: v8::Local<'s, v8::Object>,
+) {
+    let value = svg_preserve_aspect_ratio_attribute_value(scope, owner);
+    for slot in [
+        SVG_ANIMATED_PRESERVE_ASPECT_RATIO_BASE_VAL_SLOT,
+        SVG_ANIMATED_PRESERVE_ASPECT_RATIO_ANIM_VAL_SLOT,
+    ] {
+        if let Some(aspect_ratio) = get_private_value(scope, animated, slot)
+            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+        {
+            set_svg_preserve_aspect_ratio_value(scope, aspect_ratio, value);
+        }
+    }
+}
+
+pub(super) fn sync_svg_preserve_aspect_ratio_from_owner_attribute<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    aspect_ratio: v8::Local<'s, v8::Object>,
+) {
+    let Some(owner) = get_private_value(
+        scope,
+        aspect_ratio,
+        SVG_PRESERVE_ASPECT_RATIO_OWNER_ELEMENT_SLOT,
+    )
+    .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok()) else {
+        return;
+    };
+    let value = svg_preserve_aspect_ratio_attribute_value(scope, owner);
+    set_svg_preserve_aspect_ratio_value(scope, aspect_ratio, value);
+}
+
+pub(super) fn set_svg_preserve_aspect_ratio_value(
+    scope: &mut v8::PinScope<'_, '_>,
+    aspect_ratio: v8::Local<'_, v8::Object>,
+    [align, meet_or_slice]: [u32; 2],
+) {
+    set_private_value(
+        scope,
+        aspect_ratio,
+        SVG_PRESERVE_ASPECT_RATIO_ALIGN_SLOT,
+        v8::Integer::new_from_unsigned(scope, align).into(),
+    );
+    set_private_value(
+        scope,
+        aspect_ratio,
+        SVG_PRESERVE_ASPECT_RATIO_MEET_OR_SLICE_SLOT,
+        v8::Integer::new_from_unsigned(scope, meet_or_slice).into(),
+    );
+}
+
+pub(super) fn reflect_svg_preserve_aspect_ratio_to_owner_attribute<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    aspect_ratio: v8::Local<'s, v8::Object>,
+) {
+    let Some(owner) = get_private_value(
+        scope,
+        aspect_ratio,
+        SVG_PRESERVE_ASPECT_RATIO_OWNER_ELEMENT_SLOT,
+    )
+    .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok()) else {
+        return;
+    };
+    let align = svg_number_slot(scope, aspect_ratio, SVG_PRESERVE_ASPECT_RATIO_ALIGN_SLOT)
+        .unwrap_or(SVG_PRESERVE_ASPECT_RATIO_X_MID_Y_MID as f64) as u32;
+    let meet_or_slice = svg_number_slot(
+        scope,
+        aspect_ratio,
+        SVG_PRESERVE_ASPECT_RATIO_MEET_OR_SLICE_SLOT,
+    )
+    .unwrap_or(SVG_MEET_OR_SLICE_MEET as f64) as u32;
+    let (Some(align), Some(meet_or_slice)) = (
+        serialize_svg_preserve_aspect_ratio_align(align),
+        serialize_svg_meet_or_slice(meet_or_slice),
+    ) else {
+        return;
+    };
+    let serialized = format!("{align} {meet_or_slice}");
+    set_svg_owner_attribute_value(scope, owner, "preserveAspectRatio", &serialized);
+    if let Some(animated) = get_private_value(scope, owner, SVG_FIT_PRESERVE_ASPECT_RATIO_SLOT)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+    {
+        sync_svg_animated_preserve_aspect_ratio_from_owner_attribute(scope, animated, owner);
+    }
+}
+
+fn svg_preserve_aspect_ratio_attribute_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+) -> [u32; 2] {
+    svg_owner_attribute_value(scope, owner, "preserveAspectRatio")
+        .as_deref()
+        .and_then(parse_svg_preserve_aspect_ratio_value)
+        .unwrap_or([
+            SVG_PRESERVE_ASPECT_RATIO_X_MID_Y_MID,
+            SVG_MEET_OR_SLICE_MEET,
+        ])
+}
+
+fn parse_svg_preserve_aspect_ratio_value(raw: &str) -> Option<[u32; 2]> {
+    let mut tokens = raw.split_ascii_whitespace();
+    let mut align = tokens.next()?;
+    if align == "defer" {
+        align = tokens.next()?;
+    }
+    let align = parse_svg_preserve_aspect_ratio_align(align)?;
+    let meet_or_slice = match tokens.next() {
+        None | Some("meet") => SVG_MEET_OR_SLICE_MEET,
+        Some("slice") => SVG_MEET_OR_SLICE_SLICE,
+        Some(_) => return None,
+    };
+    tokens.next().is_none().then_some([align, meet_or_slice])
+}
+
+fn parse_svg_preserve_aspect_ratio_align(value: &str) -> Option<u32> {
+    match value {
+        "none" => Some(SVG_PRESERVE_ASPECT_RATIO_NONE),
+        "xMinYMin" => Some(SVG_PRESERVE_ASPECT_RATIO_X_MIN_Y_MIN),
+        "xMidYMin" => Some(SVG_PRESERVE_ASPECT_RATIO_X_MID_Y_MIN),
+        "xMaxYMin" => Some(SVG_PRESERVE_ASPECT_RATIO_X_MAX_Y_MIN),
+        "xMinYMid" => Some(SVG_PRESERVE_ASPECT_RATIO_X_MIN_Y_MID),
+        "xMidYMid" => Some(SVG_PRESERVE_ASPECT_RATIO_X_MID_Y_MID),
+        "xMaxYMid" => Some(SVG_PRESERVE_ASPECT_RATIO_X_MAX_Y_MID),
+        "xMinYMax" => Some(SVG_PRESERVE_ASPECT_RATIO_X_MIN_Y_MAX),
+        "xMidYMax" => Some(SVG_PRESERVE_ASPECT_RATIO_X_MID_Y_MAX),
+        "xMaxYMax" => Some(SVG_PRESERVE_ASPECT_RATIO_X_MAX_Y_MAX),
+        _ => None,
+    }
+}
+
+fn serialize_svg_preserve_aspect_ratio_align(value: u32) -> Option<&'static str> {
+    match value {
+        SVG_PRESERVE_ASPECT_RATIO_NONE => Some("none"),
+        SVG_PRESERVE_ASPECT_RATIO_X_MIN_Y_MIN => Some("xMinYMin"),
+        SVG_PRESERVE_ASPECT_RATIO_X_MID_Y_MIN => Some("xMidYMin"),
+        SVG_PRESERVE_ASPECT_RATIO_X_MAX_Y_MIN => Some("xMaxYMin"),
+        SVG_PRESERVE_ASPECT_RATIO_X_MIN_Y_MID => Some("xMinYMid"),
+        SVG_PRESERVE_ASPECT_RATIO_X_MID_Y_MID => Some("xMidYMid"),
+        SVG_PRESERVE_ASPECT_RATIO_X_MAX_Y_MID => Some("xMaxYMid"),
+        SVG_PRESERVE_ASPECT_RATIO_X_MIN_Y_MAX => Some("xMinYMax"),
+        SVG_PRESERVE_ASPECT_RATIO_X_MID_Y_MAX => Some("xMidYMax"),
+        SVG_PRESERVE_ASPECT_RATIO_X_MAX_Y_MAX => Some("xMaxYMax"),
+        _ => None,
+    }
+}
+
+fn serialize_svg_meet_or_slice(value: u32) -> Option<&'static str> {
+    match value {
+        SVG_MEET_OR_SLICE_MEET => Some("meet"),
+        SVG_MEET_OR_SLICE_SLICE => Some("slice"),
+        _ => None,
+    }
+}
+
 pub(super) fn set_svg_animated_string_owner_attribute<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     animated: v8::Local<'s, v8::Object>,
@@ -3065,6 +3375,21 @@ pub(super) fn svg_owner_attribute_value<'s>(
         Some(crate::native_bridge::document::XLINK_NS),
         attribute,
     )
+}
+
+fn set_svg_owner_attribute_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+    attribute: &str,
+    value: &str,
+) {
+    let Ok((runtime_ptr, handle)) =
+        crate::native_bridge::node_runtime_and_handle_from_object(scope, owner)
+    else {
+        return;
+    };
+    let runtime = unsafe { &mut *runtime_ptr };
+    let _ = runtime.set_attribute(scope, runtime_ptr, handle, attribute, value);
 }
 
 pub(super) fn parse_svg_length_value(raw: &str) -> Option<SvgParsedLength> {

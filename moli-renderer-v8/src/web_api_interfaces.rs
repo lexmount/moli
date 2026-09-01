@@ -403,6 +403,9 @@ interfaces! {
     SVGAnimatedAngle;
     SVGMarkerElement: SVGElement;
     SVGAnimatedInteger;
+    SVGAnimatedRect;
+    SVGPreserveAspectRatio;
+    SVGAnimatedPreserveAspectRatio;
     SVGAnimatedNumber;
     SVGAnimatedNumberList;
     SVGAnimatedTransformList;
