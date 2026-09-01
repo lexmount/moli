@@ -627,6 +627,8 @@ pub trait ParserDomMutationConsumer {
 
     fn mark_script_already_started_for_parser(&mut self, node_id: NativeNodeId);
 
+    fn mark_unclosed_form_control_for_parser(&mut self, node_id: NativeNodeId);
+
     /// Complete the session-owned element and deliver its DOM lifecycle effects.
     fn finish_parsing_children(&mut self, construction: &ParserConstruction, node_id: NativeNodeId);
 
@@ -669,6 +671,7 @@ struct ParserDomMutationSink {
     push_parse_error: unsafe fn(NonNull<()>, String),
     set_html_quirks_mode_for_parser: unsafe fn(NonNull<()>, QuirksMode),
     mark_script_already_started_for_parser: unsafe fn(NonNull<()>, NativeNodeId),
+    mark_unclosed_form_control_for_parser: unsafe fn(NonNull<()>, NativeNodeId),
     finish_parsing_children: unsafe fn(NonNull<()>, &ParserConstruction, NativeNodeId),
     maybe_clone_an_option_into_selectedcontent: unsafe fn(NonNull<()>, NativeNodeId),
     attach_declarative_shadow_for_parser:
@@ -833,6 +836,14 @@ impl ParserDomMutationSink {
             // pointed-to consumer to remain live and exclusive for the pump step.
             unsafe { data.cast::<T>().as_mut() }.mark_script_already_started_for_parser(node_id);
         }
+        unsafe fn mark_unclosed_form_control_for_parser_impl<T: ParserDomMutationConsumer>(
+            data: NonNull<()>,
+            node_id: NativeNodeId,
+        ) {
+            // SAFETY: ParserDomMutationSink::from_consumer_unchecked requires the
+            // pointed-to consumer to remain live and exclusive for the pump step.
+            unsafe { data.cast::<T>().as_mut() }.mark_unclosed_form_control_for_parser(node_id);
+        }
         unsafe fn finish_parsing_children_impl<T: ParserDomMutationConsumer>(
             data: NonNull<()>,
             construction: &ParserConstruction,
@@ -893,6 +904,7 @@ impl ParserDomMutationSink {
             push_parse_error: push_parse_error_impl::<T>,
             set_html_quirks_mode_for_parser: set_html_quirks_mode_for_parser_impl::<T>,
             mark_script_already_started_for_parser: mark_script_already_started_for_parser_impl::<T>,
+            mark_unclosed_form_control_for_parser: mark_unclosed_form_control_for_parser_impl::<T>,
             finish_parsing_children: finish_parsing_children_impl::<T>,
             maybe_clone_an_option_into_selectedcontent:
                 maybe_clone_an_option_into_selectedcontent_impl::<T>,
@@ -1026,6 +1038,12 @@ impl ParserDomMutationSink {
         // SAFETY: construction ties the raw pointer and callback to the same
         // consumer remains live for the current runtime-DOM sink step.
         unsafe { (self.mark_script_already_started_for_parser)(self.data, node_id) };
+    }
+
+    fn mark_unclosed_form_control_for_parser(self, node_id: NativeNodeId) {
+        // SAFETY: construction ties the raw pointer and callback to the same
+        // consumer remains live for the current runtime-DOM sink step.
+        unsafe { (self.mark_unclosed_form_control_for_parser)(self.data, node_id) };
     }
 
     fn finish_parsing_children(self, construction: &ParserConstruction, node_id: NativeNodeId) {
@@ -1599,6 +1617,12 @@ impl ParserDomMutationConsumer for TestMutationEffectCollector<'_> {
         let _ = unsafe { &mut *self.host }.set_script_already_started(node_id, true);
     }
 
+    fn mark_unclosed_form_control_for_parser(&mut self, node_id: NativeNodeId) {
+        // SAFETY: tests keep the borrowed DomHost pointer alive and route the
+        // parser pump through this collector for the duration of the step.
+        let _ = unsafe { &mut *self.host }.set_blocks_form_submission(node_id, true);
+    }
+
     fn finish_parsing_children(
         &mut self,
         construction: &ParserConstruction,
@@ -1972,6 +1996,12 @@ impl ParserDomMutationConsumer for TestReadTrackingCollector<'_> {
         // SAFETY: tests keep the borrowed DomHost pointer alive and route the
         // parser pump through this collector for the duration of the step.
         let _ = unsafe { &mut *self.host }.set_script_already_started(node_id, true);
+    }
+
+    fn mark_unclosed_form_control_for_parser(&mut self, node_id: NativeNodeId) {
+        // SAFETY: tests keep the borrowed DomHost pointer alive and route the
+        // parser pump through this collector for the duration of the step.
+        let _ = unsafe { &mut *self.host }.set_blocks_form_submission(node_id, true);
     }
 
     fn finish_parsing_children(
@@ -2936,6 +2966,18 @@ impl ParserStreamHtmlTreeSinkTarget {
         }
     }
 
+    fn mark_unclosed_form_control_for_dom_host(&mut self, node_id: NativeNodeId) {
+        if let Some(owner) = &self.runtime_dom_sinks {
+            owner
+                .dom_mutation_sink()
+                .mark_unclosed_form_control_for_parser(node_id);
+        } else {
+            let _ = self
+                .dom_host_mut()
+                .set_blocks_form_submission(node_id, true);
+        }
+    }
+
     fn finish_parsing_children(&mut self, node_id: NativeNodeId) {
         if let Some(owner) = &self.runtime_dom_sinks {
             owner
@@ -3041,8 +3083,11 @@ impl ParserStreamHtmlTreeSinkTarget {
         self.state.pending_blocking_stylesheet_pause.take()
     }
 
-    pub(super) fn begin_tree_builder_finish(&mut self) {
+    pub(super) fn begin_tree_builder_finish(&mut self, unclosed_form_controls: &[NativeNodeId]) {
         self.state.finishing_tree_builder = true;
+        for &node_id in unclosed_form_controls {
+            self.mark_unclosed_form_control_for_dom_host(node_id);
+        }
     }
 
     pub(super) fn drain_discovered_blocking_stylesheet_inputs(
@@ -3860,6 +3905,54 @@ fn parser_stream_html_tree_sink_target_builds_dom_and_records_parser_state() {
         template_contents.is_some(),
         "template contents should be preserved"
     );
+}
+
+#[test]
+fn parser_stream_marks_only_eof_unclosed_form_controls_as_submission_blocking() {
+    let cases = [
+        (
+            "select",
+            "<!doctype html><form><select><option>secret<element attribute></element>",
+            true,
+        ),
+        (
+            "select",
+            "<!doctype html><form><select><option>safe</option></select></form>",
+            false,
+        ),
+        (
+            "textarea",
+            "<!doctype html><form><textarea>secret<element attribute></element>",
+            true,
+        ),
+        (
+            "textarea",
+            "<!doctype html><form><textarea>safe</textarea></form>",
+            false,
+        ),
+    ];
+
+    for (tag_name, html, expected) in cases {
+        let url = Url::parse("https://dangling-markup.test/").expect("test url");
+        let mut stream =
+            crate::DocumentStream::new_scripting_enabled_parser_stream_for_testing(url);
+        stream.feed(html);
+        let document = stream.finish();
+        let control = document
+            .elements_by_tag_name(document.document_node_id(), tag_name, false)
+            .into_iter()
+            .next()
+            .expect("form control should be parsed");
+
+        assert_eq!(
+            document
+                .node(control)
+                .and_then(Node::as_element)
+                .is_some_and(|element| element.blocks_form_submission()),
+            expected,
+            "{tag_name} EOF state for {html:?}"
+        );
+    }
 }
 
 #[test]

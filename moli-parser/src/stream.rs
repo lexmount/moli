@@ -1169,6 +1169,11 @@ mod tests {
             let _ = unsafe { &mut *self.host }.set_script_already_started(node_id, true);
         }
 
+        fn mark_unclosed_form_control_for_parser(&mut self, node_id: NativeNodeId) {
+            // SAFETY: the test keeps the DomHost alive for this parser pump step.
+            let _ = unsafe { &mut *self.host }.set_blocks_form_submission(node_id, true);
+        }
+
         fn finish_parsing_children(
             &mut self,
             construction: &moli_dom::native::ParserConstruction,

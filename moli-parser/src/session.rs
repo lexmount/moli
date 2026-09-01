@@ -10,7 +10,7 @@ use html5ever::{
     tokenizer::{
         BufferQueue, TagKind, Token, TokenSink, TokenSinkResult, Tokenizer, TokenizerOpts,
     },
-    tree_builder::{TreeBuilder, TreeBuilderOpts, TreeSink},
+    tree_builder::{Tracer, TreeBuilder, TreeBuilderOpts, TreeSink},
 };
 use markup5ever::TokenizerResult;
 use moli_dom::native::NativeNodeId;
@@ -53,6 +53,32 @@ struct EmbedderPausingTreeBuilder {
     deferred_owner_interruption: Cell<bool>,
 }
 
+#[derive(Default)]
+struct OpenFormControlTracer {
+    handles: RefCell<Vec<NativeNodeId>>,
+}
+
+impl Tracer for OpenFormControlTracer {
+    type Handle = ParseHandle;
+
+    fn trace_handle(&self, node: &ParseHandle) {
+        let is_blocking_control = node.element_name.as_ref().is_some_and(|name| {
+            name.ns.as_ref() == "http://www.w3.org/1999/xhtml"
+                && matches!(name.local.as_ref(), "select" | "textarea")
+        });
+        if !is_blocking_control {
+            return;
+        }
+        let Some(node_id) = node.dom_node_id() else {
+            return;
+        };
+        let mut handles = self.handles.borrow_mut();
+        if !handles.contains(&node_id) {
+            handles.push(node_id);
+        }
+    }
+}
+
 impl EmbedderPausingTreeBuilder {
     fn new(sink: DocumentSink, opts: TreeBuilderOpts) -> Self {
         Self {
@@ -74,6 +100,14 @@ impl EmbedderPausingTreeBuilder {
 
     fn sink(&self) -> &DocumentSink {
         &self.inner.sink
+    }
+
+    fn begin_tree_builder_finish(&self) {
+        let tracer = OpenFormControlTracer::default();
+        self.inner.trace_handles(&tracer);
+        self.inner
+            .sink
+            .begin_tree_builder_finish(&tracer.handles.into_inner());
     }
 }
 
@@ -345,7 +379,7 @@ impl HtmlParserSession {
                 .pop_pending_blocking_stylesheet_pause();
         }
         debug_assert!(input_buffer.is_empty());
-        tokenizer.sink.sink().begin_tree_builder_finish();
+        tokenizer.sink.begin_tree_builder_finish();
         tokenizer.end();
         tokenizer.sink.inner.sink.finish()
     }
@@ -366,7 +400,7 @@ impl HtmlParserSession {
                 .pop_pending_blocking_stylesheet_pause();
         }
         debug_assert!(input_buffer.is_empty());
-        tokenizer.sink.sink().begin_tree_builder_finish();
+        tokenizer.sink.begin_tree_builder_finish();
         tokenizer.end();
         let sink = tokenizer.sink.sink();
         sink.finish_construction();
