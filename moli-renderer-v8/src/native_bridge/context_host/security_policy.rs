@@ -916,7 +916,7 @@ impl PageScriptHost {
         )
     }
 
-    fn child_effective_response_content_security_policies(
+    fn child_effective_enforced_content_security_policies(
         &self,
         child_handle: DomHandle,
     ) -> Vec<ContentSecurityPolicy> {
@@ -924,9 +924,9 @@ impl PageScriptHost {
         if self
             .child_browsing_contexts
             .get(&child_handle)
-            .is_some_and(|entry| entry.security_origin_inherited())
+            .is_some_and(|entry| entry.content_security_policy_inherited())
         {
-            policies.extend(self.parent_effective_response_content_security_policies(child_handle));
+            policies.extend(self.parent_effective_enforced_content_security_policies(child_handle));
         }
         policies.extend(
             self.child_browsing_contexts
@@ -945,7 +945,7 @@ impl PageScriptHost {
         if self
             .child_browsing_contexts
             .get(&child_handle)
-            .is_some_and(|entry| entry.security_origin_inherited())
+            .is_some_and(|entry| entry.content_security_policy_inherited())
         {
             policies.extend(
                 self.parent_effective_response_content_security_report_only_policies(child_handle),
@@ -964,13 +964,13 @@ impl PageScriptHost {
         policies
     }
 
-    fn parent_effective_response_content_security_policies(
+    fn parent_effective_enforced_content_security_policies(
         &self,
         child_handle: DomHandle,
     ) -> Vec<ContentSecurityPolicy> {
-        match self.owner_dispatch_scope_for_node(child_handle) {
+        let mut policies = match self.owner_dispatch_scope_for_node(child_handle) {
             Some(OwnerDispatchScope::Child(parent)) => {
-                self.child_effective_response_content_security_policies(parent)
+                self.child_effective_enforced_content_security_policies(parent)
             }
             Some(OwnerDispatchScope::LightweightPopup(popup)) => self
                 .lightweight_popup_policy_container(popup)
@@ -980,7 +980,14 @@ impl PageScriptHost {
                 .response_content_security_policies()
                 .to_vec(),
             None => Vec::new(),
+        };
+        if let Some(document) = self.dom_host().owner_document_handle(child_handle) {
+            policies.extend(
+                unsafe { &*self.document_runtime }
+                    .meta_content_security_policies_for_document(document),
+            );
         }
+        policies
     }
 
     fn parent_effective_response_content_security_report_only_policies(
@@ -1013,7 +1020,7 @@ impl PageScriptHost {
         let inherits_parent = self
             .child_browsing_contexts
             .get(&child_handle)
-            .is_some_and(|entry| entry.security_origin_inherited());
+            .is_some_and(|entry| entry.content_security_policy_inherited());
         let has_own_response_policies = self
             .child_browsing_contexts
             .get(&child_handle)
