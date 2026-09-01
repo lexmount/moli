@@ -1985,6 +1985,35 @@ fn dom_parser_rejects_public_doctype_without_system_literal() {
 }
 
 #[test]
+fn dom_parser_expands_entities_from_an_internal_subset() {
+    let mut vm = new_storage_test_vm("https://dom-parser-internal-subset.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const doc = new DOMParser().parseFromString(
+    '<!DOCTYPE foo [ <!ENTITY x "y"> ]><foo>&x;</foo>',
+    'text/xml'
+  );
+  const serializer = new XMLSerializer();
+  return [
+    doc.doctype.name,
+    doc.doctype.publicId,
+    doc.doctype.systemId,
+    serializer.serializeToString(doc.documentElement),
+    serializer.serializeToString(doc.doctype),
+    doc.getElementsByTagName('parsererror').length
+  ].join('|');
+})()
+"#,
+        )
+        .expect("DOMParser internal subset entity should evaluate");
+
+    assert_eq!(result, "foo|||<foo>y</foo>|<!DOCTYPE foo>|0");
+}
+
+#[test]
 fn xhtml_element_interface_survives_move_through_xml_document() {
     let mut vm = new_storage_test_vm("https://xhtml-xml-document-move.test/");
 
