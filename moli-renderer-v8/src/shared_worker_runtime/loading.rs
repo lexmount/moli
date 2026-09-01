@@ -632,6 +632,7 @@ mod tests {
         SharedWorkerDescriptor::new(
             script_type,
             credentials_mode,
+            false,
             moli_shared_worker::SharedWorkerCreationContextType::Secure,
         )
     }

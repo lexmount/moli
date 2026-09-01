@@ -8369,6 +8369,7 @@ workers/semantics/xhr/004.html
 workers/semantics/xhr/005.html
 workers/semantics/xhr/006.html
 workers/shared-worker-name-via-options.html
+workers/shared-worker-options-mismatch.html
 workers/shared-worker-parse-error-failure.html
 workers/shared-worker-runtime-error-is-not-parse-error.html
 workers/worker-request-animation-frame.html

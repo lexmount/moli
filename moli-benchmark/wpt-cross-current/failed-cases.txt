@@ -3830,7 +3830,6 @@ workers/semantics/encodings/003.html
 workers/semantics/encodings/004.html
 workers/semantics/structured-clone/dedicated.html
 workers/semantics/structured-clone/shared.html
-workers/shared-worker-options-mismatch.html
 worklets/animation-worklet-service-worker-interception.https.html
 worklets/audio-worklet-service-worker-interception.https.html
 worklets/layout-worklet-service-worker-interception.https.html

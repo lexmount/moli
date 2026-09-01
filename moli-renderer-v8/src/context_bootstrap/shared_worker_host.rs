@@ -150,6 +150,7 @@ struct SharedWorkerOptions {
     name: String,
     script_kind: WorkerScriptKind,
     credentials_mode: SharedWorkerCredentialsMode,
+    extended_lifetime: bool,
     same_site_cookies: Option<SharedWorkerSameSiteCookies>,
 }
 
@@ -179,6 +180,7 @@ impl Default for SharedWorkerOptions {
             name: String::new(),
             script_kind: WorkerScriptKind::Classic,
             credentials_mode: SharedWorkerCredentialsMode::SameOrigin,
+            extended_lifetime: false,
             same_site_cookies: None,
         }
     }
@@ -288,8 +290,12 @@ fn shared_worker_constructor_callback_inner<'s>(
         WorkerScriptKind::Classic => SharedWorkerScriptType::Classic,
         WorkerScriptKind::Module => SharedWorkerScriptType::Module,
     };
-    let descriptor =
-        SharedWorkerDescriptor::new(script_type, options.credentials_mode, creation_context_type);
+    let descriptor = SharedWorkerDescriptor::new(
+        script_type,
+        options.credentials_mode,
+        options.extended_lifetime,
+        creation_context_type,
+    );
     let same_site_cookies = options.same_site_cookies.unwrap_or_else(|| {
         SharedWorkerSameSiteCookies::default_for_storage_key(&context.storage_key)
     });
@@ -652,6 +658,7 @@ fn parse_shared_worker_options(
         }
         None => SharedWorkerCredentialsMode::SameOrigin,
     };
+    let extended_lifetime = boolean_property(scope, object, "extendedLifetime")?;
     let same_site_cookies = match optional_string_property(scope, object, "sameSiteCookies")? {
         Some(value) if value == "all" => Some(SharedWorkerSameSiteCookies::All),
         Some(value) if value == "none" => Some(SharedWorkerSameSiteCookies::None),
@@ -668,8 +675,20 @@ fn parse_shared_worker_options(
         name,
         script_kind,
         credentials_mode,
+        extended_lifetime,
         same_site_cookies,
     })
+}
+
+fn boolean_property(
+    scope: &mut v8::PinScope<'_, '_>,
+    object: v8::Local<'_, v8::Object>,
+    key: &str,
+) -> Option<bool> {
+    let key = v8_string(scope, key)?;
+    object
+        .get(scope, key.into())
+        .map(|value| value.boolean_value(scope))
 }
 
 fn optional_string_property(
