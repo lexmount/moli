@@ -352,7 +352,7 @@ impl NativeDom {
             false,
         );
         if local_name.eq_ignore_ascii_case("template") {
-            let fragment = self.create_template_contents_fragment();
+            let fragment = self.create_template_contents_fragment(handle);
             if let Some(element) = self
                 .node_mut(handle)
                 .and_then(|node| node.data_mut().as_element_mut())
@@ -391,7 +391,7 @@ impl NativeDom {
             false,
         );
         if local_name.eq_ignore_ascii_case("template") {
-            let fragment = self.create_template_contents_fragment();
+            let fragment = self.create_template_contents_fragment(handle);
             if let Some(element) = self
                 .node_mut(handle)
                 .and_then(|node| node.data_mut().as_element_mut())
@@ -495,15 +495,15 @@ impl NativeDom {
         owner_document: NativeNodeId,
     ) -> NativeNodeId {
         self.create_node(
-            NodeData::DocumentFragment(DocumentFragment),
+            NodeData::DocumentFragment(DocumentFragment::default()),
             Some(owner_document),
             false,
             false,
         )
     }
 
-    pub fn create_template_contents_fragment(&mut self) -> NativeNodeId {
-        self.create_template_contents_fragment_for_document(self.document_node_id)
+    pub fn create_template_contents_fragment(&mut self, host: NativeNodeId) -> NativeNodeId {
+        self.create_template_contents_fragment_for_document(self.document_node_id, Some(host))
     }
 
     pub fn is_inert_template_document(&self, document_handle: NativeNodeId) -> bool {
@@ -513,9 +513,33 @@ impl NativeDom {
     pub fn create_template_contents_fragment_for_document(
         &mut self,
         document_handle: NativeNodeId,
+        host: Option<NativeNodeId>,
     ) -> NativeNodeId {
         let owner_document = self.appropriate_template_contents_owner_document(document_handle);
-        self.create_document_fragment_for_document(owner_document)
+        self.create_node(
+            NodeData::DocumentFragment(DocumentFragment::new(host)),
+            Some(owner_document),
+            false,
+            false,
+        )
+    }
+
+    pub fn set_document_fragment_host(
+        &mut self,
+        fragment: NativeNodeId,
+        host: NativeNodeId,
+    ) -> bool {
+        let Some(fragment) = self
+            .node_mut(fragment)
+            .and_then(|node| node.data_mut().as_document_fragment_mut())
+        else {
+            return false;
+        };
+        if fragment.host() == Some(host) {
+            return false;
+        }
+        fragment.set_host(host);
+        true
     }
 
     pub(crate) fn appropriate_template_contents_owner_document(
@@ -595,6 +619,28 @@ impl NativeDom {
                 return true;
             }
             current = self.parent_node(parent);
+        }
+        false
+    }
+
+    pub fn is_host_including_inclusive_ancestor(
+        &self,
+        candidate_ancestor: NativeNodeId,
+        node_id: NativeNodeId,
+    ) -> bool {
+        let mut current = Some(node_id);
+        while let Some(handle) = current {
+            if handle == candidate_ancestor {
+                return true;
+            }
+            let Some(node) = self.node(handle) else {
+                return false;
+            };
+            current = node.parent_node().or_else(|| {
+                node.data()
+                    .as_document_fragment()
+                    .and_then(DocumentFragment::host)
+            });
         }
         false
     }
@@ -2645,7 +2691,8 @@ mod tests {
             .expect("second template content owner document");
         assert_eq!(second_content_owner, content_owner);
 
-        let nested_content = dom.create_template_contents_fragment_for_document(content_owner);
+        let nested_content =
+            dom.create_template_contents_fragment_for_document(content_owner, None);
         assert_eq!(
             dom.node(nested_content).and_then(Node::owner_document),
             Some(content_owner)
@@ -2670,6 +2717,46 @@ mod tests {
             dom.node(child).and_then(Node::owner_document),
             Some(dom.document_node_id())
         );
+    }
+
+    #[test]
+    fn template_content_host_participates_in_hierarchy_checks() {
+        let mut dom = NativeDom::new_html(test_url());
+        let document = dom.document_node_id();
+        let parent = dom.create_element("div");
+        let template = dom.create_element("template");
+        let content = dom
+            .node(template)
+            .and_then(Node::as_element)
+            .and_then(Element::template_contents)
+            .expect("template content");
+        let span = dom.create_element("span");
+
+        assert!(dom.append_child(document, parent));
+        assert!(dom.append_child(parent, template));
+        assert!(dom.append_child(content, span));
+        assert_eq!(
+            dom.node(content)
+                .map(Node::data)
+                .and_then(NodeData::as_document_fragment)
+                .and_then(DocumentFragment::host),
+            Some(template)
+        );
+        assert!(dom.is_host_including_inclusive_ancestor(template, span));
+        assert!(dom.is_host_including_inclusive_ancestor(parent, span));
+
+        for (insertion_parent, child) in [
+            (content, parent),
+            (content, template),
+            (span, parent),
+            (span, template),
+        ] {
+            assert!(!dom.append_child(insertion_parent, child));
+        }
+
+        assert_eq!(dom.parent_node(parent), Some(document));
+        assert_eq!(dom.parent_node(template), Some(parent));
+        assert_eq!(dom.parent_node(span), Some(content));
     }
 
     #[test]

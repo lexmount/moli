@@ -6738,6 +6738,66 @@ fn detached_templates_share_their_inert_owner_document() {
 }
 
 #[test]
+fn template_content_host_rejects_insertion_cycles_after_adoption() {
+    let mut vm = new_storage_test_vm("https://template-content-host.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  if (!document.documentElement) {
+    document.appendChild(document.createElement('html'));
+  }
+  if (!document.body) {
+    document.documentElement.appendChild(document.createElement('body'));
+  }
+  const parent = document.createElement('div');
+  const template = document.createElement('template');
+  template.innerHTML = '<span>content</span>';
+  parent.appendChild(template);
+  document.body.appendChild(parent);
+  const content = template.content;
+  const span = content.firstChild;
+  const errorName = callback => {
+    try {
+      callback();
+      return 'none';
+    } catch (error) {
+      return error.name;
+    }
+  };
+  const attempts = () => [
+    errorName(() => content.appendChild(parent)),
+    errorName(() => content.appendChild(template)),
+    errorName(() => span.appendChild(parent)),
+    errorName(() => span.appendChild(template))
+  ];
+  const beforeAdoption = attempts();
+  const newDocument = document.implementation.createHTMLDocument('');
+  const adopted = newDocument.adoptNode(content);
+  const afterAdoption = attempts();
+  newDocument.body.appendChild(content);
+  return [
+    ...beforeAdoption,
+    adopted === content,
+    content.ownerDocument === newDocument,
+    ...afterAdoption,
+    content.firstChild === null,
+    span.parentNode === newDocument.body,
+    template.parentNode === parent
+  ].join('|');
+})()
+"#,
+        )
+        .expect("template content host hierarchy probe should evaluate");
+
+    assert_eq!(
+        result,
+        "HierarchyRequestError|HierarchyRequestError|HierarchyRequestError|HierarchyRequestError|true|true|HierarchyRequestError|HierarchyRequestError|HierarchyRequestError|HierarchyRequestError|true|true|true"
+    );
+}
+
+#[test]
 fn detached_html_image_decode_uses_prototype_method() {
     let mut vm = new_storage_test_vm("https://detached-image-decode-surface.test/");
 
