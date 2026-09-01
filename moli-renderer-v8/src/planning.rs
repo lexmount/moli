@@ -542,10 +542,15 @@ fn external_script_source_load_outcome_from_response_inner(
             validate_external_script_response_mime(&script.url, script.kind, &response)
     {
         Err(error)
+    } else if !crate::subresource_integrity::response_body_matches_subresource_integrity_metadata(
+        &response_bytes,
+        script.fetch_metadata.integrity.as_deref(),
+    ) {
+        Err(format!(
+            "script request `{}` failed its integrity check",
+            script.url
+        ))
     } else {
-        crate::subresource_integrity::observe_subresource_integrity_metadata(
-            script.fetch_metadata.integrity.as_deref(),
-        );
         Ok(decode_external_script_source(
             script,
             &response,
@@ -1221,6 +1226,49 @@ mod tests {
         assert_eq!(
             decode_external_script_source(&module, &module_response, Some("shift_jis")),
             String::from_utf8_lossy(&bytes)
+        );
+    }
+
+    #[test]
+    fn external_script_source_load_enforces_integrity() {
+        use base64::Engine as _;
+
+        let body = b"export const loaded = true;";
+        let digest = base64::engine::general_purpose::STANDARD
+            .encode(moli_crypto::DigestAlgorithm::Sha384.digest_bytes(body));
+        let mut script =
+            prepared_external_script("https://example.test/module.mjs", ScriptKind::Module);
+        script.fetch_metadata.integrity = Some(format!("sha384-{digest}"));
+
+        let matching = external_script_source_load_outcome_from_response(
+            &script,
+            script_response_with_body_bytes(
+                &script.url,
+                vec![("Content-Type", "text/javascript")],
+                body.to_vec(),
+            ),
+            None,
+        );
+        assert_eq!(
+            matching.source_result.expect("matching integrity"),
+            String::from_utf8_lossy(body)
+        );
+
+        script.fetch_metadata.integrity = Some("sha384-foobar".to_owned());
+        let mismatch = external_script_source_load_outcome_from_response(
+            &script,
+            script_response_with_body_bytes(
+                &script.url,
+                vec![("Content-Type", "text/javascript")],
+                body.to_vec(),
+            ),
+            None,
+        );
+        assert!(
+            mismatch
+                .source_result
+                .expect_err("mismatching integrity")
+                .contains("failed its integrity check")
         );
     }
 

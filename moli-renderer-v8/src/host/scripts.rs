@@ -1514,7 +1514,7 @@ impl HostScriptScheduler {
         mode: ScriptMode,
     ) -> std::result::Result<PreparedScript, String> {
         let position = self.next_dynamic_position();
-        let script = build_runtime_prepared_script(
+        let mut script = build_runtime_prepared_script(
             preparation,
             NativeNodeId::new(node_id.index()),
             position,
@@ -1524,6 +1524,12 @@ impl HostScriptScheduler {
             kind,
             mode,
         )?;
+        if script.kind == ScriptKind::Module
+            && script.source_kind == ScriptSourceKind::External
+            && script.fetch_metadata.integrity.is_none()
+        {
+            script.fetch_metadata.integrity = self.resolve_module_integrity(&script.url);
+        }
         if let Some(state) = self.script_handles.get_mut(host_script_handle) {
             state.followup_lane = Self::followup_lane_for_script(state.source, script.mode);
             if Self::queued_script_waits_until_dom_content_loaded(

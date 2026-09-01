@@ -2852,6 +2852,46 @@ document.body.setAttribute('data-error-state', [
     }
 
     #[test]
+    fn html_preload_scanner_stops_module_preloads_after_import_map() {
+        let final_url = Url::parse("https://example.test/docs/page.html").expect("test url");
+        let requests = collect_preloadable_external_script_requests_from_html(
+            &final_url,
+            r#"
+                <script type="module" src="/before.mjs"></script>
+                <script type="importmap">{"integrity": {}}</script>
+                <script type="module" src="/after.mjs"></script>
+                <script src="/classic.js"></script>
+            "#,
+        );
+
+        assert_eq!(
+            preload_request_urls(requests),
+            vec![
+                Url::parse("https://example.test/before.mjs").expect("before module url"),
+                Url::parse("https://example.test/classic.js").expect("classic url"),
+            ]
+        );
+    }
+
+    #[test]
+    fn html_preload_scanner_remembers_import_map_across_chunks() {
+        let final_url = Url::parse("https://example.test/docs/page.html").expect("test url");
+        let mut scanner = IncrementalHtmlPreloadScanner::new(final_url);
+
+        assert!(
+            scanner
+                .scan_script_chunk(r#"<script type="importmap">{}</script>"#)
+                .is_empty()
+        );
+        assert!(
+            scanner
+                .scan_script_chunk(r#"<script type="module" src="/after.mjs"></script>"#)
+                .is_empty()
+        );
+        assert!(scanner.finish_script_scan().is_empty());
+    }
+
+    #[test]
     fn incremental_html_preload_scanner_handles_split_stylesheet_tag_boundaries() {
         let final_url = Url::parse("https://example.test/docs/page.html").expect("test url");
         let mut scanner = IncrementalHtmlPreloadScanner::new(final_url);

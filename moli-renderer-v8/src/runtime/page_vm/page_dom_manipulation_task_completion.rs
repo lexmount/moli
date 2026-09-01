@@ -38,7 +38,9 @@ impl PageVm {
                 action.into_page_task_completion()
             }
             PageDomManipulationTurnAction::ConnectedStyleEvent(action) => {
-                action.into_page_task_completion()
+                return self
+                    .finish_selected_page_connected_style_event_task(action, loader)
+                    .await;
             }
             PageDomManipulationTurnAction::TextTrackDefaultMode(action) => {
                 action.into_page_task_completion()

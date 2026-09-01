@@ -241,6 +241,59 @@ fn draining_dynamic_module_scripts_keeps_distinct_module_lane() {
 }
 
 #[test]
+fn dynamic_external_module_uses_import_map_integrity_when_attribute_is_absent() {
+    let preparation = preparation("https://example.test/", NodeId::new(0));
+    let mut scheduler = HostScriptScheduler::default();
+    scheduler.register_dynamic_import_map(
+        &preparation.base_url,
+        r#"{"integrity":{"/mod.js":"sha384-from-map"}}"#,
+    );
+    scheduler
+        .queue_dynamic_script(
+            &preparation,
+            "module",
+            "/mod.js",
+            ScriptSourceKind::External,
+            ScriptKind::Module,
+            ScriptMode::ModuleInOrder,
+        )
+        .expect("module script should queue");
+
+    let batch = scheduler.drain_dynamic_scripts();
+    assert_eq!(
+        batch.module_in_order[0].fetch_metadata.integrity.as_deref(),
+        Some("sha384-from-map")
+    );
+}
+
+#[test]
+fn dynamic_external_module_empty_integrity_overrides_import_map() {
+    let mut preparation = preparation("https://example.test/", NodeId::new(0));
+    preparation.fetch_metadata.integrity = Some(String::new());
+    let mut scheduler = HostScriptScheduler::default();
+    scheduler.register_dynamic_import_map(
+        &preparation.base_url,
+        r#"{"integrity":{"/mod.js":"sha384-from-map"}}"#,
+    );
+    scheduler
+        .queue_dynamic_script(
+            &preparation,
+            "module",
+            "/mod.js",
+            ScriptSourceKind::External,
+            ScriptKind::Module,
+            ScriptMode::ModuleInOrder,
+        )
+        .expect("module script should queue");
+
+    let batch = scheduler.drain_dynamic_scripts();
+    assert_eq!(
+        batch.module_in_order[0].fetch_metadata.integrity.as_deref(),
+        Some("")
+    );
+}
+
+#[test]
 fn queueing_dynamic_module_does_not_block_later_import_map_merge() {
     let preparation = preparation("https://example.test/", NodeId::new(0));
     let mut scheduler = HostScriptScheduler::default();

@@ -1254,6 +1254,7 @@ struct HtmlPreloadScannerSink {
     meta_csp_mode: MetaCspScannerMode,
     seen_meta_csp_count: Cell<usize>,
     reported_meta_csp_count: Cell<usize>,
+    seen_import_map: Cell<bool>,
     template_depth: Cell<usize>,
     picture_depth: Cell<usize>,
 }
@@ -1269,6 +1270,7 @@ impl HtmlPreloadScannerSink {
             meta_csp_mode,
             seen_meta_csp_count: Cell::new(0),
             reported_meta_csp_count: Cell::new(0),
+            seen_import_map: Cell::new(false),
             template_depth: Cell::new(0),
             picture_depth: Cell::new(0),
         }
@@ -1303,6 +1305,9 @@ impl HtmlPreloadScannerSink {
 
         let kind_hint =
             buffered_script_kind_from_type(html_attr_value(&tag.attrs, "type").as_deref());
+        if matches!(kind_hint, crate::types::ScriptKind::Module) && self.seen_import_map.get() {
+            return;
+        }
         if html_attr_present(&tag.attrs, "nomodule")
             && matches!(kind_hint, crate::types::ScriptKind::Classic)
         {
@@ -1362,6 +1367,15 @@ impl HtmlPreloadScannerSink {
                 ),
                 fetch_metadata,
             });
+        }
+    }
+
+    fn maybe_note_import_map(&self, tag: &Tag) {
+        if matches!(
+            buffered_script_kind_from_type(html_attr_value(&tag.attrs, "type").as_deref()),
+            crate::types::ScriptKind::ImportMap
+        ) {
+            self.seen_import_map.set(true);
         }
     }
 
@@ -1580,6 +1594,7 @@ impl TokenSink for HtmlPreloadScannerSink {
                 TokenSinkResult::Continue
             }
             "script" => {
+                self.maybe_note_import_map(&tag);
                 self.maybe_collect_script_preload(&tag);
                 TokenSinkResult::RawData(ScriptData)
             }
