@@ -176,7 +176,15 @@ pub(crate) fn dom_agent_includes_whitespace_for_session(
     conn: &CdpConnection,
     session_id: Option<&str>,
 ) -> bool {
-    conn.target_devtools_session_state_for_session(session_id)
+    dom_agent_includes_whitespace_for_route(conn, session_id, None)
+}
+
+pub(crate) fn dom_agent_includes_whitespace_for_route(
+    conn: &CdpConnection,
+    session_id: Option<&str>,
+    owner_route: Option<&crate::conn::CdpSessionRoute>,
+) -> bool {
+    conn.target_devtools_session_state_for_route(session_id, owner_route)
         .is_some_and(|state| {
             state.dom_session_state.enabled && state.dom_session_state.include_whitespace
         })

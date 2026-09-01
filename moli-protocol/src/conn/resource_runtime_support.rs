@@ -227,7 +227,15 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
     ) -> Result<Option<PendingPageCommand>, String> {
-        let load_inputs = self.navigation_load_inputs_for_session_owner(session_id);
+        self.start_rebuild_resource_runtime_for_route(session_id, None)
+    }
+
+    pub(crate) fn start_rebuild_resource_runtime_for_route(
+        &mut self,
+        session_id: Option<&str>,
+        owner_route: Option<&super::CdpSessionRoute>,
+    ) -> Result<Option<PendingPageCommand>, String> {
+        let load_inputs = self.navigation_load_inputs_for_route(session_id, owner_route);
         let navigator_identity = load_inputs
             .navigator_identity_override
             .clone()
@@ -241,7 +249,7 @@ impl CdpConnection {
                 storage.into_navigation_storage(),
             )
             .map_err(|error| format!("failed to rebuild resource runtime: {error}"))?;
-        let Some(page) = self.resource_runtime_apply_page_for_session_owner(session_id) else {
+        let Some(page) = self.resource_runtime_apply_page_for_route(session_id, owner_route) else {
             return Ok(None);
         };
         page.start_replace_browser_resource_runtime_with_navigator_identity(

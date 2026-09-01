@@ -1991,6 +1991,20 @@ impl CdpConnection {
         self.register_runtime_remote_object_ids_for_session_owner(session_id, object_ids);
     }
 
+    pub(crate) fn register_runtime_remote_object_ids_from_value_for_route(
+        &mut self,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
+        value: &Value,
+    ) {
+        let object_ids = runtime_remote_object_ids_in_value(value);
+        let _ = self.with_target_devtools_session_state_for_route_mut(
+            session_id,
+            owner_route,
+            |state| state.register_runtime_remote_object_ids(object_ids),
+        );
+    }
+
     pub(crate) fn register_runtime_remote_object_ids_from_value_for_session_owner_with_group(
         &mut self,
         session_id: Option<&str>,
@@ -2002,6 +2016,21 @@ impl CdpConnection {
             session_id,
             object_ids,
             object_group,
+        );
+    }
+
+    pub(crate) fn register_runtime_remote_object_ids_from_value_for_route_with_group(
+        &mut self,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
+        value: &Value,
+        object_group: &str,
+    ) {
+        let object_ids = runtime_remote_object_ids_in_value(value);
+        let _ = self.with_target_devtools_session_state_for_route_mut(
+            session_id,
+            owner_route,
+            |state| state.register_runtime_remote_object_ids_with_group(object_ids, object_group),
         );
     }
 

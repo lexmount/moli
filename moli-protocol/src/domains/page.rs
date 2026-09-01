@@ -2133,7 +2133,7 @@ fn complete_devtools_handle_javascript_dialog_command(
     conn: &mut CdpConnection,
     command: DevToolsHandleJavaScriptDialogCommand,
 ) -> CommandOutputPlan {
-    match finish_devtools_handle_javascript_dialog_command(conn, command) {
+    match finish_devtools_handle_javascript_dialog_command(conn, command, None) {
         Ok(closed_event) => {
             let mut plan = CommandOutputPlan::default();
             plan.push_background_event(closed_event);
@@ -2147,11 +2147,12 @@ fn complete_devtools_handle_javascript_dialog_command(
 fn finish_devtools_get_javascript_dialog_command(
     conn: &CdpConnection,
     command: DevToolsGetJavaScriptDialogCommand,
+    owner_route: Option<&CdpSessionRoute>,
 ) -> Result<DevToolsJavaScriptDialogResult, DevToolsError> {
     let session_id = command.context.session_id.as_ref().map(|id| id.as_str());
-    let current_page_owner = conn.target_page_residence_identity_for_session(session_id);
+    let current_page_owner = conn.target_page_residence_identity_for_route(session_id, owner_route);
     let Some(dialog) = conn
-        .target_page_session_state_for_session(session_id)
+        .target_page_session_state_for_route(session_id, owner_route)
         .and_then(|page_state| page_state.javascript_dialog_state.peek_next())
         .filter(|dialog| current_page_owner.as_ref() == Some(dialog.page_owner()))
     else {
@@ -2170,11 +2171,12 @@ fn finish_devtools_get_javascript_dialog_command(
 fn finish_devtools_set_javascript_dialog_prompt_text_command(
     conn: &mut CdpConnection,
     command: DevToolsSetJavaScriptDialogPromptTextCommand,
+    owner_route: Option<&CdpSessionRoute>,
 ) -> Result<DevToolsCommandResult, DevToolsError> {
     let session_id = command.context.session_id.as_ref().map(|id| id.as_str());
-    let current_page_owner = conn.target_page_residence_identity_for_session(session_id);
+    let current_page_owner = conn.target_page_residence_identity_for_route(session_id, owner_route);
     let Some(result) =
-        conn.with_target_devtools_session_state_for_session_mut(session_id, |state| {
+        conn.with_target_devtools_session_state_for_route_mut(session_id, owner_route, |state| {
             let dialog_state = &mut state.page_session_state.javascript_dialog_state;
             let Some(dialog) = dialog_state
                 .peek_next()
@@ -2211,12 +2213,13 @@ fn finish_devtools_set_javascript_dialog_prompt_text_command(
 fn finish_devtools_handle_javascript_dialog_command(
     conn: &mut CdpConnection,
     command: DevToolsHandleJavaScriptDialogCommand,
+    owner_route: Option<&CdpSessionRoute>,
 ) -> Result<BackgroundProtocolEvent, DevToolsError> {
     let session_id = command.context.session_id.as_ref().map(|id| id.as_str());
     let command_prompt_text = command.prompt_text;
-    let current_page_owner = conn.target_page_residence_identity_for_session(session_id);
+    let current_page_owner = conn.target_page_residence_identity_for_route(session_id, owner_route);
     let Some(dialog) = conn
-        .with_target_devtools_session_state_for_session_mut(session_id, |state| {
+        .with_target_devtools_session_state_for_route_mut(session_id, owner_route, |state| {
             let dialog_state = &mut state.page_session_state.javascript_dialog_state;
             if dialog_state
                 .peek_next()
@@ -5846,23 +5849,24 @@ async fn execute_devtools_get_layout_metrics_command(
     if route.is_some() {
         command.context.session_id = None;
     }
-    let result = if let Some(route) = route {
-        let mut route_scope = conn.scoped_none_session_owner_route_override(route);
-        execute_devtools_get_layout_metrics_for_current_owner(route_scope.conn_mut(), command).await
-    } else {
-        execute_devtools_get_layout_metrics_for_current_owner(conn, command).await
-    };
+    let result =
+        execute_devtools_get_layout_metrics_for_current_owner(conn, command, route.as_ref()).await;
     result.map(DevToolsCommandResult::LayoutMetrics)
 }
 
 async fn execute_devtools_get_layout_metrics_for_current_owner(
     conn: &mut CdpConnection,
     command: DevToolsGetLayoutMetricsCommand,
+    owner_route: Option<&CdpSessionRoute>,
 ) -> Result<DevToolsLayoutMetricsResult, DevToolsError> {
     let session_id = command.context.session_id.as_ref().map(|id| id.as_str());
-    let fallback = layout_metrics_result_from_surface(current_viewport_surface(conn, session_id));
+    let fallback = layout_metrics_result_from_surface(current_viewport_surface_for_route(
+        conn,
+        session_id,
+        owner_route,
+    ));
     let Some(page) = conn
-        .runtime_session_owner_slot_mut(session_id)
+        .runtime_session_owner_slot_mut_for_route(session_id, owner_route)
         .ok()
         .and_then(|slot| slot.loaded_page_mut())
     else {
@@ -5875,7 +5879,7 @@ async fn execute_devtools_get_layout_metrics_for_current_owner(
         devtools_layout_metrics_error(format!("Failed to produce layout metrics: {error}"))
     })?;
     let Some(page) = conn
-        .runtime_session_owner_slot_mut(session_id)
+        .runtime_session_owner_slot_mut_for_route(session_id, owner_route)
         .ok()
         .and_then(|slot| slot.loaded_page_mut())
     else {
@@ -6228,30 +6232,27 @@ async fn execute_devtools_get_frame_tree_command_for_current_owner_async(
     command: DevToolsGetFrameTreeCommand,
     route: Option<CdpSessionRoute>,
 ) -> Result<Value, DevToolsError> {
-    if let Some(route) = route {
-        let mut route_scope = conn.scoped_none_session_owner_route_override(route);
-        devtools_frame_tree_for_current_owner_async(route_scope.conn_mut(), command).await
-    } else {
-        devtools_frame_tree_for_current_owner_async(conn, command).await
-    }
+    devtools_frame_tree_for_current_owner_async(conn, command, route.as_ref()).await
 }
 
 async fn devtools_frame_tree_for_current_owner_async(
     conn: &mut CdpConnection,
     command: DevToolsGetFrameTreeCommand,
+    owner_route: Option<&CdpSessionRoute>,
 ) -> Result<Value, DevToolsError> {
     let command_session_id = command.context.session_id.as_ref().map(|id| id.as_str());
     if command_session_id.is_none() && conn.browser_context.is_none() {
         return Err(devtools_frame_tree_error("BrowserContextNotLoaded"));
     }
     let (target_id, target_url, target_security_origin, target_secure_context_type) = conn
-        .target_session_owner_frame_tree_identity(command_session_id)
+        .target_session_owner_frame_tree_identity_for_route(command_session_id, owner_route)
         .ok_or_else(|| devtools_frame_tree_error("TargetNotLoaded"))?;
     let target_unreachable_url =
-        network_error_page_unreachable_url(conn, command_session_id, &target_url);
-    let target_loader_id = frame_tree_loader_id_for_current_owner(conn, command_session_id);
+        network_error_page_unreachable_url(conn, command_session_id, owner_route, &target_url);
+    let target_loader_id =
+        frame_tree_loader_id_for_current_owner(conn, command_session_id, owner_route);
     if conn
-        .ensure_document_accessible_for_session_owner(command_session_id)
+        .ensure_document_accessible_for_route(command_session_id, owner_route)
         .is_err()
     {
         return Ok(frame_tree_payload(
@@ -6266,7 +6267,7 @@ async fn devtools_frame_tree_for_current_owner_async(
         ));
     }
     let Some(page) = conn
-        .runtime_session_owner_slot_mut(command_session_id)
+        .runtime_session_owner_slot_mut_for_route(command_session_id, owner_route)
         .ok()
         .and_then(|slot| slot.loaded_page_mut())
     else {
@@ -6289,7 +6290,7 @@ async fn devtools_frame_tree_for_current_owner_async(
         devtools_frame_tree_error(format!("Failed to snapshot child frame tree: {error}"))
     })?;
     if conn
-        .ensure_document_accessible_for_session_owner(command_session_id)
+        .ensure_document_accessible_for_route(command_session_id, owner_route)
         .is_err()
     {
         return Ok(frame_tree_payload(
@@ -6304,7 +6305,7 @@ async fn devtools_frame_tree_for_current_owner_async(
         ));
     }
     let Some(page) = conn
-        .runtime_session_owner_slot_mut(command_session_id)
+        .runtime_session_owner_slot_mut_for_route(command_session_id, owner_route)
         .ok()
         .and_then(|slot| slot.loaded_page_mut())
     else {
@@ -6343,10 +6344,11 @@ fn default_document_mime_type() -> String {
 fn network_error_page_unreachable_url(
     conn: &CdpConnection,
     session_id: Option<&str>,
+    owner_route: Option<&CdpSessionRoute>,
     document_url: &str,
 ) -> Option<String> {
     (document_url == NETWORK_ERROR_PAGE_URL)
-        .then(|| conn.runtime_session_owner_target_url(session_id))
+        .then(|| conn.runtime_session_owner_target_url_for_route(session_id, owner_route))
         .flatten()
 }
 
@@ -6368,8 +6370,9 @@ fn devtools_frame_tree_error(message: impl Into<String>) -> DevToolsError {
 fn frame_tree_loader_id_for_current_owner(
     conn: &CdpConnection,
     session_id: Option<&str>,
+    owner_route: Option<&CdpSessionRoute>,
 ) -> String {
-    conn.target_session_owner_frame_tree_loader_id(session_id)
+    conn.target_session_owner_frame_tree_loader_id_for_route(session_id, owner_route)
         .unwrap_or_default()
 }
 
@@ -6402,12 +6405,7 @@ fn execute_devtools_get_javascript_dialog_command(
     if route.is_some() {
         command.context.session_id = None;
     }
-    let result = if let Some(route) = route {
-        let mut route_scope = conn.scoped_none_session_owner_route_override(route);
-        finish_devtools_get_javascript_dialog_command(route_scope.conn_mut(), command)
-    } else {
-        finish_devtools_get_javascript_dialog_command(conn, command)
-    };
+    let result = finish_devtools_get_javascript_dialog_command(conn, command, route.as_ref());
     result.map(DevToolsCommandResult::JavaScriptDialog)
 }
 
@@ -6424,12 +6422,7 @@ fn execute_devtools_set_javascript_dialog_prompt_text_command(
     if route.is_some() {
         command.context.session_id = None;
     }
-    if let Some(route) = route {
-        let mut route_scope = conn.scoped_none_session_owner_route_override(route);
-        finish_devtools_set_javascript_dialog_prompt_text_command(route_scope.conn_mut(), command)
-    } else {
-        finish_devtools_set_javascript_dialog_prompt_text_command(conn, command)
-    }
+    finish_devtools_set_javascript_dialog_prompt_text_command(conn, command, route.as_ref())
 }
 
 fn execute_devtools_handle_javascript_dialog_command(
@@ -6451,12 +6444,7 @@ fn execute_devtools_handle_javascript_dialog_command(
     if route.is_some() {
         command.context.session_id = None;
     }
-    let result = if let Some(route) = route {
-        let mut route_scope = conn.scoped_none_session_owner_route_override(route);
-        finish_devtools_handle_javascript_dialog_command(route_scope.conn_mut(), command)
-    } else {
-        finish_devtools_handle_javascript_dialog_command(conn, command)
-    };
+    let result = finish_devtools_handle_javascript_dialog_command(conn, command, route.as_ref());
     match result {
         Ok(event) => (Ok(DevToolsCommandResult::Empty), vec![event]),
         Err(error) => (Err(error), Vec::new()),
@@ -6680,7 +6668,7 @@ fn start_devtools_page_command(
             start_devtools_get_layout_metrics_command(conn, command_id, command)
         }
         DevToolsCommand::GetJavaScriptDialog(command) => PageCommandTaskStep::Complete(
-            match finish_devtools_get_javascript_dialog_command(conn, command) {
+            match finish_devtools_get_javascript_dialog_command(conn, command, None) {
                 Ok(result) => CommandOutputPlan::from_devtools_result(
                     DevToolsCommandResult::JavaScriptDialog(result),
                 ),
@@ -6688,7 +6676,7 @@ fn start_devtools_page_command(
             },
         ),
         DevToolsCommand::SetJavaScriptDialogPromptText(command) => PageCommandTaskStep::Complete(
-            match finish_devtools_set_javascript_dialog_prompt_text_command(conn, command) {
+            match finish_devtools_set_javascript_dialog_prompt_text_command(conn, command, None) {
                 Ok(result) => CommandOutputPlan::from_devtools_result(result),
                 Err(error) => CommandOutputPlan::from_devtools_error(error),
             },
@@ -6896,8 +6884,8 @@ fn start_devtools_get_frame_tree_command(
             }
         };
     let target_unreachable_url =
-        network_error_page_unreachable_url(conn, command_session_id, &target_url);
-    let target_loader_id = frame_tree_loader_id_for_current_owner(conn, command_session_id);
+        network_error_page_unreachable_url(conn, command_session_id, None, &target_url);
+    let target_loader_id = frame_tree_loader_id_for_current_owner(conn, command_session_id, None);
     if conn
         .ensure_document_accessible_for_session_owner(command_session_id)
         .is_err()

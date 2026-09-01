@@ -1319,7 +1319,15 @@ impl CdpConnection {
         &self,
         session_id: Option<&str>,
     ) -> TargetNavigationLoadInputs {
-        let mut inputs = match self.target_session_owner_ref(session_id) {
+        self.navigation_load_inputs_for_route(session_id, None)
+    }
+
+    pub(crate) fn navigation_load_inputs_for_route(
+        &self,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
+    ) -> TargetNavigationLoadInputs {
+        let mut inputs = match self.target_session_owner_ref_for_route(session_id, owner_route) {
             Some(TargetSessionOwnerRef::NoLoadedBrowserContext) | None => self
                 .browser_context
                 .as_ref()
@@ -1733,7 +1741,15 @@ impl CdpConnection {
         &self,
         session_id: Option<&str>,
     ) -> Option<&DevToolsSessionState> {
-        self.target_session_owner_ref(session_id)?
+        self.target_devtools_session_state_for_route(session_id, None)
+    }
+
+    pub(crate) fn target_devtools_session_state_for_route(
+        &self,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
+    ) -> Option<&DevToolsSessionState> {
+        self.target_session_owner_ref_for_route(session_id, owner_route)?
             .devtools_session_state()
     }
 
@@ -1768,7 +1784,15 @@ impl CdpConnection {
         &self,
         session_id: Option<&str>,
     ) -> Option<String> {
-        self.target_session_owner_ref(session_id)
+        self.target_renderer_runtime_inspector_session_id_for_route(session_id, None)
+    }
+
+    pub(crate) fn target_renderer_runtime_inspector_session_id_for_route(
+        &self,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
+    ) -> Option<String> {
+        self.target_session_owner_ref_for_route(session_id, owner_route)
             .and_then(|owner| owner.renderer_runtime_inspector_session_id())
     }
 
@@ -1829,7 +1853,16 @@ impl CdpConnection {
         session_id: Option<&str>,
         f: impl FnOnce(&mut TargetOwnerState) -> R,
     ) -> Option<R> {
-        self.target_session_owner_mut(session_id)?
+        self.with_target_owner_state_for_route_mut(session_id, None, f)
+    }
+
+    pub(crate) fn with_target_owner_state_for_route_mut<R>(
+        &mut self,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
+        f: impl FnOnce(&mut TargetOwnerState) -> R,
+    ) -> Option<R> {
+        self.target_session_owner_mut_for_route(session_id, owner_route)?
             .mutate_target_owner_state(|owner_state| owner_state.map(f))
     }
 
@@ -2247,8 +2280,16 @@ impl CdpConnection {
         &self,
         session_id: Option<&str>,
     ) -> Vec<Option<String>> {
+        self.page_event_session_ids_for_route(session_id, None)
+    }
+
+    pub(crate) fn page_event_session_ids_for_route(
+        &self,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
+    ) -> Vec<Option<String>> {
         let Some((browser_context_id, target_id)) =
-            self.target_owner_identity_for_session(session_id)
+            self.target_owner_identity_for_route(session_id, owner_route)
         else {
             return vec![session_id.map(str::to_owned)];
         };
@@ -2354,7 +2395,16 @@ impl CdpConnection {
         &self,
         session_id: Option<&str>,
     ) -> Option<String> {
-        self.target_session_owner_ref(session_id)?.target_url()
+        self.runtime_session_owner_target_url_for_route(session_id, None)
+    }
+
+    pub(crate) fn runtime_session_owner_target_url_for_route(
+        &self,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
+    ) -> Option<String> {
+        self.target_session_owner_ref_for_route(session_id, owner_route)?
+            .target_url()
     }
 
     pub(crate) fn runtime_session_owner_record_initial_empty_document_url(
@@ -2395,7 +2445,15 @@ impl CdpConnection {
         &self,
         session_id: Option<&str>,
     ) -> Option<(String, String, String, String)> {
-        self.target_session_owner_ref(session_id)?
+        self.target_session_owner_frame_tree_identity_for_route(session_id, None)
+    }
+
+    pub(crate) fn target_session_owner_frame_tree_identity_for_route(
+        &self,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
+    ) -> Option<(String, String, String, String)> {
+        self.target_session_owner_ref_for_route(session_id, owner_route)?
             .frame_tree_identity()
     }
 
@@ -2576,6 +2634,16 @@ impl CdpConnection {
         f: impl FnOnce(TargetSessionOwnerMut<'_>) -> R,
     ) -> Option<R> {
         self.target_session_owner_mut(session_id).map(f)
+    }
+
+    pub(super) fn with_target_session_owner_mut_for_route<R>(
+        &mut self,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
+        f: impl FnOnce(TargetSessionOwnerMut<'_>) -> R,
+    ) -> Option<R> {
+        self.target_session_owner_mut_for_route(session_id, owner_route)
+            .map(f)
     }
 }
 

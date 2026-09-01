@@ -146,12 +146,10 @@ impl CdpConnection {
         let Some(route) = self.target_session_route_for_target_id(target_id) else {
             return Vec::new();
         };
-        let mut route_scope = self.scoped_none_session_owner_route_override(route);
-        let conn = route_scope.conn_mut();
-        conn.page_event_session_ids_for_session_owner(None)
+        self.page_event_session_ids_for_route(None, Some(&route))
             .into_iter()
             .filter(|session_id| {
-                conn.target_page_session_state_for_session(session_id.as_deref())
+                self.target_page_session_state_for_route(session_id.as_deref(), Some(&route))
                     .is_some_and(|state| state.page_screencast.is_active())
             })
             .collect()

@@ -778,7 +778,16 @@ impl CdpConnection {
         session_id: Option<&str>,
         enabled: bool,
     ) -> bool {
-        self.with_target_session_owner_mut(session_id, |owner| {
+        self.set_page_file_chooser_opened_event_enabled_for_route(session_id, None, enabled)
+    }
+
+    fn set_page_file_chooser_opened_event_enabled_for_route(
+        &mut self,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
+        enabled: bool,
+    ) -> bool {
+        self.with_target_session_owner_mut_for_route(session_id, owner_route, |owner| {
             owner.set_page_file_chooser_opened_event_enabled(enabled)
         })
         .unwrap_or(false)
@@ -804,20 +813,14 @@ impl CdpConnection {
         let Some(route) = self.target_session_route_for_target_id(target_id) else {
             return false;
         };
-        let mut route_scope = self.scoped_none_session_owner_route_override(route);
-        route_scope
-            .conn_mut()
-            .set_page_file_chooser_opened_event_enabled_for_session_owner(None, true)
+        self.set_page_file_chooser_opened_event_enabled_for_route(None, Some(&route), true)
     }
 
     pub fn disable_file_dialog_opened_listener_for_target(&mut self, target_id: &str) -> bool {
         let Some(route) = self.target_session_route_for_target_id(target_id) else {
             return false;
         };
-        let mut route_scope = self.scoped_none_session_owner_route_override(route);
-        route_scope
-            .conn_mut()
-            .set_page_file_chooser_opened_event_enabled_for_session_owner(None, false)
+        self.set_page_file_chooser_opened_event_enabled_for_route(None, Some(&route), false)
     }
 
     pub(crate) fn set_page_lifecycle_events_enabled_for_session_owner(

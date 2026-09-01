@@ -127,7 +127,16 @@ impl CdpConnection {
         session_id: Option<&str>,
         f: impl FnOnce(Option<TargetEmulationSessionStateMut<'_>>),
     ) -> bool {
-        self.with_target_session_owner_mut(session_id, |owner| {
+        self.mutate_emulation_session_state_for_route(session_id, None, f)
+    }
+
+    pub(crate) fn mutate_emulation_session_state_for_route(
+        &mut self,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
+        f: impl FnOnce(Option<TargetEmulationSessionStateMut<'_>>),
+    ) -> bool {
+        self.with_target_session_owner_mut_for_route(session_id, owner_route, |owner| {
             owner.mutate_emulation_session_state(f)
         })
         .unwrap_or(false)
@@ -153,24 +162,26 @@ impl CdpConnection {
             .set_devtools_timezone_override(timezone_override)
     }
 
-    pub(crate) fn set_base_locale_override_for_session_owner(
+    pub(crate) fn set_base_locale_override_for_route(
         &mut self,
         session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
         locale_override: Option<String>,
     ) -> bool {
         let fallback_identity = self.base_browser_identity.clone();
-        self.target_session_owner_mut(session_id)
+        self.target_session_owner_mut_for_route(session_id, owner_route)
             .is_some_and(|mut owner| {
                 owner.set_base_locale_override(locale_override, &fallback_identity)
             })
     }
 
-    pub(crate) fn set_base_timezone_override_for_session_owner(
+    pub(crate) fn set_base_timezone_override_for_route(
         &mut self,
         session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
         timezone_override: Option<String>,
     ) -> bool {
-        self.target_session_owner_mut(session_id)
+        self.target_session_owner_mut_for_route(session_id, owner_route)
             .is_some_and(|mut owner| owner.set_base_timezone_override(timezone_override))
     }
 

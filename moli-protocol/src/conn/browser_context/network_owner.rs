@@ -688,38 +688,47 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
     ) -> bool {
+        self.set_network_listener_enabled_for_route(session_id, None, true)
+    }
+
+    fn set_network_listener_enabled_for_route(
+        &mut self,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
+        enabled: bool,
+    ) -> bool {
         if let Some(session_id) = session_id
             && let Some(target) = self.service_worker_target_for_session_mut(Some(session_id))
         {
-            return target.set_network_enabled(session_id, true);
+            return target.set_network_enabled(session_id, enabled);
         }
         if let Some(session_id) = session_id
             && let Some(target) = self.dedicated_worker_target_for_session_mut(Some(session_id))
         {
-            return target.set_network_enabled(session_id, true);
+            return target.set_network_enabled(session_id, enabled);
         }
-        self.with_target_session_owner_mut(session_id, |owner| owner.enable_listener(session_id))
-            .unwrap_or(false)
+        self.with_target_session_owner_mut_for_route(session_id, owner_route, |owner| {
+            if enabled {
+                owner.enable_listener(session_id)
+            } else {
+                owner.disable_listener(session_id)
+            }
+        })
+        .unwrap_or(false)
     }
 
     pub fn enable_network_listener_for_target(&mut self, target_id: &str) -> bool {
         let Some(route) = self.target_session_route_for_target_id(target_id) else {
             return false;
         };
-        let mut route_scope = self.scoped_none_session_owner_route_override(route);
-        route_scope
-            .conn_mut()
-            .enable_network_listener_for_session_owner(None)
+        self.set_network_listener_enabled_for_route(None, Some(&route), true)
     }
 
     pub fn disable_network_listener_for_target(&mut self, target_id: &str) -> bool {
         let Some(route) = self.target_session_route_for_target_id(target_id) else {
             return false;
         };
-        let mut route_scope = self.scoped_none_session_owner_route_override(route);
-        route_scope
-            .conn_mut()
-            .disable_network_listener_for_session_owner(None)
+        self.set_network_listener_enabled_for_route(None, Some(&route), false)
     }
 
     pub(crate) fn set_global_cache_disabled(&mut self, cache_disabled: bool) {
@@ -750,18 +759,7 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
     ) -> bool {
-        if let Some(session_id) = session_id
-            && let Some(target) = self.service_worker_target_for_session_mut(Some(session_id))
-        {
-            return target.set_network_enabled(session_id, false);
-        }
-        if let Some(session_id) = session_id
-            && let Some(target) = self.dedicated_worker_target_for_session_mut(Some(session_id))
-        {
-            return target.set_network_enabled(session_id, false);
-        }
-        self.with_target_session_owner_mut(session_id, |owner| owner.disable_listener(session_id))
-            .unwrap_or(false)
+        self.set_network_listener_enabled_for_route(session_id, None, false)
     }
 
     pub(crate) fn start_set_cache_disabled_for_session_owner(
@@ -826,12 +824,13 @@ impl CdpConnection {
         owner.start_set_extra_http_headers(extra_headers)
     }
 
-    pub(crate) fn start_set_target_extra_http_headers_for_session_owner(
+    pub(crate) fn start_set_target_extra_http_headers_for_route(
         &mut self,
         session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
         extra_headers: Vec<(String, String)>,
     ) -> Result<Option<PendingPageCommand>, String> {
-        let Some(owner) = self.target_session_owner_mut(session_id) else {
+        let Some(owner) = self.target_session_owner_mut_for_route(session_id, owner_route) else {
             return Err("BrowserContextNotLoaded".to_owned());
         };
         owner.start_set_target_extra_http_headers(extra_headers)
@@ -857,9 +856,10 @@ impl CdpConnection {
         owner.start_replay_effective_network_request_policy()
     }
 
-    pub(crate) fn start_set_base_user_agent_override_for_session_owner(
+    pub(crate) fn start_set_base_user_agent_override_for_route(
         &mut self,
         session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
         user_agent: Option<String>,
     ) -> Result<Option<PendingPageCommand>, String> {
         let browser_identity = user_agent.as_ref().map(|user_agent| {
@@ -868,20 +868,22 @@ impl CdpConnection {
                 self.base_browser_identity.accept_language(),
             )
         });
-        if let Some(result) =
-            self.start_set_non_page_browser_identity_override(session_id, browser_identity)
+        if owner_route.is_none()
+            && let Some(result) =
+                self.start_set_non_page_browser_identity_override(session_id, browser_identity)
         {
             return result;
         }
 
         let fallback_identity = self.base_browser_identity.clone();
-        let Some(mut owner) = self.target_session_owner_mut(session_id) else {
+        let Some(mut owner) = self.target_session_owner_mut_for_route(session_id, owner_route)
+        else {
             return Err("BrowserContextNotLoaded".to_owned());
         };
         if !owner.set_base_user_agent_override(user_agent, &fallback_identity) {
             return Err("BrowserContextNotLoaded".to_owned());
         }
-        self.start_rebuild_resource_runtime_for_session_owner(session_id)
+        self.start_rebuild_resource_runtime_for_route(session_id, owner_route)
     }
 
     fn start_set_non_page_browser_identity_override(
@@ -981,7 +983,28 @@ impl CdpConnection {
         upload_throughput: f64,
         connection_type: Option<String>,
     ) -> Result<Option<PendingPageCommand>, String> {
-        let Some(owner) = self.target_session_owner_mut(session_id) else {
+        self.start_set_emulated_network_conditions_for_route(
+            session_id,
+            None,
+            offline,
+            latency,
+            download_throughput,
+            upload_throughput,
+            connection_type,
+        )
+    }
+
+    pub(crate) fn start_set_emulated_network_conditions_for_route(
+        &mut self,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
+        offline: bool,
+        latency: f64,
+        download_throughput: f64,
+        upload_throughput: f64,
+        connection_type: Option<String>,
+    ) -> Result<Option<PendingPageCommand>, String> {
+        let Some(owner) = self.target_session_owner_mut_for_route(session_id, owner_route) else {
             return Err("BrowserContextNotLoaded".to_owned());
         };
         owner.start_set_emulated_network_conditions(
