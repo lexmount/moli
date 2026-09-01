@@ -131,6 +131,10 @@ impl Document {
         self.quirks_mode
     }
 
+    pub fn is_quirks_mode(&self) -> bool {
+        self.quirks_mode == QuirksMode::Quirks
+    }
+
     pub fn kind(&self) -> DocumentKind {
         self.kind
     }
