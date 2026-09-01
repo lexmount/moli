@@ -1129,7 +1129,7 @@ async fn invalid_timezone_override_is_rejected_without_replacing_active_state() 
         "params": { "timezoneId": "Mars/Olympus" }
     }))
     .await;
-    ctx.expect_error(7_002, -32000, "Invalid timezone id");
+    ctx.expect_error(7_002, -32602, "Invalid timezone id");
     assert_eq!(
         ctx.conn
             .browser_context

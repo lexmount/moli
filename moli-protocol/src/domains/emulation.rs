@@ -591,7 +591,7 @@ fn start_timezone_override_command(
         (!trimmed.is_empty()).then(|| trimmed.to_owned())
     };
     if let Err(message) = validate_timezone_override(timezone_override.as_deref()) {
-        return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message));
+        return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(-32602, message));
     }
     if let Err(message) = conn
         .set_devtools_timezone_override_for_session_owner(cmd.session_id, timezone_override.clone())

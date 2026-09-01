@@ -132,6 +132,27 @@ async def run_locale_timezone_runtime_surface_smoke(
         cdp = await context.new_cdp_session(page)
         try:
             await cdp.send("Emulation.setLocaleOverride", {"locale": "fr-FR"})
+            invalid_timezone_error = await _expect_protocol_error(
+                cdp.send(
+                    "Emulation.setTimezoneOverride",
+                    {"timezoneId": "Mars/Olympus"},
+                ),
+                "invalid timezone override",
+            )
+            if "invalid timezone" not in invalid_timezone_error.lower():
+                raise SmokeError(
+                    "invalid timezone returned an unexpected protocol error: "
+                    f"{invalid_timezone_error}"
+                )
+            after_invalid_timezone = await _read_locale_timezone_runtime(page)
+            assert_equal(
+                [
+                    after_invalid_timezone.get("timezone"),
+                    after_invalid_timezone.get("winter"),
+                ],
+                [baseline.get("timezone"), baseline.get("winter")],
+                "rejected initial timezone override leaves native timezone state unchanged",
+            )
             await cdp.send(
                 "Emulation.setTimezoneOverride",
                 {"timezoneId": "Europe/Paris"},
@@ -187,6 +208,57 @@ async def run_locale_timezone_runtime_surface_smoke(
                 "TypeError",
                 "Intl option validation survives default injection",
             )
+            assert_equal(
+                runtime.get("intlConstruction"),
+                [True, True, True, "fr-FR"],
+                "Intl constructor proxy preserves subclass newTarget",
+            )
+            assert_equal(
+                runtime.get("intlOptionAccess"),
+                [1, True, "Europe/Paris"],
+                "Intl timezone default preserves option accessor semantics",
+            )
+            assert_equal(
+                runtime.get("dateConstruction"),
+                [
+                    "2023-12-31T23:00:00.000Z",
+                    "2024-06-30T22:00:00.000Z",
+                    "2024-03-31T01:30:00.000Z",
+                    True,
+                    True,
+                ],
+                "Date local constructors and derived newTarget use the emulated timezone",
+            )
+            assert_equal(
+                runtime.get("dateParsing"),
+                [
+                    "2023-12-31T23:00:00.000Z",
+                    "2023-12-31T23:00:00.000Z",
+                    "2024-01-01T00:00:00.000Z",
+                    "2023-12-31T22:00:00.000Z",
+                ],
+                "Date local parsing distinguishes local, date-only, and offset forms",
+            )
+            assert_equal(
+                runtime.get("dateSetters"),
+                [
+                    1704108896789,
+                    "2024-01-01T11:34:56.789Z",
+                    "2024-03-31T01:30:00.000Z",
+                    "2023-12-31T23:00:00.000Z",
+                ],
+                "Date local setters preserve milliseconds and DST disambiguation",
+            )
+            assert_equal(
+                runtime.get("explicitDateLocalePreserved"),
+                True,
+                "Date locale methods preserve explicit locale and timezone options",
+            )
+            assert_equal(
+                runtime.get("constructorReflection"),
+                ["Date", 7, "function", "NumberFormat", 0, "function"],
+                "Date and Intl constructor reflection remains native-compatible",
+            )
             date_strings = runtime.get("dateStrings")
             if not isinstance(date_strings, list) or len(date_strings) != 3:
                 raise SmokeError(f"Date string override returned an invalid shape: {date_strings!r}")
@@ -200,24 +272,6 @@ async def run_locale_timezone_runtime_surface_smoke(
                     raise SmokeError(
                         f"Date string override: expected prefix {prefix!r}, got {value!r}"
                     )
-
-            invalid_timezone_error = await _expect_protocol_error(
-                cdp.send(
-                    "Emulation.setTimezoneOverride",
-                    {"timezoneId": "Mars/Olympus"},
-                ),
-                "invalid timezone override",
-            )
-            if "invalid timezone" not in invalid_timezone_error.lower():
-                raise SmokeError(
-                    "invalid timezone returned an unexpected protocol error: "
-                    f"{invalid_timezone_error}"
-                )
-            assert_equal(
-                await _read_locale_timezone_runtime(page),
-                runtime,
-                "rejected timezone override leaves the active state unchanged",
-            )
 
             await cdp.send("Emulation.setLocaleOverride", {"locale": ""})
             locale_cleared = await _read_locale_timezone_runtime(page)
@@ -284,6 +338,8 @@ async def run_locale_timezone_runtime_surface_smoke(
                     "winterOffsetMinutes": -60,
                     "summerOffsetMinutes": -120,
                     "invalidTimezoneRejected": True,
+                    "intlSubclassNewTarget": True,
+                    "dateLocalConstructionParsingAndSetters": True,
                 },
             )
         finally:
@@ -307,6 +363,30 @@ async def _read_locale_timezone_runtime(page: Any) -> dict[str, Any]:
             'RelativeTimeFormat',
             'Segmenter',
           ];
+          let timeZoneReads = 0;
+          let getterReceiverPreserved = false;
+          const options = {
+            get timeZone() {
+              timeZoneReads += 1;
+              getterReceiverPreserved = this === options;
+              return undefined;
+            },
+          };
+          const optionFormat = new Intl.DateTimeFormat(undefined, options);
+          class DerivedNumberFormat extends Intl.NumberFormat {}
+          const derivedNumberFormat = new DerivedNumberFormat();
+          class DerivedDate extends Date {}
+          const derivedDate = new DerivedDate(2024, 0, 1);
+          const setter = new Date('2024-01-01T00:00:00Z');
+          const setterResult = setter.setHours(12, 34, 56, 789);
+          const gapSetter = new Date('2024-03-31T00:30:00Z');
+          gapSetter.setHours(2, 30, 0, 0);
+          const revived = new Date(NaN);
+          revived.setFullYear(2024, 0, 1);
+          const explicitLocaleOptions = {
+            timeZone: 'UTC', year: 'numeric', month: '2-digit', day: '2-digit',
+            hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+          };
           return {
             navigatorLanguage: navigator.language,
             intlLocales: Object.fromEntries(intlConstructors.map(name => [
@@ -365,6 +445,47 @@ async def _read_locale_timezone_runtime(page: Any) -> dict[str, Any]:
                 return error.name;
               }
             })(),
+            intlConstruction: [
+              derivedNumberFormat instanceof DerivedNumberFormat,
+              derivedNumberFormat instanceof Intl.NumberFormat,
+              Object.getPrototypeOf(derivedNumberFormat) === DerivedNumberFormat.prototype,
+              derivedNumberFormat.resolvedOptions().locale,
+            ],
+            intlOptionAccess: [
+              timeZoneReads,
+              getterReceiverPreserved,
+              optionFormat.resolvedOptions().timeZone,
+            ],
+            dateConstruction: [
+              new Date(2024, 0, 1).toISOString(),
+              new Date(2024, 6, 1).toISOString(),
+              new Date(2024, 2, 31, 2, 30).toISOString(),
+              derivedDate instanceof DerivedDate,
+              Object.getPrototypeOf(derivedDate) === DerivedDate.prototype,
+            ],
+            dateParsing: [
+              new Date('2024-01-01T00:00:00').toISOString(),
+              new Date(Date.parse('2024-01-01T00:00:00')).toISOString(),
+              new Date('2024-01-01').toISOString(),
+              new Date('2024-01-01T00:00:00+02:00').toISOString(),
+            ],
+            dateSetters: [
+              setterResult,
+              setter.toISOString(),
+              gapSetter.toISOString(),
+              revived.toISOString(),
+            ],
+            explicitDateLocalePreserved:
+              new Date(0).toLocaleString('en-US', explicitLocaleOptions) ===
+              new Intl.DateTimeFormat('en-US', explicitLocaleOptions).format(new Date(0)),
+            constructorReflection: [
+              Date.name,
+              Date.length,
+              typeof Date.UTC,
+              Intl.NumberFormat.name,
+              Intl.NumberFormat.length,
+              typeof Intl.NumberFormat.supportedLocalesOf,
+            ],
           };
         }"""
     )
