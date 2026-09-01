@@ -1,8 +1,17 @@
 mod auto;
 
 pub(super) use auto::{
-    AutomaticTableSizingTarget, compute_grid_inline_min_max, distribute_auto_columns,
+    AutomaticTableSizingTarget, TableGridInlineMinMax, compute_grid_inline_min_max,
+    distribute_auto_columns,
 };
+
+/// Finite stand-in for an unbounded CSS table inline-size contribution.
+///
+/// Blink uses the same one-million CSS pixel ceiling for percentage-dependent
+/// fixed tables and for percentage column systems that have no finite maximum.
+/// Keeping the ceiling beside the shared table constraint types ensures those
+/// two parent-facing cases cannot drift apart.
+pub(super) const TABLE_MAX_INLINE_SIZE: f32 = 1_000_000.0;
 
 /// Cell rows consulted while collecting authored table column constraints.
 ///

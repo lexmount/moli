@@ -31,9 +31,10 @@ mod columns;
 pub(crate) use collapsed_borders::CollapsedTableBorders;
 use collapsed_borders::{prepare_collapsed_table_borders, set_collapsed_border_geometry};
 use columns::{
-    AutomaticTableSizingTarget, TableCellInlineConstraint, TableCellSpanConstraint,
-    TableColumnConstraint, TableLayoutMode, apply_cell_constraints, compute_grid_inline_min_max,
-    distribute_auto_columns, distribute_fixed_columns, fixed_grid_min_inline_size,
+    AutomaticTableSizingTarget, TABLE_MAX_INLINE_SIZE, TableCellInlineConstraint,
+    TableCellSpanConstraint, TableColumnConstraint, TableLayoutMode, apply_cell_constraints,
+    compute_grid_inline_min_max, distribute_auto_columns, distribute_fixed_columns,
+    fixed_grid_min_inline_size,
 };
 
 #[derive(Clone)]
@@ -135,6 +136,37 @@ struct TableContext {
     layout_mode: TableLayoutMode,
     inline_border_spacing: f32,
     writing_mode: WritingMode,
+}
+
+/// Parent-facing min/max-content sizes of the complete table wrapper.
+///
+/// Column constraints produce GRID_MIN/GRID_MAX. CSS Tables adds one wrapper
+/// rule after that calculation: a percentage-dependent fixed table has an
+/// effectively unbounded max-content contribution. Keeping the wrapper result
+/// separate prevents that rule from contaminating final column distribution.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct TableIntrinsicInlineSizes {
+    min_content: f32,
+    max_content: f32,
+}
+
+impl TableIntrinsicInlineSizes {
+    fn from_grid(
+        grid: columns::TableGridInlineMinMax,
+        layout_mode: TableLayoutMode,
+        preferred_inline_size: Dimension,
+    ) -> Self {
+        let max_content =
+            if layout_mode.is_fixed() && preferred_inline_size.may_have_percentage_dependence() {
+                TABLE_MAX_INLINE_SIZE
+            } else {
+                grid.max
+            };
+        Self {
+            min_content: grid.min,
+            max_content: max_content.max(grid.min),
+        }
+    }
 }
 
 pub(crate) fn prepare_table_layout_trees<N>(world: &mut LayoutWorld<N>)
@@ -319,7 +351,7 @@ where
     let mut columns = Vec::new();
     let mut max_columns = 0usize;
     let mut column_tracks = Vec::new();
-    let layout_mode = if root_style.table_layout_is_fixed() {
+    let layout_mode = if root_style.uses_fixed_table_layout() {
         TableLayoutMode::Fixed
     } else {
         TableLayoutMode::Automatic
@@ -463,10 +495,16 @@ impl TableContext {
             undistributable_space,
             self.layout_mode,
         );
+        let preferred_inline_size = self.writing_mode.to_logical(self.style.size).inline_size;
+        let intrinsic_inline_sizes = TableIntrinsicInlineSizes::from_grid(
+            grid_min_max,
+            self.layout_mode,
+            preferred_inline_size,
+        );
         let used_inline_size = self.resolve_used_inline_size(
             inputs,
-            grid_min_max.min,
-            grid_min_max.max,
+            grid_min_max,
+            intrinsic_inline_sizes,
             inline_insets,
         );
         let assignable_inline_size = (used_inline_size - undistributable_space).max(0.0);
@@ -517,16 +555,22 @@ impl TableContext {
     fn resolve_used_inline_size(
         &self,
         inputs: LayoutInput,
-        grid_min: f32,
-        grid_max: f32,
+        grid: columns::TableGridInlineMinMax,
+        intrinsic: TableIntrinsicInlineSizes,
         inline_insets: f32,
     ) -> f32 {
         let space = inputs.constraint_space(self.writing_mode);
+        let (min_content, max_content) =
+            if space.sizing_purpose == SizingPurpose::IntrinsicContribution {
+                (intrinsic.min_content, intrinsic.max_content)
+            } else {
+                (grid.min, grid.max)
+            };
         let available = space.available_size.inline_size;
         let fit_content = || match available {
-            AvailableSpace::Definite(value) => grid_min.max(value.max(0.0).min(grid_max)),
-            AvailableSpace::MinContent => grid_min,
-            AvailableSpace::MaxContent => grid_max,
+            AvailableSpace::Definite(value) => min_content.max(value.max(0.0).min(max_content)),
+            AvailableSpace::MinContent => min_content,
+            AvailableSpace::MaxContent => max_content,
         };
         let logical_size = self.writing_mode.to_logical(self.style.size);
         let logical_min_size = self.writing_mode.to_logical(self.style.min_size);
@@ -539,16 +583,16 @@ impl TableContext {
         };
         let resolve_dimension = |dimension: Dimension| {
             if dimension.is_min_content() {
-                Some(grid_min)
+                Some(min_content)
             } else if dimension.is_max_content() {
-                Some(grid_max)
+                Some(max_content)
             } else if dimension.is_fit_content() {
                 Some(fit_content())
             } else if dimension.is_stretch() {
                 match available {
                     AvailableSpace::Definite(value) => Some(value.max(0.0)),
-                    AvailableSpace::MinContent => Some(grid_min),
-                    AvailableSpace::MaxContent => Some(grid_max),
+                    AvailableSpace::MinContent => Some(min_content),
+                    AvailableSpace::MaxContent => Some(max_content),
                 }
             } else {
                 dimension
@@ -574,7 +618,7 @@ impl TableContext {
             .or(preferred)
             .unwrap_or_else(fit_content);
         if !self.layout_mode.is_fixed() {
-            used = used.max(grid_min);
+            used = used.max(min_content);
         }
         if let Some(max_size) = max_size {
             used = used.min(max_size);
@@ -1444,5 +1488,48 @@ where
 
     fn set_detailed_grid_info(&mut self, _node_id: NodeId, detailed_grid_info: DetailedGridInfo) {
         self.context.detailed = Some(detailed_grid_info);
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn percentage_dependent_fixed_table_has_unbounded_parent_max_content_size() {
+        let grid = columns::TableGridInlineMinMax { min: 4.0, max: 4.0 };
+
+        assert_eq!(
+            TableIntrinsicInlineSizes::from_grid(
+                grid,
+                TableLayoutMode::Fixed,
+                Dimension::percent(1.0),
+            ),
+            TableIntrinsicInlineSizes {
+                min_content: 4.0,
+                max_content: TABLE_MAX_INLINE_SIZE,
+            },
+        );
+        assert_eq!(
+            TableIntrinsicInlineSizes::from_grid(
+                grid,
+                TableLayoutMode::Automatic,
+                Dimension::percent(1.0),
+            ),
+            TableIntrinsicInlineSizes {
+                min_content: 4.0,
+                max_content: 4.0,
+            },
+        );
+        assert_eq!(
+            TableIntrinsicInlineSizes::from_grid(
+                grid,
+                TableLayoutMode::Fixed,
+                Dimension::length(40.0),
+            ),
+            TableIntrinsicInlineSizes {
+                min_content: 4.0,
+                max_content: 4.0,
+            },
+        );
     }
 }

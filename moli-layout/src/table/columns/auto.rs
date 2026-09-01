@@ -1,7 +1,7 @@
-use super::{TableCellSpanConstraint, TableColumnConstraint, TableLayoutMode};
+use super::{
+    TABLE_MAX_INLINE_SIZE, TableCellSpanConstraint, TableColumnConstraint, TableLayoutMode,
+};
 use crate::LAYOUT_SUBPIXELS_PER_CSS_PIXEL;
-
-const TABLE_MAX_INLINE_SIZE: f32 = 1_000_000.0;
 
 /// Compare sizes at Blink's 26.6 `LayoutUnit` boundary.
 ///
