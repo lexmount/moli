@@ -12,6 +12,7 @@ use crate::{
         FileSystemHandleClonePayload, GeometryClonePayload, ImageDataClonePayload,
         ReadableStreamClonePayload, TransformStreamClonePayload, WritableStreamClonePayload,
         attach_file_system_file_snapshot_clone_payload, build_file_object,
+        build_file_list_object, file_list_files_from_object,
         build_file_system_handle_from_clone_payload, build_image_data_object_from_clone_payload,
         build_readable_stream_clone_shell, build_transform_stream_clone_shell,
         build_writable_stream_clone_shell, crypto_key_clone_payload_from_object,
@@ -46,6 +47,7 @@ const HOST_OBJECT_TAG_QUOTA_EXCEEDED_ERROR: u32 = 8;
 const HOST_OBJECT_TAG_WRITABLE_STREAM: u32 = 9;
 const HOST_OBJECT_TAG_TRANSFORM_STREAM: u32 = 10;
 const HOST_OBJECT_TAG_GEOMETRY: u32 = 11;
+pub(crate) const HOST_OBJECT_TAG_FILE_LIST: u32 = 12;
 
 const GEOMETRY_KIND_DOM_POINT_READONLY: u32 = 0;
 const GEOMETRY_KIND_DOM_POINT: u32 = 1;
@@ -283,16 +285,54 @@ struct WireSerializer {
     file_system_handles: Rc<RefCell<ClonedFileSystemHandleStore>>,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Default)]
 struct ClonedBlobStore {
     next_id: u32,
     blobs: Vec<ClonedBlob>,
+    sources: Vec<ClonedBlobSource>,
+}
+
+struct ClonedBlobSource {
+    clone_id: u32,
+    object: v8::Global<v8::Object>,
 }
 
 #[derive(Clone, Debug, Default)]
 struct ClonedFileSystemHandleStore {
     next_id: u32,
     handles: Vec<ClonedFileSystemHandle>,
+}
+
+impl WireSerializer {
+    fn store_blob_clone<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        object: v8::Local<'s, v8::Object>,
+        payload: BlobClonePayload,
+    ) -> Option<u32> {
+        let mut store = self.blobs.borrow_mut();
+        if let Some(source) = store
+            .sources
+            .iter()
+            .find(|source| v8::Local::new(scope, &source.object).strict_equals(object.into()))
+        {
+            return Some(source.clone_id);
+        }
+
+        let clone_id = store.next_id;
+        let Some(next_id) = store.next_id.checked_add(1) else {
+            drop(store);
+            throw_data_clone_exception(scope, "Too many Blob or File objects in structured clone.");
+            return None;
+        };
+        store.next_id = next_id;
+        store.blobs.push(ClonedBlob { clone_id, payload });
+        store.sources.push(ClonedBlobSource {
+            clone_id,
+            object: v8::Global::new(scope, object),
+        });
+        Some(clone_id)
+    }
 }
 
 impl v8::ValueSerializerImpl for WireSerializer {
@@ -419,19 +459,40 @@ impl v8::ValueSerializerImpl for WireSerializer {
                 serializer.write_uint32(clone_id);
                 return Some(true);
             }
-            Some("Blob" | "File") => {
-                if let Some(payload) = blob_clone_payload_from_object(scope, object) {
-                    let mut store = self.blobs.borrow_mut();
-                    let clone_id = store.next_id;
-                    let Some(next_id) = store.next_id.checked_add(1) else {
-                        drop(store);
-                        throw_data_clone_exception(scope, "Too many Blobs in structured clone.");
+            Some("FileList") => {
+                let Some(files) = file_list_files_from_object(scope, object) else {
+                    throw_data_clone_exception(scope, "Invalid FileList during structured clone.");
+                    return None;
+                };
+                let Ok(length) = u32::try_from(files.len()) else {
+                    throw_data_clone_exception(scope, "Too many Files in structured clone FileList.");
+                    return None;
+                };
+                let mut clone_ids = Vec::with_capacity(files.len());
+                for file in files {
+                    let Some(payload @ BlobClonePayload::File { .. }) =
+                        blob_clone_payload_from_object(scope, file)
+                    else {
+                        throw_data_clone_exception(
+                            scope,
+                            "FileList contains an invalid File during structured clone.",
+                        );
                         return None;
                     };
-                    store.next_id = next_id;
-                    store.blobs.push(ClonedBlob { clone_id, payload });
-                    serializer.write_uint32(HOST_OBJECT_TAG_BLOB);
+                    clone_ids.push(self.store_blob_clone(scope, file, payload)?);
+                }
+                serializer.write_uint32(HOST_OBJECT_TAG_FILE_LIST);
+                serializer.write_uint32(length);
+                for clone_id in clone_ids {
                     serializer.write_uint32(clone_id);
+                }
+                return Some(true);
+            }
+            Some("Blob" | "File") => {
+                if let Some(payload) = blob_clone_payload_from_object(scope, object) {
+                    let index = self.store_blob_clone(scope, object, payload)?;
+                    serializer.write_uint32(HOST_OBJECT_TAG_BLOB);
+                    serializer.write_uint32(index);
                     return Some(true);
                 }
             }
@@ -531,7 +592,26 @@ struct WireDeserializer {
     transform_streams: HashMap<u32, TransformStreamClonePayload>,
     deferred_streams: Rc<RefCell<Vec<DeferredStreamMaterialization>>>,
     blobs: HashMap<u32, BlobClonePayload>,
+    blob_objects: RefCell<HashMap<u32, v8::Global<v8::Object>>>,
     file_system_handles: HashMap<u32, FileSystemHandleClonePayload>,
+}
+
+impl WireDeserializer {
+    fn blob_object_for_clone_id<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        clone_id: u32,
+    ) -> Option<v8::Local<'s, v8::Object>> {
+        if let Some(object) = self.blob_objects.borrow().get(&clone_id) {
+            return Some(v8::Local::new(scope, object));
+        }
+        let payload = self.blobs.get(&clone_id)?;
+        let object = build_blob_object_from_clone_payload(scope, payload)?;
+        self.blob_objects
+            .borrow_mut()
+            .insert(clone_id, v8::Global::new(scope, object));
+        Some(object)
+    }
 }
 
 impl v8::ValueDeserializerImpl for WireDeserializer {
@@ -639,14 +719,50 @@ impl v8::ValueDeserializerImpl for WireDeserializer {
             }
             HOST_OBJECT_TAG_BLOB => {
                 let clone_id = read_u32(deserializer)?;
-                let Some(payload) = self.blobs.get(&clone_id) else {
+                let Some(object) = self.blob_object_for_clone_id(scope, clone_id) else {
                     throw_data_clone_exception(
                         scope,
                         "Missing Blob payload during structured clone.",
                     );
                     return None;
                 };
-                build_blob_object_from_clone_payload(scope, payload)
+                Some(object)
+            }
+            HOST_OBJECT_TAG_FILE_LIST => {
+                let length = read_u32(deserializer)?;
+                let mut files = Vec::new();
+                if files.try_reserve_exact(length as usize).is_err() {
+                    throw_data_clone_exception(
+                        scope,
+                        "FileList is too large to deserialize from structured clone.",
+                    );
+                    return None;
+                }
+                for _ in 0..length {
+                    let clone_id = read_u32(deserializer)?;
+                    if !matches!(
+                        self.blobs.get(&clone_id),
+                        Some(BlobClonePayload::File { .. })
+                    ) {
+                        throw_data_clone_exception(
+                            scope,
+                            "Missing File payload during FileList structured clone.",
+                        );
+                        return None;
+                    }
+                    let Some(file) = self.blob_object_for_clone_id(scope, clone_id) else {
+                        throw_data_clone_exception(
+                            scope,
+                            "Failed to deserialize File in structured clone FileList.",
+                        );
+                        return None;
+                    };
+                    files.push(file);
+                }
+                build_file_list_object(scope, &files).or_else(|| {
+                    throw_data_clone_exception(scope, "Failed to deserialize FileList.");
+                    None
+                })
             }
             HOST_OBJECT_TAG_FILE_SYSTEM_HANDLE => {
                 let clone_id = read_u32(deserializer)?;
@@ -1405,6 +1521,7 @@ fn deserialize_from_wire_impl<'s>(
             transform_streams,
             deferred_streams: Rc::clone(&deferred_streams),
             blobs,
+            blob_objects: RefCell::new(HashMap::new()),
             file_system_handles,
         }),
         &payload.base.wire_bytes,
