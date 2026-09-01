@@ -437,6 +437,93 @@ for (const [sourceName, source] of Object.entries(sources)) {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn screenshot_resolves_percentage_maximum_after_grid_intrinsic_image_probe() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        loader.set_image_fetch_enabled(true);
+        let document_url =
+            Url::parse("https://example.com/grid-replaced-percentage-maximum.html")?;
+        let (mut page_vm, _resource_source, _owner_wake_rx) =
+            page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0}
+#grid{display:grid;width:100px}
+#image{background:green;height:auto;width:200px;max-width:100%}
+</style>`;
+const source = '<svg xmlns="http://www.w3.org/2000/svg" width="500" height="500"><rect width="500" height="500" fill="green"/></svg>';
+document.body.innerHTML = `<div id=grid><img id=image src="data:image/svg+xml,${encodeURIComponent(source)}"></div>`;
+'installed'
+"#,
+        )?;
+
+        let task = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                if let Some(task) = page_vm.take_dom_manipulation_body_task_for_test(
+                    PageDomManipulationTestFamily::ImageLoadEvent,
+                ) {
+                    break task;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the local SVG decode should publish an image-load task");
+        let crate::page_task_queue::RendererPageDomManipulationTask::ImageLoadEvent(
+            image_task,
+        ) = task
+        else {
+            unreachable!("exact image-load selection preserves its task variant")
+        };
+        assert_eq!(
+            image_task.kind(),
+            crate::page_task_queue::RendererPageImageLoadEventKind::Load,
+        );
+        page_vm
+            .run_claimed_dom_manipulation_task_through_selected_dispatcher_for_test(
+                crate::page_task_queue::RendererPageDomManipulationTask::ImageLoadEvent(
+                    image_task,
+                ),
+                &loader,
+            )
+            .await?;
+        assert_eq!(
+            page_vm
+                .vm_mut()
+                .eval("[image.complete,image.naturalWidth,image.naturalHeight].join(',')")?,
+            "true,500,500",
+        );
+
+        page_vm.vm_mut().sync_live_document_style_sources();
+        let snapshot = page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(240, 160, 1.0))?
+            .expect("percentage-constrained Grid image screenshot layout");
+        let geometry = page_vm.vm_mut().eval(
+            r#"JSON.stringify((()=>{const host=grid.getBoundingClientRect(),item=image.getBoundingClientRect();return [host.width,host.height,item.x-host.x,item.y-host.y,item.width,item.height]})())"#,
+        )?;
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&geometry)?,
+            serde_json::json!([100, 100, 0, 0, 100, 100]),
+            "the final Grid area must resolve the cyclic percentage maximum without becoming a parent-owned intrinsic size",
+        );
+
+        let raster = moli_paint::raster_snapshot(&snapshot)?;
+        let pixel = |x: u32, y: u32| -> [u8; 4] {
+            let offset = ((y * raster.width + x) * 4) as usize;
+            raster.rgba[offset..offset + 4].try_into().unwrap()
+        };
+        assert_eq!(pixel(50, 50), [0, 128, 0, 255]);
+        assert_eq!(pixel(150, 50), [255, 255, 255, 255]);
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("percentage-constrained Grid image fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn screenshot_renders_zero_axis_svg_in_the_stretched_grid_content_viewport() {
     run_page_vm_async_test(async move {
         let loader =
