@@ -119,6 +119,11 @@ const SVG_TEXT_POSITIONING_LIST_ATTRIBUTES: &[(&str, &str, SvgListKind)] = &[
     ),
 ];
 
+const SVG_ANIMATED_POINTS_PROPERTIES: &[(&str, &str, bool)] = &[
+    ("points", SVG_POINTS_SLOT, false),
+    ("animatedPoints", SVG_ANIMATED_POINTS_SLOT, true),
+];
+
 fn require_svg_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
@@ -882,6 +887,56 @@ pub(super) fn svg_geometry_path_length_getter<'s>(
     let value = build_svg_animated_number_for_attribute(scope, owner, "pathLength");
     set_private_value(scope, owner, SVG_GEOMETRY_PATH_LENGTH_SLOT, value.into());
     rv.set(value.into());
+}
+
+pub(super) fn svg_animated_points_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some((name, cache_slot, read_only)) = callback_data_item(
+        scope,
+        &args,
+        SVG_ANIMATED_POINTS_PROPERTIES,
+        "SVGAnimatedPoints properties",
+    ) else {
+        rv.set_undefined();
+        return;
+    };
+    let owner = args.this();
+    let Ok((runtime_ptr, handle)) =
+        crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, owner)
+    else {
+        webidl::throw_type_error(
+            scope,
+            &format!("SVGAnimatedPoints.{name} called on incompatible receiver."),
+        );
+        return;
+    };
+    let is_animated_points = unsafe { &*runtime_ptr }
+        .dom_host()
+        .node(handle)
+        .and_then(|node| node.as_element())
+        .is_some_and(|element| {
+            element.is_svg_element("polygon") || element.is_svg_element("polyline")
+        });
+    if !is_animated_points {
+        webidl::throw_type_error(
+            scope,
+            &format!("SVGAnimatedPoints.{name} called on incompatible receiver."),
+        );
+        return;
+    }
+    if let Some(value) = get_private_value(scope, owner, cache_slot) {
+        if let Ok(list) = v8::Local::<v8::Object>::try_from(value) {
+            sync_svg_value_list_from_owner_attribute(scope, list, SvgListKind::Point);
+        }
+        rv.set(value);
+        return;
+    }
+    let list = build_svg_point_list_for_attribute(scope, owner, read_only);
+    set_private_value(scope, owner, cache_slot, list.into());
+    rv.set(list.into());
 }
 
 pub(super) fn svg_text_content_text_length_getter<'s>(
@@ -2395,6 +2450,7 @@ fn svg_value_list_metadata(kind: SvgListKind) -> (&'static str, &'static str) {
     match kind {
         SvgListKind::Length => (SVG_LENGTH_LIST_ITEMS_SLOT, "SVGLengthList"),
         SvgListKind::Number => (SVG_NUMBER_LIST_ITEMS_SLOT, "SVGNumberList"),
+        SvgListKind::Point => (SVG_POINT_LIST_ITEMS_SLOT, "SVGPointList"),
     }
 }
 
@@ -2406,6 +2462,8 @@ fn svg_value_list_kind<'s>(
         Some(SvgListKind::Length)
     } else if web_api_interfaces::SVGNumberList::is_instance(scope, list) {
         Some(SvgListKind::Number)
+    } else if get_private_value(scope, list, SVG_POINT_LIST_ITEMS_SLOT).is_some() {
+        Some(SvgListKind::Point)
     } else {
         None
     }
@@ -2434,6 +2492,45 @@ fn require_svg_value_list_items<'s>(
     sync_svg_value_list_from_owner_attribute(scope, list, kind);
     Some(svg_value_list_items(scope, list, kind))
 }
+
+macro_rules! define_svg_point_list_callback {
+    ($name:ident, $callback:ident) => {
+        pub(super) fn $name<'s>(
+            scope: &mut v8::PinScope<'s, '_>,
+            args: v8::FunctionCallbackArguments<'s>,
+            rv: v8::ReturnValue<'_, v8::Value>,
+        ) {
+            $callback(scope, args, rv, SvgListKind::Point);
+        }
+    };
+}
+
+define_svg_point_list_callback!(svg_point_list_length_getter, svg_value_list_length_getter);
+define_svg_point_list_callback!(svg_point_list_clear_callback, svg_value_list_clear_callback);
+define_svg_point_list_callback!(
+    svg_point_list_initialize_callback,
+    svg_value_list_initialize_callback
+);
+define_svg_point_list_callback!(
+    svg_point_list_get_item_callback,
+    svg_value_list_get_item_callback
+);
+define_svg_point_list_callback!(
+    svg_point_list_insert_item_before_callback,
+    svg_value_list_insert_item_before_callback
+);
+define_svg_point_list_callback!(
+    svg_point_list_replace_item_callback,
+    svg_value_list_replace_item_callback
+);
+define_svg_point_list_callback!(
+    svg_point_list_remove_item_callback,
+    svg_value_list_remove_item_callback
+);
+define_svg_point_list_callback!(
+    svg_point_list_append_item_callback,
+    svg_value_list_append_item_callback
+);
 
 pub(super) fn svg_length_list_length_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,

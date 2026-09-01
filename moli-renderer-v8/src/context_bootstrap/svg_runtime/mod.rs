@@ -1,5 +1,10 @@
 use super::{
-    build_dom_point_object, build_dom_rect_object, optional_dom_point_init_arg,
+    build_dom_point_object, build_dom_rect_object,
+    geometry_runtime::{
+        build_svg_point_object_with_values, dom_point_clone_data, dom_point_init_from_object,
+        set_svg_point_read_only,
+    },
+    optional_dom_point_init_arg,
     selection::{selection_clear, selection_dispatch_change, selection_has_range},
     selection_value_for_window,
 };
@@ -85,6 +90,9 @@ const SVG_ANIMATED_INTEGER_PROPERTY_INDEX_SLOT: &str = "__moliSvgAnimatedInteger
 const SVG_ANIMATED_NUMBER_LIST_BASE_VAL_SLOT: &str = "__moliSvgAnimatedNumberListBaseVal";
 const SVG_ANIMATED_NUMBER_LIST_ANIM_VAL_SLOT: &str = "__moliSvgAnimatedNumberListAnimVal";
 const SVG_NUMBER_LIST_ITEMS_SLOT: &str = "__moliSvgNumberListItems";
+const SVG_POINT_LIST_ITEMS_SLOT: &str = "__moliSvgPointListItems";
+const SVG_POINTS_SLOT: &str = "__moliSvgPoints";
+const SVG_ANIMATED_POINTS_SLOT: &str = "__moliSvgAnimatedPoints";
 const SVG_STRING_LIST_ITEMS_SLOT: &str = "__moliSvgStringListItems";
 const SVG_STRING_LIST_OWNER_ELEMENT_SLOT: &str = "__moliSvgStringListOwnerElement";
 const SVG_STRING_LIST_OWNER_ATTRIBUTE_SLOT: &str = "__moliSvgStringListOwnerAttribute";
@@ -163,6 +171,7 @@ const SVG_TEST_STRING_LIST_ATTRIBUTES: &[(&str, &str)] = &[
 enum SvgListKind {
     Length,
     Number,
+    Point,
 }
 
 #[derive(Clone, Copy)]
@@ -1289,6 +1298,7 @@ pub(in crate::context_bootstrap) fn install_svg_template_bindings<'s>(
         "SVGAnimatedNumber" => bindings::install_svg_animated_number_bindings(scope, template),
         "SVGAnimatedInteger" => bindings::install_svg_animated_integer_bindings(scope, template),
         "SVGNumberList" => bindings::install_svg_number_list_bindings(scope, template),
+        "SVGPointList" => bindings::install_svg_point_list_bindings(scope, template),
         "SVGStringList" => bindings::install_svg_string_list_bindings(scope, template),
         "SVGAnimatedNumberList" => {
             bindings::install_svg_animated_number_list_bindings(scope, template)
@@ -1313,4 +1323,11 @@ pub(in crate::context_bootstrap) fn install_svg_template_bindings<'s>(
         "SVGSVGElement" => bindings::install_svg_svg_element_bindings(scope, template),
         _ => {}
     }
+}
+
+pub(in crate::context_bootstrap) fn reflect_svg_point_mutation<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    point: v8::Local<'s, v8::Object>,
+) {
+    builders::reflect_svg_value_list_item_to_owner_list(scope, point, SvgListKind::Point);
 }

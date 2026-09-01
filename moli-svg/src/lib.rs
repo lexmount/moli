@@ -12,6 +12,7 @@ pub use geometry::{
 };
 pub use length::{
     SvgLength, SvgLengthUnit, parse_length, parse_length_list, parse_number, parse_number_list,
+    parse_point_list,
 };
 pub use matrix::{SvgMatrixComponents, serialize_number};
 pub use transform::{
@@ -26,12 +27,29 @@ mod tests {
         SvgMatrixComponents, SvgTransform, SvgTransformKind, bounding_box_for_element,
         bounding_box_for_segments, bounding_box_for_transformed_element,
         consolidate_transform_matrices, is_point_in_fill, parse_length, parse_length_list,
-        parse_number, parse_number_list, parse_transform_attribute, point_at_length,
-        segments_for_element, serialize_number, serialize_transform_list,
+        parse_number, parse_number_list, parse_point_list, parse_transform_attribute,
+        point_at_length, segments_for_element, serialize_number, serialize_transform_list,
     };
 
     fn path_segments(raw: &str) -> Vec<SvgGeometrySegment> {
         segments_for_element(SvgGeometryElement::Path { d: raw.to_owned() })
+    }
+
+    #[test]
+    fn point_list_parser_rejects_invalid_tokens_and_truncates_incomplete_pairs() {
+        assert_eq!(
+            parse_point_list("0,0 100,0 100,100 0,100"),
+            Some(vec![(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)])
+        );
+        assert_eq!(
+            parse_point_list("0,0 100,0 20"),
+            Some(vec![(0.0, 0.0), (100.0, 0.0)])
+        );
+        assert_eq!(
+            parse_point_list("0,0 100,0 20,"),
+            Some(vec![(0.0, 0.0), (100.0, 0.0)])
+        );
+        assert_eq!(parse_point_list("0,0 100,0 INVALID"), None);
     }
 
     fn polyline_segments(raw: &str) -> Vec<SvgGeometrySegment> {
