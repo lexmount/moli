@@ -220,6 +220,10 @@ impl ChildBrowsingContextEntry {
         self.live_bootstrap.security_origin_inherited()
     }
 
+    pub(super) fn content_security_policy_inherited(&self) -> bool {
+        self.live_bootstrap.content_security_policy_inherited()
+    }
+
     pub(super) fn document_policy_container_snapshot(&self) -> ChildDocumentPolicyContainer {
         self.document_policy_container.clone()
     }
