@@ -3340,6 +3340,59 @@ fn set_html_unsafe_preserves_declarative_shadow_roots() {
         "function|1|true|true|2|input|span|1|em|true|2|true|false|true|true|true|slot|true"
     );
 }
+
+#[test]
+fn set_html_unsafe_in_xml_documents_uses_xml_fragment_serialization() {
+    let mut vm = new_storage_test_vm("https://set-html-unsafe-xml.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const markup = '<p><foo><b><i>test</b></i>';
+  const xml = document.implementation.createDocument(null, 'root', null);
+  xml.documentElement.setHTMLUnsafe(markup);
+
+  const svg = document.implementation.createDocument(
+    'http://www.w3.org/2000/svg',
+    'root',
+    null
+  );
+  svg.documentElement.setHTMLUnsafe(markup);
+
+  const liveSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  liveSvg.setHTMLUnsafe('<circle></circle>');
+
+  return [
+    xml.contentType,
+    xml.documentElement.innerHTML,
+    xml.documentElement.firstChild.namespaceURI,
+    svg.contentType,
+    svg.documentElement.innerHTML,
+    svg.documentElement.firstChild.namespaceURI,
+    liveSvg.innerHTML,
+    liveSvg.firstChild.namespaceURI
+  ].join('|');
+})()
+"#,
+        )
+        .expect("setHTMLUnsafe should serialize XML document fragments as XML");
+
+    assert_eq!(
+        result,
+        concat!(
+            "application/xml|",
+            "<p xmlns=\"http://www.w3.org/1999/xhtml\"><foo><b><i>test</i></b></foo></p>|",
+            "http://www.w3.org/1999/xhtml|",
+            "image/svg+xml|",
+            "<p xmlns=\"http://www.w3.org/1999/xhtml\"><foo><b><i>test</i></b></foo></p>|",
+            "http://www.w3.org/1999/xhtml|",
+            "<circle></circle>|",
+            "http://www.w3.org/2000/svg"
+        )
+    );
+}
+
 #[test]
 fn get_html_serializes_shadow_roots_when_requested() {
     let mut vm = new_storage_test_vm("https://shadow-get-html.test/");
