@@ -162,10 +162,30 @@ const NODE_BRIDGE_DESCRIPTORS: &[BridgeDescriptor] = &[
         ELEMENT_GROUPS,
     ),
     descriptor(
+        web_api_interfaces::SVGFEDiffuseLightingElement::DESCRIPTOR,
+        ELEMENT_GROUPS,
+    ),
+    descriptor(
         web_api_interfaces::SVGFEDisplacementMapElement::DESCRIPTOR,
         ELEMENT_GROUPS,
     ),
+    descriptor(
+        web_api_interfaces::SVGFEDistantLightElement::DESCRIPTOR,
+        ELEMENT_GROUPS,
+    ),
+    descriptor(web_api_interfaces::SVGFEDropShadowElement::DESCRIPTOR, ELEMENT_GROUPS),
+    descriptor(
+        web_api_interfaces::SVGFEGaussianBlurElement::DESCRIPTOR,
+        ELEMENT_GROUPS,
+    ),
     descriptor(web_api_interfaces::SVGFEMorphologyElement::DESCRIPTOR, ELEMENT_GROUPS),
+    descriptor(web_api_interfaces::SVGFEOffsetElement::DESCRIPTOR, ELEMENT_GROUPS),
+    descriptor(web_api_interfaces::SVGFEPointLightElement::DESCRIPTOR, ELEMENT_GROUPS),
+    descriptor(
+        web_api_interfaces::SVGFESpecularLightingElement::DESCRIPTOR,
+        ELEMENT_GROUPS,
+    ),
+    descriptor(web_api_interfaces::SVGFESpotLightElement::DESCRIPTOR, ELEMENT_GROUPS),
     descriptor(web_api_interfaces::SVGFETurbulenceElement::DESCRIPTOR, ELEMENT_GROUPS),
     descriptor(
         web_api_interfaces::SVGForeignObjectElement::DESCRIPTOR,
@@ -198,20 +218,12 @@ const NODE_BRIDGE_DESCRIPTORS: &[BridgeDescriptor] = &[
             svg_gradient_transform: true,
         },
     ),
-    descriptor(
-        web_api_interfaces::SVGMetadataElement::DESCRIPTOR,
-        ELEMENT_GROUPS,
-    ),
-    descriptor(
-        web_api_interfaces::SVGScriptElement::DESCRIPTOR,
-        ELEMENT_GROUPS,
-    ),
-    descriptor(
-        web_api_interfaces::SVGStyleElement::DESCRIPTOR,
-        ELEMENT_GROUPS,
-    ),
-    descriptor(web_api_interfaces::SVGMaskElement::DESCRIPTOR, ELEMENT_GROUPS),
     descriptor(web_api_interfaces::SVGMarkerElement::DESCRIPTOR, ELEMENT_GROUPS),
+    descriptor(web_api_interfaces::SVGMaskElement::DESCRIPTOR, ELEMENT_GROUPS),
+    descriptor(web_api_interfaces::SVGMetadataElement::DESCRIPTOR, ELEMENT_GROUPS),
+    descriptor(web_api_interfaces::SVGScriptElement::DESCRIPTOR, ELEMENT_GROUPS),
+    descriptor(web_api_interfaces::SVGStopElement::DESCRIPTOR, ELEMENT_GROUPS),
+    descriptor(web_api_interfaces::SVGStyleElement::DESCRIPTOR, ELEMENT_GROUPS),
     specialized_descriptor(
         web_api_interfaces::SVGPathElement::DESCRIPTOR,
         ELEMENT_GROUPS,
