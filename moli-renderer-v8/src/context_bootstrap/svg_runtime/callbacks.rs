@@ -3415,10 +3415,22 @@ pub(super) fn svg_svg_element_create_point_callback<'s>(
 
 pub(super) fn svg_svg_element_create_angle_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    _args: v8::FunctionCallbackArguments<'s>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    rv.set(build_svg_angle(scope).into());
+    if require_svg_svg_element_receiver(scope, args.this(), "createSVGAngle") {
+        rv.set(build_svg_angle(scope).into());
+    }
+}
+
+pub(super) fn svg_svg_element_create_point_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if require_svg_svg_element_receiver(scope, args.this(), "createSVGPoint") {
+        rv.set(super::super::geometry_runtime::build_svg_point_object(scope).into());
+    }
 }
 
 pub(super) fn svg_svg_element_deselect_all_callback<'s>(
@@ -3962,6 +3974,10 @@ pub(super) fn svg_angle_convert_to_specified_units_callback<'s>(
     }
     reflect_svg_angle_to_owner_attribute(scope, args.this());
     rv.set_undefined();
+}
+
+fn svg_length_unit_type_is_supported(unit_type: u32) -> bool {
+    (SVG_LENGTH_TYPE_NUMBER..=SVG_LENGTH_TYPE_PC).contains(&unit_type)
 }
 
 pub(super) fn svg_angle_convert_to_specified_units_callback<'s>(
