@@ -79,6 +79,7 @@ const SVG_STRING_LIST_SYNCED_ATTRIBUTE_PRESENT_SLOT: &str =
 const SVG_VALUE_LIST_OWNER_ELEMENT_SLOT: &str = "__moliSvgValueListOwnerElement";
 const SVG_VALUE_LIST_OWNER_ATTRIBUTE_SLOT: &str = "__moliSvgValueListOwnerAttribute";
 const SVG_VALUE_LIST_ITEM_OWNER_LIST_SLOT: &str = "__moliSvgValueListItemOwnerList";
+const SVG_VALUE_LIST_READ_ONLY_SLOT: &str = "__moliSvgValueListReadOnly";
 const SVG_VALUE_LIST_SYNCED_ATTRIBUTE_VALUE_SLOT: &str = "__moliSvgValueListSyncedAttributeValue";
 const SVG_ANIMATED_ENUMERATION_BASE_VAL_SLOT: &str = "__moliSvgAnimatedEnumerationBaseVal";
 const SVG_ANIMATED_ENUMERATION_ANIM_VAL_SLOT: &str = "__moliSvgAnimatedEnumerationAnimVal";

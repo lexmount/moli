@@ -209,6 +209,8 @@ struct SvgAnimatedTransformListObjectDeclaration<'scope> {
 struct SvgLengthListObjectDeclaration<'scope> {
     #[webapi(slot = SVG_LENGTH_LIST_ITEMS_SLOT)]
     items: Vec<v8::Local<'scope, v8::Value>>,
+    #[webapi(slot = SVG_VALUE_LIST_READ_ONLY_SLOT)]
+    read_only: bool,
     #[webapi(method, callback = svg_length_list_clear_callback, length = 0)]
     clear: (),
     #[webapi(method, callback = svg_length_list_initialize_callback, length = 1)]
@@ -234,6 +236,8 @@ struct SvgLengthListObjectDeclaration<'scope> {
 struct SvgNumberListObjectDeclaration<'scope> {
     #[webapi(slot = SVG_NUMBER_LIST_ITEMS_SLOT)]
     items: Vec<v8::Local<'scope, v8::Value>>,
+    #[webapi(slot = SVG_VALUE_LIST_READ_ONLY_SLOT)]
+    read_only: bool,
     #[webapi(method, callback = svg_number_list_clear_callback, length = 0)]
     clear: (),
     #[webapi(method, callback = svg_number_list_initialize_callback, length = 1)]
@@ -451,8 +455,8 @@ pub(super) fn reflect_svg_animated_boolean_to_owner_attribute<'s>(
 pub(super) fn build_svg_animated_length_list<'s>(
     scope: &mut v8::PinScope<'s, '_>,
 ) -> v8::Local<'s, v8::Object> {
-    let base_val = build_svg_length_list(scope);
-    let anim_val = build_svg_length_list(scope);
+    let base_val = build_svg_length_list(scope, false);
+    let anim_val = build_svg_length_list(scope, true);
     SvgAnimatedLengthListObjectDeclaration::new(base_val, anim_val)
         .bind(scope)
         .expect("SVGAnimatedLengthList declaration should bind")
@@ -461,8 +465,8 @@ pub(super) fn build_svg_animated_length_list<'s>(
 pub(super) fn build_svg_animated_number_list<'s>(
     scope: &mut v8::PinScope<'s, '_>,
 ) -> v8::Local<'s, v8::Object> {
-    let base_val = build_svg_number_list(scope);
-    let anim_val = build_svg_number_list(scope);
+    let base_val = build_svg_number_list(scope, false);
+    let anim_val = build_svg_number_list(scope, true);
     SvgAnimatedNumberListObjectDeclaration::new(base_val, anim_val)
         .bind(scope)
         .expect("SVGAnimatedNumberList declaration should bind")
@@ -847,18 +851,32 @@ pub(super) fn serialize_svg_animated_enumeration(
 
 pub(super) fn build_svg_length_list<'s>(
     scope: &mut v8::PinScope<'s, '_>,
+    read_only: bool,
 ) -> v8::Local<'s, v8::Object> {
-    SvgLengthListObjectDeclaration::new(Vec::new())
-        .bind(scope)
-        .expect("SVGLengthList declaration should bind")
+    let template = v8::ObjectTemplate::new(scope);
+    configure_svg_value_list_indexed_property_handler(template);
+    let object = template
+        .new_instance(scope)
+        .expect("SVGLengthList object template should instantiate");
+    SvgLengthListObjectDeclaration::new(Vec::new(), read_only)
+        .bind_into(scope, object)
+        .expect("SVGLengthList declaration should bind");
+    object
 }
 
 pub(super) fn build_svg_number_list<'s>(
     scope: &mut v8::PinScope<'s, '_>,
+    read_only: bool,
 ) -> v8::Local<'s, v8::Object> {
-    SvgNumberListObjectDeclaration::new(Vec::new())
-        .bind(scope)
-        .expect("SVGNumberList declaration should bind")
+    let template = v8::ObjectTemplate::new(scope);
+    configure_svg_value_list_indexed_property_handler(template);
+    let object = template
+        .new_instance(scope)
+        .expect("SVGNumberList object template should instantiate");
+    SvgNumberListObjectDeclaration::new(Vec::new(), read_only)
+        .bind_into(scope, object)
+        .expect("SVGNumberList declaration should bind");
+    object
 }
 
 pub(super) fn build_svg_string_list_for_attribute<'s>(
@@ -1724,15 +1742,34 @@ pub(super) fn svg_matrix_value_or_throw<'s>(
     None
 }
 
-pub(super) fn svg_value_list_item_or_default<'s>(
+pub(super) fn svg_value_list_item_or_throw<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
     kind: SvgListKind,
-) -> v8::Local<'s, v8::Object> {
-    v8::Local::<v8::Object>::try_from(value).unwrap_or_else(|_| match kind {
-        SvgListKind::Length => build_svg_length(scope, 0.0),
-        SvgListKind::Number => build_svg_number(scope, 0.0),
-    })
+) -> Option<v8::Local<'s, v8::Object>> {
+    let (brand_slot, interface) = match kind {
+        SvgListKind::Length => (SVG_LENGTH_VALUE_SLOT, "SVGLength"),
+        SvgListKind::Number => (SVG_NUMBER_VALUE_SLOT, "SVGNumber"),
+    };
+    let object = v8::Local::<v8::Object>::try_from(value).ok();
+    if let Some(object) = object
+        && get_private_value(scope, object, brand_slot).is_some()
+    {
+        return Some(object);
+    }
+    webidl::throw_type_error(
+        scope,
+        &format!("Argument 1 can not be converted to {interface}"),
+    );
+    None
+}
+
+pub(super) fn svg_value_list_is_read_only<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> bool {
+    get_private_value(scope, object, SVG_VALUE_LIST_READ_ONLY_SLOT)
+        .is_some_and(|value| value.is_true())
 }
 
 pub(super) fn svg_value_list_items<'s>(
@@ -1865,25 +1902,45 @@ pub(super) fn sync_svg_animated_value_list_from_owner_attribute<'s>(
 ) {
     let raw = svg_owner_attribute_value(scope, owner, attribute);
     let raw_value = raw.clone().unwrap_or_default();
-    if let Some(base_val) = svg_animated_value_list_member(scope, animated, "baseVal", kind)
-        && svg_value_list_synced_attribute_value(scope, base_val)
-            .as_deref()
-            .is_some_and(|synced| synced == raw_value)
-    {
-        set_svg_value_list_owner_attribute(scope, base_val, owner, attribute);
-        return;
-    }
-    let base_items = build_svg_value_list_items_from_attribute(scope, raw.as_deref(), kind);
-    let anim_items = build_svg_value_list_items_from_attribute(scope, raw.as_deref(), kind);
     if let Some(base_val) = svg_animated_value_list_member(scope, animated, "baseVal", kind) {
-        set_svg_value_list_items(scope, base_val, base_items, kind);
         set_svg_value_list_owner_attribute(scope, base_val, owner, attribute);
-        set_svg_value_list_synced_attribute_value(scope, base_val, &raw_value);
+        sync_svg_value_list_from_owner_attribute(scope, base_val, kind);
     }
-    if let Some(anim_val) = svg_animated_value_list_member(scope, animated, "animVal", kind) {
+    if let Some(anim_val) = svg_animated_value_list_member(scope, animated, "animVal", kind)
+        && svg_value_list_synced_attribute_value(scope, anim_val).as_deref()
+            != Some(raw_value.as_str())
+    {
+        let anim_items = build_svg_value_list_items_from_attribute(scope, raw.as_deref(), kind);
         set_svg_value_list_items(scope, anim_val, anim_items, kind);
         set_svg_value_list_synced_attribute_value(scope, anim_val, &raw_value);
     }
+}
+
+pub(super) fn sync_svg_value_list_from_owner_attribute<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    list: v8::Local<'s, v8::Object>,
+    kind: SvgListKind,
+) {
+    let Some(owner) = get_private_value(scope, list, SVG_VALUE_LIST_OWNER_ELEMENT_SLOT)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+    else {
+        return;
+    };
+    let Some(attribute) = get_private_value(scope, list, SVG_VALUE_LIST_OWNER_ATTRIBUTE_SLOT)
+        .and_then(|value| value.to_string(scope))
+        .map(|value| value.to_rust_string_lossy(scope))
+        .filter(|value| !value.is_empty())
+    else {
+        return;
+    };
+    let raw = svg_owner_attribute_value(scope, owner, &attribute);
+    let raw_value = raw.clone().unwrap_or_default();
+    if svg_value_list_synced_attribute_value(scope, list).as_deref() == Some(raw_value.as_str()) {
+        return;
+    }
+    let items = build_svg_value_list_items_from_attribute(scope, raw.as_deref(), kind);
+    set_svg_value_list_items(scope, list, items, kind);
+    set_svg_value_list_synced_attribute_value(scope, list, &raw_value);
 }
 
 pub(super) fn build_svg_value_list_items_from_attribute<'s>(
