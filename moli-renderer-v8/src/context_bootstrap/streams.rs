@@ -1,10 +1,12 @@
 use super::specs::{ConstructorKind, ConstructorSpec};
 use super::stream_adapter::{
-    QueuingStrategyMembers, cancel_readable_stream, close_stream, enqueue_chunk,
-    initialize_transform_stream_object, initialize_webidl_readable_stream_object,
-    initialize_webidl_transform_stream_object, initialize_webidl_writable_stream_object,
-    parse_readable_stream_source_object, parse_transform_stream_transformer_object,
-    parse_writable_stream_sink_object, readable_stream_byob_request_respond_callback,
+    EnqueueChunkError, QueuingStrategyMembers, StreamQueuingStrategy, call_function_result, cancel_readable_stream,
+    close_stream, enqueue_chunk, initialize_transform_stream_object,
+    initialize_webidl_readable_stream_object, initialize_webidl_transform_stream_object,
+    initialize_webidl_writable_stream_object, new_readable_stream_object,
+    parse_readable_stream_source_object,
+    parse_transform_stream_transformer_object, parse_writable_stream_sink_object,
+    readable_stream_byob_request_respond_callback,
     readable_stream_byob_request_respond_with_new_view_callback,
     readable_stream_byob_request_view_getter, readable_stream_is_byte_stream,
     readable_stream_locked, rejected_promise_value, set_resolved_promise, stream_slot_object,
@@ -26,6 +28,7 @@ use moli_webapi_declare::WebApiFunctionTemplate;
 
 mod compression;
 mod constructors;
+mod from;
 mod readable;
 mod transferable;
 mod writable;
@@ -176,6 +179,17 @@ const STREAM_INTERFACE_SPECS: &[StreamInterfaceSpec] = &[
         prototype_installer: StreamPrototypeInstaller::Controller,
     },
 ];
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(name = "ReadableStream", enumerable)]
+struct ReadableStreamConstructorDeclaration {
+    #[webapi(
+        static_method = "from",
+        length = 1,
+        callback = from::readable_stream_from_callback
+    )]
+    from: (),
+}
 
 pub(in crate::context_bootstrap) fn stream_constructor_specs()
 -> impl Iterator<Item = ConstructorSpec> {
@@ -346,6 +360,7 @@ pub(super) fn install_stream_template_bindings<'s>(
     let prototype = template.prototype_template(scope);
     match spec.prototype_installer {
         StreamPrototypeInstaller::ReadableStream => {
+            ReadableStreamConstructorDeclaration::initialize_template(scope, template);
             ReadableStreamPrototypeDeclaration::initialize_prototype_template(scope, prototype);
         }
         StreamPrototypeInstaller::WritableStream => {
