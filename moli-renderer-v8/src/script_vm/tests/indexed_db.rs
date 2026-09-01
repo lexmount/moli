@@ -5791,3 +5791,44 @@ async fn read_indexed_db_databases_child_request_head(
     }
     Ok(String::from_utf8_lossy(&buffer).into_owned())
 }
+
+#[test]
+fn indexed_db_put_rejects_non_serializable_platform_objects() {
+    let mut vm =
+        new_storage_page_task_executor_test_vm("https://indexeddb-platform-object-dataclone.test/");
+
+    vm.eval(
+        r#"
+(() => {
+  globalThis.__indexedDbPlatformCloneErrors = "pending";
+  const dbName = `platform-object-${Math.random()}`;
+  const open = indexedDB.open(dbName, 1);
+  open.onupgradeneeded = () => open.result.createObjectStore("values");
+  open.onsuccess = () => {
+    const store = open.result.transaction("values", "readwrite").objectStore("values");
+    const probe = (value, key) => {
+      try {
+        store.put(value, key);
+        return "ok";
+      } catch (error) {
+        return error && error.name;
+      }
+    };
+    globalThis.__indexedDbPlatformCloneErrors = [
+      probe(new Event("event"), "event"),
+      probe(new MessageChannel(), "channel"),
+      probe(new Response(), "response")
+    ].join("|");
+  };
+  return "scheduled";
+})()
+"#,
+    )
+    .expect("indexeddb platform object dataclone workflow should schedule");
+
+    let result = vm
+        .eval_after_selected_page_tasks("String(globalThis.__indexedDbPlatformCloneErrors)")
+        .expect("indexeddb platform object dataclone result should be readable");
+
+    assert_eq!(result, "DataCloneError|DataCloneError|DataCloneError");
+}
