@@ -82,7 +82,9 @@ fn grid_static_position_edge(
         keyword => keyword,
     };
     let logical_edge = match keyword {
-        AlignItemsKeyword::End | AlignItemsKeyword::FlexEnd => StaticPositionEdge::End,
+        AlignItemsKeyword::End | AlignItemsKeyword::FlexEnd | AlignItemsKeyword::LastBaseline => {
+            StaticPositionEdge::End
+        }
         AlignItemsKeyword::Center => StaticPositionEdge::Center,
         AlignItemsKeyword::Normal
         | AlignItemsKeyword::Start

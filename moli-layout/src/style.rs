@@ -2491,13 +2491,18 @@ fn usable_aspect_ratio(ratio: Option<f32>) -> Option<f32> {
     ratio.filter(|ratio| ratio.is_finite() && *ratio > 0.0)
 }
 
-/// Project CSS self-alignment while retaining the formatting-context meaning
-/// of `normal`. All other keywords stay owned by the generic Stylo adapter.
+/// Project CSS self-alignment while retaining values whose semantics the
+/// pinned generic Stylo adapter cannot preserve. All other keywords remain
+/// owned by that adapter.
 fn taffy_item_alignment(input: AlignFlags) -> Option<taffy::AlignItems> {
-    if input.value() == AlignFlags::NORMAL {
-        Some(taffy::AlignItems::NORMAL)
-    } else {
-        stylo_taffy::convert::item_alignment(input)
+    match input.value() {
+        AlignFlags::NORMAL => Some(taffy::AlignItems::NORMAL),
+        // The pinned stylo_taffy revision predates Taffy's last-baseline
+        // support and therefore degrades this value to `end`. Preserve the
+        // authored value at the adapter boundary now that Taffy models its
+        // sharing group directly.
+        AlignFlags::LAST_BASELINE => Some(taffy::AlignItems::LAST_BASELINE),
+        _ => stylo_taffy::convert::item_alignment(input),
     }
 }
 
@@ -2945,7 +2950,7 @@ mod alignment_tests {
     use super::*;
 
     #[test]
-    fn stylo_item_alignment_preserves_context_dependent_normal() {
+    fn stylo_item_alignment_preserves_contextual_and_baseline_semantics() {
         assert_eq!(
             taffy_item_alignment(AlignFlags::NORMAL),
             Some(taffy::AlignItems::NORMAL)
@@ -2955,6 +2960,10 @@ mod alignment_tests {
             taffy_item_alignment(AlignFlags::STRETCH)
         );
         assert_eq!(taffy_item_alignment(AlignFlags::AUTO), None);
+        assert_eq!(
+            taffy_item_alignment(AlignFlags::LAST_BASELINE),
+            Some(taffy::AlignItems::LAST_BASELINE)
+        );
         assert_eq!(
             taffy_item_alignment(AlignFlags::CENTER | AlignFlags::SAFE),
             Some(taffy::AlignItems::SAFE_CENTER)

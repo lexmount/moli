@@ -224,6 +224,56 @@ mod tests {
     }
 
     #[test]
+    fn layout_renderer_propagates_flex_first_and_last_line_baselines_from_stylo() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}
+.outer{position:absolute;left:0;display:flex;width:300px;height:150px}
+#first{top:0;align-items:baseline}
+#last{top:200px;align-items:last baseline}
+.inner{display:flex;flex-wrap:wrap;align-content:center;width:80px;height:100px}
+.line-a{width:80px;height:10px;flex-shrink:0}
+.line-b{width:80px;height:20px;flex-shrink:0}
+.reference{width:20px;height:20px}
+#first-inner{background:rgb(201,1,1)}#first-reference{background:rgb(1,201,1)}
+#first-a{background:rgb(1,1,201)}#first-b{background:rgb(201,201,1)}
+#last-inner{background:rgb(201,1,201)}#last-reference{background:rgb(1,201,201)}
+#last-a{background:rgb(241,101,1)}#last-b{background:rgb(101,1,241)}
+</style></head><body>
+<div id=first class=outer><div id=first-inner class=inner><div id=first-a class=line-a></div><div id=first-b class=line-b></div></div><div id=first-reference class=reference></div></div>
+<div id=last class=outer><div id=last-inner class=inner><div id=last-a class=line-a></div><div id=last-b class=line-b></div></div><div id=last-reference class=reference></div></div>
+</body></html>"#,
+            )
+            .await;
+
+            // Chromium positions the centered inner lines at 35/45px. The
+            // first exported baseline is 45px, while the last is 65px. The
+            // outer last-baseline line itself sits at y=250px.
+            for (color, expected) in [
+                (rgb(201, 1, 1), (0.0, 0.0, 80.0, 100.0)),
+                (rgb(1, 201, 1), (80.0, 25.0, 20.0, 20.0)),
+                (rgb(1, 1, 201), (0.0, 35.0, 80.0, 10.0)),
+                (rgb(201, 201, 1), (0.0, 45.0, 80.0, 20.0)),
+                (rgb(201, 1, 201), (0.0, 250.0, 80.0, 100.0)),
+                (rgb(1, 201, 201), (80.0, 295.0, 20.0, 20.0)),
+                (rgb(241, 101, 1), (0.0, 285.0, 80.0, 10.0)),
+                (rgb(101, 1, 241), (0.0, 295.0, 80.0, 20.0)),
+            ] {
+                assert_paint_rect(
+                    solid_paint_rect(&snapshot, color),
+                    moli_layout::PaintRect::new(expected.0, expected.1, expected.2, expected.3),
+                );
+            }
+        }));
+    }
+
+    #[test]
     fn layout_renderer_applies_used_size_containment_across_formatting_contexts() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
