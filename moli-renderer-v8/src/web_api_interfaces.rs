@@ -433,6 +433,15 @@ interfaces! {
     SVGFEMorphologyElement: SVGElement;
     SVGFETurbulenceElement: SVGElement;
     SVGTextPathElement: SVGTextContentElement;
+    SVGFEDiffuseLightingElement: SVGElement;
+    SVGFEDistantLightElement: SVGElement;
+    SVGFEDropShadowElement: SVGElement;
+    SVGFEGaussianBlurElement: SVGElement;
+    SVGFEOffsetElement: SVGElement;
+    SVGFEPointLightElement: SVGElement;
+    SVGFESpecularLightingElement: SVGElement;
+    SVGFESpotLightElement: SVGElement;
+    SVGStopElement: SVGElement;
     SVGElement: Element;
     SVGEllipseElement: SVGGeometryElement;
     SVGFEComponentTransferElement: SVGElement;

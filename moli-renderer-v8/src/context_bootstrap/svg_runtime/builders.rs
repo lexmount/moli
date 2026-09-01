@@ -572,6 +572,38 @@ pub(super) fn build_svg_animated_number_for_attribute<'s>(
     object
 }
 
+pub(super) fn build_svg_animated_number_for_property<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+    property: SvgAnimatedNumberProperty,
+) -> v8::Local<'s, v8::Object> {
+    let object = build_svg_animated_number(scope, property.initial_value);
+    set_svg_animated_number_owner_attribute(scope, object, owner, property.attribute);
+    let index = u32::try_from(property.index).expect("SVG number property index exceeds u32");
+    let index = v8::Integer::new_from_unsigned(scope, index);
+    set_private_value(
+        scope,
+        object,
+        SVG_ANIMATED_NUMBER_PROPERTY_INDEX_SLOT,
+        index.into(),
+    );
+    sync_svg_animated_number_from_property(scope, object);
+    object
+}
+
+pub(super) fn svg_animated_number_property_for_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    animated: v8::Local<'s, v8::Object>,
+) -> Option<SvgAnimatedNumberProperty> {
+    let index = get_private_value(scope, animated, SVG_ANIMATED_NUMBER_PROPERTY_INDEX_SLOT)?
+        .uint32_value(scope)?;
+    SVG_ANIMATED_NUMBER_PROPERTIES.get(index as usize).copied()
+}
+
+pub(super) fn svg_animated_number_cache_slot(property: SvgAnimatedNumberProperty) -> String {
+    format!("__moliSvgAnimatedNumberProperty{}", property.index)
+}
+
 pub(super) fn build_svg_animated_integer<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: i32,
@@ -3264,6 +3296,57 @@ pub(super) fn sync_svg_animated_number_from_owner_attribute<'s>(
         .as_deref()
         .and_then(parse_svg_number_value)
         .unwrap_or(0.0);
+    set_svg_animated_number_values(scope, animated, value);
+}
+
+pub(super) fn sync_svg_animated_number_from_stored_owner_attribute<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    animated: v8::Local<'s, v8::Object>,
+) {
+    if svg_animated_number_property_for_object(scope, animated).is_some() {
+        sync_svg_animated_number_from_property(scope, animated);
+        return;
+    }
+    let Some(owner) = get_private_value(scope, animated, SVG_ANIMATED_NUMBER_OWNER_ELEMENT_SLOT)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+    else {
+        return;
+    };
+    let Some(attribute) =
+        get_private_value(scope, animated, SVG_ANIMATED_NUMBER_OWNER_ATTRIBUTE_SLOT)
+            .and_then(|value| value.to_string(scope))
+            .map(|value| value.to_rust_string_lossy(scope))
+            .filter(|value| !value.is_empty())
+    else {
+        return;
+    };
+    sync_svg_animated_number_from_owner_attribute(scope, animated, owner, &attribute);
+}
+
+pub(super) fn sync_svg_animated_number_from_property<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    animated: v8::Local<'s, v8::Object>,
+) {
+    let Some(property) = svg_animated_number_property_for_object(scope, animated) else {
+        return;
+    };
+    let Some(owner) = get_private_value(scope, animated, SVG_ANIMATED_NUMBER_OWNER_ELEMENT_SLOT)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+    else {
+        return;
+    };
+    let value = svg_owner_attribute_value(scope, owner, property.attribute)
+        .as_deref()
+        .and_then(|raw| parse_svg_animated_number(property, raw))
+        .unwrap_or(property.initial_value);
+    set_svg_animated_number_values(scope, animated, value);
+}
+
+pub(super) fn set_svg_animated_number_values(
+    scope: &mut v8::PinScope<'_, '_>,
+    animated: v8::Local<'_, v8::Object>,
+    value: f64,
+) {
     let value = v8::Number::new(scope, value);
     set_private_value(
         scope,
@@ -3283,6 +3366,10 @@ pub(super) fn reflect_svg_animated_number_to_owner_attribute<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     animated: v8::Local<'s, v8::Object>,
 ) {
+    if svg_animated_number_property_for_object(scope, animated).is_some() {
+        reflect_svg_animated_number_property_to_owner_attribute(scope, animated);
+        return;
+    }
     let Some(owner) = get_private_value(scope, animated, SVG_ANIMATED_NUMBER_OWNER_ELEMENT_SLOT)
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
     else {
@@ -3305,6 +3392,85 @@ pub(super) fn reflect_svg_animated_number_to_owner_attribute<'s>(
     };
     let runtime = unsafe { &mut *runtime_ptr };
     let _ = runtime.set_attribute(scope, runtime_ptr, handle, &attribute, &value);
+}
+
+pub(super) fn reflect_svg_animated_number_property_to_owner_attribute<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    animated: v8::Local<'s, v8::Object>,
+) {
+    let Some(property) = svg_animated_number_property_for_object(scope, animated) else {
+        return;
+    };
+    let Some(owner) = get_private_value(scope, animated, SVG_ANIMATED_NUMBER_OWNER_ELEMENT_SLOT)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+    else {
+        return;
+    };
+    let value = svg_number_slot(scope, animated, SVG_ANIMATED_NUMBER_BASE_VAL_SLOT)
+        .unwrap_or(property.initial_value);
+    let serialized = match property.component {
+        SvgAnimatedNumberComponent::Scalar | SvgAnimatedNumberComponent::NumberOrPercentage => {
+            svg_geometry::serialize_number(value)
+        }
+        SvgAnimatedNumberComponent::PairFirst | SvgAnimatedNumberComponent::PairSecondOrFirst => {
+            let (mut first, mut second) =
+                svg_owner_attribute_value(scope, owner, property.attribute)
+                    .as_deref()
+                    .and_then(parse_svg_number_pair)
+                    .unwrap_or((property.initial_value, property.initial_value));
+            match property.component {
+                SvgAnimatedNumberComponent::PairFirst => first = value,
+                SvgAnimatedNumberComponent::PairSecondOrFirst => second = value,
+                SvgAnimatedNumberComponent::Scalar
+                | SvgAnimatedNumberComponent::NumberOrPercentage => unreachable!(),
+            }
+            format!(
+                "{} {}",
+                svg_geometry::serialize_number(first),
+                svg_geometry::serialize_number(second)
+            )
+        }
+    };
+    let Ok((runtime_ptr, handle)) =
+        crate::native_bridge::node_runtime_and_handle_from_object(scope, owner)
+    else {
+        return;
+    };
+    let runtime = unsafe { &mut *runtime_ptr };
+    let _ = runtime.set_attribute(scope, runtime_ptr, handle, property.attribute, &serialized);
+}
+
+pub(super) fn parse_svg_animated_number(
+    property: SvgAnimatedNumberProperty,
+    value: &str,
+) -> Option<f64> {
+    match property.component {
+        SvgAnimatedNumberComponent::Scalar => parse_svg_number_value(value),
+        SvgAnimatedNumberComponent::PairFirst => {
+            parse_svg_number_pair(value).map(|(first, _)| first)
+        }
+        SvgAnimatedNumberComponent::PairSecondOrFirst => {
+            parse_svg_number_pair(value).map(|(_, second)| second)
+        }
+        SvgAnimatedNumberComponent::NumberOrPercentage => parse_svg_number_or_percentage(value),
+    }
+}
+
+fn parse_svg_number_pair(value: &str) -> Option<(f64, f64)> {
+    let values = svg_geometry::parse_number_list(value)?;
+    match values.as_slice() {
+        [first] => Some((*first, *first)),
+        [first, second] => Some((*first, *second)),
+        _ => None,
+    }
+}
+
+fn parse_svg_number_or_percentage(value: &str) -> Option<f64> {
+    let value = value.trim();
+    match value.strip_suffix('%') {
+        Some(percentage) => parse_svg_number_value(percentage).map(|value| value / 100.0),
+        None => parse_svg_number_value(value),
+    }
 }
 
 pub(super) fn set_svg_length_owner_attribute<'s>(
