@@ -344,13 +344,19 @@ impl<'a> QueryElement<'a> {
     pub(super) fn is_editable(self) -> bool {
         let mut current = Some(self.handle);
         while let Some(handle) = current {
-            if let Some(element) = self.host.node(handle).and_then(Node::as_element)
+            let Some(node) = self.host.node(handle) else {
+                return false;
+            };
+            if let Some(document) = node.as_document() {
+                return document.design_mode_enabled();
+            }
+            if let Some(element) = node.as_element()
                 && let Some(value) = element.attribute("contenteditable")
                 && let Some(is_editable) = contenteditable_value_is_editable(value)
             {
                 return is_editable;
             }
-            current = self.host.node(handle).and_then(Node::parent_node);
+            current = node.parent_node();
         }
         false
     }
