@@ -1,6 +1,6 @@
 use super::events::{
     construct_original_before_unload_event, construct_original_event,
-    run_navigate_event_precommit_handlers,
+    construct_original_page_transition_event, run_navigate_event_precommit_handlers,
 };
 use super::location_history_storage::{
     NAVIGATION_ENTRY_EVENT_LISTENERS_SLOT, NAVIGATION_EVENT_LISTENERS_SLOT,
@@ -653,9 +653,7 @@ pub(crate) fn dispatch_pagehide_for_runtime_owner<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
 ) {
-    let Some(event) =
-        super::events::construct_original_page_transition_event(scope, "pagehide", false)
-    else {
+    let Some(event) = construct_original_page_transition_event(scope, "pagehide", false) else {
         return;
     };
     dispatch_unload_lifecycle_event_for_runtime_owner(scope, owner, "pagehide", event);
