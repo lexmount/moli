@@ -34,6 +34,21 @@ pub(super) fn configure_svg_string_list_indexed_property_handler(
     );
 }
 
+pub(super) fn configure_svg_value_list_indexed_property_handler(
+    template: v8::Local<'_, v8::ObjectTemplate>,
+) {
+    template.set_indexed_property_handler(
+        v8::IndexedPropertyHandlerConfiguration::new()
+            .getter(svg_value_list_indexed_getter)
+            .setter(svg_value_list_indexed_setter)
+            .query(svg_value_list_indexed_query)
+            .deleter(svg_value_list_indexed_deleter)
+            .enumerator(svg_value_list_indexed_enumerator)
+            .definer(svg_value_list_indexed_definer)
+            .descriptor(svg_value_list_indexed_descriptor),
+    );
+}
+
 fn svg_dom_matrix_2d_init_arg<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
@@ -1883,12 +1898,56 @@ fn svg_string_list_indexed_descriptor<'s>(
     v8::Intercepted::kYes
 }
 
+fn svg_value_list_metadata(kind: SvgListKind) -> (&'static str, &'static str) {
+    match kind {
+        SvgListKind::Length => (SVG_LENGTH_LIST_ITEMS_SLOT, "SVGLengthList"),
+        SvgListKind::Number => (SVG_NUMBER_LIST_ITEMS_SLOT, "SVGNumberList"),
+    }
+}
+
+fn svg_value_list_kind<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    list: v8::Local<'s, v8::Object>,
+) -> Option<SvgListKind> {
+    if web_api_interfaces::SVGLengthList::is_instance(scope, list) {
+        Some(SvgListKind::Length)
+    } else if web_api_interfaces::SVGNumberList::is_instance(scope, list) {
+        Some(SvgListKind::Number)
+    } else {
+        None
+    }
+}
+
+fn require_svg_value_list_items<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    list: v8::Local<'s, v8::Object>,
+    kind: SvgListKind,
+    member: &str,
+    writable: bool,
+) -> Option<v8::Local<'s, v8::Array>> {
+    let (_, interface) = svg_value_list_metadata(kind);
+    if !require_svg_receiver(scope, list, interface, member) {
+        return None;
+    }
+    if writable && svg_value_list_is_read_only(scope, list) {
+        throw_dom_exception(
+            scope,
+            "NoModificationAllowedError",
+            7,
+            "The SVG value list is read-only.",
+        );
+        return None;
+    }
+    sync_svg_value_list_from_owner_attribute(scope, list, kind);
+    Some(svg_value_list_items(scope, list, kind))
+}
+
 pub(super) fn svg_length_list_length_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    svg_value_list_length_getter(scope, args, rv, SvgListKind::Length, "SVGLengthList");
+    svg_value_list_length_getter(scope, args, rv, SvgListKind::Length);
 }
 
 pub(super) fn svg_number_list_length_getter<'s>(
@@ -1896,7 +1955,7 @@ pub(super) fn svg_number_list_length_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    svg_value_list_length_getter(scope, args, rv, SvgListKind::Number, "SVGNumberList");
+    svg_value_list_length_getter(scope, args, rv, SvgListKind::Number);
 }
 
 pub(super) fn svg_value_list_length_getter<'s>(
@@ -1904,13 +1963,13 @@ pub(super) fn svg_value_list_length_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
     kind: SvgListKind,
-    interface: &'static str,
 ) {
-    if !require_svg_receiver(scope, args.this(), interface, "length getter") {
+    let Some(items) =
+        require_svg_value_list_items(scope, args.this(), kind, "length getter", false)
+    else {
         return;
-    }
-    let length = svg_value_list_items(scope, args.this(), kind).length();
-    rv.set(v8::Integer::new_from_unsigned(scope, length).into());
+    };
+    rv.set(v8::Integer::new_from_unsigned(scope, items.length()).into());
 }
 
 pub(super) fn svg_length_list_clear_callback<'s>(
@@ -1935,6 +1994,9 @@ pub(super) fn svg_value_list_clear_callback<'s>(
     mut rv: v8::ReturnValue<'_, v8::Value>,
     kind: SvgListKind,
 ) {
+    if require_svg_value_list_items(scope, args.this(), kind, "clear", true).is_none() {
+        return;
+    }
     set_svg_value_list_items(scope, args.this(), v8::Array::new(scope, 0), kind);
     reflect_svg_value_list_to_owner_attribute(scope, args.this(), kind);
     rv.set_undefined();
@@ -1962,10 +2024,15 @@ pub(super) fn svg_value_list_initialize_callback<'s>(
     mut rv: v8::ReturnValue<'_, v8::Value>,
     kind: SvgListKind,
 ) {
+    if require_svg_value_list_items(scope, args.this(), kind, "initialize", true).is_none() {
+        return;
+    }
     let Some(parsed) = webidl::parse_args::<SvgListItemArgs>(scope, &args) else {
         return;
     };
-    let item = svg_value_list_item_or_default(scope, parsed.item, kind);
+    let Some(item) = svg_value_list_item_or_throw(scope, parsed.item, kind) else {
+        return;
+    };
     let Some(items) = serialize_v8_array(scope, [item]) else {
         return;
     };
@@ -1996,10 +2063,13 @@ pub(super) fn svg_value_list_get_item_callback<'s>(
     mut rv: v8::ReturnValue<'_, v8::Value>,
     kind: SvgListKind,
 ) {
+    let Some(items) = require_svg_value_list_items(scope, args.this(), kind, "getItem", false)
+    else {
+        return;
+    };
     let Some(parsed) = webidl::parse_args::<SvgListIndexArgs>(scope, &args) else {
         return;
     };
-    let items = svg_value_list_items(scope, args.this(), kind);
     let Some(item) = svg_list_item_or_throw(scope, items, parsed.index) else {
         return;
     };
@@ -2028,11 +2098,17 @@ pub(super) fn svg_value_list_insert_item_before_callback<'s>(
     mut rv: v8::ReturnValue<'_, v8::Value>,
     kind: SvgListKind,
 ) {
+    let Some(items) =
+        require_svg_value_list_items(scope, args.this(), kind, "insertItemBefore", true)
+    else {
+        return;
+    };
     let Some(parsed) = webidl::parse_args::<SvgListItemIndexArgs>(scope, &args) else {
         return;
     };
-    let item = svg_value_list_item_or_default(scope, parsed.item, kind);
-    let items = svg_value_list_items(scope, args.this(), kind);
+    let Some(item) = svg_value_list_item_or_throw(scope, parsed.item, kind) else {
+        return;
+    };
     let length = items.length();
     let index = parsed.index.min(length);
     let next = v8::Array::new(scope, (length + 1) as i32);
@@ -2074,15 +2150,20 @@ pub(super) fn svg_value_list_replace_item_callback<'s>(
     mut rv: v8::ReturnValue<'_, v8::Value>,
     kind: SvgListKind,
 ) {
+    let Some(items) = require_svg_value_list_items(scope, args.this(), kind, "replaceItem", true)
+    else {
+        return;
+    };
     let Some(parsed) = webidl::parse_args::<SvgListItemIndexArgs>(scope, &args) else {
         return;
     };
-    let items = svg_value_list_items(scope, args.this(), kind);
+    let Some(item) = svg_value_list_item_or_throw(scope, parsed.item, kind) else {
+        return;
+    };
     if parsed.index >= items.length() {
         webidl::throw_index_size_error(scope);
         return;
     }
-    let item = svg_value_list_item_or_default(scope, parsed.item, kind);
     if let Some(replaced) = items
         .get_index(scope, parsed.index)
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
@@ -2119,11 +2200,14 @@ pub(super) fn svg_value_list_remove_item_callback<'s>(
     mut rv: v8::ReturnValue<'_, v8::Value>,
     kind: SvgListKind,
 ) {
+    let Some(items) = require_svg_value_list_items(scope, args.this(), kind, "removeItem", true)
+    else {
+        return;
+    };
     let Some(parsed) = webidl::parse_args::<SvgListIndexArgs>(scope, &args) else {
         return;
     };
     let index = parsed.index;
-    let items = svg_value_list_items(scope, args.this(), kind);
     let length = items.length();
     if index >= length {
         webidl::throw_index_size_error(scope);
@@ -2173,15 +2257,166 @@ pub(super) fn svg_value_list_append_item_callback<'s>(
     mut rv: v8::ReturnValue<'_, v8::Value>,
     kind: SvgListKind,
 ) {
+    let Some(items) = require_svg_value_list_items(scope, args.this(), kind, "appendItem", true)
+    else {
+        return;
+    };
     let Some(parsed) = webidl::parse_args::<SvgListItemArgs>(scope, &args) else {
         return;
     };
-    let item = svg_value_list_item_or_default(scope, parsed.item, kind);
-    let items = svg_value_list_items(scope, args.this(), kind);
+    let Some(item) = svg_value_list_item_or_throw(scope, parsed.item, kind) else {
+        return;
+    };
     set_svg_value_list_item_owner_list(scope, item, args.this());
     let _ = items.set_index(scope, items.length(), item.into());
     reflect_svg_value_list_to_owner_attribute(scope, args.this(), kind);
     rv.set(item.into());
+}
+
+fn svg_value_list_intercepted_items<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    list: v8::Local<'s, v8::Object>,
+) -> Option<(SvgListKind, v8::Local<'s, v8::Array>)> {
+    let kind = svg_value_list_kind(scope, list)?;
+    sync_svg_value_list_from_owner_attribute(scope, list, kind);
+    Some((kind, svg_value_list_items(scope, list, kind)))
+}
+
+fn svg_value_list_indexed_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    index: u32,
+    args: v8::PropertyCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) -> v8::Intercepted {
+    let Some(value) = svg_value_list_intercepted_items(scope, args.holder())
+        .map(|(_, items)| items)
+        .filter(|items| index < items.length())
+        .and_then(|items| items.get_index(scope, index))
+    else {
+        return v8::Intercepted::kNo;
+    };
+    rv.set(value);
+    v8::Intercepted::kYes
+}
+
+fn svg_value_list_indexed_setter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    index: u32,
+    value: v8::Local<'s, v8::Value>,
+    args: v8::PropertyCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Boolean>,
+) -> v8::Intercepted {
+    let list = args.holder();
+    let Some(kind) = svg_value_list_kind(scope, list) else {
+        return v8::Intercepted::kNo;
+    };
+    let Some(items) = require_svg_value_list_items(scope, list, kind, "indexed setter", true)
+    else {
+        return v8::Intercepted::kYes;
+    };
+    let Some(item) = svg_value_list_item_or_throw(scope, value, kind) else {
+        return v8::Intercepted::kYes;
+    };
+    if index >= items.length() {
+        webidl::throw_index_size_error(scope);
+        return v8::Intercepted::kYes;
+    }
+    if let Some(replaced) = items
+        .get_index(scope, index)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+    {
+        clear_svg_value_list_item_owner_list(scope, replaced);
+    }
+    let _ = items.set_index(scope, index, item.into());
+    set_svg_value_list_item_owner_list(scope, item, list);
+    reflect_svg_value_list_to_owner_attribute(scope, list, kind);
+    v8::Intercepted::kYes
+}
+
+fn svg_value_list_indexed_query<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    index: u32,
+    args: v8::PropertyCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Integer>,
+) -> v8::Intercepted {
+    let Some((_, items)) = svg_value_list_intercepted_items(scope, args.holder()) else {
+        return v8::Intercepted::kNo;
+    };
+    if index >= items.length() {
+        return v8::Intercepted::kNo;
+    }
+    rv.set_int32(v8::PropertyAttribute::NONE.as_u32() as i32);
+    v8::Intercepted::kYes
+}
+
+fn svg_value_list_indexed_deleter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    index: u32,
+    args: v8::PropertyCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Boolean>,
+) -> v8::Intercepted {
+    let Some((_, items)) = svg_value_list_intercepted_items(scope, args.holder()) else {
+        return v8::Intercepted::kNo;
+    };
+    if index >= items.length() {
+        return v8::Intercepted::kNo;
+    }
+    rv.set_bool(false);
+    v8::Intercepted::kYes
+}
+
+fn svg_value_list_indexed_definer<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    index: u32,
+    descriptor: &v8::PropertyDescriptor,
+    args: v8::PropertyCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Boolean>,
+) -> v8::Intercepted {
+    if descriptor.has_get() || descriptor.has_set() {
+        rv.set_bool(false);
+        return v8::Intercepted::kYes;
+    }
+    let value = if descriptor.has_value() {
+        v8::Local::new(scope, descriptor.value())
+    } else {
+        v8::undefined(scope).into()
+    };
+    svg_value_list_indexed_setter(scope, index, value, args, rv)
+}
+
+fn svg_value_list_indexed_enumerator<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::PropertyCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Array>,
+) {
+    let length = svg_value_list_intercepted_items(scope, args.holder())
+        .map(|(_, items)| items.length())
+        .unwrap_or(0);
+    let keys = (0..length)
+        .map(|index| v8::Integer::new_from_unsigned(scope, index).into())
+        .collect::<Vec<_>>();
+    rv.set(v8::Array::new_with_elements(scope, &keys));
+}
+
+fn svg_value_list_indexed_descriptor<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    index: u32,
+    args: v8::PropertyCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) -> v8::Intercepted {
+    let Some(value) = svg_value_list_intercepted_items(scope, args.holder())
+        .map(|(_, items)| items)
+        .filter(|items| index < items.length())
+        .and_then(|items| items.get_index(scope, index))
+    else {
+        return v8::Intercepted::kNo;
+    };
+    let Ok(descriptor) = DataPropertyDescriptorDeclaration::new(value, true, true).bind(scope)
+    else {
+        return v8::Intercepted::kNo;
+    };
+    rv.set(descriptor.into());
+    v8::Intercepted::kYes
 }
 
 pub(super) fn svg_transform_list_length_getter<'s>(
