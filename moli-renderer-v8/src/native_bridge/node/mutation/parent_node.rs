@@ -1,5 +1,5 @@
 use super::core::{
-    node_can_contain_children, node_move_before_shadow_including_contains, node_type_is_insertable,
+    node_can_contain_children, node_is_host_including_inclusive_ancestor, node_type_is_insertable,
     pre_insert_validation_handles,
 };
 use super::fragment::{
@@ -148,7 +148,7 @@ fn validate_parent_node_insertion(
         return false;
     }
     for child in inserted {
-        if node_move_before_shadow_including_contains(runtime, *child, parent) {
+        if node_is_host_including_inclusive_ancestor(runtime, *child, parent) {
             throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
             return false;
         }
@@ -256,7 +256,7 @@ fn validate_parent_node_replace_children(
         return false;
     }
     for child in inserted {
-        if node_move_before_shadow_including_contains(runtime, *child, parent) {
+        if node_is_host_including_inclusive_ancestor(runtime, *child, parent) {
             throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
             return false;
         }
