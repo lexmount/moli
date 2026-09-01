@@ -1529,6 +1529,97 @@ fn svg_specialized_accessors_live_on_owner_prototypes() {
 }
 
 #[test]
+fn svg_animated_lengths_reflect_initial_and_content_attribute_values() {
+    let mut vm = new_parsed_test_vm(
+        "https://svg-animated-length-reflection.test/",
+        "<!doctype html><html><head></head><body></body></html>",
+    );
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const assert = (condition, message) => {
+                if (!condition) throw new Error(message);
+              };
+              const ns = "http://www.w3.org/2000/svg";
+              const cases = [
+                ["filter", SVGFilterElement, [
+                  ["x", "-10%"], ["y", "-10%"],
+                  ["width", "120%"], ["height", "120%"],
+                ]],
+                ["feBlend", SVGFEBlendElement, [
+                  ["x", "0%"], ["y", "0%"],
+                  ["width", "100%"], ["height", "100%"],
+                ]],
+                ["linearGradient", SVGLinearGradientElement, [
+                  ["x1", "0%"], ["y1", "0%"], ["x2", "100%"], ["y2", "0%"],
+                ]],
+                ["marker", SVGMarkerElement, [
+                  ["refX", "0"], ["refY", "0"],
+                  ["markerWidth", "3"], ["markerHeight", "3"],
+                ]],
+                ["mask", SVGMaskElement, [
+                  ["x", "-10%"], ["y", "-10%"],
+                  ["width", "120%"], ["height", "120%"],
+                ]],
+                ["pattern", SVGPatternElement, [
+                  ["x", "0"], ["y", "0"], ["width", "0"], ["height", "0"],
+                ]],
+                ["radialGradient", SVGRadialGradientElement, [
+                  ["cx", "50%"], ["cy", "50%"], ["r", "50%"],
+                  ["fx", "50%"], ["fy", "50%"], ["fr", "0%"],
+                ]],
+                ["svg", SVGSVGElement, [
+                  ["x", "0"], ["y", "0"], ["width", "100%"], ["height", "100%"],
+                ]],
+                ["text", SVGTextContentElement, [["textLength", "0"]]],
+                ["textPath", SVGTextPathElement, [["startOffset", "0"]]],
+              ];
+
+              for (const [tag, owner, attributes] of cases) {
+                const element = document.createElementNS(ns, tag);
+                for (const [name, initial] of attributes) {
+                  const descriptor = Object.getOwnPropertyDescriptor(owner.prototype, name);
+                  assert(typeof descriptor?.get === "function", `${owner.name}.${name} getter`);
+                  assert(descriptor.set === undefined, `${owner.name}.${name} setter`);
+                  assert(descriptor.enumerable && descriptor.configurable,
+                    `${owner.name}.${name} flags`);
+
+                  const animated = element[name];
+                  assert(animated instanceof SVGAnimatedLength, `${tag}.${name} interface`);
+                  assert(element[name] === animated, `${tag}.${name} SameObject`);
+                  assert(animated.baseVal.valueAsString === initial,
+                    `${tag}.${name} initial baseVal`);
+                  assert(animated.animVal.valueAsString === initial,
+                    `${tag}.${name} initial animVal`);
+
+                  element.setAttribute(name, "42");
+                  assert(element[name] === animated, `${tag}.${name} SameObject after set`);
+                  assert(animated.baseVal.valueAsString === "42" &&
+                    animated.animVal.valueAsString === "42", `${tag}.${name} content update`);
+
+                  element.setAttribute(name, "foobar");
+                  assert(element[name] === animated, `${tag}.${name} SameObject after invalid`);
+                  assert(animated.baseVal.valueAsString === initial &&
+                    animated.animVal.valueAsString === initial, `${tag}.${name} invalid fallback`);
+
+                  element.removeAttribute(name);
+                  assert(element[name] === animated, `${tag}.${name} SameObject after remove`);
+                  assert(animated.baseVal.valueAsString === initial &&
+                    animated.animVal.valueAsString === initial, `${tag}.${name} removed fallback`);
+                }
+              }
+              return "ok";
+            })()
+            "#,
+        )
+        .expect("SVG animated length reflection probe should evaluate");
+
+    assert_eq!(result, "ok");
+}
+
+#[test]
 fn svg_historical_interfaces_keep_current_element_constructors_only() {
     let mut vm = new_parsed_test_vm(
         "https://svg-historical-interfaces.test/",

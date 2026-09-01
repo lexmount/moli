@@ -1095,26 +1095,13 @@ pub(super) fn build_svg_matrix<'s>(
     .expect("SVGMatrix declaration should bind")
 }
 
-pub(super) fn build_svg_animated_length<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: f64,
-) -> v8::Local<'s, v8::Object> {
-    let base_val = build_svg_length(scope, value);
-    let anim_val = build_svg_length(scope, value);
-    SvgAnimatedLengthObjectDeclaration::new(base_val, anim_val)
-        .bind(scope)
-        .expect("SVGAnimatedLength declaration should bind")
-}
-
 pub(super) fn build_svg_animated_length_for_attribute<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
     attribute: &str,
+    initial_value: &str,
 ) -> v8::Local<'s, v8::Object> {
-    let parsed = svg_owner_attribute_value(scope, owner, attribute)
-        .as_deref()
-        .and_then(parse_svg_length_value)
-        .unwrap_or_default();
+    let parsed = svg_animated_length_attribute_value(scope, owner, attribute, initial_value);
     let base_val = build_svg_length_from_parsed(scope, parsed);
     set_svg_length_owner_attribute(scope, base_val, owner, attribute);
     let anim_val = build_svg_length_from_parsed(scope, parsed);
@@ -2427,6 +2414,15 @@ pub(super) fn svg_animated_length_attribute_slot(name: &str) -> &'static str {
         "y1" => "__moliSvgAnimatedY1",
         "x2" => "__moliSvgAnimatedX2",
         "y2" => "__moliSvgAnimatedY2",
+        "fx" => "__moliSvgAnimatedFx",
+        "fy" => "__moliSvgAnimatedFy",
+        "fr" => "__moliSvgAnimatedFr",
+        "refX" => "__moliSvgAnimatedRefX",
+        "refY" => "__moliSvgAnimatedRefY",
+        "markerWidth" => "__moliSvgAnimatedMarkerWidth",
+        "markerHeight" => "__moliSvgAnimatedMarkerHeight",
+        "textLength" => SVG_TEXT_CONTENT_TEXT_LENGTH_SLOT,
+        "startOffset" => "__moliSvgAnimatedStartOffset",
         _ => "__moliSvgAnimatedUnknown",
     }
 }
@@ -2833,11 +2829,9 @@ pub(super) fn sync_svg_animated_length_from_owner_attribute<'s>(
     animated: v8::Local<'s, v8::Object>,
     owner: v8::Local<'s, v8::Object>,
     attribute: &str,
+    initial_value: &str,
 ) {
-    let parsed = svg_owner_attribute_value(scope, owner, attribute)
-        .as_deref()
-        .and_then(parse_svg_length_value)
-        .unwrap_or_default();
+    let parsed = svg_animated_length_attribute_value(scope, owner, attribute, initial_value);
     if let Some(base_val) = get_private_value(scope, animated, SVG_ANIMATED_LENGTH_BASE_VAL_SLOT)
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
     {
@@ -2849,6 +2843,19 @@ pub(super) fn sync_svg_animated_length_from_owner_attribute<'s>(
     {
         set_svg_length_parsed_value(scope, anim_val, parsed);
     }
+}
+
+fn svg_animated_length_attribute_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+    attribute: &str,
+    initial_value: &str,
+) -> SvgParsedLength {
+    svg_owner_attribute_value(scope, owner, attribute)
+        .as_deref()
+        .and_then(parse_svg_length_value)
+        .or_else(|| parse_svg_length_value(initial_value))
+        .unwrap_or_default()
 }
 
 pub(super) fn set_svg_animated_string_owner_attribute<'s>(

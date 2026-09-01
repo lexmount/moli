@@ -1288,6 +1288,18 @@ struct SvgTextPositioningElementPrototypeAccessorsDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::SVGPatternElement, enumerable)]
 struct SvgPatternElementPrototypeAccessorsDeclaration {
+    #[webapi(accessor_property = "x", getter = svg_pattern_animated_length_getter, data = callback_data_index_value(scope, 0))]
+    x: (),
+
+    #[webapi(accessor_property = "y", getter = svg_pattern_animated_length_getter, data = callback_data_index_value(scope, 1))]
+    y: (),
+
+    #[webapi(accessor_property = "width", getter = svg_pattern_animated_length_getter, data = callback_data_index_value(scope, 2))]
+    width: (),
+
+    #[webapi(accessor_property = "height", getter = svg_pattern_animated_length_getter, data = callback_data_index_value(scope, 3))]
+    height: (),
+
     #[webapi(
         accessor_property = "patternUnits",
         getter = svg_element_animated_enumeration_getter,
@@ -1328,6 +1340,60 @@ struct SvgGradientElementPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::SVGLinearGradientElement, enumerable)]
+struct SvgLinearGradientElementPrototypeAccessorsDeclaration {
+    #[webapi(accessor_property = "x1", getter = svg_linear_gradient_animated_length_getter, data = callback_data_index_value(scope, 0))]
+    x1: (),
+
+    #[webapi(accessor_property = "y1", getter = svg_linear_gradient_animated_length_getter, data = callback_data_index_value(scope, 1))]
+    y1: (),
+
+    #[webapi(accessor_property = "x2", getter = svg_linear_gradient_animated_length_getter, data = callback_data_index_value(scope, 2))]
+    x2: (),
+
+    #[webapi(accessor_property = "y2", getter = svg_linear_gradient_animated_length_getter, data = callback_data_index_value(scope, 3))]
+    y2: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::SVGRadialGradientElement, enumerable)]
+struct SvgRadialGradientElementPrototypeAccessorsDeclaration {
+    #[webapi(accessor_property = "cx", getter = svg_radial_gradient_animated_length_getter, data = callback_data_index_value(scope, 0))]
+    cx: (),
+
+    #[webapi(accessor_property = "cy", getter = svg_radial_gradient_animated_length_getter, data = callback_data_index_value(scope, 1))]
+    cy: (),
+
+    #[webapi(accessor_property = "r", getter = svg_radial_gradient_animated_length_getter, data = callback_data_index_value(scope, 2))]
+    r: (),
+
+    #[webapi(accessor_property = "fx", getter = svg_radial_gradient_animated_length_getter, data = callback_data_index_value(scope, 3))]
+    fx: (),
+
+    #[webapi(accessor_property = "fy", getter = svg_radial_gradient_animated_length_getter, data = callback_data_index_value(scope, 4))]
+    fy: (),
+
+    #[webapi(accessor_property = "fr", getter = svg_radial_gradient_animated_length_getter, data = callback_data_index_value(scope, 5))]
+    fr: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::SVGSVGElement, enumerable)]
+struct SvgSvgElementPrototypeAccessorsDeclaration {
+    #[webapi(accessor_property = "x", getter = svg_svg_animated_length_getter, data = callback_data_index_value(scope, 0))]
+    x: (),
+
+    #[webapi(accessor_property = "y", getter = svg_svg_animated_length_getter, data = callback_data_index_value(scope, 1))]
+    y: (),
+
+    #[webapi(accessor_property = "width", getter = svg_svg_animated_length_getter, data = callback_data_index_value(scope, 2))]
+    width: (),
+
+    #[webapi(accessor_property = "height", getter = svg_svg_animated_length_getter, data = callback_data_index_value(scope, 3))]
+    height: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::SVGClipPathElement, enumerable)]
 struct SvgClipPathElementPrototypeAccessorsDeclaration {
     #[webapi(
@@ -1341,6 +1407,18 @@ struct SvgClipPathElementPrototypeAccessorsDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::SVGFilterElement, enumerable)]
 struct SvgFilterElementPrototypeAccessorsDeclaration {
+    #[webapi(accessor_property = "x", getter = svg_filter_animated_length_getter, data = callback_data_index_value(scope, 0))]
+    x: (),
+
+    #[webapi(accessor_property = "y", getter = svg_filter_animated_length_getter, data = callback_data_index_value(scope, 1))]
+    y: (),
+
+    #[webapi(accessor_property = "width", getter = svg_filter_animated_length_getter, data = callback_data_index_value(scope, 2))]
+    width: (),
+
+    #[webapi(accessor_property = "height", getter = svg_filter_animated_length_getter, data = callback_data_index_value(scope, 3))]
+    height: (),
+
     #[webapi(
         accessor_property = "filterUnits",
         getter = svg_element_animated_enumeration_getter,
@@ -1354,6 +1432,22 @@ struct SvgFilterElementPrototypeAccessorsDeclaration {
         data = callback_data_index_value(scope, 2)
     )]
     primitive_units: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(name = "SVGFilterPrimitiveStandardAttributes", enumerable)]
+struct SvgFilterPrimitiveStandardAttributesPrototypeAccessorsDeclaration {
+    #[webapi(accessor_property = "x", getter = svg_filter_primitive_animated_length_getter, data = callback_data_index_value(scope, 0))]
+    x: (),
+
+    #[webapi(accessor_property = "y", getter = svg_filter_primitive_animated_length_getter, data = callback_data_index_value(scope, 1))]
+    y: (),
+
+    #[webapi(accessor_property = "width", getter = svg_filter_primitive_animated_length_getter, data = callback_data_index_value(scope, 2))]
+    width: (),
+
+    #[webapi(accessor_property = "height", getter = svg_filter_primitive_animated_length_getter, data = callback_data_index_value(scope, 3))]
+    height: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -1502,6 +1596,9 @@ struct SvgFeTurbulenceElementPrototypeAccessorsDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::SVGTextPathElement, enumerable)]
 struct SvgTextPathElementPrototypeAccessorsDeclaration {
+    #[webapi(accessor_property = "startOffset", getter = svg_text_path_animated_length_getter, data = callback_data_index_value(scope, 0))]
+    start_offset: (),
+
     #[webapi(
         accessor_property = "method",
         getter = svg_element_animated_enumeration_getter,
@@ -1527,6 +1624,18 @@ struct SvgTextPathElementPrototypeAccessorsDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::SVGMaskElement, enumerable)]
 struct SvgMaskElementPrototypeAccessorsDeclaration {
+    #[webapi(accessor_property = "x", getter = svg_mask_animated_length_getter, data = callback_data_index_value(scope, 0))]
+    x: (),
+
+    #[webapi(accessor_property = "y", getter = svg_mask_animated_length_getter, data = callback_data_index_value(scope, 1))]
+    y: (),
+
+    #[webapi(accessor_property = "width", getter = svg_mask_animated_length_getter, data = callback_data_index_value(scope, 2))]
+    width: (),
+
+    #[webapi(accessor_property = "height", getter = svg_mask_animated_length_getter, data = callback_data_index_value(scope, 3))]
+    height: (),
+
     #[webapi(
         accessor_property = "maskUnits",
         getter = svg_element_animated_enumeration_getter,
@@ -1628,6 +1737,18 @@ struct SvgGraphicsBoxElementPrototypeAccessorsDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::SVGMarkerElement, enumerable)]
 struct SvgMarkerElementPrototypeAccessorsDeclaration {
+    #[webapi(accessor_property = "refX", getter = svg_marker_animated_length_getter, data = callback_data_index_value(scope, 0))]
+    ref_x: (),
+
+    #[webapi(accessor_property = "refY", getter = svg_marker_animated_length_getter, data = callback_data_index_value(scope, 1))]
+    ref_y: (),
+
+    #[webapi(accessor_property = "markerWidth", getter = svg_marker_animated_length_getter, data = callback_data_index_value(scope, 2))]
+    marker_width: (),
+
+    #[webapi(accessor_property = "markerHeight", getter = svg_marker_animated_length_getter, data = callback_data_index_value(scope, 3))]
+    marker_height: (),
+
     #[webapi(
         accessor_property = "markerUnits",
         getter = svg_element_animated_enumeration_getter,
@@ -1961,6 +2082,20 @@ pub(super) fn install_svg_element_accessor_bindings<'s>(
     interface_name: &str,
 ) {
     let prototype = template.prototype_template(scope);
+    if matches!(
+        interface_name,
+        "SVGFEBlendElement"
+            | "SVGFEColorMatrixElement"
+            | "SVGFECompositeElement"
+            | "SVGFEConvolveMatrixElement"
+            | "SVGFEDisplacementMapElement"
+            | "SVGFEMorphologyElement"
+            | "SVGFETurbulenceElement"
+    ) {
+        SvgFilterPrimitiveStandardAttributesPrototypeAccessorsDeclaration::initialize_prototype_template(
+            scope, prototype,
+        );
+    }
     match interface_name {
         "SVGGraphicsElement" => {
             SvgGraphicsElementPrototypeAccessorsDeclaration::initialize_prototype_template(
@@ -2058,6 +2193,27 @@ pub(super) fn install_svg_element_accessor_bindings<'s>(
                 scope, prototype,
             );
         }
+        "SVGLinearGradientElement" => {
+            SvgLinearGradientElementPrototypeAccessorsDeclaration::initialize_prototype_template(
+                scope, prototype,
+            );
+            SvgUriReferencePrototypeAccessorsDeclaration::initialize_prototype_template(
+                scope, prototype,
+            );
+        }
+        "SVGRadialGradientElement" => {
+            SvgRadialGradientElementPrototypeAccessorsDeclaration::initialize_prototype_template(
+                scope, prototype,
+            );
+            SvgUriReferencePrototypeAccessorsDeclaration::initialize_prototype_template(
+                scope, prototype,
+            );
+        }
+        "SVGSVGElement" => {
+            SvgSvgElementPrototypeAccessorsDeclaration::initialize_prototype_template(
+                scope, prototype,
+            );
+        }
         "SVGRectElement" => {
             SvgRectElementPrototypeAccessorsDeclaration::initialize_prototype_template(
                 scope, prototype,
@@ -2088,10 +2244,7 @@ pub(super) fn install_svg_element_accessor_bindings<'s>(
                 scope, prototype,
             );
         }
-        "SVGAElement"
-        | "SVGLinearGradientElement"
-        | "SVGRadialGradientElement"
-        | "SVGScriptElement" => {
+        "SVGAElement" | "SVGScriptElement" => {
             SvgUriReferencePrototypeAccessorsDeclaration::initialize_prototype_template(
                 scope, prototype,
             );
