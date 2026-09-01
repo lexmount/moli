@@ -931,6 +931,22 @@ impl DomHost {
         did_change
     }
 
+    pub fn set_blocks_form_submission(&mut self, handle: DomHandle, blocks: bool) -> bool {
+        let did_change = {
+            let Some(element) = self
+                .node_mut(handle)
+                .and_then(|node| node.data_mut().as_element_mut())
+            else {
+                return false;
+            };
+            element.set_blocks_form_submission(blocks)
+        };
+        if did_change {
+            self.record_mutation(MutationScope::LocalState);
+        }
+        did_change
+    }
+
     pub fn set_script_parser_inserted_for_prepare(
         &mut self,
         handle: DomHandle,

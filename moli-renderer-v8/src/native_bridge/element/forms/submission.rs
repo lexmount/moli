@@ -127,6 +127,25 @@ fn submit_form_with_submit_event_inner(
     submitter_handle: Option<DomHandle>,
     user_initiated: bool,
 ) -> bool {
+    let blocked_by_unclosed_form_control = {
+        let runtime = unsafe { &*runtime_ptr };
+        form_control_elements(runtime, form_handle)
+            .into_iter()
+            .any(|handle| {
+                runtime
+                    .dom_host()
+                    .node(handle)
+                    .and_then(Node::as_element)
+                    .is_some_and(Element::blocks_form_submission)
+            })
+    };
+    if blocked_by_unclosed_form_control {
+        if let Some(event) = construct_simple_event(scope, "error", false, false, false) {
+            let _ = dispatch_public_event(scope, runtime_ptr, form_handle, event);
+        }
+        return false;
+    }
+
     let skips_constraint_validation = {
         let runtime = unsafe { &*runtime_ptr };
         form_submission_skips_constraint_validation(runtime, form_handle, submitter_handle)

@@ -300,6 +300,13 @@ impl ParserDomMutationConsumer for DocumentWriteParserMutationOwner<'_, '_, '_> 
             .mark_script_already_started_for_parser_in_live_dom_host(node_id);
     }
 
+    fn mark_unclosed_form_control_for_parser(&mut self, node_id: DomHandle) {
+        let _ = self
+            .runtime
+            .dom_host_mut()
+            .set_blocks_form_submission(node_id, true);
+    }
+
     fn finish_parsing_script_children(&mut self, node_id: DomHandle) {
         let _ = self
             .runtime
