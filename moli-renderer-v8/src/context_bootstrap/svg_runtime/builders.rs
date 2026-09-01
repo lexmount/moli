@@ -187,8 +187,12 @@ struct SvgAnimatedPreserveAspectRatioObjectDeclaration<'scope> {
 struct SvgLengthObjectDeclaration {
     #[webapi(slot = SVG_LENGTH_UNIT_TYPE_SLOT)]
     unit_type: u32,
+    #[webapi(slot = SVG_LENGTH_UNIT_SUFFIX_SLOT)]
+    unit_suffix: String,
     #[webapi(slot = SVG_LENGTH_VALUE_SLOT)]
     value: f64,
+    #[webapi(slot = SVG_LENGTH_VALUE_IN_SPECIFIED_UNITS_SLOT)]
+    value_in_specified_units: f64,
     #[webapi(slot = SVG_LENGTH_VALUE_AS_STRING_SLOT)]
     value_as_string: String,
 }
@@ -1311,6 +1315,7 @@ pub(super) fn build_svg_length<'s>(
         SvgParsedLength {
             value,
             unit_type: SVG_LENGTH_TYPE_NUMBER,
+            unit: SvgLengthUnit::Number,
             raw: None,
         },
     )
@@ -1323,11 +1328,19 @@ pub(super) fn build_svg_length_from_parsed<'s>(
     let value_as_string = parsed
         .raw
         .map(str::to_owned)
-        .or_else(|| Some(serialize_svg_length_value(parsed.value, parsed.unit_type)))
+        .or_else(|| Some(SvgLength::new(parsed.value, parsed.unit).serialize()))
         .unwrap_or_else(|| "0".to_owned());
-    SvgLengthObjectDeclaration::new(parsed.unit_type, parsed.value, value_as_string)
-        .bind(scope)
-        .expect("SVGLength declaration should bind")
+    let value =
+        resolve_svg_length_without_context(parsed.value, parsed.unit).unwrap_or(parsed.value);
+    SvgLengthObjectDeclaration::new(
+        parsed.unit_type,
+        parsed.unit.suffix().to_owned(),
+        value,
+        parsed.value,
+        value_as_string,
+    )
+    .bind(scope)
+    .expect("SVGLength declaration should bind")
 }
 
 pub(super) fn build_dom_point_like<'s>(
@@ -2919,6 +2932,7 @@ pub(super) fn reflect_svg_angle_to_owner_attribute<'s>(
 pub(super) struct SvgParsedLength {
     value: f64,
     unit_type: u32,
+    unit: SvgLengthUnit,
     raw: Option<&'static str>,
 }
 
@@ -2927,6 +2941,7 @@ impl Default for SvgParsedLength {
         Self {
             value: 0.0,
             unit_type: SVG_LENGTH_TYPE_NUMBER,
+            unit: SvgLengthUnit::Number,
             raw: Some("0"),
         }
     }
@@ -2941,9 +2956,9 @@ pub(super) fn svg_length_number_slot<'s>(
     value.number_value(scope)
 }
 
-pub(super) fn set_svg_length_numeric_value(
-    scope: &mut v8::PinScope<'_, '_>,
-    object: v8::Local<'_, v8::Object>,
+pub(super) fn set_svg_length_numeric_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
     value: f64,
     unit_type: u32,
 ) {
@@ -2954,15 +2969,16 @@ pub(super) fn set_svg_length_numeric_value(
         SvgParsedLength {
             value,
             unit_type,
+            unit: svg_length_unit_from_type(unit_type),
             raw: None,
         },
     );
     set_svg_length_value_string(scope, object, &value_as_string);
 }
 
-pub(super) fn set_svg_length_parsed_value(
-    scope: &mut v8::PinScope<'_, '_>,
-    object: v8::Local<'_, v8::Object>,
+pub(super) fn set_svg_length_parsed_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
     parsed: SvgParsedLength,
 ) {
     set_private_value(
@@ -2971,12 +2987,71 @@ pub(super) fn set_svg_length_parsed_value(
         SVG_LENGTH_UNIT_TYPE_SLOT,
         v8::Number::new(scope, parsed.unit_type as f64).into(),
     );
+    set_private_value(
+        scope,
+        object,
+        SVG_LENGTH_UNIT_SUFFIX_SLOT,
+        v8_string(scope, parsed.unit.suffix())
+            .unwrap_or_else(|| v8str(scope, ""))
+            .into(),
+    );
+    set_private_value(
+        scope,
+        object,
+        SVG_LENGTH_VALUE_IN_SPECIFIED_UNITS_SLOT,
+        v8::Number::new(scope, parsed.value).into(),
+    );
     let raw = parsed
         .raw
         .map(str::to_owned)
-        .or_else(|| Some(serialize_svg_length_value(parsed.value, parsed.unit_type)))
+        .or_else(|| Some(SvgLength::new(parsed.value, parsed.unit).serialize()))
         .unwrap_or_else(|| "0".to_owned());
-    set_svg_length_value(scope, object, parsed.value, &raw);
+    let value = resolve_svg_length_user_value_for_unit(scope, object, parsed.value, parsed.unit)
+        .or_else(|| resolve_svg_length_without_context(parsed.value, parsed.unit))
+        .unwrap_or(parsed.value);
+    set_svg_length_value(scope, object, value, &raw);
+}
+
+pub(super) fn set_svg_length_value_in_user_units<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    value: f64,
+) {
+    let unit = svg_length_unit_slot(scope, object);
+    let specified_value = svg_length_unit_factor(scope, object, unit)
+        .filter(|factor| *factor != 0.0)
+        .map(|factor| value / factor)
+        .unwrap_or(value);
+    set_svg_length_specified_value(scope, object, specified_value, value, unit);
+}
+
+pub(super) fn set_svg_length_value_in_specified_units<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    specified_value: f64,
+) {
+    let unit = svg_length_unit_slot(scope, object);
+    let value = resolve_svg_length_user_value_for_unit(scope, object, specified_value, unit)
+        .or_else(|| resolve_svg_length_without_context(specified_value, unit))
+        .unwrap_or(specified_value);
+    set_svg_length_specified_value(scope, object, specified_value, value, unit);
+}
+
+fn set_svg_length_specified_value(
+    scope: &mut v8::PinScope<'_, '_>,
+    object: v8::Local<'_, v8::Object>,
+    specified_value: f64,
+    value: f64,
+    unit: SvgLengthUnit,
+) {
+    set_private_value(
+        scope,
+        object,
+        SVG_LENGTH_VALUE_IN_SPECIFIED_UNITS_SLOT,
+        v8::Number::new(scope, specified_value).into(),
+    );
+    let value_as_string = SvgLength::new(specified_value, unit).serialize();
+    set_svg_length_value(scope, object, value, &value_as_string);
 }
 
 pub(super) fn set_svg_length_value(
@@ -3651,6 +3726,7 @@ pub(super) fn svg_parsed_length_from_svg_length(length: SvgLength) -> SvgParsedL
     SvgParsedLength {
         value: length.value,
         unit_type: svg_length_unit_type(length.unit),
+        unit: length.unit,
         raw: None,
     }
 }
@@ -3661,6 +3737,17 @@ pub(super) fn svg_length_unit_type(unit: SvgLengthUnit) -> u32 {
         SvgLengthUnit::Percentage => SVG_LENGTH_TYPE_PERCENTAGE,
         SvgLengthUnit::Ems => SVG_LENGTH_TYPE_EMS,
         SvgLengthUnit::Exs => SVG_LENGTH_TYPE_EXS,
+        SvgLengthUnit::Ch
+        | SvgLengthUnit::Rem
+        | SvgLengthUnit::Lh
+        | SvgLengthUnit::Rlh
+        | SvgLengthUnit::Cap
+        | SvgLengthUnit::Ic
+        | SvgLengthUnit::Q
+        | SvgLengthUnit::Vw
+        | SvgLengthUnit::Vh
+        | SvgLengthUnit::Vmin
+        | SvgLengthUnit::Vmax => SVG_LENGTH_TYPE_UNKNOWN,
         SvgLengthUnit::Px => SVG_LENGTH_TYPE_PX,
         SvgLengthUnit::Cm => SVG_LENGTH_TYPE_CM,
         SvgLengthUnit::Mm => SVG_LENGTH_TYPE_MM,
@@ -3691,4 +3778,297 @@ pub(super) fn svg_length_unit_from_type(unit_type: u32) -> SvgLengthUnit {
         SVG_LENGTH_TYPE_PC => SvgLengthUnit::Pc,
         _ => SvgLengthUnit::Number,
     }
+}
+
+fn svg_length_unit_slot<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> SvgLengthUnit {
+    get_private_value(scope, object, SVG_LENGTH_UNIT_SUFFIX_SLOT)
+        .and_then(|value| value.to_string(scope))
+        .map(|value| value.to_rust_string_lossy(scope))
+        .and_then(|suffix| svg_geometry::parse_length(&format!("1{suffix}")))
+        .map(|length| length.unit)
+        .unwrap_or(SvgLengthUnit::Number)
+}
+
+pub(super) fn svg_length_value_in_user_units<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> f64 {
+    let specified_value =
+        svg_length_number_slot(scope, object, SVG_LENGTH_VALUE_IN_SPECIFIED_UNITS_SLOT)
+            .unwrap_or(0.0);
+    let unit = svg_length_unit_slot(scope, object);
+    if resolve_svg_absolute_length(1.0, unit).is_some() {
+        return svg_length_number_slot(scope, object, SVG_LENGTH_VALUE_SLOT)
+            .unwrap_or(specified_value);
+    }
+    if let Some(value) =
+        resolve_svg_length_user_value_for_unit(scope, object, specified_value, unit)
+    {
+        set_private_value(
+            scope,
+            object,
+            SVG_LENGTH_VALUE_SLOT,
+            v8::Number::new(scope, value).into(),
+        );
+        return value;
+    }
+    resolve_svg_length_without_context(specified_value, unit)
+        .or_else(|| svg_length_number_slot(scope, object, SVG_LENGTH_VALUE_SLOT))
+        .unwrap_or(specified_value)
+}
+
+pub(super) fn convert_svg_length_to_unit<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    unit_type: u32,
+) -> bool {
+    let unit = svg_length_unit_from_type(unit_type);
+    let value = svg_length_value_in_user_units(scope, object);
+    let Some(factor) = svg_length_unit_factor(scope, object, unit).filter(|factor| *factor != 0.0)
+    else {
+        return false;
+    };
+    set_private_value(
+        scope,
+        object,
+        SVG_LENGTH_UNIT_TYPE_SLOT,
+        v8::Number::new(scope, unit_type as f64).into(),
+    );
+    set_private_value(
+        scope,
+        object,
+        SVG_LENGTH_UNIT_SUFFIX_SLOT,
+        v8_string(scope, unit.suffix())
+            .unwrap_or_else(|| v8str(scope, ""))
+            .into(),
+    );
+    set_svg_length_specified_value(scope, object, value / factor, value, unit);
+    true
+}
+
+fn svg_length_unit_factor<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    unit: SvgLengthUnit,
+) -> Option<f64> {
+    resolve_svg_length_user_value_for_unit(scope, object, 1.0, unit)
+        .or_else(|| resolve_svg_length_without_context(1.0, unit))
+}
+
+fn resolve_svg_length_without_context(value: f64, unit: SvgLengthUnit) -> Option<f64> {
+    if let Some(value) = resolve_svg_absolute_length(value, unit) {
+        return Some(value);
+    }
+    matches!(unit, SvgLengthUnit::Percentage).then_some(value)
+}
+
+fn resolve_svg_length_user_value_for_unit<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    value: f64,
+    unit: SvgLengthUnit,
+) -> Option<f64> {
+    if let Some(value) = resolve_svg_absolute_length(value, unit) {
+        return Some(value);
+    }
+    let owner = svg_length_owner_element(scope, object)?;
+    let attribute = svg_length_owner_attribute(scope, object).unwrap_or_default();
+    let (runtime_ptr, handle) =
+        crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, owner).ok()?;
+    let runtime = unsafe { &*runtime_ptr };
+    let connected = runtime
+        .dom_host()
+        .node(handle)
+        .is_some_and(|node| node.is_connected());
+    let basis = if connected {
+        svg_length_percentage_basis(runtime, handle, &attribute)
+    } else {
+        100.0
+    };
+    let context = svg_length_numeric_context(runtime, handle, unit, connected);
+    match unit {
+        SvgLengthUnit::Percentage => Some(value * basis / 100.0),
+        SvgLengthUnit::Ems => context.font_size_px.map(|basis| value * basis),
+        SvgLengthUnit::Exs | SvgLengthUnit::Ch => {
+            context.font_size_px.map(|basis| value * basis * 0.5)
+        }
+        SvgLengthUnit::Rem => context.root_font_size_px.map(|basis| value * basis),
+        SvgLengthUnit::Lh | SvgLengthUnit::Rlh => context.line_height_px.map(|basis| value * basis),
+        SvgLengthUnit::Cap => context.font_size_px.map(|basis| value * basis * 0.7),
+        SvgLengthUnit::Ic => context.font_size_px.map(|basis| value * basis),
+        SvgLengthUnit::Vw => context.viewport_width_px.map(|basis| value * basis / 100.0),
+        SvgLengthUnit::Vh => context
+            .viewport_height_px
+            .map(|basis| value * basis / 100.0),
+        SvgLengthUnit::Vmin => {
+            Some(value * context.viewport_width_px?.min(context.viewport_height_px?) / 100.0)
+        }
+        SvgLengthUnit::Vmax => {
+            Some(value * context.viewport_width_px?.max(context.viewport_height_px?) / 100.0)
+        }
+        SvgLengthUnit::Number
+        | SvgLengthUnit::Px
+        | SvgLengthUnit::Cm
+        | SvgLengthUnit::Mm
+        | SvgLengthUnit::Q
+        | SvgLengthUnit::In
+        | SvgLengthUnit::Pt
+        | SvgLengthUnit::Pc => unreachable!("absolute SVG length handled above"),
+    }
+}
+
+fn resolve_svg_absolute_length(value: f64, unit: SvgLengthUnit) -> Option<f64> {
+    let pixels = match unit {
+        SvgLengthUnit::Number | SvgLengthUnit::Px => value,
+        SvgLengthUnit::Cm => value * 96.0 / 2.54,
+        SvgLengthUnit::Mm => value * 96.0 / 25.4,
+        SvgLengthUnit::Q => value * 96.0 / 101.6,
+        SvgLengthUnit::In => value * 96.0,
+        SvgLengthUnit::Pt => value * 96.0 / 72.0,
+        SvgLengthUnit::Pc => value * 16.0,
+        _ => return None,
+    };
+    Some(pixels)
+}
+
+fn svg_length_owner_element<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    get_private_value(scope, object, SVG_LENGTH_OWNER_ELEMENT_SLOT)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+        .or_else(|| {
+            let list = get_private_value(scope, object, SVG_VALUE_LIST_ITEM_OWNER_LIST_SLOT)
+                .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?;
+            get_private_value(scope, list, SVG_VALUE_LIST_OWNER_ELEMENT_SLOT)
+                .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+        })
+}
+
+fn svg_length_owner_attribute<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> Option<String> {
+    get_private_value(scope, object, SVG_LENGTH_OWNER_ATTRIBUTE_SLOT)
+        .and_then(|value| value.to_string(scope))
+        .map(|value| value.to_rust_string_lossy(scope))
+        .or_else(|| {
+            let list = get_private_value(scope, object, SVG_VALUE_LIST_ITEM_OWNER_LIST_SLOT)
+                .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?;
+            get_private_value(scope, list, SVG_VALUE_LIST_OWNER_ATTRIBUTE_SLOT)
+                .and_then(|value| value.to_string(scope))
+                .map(|value| value.to_rust_string_lossy(scope))
+        })
+}
+
+fn svg_length_numeric_context(
+    runtime: &crate::native_bridge::JsContextHost,
+    handle: crate::document_runtime::DomHandle,
+    unit: SvgLengthUnit,
+    connected: bool,
+) -> moli_css_parse::CssNumericContext {
+    if !connected {
+        return moli_css_parse::CssNumericContext::default();
+    }
+    let font_size_px = svg_computed_pixel_value(runtime, handle, "font-size");
+    let line_height_px = svg_computed_pixel_value(runtime, handle, "line-height")
+        .or_else(|| font_size_px.map(|font_size| font_size * 1.2));
+    let document = runtime.dom_host().owner_document_handle(handle);
+    let root = document.and_then(|document| {
+        runtime
+            .dom_host()
+            .document_element_handle_for_document(document)
+    });
+    let root_font_size_px = root
+        .and_then(|root| svg_computed_pixel_value(runtime, root, "font-size"))
+        .or(font_size_px);
+    let root_line_height_px = root
+        .and_then(|root| svg_computed_pixel_value(runtime, root, "line-height"))
+        .or_else(|| root_font_size_px.map(|font_size| font_size * 1.2));
+    let viewport = runtime.style_viewport();
+    moli_css_parse::CssNumericContext {
+        font_size_px,
+        root_font_size_px,
+        line_height_px: if matches!(unit, SvgLengthUnit::Rlh) {
+            root_line_height_px
+        } else {
+            line_height_px
+        },
+        viewport_width_px: viewport.width,
+        viewport_height_px: viewport.height,
+        ..moli_css_parse::CssNumericContext::default()
+    }
+}
+
+fn svg_computed_pixel_value(
+    runtime: &crate::native_bridge::JsContextHost,
+    handle: crate::document_runtime::DomHandle,
+    property: &str,
+) -> Option<f64> {
+    let value = crate::native_bridge::element::computed_style_property_for_handle(
+        runtime, handle, property,
+    );
+    moli_css_parse::parse_px_length(&value, moli_css_parse::UnitlessLength::Any)
+}
+
+fn svg_length_percentage_basis(
+    runtime: &crate::native_bridge::JsContextHost,
+    handle: crate::document_runtime::DomHandle,
+    attribute: &str,
+) -> f64 {
+    let (width, height) = svg_nearest_viewport_dimensions(runtime, handle).unwrap_or_else(|| {
+        let viewport = runtime.style_viewport();
+        (
+            viewport.width.unwrap_or(100.0),
+            viewport.height.unwrap_or(100.0),
+        )
+    });
+    match attribute {
+        "x" | "x1" | "x2" | "cx" | "rx" | "width" | "markerWidth" | "refX" => width,
+        "y" | "y1" | "y2" | "cy" | "ry" | "height" | "markerHeight" | "refY" => height,
+        _ => ((width * width + height * height) / 2.0).sqrt(),
+    }
+}
+
+fn svg_nearest_viewport_dimensions(
+    runtime: &crate::native_bridge::JsContextHost,
+    handle: crate::document_runtime::DomHandle,
+) -> Option<(f64, f64)> {
+    let dom = runtime.dom_host();
+    let mut current = Some(handle);
+    while let Some(candidate) = current {
+        let node = dom.node(candidate)?;
+        if node
+            .as_element()
+            .is_some_and(|element| element.is_svg_element("svg"))
+        {
+            if let Some(view_box) = dom.get_attribute(candidate, "viewBox")
+                && let Some([_, _, width, height]) = parse_svg_view_box_value(&view_box)
+                && width > 0.0
+                && height > 0.0
+            {
+                return Some((width, height));
+            }
+            let width = dom
+                .get_attribute(candidate, "width")
+                .as_deref()
+                .and_then(|value| {
+                    moli_css_parse::parse_px_length(value, moli_css_parse::UnitlessLength::Any)
+                });
+            let height = dom
+                .get_attribute(candidate, "height")
+                .as_deref()
+                .and_then(|value| {
+                    moli_css_parse::parse_px_length(value, moli_css_parse::UnitlessLength::Any)
+                });
+            if let (Some(width), Some(height)) = (width, height) {
+                return Some((width, height));
+            }
+        }
+        current = node.parent_node();
+    }
+    None
 }
