@@ -3,6 +3,7 @@ use super::*;
 fn anchor_url_string_function_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
+    parse_failure_value: &'static str,
     project: impl FnOnce(&url::Url) -> String,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
@@ -14,7 +15,7 @@ fn anchor_url_string_function_getter<'s>(
     };
     let value = parsed_url_like_attribute(unsafe { &*runtime_ptr }, handle, "href")
         .map(|url| project(&url))
-        .unwrap_or_default();
+        .unwrap_or_else(|| parse_failure_value.to_owned());
     if let Some(value) = v8_string(scope, &value) {
         rv.set(value.into());
     } else {
@@ -280,6 +281,7 @@ fn anchor_host_getter_function<'s>(
     anchor_url_string_function_getter(
         scope,
         args.this(),
+        "",
         |url| {
             url.host_str()
                 .map(|host| {
@@ -336,6 +338,7 @@ fn anchor_hostname_getter_function<'s>(
     anchor_url_string_function_getter(
         scope,
         args.this(),
+        "",
         |url| url.host_str().unwrap_or_default().to_owned(),
         rv,
     );
@@ -368,6 +371,7 @@ fn anchor_port_getter_function<'s>(
     anchor_url_string_function_getter(
         scope,
         args.this(),
+        "",
         |url| url.port().map(|port| port.to_string()).unwrap_or_default(),
         rv,
     );
@@ -397,7 +401,7 @@ fn anchor_pathname_getter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    anchor_url_string_function_getter(scope, args.this(), |url| url.path().to_owned(), rv);
+    anchor_url_string_function_getter(scope, args.this(), "", |url| url.path().to_owned(), rv);
 }
 
 fn anchor_pathname_setter_function<'s>(
@@ -426,6 +430,7 @@ fn anchor_search_getter_function<'s>(
     anchor_url_string_function_getter(
         scope,
         args.this(),
+        "",
         |url| url::quirks::search(url).to_owned(),
         rv,
     );
@@ -454,6 +459,7 @@ fn anchor_hash_getter_function<'s>(
     anchor_url_string_function_getter(
         scope,
         args.this(),
+        "",
         |url| url::quirks::hash(url).to_owned(),
         rv,
     );
@@ -479,7 +485,13 @@ fn anchor_origin_getter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    anchor_url_string_function_getter(scope, args.this(), moli_url::origin_ascii_serialization, rv);
+    anchor_url_string_function_getter(
+        scope,
+        args.this(),
+        "",
+        moli_url::origin_ascii_serialization,
+        rv,
+    );
 }
 
 fn anchor_protocol_getter_function<'s>(
@@ -487,7 +499,13 @@ fn anchor_protocol_getter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    anchor_url_string_function_getter(scope, args.this(), |url| format!("{}:", url.scheme()), rv);
+    anchor_url_string_function_getter(
+        scope,
+        args.this(),
+        ":",
+        |url| format!("{}:", url.scheme()),
+        rv,
+    );
 }
 
 fn anchor_protocol_setter_function<'s>(
@@ -511,7 +529,7 @@ fn anchor_username_getter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    anchor_url_string_function_getter(scope, args.this(), |url| url.username().to_owned(), rv);
+    anchor_url_string_function_getter(scope, args.this(), "", |url| url.username().to_owned(), rv);
 }
 
 fn anchor_username_setter_function<'s>(
@@ -540,6 +558,7 @@ fn anchor_password_getter_function<'s>(
     anchor_url_string_function_getter(
         scope,
         args.this(),
+        "",
         |url| url.password().unwrap_or("").to_owned(),
         rv,
     );
