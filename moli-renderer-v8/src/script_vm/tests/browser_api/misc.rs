@@ -92,6 +92,8 @@ fn service_worker_csp_report_seen(
 #[test]
 fn date_locale_methods_use_shared_time_formatting_surface() {
     let mut vm = new_storage_test_vm("https://date-locale-formatting.test/");
+    vm.set_timezone_override_and_sync_surface(Some("UTC"))
+        .expect("Date timezone override should make the baseline deterministic");
 
     let us = vm
         .eval("new Date(0).toLocaleString()")
@@ -244,8 +246,108 @@ fn emulation_defaults_drive_real_intl_and_local_date_operations() {
 }
 
 #[test]
+fn emulation_preserves_intl_construction_and_complete_local_date_operations() {
+    let mut vm = new_storage_test_vm("https://date-locale-native-semantics.test/");
+    vm.set_locale_override_and_sync_surface(Some("fr-FR"))
+        .expect("locale override should sync into the Intl surface");
+    vm.set_timezone_override_and_sync_surface(Some("America/New_York"))
+        .expect("timezone override should sync into the Date surface");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  let timeZoneReads = 0;
+  let getterReceiverPreserved = false;
+  const options = {
+    get timeZone() {
+      timeZoneReads += 1;
+      getterReceiverPreserved = this === options;
+      return undefined;
+    }
+  };
+  const optionFormat = new Intl.DateTimeFormat(undefined, options);
+
+  class DerivedNumberFormat extends Intl.NumberFormat {}
+  const numberFormat = new DerivedNumberFormat();
+  class DerivedDate extends Date {}
+  const derivedDate = new DerivedDate(2024, 0, 1);
+
+  const setter = new Date('2024-01-01T05:00:00Z');
+  const setterResult = setter.setHours(12, 34, 56, 789);
+  const gapSetter = new Date('2024-03-10T06:30:00Z');
+  gapSetter.setHours(2, 30, 0, 0);
+  const revived = new Date(NaN);
+  revived.setFullYear(2024, 0, 1);
+
+  const explicitLocaleOptions = {
+    timeZone: 'UTC', year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23'
+  };
+  const explicitLocaleDate = new Date('2024-01-01T00:00:00Z');
+
+  return JSON.stringify({
+    intlSubclass: [
+      numberFormat instanceof DerivedNumberFormat,
+      numberFormat instanceof Intl.NumberFormat,
+      Object.getPrototypeOf(numberFormat) === DerivedNumberFormat.prototype,
+      numberFormat.resolvedOptions().locale
+    ],
+    options: [
+      timeZoneReads,
+      getterReceiverPreserved,
+      optionFormat.resolvedOptions().timeZone
+    ],
+    dateSubclass: [
+      derivedDate instanceof DerivedDate,
+      derivedDate instanceof Date,
+      Object.getPrototypeOf(derivedDate) === DerivedDate.prototype,
+      derivedDate.toISOString()
+    ],
+    constructors: [
+      new Date(2024, 0, 1).toISOString(),
+      new Date(2024, 6, 1).toISOString(),
+      new Date(2024, 2, 10, 2, 30).toISOString(),
+      new Date(2024, 10, 3, 1, 30).toISOString()
+    ],
+    parsing: [
+      new Date('2024-01-01T00:00:00').toISOString(),
+      new Date(Date.parse('2024-01-01T00:00:00')).toISOString(),
+      new Date('2024-01-01').toISOString(),
+      new Date('2024-01-01T00:00:00+02:00').toISOString()
+    ],
+    setters: [setterResult, setter.toISOString(), gapSetter.toISOString(), revived.toISOString()],
+    functionCallUsesOverride: /GMT-0[45]00/.test(Date()),
+    explicitLocalePreserved:
+      explicitLocaleDate.toLocaleString('en-US', explicitLocaleOptions) ===
+      new Intl.DateTimeFormat('en-US', explicitLocaleOptions).format(explicitLocaleDate),
+    reflection: [
+      Date.name,
+      Date.length,
+      typeof Date.UTC,
+      typeof Date.parse,
+      Object.getOwnPropertyDescriptor(Date, 'UTC').enumerable,
+      Intl.NumberFormat.name,
+      Intl.NumberFormat.length,
+      typeof Intl.NumberFormat.supportedLocalesOf
+    ]
+  });
+})()
+"#,
+        )
+        .expect("native Intl and complete local Date semantics should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"intlSubclass":[true,true,true,"fr-FR"],"options":[1,true,"America/New_York"],"dateSubclass":[true,true,true,"2024-01-01T05:00:00.000Z"],"constructors":["2024-01-01T05:00:00.000Z","2024-07-01T04:00:00.000Z","2024-03-10T07:30:00.000Z","2024-11-03T05:30:00.000Z"],"parsing":["2024-01-01T05:00:00.000Z","2024-01-01T05:00:00.000Z","2024-01-01T00:00:00.000Z","2023-12-31T22:00:00.000Z"],"setters":[1704130496789,"2024-01-01T17:34:56.789Z","2024-03-10T07:30:00.000Z","2024-01-01T05:00:00.000Z"],"functionCallUsesOverride":true,"explicitLocalePreserved":true,"reflection":["Date",7,"function","function",false,"NumberFormat",0,"function"]}"#
+    );
+}
+
+#[test]
 fn date_locale_methods_are_declared_on_date_prototype() {
     let mut vm = new_storage_test_vm("https://date-locale-declared.test/");
+    vm.set_timezone_override_and_sync_surface(Some("UTC"))
+        .expect("Date timezone override should make the descriptor probe deterministic");
 
     let result = vm
         .eval(
