@@ -231,11 +231,9 @@ fn start_devtools_create_target_command_with_result_host(
     };
     let initial_document_route =
         conn.target_session_route_for_target_id(created_target_id.as_str());
-    let pending_initial_document = if let Some(route) = initial_document_route.clone() {
-        let mut route_scope = conn.scoped_none_session_owner_route_override(route);
-        route_scope
-            .conn_mut()
-            .start_initial_document_page_ensure_for_session_owner(None)
+    let pending_initial_document = if let Some(route) = initial_document_route {
+        let owner = crate::conn::CommandOwnerScope::for_implicit_route(Some(route));
+        conn.start_initial_document_page_ensure_for_owner(&owner)
     } else {
         Ok(None)
     };
@@ -247,7 +245,6 @@ fn start_devtools_create_target_command_with_result_host(
                 kind: Box::new(PendingTargetCommandKind::CreateTarget {
                     response_plan: plan,
                     creation_commit,
-                    initial_document_route,
                     initial_document: Some(Box::new(initial_document)),
                 }),
             })

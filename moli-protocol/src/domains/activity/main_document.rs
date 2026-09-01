@@ -50,7 +50,6 @@ pub(crate) struct MainDocumentDownloadNavigationActivity {
 
 struct DeferredMainDocumentLoadCompletionState {
     navigation_activity: MainDocumentNavigationActivity,
-    owner_scope: CommandOwnerScope,
     renderer_document_binding: Option<CommittedRendererDocumentBinding>,
     pending_download: Option<RendererPendingDownloadActivation>,
 }
@@ -255,11 +254,9 @@ impl MainDocumentNavigationActivity {
                 elapsed_ms = timing_started.elapsed().as_millis(),
             );
         }
-        let owner_scope = CommandOwnerScope::capture(conn, self.state.owner.session_id());
         conn.enqueue_deferred_main_document_load_completion(
             DeferredMainDocumentLoadCompletionAdmission::new(self, pending_download)
-                .with_renderer_document_binding(renderer_document_binding)
-                .with_owner_scope(owner_scope),
+                .with_renderer_document_binding(renderer_document_binding),
         );
     }
 
@@ -624,7 +621,7 @@ impl MainDocumentNavigationActivity {
         network::emit_pending_network_backlog_activity_background_events(
             conn,
             out,
-            network::NetworkBacklogProjectionContext::new(self.state.owner.session_id()),
+            network::NetworkBacklogProjectionContext::for_owner(&self.state.owner),
         );
         if timing_enabled {
             tracing::info!(
@@ -643,11 +640,9 @@ impl DeferredMainDocumentLoadCompletionAdmission {
         navigation_activity: MainDocumentNavigationActivity,
         pending_download: Option<RendererPendingDownloadActivation>,
     ) -> Self {
-        let owner_scope = navigation_activity.state.owner.clone();
         Self {
             state: DeferredMainDocumentLoadCompletionState {
                 navigation_activity,
-                owner_scope,
                 renderer_document_binding: None,
                 pending_download,
             },
@@ -662,17 +657,12 @@ impl DeferredMainDocumentLoadCompletionAdmission {
         self
     }
 
-    fn with_owner_scope(mut self, owner_scope: CommandOwnerScope) -> Self {
-        self.state.owner_scope = owner_scope;
-        self
-    }
-
     pub(crate) fn owner_scope(&self) -> &CommandOwnerScope {
-        &self.state.owner_scope
+        &self.state.navigation_activity.state.owner
     }
 
     pub(crate) fn session_id(&self) -> Option<&str> {
-        self.state.owner_scope.session_id()
+        self.owner_scope().session_id()
     }
 
     pub(crate) fn is_still_current_for_scheduler(&self, conn: &CdpConnection) -> bool {
@@ -710,7 +700,7 @@ impl DeferredMainDocumentLoadCompletionAdmission {
 
 impl DeferredMainDocumentLoadCompletionActivity {
     pub(crate) fn owner_scope(&self) -> &CommandOwnerScope {
-        &self.state.owner_scope
+        &self.state.navigation_activity.state.owner
     }
 
     pub(crate) fn renderer_document_identity(&self) -> Option<RendererDocumentLifecycleIdentity> {
@@ -718,7 +708,7 @@ impl DeferredMainDocumentLoadCompletionActivity {
     }
 
     pub(crate) fn session_id(&self) -> Option<&str> {
-        self.state.owner_scope.session_id()
+        self.owner_scope().session_id()
     }
 
     pub(crate) fn target_id(&self) -> &str {
@@ -819,11 +809,11 @@ impl PendingDeferredMainDocumentLoadCompletionActivity {
 
 impl CompletedDeferredMainDocumentLoadCompletionActivity {
     pub(crate) fn owner_scope(&self) -> &CommandOwnerScope {
-        &self.state.owner_scope
+        &self.state.navigation_activity.state.owner
     }
 
     pub(crate) fn session_id(&self) -> Option<&str> {
-        self.state.owner_scope.session_id()
+        self.owner_scope().session_id()
     }
 
     pub(crate) fn observation_id(&self) -> DeferredMainDocumentLoadObservationId {
@@ -1075,7 +1065,6 @@ mod tests {
     }
 
     fn deferred_load_admission_for_test(
-        conn: &CdpConnection,
         binding: CommittedRendererDocumentBinding,
     ) -> DeferredMainDocumentLoadCompletionAdmission {
         let navigation_activity = MainDocumentNavigationActivity::new(
@@ -1086,7 +1075,6 @@ mod tests {
         );
         DeferredMainDocumentLoadCompletionAdmission::new(navigation_activity, None)
             .with_renderer_document_binding(Some(binding))
-            .with_owner_scope(CommandOwnerScope::capture(conn, Some("SID-nav")))
     }
 
     fn take_deferred_load_work_for_test(conn: &mut CdpConnection) -> ProtocolSchedulerWork {
@@ -1518,7 +1506,7 @@ mod tests {
     #[tokio::test]
     async fn deferred_load_terminal_before_adapter_wait_is_not_lost() {
         let (mut conn, binding, started) = connection_with_dcl_only_renderer_lifecycle();
-        let admission = deferred_load_admission_for_test(&conn, binding);
+        let admission = deferred_load_admission_for_test(binding);
         conn.enqueue_deferred_main_document_load_completion(admission);
         let work = take_deferred_load_work_for_test(&mut conn);
 
@@ -1539,8 +1527,8 @@ mod tests {
     #[test]
     fn same_owner_load_admissions_publish_distinct_ordered_work() {
         let (mut conn, binding, _) = connection_with_dcl_only_renderer_lifecycle();
-        let first = deferred_load_admission_for_test(&conn, binding.clone());
-        let second = deferred_load_admission_for_test(&conn, binding);
+        let first = deferred_load_admission_for_test(binding.clone());
+        let second = deferred_load_admission_for_test(binding);
         conn.enqueue_deferred_main_document_load_completion(first);
         conn.enqueue_deferred_main_document_load_completion(second);
 
@@ -1571,7 +1559,7 @@ mod tests {
     #[tokio::test]
     async fn deferred_load_work_remains_resident_without_republication_until_terminal() {
         let (mut conn, binding, started) = connection_with_dcl_only_renderer_lifecycle();
-        let admission = deferred_load_admission_for_test(&conn, binding);
+        let admission = deferred_load_admission_for_test(binding);
         conn.enqueue_deferred_main_document_load_completion(admission);
         let work = take_deferred_load_work_for_test(&mut conn);
         assert!(
@@ -1661,7 +1649,7 @@ mod tests {
     #[tokio::test]
     async fn superseded_deferred_load_completion_is_consumed_through_its_observer() {
         let (mut conn, binding, _) = connection_with_dcl_only_renderer_lifecycle();
-        let old_completion = deferred_load_admission_for_test(&conn, binding);
+        let old_completion = deferred_load_admission_for_test(binding);
         conn.enqueue_deferred_main_document_load_completion(old_completion);
         let work = take_deferred_load_work_for_test(&mut conn);
 

@@ -5,7 +5,7 @@ use url::Url;
 
 use super::body_spool::ensure_materialize_limit;
 use super::{
-    CapturedBody, CapturedBodyWriter, CdpConnection, DocumentNavigationToken,
+    CapturedBody, CapturedBodyWriter, CdpConnection, CdpSessionRoute, DocumentNavigationToken,
     NavigationDispatchState, NavigationLoadOutcome, PausedResponsePreparedDocument,
 };
 use crate::devtools_runtime::{DevToolsNetworkInterceptId, DevToolsNetworkResourceType};
@@ -2112,8 +2112,24 @@ impl CdpConnection {
         internal_id: u64,
         error_text: String,
     ) -> Result<Option<moli_core::RendererOutputFence>, String> {
+        self.fail_pending_subresource_auth_for_route_async(
+            session_id,
+            None,
+            internal_id,
+            error_text,
+        )
+        .await
+    }
+
+    pub(crate) async fn fail_pending_subresource_auth_for_route_async(
+        &mut self,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
+        internal_id: u64,
+        error_text: String,
+    ) -> Result<Option<moli_core::RendererOutputFence>, String> {
         let page = self
-            .runtime_session_owner_slot_mut(session_id)?
+            .runtime_session_owner_slot_mut_for_route(session_id, owner_route)?
             .loaded_page_mut()
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?;
         page.fail_pending_subresource_auth_async(internal_id, error_text)
@@ -2136,8 +2152,24 @@ impl CdpConnection {
         internal_id: u64,
         error_text: String,
     ) -> Result<Option<moli_core::RendererOutputFence>, String> {
+        self.fail_pending_subresource_fetch_for_route_async(
+            session_id,
+            None,
+            internal_id,
+            error_text,
+        )
+        .await
+    }
+
+    pub(crate) async fn fail_pending_subresource_fetch_for_route_async(
+        &mut self,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
+        internal_id: u64,
+        error_text: String,
+    ) -> Result<Option<moli_core::RendererOutputFence>, String> {
         let page = self
-            .runtime_session_owner_slot_mut(session_id)?
+            .runtime_session_owner_slot_mut_for_route(session_id, owner_route)?
             .loaded_page_mut()
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?;
         page.fail_pending_subresource_fetch_async(internal_id, error_text)
@@ -2238,8 +2270,24 @@ impl CdpConnection {
         internal_id: u64,
         error_text: String,
     ) -> Result<Option<moli_core::RendererOutputFence>, String> {
+        self.fail_pending_subresource_response_for_route_async(
+            session_id,
+            None,
+            internal_id,
+            error_text,
+        )
+        .await
+    }
+
+    pub(crate) async fn fail_pending_subresource_response_for_route_async(
+        &mut self,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
+        internal_id: u64,
+        error_text: String,
+    ) -> Result<Option<moli_core::RendererOutputFence>, String> {
         let page = self
-            .runtime_session_owner_slot_mut(session_id)?
+            .runtime_session_owner_slot_mut_for_route(session_id, owner_route)?
             .loaded_page_mut()
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?;
         page.fail_pending_subresource_response_async(internal_id, error_text)

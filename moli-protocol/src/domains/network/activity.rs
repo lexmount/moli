@@ -1,4 +1,4 @@
-use crate::conn::CdpConnection;
+use crate::conn::{CdpConnection, CommandOwnerScope};
 use crate::domains::activity::{
     PreparedSubresourceContinueAction, ProtocolOutputPayloads, ProtocolOutputProjectionContext,
     ProtocolOutputSink, ProtocolOutputSlot,
@@ -55,13 +55,13 @@ impl NetworkPreparedOutputs {
     }
 
     pub(crate) fn backlog_projection_context<'a>(
-        session_id: Option<&'a str>,
+        owner: &CommandOwnerScope,
         frame_id: Option<&'a str>,
         base_timestamp: Option<f64>,
         contextual_subresource_request_id: Option<&'a str>,
         prepared_outputs: Option<&'a mut Self>,
     ) -> NetworkBacklogProjectionContext<'a> {
-        NetworkBacklogProjectionContext::new(session_id)
+        NetworkBacklogProjectionContext::for_owner(owner)
             .with_frame_id(frame_id)
             .with_base_timestamp(base_timestamp)
             .with_contextual_subresource_request_id(contextual_subresource_request_id)
@@ -288,13 +288,13 @@ impl NetworkPreparedOutputSlot {
 
     pub(crate) fn backlog_projection_context<'a>(
         &'a mut self,
-        session_id: Option<&'a str>,
+        owner: &CommandOwnerScope,
         frame_id: Option<&'a str>,
         base_timestamp: Option<f64>,
         contextual_subresource_request_id: Option<&'a str>,
     ) -> NetworkBacklogProjectionContext<'a> {
         NetworkPreparedOutputs::backlog_projection_context(
-            session_id,
+            owner,
             frame_id,
             base_timestamp,
             contextual_subresource_request_id,
@@ -320,7 +320,7 @@ impl NetworkPreparedOutputSlot {
         &mut self,
         conn: &mut CdpConnection,
         out: &mut Vec<crate::conn::BackgroundProtocolEvent>,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
         frame_id: Option<&str>,
         base_timestamp: Option<f64>,
         contextual_subresource_request_id: Option<&str>,
@@ -329,7 +329,7 @@ impl NetworkPreparedOutputSlot {
             conn,
             out,
             self.backlog_projection_context(
-                session_id,
+                owner,
                 frame_id,
                 base_timestamp,
                 contextual_subresource_request_id,
@@ -390,10 +390,11 @@ impl NetworkOutputProjectionStep {
             }
             NetworkOutputProjectionStep::NetworkBacklog => {
                 if let Some(slot) = prepared_outputs.and_then(ProtocolOutputPayloads::network_mut) {
+                    let owner = CommandOwnerScope::capture(conn, context.session_id);
                     slot.emit_backlog_activity_background_events(
                         conn,
                         context.command.protocol_events_mut(),
-                        context.session_id,
+                        &owner,
                         context.subresource_frame_id,
                         context.subresource_timestamp,
                         context.subresource_network_request_id,
@@ -485,9 +486,39 @@ pub(in crate::domains) fn network_backlog_prepared_outputs(
     outputs
 }
 
+pub(in crate::domains) fn network_backlog_prepared_outputs_for_owner(
+    conn: &mut CdpConnection,
+    owner: &crate::conn::CommandOwnerScope,
+    preferred_request_id: Option<super::NetworkBacklogPreferredRequestId<'_>>,
+) -> NetworkPreparedOutputs {
+    let mut outputs = NetworkPreparedOutputs::default();
+    let session_id = owner.session_id();
+    let primary_session_id = conn.runtime_session_owner_primary_session_id_for_route(
+        session_id,
+        owner.session_owner_route(),
+    );
+    if let Some(backlog) = conn.network_backlog_prepared_delivery_for_route(
+        session_id,
+        owner.session_owner_route(),
+        session_id,
+        primary_session_id.as_deref(),
+        preferred_request_id,
+    ) {
+        outputs.extend(NetworkPreparedOutputs {
+            pending_subresource_continue_actions: Vec::new(),
+            renderer_live: TargetNetworkBacklogPreparedDelivery::default(),
+            backlog,
+            subresource_fetch_pauses: Vec::new(),
+        });
+    }
+    outputs
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::conn::{CommandDispatchContext, PendingSubresourceFetchOwnerKind};
+    use crate::conn::{
+        CommandDispatchContext, CommandOwnerScope, PendingSubresourceFetchOwnerKind,
+    };
     use axum::{
         Router,
         extract::ws::{Message, WebSocketUpgrade},
@@ -557,15 +588,16 @@ mod tests {
     #[test]
     fn network_prepared_outputs_build_backlog_projection_context() {
         let mut prepared = NetworkPreparedOutputs::default();
+        let owner = CommandOwnerScope::for_session("SID-1");
         let context = NetworkPreparedOutputs::backlog_projection_context(
-            Some("SID-1"),
+            &owner,
             Some("FRAME-1"),
             Some(11.0),
             Some("REQ-1"),
             Some(&mut prepared),
         );
 
-        assert_eq!(context.session_id, Some("SID-1"));
+        assert_eq!(context.session_id(), Some("SID-1"));
         assert_eq!(context.frame_id, Some("FRAME-1"));
         assert_eq!(context.base_timestamp, Some(11.0));
         assert!(

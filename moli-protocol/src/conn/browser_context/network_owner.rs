@@ -531,8 +531,23 @@ impl CdpConnection {
         data_type: DevToolsNetworkDataType,
         encoded_data_size: usize,
     ) -> Vec<String> {
+        self.network_data_collector_ids_for_route_body(
+            session_id,
+            None,
+            data_type,
+            encoded_data_size,
+        )
+    }
+
+    pub(crate) fn network_data_collector_ids_for_route_body(
+        &self,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
+        data_type: DevToolsNetworkDataType,
+        encoded_data_size: usize,
+    ) -> Vec<String> {
         let Some((browser_context_id, target_id)) =
-            self.target_owner_identity_for_session(session_id)
+            self.target_owner_identity_for_route(session_id, owner_route)
         else {
             return Vec::new();
         };
@@ -612,10 +627,27 @@ impl CdpConnection {
         primary_session_id: Option<&str>,
         preferred_request_id: Option<NetworkBacklogPreferredRequestId<'_>>,
     ) -> Option<TargetNetworkBacklogPreparedDelivery> {
+        self.network_backlog_prepared_delivery_for_route(
+            session_id,
+            None,
+            trigger_session_id,
+            primary_session_id,
+            preferred_request_id,
+        )
+    }
+
+    pub(crate) fn network_backlog_prepared_delivery_for_route(
+        &mut self,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
+        trigger_session_id: Option<&str>,
+        primary_session_id: Option<&str>,
+        preferred_request_id: Option<NetworkBacklogPreferredRequestId<'_>>,
+    ) -> Option<TargetNetworkBacklogPreparedDelivery> {
         let mut network_request_id_allocator =
             std::mem::take(&mut self.network_request_id_allocator);
         let result = self
-            .runtime_session_owner_slot_mut(session_id)
+            .runtime_session_owner_slot_mut_for_route(session_id, owner_route)
             .ok()
             .map(|runtime_slot| {
                 runtime_slot.network_backlog_prepared_delivery(
@@ -649,9 +681,10 @@ impl CdpConnection {
         result
     }
 
-    pub(crate) fn pending_network_backlog_delivery_snapshot_for_session_owner(
+    pub(crate) fn pending_network_backlog_delivery_snapshot_for_route(
         &mut self,
         session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
         trigger_session_id: Option<&str>,
         primary_session_id: Option<&str>,
         preferred_request_id: Option<NetworkBacklogPreferredRequestId<'_>>,
@@ -659,7 +692,7 @@ impl CdpConnection {
         let mut network_request_id_allocator =
             std::mem::take(&mut self.network_request_id_allocator);
         let result = self
-            .runtime_session_owner_slot_mut(session_id)
+            .runtime_session_owner_slot_mut_for_route(session_id, owner_route)
             .ok()
             .and_then(|runtime_slot| {
                 runtime_slot.pending_network_backlog_delivery_snapshot(
@@ -677,10 +710,20 @@ impl CdpConnection {
         &self,
         session_id: Option<&str>,
     ) -> Vec<Option<String>> {
-        let Ok(runtime_slot) = self.runtime_session_owner_slot(session_id) else {
+        self.network_event_session_ids_for_route(session_id, None)
+    }
+
+    pub(crate) fn network_event_session_ids_for_route(
+        &self,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
+    ) -> Vec<Option<String>> {
+        let Ok(runtime_slot) = self.runtime_session_owner_slot_for_route(session_id, owner_route)
+        else {
             return vec![session_id.map(str::to_owned)];
         };
-        let primary_session_id = self.runtime_session_owner_primary_session_id(session_id);
+        let primary_session_id =
+            self.runtime_session_owner_primary_session_id_for_route(session_id, owner_route);
         runtime_slot.network_event_session_ids(session_id, primary_session_id.as_deref())
     }
 

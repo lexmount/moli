@@ -1290,21 +1290,16 @@ async fn ensure_initial_document_for_attached_page_targets_async(
         let Some(route) = conn.target_session_route_for_target_id(target_id) else {
             continue;
         };
-        let pending = {
-            let mut route_scope = conn.scoped_none_session_owner_route_override(route);
-            match route_scope
-                .conn_mut()
-                .start_initial_document_page_ensure_for_session_owner(None)
-            {
-                Ok(pending) => pending,
-                Err(message) => {
-                    warn_target_protocol_side_effect_failure(
-                        target_id,
-                        "start_initial_document_page_ensure",
-                        &message,
-                    );
-                    continue;
-                }
+        let owner = crate::conn::CommandOwnerScope::for_implicit_route(Some(route));
+        let pending = match conn.start_initial_document_page_ensure_for_owner(&owner) {
+            Ok(pending) => pending,
+            Err(message) => {
+                warn_target_protocol_side_effect_failure(
+                    target_id,
+                    "start_initial_document_page_ensure",
+                    &message,
+                );
+                continue;
             }
         };
         let Some(pending) = pending else {

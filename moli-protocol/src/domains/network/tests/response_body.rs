@@ -384,10 +384,11 @@ async fn get_response_body_returns_partial_body_after_staged_loading_failed() {
     *prepared_outputs.backlog_mut() = backlog;
 
     let mut emitted_events = Vec::new();
+    let owner = crate::conn::CommandOwnerScope::for_session("SID-1");
     emit_pending_network_backlog_activity_background_events(
         &mut ctx.conn,
         &mut emitted_events,
-        NetworkBacklogProjectionContext::new(Some("SID-1"))
+        NetworkBacklogProjectionContext::for_owner(&owner)
             .with_base_timestamp(Some(100.0))
             .with_prepared_outputs(Some(&mut prepared_outputs)),
     );

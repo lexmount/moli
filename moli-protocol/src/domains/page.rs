@@ -2329,10 +2329,11 @@ pub(in crate::domains) async fn emit_top_level_history_traversal_activity_backgr
 pub(crate) async fn navigate_page_owned_top_level_location_background_events_async(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
-    session_id: Option<&str>,
+    command_owner: &CommandOwnerScope,
     owner: &crate::conn::TargetPageResidenceIdentity,
     navigation: RendererDocumentSourcedTopLevelLocationNavigation,
 ) {
+    let session_id = command_owner.session_id();
     let source_document = navigation.source_document();
     if !conn.target_page_residence_identity_is_current_for_session(session_id, owner) {
         tracing::debug!(
@@ -2346,10 +2347,10 @@ pub(crate) async fn navigate_page_owned_top_level_location_background_events_asy
         );
         return;
     }
-    navigate_session_owner_from_renderer_request_background_events_async(
+    navigate_command_owner_from_renderer_request_background_events_async(
         conn,
         out,
-        session_id,
+        command_owner.clone(),
         navigation.url(),
         navigation.request_method(),
         navigation.request_body(),
@@ -2365,10 +2366,20 @@ pub(crate) async fn navigate_session_owner_from_renderer_background_events_async
     session_id: Option<&str>,
     url: &str,
 ) {
-    navigate_session_owner_from_renderer_request_background_events_async(
+    let owner = CommandOwnerScope::capture(conn, session_id);
+    navigate_command_owner_from_renderer_background_events_async(conn, out, &owner, url).await;
+}
+
+pub(crate) async fn navigate_command_owner_from_renderer_background_events_async(
+    conn: &mut CdpConnection,
+    out: &mut Vec<BackgroundProtocolEvent>,
+    owner: &CommandOwnerScope,
+    url: &str,
+) {
+    navigate_command_owner_from_renderer_request_background_events_async(
         conn,
         out,
-        session_id,
+        owner.clone(),
         url,
         "GET",
         None,
@@ -2378,17 +2389,16 @@ pub(crate) async fn navigate_session_owner_from_renderer_background_events_async
     .await;
 }
 
-async fn navigate_session_owner_from_renderer_request_background_events_async(
+async fn navigate_command_owner_from_renderer_request_background_events_async(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
-    session_id: Option<&str>,
+    owner: CommandOwnerScope,
     url: &str,
     request_method: &str,
     request_body: Option<&[u8]>,
     request_headers: &[(String, String)],
     browser_navigation_kind: moli_fetch::BrowserNavigationRequestKind,
 ) {
-    let owner = CommandOwnerScope::capture(conn, session_id);
     let start = navigation::start_session_owner_navigation_from_renderer(
         conn,
         &owner,
@@ -7477,16 +7487,6 @@ pub(crate) async fn complete_pending_page_command(
     completed: CompletedPageCommandDispatch,
     command_context: &mut CommandDispatchContext,
 ) -> PageCommandTaskStep {
-    let owner_scope = completed.owner_scope.clone();
-    let mut route_scope = owner_scope.enter(conn);
-    complete_pending_page_command_inner(route_scope.conn_mut(), completed, command_context).await
-}
-
-async fn complete_pending_page_command_inner(
-    conn: &mut CdpConnection,
-    completed: CompletedPageCommandDispatch,
-    command_context: &mut CommandDispatchContext,
-) -> PageCommandTaskStep {
     let command_id = completed.command_id;
     let owner_scope = completed.owner_scope.clone();
     let session_id = completed.owner_scope.session_id().map(str::to_owned);
@@ -7612,7 +7612,7 @@ async fn complete_pending_page_command_inner(
             return preload::complete_pending_add_script_to_evaluate_on_new_document_command(
                 conn,
                 command_id,
-                session_id.as_deref(),
+                &owner_scope,
                 completed,
                 command_context,
             )
@@ -7990,7 +7990,7 @@ async fn complete_pending_page_command_inner(
             return preload::complete_pending_create_isolated_world_command(
                 conn,
                 command_id,
-                session_id.as_deref(),
+                &owner_scope,
                 *completed,
                 command_context,
             )
@@ -8028,7 +8028,7 @@ async fn complete_pending_page_command_inner(
             return termination::complete_stop_loading_command_dispatch(
                 conn,
                 command_id,
-                session_id.as_deref(),
+                &owner_scope,
             )
             .await;
         }
@@ -8036,7 +8036,7 @@ async fn complete_pending_page_command_inner(
             return termination::complete_crash_command_dispatch(
                 conn,
                 command_id,
-                session_id.as_deref(),
+                &owner_scope,
                 command_context,
             )
             .await;
@@ -8045,7 +8045,7 @@ async fn complete_pending_page_command_inner(
             return termination::complete_close_command_dispatch(
                 conn,
                 command_id,
-                session_id.as_deref(),
+                &owner_scope,
                 command_context,
             )
             .await;

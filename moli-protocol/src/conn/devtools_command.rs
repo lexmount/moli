@@ -392,13 +392,10 @@ impl CdpConnection {
             .is_some_and(|browser_context| {
                 browser_context.has_default_bidi_channel_preload_script()
             });
-        let mut route_scope = self.scoped_none_session_owner_route_override(route);
+        let command_owner = CommandOwnerScope::for_implicit_route(Some(route.clone()));
         let mut initial_runtime_execution_context_ids = Vec::new();
         let mut renderer_output_predecessor = None;
-        let pending = match route_scope
-            .conn_mut()
-            .start_initial_document_page_ensure_for_session_owner(None)
-        {
+        let pending = match self.start_initial_document_page_ensure_for_owner(&command_owner) {
             Ok(pending) => pending,
             Err(error) => {
                 tracing::debug!(
@@ -412,8 +409,7 @@ impl CdpConnection {
         if let Some(pending) = pending {
             match pending.wait().await {
                 Ok(completed) => {
-                    match route_scope
-                        .conn_mut()
+                    match self
                         .complete_initial_document_page_build_for_owner_with_creation_diagnostics(
                             completed,
                         )
@@ -444,9 +440,7 @@ impl CdpConnection {
                     }
                 }
                 Err(error) => {
-                    let error = route_scope
-                        .conn_mut()
-                        .reset_failed_initial_document_page_build_for_owner(error);
+                    let error = self.reset_failed_initial_document_page_build_for_owner(error);
                     tracing::debug!(
                         ?error,
                         target_id = %target_id.as_str(),
@@ -458,18 +452,18 @@ impl CdpConnection {
         }
         let mut listener_events = Vec::new();
         if has_default_bidi_channel_preload_script
-            || route_scope
-                .conn_mut()
-                .target_owner_has_bidi_channel_preload_script_for_session(None)
+            || self.target_owner_has_bidi_channel_preload_script_for_route(
+                command_owner.session_id(),
+                command_owner.session_owner_route(),
+            )
         {
             let mut execution_context_ids = initial_runtime_execution_context_ids;
             // Target lifecycle creation can materialize initial about:blank without Runtime.enable;
             // in that path the renderer has an initial default context id but no Runtime
             // frontend-created inspector batch.
             if execution_context_ids.is_empty()
-                && let Ok(Some(default_context_id)) = route_scope
-                    .conn_mut()
-                    .runtime_default_or_initial_execution_context_id_for_session_owner_async(None)
+                && let Ok(Some(default_context_id)) = self
+                    .runtime_default_or_initial_execution_context_id_for_owner_async(&command_owner)
                     .await
             {
                 execution_context_ids.push(default_context_id);
@@ -477,8 +471,8 @@ impl CdpConnection {
             for execution_context_id in execution_context_ids {
                 Box::pin(
                     crate::domains::runtime::start_bidi_preload_channel_listeners_for_execution_context_background_events_async(
-                        route_scope.conn_mut(),
-                        None,
+                        self,
+                        &command_owner,
                         execution_context_id,
                         &mut listener_events,
                     ),

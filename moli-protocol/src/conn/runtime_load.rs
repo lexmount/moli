@@ -1774,14 +1774,24 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
     ) -> Result<Option<PendingInitialDocumentPageBuild>, String> {
-        let runtime_slot = match self.runtime_session_owner_slot(session_id) {
+        let owner = CommandOwnerScope::capture(self, session_id);
+        self.start_initial_document_page_ensure_for_owner(&owner)
+    }
+
+    pub(crate) fn start_initial_document_page_ensure_for_owner(
+        &mut self,
+        owner: &CommandOwnerScope,
+    ) -> Result<Option<PendingInitialDocumentPageBuild>, String> {
+        let runtime_slot = match self
+            .runtime_session_owner_slot_for_route(owner.session_id(), owner.session_owner_route())
+        {
             Ok(slot) => slot,
             Err(_) => return Ok(None),
         };
         if runtime_slot.has_loaded_page() {
             return Ok(None);
         }
-        if !self.runtime_session_owner_target_is_initial_about_blank(session_id) {
+        if !self.runtime_session_owner_target_is_initial_about_blank_for_owner(owner) {
             return Ok(None);
         }
         // Session attachment is a target operation, not a Document command.
@@ -1792,27 +1802,44 @@ impl CdpConnection {
         // it, while rejecting the ensure would incorrectly reject attachment.
         // Treat this as an already-satisfied ensure and let the exact
         // target-owned navigation install the replacement Document.
-        if self.has_pending_document_navigation_for_session_owner(session_id) {
+        if self.has_pending_document_navigation_for_route(
+            owner.session_id(),
+            owner.session_owner_route(),
+        ) {
             return Ok(None);
         }
 
-        self.start_initial_empty_document_page_build_for_session_owner(session_id)
+        self.start_initial_empty_document_page_build_for_owner(owner)
     }
 
     pub(crate) fn runtime_session_owner_target_is_initial_about_blank(
         &self,
         session_id: Option<&str>,
     ) -> bool {
-        if let Some(is_on_initial_empty_document) =
-            self.runtime_session_owner_record_is_on_initial_empty_document(session_id)
+        let owner = CommandOwnerScope::capture(self, session_id);
+        self.runtime_session_owner_target_is_initial_about_blank_for_owner(&owner)
+    }
+
+    fn runtime_session_owner_target_is_initial_about_blank_for_owner(
+        &self,
+        owner: &CommandOwnerScope,
+    ) -> bool {
+        if let Some(is_on_initial_empty_document) = self
+            .runtime_session_owner_record_is_on_initial_empty_document_for_route(
+                owner.session_id(),
+                owner.session_owner_route(),
+            )
         {
             return is_on_initial_empty_document;
         }
-        self.runtime_session_owner_target_url(session_id)
-            .as_deref()
-            .and_then(|raw_url| Url::parse(raw_url).ok())
-            .as_ref()
-            .is_some_and(moli_url::is_about_blank)
+        self.runtime_session_owner_target_url_for_route(
+            owner.session_id(),
+            owner.session_owner_route(),
+        )
+        .as_deref()
+        .and_then(|raw_url| Url::parse(raw_url).ok())
+        .as_ref()
+        .is_some_and(moli_url::is_about_blank)
     }
 
     /// Returns whether the materialized initial `about:blank` still needs to
@@ -1870,11 +1897,13 @@ impl CdpConnection {
         target_url != initial_url
     }
 
-    fn start_initial_empty_document_page_build_for_session_owner(
+    fn start_initial_empty_document_page_build_for_owner(
         &mut self,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
     ) -> Result<Option<PendingInitialDocumentPageBuild>, String> {
-        let runtime_slot = match self.runtime_session_owner_slot(session_id) {
+        let runtime_slot = match self
+            .runtime_session_owner_slot_for_route(owner.session_id(), owner.session_owner_route())
+        {
             Ok(slot) => slot,
             Err(_) => return Ok(None),
         };
@@ -1890,38 +1919,53 @@ impl CdpConnection {
             }));
         }
 
-        let owner = self
-            .initial_document_page_owner_for_session(session_id)
+        let page_owner = self
+            .initial_document_page_owner_for_route(owner.session_id(), owner.session_owner_route())
             .ok_or_else(|| "TargetNotLoaded".to_owned())?;
-        let load_inputs = self.navigation_load_inputs_for_session_owner(session_id);
+        let load_inputs =
+            self.navigation_load_inputs_for_route(owner.session_id(), owner.session_owner_route());
         let requested_url = self
-            .runtime_session_owner_initial_empty_document_url(session_id)
+            .runtime_session_owner_initial_empty_document_url_for_owner(owner)
             .unwrap_or_else(|| Url::parse("about:blank").expect("about:blank should be valid"));
         let (fetch_subresource_interception_enabled, fetch_subresource_interception_resource_type) =
             load_inputs.fetch_subresource_interception;
         let mut engine = self.background_navigation_engine_for_load_inputs(&load_inputs);
         let page_storage = load_inputs.page_storage_handles();
-        let top_level_storage_key =
-            self.runtime_session_owner_initial_empty_document_storage_key(session_id);
-        self.runtime_session_owner_slot_mut(session_id)?
-            .start_initial_document_page_build();
+        let top_level_storage_key = self
+            .runtime_session_owner_initial_empty_document_storage_key_for_route(
+                owner.session_id(),
+                owner.session_owner_route(),
+            );
+        self.runtime_session_owner_slot_mut_for_route(
+            owner.session_id(),
+            owner.session_owner_route(),
+        )?
+        .start_initial_document_page_build();
         let page_reservation = engine.reserve_page_for_creation();
         let renderer_page = RendererPageResidenceIdentity::from_parts(
             page_reservation.local_host_id(),
             page_reservation.page_id(),
         );
         if !self
-            .runtime_session_owner_slot_mut(session_id)?
+            .runtime_session_owner_slot_mut_for_route(
+                owner.session_id(),
+                owner.session_owner_route(),
+            )?
             .bind_initial_document_page_build_renderer_page(renderer_page)
         {
             let message =
                 "initial document Page reservation no longer matches its target build".to_owned();
-            let _ = self.runtime_session_owner_slot_mut(session_id).map(|slot| {
-                slot.fail_initial_document_page_build(message.clone());
-                slot.mark_loaded_page_absent(
-                    TargetPageAbsenceReason::InitialDocumentPageBuildPending,
-                );
-            });
+            let _ = self
+                .runtime_session_owner_slot_mut_for_route(
+                    owner.session_id(),
+                    owner.session_owner_route(),
+                )
+                .map(|slot| {
+                    slot.fail_initial_document_page_build(message.clone());
+                    slot.mark_loaded_page_absent(
+                        TargetPageAbsenceReason::InitialDocumentPageBuildPending,
+                    );
+                });
             return Err(message);
         }
         // The renderer command below can open the Page output stream and
@@ -1929,10 +1973,13 @@ impl CdpConnection {
         // control. Bind the reserved Page to its target before enqueueing that
         // command; binding after `start_*` would leave a real cross-thread race
         // where the concrete FIFO receives its first publication ownerless.
-        let page_owner = self
-            .pending_target_page_residence_identity_for_session(session_id)
+        let renderer_page_owner = self
+            .pending_target_page_residence_identity_for_route(
+                owner.session_id(),
+                owner.session_owner_route(),
+            )
             .ok_or_else(|| "initial document Page reservation lost its target owner".to_owned())?;
-        self.bind_renderer_page_output_owner(renderer_page, page_owner);
+        self.bind_renderer_page_output_owner(renderer_page, renderer_page_owner);
         let pending = engine
             .start_build_html_page_from_response_with_storage_and_inspector_session_restores(
                 page_reservation,
@@ -1968,17 +2015,22 @@ impl CdpConnection {
             )
             .map_err(|error| {
                 let message = format!("failed to start initial document page build: {error}");
-                let _ = self.runtime_session_owner_slot_mut(session_id).map(|slot| {
-                    slot.fail_initial_document_page_build(message.clone());
-                    slot.mark_loaded_page_absent(
-                        TargetPageAbsenceReason::InitialDocumentPageBuildPending,
-                    );
-                });
+                let _ = self
+                    .runtime_session_owner_slot_mut_for_route(
+                        owner.session_id(),
+                        owner.session_owner_route(),
+                    )
+                    .map(|slot| {
+                        slot.fail_initial_document_page_build(message.clone());
+                        slot.mark_loaded_page_absent(
+                            TargetPageAbsenceReason::InitialDocumentPageBuildPending,
+                        );
+                    });
                 message
             })?;
         Ok(Some(PendingInitialDocumentPageBuild {
             kind: PendingInitialDocumentPageBuildKind::Build {
-                owner,
+                owner: page_owner,
                 load_inputs: Box::new(load_inputs),
                 override_mode: NavigationLoadInputOverrideMode::FreshlyBuiltPage,
                 engine: Box::new(Some(engine)),
@@ -2028,19 +2080,25 @@ impl CdpConnection {
         failed.into_message()
     }
 
-    fn runtime_session_owner_initial_empty_document_url(
+    fn runtime_session_owner_initial_empty_document_url_for_owner(
         &self,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
     ) -> Option<Url> {
-        if let Some(raw_url) =
-            self.runtime_session_owner_record_initial_empty_document_url(session_id)
+        if let Some(raw_url) = self
+            .runtime_session_owner_record_initial_empty_document_url_for_route(
+                owner.session_id(),
+                owner.session_owner_route(),
+            )
         {
             return Url::parse(&raw_url).ok().filter(moli_url::is_about_blank);
         }
-        self.runtime_session_owner_target_url(session_id)
-            .as_deref()
-            .and_then(|raw_url| Url::parse(raw_url).ok())
-            .filter(moli_url::is_about_blank)
+        self.runtime_session_owner_target_url_for_route(
+            owner.session_id(),
+            owner.session_owner_route(),
+        )
+        .as_deref()
+        .and_then(|raw_url| Url::parse(raw_url).ok())
+        .filter(moli_url::is_about_blank)
     }
 
     fn complete_initial_document_page_build_for_page_owner(

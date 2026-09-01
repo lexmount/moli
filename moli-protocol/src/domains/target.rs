@@ -323,7 +323,6 @@ enum PendingTargetCommandKind {
     CreateTarget {
         response_plan: CommandOutputPlan,
         creation_commit: creation::TargetCreationCommit,
-        initial_document_route: Option<crate::conn::CdpSessionRoute>,
         initial_document: Option<Box<crate::conn::PendingInitialDocumentPageBuild>>,
     },
     DetachFromTarget {
@@ -364,7 +363,6 @@ enum CompletedTargetCommandKind {
     CreateTarget {
         response_plan: CommandOutputPlan,
         creation_commit: creation::TargetCreationCommit,
-        initial_document_route: Option<crate::conn::CdpSessionRoute>,
         initial_document: Option<
             Result<
                 Box<crate::conn::CompletedInitialDocumentPageBuild>,
@@ -418,12 +416,10 @@ impl PendingTargetCommandDispatch {
             PendingTargetCommandKind::CreateTarget {
                 response_plan,
                 creation_commit,
-                initial_document_route,
                 initial_document,
             } => CompletedTargetCommandKind::CreateTarget {
                 response_plan,
                 creation_commit,
-                initial_document_route,
                 initial_document: match initial_document {
                     Some(pending) => Some(pending.wait().await.map(Box::new)),
                     None => None,
@@ -809,7 +805,6 @@ pub(crate) async fn complete_pending_target_command(
         CompletedTargetCommandKind::CreateTarget {
             response_plan,
             creation_commit,
-            initial_document_route,
             initial_document,
         } => {
             let activation_events = if let Some(activation) = creation_commit.activation() {
@@ -822,20 +817,11 @@ pub(crate) async fn complete_pending_target_command(
             match initial_document {
                 Some(Ok(completed_initial_document)) => {
                     let completed_initial_document = *completed_initial_document;
-                    let result = if let Some(route) = initial_document_route {
-                        let mut route_scope = conn.scoped_none_session_owner_route_override(route);
-                        route_scope
-                            .conn_mut()
-                            .complete_initial_document_page_build_for_owner_with_creation_diagnostics(
-                                completed_initial_document,
-                            )
-                            .await
-                    } else {
-                        conn.complete_initial_document_page_build_for_owner_with_creation_diagnostics(
+                    let result = conn
+                        .complete_initial_document_page_build_for_owner_with_creation_diagnostics(
                             completed_initial_document,
                         )
-                        .await
-                    };
+                        .await;
                     match result {
                         Ok(diagnostics) => {
                             if let Some(predecessor) = diagnostics.renderer_output_predecessor {

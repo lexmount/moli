@@ -536,7 +536,7 @@ async fn restore_and_commit_loaded_navigation_page_async(
         Box::pin(
             crate::domains::runtime::start_bidi_preload_channel_listeners_for_execution_context_background_events_async(
                 conn,
-                state.owner.session_id(),
+                &state.owner,
                 execution_context_id,
                 &mut preload_channel_listener_events,
             ),

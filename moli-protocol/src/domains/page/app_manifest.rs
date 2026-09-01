@@ -230,7 +230,7 @@ pub(super) fn complete_get_app_manifest_command(
             emit_pending_network_backlog_activity_background_events(
                 conn,
                 &mut ordered_events,
-                NetworkBacklogProjectionContext::new(session_id),
+                NetworkBacklogProjectionContext::for_owner(owner),
             );
             let mut plan = CommandOutputPlan::default();
             plan.extend_background_events(ordered_events);

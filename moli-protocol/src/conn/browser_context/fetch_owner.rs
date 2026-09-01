@@ -233,7 +233,15 @@ impl CdpConnection {
         &self,
         session_id: Option<&str>,
     ) -> Option<TargetFetchSubresourceInterceptionSnapshot> {
-        self.target_session_owner_aggregate_fetch_config(session_id)
+        self.target_fetch_subresource_interception_snapshot_for_route(session_id, None)
+    }
+
+    pub(crate) fn target_fetch_subresource_interception_snapshot_for_route(
+        &self,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
+    ) -> Option<TargetFetchSubresourceInterceptionSnapshot> {
+        self.target_session_owner_aggregate_fetch_config_for_route(session_id, owner_route)
             .map(|config| config.subresource_interception_snapshot())
     }
 
@@ -822,8 +830,17 @@ impl CdpConnection {
         session_id: Option<&str>,
         internal_id: u64,
     ) -> Option<String> {
+        self.in_flight_subresource_fetch_request_id_for_route(session_id, None, internal_id)
+    }
+
+    pub(crate) fn in_flight_subresource_fetch_request_id_for_route(
+        &mut self,
+        session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
+        internal_id: u64,
+    ) -> Option<String> {
         let (request_id, page_owner) = self
-            .target_session_owner_mut(session_id)?
+            .target_session_owner_mut_for_route(session_id, owner_route)?
             .in_flight_subresource_fetch_request_identity(internal_id)?;
         self.target_page_residence_identity_is_current_for_session(session_id, &page_owner)
             .then_some(request_id)
@@ -1139,11 +1156,12 @@ impl CdpConnection {
         Ok(Some((pending, page_command)))
     }
 
-    pub(crate) fn take_pending_fetch_state_for_session_owner(
+    pub(crate) fn take_pending_fetch_state_for_route(
         &mut self,
         session_id: Option<&str>,
+        owner_route: Option<&CdpSessionRoute>,
     ) -> Option<SessionOwnerPendingFetchState> {
-        self.target_session_owner_mut(session_id)?
+        self.target_session_owner_mut_for_route(session_id, owner_route)?
             .drain_fetch_pending_state()
     }
 }

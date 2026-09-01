@@ -1,12 +1,10 @@
-use url::Url;
-
 use crate::conn::{
-    BackgroundProtocolEvent, CdpConnection, ClaimedSubresourceContinueRequest, FetchAuthChallenge,
-    FetchRequestStage, PendingSubresourceFetchAuthRequest, PendingSubresourceFetchAuthStage,
-    PendingSubresourceFetchAuthStageChain, PendingSubresourceFetchOwnerKind,
-    PendingSubresourceFetchRequest, PendingSubresourceFetchResponseRequest,
-    PendingSubresourceFetchResponseStage, PendingSubresourceFetchResponseStageChain,
-    TargetPageResidenceIdentity,
+    BackgroundProtocolEvent, CdpConnection, ClaimedSubresourceContinueRequest, CommandOwnerScope,
+    FetchAuthChallenge, FetchRequestStage, PendingSubresourceFetchAuthRequest,
+    PendingSubresourceFetchAuthStage, PendingSubresourceFetchAuthStageChain,
+    PendingSubresourceFetchOwnerKind, PendingSubresourceFetchRequest,
+    PendingSubresourceFetchResponseRequest, PendingSubresourceFetchResponseStage,
+    PendingSubresourceFetchResponseStageChain, TargetPageResidenceIdentity,
 };
 use crate::devtools_runtime::DevToolsNetworkInterceptId;
 use crate::domains::fetch;
@@ -15,12 +13,12 @@ use moli_core::page::{
     SubresourceNetworkRequestHandle,
 };
 
-use super::contextual_projection::{
-    MainDocumentBodyCompleteProjection, POST_SUBRESOURCE_FETCH_PROJECTION_STEPS,
-    POST_SUBRESOURCE_NETWORK_PROJECTION_STEPS, ProtocolOutputProjectionContext,
-    ProtocolOutputProjectionPlan,
+use super::contextual_projection::MainDocumentBodyCompleteProjection;
+use crate::domains::network::{
+    MainDocumentProgressGate, NetworkBacklogPreferredRequestId, NetworkBacklogProjectionContext,
+    emit_pending_network_backlog_activity_background_events,
+    network_backlog_prepared_outputs_for_owner,
 };
-use crate::domains::network::MainDocumentProgressGate;
 
 #[derive(Debug)]
 pub(crate) struct PreparedSubresourceContinueAction {
@@ -506,28 +504,33 @@ pub(crate) async fn flush_post_subresource_fetch_request_activity_background_eve
     session_id: Option<&str>,
     pending: &PendingSubresourceFetchRequest,
 ) {
+    let owner = CommandOwnerScope::capture(conn, session_id);
+    flush_post_subresource_fetch_request_activity_for_owner_background_events_async(
+        conn, out, &owner, pending,
+    )
+    .await;
+}
+
+pub(crate) async fn flush_post_subresource_fetch_request_activity_for_owner_background_events_async(
+    conn: &mut CdpConnection,
+    out: &mut Vec<BackgroundProtocolEvent>,
+    owner: &CommandOwnerScope,
+    pending: &PendingSubresourceFetchRequest,
+) {
     record_subresource_network_request_handle(
         conn,
-        session_id,
+        owner,
         &pending.network_request_id,
         pending.network_request_handle,
     );
-    let mut command_context = crate::conn::CommandDispatchContext::default();
-    ProtocolOutputProjectionPlan {
-        steps: POST_SUBRESOURCE_FETCH_PROJECTION_STEPS,
-    }
-    .project_into_protocol_events_async(
+    project_network_backlog_for_owner(
         conn,
-        ProtocolOutputProjectionContext::new(session_id, &mut command_context)
-            .with_subresource_filter(
-                &pending.frame_id,
-                &pending.document_url,
-                Some(&pending.network_request_id),
-            ),
-    )
-    .await;
-    out.extend(command_context.take_protocol_events());
-    clear_fetch_pause_network_announcement(conn, session_id, &pending.network_request_id);
+        out,
+        owner,
+        &pending.frame_id,
+        Some(&pending.network_request_id),
+    );
+    clear_fetch_pause_network_announcement(conn, owner, &pending.network_request_id);
 }
 
 pub(crate) async fn flush_post_subresource_response_activity_background_events_async(
@@ -536,18 +539,30 @@ pub(crate) async fn flush_post_subresource_response_activity_background_events_a
     session_id: Option<&str>,
     pending: &PendingSubresourceFetchResponseRequest,
 ) {
+    let owner = CommandOwnerScope::capture(conn, session_id);
+    flush_post_subresource_response_activity_for_owner_background_events_async(
+        conn, out, &owner, pending,
+    )
+    .await;
+}
+
+pub(crate) async fn flush_post_subresource_response_activity_for_owner_background_events_async(
+    conn: &mut CdpConnection,
+    out: &mut Vec<BackgroundProtocolEvent>,
+    owner: &CommandOwnerScope,
+    pending: &PendingSubresourceFetchResponseRequest,
+) {
     record_subresource_network_request_handle(
         conn,
-        session_id,
+        owner,
         &pending.network_request_id,
         pending.network_request_handle,
     );
     flush_post_subresource_network_activity_background_events_async(
         conn,
         out,
-        session_id,
+        owner,
         &pending.frame_id,
-        &pending.document_url,
         &pending.network_request_id,
     )
     .await;
@@ -559,18 +574,30 @@ pub(crate) async fn flush_post_subresource_auth_activity_background_events_async
     session_id: Option<&str>,
     pending: &PendingSubresourceFetchAuthRequest,
 ) {
+    let owner = CommandOwnerScope::capture(conn, session_id);
+    flush_post_subresource_auth_activity_for_owner_background_events_async(
+        conn, out, &owner, pending,
+    )
+    .await;
+}
+
+pub(crate) async fn flush_post_subresource_auth_activity_for_owner_background_events_async(
+    conn: &mut CdpConnection,
+    out: &mut Vec<BackgroundProtocolEvent>,
+    owner: &CommandOwnerScope,
+    pending: &PendingSubresourceFetchAuthRequest,
+) {
     record_subresource_network_request_handle(
         conn,
-        session_id,
+        owner,
         &pending.network_request_id,
         pending.network_request_handle,
     );
     flush_post_subresource_network_activity_background_events_async(
         conn,
         out,
-        session_id,
+        owner,
         &pending.frame_id,
-        &pending.document_url,
         &pending.network_request_id,
     )
     .await;
@@ -579,46 +606,63 @@ pub(crate) async fn flush_post_subresource_auth_activity_background_events_async
 async fn flush_post_subresource_network_activity_background_events_async(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
-    session_id: Option<&str>,
+    owner: &CommandOwnerScope,
     frame_id: &str,
-    document_url: &Url,
     network_request_id: &str,
 ) {
-    conn.ingest_runtime_session_owner_output_updates(session_id);
-    let mut command_context = crate::conn::CommandDispatchContext::default();
-    ProtocolOutputProjectionPlan {
-        steps: POST_SUBRESOURCE_NETWORK_PROJECTION_STEPS,
-    }
-    .project_into_protocol_events_async(
+    conn.ingest_runtime_session_owner_output_updates_for_route(
+        owner.session_id(),
+        owner.session_owner_route(),
+    );
+    project_network_backlog_for_owner(conn, out, owner, frame_id, Some(network_request_id));
+    clear_fetch_pause_network_announcement(conn, owner, network_request_id);
+}
+
+fn project_network_backlog_for_owner(
+    conn: &mut CdpConnection,
+    out: &mut Vec<BackgroundProtocolEvent>,
+    owner: &CommandOwnerScope,
+    frame_id: &str,
+    network_request_id: Option<&str>,
+) {
+    let preferred_request_id =
+        network_request_id.map(NetworkBacklogPreferredRequestId::contextual_subresource);
+    let mut prepared =
+        network_backlog_prepared_outputs_for_owner(conn, owner, preferred_request_id);
+    emit_pending_network_backlog_activity_background_events(
         conn,
-        ProtocolOutputProjectionContext::new(session_id, &mut command_context)
-            .with_subresource_filter(frame_id, document_url, Some(network_request_id)),
-    )
-    .await;
-    out.extend(command_context.take_protocol_events());
-    clear_fetch_pause_network_announcement(conn, session_id, network_request_id);
+        out,
+        NetworkBacklogProjectionContext::for_owner(owner)
+            .with_frame_id(Some(frame_id))
+            .with_contextual_subresource_request_id(network_request_id)
+            .with_prepared_outputs(Some(&mut prepared)),
+    );
 }
 
 fn clear_fetch_pause_network_announcement(
     conn: &mut CdpConnection,
-    session_id: Option<&str>,
+    owner: &CommandOwnerScope,
     request_id: &str,
 ) {
-    if let Ok(runtime_slot) = conn.runtime_session_owner_slot_mut(session_id) {
+    if let Ok(runtime_slot) = conn
+        .runtime_session_owner_slot_mut_for_route(owner.session_id(), owner.session_owner_route())
+    {
         runtime_slot.clear_fetch_pause_announced_request_id(request_id);
     }
 }
 
 fn record_subresource_network_request_handle(
     conn: &mut CdpConnection,
-    session_id: Option<&str>,
+    owner: &CommandOwnerScope,
     request_id: &str,
     request_handle: Option<SubresourceNetworkRequestHandle>,
 ) {
     let Some(request_handle) = request_handle else {
         return;
     };
-    if let Ok(runtime_slot) = conn.runtime_session_owner_slot_mut(session_id) {
+    if let Ok(runtime_slot) = conn
+        .runtime_session_owner_slot_mut_for_route(owner.session_id(), owner.session_owner_route())
+    {
         runtime_slot.record_subresource_request_id_for_handle_if_absent(
             request_handle,
             request_id.to_owned(),

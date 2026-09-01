@@ -4141,23 +4141,31 @@ fn bidi_channel_properties_from_local_value(
 
 pub(crate) async fn start_bidi_preload_channel_listeners_for_execution_context_background_events_async(
     conn: &mut CdpConnection,
-    session_id: Option<&str>,
+    owner: &CommandOwnerScope,
     execution_context_id: i64,
     out: &mut Vec<BackgroundProtocolEvent>,
 ) {
-    let handoff_owners = conn.target_owner_bidi_channel_preload_handoffs_for_session(session_id);
+    let session_id = owner.session_id();
+    let handoff_owners = conn.target_owner_bidi_channel_preload_handoffs_for_route(
+        session_id,
+        owner.session_owner_route(),
+    );
     if handoff_owners.is_empty() {
         return;
     }
     let target_id = conn
-        .target_owner_identity_for_session(session_id)
+        .target_owner_identity_for_route(session_id, owner.session_owner_route())
         .and_then(|(_, target_id)| target_id)
         .map(DevToolsTargetId::from);
-    let route = conn.session_route(session_id).or_else(|| {
-        target_id
-            .as_ref()
-            .and_then(|target_id| conn.target_session_route_for_target_id(target_id.as_str()))
-    });
+    let route = owner
+        .session_owner_route()
+        .cloned()
+        .or_else(|| conn.session_route(session_id))
+        .or_else(|| {
+            target_id
+                .as_ref()
+                .and_then(|target_id| conn.target_session_route_for_target_id(target_id.as_str()))
+        });
     let Some(route) = route else {
         return;
     };
@@ -4166,8 +4174,7 @@ pub(crate) async fn start_bidi_preload_channel_listeners_for_execution_context_b
         execution_context_id: Some(execution_context_id),
         window_context_id: target_id,
     };
-    let Some(listener_owner) =
-        bidi_channel_page_owner_for_runtime_target(conn, &target, session_id)
+    let Some(listener_owner) = bidi_channel_page_owner_for_runtime_target(conn, &target, owner)
     else {
         return;
     };
@@ -4349,12 +4356,15 @@ async fn release_bidi_channel_object_group_for_target_best_effort_async(
 }
 
 fn bidi_channel_page_owner_for_runtime_target(
-    conn: &mut CdpConnection,
+    conn: &CdpConnection,
     target: &DevToolsRuntimeTarget,
-    session_id: Option<&str>,
+    owner: &CommandOwnerScope,
 ) -> Option<BidiChannelPageOwner> {
-    let mut route_scope = conn.scoped_none_session_owner_route_override(target.route.clone());
-    BidiChannelPageOwner::capture(route_scope.conn_mut(), session_id)
+    let exact_owner = owner
+        .session_id()
+        .map(CommandOwnerScope::for_session)
+        .unwrap_or_else(|| CommandOwnerScope::for_implicit_route(Some(target.route.clone())));
+    BidiChannelPageOwner::capture_for_owner(conn, exact_owner)
 }
 
 async fn create_bidi_channel_proxy_and_start_listener_async(
@@ -4370,8 +4380,12 @@ async fn create_bidi_channel_proxy_and_start_listener_async(
     let listener_realm_id = realm_id
         .cloned()
         .ok_or_else(|| "NoSuchBidiChannelRealm".to_owned())?;
-    let listener_owner = bidi_channel_page_owner_for_runtime_target(conn, target, None)
-        .ok_or_else(|| "NoSuchBidiChannelTarget".to_owned())?;
+    let listener_owner = bidi_channel_page_owner_for_runtime_target(
+        conn,
+        target,
+        &CommandOwnerScope::for_implicit_route(Some(target.route.clone())),
+    )
+    .ok_or_else(|| "NoSuchBidiChannelTarget".to_owned())?;
     let channel_object_group = conn.next_bidi_channel_object_group();
     let proxy_handle = match create_bidi_channel_proxy_async(
         conn,

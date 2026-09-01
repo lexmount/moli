@@ -2309,6 +2309,30 @@ impl CdpConnection {
         });
     }
 
+    pub(crate) fn register_runtime_remote_object_ids_for_owner_with_realm(
+        &mut self,
+        owner: &CommandOwnerScope,
+        object_ids: Vec<String>,
+        realm_id: &str,
+    ) {
+        if owner.session_id().is_some() {
+            self.register_runtime_remote_object_ids_for_session_owner_with_realm(
+                owner.session_id(),
+                object_ids,
+                realm_id,
+            );
+            return;
+        }
+        if object_ids.is_empty() {
+            return;
+        }
+        let _ = self.with_target_devtools_session_state_for_route_mut(
+            owner.session_id(),
+            owner.session_owner_route(),
+            |state| state.register_runtime_remote_object_ids_with_realm(object_ids, realm_id),
+        );
+    }
+
     pub(crate) fn register_runtime_remote_object_alias_for_session_owner_with_realm(
         &mut self,
         session_id: Option<&str>,
@@ -3318,9 +3342,7 @@ impl CdpConnection {
             return BidiChannelListenerRoute::NotListener;
         };
         let owner = residence.owner().clone();
-        let mut route_scope = owner.enter(self);
-        let conn = route_scope.conn_mut();
-        if !owner.is_current(conn) {
+        if !owner.is_current(self) {
             tracing::debug!(
                 command_id = response.command_id,
                 session_id = owner.session_id(),
@@ -3336,7 +3358,7 @@ impl CdpConnection {
                 channel = %listener.properties().channel,
                 "BiDi channel listener stopped after inspector error"
             );
-            conn.publish_bidi_channel_object_group_release(
+            self.publish_bidi_channel_object_group_release(
                 owner,
                 listener.channel_object_group().to_owned(),
             );
@@ -3349,7 +3371,7 @@ impl CdpConnection {
                 channel = %listener.properties().channel,
                 "BiDi channel listener stopped after JavaScript exception"
             );
-            conn.publish_bidi_channel_object_group_release(
+            self.publish_bidi_channel_object_group_release(
                 owner,
                 listener.channel_object_group().to_owned(),
             );
@@ -3364,8 +3386,8 @@ impl CdpConnection {
             Some(realm_id.clone()),
         );
         if let Some(remote_object_id) = data.handle.as_ref().or(data.shared_id.as_ref()) {
-            conn.register_runtime_remote_object_ids_for_session_owner_with_realm(
-                response.session_id(),
+            self.register_runtime_remote_object_ids_for_owner_with_realm(
+                owner.command_owner(),
                 vec![remote_object_id.as_str().to_owned()],
                 realm_id.as_str(),
             );
@@ -3382,7 +3404,7 @@ impl CdpConnection {
                 data,
             }),
         );
-        conn.publish_bidi_channel_listener_start(residence);
+        self.publish_bidi_channel_listener_start(residence);
         BidiChannelListenerRoute::Event(event)
     }
 
@@ -5485,6 +5507,22 @@ impl CdpConnection {
         session_id: Option<&str>,
     ) -> Result<Option<i64>, String> {
         let page = self.runtime_session_owner_page_mut(session_id)?;
+        page.default_or_initial_execution_context_id_async()
+            .await
+            .map_err(|error| format!("runtime default execution context lookup failed: {error}"))
+    }
+
+    pub(crate) async fn runtime_default_or_initial_execution_context_id_for_owner_async(
+        &mut self,
+        owner: &CommandOwnerScope,
+    ) -> Result<Option<i64>, String> {
+        let page = self
+            .runtime_session_owner_slot_mut_for_route(
+                owner.session_id(),
+                owner.session_owner_route(),
+            )?
+            .loaded_page_mut()
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())?;
         page.default_or_initial_execution_context_id_async()
             .await
             .map_err(|error| format!("runtime default execution context lookup failed: {error}"))

@@ -1,4 +1,7 @@
-use super::{CdpConnection, CdpSessionRoute, NoneSessionOwnerRouteOverrideScope};
+use super::{
+    CdpConnection, CdpSessionRoute, NoneSessionOwnerRouteOverrideScope,
+    TargetPageProtocolAttachmentIdentity,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct CommandOwnerScope {
@@ -47,6 +50,24 @@ impl CommandOwnerScope {
                 None => CommandOwnerIdentity::Implicit,
             },
         }
+    }
+
+    pub(crate) fn for_page_attachment(attachment: &TargetPageProtocolAttachmentIdentity) -> Self {
+        if let Some(session_id) = attachment.session_id() {
+            return Self::for_session(session_id);
+        }
+        let page = attachment.page_owner();
+        let route = match page.target_id() {
+            Some(target_id) => CdpSessionRoute::PageTarget {
+                browser_context_id: page.browser_context_id().to_owned(),
+                target_id: target_id.to_owned(),
+                is_attached_session: false,
+            },
+            None => CdpSessionRoute::BrowserContext {
+                browser_context_id: page.browser_context_id().to_owned(),
+            },
+        };
+        Self::for_implicit_route(Some(route))
     }
 
     pub(crate) fn session_id(&self) -> Option<&str> {

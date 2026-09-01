@@ -102,6 +102,15 @@ impl RuntimeInspectorMessageAuthority {
             }
         }
     }
+
+    fn command_owner(&self) -> Option<crate::conn::CommandOwnerScope> {
+        match self {
+            Self::CurrentPage(attachment) => Some(
+                crate::conn::CommandOwnerScope::for_page_attachment(attachment),
+            ),
+            Self::AuthorizedRetiredTerminal { .. } => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -194,6 +203,7 @@ impl RuntimeOutputProjectionStep {
                         if !batch.authority.permits_projection(conn) {
                             continue;
                         }
+                        let owner = batch.authority.command_owner();
                         let session_id = batch.authority.session_id().map(str::to_owned);
                         push_runtime_inspector_messages_for_session(
                             conn,
@@ -202,10 +212,13 @@ impl RuntimeOutputProjectionStep {
                             session_id.as_deref(),
                         );
                         for execution_context_id in batch.created_execution_context_ids {
+                            let Some(owner) = owner.as_ref() else {
+                                continue;
+                            };
                             Box::pin(
                                 super::start_bidi_preload_channel_listeners_for_execution_context_background_events_async(
                                     conn,
-                                    session_id.as_deref(),
+                                    owner,
                                     execution_context_id,
                                     context.command.protocol_events_mut(),
                                 ),

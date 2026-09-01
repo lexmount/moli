@@ -25,9 +25,19 @@ impl BidiChannelPageOwner {
     /// route, while `attachment` freezes the target Page residence and exact
     /// protocol session.
     pub(crate) fn capture(conn: &CdpConnection, session_id: Option<&str>) -> Option<Self> {
+        Self::capture_for_owner(conn, CommandOwnerScope::capture(conn, session_id))
+    }
+
+    pub(crate) fn capture_for_owner(
+        conn: &CdpConnection,
+        owner_scope: CommandOwnerScope,
+    ) -> Option<Self> {
         Some(Self {
-            owner_scope: CommandOwnerScope::capture(conn, session_id),
-            attachment: conn.target_page_protocol_attachment_identity_for_session(session_id)?,
+            attachment: conn.target_page_protocol_attachment_identity_for_route(
+                owner_scope.session_id(),
+                owner_scope.session_owner_route(),
+            )?,
+            owner_scope,
         })
     }
 
@@ -39,6 +49,10 @@ impl BidiChannelPageOwner {
         self.attachment.page_owner().target_id()
     }
 
+    pub(crate) fn command_owner(&self) -> &CommandOwnerScope {
+        &self.owner_scope
+    }
+
     pub(crate) fn enter<'a>(
         &self,
         conn: &'a mut CdpConnection,
@@ -46,11 +60,10 @@ impl BidiChannelPageOwner {
         self.owner_scope.enter(conn)
     }
 
-    /// Checks the captured Page attachment under its owner route.
+    /// Checks the captured Page attachment directly.
     ///
-    /// Callers handling an implicit session must first enter this binding with
-    /// `enter`; otherwise a surrounding command's route could answer the
-    /// currentness query for the wrong Page.
+    /// The attachment contains its exact context, target, and Page residence,
+    /// so this check does not depend on the connection's ambient route.
     pub(crate) fn is_current(&self, conn: &CdpConnection) -> bool {
         conn.target_page_protocol_attachment_identity_is_current(&self.attachment)
     }

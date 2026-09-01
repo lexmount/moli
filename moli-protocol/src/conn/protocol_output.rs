@@ -183,20 +183,18 @@ impl CdpConnection {
             }
             ReadyProtocolSchedulerWork::TopLevelLocationNavigationOwnerAction(action) => {
                 let (owner_scope, page_owner, navigation) = action.into_parts();
-                let session_id = owner_scope.session_id().map(str::to_owned);
-                let mut route_scope = owner_scope.enter(self);
                 let mut protocol_events = Vec::new();
                 crate::domains::page::navigate_page_owned_top_level_location_background_events_async(
-                    route_scope.conn_mut(),
+                    self,
                     &mut protocol_events,
-                    session_id.as_deref(),
+                    &owner_scope,
                     &page_owner,
                     navigation,
                 )
                 .await;
                 CdpTurnOutcome::new_with_protocol_events(
                     protocol_events,
-                    route_scope.conn_mut().take_scheduler_events(),
+                    self.take_scheduler_events(),
                 )
             }
             ReadyProtocolSchedulerWork::PopupTargetNavigationOwnerAction(action) => {
