@@ -130,6 +130,7 @@ mod grid_item_box_generation;
 mod grid_item_paint_order;
 mod grid_resolved_track_values;
 mod grid_self_alignment;
+mod grid_size_containment;
 mod hash_change_delivery;
 mod history_traversal;
 mod image_load_event;
