@@ -986,7 +986,45 @@ fn css_variable_specified_values_preserve_cssom_shorthand_boundaries() {
 
     assert_eq!(
         result,
-        "margin: var(--prop);,var(--prop),|margin-right: ; margin-bottom: ; margin-left: ; margin-top: 10px;,,,10px|var(--prop),|,,var(--prop)  /* keep */ var(--prop),color: var(--prop)  /* keep */ var(--prop);|var(--open)|3px,1px,1px,1px"
+        "margin: var(--prop);,var(--prop),|margin-right: ; margin-bottom: ; margin-left: ; margin-top: 10px;,,,10px|var(--prop),|,,var(--prop)  /* keep */ var(--prop),color: var(--prop)  /* keep */ var(--prop);|var(--open|3px,1px,1px,1px"
+    );
+}
+
+#[test]
+fn stylesheet_eof_open_var_preserves_cssom_text_views() {
+    let mut vm = new_storage_test_vm("https://css-var-stylesheet-eof.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const style = document.createElement('style');
+  style.textContent = 'div { width: var(--open';
+  (document.head || document.documentElement || document).appendChild(style);
+  const rule = style.sheet.cssRules[0];
+
+  const constructed = new CSSStyleSheet();
+  constructed.replaceSync('span { height: var(--retained');
+  const retained = constructed.cssRules[0];
+  constructed.replaceSync('span { height: 1px; }');
+  constructed.cssRules[0].style.width = 'var(--written';
+
+  return [
+    rule.style.getPropertyValue('width'),
+    rule.style.cssText,
+    rule.cssText,
+    retained.style.getPropertyValue('height'),
+    retained.cssText,
+    constructed.cssRules[0].style.width
+  ].join('|');
+})()
+"#,
+        )
+        .expect("stylesheet EOF-open var CSSOM views should evaluate");
+
+    assert_eq!(
+        result,
+        "var(--open|width: var(--open;|div { width: var(--open; }|var(--retained|span { height: var(--retained; }|var(--written"
     );
 }
 

@@ -17,7 +17,10 @@ pub use color::{
     css_system_color_srgb, parse_css_color_scheme_flags, parse_css_color_to_opaque_srgb_hex,
     parse_css_color_to_srgb_bytes,
 };
-pub use declaration::{CssDeclaration, DeclarationParseOptions, parse_declaration_list};
+pub use declaration::{
+    CssDeclaration, DeclarationParseOptions, parse_declaration_list,
+    recover_stylesheet_eof_open_var_declaration_text,
+};
 pub use font_face::{
     CssFontFace, font_load_query_contains_css_wide_keyword, font_load_query_family,
     normalize_font_face_src, parse_font_faces,
@@ -72,10 +75,10 @@ pub use util::{
     unescape_top_level_semicolons, unquote_css_string,
 };
 pub use value::{
-    css_declaration_value_has_valid_env_functions, css_value_may_contain_env_function,
-    css_value_may_contain_var_function, normalize_css_variable_specified_value,
-    normalize_cssom_component_value_serialization, normalize_custom_property_specified_value,
-    serialize_component_values_single_line,
+    css_declaration_value_has_valid_env_functions, css_value_is_eof_open_var_function,
+    css_value_may_contain_env_function, css_value_may_contain_var_function,
+    normalize_css_variable_specified_value, normalize_cssom_component_value_serialization,
+    normalize_custom_property_specified_value, serialize_component_values_single_line,
 };
 
 /// Returns the non-custom CSS properties that the pinned Stylo world currently

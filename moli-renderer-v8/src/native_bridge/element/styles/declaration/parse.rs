@@ -1813,6 +1813,9 @@ fn style_entries_affecting_property(entries: &[StyleEntry], property: &str) -> V
 }
 
 fn cssom_style_property_write_uses_pdb(name: &str, value: &str) -> bool {
+    if moli_css_parse::css_value_is_eof_open_var_function(value) {
+        return false;
+    }
     let name = canonical_style_property_name(name);
     if moli_css_parse::is_cssom_custom_property_name(&name) {
         return !value.is_empty() && stylo_pdb_entries_for_property(&name, value, false).is_some();

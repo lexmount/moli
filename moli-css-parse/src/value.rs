@@ -33,6 +33,15 @@ pub fn css_value_may_contain_var_function(value: &str) -> bool {
         .any(|window| matches!(window, [b'v' | b'V', b'a' | b'A', b'r' | b'R', b'(']))
 }
 
+/// Whether `value` is a valid standalone `var()` reference whose final
+/// parenthesis was omitted at the end of a CSS input fragment.
+///
+/// CSSOM preserves that omission in the specified value even though Stylo's
+/// declaration storage currently appends the missing parenthesis internally.
+pub fn css_value_is_eof_open_var_function(value: &str) -> bool {
+    recover_left_open_css_var_function(value).is_some()
+}
+
 /// This validates var() token structure before substitution, but does not decide
 /// ordinary property grammar.
 pub(crate) fn css_declaration_value_has_valid_var_functions(value: &str) -> bool {
@@ -557,6 +566,15 @@ mod tests {
             normalize_css_variable_specified_value("red").as_deref(),
             Some("red")
         );
+    }
+
+    #[test]
+    fn eof_open_var_function_detection_is_narrow() {
+        assert!(super::css_value_is_eof_open_var_function("var(--x"));
+        assert!(super::css_value_is_eof_open_var_function("VAR(--x;"));
+        assert!(!super::css_value_is_eof_open_var_function("var(--x)"));
+        assert!(!super::css_value_is_eof_open_var_function("1px var(--x"));
+        assert!(!super::css_value_is_eof_open_var_function("var(-x"));
     }
 
     #[test]
