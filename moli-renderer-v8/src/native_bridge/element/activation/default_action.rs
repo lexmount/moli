@@ -21,14 +21,17 @@ use crate::{
 };
 
 use super::super::super::JsContextHost;
-use super::super::forms::{FormAssociatedResetCallbackTiming, reset_form_default_action};
+use super::super::forms::{
+    FormAssociatedResetCallbackTiming, normalized_button_command, reset_form_default_action,
+};
 use super::super::{
     NodePublicEventDispatchOutcome, cache_input_files_from_selected_files,
     closed_details_ancestors_to_reveal, construct_click_event_with_detail_and_modifiers,
     construct_command_event, construct_simple_event, contenteditable_editing_host,
-    dispatch_popover_toggle_events, dispatch_public_event, element_attribute,
-    element_has_attribute, form_associated_form_owner, is_disabled_form_control, is_focusable,
-    is_valid_submit_button, label_activation_control_handle, observable_bounding_client_rect,
+    dispatch_popover_hide_events, dispatch_popover_show_events, dispatch_popover_toggle_events,
+    dispatch_public_event, element_attribute, element_has_attribute, form_associated_form_owner,
+    is_disabled_form_control, is_focusable, is_valid_submit_button,
+    label_activation_control_handle, observable_bounding_client_rect,
     perform_popover_invoker_default_action, perform_summary_click_default_action,
     replace_text_control_selection, resolve_url_like_attribute,
     resolved_reflected_element_attribute_handle, scroll_node_into_view_at_start,
@@ -1455,8 +1458,7 @@ fn perform_click_default_action(
     {
         return None;
     }
-    dispatch_button_command_event_if_needed(scope, runtime_ptr, handle);
-    if dispatch_button_popover_toggle_events_if_needed(scope, runtime_ptr, handle) {
+    if perform_button_command_default_action(scope, runtime_ptr, handle) {
         return None;
     }
     if perform_popover_invoker_default_action(scope, runtime_ptr, handle) {
@@ -1527,57 +1529,68 @@ fn element_is_anchor_with_href(runtime: &JsContextHost, handle: DomHandle) -> bo
     )
 }
 
-fn dispatch_button_command_event_if_needed(
-    scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
-    handle: DomHandle,
-) {
-    let runtime = unsafe { &*runtime_ptr };
-    if !runtime.dom_host().is_html_element_named(handle, "button") {
-        return;
-    }
-    let Some(command) =
-        element_attribute(runtime, handle, "command").filter(|value| !value.is_empty())
-    else {
-        return;
-    };
-    let Some(target) = command_for_element_target(runtime_ptr, handle) else {
-        return;
-    };
-    let Some(source) = node_wrapper_from_handle(scope, handle) else {
-        return;
-    };
-    let Some(event) = construct_command_event(scope, &command, source.into()) else {
-        return;
-    };
-    if dispatch_public_event(scope, runtime_ptr, target, event).allows_default()
-        && command.eq_ignore_ascii_case("toggle-popover")
-    {
-        dispatch_popover_toggle_events(scope, runtime_ptr, target, handle);
-    }
-}
-
-fn dispatch_button_popover_toggle_events_if_needed(
+fn perform_button_command_default_action(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
     handle: DomHandle,
 ) -> bool {
-    let runtime = unsafe { &*runtime_ptr };
-    if !runtime.dom_host().is_html_element_named(handle, "button") {
-        return false;
-    }
-    let Some(target) = popover_target_element_target(runtime_ptr, handle) else {
+    let (command, target) = {
+        let runtime = unsafe { &*runtime_ptr };
+        if !runtime.dom_host().is_html_element_named(handle, "button") {
+            return false;
+        }
+        let command = normalized_button_command(element_attribute(runtime, handle, "command"));
+        if command.is_empty() {
+            return false;
+        }
+        let Some(target) = command_for_element_target(runtime_ptr, handle) else {
+            return false;
+        };
+        let Some(target_element) = runtime.dom_host().node(target).and_then(Node::as_element)
+        else {
+            return false;
+        };
+        let compatible = if command.starts_with("--") {
+            true
+        } else {
+            match command.as_str() {
+                "show-popover" | "hide-popover" | "toggle-popover" => {
+                    target_element.namespace() == "http://www.w3.org/1999/xhtml"
+                }
+                "show-modal" | "close" | "request-close" => {
+                    target_element.is_html_element("dialog")
+                }
+                _ => false,
+            }
+        };
+        if !compatible {
+            return false;
+        }
+        (command, target)
+    };
+    let Some(source) = node_wrapper_from_handle(scope, handle) else {
         return false;
     };
-    dispatch_popover_toggle_events(scope, runtime_ptr, target, handle);
+    let Some(event) = construct_command_event(scope, &command, source.into()) else {
+        return false;
+    };
+    let outcome = dispatch_public_event(scope, runtime_ptr, target, event);
+    if !outcome.allows_default() {
+        return true;
+    }
+    let runtime = unsafe { &*runtime_ptr };
+    if !runtime.dom_host().is_connected(target)
+        || !element_has_attribute(runtime, target, "popover")
+    {
+        return true;
+    }
+    match command.as_str() {
+        "show-popover" => dispatch_popover_show_events(scope, runtime_ptr, target, handle),
+        "hide-popover" => dispatch_popover_hide_events(scope, runtime_ptr, target, handle),
+        "toggle-popover" => dispatch_popover_toggle_events(scope, runtime_ptr, target, handle),
+        _ => {}
+    }
     true
-}
-
-fn popover_target_element_target(
-    runtime_ptr: *mut JsContextHost,
-    handle: DomHandle,
-) -> Option<DomHandle> {
-    resolved_reflected_element_attribute_handle(unsafe { &*runtime_ptr }, handle, "popovertarget")
 }
 
 fn command_for_element_target(
