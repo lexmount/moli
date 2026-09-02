@@ -33,7 +33,7 @@ pub(in crate::context_bootstrap) use value::{
     ValueEventKind, build_value_event_template, install_value_event_template_bindings,
 };
 
-use moli_webapi::events::subclasses::{COMMAND_EVENT_COMMAND_SLOT, COMMAND_EVENT_SOURCE_SLOT};
+use moli_webapi::events::subclasses::{COMMAND_EVENT_COMMAND_SLOT, COMMAND_EVENT_SOURCE_SLOT, TOGGLE_EVENT_SOURCE_SLOT};
 
 #[derive(Default, WebApiObject)]
 #[webapi(fragment, prototype = "PointerEvent", enumerable)]
@@ -148,10 +148,16 @@ pub(crate) fn set_event_source_value<'s>(
     value: v8::Local<'s, v8::Value>,
 ) {
     let event = event_backing(scope, event);
-    if event_subclass_kind(scope, event) == Some(EventSubclassKind::CommandEvent) {
-        set_private_value(scope, event, COMMAND_EVENT_SOURCE_SLOT, value);
-    } else {
-        let _ = event.set(scope, v8str(scope, "source").into(), value);
+    match event_subclass_kind(scope, event) {
+        Some(EventSubclassKind::CommandEvent) => {
+            set_private_value(scope, event, COMMAND_EVENT_SOURCE_SLOT, value);
+        }
+        Some(EventSubclassKind::ToggleEvent) => {
+            set_private_value(scope, event, TOGGLE_EVENT_SOURCE_SLOT, value);
+        }
+        _ => {
+            let _ = event.set(scope, v8str(scope, "source").into(), value);
+        }
     }
 }
 
@@ -343,6 +349,25 @@ pub(super) fn command_event_command_getter_function<'s>(
     let value = event_private_value(scope, args.this(), COMMAND_EVENT_COMMAND_SLOT)
         .unwrap_or_else(|| v8str(scope, "").into());
     rv.set(value);
+}
+
+pub(super) fn toggle_event_source_getter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if event_subclass_kind(scope, args.this()) != Some(EventSubclassKind::ToggleEvent) {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    }
+    let value = event_private_value(scope, args.this(), TOGGLE_EVENT_SOURCE_SLOT)
+        .unwrap_or_else(|| v8::null(scope).into());
+    let Some(context) = args.this().get_creation_context(scope) else {
+        return;
+    };
+    if let Some(value) = super::platform_object_worlds::in_realm(scope, value, context) {
+        rv.set(value);
+    }
 }
 
 pub(super) fn form_data_event_form_data_getter_function<'s>(

@@ -19,9 +19,9 @@ use super::{
         input_event_get_target_ranges_callback, keyboard_event_init_callback,
         mouse_event_related_target_getter_function, pointer_event_get_predicted_events_callback,
         submit_event_submitter_getter_function, ui_event_pseudo_target_getter_function,
+        command_event_command_getter_function, command_event_source_getter_function,
+        toggle_event_source_getter_function,
         ui_event_which_getter_function,
-        command_event_command_getter_function,
-        command_event_source_getter_function,
     },
     selection_surface::document_get_selection_callback,
     specs::ConstructorSpec,
@@ -161,6 +161,13 @@ struct CommandEventTemplateAccessorsDeclaration {
 
     #[webapi(accessor_property, getter = command_event_command_getter_function)]
     command: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::ToggleEvent, enumerable)]
+struct ToggleEventTemplateAccessorsDeclaration {
+    #[webapi(accessor_property, getter = toggle_event_source_getter_function)]
+    source: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -399,6 +406,7 @@ fn event_template_declaration(interface: &str) -> Option<EventTemplateDeclaratio
         return Some(declaration);
     }
     Some(match interface {
+        "ToggleEvent" => EventTemplateDeclaration::new::<ToggleEventTemplateAccessorsDeclaration>(),
         "CommandEvent" => {
             EventTemplateDeclaration::new::<CommandEventTemplateAccessorsDeclaration>()
         }
