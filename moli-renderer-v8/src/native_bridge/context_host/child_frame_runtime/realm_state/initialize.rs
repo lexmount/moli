@@ -172,13 +172,28 @@ fn bind_frame_element<'s>(
     handle: crate::document_runtime::DomHandle,
 ) {
     let host_ptr = host as *mut JsContextHost;
-    if let Some(frame_element) = host
-        .native_bridge_mut()
-        .wrap_handle(scope, host_ptr, handle)
-        .map(Into::into)
-    {
-        set_private_value(scope, global, "__moliWindowFrameElement", frame_element);
-    }
+    let Some(owner_context) =
+        crate::native_bridge::node::node_owner_document_relevant_context(scope, host_ptr, handle)
+    else {
+        return;
+    };
+    let frame_element = {
+        let owner_scope = &mut v8::ContextScope::new(scope, owner_context);
+        let Some(frame_element) =
+            host.native_bridge_mut()
+                .wrap_handle(owner_scope, host_ptr, handle)
+        else {
+            return;
+        };
+        v8::Global::new(owner_scope, frame_element)
+    };
+    let frame_element = v8::Local::new(scope, &frame_element);
+    set_private_value(
+        scope,
+        global,
+        "__moliWindowFrameElement",
+        frame_element.into(),
+    );
 }
 
 fn bind_navigation<'s>(
