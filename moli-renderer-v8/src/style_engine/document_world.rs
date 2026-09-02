@@ -57,6 +57,7 @@ impl DocumentStyleWorld {
     }
 
     pub(super) fn clear_for_document_replacement(&self) {
+        self.document_state.clear_web_font_metrics();
         self.registered_custom_properties.clear();
         self.pending_invalidations.clear();
         self.pending_structural_mutations.clear();

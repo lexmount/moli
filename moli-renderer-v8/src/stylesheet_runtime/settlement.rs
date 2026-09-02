@@ -298,7 +298,7 @@ impl DocumentRuntime {
     }
 
     fn complete_document_web_font(
-        host: &JsContextHost,
+        host: &mut JsContextHost,
         terminal: crate::css_resource_urls::CompletedStylesheetWebFont,
     ) {
         match host.complete_document_web_font(terminal) {

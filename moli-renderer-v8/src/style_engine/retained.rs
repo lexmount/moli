@@ -1,3 +1,4 @@
+use moli_layout::DocumentFontMetricsProvider;
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use style::{
@@ -89,6 +90,7 @@ pub(super) fn build_retained_style_system(
     shared_lock: &SharedRwLock,
     retained_source_records: &[RetainedStylesheetSourceRecord<'_>],
     author_styles_disabled: bool,
+    font_metrics_provider: DocumentFontMetricsProvider,
 ) -> RetainedStyleSystem {
     let mut stylist = new_stylist_with_viewport_bits(
         key.viewport_width_bits,
@@ -97,6 +99,7 @@ pub(super) fn build_retained_style_system(
         key.screen_height_bits,
         key.environment,
         key.quirks_mode,
+        font_metrics_provider,
     );
     stylist.set_author_styles_enabled(if author_styles_disabled {
         AuthorStylesEnabled::No
@@ -199,6 +202,7 @@ pub(super) fn update_retained_style_system(
     inputs: &FullStyleWorldSnapshot,
     shared_lock: &SharedRwLock,
     retained_source_records: &[RetainedStylesheetSourceRecord<'_>],
+    font_metrics_provider: &DocumentFontMetricsProvider,
 ) -> RetainedStyleInvalidations {
     let mut invalidations = RetainedStyleInvalidations::new();
     let document_update = update_document_scope(
@@ -208,6 +212,7 @@ pub(super) fn update_retained_style_system(
         shared_lock,
         Some(&inputs.document_stylesheet_sources),
         Some(&inputs.script_custom_property_registrations),
+        font_metrics_provider,
     );
     invalidations.document = document_update.invalidations;
     invalidations.document_scope_fallback = document_update.scope_fallback;
@@ -260,6 +265,7 @@ pub(super) fn update_retained_style_system_incrementally(
     retained_source_records: &[RetainedStylesheetSourceRecord<'_>],
     dirty_source_ids: &HashSet<StyleSourceId>,
     full_source_projection_scopes: &HashSet<StyleScopeId>,
+    font_metrics_provider: &DocumentFontMetricsProvider,
 ) -> RetainedStyleInvalidations {
     let mut invalidations = RetainedStyleInvalidations::new();
     let document_update = update_document_scope(
@@ -269,6 +275,7 @@ pub(super) fn update_retained_style_system_incrementally(
         shared_lock,
         update.document_stylesheet_sources.as_deref(),
         update.script_custom_property_registrations.as_deref(),
+        font_metrics_provider,
     );
     invalidations.document = document_update.invalidations;
     invalidations.document_scope_fallback = document_update.scope_fallback;
@@ -343,6 +350,7 @@ fn update_document_scope(
     shared_lock: &SharedRwLock,
     stylesheet_sources: Option<&[StyloStylesheetSource]>,
     custom_property_registrations: Option<&[CssCustomPropertyRegistrationRecord]>,
+    font_metrics_provider: &DocumentFontMetricsProvider,
 ) -> DocumentScopeUpdate {
     let custom_properties_changed = custom_property_registrations.is_some_and(|registrations| {
         retained.script_custom_property_registrations.as_slice() != registrations
@@ -395,6 +403,7 @@ fn update_document_scope(
             key.screen_height_bits,
             key.environment,
             key.quirks_mode,
+            font_metrics_provider.clone(),
         );
         root_font_metrics_changed = device
             .inherit_root_font_relative_state_from(retained.stylist.device())

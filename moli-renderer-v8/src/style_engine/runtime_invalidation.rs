@@ -513,6 +513,32 @@ impl MoliStyleEngine {
             .invalidate_subtrees_and_shadow_cascade_data(host, [root]);
     }
 
+    /// Invalidates computed values whose font-relative lengths or normal line
+    /// height were resolved before the document font set changed.
+    ///
+    /// The font provider is shared with the retained Device, so no Stylist
+    /// replacement is required. A document subtree invalidation is the
+    /// conservative boundary until Stylo exposes per-family metric
+    /// dependencies to the embedding.
+    pub(crate) fn invalidate_for_document_font_set_change(
+        &mut self,
+        host: &DomHost,
+        document: DomHandle,
+    ) -> bool {
+        let world = self.world_for_document(document);
+        let used_font_metrics = world
+            .document_state
+            .try_with_retained_style_system(|retained| {
+                retained.stylist.device().used_font_metrics()
+            })
+            .unwrap_or(false);
+        if !used_font_metrics {
+            return false;
+        }
+        self.invalidation_cleanup_for_world(&world)
+            .invalidate_subtrees(host, [document])
+    }
+
     fn queue_style_invalidation_scope(
         &self,
         document: DomHandle,

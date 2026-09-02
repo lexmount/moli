@@ -98,8 +98,9 @@ pub use style::{
     LayoutPosition, LayoutRememberedSize, LayoutRememberedSizePolicy, ResolvedLayoutStyle,
 };
 pub use text::{
-    DocumentLayoutServices, SystemFontPolicy, WebFontFace, WebFontRegistration,
-    WebFontRegistrationError, WebFontRegistrationOutcome, WebFontStyle, WebFontUnicodeRange,
+    DocumentFontMetricsProvider, DocumentLayoutServices, SystemFontPolicy, WebFontFace,
+    WebFontRegistration, WebFontRegistrationError, WebFontRegistrationOutcome, WebFontStyle,
+    WebFontUnicodeRange,
 };
 pub use world::{
     LayoutAnonymousReason, LayoutBox, LayoutBoxId, LayoutBoxKind, LayoutCapabilityDiagnostic,

@@ -194,10 +194,16 @@ impl JsContextHost {
         );
         let visual_resource_generation =
             super::visual_resource_generation::VisualResourceGeneration::default();
+        let style_engine =
+            MoliStyleEngine::new_with_author_styles_disabled(runtime.author_styles_disabled());
+        let main_font_metrics_provider =
+            style_engine.font_metrics_provider_for_document(runtime.document_handle());
         let mut host = Self {
             runtime: runtime as *mut DocumentRuntime,
             layout_policy: moli_page_types::LayoutPolicy::default(),
-            document_layout_state: RefCell::new(super::layout_state::DocumentLayoutState::default()),
+            document_layout_state: RefCell::new(super::layout_state::DocumentLayoutState::new(
+                main_font_metrics_provider,
+            )),
             element_layout_state: RefCell::new(
                 super::element_layout_state::ElementLayoutState::default(),
             ),
@@ -347,9 +353,7 @@ impl JsContextHost {
             child_meta_refresh_navigations: HashMap::new(),
             disconnected_shadow_roots: HashSet::new(),
             live_stylesheets: crate::live_stylesheet::LiveStylesheetRegistry::default(),
-            style_engine: MoliStyleEngine::new_with_author_styles_disabled(
-                runtime.author_styles_disabled(),
-            ),
+            style_engine,
             inline_style_declarations: HashMap::new(),
             css_module_texts_by_url: HashMap::new(),
             css_module_failed_urls: HashSet::new(),

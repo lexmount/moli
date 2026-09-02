@@ -212,6 +212,15 @@ impl MoliStyleEngine {
         self.document_worlds.for_document(document)
     }
 
+    pub(crate) fn font_metrics_provider_for_document(
+        &self,
+        document: DomHandle,
+    ) -> moli_layout::DocumentFontMetricsProvider {
+        self.world_for_document(document)
+            .document_state
+            .font_metrics_provider()
+    }
+
     pub(in crate::style_engine) fn owner_document_world(
         &self,
         host: &DomHost,

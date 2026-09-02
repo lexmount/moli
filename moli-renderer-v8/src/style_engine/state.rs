@@ -3,6 +3,7 @@ use std::{
     collections::HashMap,
 };
 
+use moli_layout::{DocumentFontMetricsProvider, SystemFontPolicy};
 use moli_selector::StyloSourceInvalidationFallbackReason;
 use selectors::context::SelectorCaches;
 use style::{
@@ -80,6 +81,7 @@ pub(super) struct StyleDocumentGenerationSnapshot {
 }
 
 pub(super) struct StyleDocumentState {
+    font_metrics_provider: DocumentFontMetricsProvider,
     pub(super) retained_style_system: RefCell<Option<RetainedStyleSystem>>,
     selector_caches: RefCell<SelectorCaches>,
     source_dirty_scopes: StyleSourceDirtyScopes,
@@ -105,6 +107,7 @@ pub(super) struct StyleDocumentState {
 impl StyleDocumentState {
     pub(super) fn new() -> Self {
         Self {
+            font_metrics_provider: DocumentFontMetricsProvider::new(SystemFontPolicy::Enabled),
             retained_style_system: RefCell::new(None),
             selector_caches: RefCell::new(SelectorCaches::default()),
             source_dirty_scopes: StyleSourceDirtyScopes::default(),
@@ -126,6 +129,14 @@ impl StyleDocumentState {
             #[cfg(test)]
             ancestor_style_validation_visits: Cell::new(0),
         }
+    }
+
+    pub(super) fn font_metrics_provider(&self) -> DocumentFontMetricsProvider {
+        self.font_metrics_provider.clone()
+    }
+
+    pub(super) fn clear_web_font_metrics(&self) {
+        self.font_metrics_provider.clear_web_fonts();
     }
 
     pub(super) fn source_set_generation(&self) -> u64 {

@@ -1,18 +1,18 @@
 use std::{
     collections::HashSet,
     ptr::NonNull,
-    sync::{Arc as StdArc, LazyLock},
+    sync::{Arc as StdArc, LazyLock, OnceLock},
 };
 
 use euclid::{Scale, Size2D};
+use moli_layout::{DocumentFontMetricsProvider, SystemFontPolicy};
 use moli_selector::StyloSourceDependencySummary;
 use style::{
     context::QuirksMode,
-    device::{Device, servo::FontMetricsProvider},
+    device::Device,
     font_face::{
         FontFaceRule, FontFaceSourceFormat, FontFaceSourceFormatKeyword, Source, SourceList,
     },
-    font_metrics::FontMetrics,
     properties::{ComputedValues, style_structs::Font},
     servo::media_features::PointerCapabilities,
     servo_arc::Arc as ServoArc,
@@ -22,13 +22,6 @@ use style::{
         StylesheetInDocument, UrlExtraData, scope_rule::ImplicitScopeRoot,
     },
     stylist::{CascadeData, Stylist},
-    values::{
-        computed::{
-            CSSPixelLength, Length,
-            font::{GenericFontFamily, SingleFontFamily},
-        },
-        specified::font::QueryFontMetricsFlags,
-    },
 };
 use style_traits::{CSSPixel, CssWriter, DevicePixel, ToCss};
 
@@ -78,9 +71,6 @@ pub(crate) fn author_source_text_parse_count_for_test() -> usize {
 pub(super) fn moli_ua_stylesheet_base_url() -> &'static url::Url {
     &MOLI_UA_STYLESHEET_BASE_URL
 }
-
-#[derive(Debug)]
-struct HeadlessFontMetricsProvider;
 
 pub(super) fn install_active_stylesheets(
     host: &DomHost,
@@ -141,6 +131,7 @@ pub(in crate::style_engine) fn style_source_metadata_for_stylesheet(
         DEFAULT_VIEWPORT_HEIGHT.to_bits(),
         StyloStyleEnvironment::default(),
         quirks_mode,
+        ephemeral_font_metrics_provider(),
     );
     let mut cascade_data = CascadeData::new();
     let document_stylesheet = DocumentStyleSheet::new(stylesheet.clone());
@@ -207,6 +198,7 @@ pub(crate) fn native_font_face_projection_for_stylesheet(
         screen_height.to_bits(),
         environment,
         quirks_mode,
+        ephemeral_font_metrics_provider(),
     );
 
     let mut projection = NativeStylesheetFontFaceProjection::default();
@@ -356,6 +348,7 @@ fn style_source_metadata_for_css_text_with_origin(
         DEFAULT_VIEWPORT_HEIGHT.to_bits(),
         StyloStyleEnvironment::default(),
         QuirksMode::NoQuirks,
+        ephemeral_font_metrics_provider(),
     );
     let mut cascade_data = CascadeData::new();
     if cascade_data
@@ -386,6 +379,7 @@ pub(super) fn new_stylist_with_viewport_bits(
     screen_height_bits: u32,
     environment: StyloStyleEnvironment,
     quirks_mode: QuirksMode,
+    font_metrics_provider: DocumentFontMetricsProvider,
 ) -> Stylist {
     Stylist::new(
         new_style_device_with_viewport_bits(
@@ -395,6 +389,7 @@ pub(super) fn new_stylist_with_viewport_bits(
             screen_height_bits,
             environment,
             quirks_mode,
+            font_metrics_provider,
         ),
         quirks_mode,
     )
@@ -407,6 +402,7 @@ pub(super) fn new_style_device_with_viewport_bits(
     screen_height_bits: u32,
     environment: StyloStyleEnvironment,
     quirks_mode: QuirksMode,
+    font_metrics_provider: DocumentFontMetricsProvider,
 ) -> Device {
     let width = f32::from_bits(viewport_width_bits);
     let height = f32::from_bits(viewport_height_bits);
@@ -419,7 +415,7 @@ pub(super) fn new_style_device_with_viewport_bits(
         Size2D::<f32, CSSPixel>::new(width, height),
         Size2D::<f32, DevicePixel>::new(screen_width, screen_height),
         Scale::<f32, CSSPixel, DevicePixel>::new(1.0),
-        Box::new(HeadlessFontMetricsProvider),
+        Box::new(font_metrics_provider),
         initial_style,
         environment.stylo_prefers_color_scheme(),
         PointerCapabilities::default(),
@@ -548,33 +544,9 @@ fn parse_stylesheet(
     )
 }
 
-impl FontMetricsProvider for HeadlessFontMetricsProvider {
-    fn query_font_metrics(
-        &self,
-        _vertical: bool,
-        font: &Font,
-        base_size: CSSPixelLength,
-        _flags: QueryFontMetricsFlags,
-    ) -> FontMetrics {
-        let mut metrics = FontMetrics::default();
-        if font_family_list_starts_with_ahem(font) {
-            metrics.zero_advance_measure = Some(base_size);
-        }
-        metrics
-    }
-
-    fn base_size_for_generic(&self, _generic: GenericFontFamily) -> Length {
-        Length::new(16.0)
-    }
-}
-
-fn font_family_list_starts_with_ahem(font: &Font) -> bool {
-    font.clone_font_family()
-        .families
-        .iter()
-        .next()
-        .is_some_and(|family| match family {
-            SingleFontFamily::FamilyName(name) => name.name.as_ref().eq_ignore_ascii_case("Ahem"),
-            SingleFontFamily::Generic(_) => false,
-        })
+fn ephemeral_font_metrics_provider() -> DocumentFontMetricsProvider {
+    static PROVIDER: OnceLock<DocumentFontMetricsProvider> = OnceLock::new();
+    PROVIDER
+        .get_or_init(|| DocumentFontMetricsProvider::new(SystemFontPolicy::Enabled))
+        .clone()
 }

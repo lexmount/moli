@@ -4026,13 +4026,15 @@ document.head.innerHTML = `<style>
 @font-face {{ font-family:MoliAhem; src:url(data:font/woff2;base64,{encoded}) format('woff2') }}
 * {{ box-sizing:border-box }}
 html,body {{ margin:0 }}
+html {{ font:20px/normal MoliAhem }}
 .row {{ display:flex; justify-content:center; gap:8px; padding-top:20px }}
 .item {{ display:inline-flex; align-items:center; gap:8px; padding:10px 14px; border:1px solid; border-radius:24px }}
 .icon {{ width:20px; height:20px; flex:0 0 auto }}
 .text,#constrained {{ font-family:MoliAhem; font-size:9px }}
 #constrained {{ width:80px }}
+#metric-units {{ box-sizing:content-box; width:1ch; height:1lh; padding-left:1ex; padding-right:1cap; margin-top:1rlh }}
 </style>`;
-document.body.innerHTML = `<div class=row><div class=item id=ask><i class=icon></i><span class=text id=ask-text>Ask about files</span></div></div><div id=constrained>Ask about files</div>`;
+document.body.innerHTML = `<div class=row><div class=item id=ask><i class=icon></i><span class=text id=ask-text>Ask about files</span></div></div><div id=constrained>Ask about files</div><div id=metric-units></div>`;
 'installed'
 "#
         ))?;
@@ -4063,6 +4065,27 @@ document.body.innerHTML = `<div class=row><div class=item id=ask><i class=icon><
                 );
             }
         }
+        let metric_units = page_vm.vm_mut().eval(
+            r#"(() => {
+  const element = document.getElementById('metric-units');
+  const style = getComputedStyle(element);
+  const rect = element.getBoundingClientRect();
+  return [
+    style.width,
+    style.height,
+    style.paddingLeft,
+    style.paddingRight,
+    style.marginTop,
+    rect.width,
+    rect.height
+  ].join('|');
+})()"#,
+        )?;
+        assert_eq!(
+            metric_units,
+            "12px|20px|16px|16px|20px|44|20",
+            "font-relative units should use the same loaded face as text shaping"
+        );
         Ok::<_, anyhow::Error>(())
     })
     .await
@@ -4246,7 +4269,7 @@ async fn screenshot_settles_document_fonts_ready_after_loaded_font_layout() {
 globalThis.__fontReadyBefore = document.fonts.ready;
 document.head.innerHTML = `<style>
 @font-face {{ font-family:MoliReadyAhem; src:url(data:font/woff2;base64,{encoded}) format('woff2') }}
-#text {{ display:inline-block; font:10px/1 MoliReadyAhem }}
+#text {{ display:inline-block; font:10px/normal MoliReadyAhem; height:1lh }}
 </style>`;
 document.body.innerHTML = '<span id=text>XXXX</span>';
 globalThis.__fontReadyDuring = document.fonts.ready;
@@ -4265,6 +4288,10 @@ JSON.stringify({{
             r#"{"changed":true,"stable":true,"status":"loading","settled":false}"#,
             "ready must reserve authored sources before task-boundary admission"
         );
+        let document = page_vm.vm().document_handle_for_test();
+        let stylist = page_vm
+            .vm()
+            .retained_stylist_identity_for_document_for_test(document);
 
         page_vm
             .vm_mut()
@@ -4291,6 +4318,13 @@ JSON.stringify({{
                 .any(|resource| resource.font.data.as_ref() == expected_ttf),
             "the settling layout must consume the registered web font"
         );
+        assert_eq!(
+            page_vm
+                .vm()
+                .retained_stylist_identity_for_document_for_test(document),
+            stylist,
+            "font availability should invalidate metric-dependent values without rebuilding the retained Stylist"
+        );
         page_vm.vm_mut().eval("void 0")?;
         assert_eq!(
             page_vm.vm_mut().eval(
@@ -4298,11 +4332,12 @@ JSON.stringify({{
   settled: __fontReadySettled,
   stable: __fontReadyDuring === document.fonts.ready,
   status: document.fonts.status,
-  width: document.getElementById('text').getBoundingClientRect().width
+  width: document.getElementById('text').getBoundingClientRect().width,
+  height: getComputedStyle(document.getElementById('text')).height
 })"#,
             )?,
-            r#"{"settled":true,"stable":true,"status":"loaded","width":24}"#,
-            "ready must settle only after screenshot publishes Ahem-backed geometry"
+            r#"{"settled":true,"stable":true,"status":"loaded","width":24,"height":"10px"}"#,
+            "ready must settle only after screenshot publishes Ahem-backed geometry and font-relative metrics"
         );
         Ok::<_, anyhow::Error>(())
     })

@@ -220,6 +220,9 @@ impl JsContextHost {
         };
         let pass_viewport = request.viewport;
         let _active = ActiveLayoutPass::enter(&self.layout_pass_active)?;
+        let font_metrics_provider = self
+            .style_engine
+            .font_metrics_provider_for_document(document);
         let mut pass = {
             let mut state = self.document_layout_state.borrow_mut();
             state.retain_live_embedded_document_services(|candidate| {
@@ -230,6 +233,7 @@ impl JsContextHost {
             state.with_services_for_document(
                 document,
                 self.document_handle(),
+                font_metrics_provider,
                 |services, embedded_document_services| {
                     crate::layout_renderer::build_native_layout_pass(
                         self,
@@ -513,7 +517,11 @@ impl JsContextHost {
     }
 
     pub(crate) fn reset_document_layout_state(&self) {
-        *self.document_layout_state.borrow_mut() = Default::default();
+        let font_metrics_provider = self
+            .style_engine
+            .font_metrics_provider_for_document(self.document_handle());
+        *self.document_layout_state.borrow_mut() =
+            super::layout_state::DocumentLayoutState::new(font_metrics_provider);
         *self.element_layout_state.borrow_mut() = Default::default();
         self.style_viewport_generation
             .set(self.style_viewport_generation.get().saturating_add(1));
@@ -568,12 +576,16 @@ impl JsContextHost {
     }
 
     pub(crate) fn retain_document_web_font_slots<'a>(
-        &self,
+        &mut self,
         resources: impl IntoIterator<Item = &'a StylesheetLoadBlockingResource>,
     ) {
-        self.document_layout_state
+        let font_set_changed = self
+            .document_layout_state
             .borrow_mut()
             .retain_active_slots(resources);
+        if font_set_changed {
+            self.note_document_font_set_change();
+        }
     }
 
     /// Observes the current authored font sources without starting network
@@ -620,17 +632,47 @@ impl JsContextHost {
     }
 
     pub(crate) fn admit_document_web_font(
-        &self,
+        &mut self,
         resource: StylesheetLoadBlockingResource,
     ) -> Option<StylesheetLoadBlockingResource> {
-        self.document_layout_state.borrow_mut().admit(resource)
+        let (resource, font_set_changed) = self.document_layout_state.borrow_mut().admit(resource);
+        if font_set_changed {
+            self.note_document_font_set_change();
+        }
+        resource
     }
 
     pub(crate) fn complete_document_web_font(
-        &self,
+        &mut self,
         terminal: CompletedStylesheetWebFont,
     ) -> DocumentWebFontCompletion {
-        self.document_layout_state.borrow_mut().complete(terminal)
+        let completion = self.document_layout_state.borrow_mut().complete(terminal);
+        if matches!(
+            completion,
+            DocumentWebFontCompletion::Registered(
+                moli_layout::WebFontRegistrationOutcome::Added
+                    | moli_layout::WebFontRegistrationOutcome::Replaced
+            )
+        ) {
+            self.note_document_font_set_change();
+        }
+        completion
+    }
+
+    fn note_document_font_set_change(&mut self) {
+        self.clear_layout_rect_cache();
+        let document = self.document_handle();
+        let dom_host = self.dom_host() as *const _;
+        self.style_engine
+            .invalidate_for_document_font_set_change(unsafe { &*dom_host }, document);
+    }
+
+    pub(crate) fn document_font_metrics_provider(
+        &self,
+        document: DomHandle,
+    ) -> moli_layout::DocumentFontMetricsProvider {
+        self.style_engine
+            .font_metrics_provider_for_document(document)
     }
 
     #[cfg(test)]

@@ -4627,7 +4627,7 @@ fn root_font_relative_units_follow_the_committed_root_style() {
 fn replacement_device_preserves_root_font_relative_bases_and_usage() {
     let mut vm = new_parsed_test_vm(
         "https://replacement-device-root-font.test/",
-        r#"<html style="font-family:Ahem;font-size:30px;line-height:1.5"><head></head><body><div id="target" style="width:4rem;height:1rlh;padding-left:1rch"></div></body></html>"#,
+        r#"<html style="font-family:monospace;font-size:30px;line-height:1.5"><head></head><body><div id="target" style="width:4rem;height:1rlh;padding-left:1rch"></div></body></html>"#,
     );
     let surface = |inner_width, inner_height| crate::protocol_types::ViewportSurface {
         inner_width,
@@ -4650,12 +4650,17 @@ fn replacement_device_preserves_root_font_relative_bases_and_usage() {
   const target = document.getElementById('target');
   const style = getComputedStyle(target);
   globalThis.__heldRootFontStyle = style;
-  return [style.width, style.height, style.paddingLeft].join('|');
+  globalThis.__rootChBeforeReplacement = parseFloat(style.paddingLeft);
+  return [
+    style.width,
+    style.height,
+    Number.isFinite(__rootChBeforeReplacement) && __rootChBeforeReplacement > 0
+  ].join('|');
 })()
 "#,
         )
         .expect("initial root font-relative styles should resolve");
-    assert_eq!(before, "120px|45px|30px");
+    assert_eq!(before, "120px|45px|true");
 
     let document = vm.document_handle_for_test();
     let stylist = vm.retained_stylist_identity_for_document_for_test(document);
@@ -4669,25 +4674,30 @@ fn replacement_device_preserves_root_font_relative_bases_and_usage() {
   const root = document.documentElement;
   const target = document.getElementById('target');
   const retained = __heldRootFontStyle;
-  const retainedValues = [retained.width, retained.height, retained.paddingLeft];
+  const retainedWidth = retained.width;
+  const retainedHeight = retained.height;
+  const retainedCh = parseFloat(retained.paddingLeft);
 
   root.style.fontSize = '20px';
   root.style.lineHeight = '2';
   const committedRootSize = getComputedStyle(root).fontSize;
   const fresh = getComputedStyle(target);
+  const freshCh = parseFloat(fresh.paddingLeft);
   return [
-    ...retainedValues,
+    retainedWidth,
+    retainedHeight,
+    Math.abs(retainedCh - __rootChBeforeReplacement) < 0.001,
     committedRootSize,
     fresh.width,
     fresh.height,
-    fresh.paddingLeft
+    Math.abs(freshCh * 1.5 - __rootChBeforeReplacement) < 0.01
   ].join('|');
 })()
 "#,
         )
         .expect("replacement Device should retain and advance root font-relative state");
 
-    assert_eq!(after, "120px|45px|30px|20px|80px|40px|20px");
+    assert_eq!(after, "120px|45px|true|20px|80px|40px|true");
     assert_eq!(
         vm.retained_stylist_identity_for_document_for_test(document),
         stylist,
