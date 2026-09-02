@@ -326,9 +326,7 @@ where
         } else if self.world.is_viewport_defining_body(id) {
             false
         } else {
-            self.world.boxes[id.index()]
-                .style
-                .establishes_scroll_container()
+            self.world.boxes[id.index()].establishes_scroll_container()
         }
     }
 
