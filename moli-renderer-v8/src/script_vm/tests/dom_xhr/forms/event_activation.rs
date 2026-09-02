@@ -1,6 +1,78 @@
 use super::*;
 
 #[test]
+fn command_interfaces_apply_reflection_and_webidl_conversion() {
+    let mut vm = new_storage_test_vm("https://command-interface.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const host = document.body || document.documentElement || document;
+  const container = document.createElement('div');
+  const button = document.createElement('button');
+  const target = document.createElement('div');
+  container.append(button, target);
+  host.appendChild(container);
+
+  const initial = button.command;
+  button.setAttribute('command', 'ToGgLe-PoPoVeR');
+  const builtin = button.command;
+  button.setAttribute('command', '--Preserve-Me');
+  const custom = button.command;
+  button.command = [1, 2, 3];
+  const invalid = [button.getAttribute('command'), button.command];
+
+  const defaultEvent = new CommandEvent('command');
+  const initialized = new CommandEvent('command', {
+    command: null,
+    source: target,
+  });
+  const commandDescriptor = Object.getOwnPropertyDescriptor(
+    CommandEvent.prototype,
+    'command',
+  );
+  const sourceDescriptor = Object.getOwnPropertyDescriptor(
+    CommandEvent.prototype,
+    'source',
+  );
+  const descriptors = [
+    typeof commandDescriptor.get === 'function',
+    commandDescriptor.set === undefined,
+    typeof sourceDescriptor.get === 'function',
+    sourceDescriptor.set === undefined,
+  ];
+  const rejected = [false, true, {}, new XMLHttpRequest()].map(source => {
+    try {
+      new CommandEvent('command', { source });
+      return false;
+    } catch (error) {
+      return error instanceof TypeError;
+    }
+  });
+
+  return JSON.stringify({
+    initial,
+    builtin,
+    custom,
+    invalid,
+    event: [defaultEvent.command, defaultEvent.source, initialized.command,
+            initialized.source === target],
+    descriptors,
+    rejected,
+  });
+})()
+"#,
+        )
+        .expect("command interface probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"initial":"","builtin":"toggle-popover","custom":"--Preserve-Me","invalid":["1,2,3",""],"event":["",null,"null",true],"descriptors":[true,true,true,true],"rejected":[true,true,true,true]}"#
+    );
+}
+
+#[test]
 fn button_auto_type_state_tracks_commands_form_owner_and_select_parent() {
     let mut vm = new_storage_test_vm("https://button-auto-type-state.test/");
 

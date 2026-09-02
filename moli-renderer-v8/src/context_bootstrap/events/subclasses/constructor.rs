@@ -148,7 +148,11 @@ fn event_subclass_constructor_callback<'s>(
                 return;
             }
         }
-        EventSubclassKind::CommandEvent => data::initialize_command_event(scope, event, init),
+        EventSubclassKind::CommandEvent => {
+            if !data::initialize_command_event(scope, event, init) {
+                return;
+            }
+        }
         EventSubclassKind::ToggleEvent => {
             if !data::initialize_toggle_event(scope, event, init) {
                 return;

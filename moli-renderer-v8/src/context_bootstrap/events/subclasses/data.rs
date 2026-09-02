@@ -166,13 +166,6 @@ struct InputEventInitDeclaration<'scope> {
 
 #[derive(WebApiObject)]
 #[webapi(plain, data_properties, enumerable)]
-struct CommandEventInitDeclaration<'scope> {
-    source: v8::Local<'scope, v8::Value>,
-    command: String,
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain, data_properties, enumerable)]
 struct InterestEventInitDeclaration<'scope> {
     source: v8::Local<'scope, v8::Value>,
 }
@@ -298,6 +291,15 @@ struct ToggleEventInitMembers<'s> {
     #[webidl(default = "")]
     new_state: String,
     #[webidl(with = toggle_event_source_member)]
+    source: Option<v8::Local<'s, v8::Value>>,
+}
+
+#[derive(Default, webidl::WebIdlDictionary)]
+#[webidl(prefix = "CommandEventInit")]
+struct CommandEventInitMembers<'s> {
+    #[webidl(default = "")]
+    command: String,
+    #[webidl(converter = "raw")]
     source: Option<v8::Local<'s, v8::Value>>,
 }
 
@@ -1404,11 +1406,41 @@ pub(in crate::context_bootstrap::events::subclasses) fn initialize_command_event
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,
     init: Option<v8::Local<'s, v8::Object>>,
-) {
-    let source =
-        init_value_property(scope, init, "source").unwrap_or_else(|| v8::null(scope).into());
-    let command = init_string_property(scope, init, "command", "");
-    let _ = CommandEventInitDeclaration::new(source, command).initialize(scope, event);
+) -> bool {
+    let parsed = match init {
+        Some(init) => match webidl::parse_dictionary_object::<CommandEventInitMembers>(scope, init)
+        {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                webidl::throw_error(scope, &error);
+                return false;
+            }
+        },
+        None => CommandEventInitMembers::default(),
+    };
+    let source = parsed.source.unwrap_or_else(|| v8::null(scope).into());
+    if !source.is_null() {
+        let Ok(object) = v8::Local::<v8::Object>::try_from(source) else {
+            throw_type_error(
+                scope,
+                "Failed to construct 'CommandEvent': source must be an Element.",
+            );
+            return false;
+        };
+        if !event_init_value_is_element(scope, object) {
+            throw_type_error(
+                scope,
+                "Failed to construct 'CommandEvent': source must be an Element.",
+            );
+            return false;
+        }
+    }
+    let Some(command) = v8_string(scope, &parsed.command) else {
+        return false;
+    };
+    set_private_value(scope, event, COMMAND_EVENT_SOURCE_SLOT, source);
+    set_private_value(scope, event, COMMAND_EVENT_COMMAND_SLOT, command.into());
+    true
 }
 
 pub(in crate::context_bootstrap::events::subclasses) fn initialize_track_event<'s>(
@@ -1447,7 +1479,7 @@ fn submit_event_submitter<'s>(
         );
         return None;
     };
-    if !submitter_is_html_element(scope, object) {
+    if !event_init_value_is_element(scope, object) {
         throw_type_error(
             scope,
             "Failed to construct 'SubmitEvent': submitter must be an HTMLElement.",
@@ -1457,7 +1489,7 @@ fn submit_event_submitter<'s>(
     Some(value)
 }
 
-fn submitter_is_html_element(
+fn event_init_value_is_element(
     scope: &mut v8::PinScope<'_, '_>,
     object: v8::Local<'_, v8::Object>,
 ) -> bool {

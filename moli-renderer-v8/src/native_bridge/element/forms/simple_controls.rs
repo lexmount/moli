@@ -1249,6 +1249,64 @@ pub(in crate::native_bridge) fn button_command_for_element_getter_function<'s>(
     set_wrapped_button_element_or_null(scope, &mut rv, runtime_ptr, source, target);
 }
 
+fn normalized_button_command(value: Option<String>) -> String {
+    let Some(value) = value else {
+        return String::new();
+    };
+    if value.starts_with("--") {
+        return value;
+    }
+    for keyword in [
+        "toggle-popover",
+        "show-popover",
+        "hide-popover",
+        "close",
+        "request-close",
+        "show-modal",
+    ] {
+        if value.eq_ignore_ascii_case(keyword) {
+            return keyword.to_owned();
+        }
+    }
+    String::new()
+}
+
+pub(in crate::native_bridge) fn button_command_getter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some((runtime_ptr, handle)) = button_getter_receiver(scope, args.this(), "command") else {
+        rv.set_empty_string();
+        return;
+    };
+    let command = normalized_button_command(element_attribute(
+        unsafe { &*runtime_ptr },
+        handle,
+        "command",
+    ));
+    let Some(command) = v8_string(scope, &command) else {
+        rv.set_empty_string();
+        return;
+    };
+    rv.set(command.into());
+}
+
+pub(in crate::native_bridge) fn button_command_setter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    set_button_dom_string_attribute_on_receiver(
+        scope,
+        args.this(),
+        "command",
+        args.get(0),
+        "command",
+    );
+    rv.set_undefined();
+}
+
 pub(in crate::native_bridge) fn button_command_for_element_setter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
