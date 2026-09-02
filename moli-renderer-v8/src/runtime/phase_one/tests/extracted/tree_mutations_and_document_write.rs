@@ -1446,6 +1446,7 @@ const selectedcontent = document.getElementById('selectedcontent');
 const sourceSpan = document.querySelector('#one > span');
 window.selectedcontentState = [
   selectedcontent.textContent.trim(),
+  selectedcontent.innerText.trim(),
   selectedcontent.firstElementChild !== sourceSpan,
 ];
 select.value = 'two';
@@ -1468,7 +1469,7 @@ window.selectedcontentState.push(selectedcontent.textContent.trim());
                 .expect("selectedcontent parser state should evaluate");
             assert_eq!(
                 result.get("value").and_then(serde_json::Value::as_str),
-                Some(r#"["one",true,"two","STRONG","updated","one"]"#),
+                Some(r#"["one","one",true,"two","STRONG","updated","one"]"#),
                 "parser option completion and select setters must synchronously clone the selected option children"
             );
         }));
