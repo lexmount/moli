@@ -59,11 +59,18 @@ const LOAD_START_INDEX: usize = 2;
 pub(super) const LOAD_END_INDEX: usize = 3;
 const LIFECYCLE_TIMESTAMP_COUNT: usize = 4;
 
+fn initial_performance_entry_id() -> f64 {
+    fastrand::u64(100..=10_000) as f64
+}
+
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::Performance)]
 struct PerformanceObjectDeclaration<'scope> {
     #[webapi(slot = PERFORMANCE_TIME_ORIGIN_SLOT)]
     time_origin: f64,
+
+    #[webapi(slot = PERFORMANCE_LAST_ENTRY_ID_SLOT)]
+    last_entry_id: f64,
 
     #[webapi(slot = PERFORMANCE_ENTRIES_SLOT, init = "array")]
     entries: (),
@@ -83,6 +90,9 @@ struct PerformanceObjectDeclaration<'scope> {
 struct WorkerPerformanceObjectDeclaration {
     #[webapi(slot = PERFORMANCE_TIME_ORIGIN_SLOT)]
     time_origin: f64,
+
+    #[webapi(slot = PERFORMANCE_LAST_ENTRY_ID_SLOT)]
+    last_entry_id: f64,
 
     #[webapi(slot = PERFORMANCE_ENTRIES_SLOT, init = "array")]
     entries: (),
@@ -363,9 +373,12 @@ pub(in crate::context_bootstrap) fn install_worker_performance_runtime_state<'s>
     )?;
     super::super::exposed_interfaces::ensure_intrinsic_interface_constructor(scope, "Performance")?;
 
-    let performance = WorkerPerformanceObjectDeclaration::new(unix_epoch_millis())
-        .bind(scope)
-        .map_err(|error| anyhow!("failed to create worker performance: {error}"))?;
+    let performance = WorkerPerformanceObjectDeclaration::new(
+        unix_epoch_millis(),
+        initial_performance_entry_id(),
+    )
+    .bind(scope)
+    .map_err(|error| anyhow!("failed to create worker performance: {error}"))?;
     install_simple_event_target_methods(
         scope,
         performance,
@@ -400,6 +413,7 @@ pub(super) fn create_performance_object<'s>(
 ) -> v8::Local<'s, v8::Object> {
     let performance = PerformanceObjectDeclaration::new(
         time_origin,
+        initial_performance_entry_id(),
         v8::undefined(scope).into(),
         v8::undefined(scope).into(),
         v8::undefined(scope).into(),
@@ -1068,6 +1082,7 @@ pub(super) fn ensure_navigation_performance_entry<'s>(
         .map(|value| value.to_rust_string_lossy(scope))
         .unwrap_or_else(|| "document".to_owned());
     let entry = create_navigation_performance_entry(scope, &navigation_type, &name);
+    super::entries::assign_navigation_performance_entry_identity(scope, performance, entry);
     set_private_value(
         scope,
         performance,
