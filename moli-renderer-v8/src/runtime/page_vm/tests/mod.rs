@@ -97,6 +97,7 @@ use crate::frame_owner_model::{
 };
 use crate::native_bridge::PendingWindowMessageEndpoint;
 
+mod absolute_intrinsic_sizing;
 mod async_subresource_completion;
 mod block_stretch_sizing;
 mod broadcast_channel_delivery;
