@@ -250,8 +250,8 @@ pub(in crate::native_bridge) use self::validation::{
     control_check_validity_callback, control_matches_validity_pseudo,
     control_report_validity_callback, control_set_custom_validity_callback,
     control_validation_message_getter_function, control_validity_getter_function,
-    control_will_validate_getter_function, dispatch_invalid_event, form_check_validity_callback,
-    form_report_validity_callback, form_validate_for_submission,
+    control_validity_pseudo_state, control_will_validate_getter_function, dispatch_invalid_event,
+    form_check_validity_callback, form_report_validity_callback, form_validate_for_submission,
 };
 
 #[derive(strum::EnumString, strum::IntoStaticStr)]
