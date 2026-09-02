@@ -854,9 +854,16 @@ fn value_subclass_constructors_keep_payloads_flags_and_own_property_shapes() {
         }
         const custom = new CustomEvent('c', {detail: details});
         assert(Object.hasOwn(custom, 'detail') && !Object.hasOwn(custom, 'initCustomEvent'));
+        for (const Ctor of [CommandEvent, ToggleEvent]) {
+            const event = new Ctor('source', {source: sourceElement});
+            const source = Object.getOwnPropertyDescriptor(Ctor.prototype, 'source');
+            assert(!Object.hasOwn(event, 'source') && source.get.call(event) === sourceElement, Ctor.name + ' source placement');
+            assert(source.enumerable && source.configurable && source.set === undefined, Ctor.name + ' source descriptor');
+        }
         const toggle = new ToggleEvent('t', {newState: 'open'});
-        const d = Object.getOwnPropertyDescriptor(toggle, 'newState');
-        assert(!d.enumerable && !d.configurable && typeof d.get === 'function' && d.set === undefined);
+        const d = Object.getOwnPropertyDescriptor(ToggleEvent.prototype, 'newState');
+        assert(!Object.hasOwn(toggle, 'newState') && d.enumerable && d.configurable && typeof d.get === 'function' && d.set === undefined, 'ToggleEvent state descriptor ' + JSON.stringify(d));
+        assert(!Object.hasOwn(new CommandEvent('c'), 'command'), 'CommandEvent command placement');
         assert(new CloseEvent('c', {code: -1}).code === 65535);
         assert(!Object.hasOwn(new HashChangeEvent('h'), 'oldURL'));
         return true;

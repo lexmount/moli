@@ -68,6 +68,7 @@ const PAGE_REVEAL_EVENT_VIEW_TRANSITION_SLOT: &str = "__moliPageRevealEventViewT
 const PAGE_SWAP_EVENT_ACTIVATION_SLOT: &str = "__moliPageSwapEventActivation";
 const PAGE_SWAP_EVENT_VIEW_TRANSITION_SLOT: &str = "__moliPageSwapEventViewTransition";
 pub const COMMAND_EVENT_SOURCE_SLOT: &str = "__moliCommandEventSource";
+pub const TOGGLE_EVENT_SOURCE_SLOT: &str = "__moliToggleEventSource";
 const TRACK_EVENT_TRACK_SLOT: &str = "__moliTrackEventTrack";
 const CLIPBOARD_EVENT_CLIPBOARD_DATA_SLOT: &str = "__moliClipboardEventClipboardData";
 const CLIPBOARD_CHANGE_EVENT_TYPES_SLOT: &str = "__moliClipboardChangeEventTypes";

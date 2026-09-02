@@ -2513,7 +2513,7 @@ fn event_source_target_handle<'s>(
     host_ptr: *mut PageScriptHost,
     event: v8::Local<'s, v8::Object>,
 ) -> Option<EventTargetHandle> {
-    // CommandEvent retains its original source and retarget it
+    // ToggleEvent/CommandEvent retain their original source and retarget it
     // on every getter read, including outside dispatch and after tree changes.
     if crate::context_bootstrap::event_source_retargets_on_access(scope, event) {
         return None;

@@ -9,7 +9,7 @@ use super::*;
 use crate::context_bootstrap::navigation_entry::wrappers as entry_wrappers;
 use crate::context_bootstrap::{exposed_interfaces, world_wrappers};
 pub(in crate::context_bootstrap) use moli_webapi::events::state::event_value_attribute_getter;
-use moli_webapi::events::subclasses::COMMAND_EVENT_SOURCE_SLOT;
+use moli_webapi::events::subclasses::{COMMAND_EVENT_SOURCE_SLOT, TOGGLE_EVENT_SOURCE_SLOT};
 
 pub(crate) use moli_webapi::events::state::{
     event_bool_attribute, event_private_value, new_event_state, set_event_private_value,
@@ -328,8 +328,18 @@ pub(crate) fn event_attribute<'s>(
     property: &str,
 ) -> Option<v8::Local<'s, v8::Value>> {
     let state = event_backing(scope, event);
-    if property == "source" && event_subclass_kind(scope, state) == Some(EventSubclassKind::CommandEvent) {
-        return get_private_value(scope, state, COMMAND_EVENT_SOURCE_SLOT);
+    // CommandEvent and ToggleEvent expose source through prototype accessors;
+    // their native state holds the value in a private slot, not an own field.
+    if property == "source" {
+        match event_subclass_kind(scope, state) {
+            Some(EventSubclassKind::CommandEvent) => {
+                return get_private_value(scope, state, COMMAND_EVENT_SOURCE_SLOT);
+            }
+            Some(EventSubclassKind::ToggleEvent) => {
+                return get_private_value(scope, state, TOGGLE_EVENT_SOURCE_SLOT);
+            }
+            _ => {}
+        }
     }
     moli_webapi::events::state::event_attribute(scope, state, property)
 }

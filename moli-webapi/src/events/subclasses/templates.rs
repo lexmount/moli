@@ -56,6 +56,19 @@ struct CommandEventTemplateAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::ToggleEvent, enumerable)]
+struct ToggleEventTemplateAccessorsDeclaration {
+    #[webapi(accessor_property = "oldState", getter = event_value_attribute_getter, data = moli_v8_util::v8str(scope, "oldState"))]
+    old_state: (),
+
+    #[webapi(accessor_property = "newState", getter = event_value_attribute_getter, data = moli_v8_util::v8str(scope, "newState"))]
+    new_state: (),
+
+    #[webapi(accessor_property, getter = nullable_event_slot_getter, data = moli_v8_util::v8str(scope, TOGGLE_EVENT_SOURCE_SLOT))]
+    source: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::BeforeUnloadEvent, enumerable)]
 struct BeforeUnloadEventTemplateAccessorsDeclaration {
     #[webapi(accessor_property, getter = before_unload_event_return_value_getter, setter = before_unload_event_return_value_setter)]
@@ -183,6 +196,7 @@ pub fn template_declaration(interface: &str) -> Option<EventTemplateDeclaration>
         "CommandEvent" => {
             EventTemplateDeclaration::new::<CommandEventTemplateAccessorsDeclaration>()
         }
+        "ToggleEvent" => EventTemplateDeclaration::new::<ToggleEventTemplateAccessorsDeclaration>(),
         "CloseEvent" => EventTemplateDeclaration::new::<CloseEventTemplateAccessorsDeclaration>(),
         "TrackEvent" => EventTemplateDeclaration::new::<TrackEventTemplateAccessorsDeclaration>(),
         "HashChangeEvent" => {

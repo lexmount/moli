@@ -162,6 +162,17 @@ struct CommandEventTemplateAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::ToggleEvent, enumerable)]
+struct ToggleEventTemplateAccessorsDeclaration {
+    #[webapi(accessor_property = "oldState", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "oldState"))]
+    old_state: (),
+    #[webapi(accessor_property = "newState", getter = event_value_attribute_getter, data = crate::util::v8str(scope, "newState"))]
+    new_state: (),
+    #[webapi(accessor_property, getter = interaction_event_source_getter)]
+    source: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::UIEvent, enumerable)]
 struct UiEventTemplateMethodsDeclaration {
     #[webapi(accessor_property, getter = event_platform_attribute_getter, data = crate::util::v8str(scope, "sourceCapabilities"))]
@@ -460,9 +471,21 @@ struct DocumentEventTemplateMethodsDeclaration {
 // Installation and wrapper placement share the same native declarations. Public
 // prototype mutations cannot change which fields are exposed as own properties.
 fn event_template_declaration(interface: &str) -> Option<EventTemplateDeclaration> {
-    // The renderer retargets source against currentTarget in the receiver's world.
-    if interface == "CommandEvent" {
-        return Some(EventTemplateDeclaration::new::<CommandEventTemplateAccessorsDeclaration>());
+    // Native source accessors retarget against currentTarget and project into
+    // the receiver's world. Keep those declarations when the shared value
+    // bindings also supply source accessors for renderer-independent embedders.
+    match interface {
+        "ToggleEvent" => {
+            return Some(EventTemplateDeclaration::new::<
+                ToggleEventTemplateAccessorsDeclaration,
+            >());
+        }
+        "CommandEvent" => {
+            return Some(EventTemplateDeclaration::new::<
+                CommandEventTemplateAccessorsDeclaration,
+            >());
+        }
+        _ => {}
     }
     if let Some(declaration) = moli_webapi::events::subclasses::template_declaration(interface) {
         return Some(declaration);

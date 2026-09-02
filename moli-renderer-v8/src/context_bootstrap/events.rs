@@ -155,7 +155,10 @@ pub(crate) fn event_source_retargets_on_access<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,
 ) -> bool {
-    event_subclass_kind(scope, event) == Some(EventSubclassKind::CommandEvent)
+    matches!(
+        event_subclass_kind(scope, event),
+        Some(EventSubclassKind::CommandEvent | EventSubclassKind::ToggleEvent)
+    )
 }
 
 pub(crate) fn event_is_mouse_event<'s>(
