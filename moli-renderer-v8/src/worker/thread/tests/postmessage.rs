@@ -2051,6 +2051,17 @@ async fn worker_user_timing_uses_shared_mark_measure_runtime() {
                 measure.duration,
                 measure.detail.kind
             ].join(":"),
+            entryIds:
+                Number.isSafeInteger(mark.id)
+                && mark.id > 0
+                && Number.isSafeInteger(measure.id)
+                && measure.id > mark.id
+                && mark.navigationId === 0
+                && measure.navigationId === 0
+                && detached.id === 0
+                && detached.navigationId === 0
+                && mark.toJSON().id === mark.id
+                && mark.toJSON().navigationId === 0,
             detachedTimelineCount:
                 performance.getEntriesByName("detached", "mark").length,
             bufferedTypes: performance.getEntries()
@@ -2074,7 +2085,7 @@ async fn worker_user_timing_uses_shared_mark_measure_runtime() {
         .expect("channel closed");
     assert_eq!(
         expect_post_json(msg),
-        r#"{"timingNamesAccepted":true,"interfaces":true,"inheritance":true,"mark":"worker-mark:mark:2:0:before:false","measure":"worker-measure:measure:2:3:measure","detachedTimelineCount":0,"bufferedTypes":"mark,measure,mark","reservedBoundary":"TypeError","missingBoundary":"SyntaxError","markBrand":"TypeError","nowBrand":"TypeError"}"#
+        r#"{"timingNamesAccepted":true,"interfaces":true,"inheritance":true,"mark":"worker-mark:mark:2:0:before:false","measure":"worker-measure:measure:2:3:measure","entryIds":true,"detachedTimelineCount":0,"bufferedTypes":"mark,measure,mark","reservedBoundary":"TypeError","missingBoundary":"SyntaxError","markBrand":"TypeError","nowBrand":"TypeError"}"#
     );
 }
 
