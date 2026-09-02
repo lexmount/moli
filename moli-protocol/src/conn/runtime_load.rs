@@ -858,8 +858,11 @@ impl BackgroundNavigationLoadJob {
             }
 
             ensure_url_not_blocked_for_load_inputs(&self.load_inputs, &self.raw_url)?;
-            if self.load_inputs.network_offline {
+            if network_offline_blocks_url(self.load_inputs.network_offline, &self.raw_url) {
                 return Err("Network emulation offline".to_owned());
+            }
+            if self.load_inputs.network_offline {
+                self.load_inputs.network_offline = false;
             }
 
             let requested_url = Url::parse(&self.raw_url).map_err(|error| {
@@ -1562,7 +1565,7 @@ impl CdpConnection {
             document_activity: load_inputs.document_activity,
             browser_resource_runtime,
             navigator_identity,
-            network_offline: load_inputs.network_offline,
+            network_offline: load_inputs.network_offline && !url_is_loopback(final_url),
             bypass_service_worker: load_inputs.bypass_service_worker,
             cache_disabled: load_inputs.cache_disabled,
             blocked_url_patterns: load_inputs.blocked_url_patterns,
@@ -2280,7 +2283,7 @@ impl CdpConnection {
     async fn load_navigation_request_via_runtime_with_network_events_and_load_inputs_async(
         &mut self,
         owner: &CommandOwnerScope,
-        load_inputs: TargetNavigationLoadInputs,
+        mut load_inputs: TargetNavigationLoadInputs,
         method: &str,
         raw_url: &str,
         body: Option<Vec<u8>>,
@@ -2351,8 +2354,11 @@ impl CdpConnection {
         }
 
         ensure_url_not_blocked_for_load_inputs(&load_inputs, raw_url)?;
-        if load_inputs.network_offline {
+        if network_offline_blocks_url(load_inputs.network_offline, raw_url) {
             return Err("Network emulation offline".to_owned());
+        }
+        if load_inputs.network_offline {
+            load_inputs.network_offline = false;
         }
 
         let requested_url = Url::parse(raw_url)
@@ -2965,7 +2971,7 @@ impl CdpConnection {
     ) -> Result<NetworkFetchResult<NavigationResponse>, String> {
         let load_inputs = self.navigation_load_inputs_for_session_owner(None);
         ensure_url_not_blocked_for_load_inputs(&load_inputs, raw_url)?;
-        if load_inputs.network_offline {
+        if network_offline_blocks_url(load_inputs.network_offline, raw_url) {
             return Err("Network emulation offline".to_owned());
         }
         let resource_storage = load_inputs.resource_storage_handles();
@@ -3005,7 +3011,7 @@ impl CdpConnection {
             request_load_policy,
         );
         ensure_url_not_blocked_for_load_inputs(&load_inputs, raw_url)?;
-        if load_inputs.network_offline {
+        if network_offline_blocks_url(load_inputs.network_offline, raw_url) {
             return Err("Network emulation offline".to_owned());
         }
 
@@ -3097,7 +3103,7 @@ impl CdpConnection {
         auth: Option<SubresourceAuthCredentials>,
     ) -> Result<NetworkFetchResult<StreamingRawResponse>, String> {
         ensure_url_not_blocked_for_load_inputs(load_inputs, raw_url)?;
-        if load_inputs.network_offline {
+        if network_offline_blocks_url(load_inputs.network_offline, raw_url) {
             return Err("Network emulation offline".to_owned());
         }
 
@@ -3897,6 +3903,33 @@ fn ensure_url_not_blocked_for_load_inputs(
     }
 }
 
+/// Chromium does not hard-block loopback navigations under emulated offline
+/// conditions (`Network.emulateNetworkConditions {offline:true}`); requests
+/// to `localhost`/`*.localhost` and loopback IPs keep working while the page
+/// is otherwise offline. Match that quirk so loopback navigations proceed.
+fn url_is_loopback(url: &Url) -> bool {
+    match url.host() {
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        Some(url::Host::Domain(domain)) => {
+            let domain = domain.trim_end_matches('.');
+            let domain = domain.to_ascii_lowercase();
+            domain == "localhost" || domain.ends_with(".localhost")
+        }
+        None => false,
+    }
+}
+
+/// Resolves whether the emulated network-offline policy should block a
+/// navigation to `raw_url`. Loopback destinations are exempt so that a
+/// navigation to a local fixture proceeds like Chromium.
+fn network_offline_blocks_url(network_offline: bool, raw_url: &str) -> bool {
+    network_offline
+        && Url::parse(raw_url)
+            .map(|url| !url_is_loopback(&url))
+            .unwrap_or(true)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum NavigationLoadInputOverrideMode {
     FreshlyBuiltPage,
@@ -3940,9 +3973,10 @@ mod tests {
     use super::{
         BackgroundNavigationEarlyResult, decode_data_url_body, decode_data_url_response,
         decode_text_html_data_url, decoded_data_url_navigation_response,
-        inline_html_navigation_source,
+        inline_html_navigation_source, network_offline_blocks_url, url_is_loopback,
     };
     use serde_json::json;
+    use url::Url;
 
     #[test]
     fn decode_text_html_data_url_uses_data_url_processor() {
@@ -4064,5 +4098,71 @@ mod tests {
                 "sessionId": "SID-nav",
             })
         );
+    }
+
+    #[test]
+    fn url_is_loopback_accepts_local_hosts_and_loopback_addresses() {
+        for url in [
+            "http://localhost/",
+            "http://localhost:8765/page.html",
+            "http://LOCALHOST/",
+            "http://localhost./",
+            "http://app.localhost/page",
+            "http://127.0.0.1/",
+            "http://127.0.0.1:8765/page.html",
+            "http://127.0.0.2/",
+            "http://[::1]/",
+            "http://[::1]:8765/page.html",
+        ] {
+            let parsed = Url::parse(url).expect(url);
+            assert!(
+                url_is_loopback(&parsed),
+                "expected `{url}` to be treated as loopback"
+            );
+        }
+    }
+
+    #[test]
+    fn url_is_loopback_rejects_remote_hosts_and_schemeless_urls() {
+        for url in [
+            "http://example.test/",
+            "http://example.test:8765/offline",
+            "https://example.com/",
+            "http://8.8.8.8/",
+            "http://192.168.1.10/",
+            "http://localhost.evil.example/",
+            "about:blank",
+            "data:text/html,hello",
+        ] {
+            let parsed = Url::parse(url).expect(url);
+            assert!(
+                !url_is_loopback(&parsed),
+                "expected `{url}` not to be treated as loopback"
+            );
+        }
+    }
+
+    #[test]
+    fn network_offline_blocks_url_exempts_loopback_destinations_only() {
+        assert!(network_offline_blocks_url(true, "http://example.test/"));
+        assert!(network_offline_blocks_url(
+            true,
+            "http://example.test/offline"
+        ));
+        assert!(network_offline_blocks_url(true, "http://8.8.8.8/"));
+        assert!(!network_offline_blocks_url(
+            true,
+            "http://127.0.0.1:8765/page.html"
+        ));
+        assert!(!network_offline_blocks_url(
+            true,
+            "http://localhost/page.html"
+        ));
+        assert!(!network_offline_blocks_url(true, "http://[::1]/"));
+        assert!(!network_offline_blocks_url(false, "http://example.test/"));
+        assert!(!network_offline_blocks_url(
+            false,
+            "http://127.0.0.1:8765/page.html"
+        ));
     }
 }
