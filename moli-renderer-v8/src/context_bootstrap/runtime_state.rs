@@ -1530,7 +1530,7 @@ fn document_parse_html_unsafe_callback<'s>(
     let Some(document) =
         crate::dom_parser::parse_detached_html_document_from_source_with_declarative_shadow_roots(
             scope,
-            runtime.document_url().clone(),
+            url::Url::parse("about:blank").expect("static about:blank URL parses"),
             &html,
         )
     else {

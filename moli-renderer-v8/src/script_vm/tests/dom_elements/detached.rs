@@ -3321,6 +3321,24 @@ fn detached_legacy_boolean_accessors_use_owner_prototypes() {
 }
 
 #[test]
+fn document_parse_html_unsafe_uses_about_blank_document_metadata() {
+    let mut vm = new_storage_test_vm("https://parse-html-unsafe-url.test/path/page.html");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const parsed = Document.parseHTMLUnsafe("<html><head></head><body></body></html>");
+  return [parsed.URL, parsed.documentURI, parsed.baseURI].join("|");
+})()
+"#,
+        )
+        .expect("Document.parseHTMLUnsafe URL metadata probe should evaluate");
+
+    assert_eq!(result, "about:blank|about:blank|about:blank");
+}
+
+#[test]
 fn document_metadata_uses_document_and_node_prototype_accessors() {
     let mut vm = new_storage_test_vm("https://document-metadata-prototype.test/root/page.html");
 
