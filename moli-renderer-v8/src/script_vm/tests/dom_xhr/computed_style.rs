@@ -4585,6 +4585,117 @@ fn computed_width_resolves_percent_against_parent_and_child_frame_viewport() {
 }
 
 #[test]
+fn root_font_relative_units_follow_the_committed_root_style() {
+    let mut vm = new_parsed_test_vm(
+        "https://root-font-relative-state.test/",
+        r#"<html style="font-size:30px;line-height:1.5"><head></head><body><div id="target" style="width:4rem;height:1rlh"></div></body></html>"#,
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const root = document.documentElement;
+  const target = document.getElementById('target');
+  const before = getComputedStyle(target);
+  const beforeWidth = before.width;
+  const beforeHeight = before.height;
+
+  root.style.fontSize = '20px';
+  root.style.lineHeight = '2';
+
+  // Resolve only the root first. The already-published descendant must still
+  // inherit this new Device basis when it is observed afterwards.
+  const committedRootSize = getComputedStyle(root).fontSize;
+  const after = getComputedStyle(target);
+  return [
+    beforeWidth,
+    beforeHeight,
+    committedRootSize,
+    after.width,
+    after.height
+  ].join('|');
+})()
+"#,
+        )
+        .expect("root font-relative state should follow the committed root style");
+
+    assert_eq!(result, "120px|45px|20px|80px|40px");
+}
+
+#[test]
+fn replacement_device_preserves_root_font_relative_bases_and_usage() {
+    let mut vm = new_parsed_test_vm(
+        "https://replacement-device-root-font.test/",
+        r#"<html style="font-family:Ahem;font-size:30px;line-height:1.5"><head></head><body><div id="target" style="width:4rem;height:1rlh;padding-left:1rch"></div></body></html>"#,
+    );
+    let surface = |inner_width, inner_height| crate::protocol_types::ViewportSurface {
+        inner_width,
+        inner_height,
+        outer_width: inner_width,
+        outer_height: inner_height,
+        device_pixel_ratio: 1.0,
+        screen_width: 1920,
+        screen_height: 1080,
+        screen_avail_width: 1920,
+        screen_avail_height: 1040,
+    };
+    vm.set_viewport_surface(Some(surface(800, 600)))
+        .expect("initial viewport surface should update");
+
+    let before = vm
+        .eval(
+            r#"
+(() => {
+  const target = document.getElementById('target');
+  const style = getComputedStyle(target);
+  globalThis.__heldRootFontStyle = style;
+  return [style.width, style.height, style.paddingLeft].join('|');
+})()
+"#,
+        )
+        .expect("initial root font-relative styles should resolve");
+    assert_eq!(before, "120px|45px|30px");
+
+    let document = vm.document_handle_for_test();
+    let stylist = vm.retained_stylist_identity_for_document_for_test(document);
+    vm.set_viewport_surface(Some(surface(1000, 700)))
+        .expect("replacement viewport surface should update");
+
+    let after = vm
+        .eval(
+            r#"
+(() => {
+  const root = document.documentElement;
+  const target = document.getElementById('target');
+  const retained = __heldRootFontStyle;
+  const retainedValues = [retained.width, retained.height, retained.paddingLeft];
+
+  root.style.fontSize = '20px';
+  root.style.lineHeight = '2';
+  const committedRootSize = getComputedStyle(root).fontSize;
+  const fresh = getComputedStyle(target);
+  return [
+    ...retainedValues,
+    committedRootSize,
+    fresh.width,
+    fresh.height,
+    fresh.paddingLeft
+  ].join('|');
+})()
+"#,
+        )
+        .expect("replacement Device should retain and advance root font-relative state");
+
+    assert_eq!(after, "120px|45px|30px|20px|80px|40px|20px");
+    assert_eq!(
+        vm.retained_stylist_identity_for_document_for_test(document),
+        stylist,
+        "a Device replacement must retain the document Stylist",
+    );
+}
+
+#[test]
 fn transformed_oversized_inline_iframe_uses_its_containing_block_percentage_basis() {
     let mut vm = new_storage_test_vm("https://inline-iframe-percentage-size.test/");
 

@@ -386,6 +386,7 @@ fn update_document_scope(
         || retained.key.screen_height_bits != key.screen_height_bits
         || retained.key.environment != key.environment;
     let mut device_affected_origins = OriginSet::empty();
+    let mut root_font_metrics_changed = false;
     if device_changed {
         let device = new_style_device_with_viewport_bits(
             key.viewport_width_bits,
@@ -395,6 +396,9 @@ fn update_document_scope(
             key.environment,
             key.quirks_mode,
         );
+        root_font_metrics_changed = device
+            .inherit_root_font_relative_state_from(retained.stylist.device())
+            .font_metrics_changed();
         let guard = shared_lock.read();
         let guards = StylesheetGuards::same(&guard);
         device_affected_origins = retained.stylist.set_device(device, &guards);
@@ -408,7 +412,7 @@ fn update_document_scope(
             install_active_stylesheet(host, shared_lock, source, key.quirks_mode)
         })
     });
-    let mut scope_fallback = false;
+    let mut scope_fallback = root_font_metrics_changed;
     if let Some(reconciliation) = stylesheet_reconciliation.as_ref() {
         let guard = shared_lock.read();
         scope_fallback |= reconciliation.stylesheet_removed();

@@ -4,6 +4,7 @@ use dom::ElementState as StyloElementState;
 use style::{
     Atom,
     animation::DocumentAnimationSet,
+    computed_value_flags::ComputedValueFlags,
     context::{
         QuirksMode, RegisteredSpeculativePainter, RegisteredSpeculativePainters,
         SharedStyleContext, StyleContext, StyleSystemOptions, ThreadLocalStyleContext,
@@ -939,6 +940,9 @@ fn resolve_element_styles(
         // `resolve_style` is the single-node initial-style API. Keep dirty
         // values published until this observation begins, then replace only
         // the demanded path from ancestors to target.
+        let old_primary_style = element
+            .borrow_data()
+            .and_then(|data| data.styles.get_primary().cloned());
         unsafe {
             element.ensure_data().styles = ElementStyles::default();
         }
@@ -949,11 +953,8 @@ fn resolve_element_styles(
             pseudo_element,
             None,
         );
-        unsafe {
-            let mut data = element.ensure_data();
-            data.styles = styles.clone();
-            data.clear_restyle_state();
-        }
+        let styles =
+            commit_resolved_element_styles(&context, element, old_primary_style.as_ref(), styles);
         let required_generation = world
             .document_state
             .lazy_invalidation_roots
@@ -1024,16 +1025,15 @@ where
             continue;
         }
         world.pseudo_style_cache.invalidate_handles([handle]);
+        let old_primary_style = ancestor
+            .borrow_data()
+            .and_then(|data| data.styles.get_primary().cloned());
         unsafe {
             ancestor.ensure_data().styles = ElementStyles::default();
         }
         let styles = resolve_style(context, ancestor, RuleInclusion::All, None, None);
         resolution_count = resolution_count.saturating_add(1);
-        unsafe {
-            let mut data = ancestor.ensure_data();
-            data.styles = styles;
-            data.clear_restyle_state();
-        }
+        commit_resolved_element_styles(context, ancestor, old_primary_style.as_ref(), styles);
         world
             .document_state
             .lazy_invalidation_roots
@@ -1041,6 +1041,44 @@ where
         force_descendants = true;
     }
     resolution_count
+}
+
+/// Publish a single-node Stylo resolution and its document-root side effects
+/// as one commit.
+///
+/// `resolve_style` deliberately omits traversal finalization. Moli uses that
+/// API for demand-driven ancestor paths, so the root's font-relative bases
+/// must advance at this boundary before the next descendant is cascaded.
+fn commit_resolved_element_styles<E>(
+    context: &StyleContext<E>,
+    element: E,
+    old_primary_style: Option<&ServoArc<ComputedValues>>,
+    styles: ElementStyles,
+) -> ElementStyles
+where
+    E: TElement,
+{
+    let root_style = styles
+        .get_primary()
+        .filter(|style| {
+            style
+                .flags
+                .contains(ComputedValueFlags::IS_ROOT_ELEMENT_STYLE)
+        })
+        .cloned();
+    unsafe {
+        let mut data = element.ensure_data();
+        data.styles = styles.clone();
+        data.clear_restyle_state();
+    }
+    if let Some(root_style) = root_style.as_ref() {
+        let _ = context
+            .shared
+            .stylist
+            .device()
+            .update_root_font_relative_state(old_primary_style, root_style);
+    }
+    styles
 }
 
 /// Maps the memoized DOM path suffix back to Stylo ancestors.
