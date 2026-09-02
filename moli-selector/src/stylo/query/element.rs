@@ -53,6 +53,7 @@ impl<'a> QueryElement<'a> {
             shared_lock,
             style_data,
             atom_cache,
+            validity_states: None,
         }
     }
 
@@ -148,6 +149,7 @@ impl<'a> TElement for QueryElement<'a> {
             shared_lock: self.shared_lock,
             style_data: self.style_data,
             atom_cache: self.atom_cache,
+            validity_states: self.validity_states,
         }
     }
 
@@ -161,6 +163,7 @@ impl<'a> TElement for QueryElement<'a> {
                 shared_lock: self.shared_lock,
                 style_data: self.style_data,
                 atom_cache: self.atom_cache,
+                validity_states: self.validity_states,
             })
             .collect::<Vec<_>>();
         LayoutIterator(children.into_iter())
@@ -349,6 +352,7 @@ impl<'a> TElement for QueryElement<'a> {
                 shared_lock: self.shared_lock,
                 style_data: self.style_data,
                 atom_cache: self.atom_cache,
+                validity_states: self.validity_states,
             })
     }
 
@@ -361,6 +365,7 @@ impl<'a> TElement for QueryElement<'a> {
                 shared_lock: self.shared_lock,
                 style_data: self.style_data,
                 atom_cache: self.atom_cache,
+                validity_states: self.validity_states,
             })
     }
 
@@ -395,6 +400,7 @@ impl<'a> TElement for QueryElement<'a> {
                         shared_lock: self.shared_lock,
                         style_data: self.style_data,
                         atom_cache: self.atom_cache,
+                        validity_states: self.validity_states,
                     })
             });
         }
@@ -462,6 +468,7 @@ impl SelectorsElement for QueryElement<'_> {
             shared_lock: self.shared_lock,
             style_data: self.style_data,
             atom_cache: self.atom_cache,
+            validity_states: self.validity_states,
         })
     }
 
@@ -480,6 +487,7 @@ impl SelectorsElement for QueryElement<'_> {
             shared_lock: self.shared_lock,
             style_data: self.style_data,
             atom_cache: self.atom_cache,
+            validity_states: self.validity_states,
         })
     }
 
@@ -496,6 +504,7 @@ impl SelectorsElement for QueryElement<'_> {
                 shared_lock: self.shared_lock,
                 style_data: self.style_data,
                 atom_cache: self.atom_cache,
+                validity_states: self.validity_states,
             })
     }
 
@@ -508,6 +517,7 @@ impl SelectorsElement for QueryElement<'_> {
                 shared_lock: self.shared_lock,
                 style_data: self.style_data,
                 atom_cache: self.atom_cache,
+                validity_states: self.validity_states,
             })
     }
 
@@ -520,6 +530,7 @@ impl SelectorsElement for QueryElement<'_> {
                 shared_lock: self.shared_lock,
                 style_data: self.style_data,
                 atom_cache: self.atom_cache,
+                validity_states: self.validity_states,
             })
     }
 
@@ -534,6 +545,7 @@ impl SelectorsElement for QueryElement<'_> {
                 shared_lock: self.shared_lock,
                 style_data: self.style_data,
                 atom_cache: self.atom_cache,
+                validity_states: self.validity_states,
             })
     }
 

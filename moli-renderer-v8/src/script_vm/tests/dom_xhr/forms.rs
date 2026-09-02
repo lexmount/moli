@@ -518,6 +518,61 @@ fn live_input_pattern_uses_native_regexp_after_global_mutation() {
 
     assert_eq!(result, "false/true|true/false|false/true");
 }
+
+#[test]
+fn live_input_pattern_drives_dom_selector_apis() {
+    let mut vm = new_storage_test_vm("https://live-pattern-selectors.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const root = document.createElement('div');
+  root.id = 'patterns';
+  root.innerHTML =
+    '<input id="bad" value="AAA" pattern="[0-9][A-Z]{3}">' +
+    '<input id="good" value="0AAA" pattern="[0-9][A-Z]{3}">';
+  const ids = selector =>
+    [...root.querySelectorAll(selector)].map(element => element.id).join(',');
+  const bad = root.querySelector('#bad');
+  const good = root.querySelector('#good');
+  const initial = [
+    ids(':valid'),
+    ids(String.raw`:\76 alid`),
+    ids(':invalid'),
+    root.querySelector('input:invalid').id,
+    bad.matches('input#bad:invalid'),
+    good.matches('#good:valid'),
+    bad.closest('div:has(> input#bad:invalid)').id
+  ];
+
+  bad.value = '0BBB';
+  good.value = 'BBB';
+
+  const advanced = document.createElement('input');
+  advanced.id = 'advanced';
+  advanced.pattern = '([a-z])\\1';
+  advanced.value = 'ab';
+  root.append(advanced);
+
+  return [
+    ...initial,
+    ids(':valid'),
+    ids(':invalid'),
+    advanced.matches('#advanced:invalid'),
+    root.querySelector('#advanced:invalid').id
+  ].join('|');
+})()
+"#,
+        )
+        .expect("live input patterns should drive DOM selector APIs");
+
+    assert_eq!(
+        result,
+        "good|good|bad|bad|true|true|patterns|bad|good,advanced|true|advanced"
+    );
+}
+
 #[test]
 fn detached_select_and_option_track_selection_state() {
     let mut vm = new_storage_test_vm("https://detached-select-state.test/path/page.html");
