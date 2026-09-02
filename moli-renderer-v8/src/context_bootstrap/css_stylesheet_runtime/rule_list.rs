@@ -109,7 +109,6 @@ pub(crate) fn new_css_rule_list_object<'s>(
     }
     .bind_into(scope, list)
     .expect("CSSRuleList declaration should bind into list");
-    reset_css_rule_list_materialized_items(scope, list);
     list
 }
 
@@ -238,23 +237,19 @@ fn css_rule_list_parent_rule<'s>(
 fn css_rule_list_materialized_items<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     list: v8::Local<'s, v8::Object>,
-) -> v8::Local<'s, v8::Map> {
-    if let Some(items) = get_private_value(scope, list, CSS_RULE_LIST_MATERIALIZED_ITEMS_SLOT)
+) -> Option<v8::Local<'s, v8::Map>> {
+    get_private_value(scope, list, CSS_RULE_LIST_MATERIALIZED_ITEMS_SLOT)
         .and_then(|value| v8::Local::<v8::Map>::try_from(value).ok())
-    {
+}
+
+fn ensure_css_rule_list_materialized_items<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    list: v8::Local<'s, v8::Object>,
+) -> v8::Local<'s, v8::Map> {
+    if let Some(items) = css_rule_list_materialized_items(scope, list) {
         return items;
     }
 
-    reset_css_rule_list_materialized_items(scope, list);
-    get_private_value(scope, list, CSS_RULE_LIST_MATERIALIZED_ITEMS_SLOT)
-        .and_then(|value| v8::Local::<v8::Map>::try_from(value).ok())
-        .expect("CSSRuleList materialized item backing should initialize")
-}
-
-pub(crate) fn reset_css_rule_list_materialized_items<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    list: v8::Local<'s, v8::Object>,
-) {
     let items = v8::Map::new(scope);
     set_private_value(
         scope,
@@ -262,6 +257,21 @@ pub(crate) fn reset_css_rule_list_materialized_items<'s>(
         CSS_RULE_LIST_MATERIALIZED_ITEMS_SLOT,
         items.into(),
     );
+    items
+}
+
+pub(crate) fn reset_css_rule_list_materialized_items<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    list: v8::Local<'s, v8::Object>,
+) {
+    if css_rule_list_materialized_items(scope, list).is_some() {
+        set_private_value(
+            scope,
+            list,
+            CSS_RULE_LIST_MATERIALIZED_ITEMS_SLOT,
+            v8::null(scope).into(),
+        );
+    }
 }
 
 pub(crate) fn css_rule_list_materialized_rule<'s>(
@@ -269,7 +279,7 @@ pub(crate) fn css_rule_list_materialized_rule<'s>(
     list: v8::Local<'s, v8::Object>,
     index: u32,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let items = css_rule_list_materialized_items(scope, list);
+    let items = css_rule_list_materialized_items(scope, list)?;
     let key = v8::Integer::new_from_unsigned(scope, index);
     items
         .get(scope, key.into())
@@ -280,7 +290,9 @@ pub(crate) fn css_rule_list_materialized_entries<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     list: v8::Local<'s, v8::Object>,
 ) -> Vec<(u32, v8::Local<'s, v8::Object>)> {
-    let items = css_rule_list_materialized_items(scope, list);
+    let Some(items) = css_rule_list_materialized_items(scope, list) else {
+        return Vec::new();
+    };
     let item_count = items.size();
     note_css_rule_list_materialized_traversal(item_count);
     let flattened = items.as_array(scope);
@@ -312,7 +324,7 @@ pub(crate) fn set_css_rule_list_materialized_rule<'s>(
     index: u32,
     rule: v8::Local<'s, v8::Object>,
 ) {
-    let items = css_rule_list_materialized_items(scope, list);
+    let items = ensure_css_rule_list_materialized_items(scope, list);
     let key = v8::Integer::new_from_unsigned(scope, index);
     let _ = items.set(scope, key.into(), rule.into());
 }
@@ -337,9 +349,10 @@ pub(crate) fn delete_css_rule_list_materialized_rule<'s>(
     list: v8::Local<'s, v8::Object>,
     index: u32,
 ) {
-    let items = css_rule_list_materialized_items(scope, list);
-    let key = v8::Integer::new_from_unsigned(scope, index);
-    let _ = items.delete(scope, key.into());
+    if let Some(items) = css_rule_list_materialized_items(scope, list) {
+        let key = v8::Integer::new_from_unsigned(scope, index);
+        let _ = items.delete(scope, key.into());
+    }
 }
 
 pub(crate) fn css_rule_list_item<'s>(

@@ -10627,6 +10627,40 @@ fn css_rule_wrappers_are_counted_at_the_materialization_boundary() {
 }
 
 #[test]
+fn css_rule_wrapper_custom_state_survives_garbage_collection() {
+    let mut vm = new_storage_test_vm("https://css-rule-wrapper-gc.test/");
+
+    vm.eval(
+        r#"
+(() => {
+  const sheet = new CSSStyleSheet();
+  sheet.replaceSync('.rule { color: red; }');
+  const rules = sheet.cssRules;
+  rules[0].customState = 42;
+  globalThis.__rulesRetainedAcrossGc = rules;
+})()
+"#,
+    )
+    .expect("CSSRule wrapper custom state should initialize");
+
+    vm.collect_renderer_document_isolate_garbage()
+        .expect("CSSRule wrapper GC should complete");
+
+    assert_eq!(
+        vm.eval(
+            r#"
+(() => {
+  const rule = globalThis.__rulesRetainedAcrossGc[0];
+  return `${rule.customState}|${rule.cssText}`;
+})()
+"#,
+        )
+        .expect("CSSRule wrapper custom state should remain observable after GC"),
+        "42|.rule { color: red; }"
+    );
+}
+
+#[test]
 fn css_rule_list_sparse_mutations_visit_only_materialized_entries() {
     let mut vm = new_storage_test_vm("https://css-rule-list-sparse-traversal.test/");
 
