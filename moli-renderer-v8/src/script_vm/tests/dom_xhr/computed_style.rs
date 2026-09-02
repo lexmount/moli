@@ -4987,6 +4987,7 @@ fn computed_style_child_document_media_queries_use_iframe_viewport() {
   childDocument.open();
   childDocument.write('<style>body { color: red } @media all and (min-width: 101px) { body { color: green } }</style><body>text</body>');
   childDocument.close();
+  document.body.offsetTop;
   const before = getComputedStyle(childDocument.body).color;
   frame.style.width = '200px';
   const after = getComputedStyle(childDocument.body).color;
