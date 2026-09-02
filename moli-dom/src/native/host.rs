@@ -14,14 +14,14 @@ use super::{Element, LiveDomNodeMetadata, NativeDom, NativeNodeId, Node, NodeTyp
 mod clone;
 mod collections;
 mod document;
+mod html_serialization;
 mod mutation;
 mod parser;
 mod query_index;
-mod serialize;
 mod stylesheet_candidates;
 mod types;
 
-pub use serialize::{ShadowRootInclusion, ShadowRootRegistryAttributePolicy};
+pub use html_serialization::{ShadowRootInclusion, ShadowRootRegistryAttributePolicy};
 pub use stylesheet_candidates::StylesheetCandidateTreeScopeSnapshots;
 pub(crate) use stylesheet_candidates::{StylesheetCandidateChanges, StylesheetCandidateRegistries};
 

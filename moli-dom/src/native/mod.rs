@@ -2,9 +2,10 @@ mod attributes;
 mod document;
 mod element;
 mod host;
+mod html_serialization;
 mod node;
 mod queries;
-mod serialize;
+mod scripts;
 
 use std::sync::Arc;
 
@@ -29,11 +30,11 @@ pub use host::{
     HostElementSnapshot, ShadowRootBindingSnapshot, ShadowRootInclusion, ShadowRootInit,
     ShadowRootRegistryAttributePolicy,
 };
+pub use html_serialization::HtmlSerializationLimitExceeded;
 pub use node::{
     CDataSection, Comment, LiveDomNodeMetadata, NativeNodeId, Node, NodeData, NodeFlags, NodeType,
     ProcessingInstruction, Text,
 };
-pub use serialize::HtmlSerializationLimitExceeded;
 
 // Node IDs remain dense indexes, while immutable page snapshots share complete
 // chunks. A mutation detaches only its 256-node chunk, bounding copy-on-write
@@ -212,6 +213,10 @@ impl NativeDom {
 
     pub fn parse_errors(&self) -> &[String] {
         &self.parse_errors
+    }
+
+    pub fn push_parse_error(&mut self, error: String) {
+        self.parse_errors.push(error);
     }
 
     pub fn node(&self, node_id: NativeNodeId) -> Option<&Node> {

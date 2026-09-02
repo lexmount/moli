@@ -4,19 +4,17 @@ use super::node::{NativeNodeId, Node};
 use crate::forms::parse_non_negative_integer_prefix;
 
 impl NativeDom {
-    pub fn connected_script_handles(&self, root: NativeNodeId) -> Vec<NativeNodeId> {
-        let mut handles = Vec::new();
-        let mut stack = vec![root];
-        while let Some(handle) = stack.pop() {
-            let Some(node) = self.node(handle) else {
-                continue;
-            };
-            if node.flags().connected() && node.is_script_element() {
-                handles.push(handle);
-            }
-            stack.extend(self.child_ids_reversed(handle));
+    pub fn is_html_element_named(&self, node_id: NativeNodeId, local_name: &str) -> bool {
+        self.node(node_id)
+            .is_some_and(|node| node.is_html_element_named(local_name))
+    }
+
+    pub fn option_value(&self, node_id: NativeNodeId) -> Option<String> {
+        let element = self.node(node_id).and_then(Node::as_element)?;
+        if !element.is_html_option() {
+            return None;
         }
-        handles
+        Some(element.option_value(self, node_id))
     }
 
     pub fn child_element_nodes(&self, root: NativeNodeId) -> Vec<NativeNodeId> {
