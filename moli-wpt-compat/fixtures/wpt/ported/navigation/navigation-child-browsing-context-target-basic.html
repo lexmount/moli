@@ -31,6 +31,7 @@
       const form = document.createElement("form");
       form.target = "frame2";
       form.action = "resources/a-page.html";
+      document.body.appendChild(form);
       form.submit();
 
       document.body.setAttribute(
