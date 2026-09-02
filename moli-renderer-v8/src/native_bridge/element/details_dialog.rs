@@ -13,6 +13,7 @@ use moli_selector::stylo_flat_tree_heading_descendants;
 use super::super::{
     JsContextHost, node::node_runtime_and_handle_from_object_or_detached, throw_dom_exception,
 };
+use super::focus::run_dialog_focusing_steps;
 use super::popover::popover_is_open;
 use super::toggle_event::queue_element_toggle_event;
 use super::{
@@ -515,6 +516,7 @@ pub(super) fn dialog_show_callback<'s>(
         return;
     }
     dialog_set_open_state_for_handle(scope, runtime_ptr, handle, true, false);
+    run_dialog_focusing_steps(scope, runtime_ptr, handle);
 }
 
 pub(super) fn dialog_show_modal_callback<'s>(
@@ -560,6 +562,7 @@ pub(super) fn dialog_show_modal_callback<'s>(
         return;
     }
     dialog_set_open_state_for_handle(scope, runtime_ptr, handle, true, true);
+    run_dialog_focusing_steps(scope, runtime_ptr, handle);
 }
 
 pub(super) fn dialog_close_callback<'s>(
