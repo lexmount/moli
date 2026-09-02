@@ -498,15 +498,11 @@ fn append_rendered_text_node(out: &mut String, text: &str) {
     let trailing = &text[last_non_ws..];
     let body = collapse_whitespace(&text[first_non_ws..last_non_ws]);
 
-    if leading.chars().any(char::is_whitespace)
-        && !leading.contains('\n')
-        && !out.is_empty()
-        && !out.ends_with([' ', '\n'])
-    {
+    if leading.chars().any(char::is_whitespace) && !out.is_empty() && !out.ends_with([' ', '\n']) {
         out.push(' ');
     }
     out.push_str(&body);
-    if trailing.chars().any(char::is_whitespace) && !trailing.contains('\n') {
+    if trailing.chars().any(char::is_whitespace) {
         out.push(' ');
     }
 }
