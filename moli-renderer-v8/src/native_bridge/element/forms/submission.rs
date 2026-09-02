@@ -88,6 +88,7 @@ pub(in crate::native_bridge) fn submit_form_with_submit_event(
     let form_can_dispatch_submit_event = {
         let runtime = unsafe { &*runtime_ptr };
         form_is_connected_or_in_detached_document(runtime, form_handle)
+            && !runtime.is_constructing_form_data_for(form_handle)
     };
     if !form_can_dispatch_submit_event {
         return false;
@@ -459,6 +460,15 @@ pub(in crate::native_bridge) fn submit_form_default_action(
     submitter: Option<DomHandle>,
     user_initiated: bool,
 ) -> bool {
+    let form_can_submit = {
+        let runtime = unsafe { &*runtime_ptr };
+        form_is_connected_or_in_detached_document(runtime, form_handle)
+            && !runtime.is_constructing_form_data_for(form_handle)
+    };
+    if !form_can_submit {
+        return false;
+    }
+
     let method = {
         let runtime = unsafe { &*runtime_ptr };
         resolve_form_submission_method(runtime, form_handle, submitter)
@@ -487,6 +497,9 @@ pub(in crate::native_bridge) fn submit_form_default_action(
     else {
         return false;
     };
+    if !form_is_connected_or_in_detached_document(unsafe { &*runtime_ptr }, form_handle) {
+        return false;
+    }
 
     let special_target = target_name
         .as_deref()
