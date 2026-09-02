@@ -78,7 +78,7 @@ pub(in crate::context_bootstrap) fn range_selection_string_contents<'s>(
         }
     };
     let root_state = SelectionTextState {
-        active_modal_dialog: selection_text_active_modal_dialog(runtime),
+        active_modal_dialog: selection_text_active_modal_dialog(runtime, document),
         ..Default::default()
     };
     let mut out = String::new();
@@ -380,6 +380,7 @@ fn selection_text_has_inert_ancestor(
 
 fn selection_text_active_modal_dialog(
     runtime: &crate::native_bridge::JsContextHost,
+    document: DomHandle,
 ) -> Option<DomHandle> {
     runtime
         .dom_host()
@@ -388,7 +389,9 @@ fn selection_text_active_modal_dialog(
         .iter()
         .rev()
         .find_map(|node| {
-            if !node.is_connected() {
+            if !node.is_connected()
+                || runtime.dom_host().owner_document_handle(node.id()) != Some(document)
+            {
                 return None;
             }
             let element = node.as_element()?;

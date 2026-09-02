@@ -9528,3 +9528,78 @@ fn document_get_selection_uses_associated_window_selection() {
         "true|true|true|false|true|[object Selection]||0|true|true|true|true|true|true|true|true|false|true|true|0"
     );
 }
+
+#[test]
+fn modal_dialog_selection_inertness_is_scoped_to_its_document() {
+    let mut vm = new_storage_test_vm("https://selection-modal-document-scope.test/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const html = document.documentElement ||
+                document.appendChild(document.createElement("html"));
+              const body = document.body || html.appendChild(document.createElement("body"));
+              body.textContent = "";
+              const parentText = document.createElement("p");
+              parentText.textContent = "parent outside";
+              const parentDialog = document.createElement("dialog");
+              parentDialog.textContent = "parent dialog";
+              const frame = document.createElement("iframe");
+              body.append(parentText, parentDialog, frame);
+
+              const childDocument = frame.contentDocument;
+              const childHtml = childDocument.documentElement ||
+                childDocument.appendChild(childDocument.createElement("html"));
+              const childBody = childDocument.body ||
+                childHtml.appendChild(childDocument.createElement("body"));
+              childBody.textContent = "";
+              const childText = childDocument.createElement("p");
+              childText.textContent = "child outside";
+              const childDialog = childDocument.createElement("dialog");
+              childDialog.textContent = "child dialog";
+              childBody.append(childText, childDialog);
+
+              const selectedText = (selection, root) => {
+                selection.removeAllRanges();
+                selection.selectAllChildren(root);
+                return selection.toString();
+              };
+              const parentSelection = getSelection();
+              const childSelection = frame.contentWindow.getSelection();
+
+              parentDialog.showModal();
+              const parentWithParentModal = selectedText(parentSelection, body);
+              const childWithParentModal = selectedText(childSelection, childBody);
+              childSelection.removeAllRanges();
+              const childCommandWithParentModal = childDocument.execCommand("selectAll");
+              const childCommandTextWithParentModal = childSelection.toString();
+              parentDialog.close();
+
+              childDialog.showModal();
+              const parentWithChildModal = selectedText(parentSelection, body);
+              const childWithChildModal = selectedText(childSelection, childBody);
+              parentSelection.removeAllRanges();
+              const parentCommandWithChildModal = document.execCommand("selectAll");
+              const parentCommandTextWithChildModal = parentSelection.toString();
+
+              return JSON.stringify({
+                parentWithParentModal,
+                childWithParentModal,
+                childCommandWithParentModal,
+                childCommandTextWithParentModal,
+                parentWithChildModal,
+                childWithChildModal,
+                parentCommandWithChildModal,
+                parentCommandTextWithChildModal
+              });
+            })()
+            "#,
+        )
+        .expect("modal selection inertness should remain document-scoped");
+
+    assert_eq!(
+        result,
+        r#"{"parentWithParentModal":"parent dialog","childWithParentModal":"child outside","childCommandWithParentModal":true,"childCommandTextWithParentModal":"child outside","parentWithChildModal":"parent outside","childWithChildModal":"child dialog","parentCommandWithChildModal":true,"parentCommandTextWithChildModal":"parent outside"}"#
+    );
+}
