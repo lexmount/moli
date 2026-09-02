@@ -21,25 +21,71 @@ impl DocumentRuntime {
         root: Option<DomHandle>,
         selector: &str,
     ) -> Result<Option<DomHandle>, SelectorError> {
+        self.query_selector_with_optional_validity_states(root, selector, None)
+    }
+
+    pub(crate) fn query_selector_with_validity_states(
+        &self,
+        root: Option<DomHandle>,
+        selector: &str,
+        validity_states: &HashMap<DomHandle, bool>,
+    ) -> Result<Option<DomHandle>, SelectorError> {
+        self.query_selector_with_optional_validity_states(root, selector, Some(validity_states))
+    }
+
+    fn query_selector_with_optional_validity_states(
+        &self,
+        root: Option<DomHandle>,
+        selector: &str,
+        validity_states: Option<&HashMap<DomHandle, bool>>,
+    ) -> Result<Option<DomHandle>, SelectorError> {
         self.selector_debug.record_query_selector();
         trace_hot_selector_api("querySelector", root, selector);
         match root {
             Some(root) => {
                 if self.dom_host.node(root).is_some_and(Node::is_document) {
-                    let handles = self.selector_engine.query_selector_all_in_host(
-                        &self.dom_host,
-                        root,
-                        selector,
-                    )?;
+                    let handles = match validity_states {
+                        Some(states) => self
+                            .selector_engine
+                            .query_selector_all_in_host_with_validity_states(
+                                &self.dom_host,
+                                root,
+                                selector,
+                                states,
+                            )?,
+                        None => self.selector_engine.query_selector_all_in_host(
+                            &self.dom_host,
+                            root,
+                            selector,
+                        )?,
+                    };
                     Ok(handles.into_iter().next())
                 } else {
-                    self.selector_engine
-                        .query_selector_in_host(&self.dom_host, root, selector)
+                    match validity_states {
+                        Some(states) => self
+                            .selector_engine
+                            .query_selector_in_host_with_validity_states(
+                                &self.dom_host,
+                                root,
+                                selector,
+                                states,
+                            ),
+                        None => self.selector_engine.query_selector_in_host(
+                            &self.dom_host,
+                            root,
+                            selector,
+                        ),
+                    }
                 }
             }
-            None => self
-                .selector_engine
-                .query_selector_host(&self.dom_host, selector),
+            None => match validity_states {
+                Some(states) => self
+                    .selector_engine
+                    .query_selector_host_with_validity_states(&self.dom_host, selector, states),
+                None => self
+                    .selector_engine
+                    .query_selector_host(&self.dom_host, selector),
+            },
         }
     }
 
@@ -48,28 +94,84 @@ impl DocumentRuntime {
         root: Option<DomHandle>,
         selector: &str,
     ) -> Result<Vec<DomHandle>, SelectorError> {
+        self.query_selector_all_with_optional_validity_states(root, selector, None)
+    }
+
+    pub(crate) fn query_selector_all_with_validity_states(
+        &self,
+        root: Option<DomHandle>,
+        selector: &str,
+        validity_states: &HashMap<DomHandle, bool>,
+    ) -> Result<Vec<DomHandle>, SelectorError> {
+        self.query_selector_all_with_optional_validity_states(root, selector, Some(validity_states))
+    }
+
+    fn query_selector_all_with_optional_validity_states(
+        &self,
+        root: Option<DomHandle>,
+        selector: &str,
+        validity_states: Option<&HashMap<DomHandle, bool>>,
+    ) -> Result<Vec<DomHandle>, SelectorError> {
         self.selector_debug.record_query_selector_all();
         trace_hot_selector_api("querySelectorAll", root, selector);
         match root {
-            Some(root) => {
-                let handles = self.selector_engine.query_selector_all_in_host(
-                    &self.dom_host,
-                    root,
-                    selector,
-                )?;
-                Ok(handles)
-            }
-            None => self
-                .selector_engine
-                .query_selector_all_host(&self.dom_host, selector),
+            Some(root) => match validity_states {
+                Some(states) => self
+                    .selector_engine
+                    .query_selector_all_in_host_with_validity_states(
+                        &self.dom_host,
+                        root,
+                        selector,
+                        states,
+                    ),
+                None => {
+                    self.selector_engine
+                        .query_selector_all_in_host(&self.dom_host, root, selector)
+                }
+            },
+            None => match validity_states {
+                Some(states) => self
+                    .selector_engine
+                    .query_selector_all_host_with_validity_states(&self.dom_host, selector, states),
+                None => self
+                    .selector_engine
+                    .query_selector_all_host(&self.dom_host, selector),
+            },
         }
     }
 
     pub(crate) fn matches(&self, node: DomHandle, selector: &str) -> Result<bool, SelectorError> {
+        self.matches_with_optional_validity_states(node, selector, None)
+    }
+
+    pub(crate) fn matches_with_validity_states(
+        &self,
+        node: DomHandle,
+        selector: &str,
+        validity_states: &HashMap<DomHandle, bool>,
+    ) -> Result<bool, SelectorError> {
+        self.matches_with_optional_validity_states(node, selector, Some(validity_states))
+    }
+
+    fn matches_with_optional_validity_states(
+        &self,
+        node: DomHandle,
+        selector: &str,
+        validity_states: Option<&HashMap<DomHandle, bool>>,
+    ) -> Result<bool, SelectorError> {
         self.selector_debug.record_matches();
         trace_hot_selector_api("matches", Some(node), selector);
-        self.selector_engine
-            .matches_host(&self.dom_host, node, selector)
+        match validity_states {
+            Some(states) => self.selector_engine.matches_host_with_validity_states(
+                &self.dom_host,
+                node,
+                selector,
+                states,
+            ),
+            None => self
+                .selector_engine
+                .matches_host(&self.dom_host, node, selector),
+        }
     }
 
     pub(crate) fn closest(
@@ -77,10 +179,37 @@ impl DocumentRuntime {
         node: DomHandle,
         selector: &str,
     ) -> Result<Option<DomHandle>, SelectorError> {
+        self.closest_with_optional_validity_states(node, selector, None)
+    }
+
+    pub(crate) fn closest_with_validity_states(
+        &self,
+        node: DomHandle,
+        selector: &str,
+        validity_states: &HashMap<DomHandle, bool>,
+    ) -> Result<Option<DomHandle>, SelectorError> {
+        self.closest_with_optional_validity_states(node, selector, Some(validity_states))
+    }
+
+    fn closest_with_optional_validity_states(
+        &self,
+        node: DomHandle,
+        selector: &str,
+        validity_states: Option<&HashMap<DomHandle, bool>>,
+    ) -> Result<Option<DomHandle>, SelectorError> {
         self.selector_debug.record_closest();
         trace_hot_selector_api("closest", Some(node), selector);
-        self.selector_engine
-            .closest_host(&self.dom_host, node, selector)
+        match validity_states {
+            Some(states) => self.selector_engine.closest_host_with_validity_states(
+                &self.dom_host,
+                node,
+                selector,
+                states,
+            ),
+            None => self
+                .selector_engine
+                .closest_host(&self.dom_host, node, selector),
+        }
     }
 
     pub(crate) fn selector_debug_snapshot(&self) -> SelectorDebugSnapshot {

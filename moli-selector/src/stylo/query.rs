@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     fmt,
     hash::{Hash, Hasher},
     ptr::NonNull,
@@ -44,6 +45,7 @@ pub(in crate::stylo) struct QueryNode<'a> {
     shared_lock: &'a SharedRwLock,
     style_data: Option<&'a StyloElementDataStore>,
     atom_cache: &'a QueryAtomCache,
+    validity_states: Option<&'a HashMap<NodeId, bool>>,
 }
 
 impl fmt::Debug for QueryNode<'_> {
@@ -74,6 +76,7 @@ impl<'a> QueryNode<'a> {
         shared_lock: &'a SharedRwLock,
         style_data: Option<&'a StyloElementDataStore>,
         atom_cache: &'a QueryAtomCache,
+        validity_states: Option<&'a HashMap<NodeId, bool>>,
     ) -> Self {
         Self {
             host,
@@ -81,6 +84,7 @@ impl<'a> QueryNode<'a> {
             shared_lock,
             style_data,
             atom_cache,
+            validity_states,
         }
     }
 
@@ -100,6 +104,7 @@ impl<'a> QueryNode<'a> {
             shared_lock: self.shared_lock,
             style_data: self.style_data,
             atom_cache: self.atom_cache,
+            validity_states: self.validity_states,
         })
     }
 
@@ -111,6 +116,7 @@ impl<'a> QueryNode<'a> {
             shared_lock: self.shared_lock,
             style_data: self.style_data,
             atom_cache: self.atom_cache,
+            validity_states: self.validity_states,
         })
     }
 
@@ -123,6 +129,7 @@ impl<'a> QueryNode<'a> {
                 shared_lock: self.shared_lock,
                 style_data: self.style_data,
                 atom_cache: self.atom_cache,
+                validity_states: self.validity_states,
             })
     }
 
@@ -140,6 +147,7 @@ pub(in crate::stylo) struct QueryElement<'a> {
     shared_lock: &'a SharedRwLock,
     style_data: Option<&'a StyloElementDataStore>,
     atom_cache: &'a QueryAtomCache,
+    validity_states: Option<&'a HashMap<NodeId, bool>>,
 }
 
 impl fmt::Debug for QueryElement<'_> {
@@ -170,6 +178,7 @@ pub(in crate::stylo) struct QueryDocument<'a> {
     shared_lock: &'a SharedRwLock,
     style_data: Option<&'a StyloElementDataStore>,
     atom_cache: &'a QueryAtomCache,
+    validity_states: Option<&'a HashMap<NodeId, bool>>,
 }
 
 impl fmt::Debug for QueryDocument<'_> {
@@ -200,6 +209,7 @@ impl<'a> QueryDocument<'a> {
         shared_lock: &'a SharedRwLock,
         style_data: Option<&'a StyloElementDataStore>,
         atom_cache: &'a QueryAtomCache,
+        validity_states: Option<&'a HashMap<NodeId, bool>>,
     ) -> Self {
         Self {
             host,
@@ -207,6 +217,7 @@ impl<'a> QueryDocument<'a> {
             shared_lock,
             style_data,
             atom_cache,
+            validity_states,
         }
     }
 
@@ -226,6 +237,7 @@ pub(in crate::stylo) struct QueryShadowRoot<'a> {
     shared_lock: &'a SharedRwLock,
     style_data: Option<&'a StyloElementDataStore>,
     atom_cache: &'a QueryAtomCache,
+    validity_states: Option<&'a HashMap<NodeId, bool>>,
 }
 
 impl fmt::Debug for QueryShadowRoot<'_> {
@@ -269,6 +281,7 @@ impl<'a> TDocument for QueryDocument<'a> {
             shared_lock: self.shared_lock,
             style_data: self.style_data,
             atom_cache: self.atom_cache,
+            validity_states: self.validity_states,
         }
     }
 
@@ -300,6 +313,7 @@ impl<'a> TNode for QueryNode<'a> {
             shared_lock: self.shared_lock,
             style_data: self.style_data,
             atom_cache: self.atom_cache,
+            validity_states: self.validity_states,
         })
     }
 
@@ -310,6 +324,7 @@ impl<'a> TNode for QueryNode<'a> {
             shared_lock: self.shared_lock,
             style_data: self.style_data,
             atom_cache: self.atom_cache,
+            validity_states: self.validity_states,
         })
     }
 
@@ -320,6 +335,7 @@ impl<'a> TNode for QueryNode<'a> {
             shared_lock: self.shared_lock,
             style_data: self.style_data,
             atom_cache: self.atom_cache,
+            validity_states: self.validity_states,
         })
     }
 
@@ -330,6 +346,7 @@ impl<'a> TNode for QueryNode<'a> {
             shared_lock: self.shared_lock,
             style_data: self.style_data,
             atom_cache: self.atom_cache,
+            validity_states: self.validity_states,
         })
     }
 
@@ -340,6 +357,7 @@ impl<'a> TNode for QueryNode<'a> {
             shared_lock: self.shared_lock,
             style_data: self.style_data,
             atom_cache: self.atom_cache,
+            validity_states: self.validity_states,
         })
     }
 
@@ -354,6 +372,7 @@ impl<'a> TNode for QueryNode<'a> {
             shared_lock: self.shared_lock,
             style_data: self.style_data,
             atom_cache: self.atom_cache,
+            validity_states: self.validity_states,
         }
     }
 
@@ -401,6 +420,7 @@ impl<'a> TShadowRoot for QueryShadowRoot<'a> {
             shared_lock: self.shared_lock,
             style_data: self.style_data,
             atom_cache: self.atom_cache,
+            validity_states: self.validity_states,
         }
     }
 
@@ -415,6 +435,7 @@ impl<'a> TShadowRoot for QueryShadowRoot<'a> {
             shared_lock: self.shared_lock,
             style_data: self.style_data,
             atom_cache: self.atom_cache,
+            validity_states: self.validity_states,
         }
     }
 
