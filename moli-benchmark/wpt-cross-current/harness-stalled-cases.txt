@@ -38,10 +38,10 @@ payment-method-basic-card/steps_for_selecting_the_payment_handler.html
 resource-timing/nested-context-navigations-embed.html
 resource-timing/nested-context-navigations-iframe.html
 resource-timing/nested-context-navigations-object.html
-service-workers/service-worker/clients-matchall-order.https.html
 service-workers/service-worker/fetch-mixed-content-to-inscope.https.html
 service-workers/service-worker/fetch-mixed-content-to-outscope.https.html
 service-workers/service-worker/interface-requirements-sw.https.html
+service-workers/service-worker/windowclient-navigate.https.html
 svg/linking/scripted/a.rel-noreferrer-policy.html
 trusted-types/trusted-types-navigation.html?01-05
 trusted-types/trusted-types-navigation.html?06-10
