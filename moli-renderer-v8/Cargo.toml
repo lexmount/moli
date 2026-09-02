@@ -100,6 +100,7 @@ html5ever = "0.39.0"
 hashlink = "0.10"
 indexmap = "2.6"
 parking_lot = "0.12"
+fastrand = "2.3.0"
 markup5ever = "0.39.0"
 xml5ever = "0.39.0"
 serde = { version = "1.0.228", features = ["derive"] }

@@ -25,12 +25,15 @@ pub(in crate::context_bootstrap) const PERFORMANCE_NAVIGATION_REDIRECT_COUNT_SLO
     "__moliPerformanceNavigationRedirectCount";
 pub(in crate::context_bootstrap) const PERFORMANCE_ENTRY_NAME_SLOT: &str =
     "__moliPerformanceEntryName";
+pub(in crate::context_bootstrap) const PERFORMANCE_ENTRY_ID_SLOT: &str = "__moliPerformanceEntryId";
 pub(in crate::context_bootstrap) const PERFORMANCE_ENTRY_TYPE_SLOT: &str =
     "__moliPerformanceEntryType";
 pub(in crate::context_bootstrap) const PERFORMANCE_ENTRY_START_TIME_SLOT: &str =
     "__moliPerformanceEntryStartTime";
 pub(in crate::context_bootstrap) const PERFORMANCE_ENTRY_DURATION_SLOT: &str =
     "__moliPerformanceEntryDuration";
+pub(in crate::context_bootstrap) const PERFORMANCE_ENTRY_NAVIGATION_ID_SLOT: &str =
+    "__moliPerformanceEntryNavigationId";
 pub(in crate::context_bootstrap) const PERFORMANCE_ENTRY_DETAIL_SLOT: &str =
     "__moliPerformanceEntryDetail";
 pub(in crate::context_bootstrap) const PERFORMANCE_RESOURCE_INITIATOR_TYPE_SLOT: &str =
@@ -78,6 +81,7 @@ pub(in crate::context_bootstrap) const PERFORMANCE_EVENT_COUNTS_SLOT: &str =
 pub(in crate::context_bootstrap) const PERFORMANCE_EVENT_COUNTS_VALUES_SLOT: &str =
     "__moliPerformanceEventCountsValues";
 pub(super) const PERFORMANCE_NAVIGATION_ENTRY_SLOT: &str = "__moliPerformanceNavigationEntry";
+pub(super) const PERFORMANCE_LAST_ENTRY_ID_SLOT: &str = "__moliPerformanceLastEntryId";
 pub(super) const PERFORMANCE_NAVIGATION_TYPE_SEED_SLOT: &str =
     "__moliPerformanceNavigationTypeSeed";
 pub(super) const PERFORMANCE_NAVIGATION_NAME_SEED_SLOT: &str =
