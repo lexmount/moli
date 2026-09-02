@@ -6448,3 +6448,34 @@ const rect = span.getBoundingClientRect();
         r#"{"size":1,"returned":true,"has":true,"order":"fourth,third,replacement,first"}"#
     );
 }
+
+#[test]
+fn composed_command_event_crosses_the_shadow_root_with_a_source() {
+    let mut vm = new_storage_html_test_vm("https://composed-command-source.test/");
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const host = document.body.appendChild(document.createElement('div'));
+              const root = host.attachShadow({mode: 'closed'});
+              const source = root.appendChild(document.createElement('button'));
+              const target = root.appendChild(document.createElement('div'));
+              const seen = [];
+              for (const [name, node] of [['target', target], ['root', root],
+                    ['host', host], ['document', document]]) {
+                node.addEventListener('command', () => seen.push(name));
+              }
+              function run(composed) {
+                seen.length = 0;
+                target.dispatchEvent(new CommandEvent('command', {
+                  source, command: '--test', bubbles: true, composed
+                }));
+                return seen.join(',');
+              }
+              return [run(false), run(true)].join('|');
+            })()
+            "#,
+        )
+        .expect("composed CommandEvent dispatch should evaluate");
+    assert_eq!(result, "target,root|target,root,host,document");
+}
