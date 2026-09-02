@@ -202,6 +202,13 @@ impl LayoutInputControlKind {
             Self::Week => "form-input-week",
         }
     }
+
+    pub(crate) const fn has_single_line_text_editor(self) -> bool {
+        matches!(
+            self,
+            Self::Email | Self::Password | Self::Search | Self::Telephone | Self::Text | Self::Url
+        )
+    }
 }
 
 /// Replaced-content family. Pixel resources are deliberately not part of this type.
@@ -352,6 +359,14 @@ impl LayoutElementSemantics {
             LayoutElementCategory::FormControl(LayoutFormControlKind::Input(
                 LayoutInputControlKind::Hidden
             ))
+        )
+    }
+
+    pub(crate) const fn has_internal_text_control_scroller(&self) -> bool {
+        matches!(
+            self.category,
+            LayoutElementCategory::FormControl(LayoutFormControlKind::Input(kind))
+                if kind.has_single_line_text_editor()
         )
     }
 
