@@ -1286,6 +1286,69 @@ fn classic_scrollbar_metrics_and_thumb_drag_match_chromium_without_dom_mouse_eve
 }
 
 #[test]
+fn single_line_text_input_preserves_programmatic_scroll_across_select() {
+    let mut vm = new_storage_test_vm("https://text-input-scroll.test/");
+    vm.eval(
+        r#"
+        (() => {
+          if (!document.documentElement) {
+            document.appendChild(document.createElement("html"));
+          }
+          if (!document.body) {
+            document.documentElement.appendChild(document.createElement("body"));
+          }
+          const previous = document.createElement("input");
+          previous.value = "0123456789".repeat(100);
+          document.body.append(previous);
+          globalThis.__previousScrollInput = previous;
+          return "installed";
+        })()
+        "#,
+    )
+    .expect("text input scroll fixture should initialize");
+    refresh_layout_for_test(&mut vm);
+    vm.eval("__previousScrollInput.scrollLeft")
+        .expect("the previous input should retain the frozen layout");
+
+    vm.eval(
+        r#"
+        (() => {
+          __previousScrollInput.remove();
+          const input = document.createElement("input");
+          input.value = "0123456789".repeat(100);
+          document.body.append(input);
+          globalThis.__scrollInput = input;
+          return "replaced";
+        })()
+        "#,
+    )
+    .expect("the previous text input should be replaced");
+
+    vm.eval("__scrollInput.scrollLeft = 33")
+        .expect("text input should accept a programmatic scroll");
+    refresh_layout_for_test(&mut vm);
+    assert_eq!(
+        vm.eval("__scrollInput.scrollWidth > __scrollInput.clientWidth")
+            .expect("text input overflow should be observable"),
+        "true"
+    );
+    assert_eq!(
+        vm.eval("__scrollInput.scrollLeft")
+            .expect("text input scroll should remain observable"),
+        "33"
+    );
+
+    vm.eval("__scrollInput.select()")
+        .expect("selecting the input contents should succeed");
+    refresh_layout_for_test(&mut vm);
+    assert_eq!(
+        vm.eval("__scrollInput.scrollLeft")
+            .expect("selection should preserve the text input scroll"),
+        "33"
+    );
+}
+
+#[test]
 fn painted_overlay_wins_over_scrollbar_and_corner_consumes_input() {
     let mut vm = new_storage_test_vm("https://painted-scrollbar-surface.test/");
     vm.eval(
