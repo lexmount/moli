@@ -403,7 +403,7 @@ pub use geometry::ClientRect;
 #[cfg(test)]
 pub(crate) use geometry::observable_scrollbar_hit_test;
 pub(crate) use geometry::{
-    InputSurfaceHit, apply_scroll_observable_effects, input_surface_hit_test,
+    element_is_inert_for_hit_testing, InputSurfaceHit, apply_scroll_observable_effects, input_surface_hit_test,
     observable_caret_position, observable_deep_hit_test, observable_document_metrics,
     observable_event_offset, observable_geometry_batch, observable_geometry_query,
     observable_hit_test, observable_hit_test_all, observable_input_hit_test,

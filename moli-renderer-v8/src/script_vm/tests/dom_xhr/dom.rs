@@ -10429,3 +10429,59 @@ yield; // Publish this scene before reading its geometry.
         "INPUT|<input><span>some text</span>|<input type=\"text\" id=\"inputid\"><div id=\"divid\">new text</div>|inputId|0|1|Som|NotSupportedError:9"
     );
 }
+
+#[test]
+fn document_point_queries_skip_dynamic_inert_flat_tree_subtrees() {
+    let mut vm = new_parsed_test_vm(
+        "https://document-point-query-inert.test/",
+        r#"<!doctype html><style>
+html, body { margin: 0; }
+#under, #container, #target { position: absolute; inset: 0; width: 100px; height: 100px; }
+#under { background: red; }
+#container { background: blue; }
+#target { background: green; }
+</style>
+<div id="under"></div><div id="container"><div id="target"></div></div>"#,
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const container = document.getElementById('container');
+  const target = document.getElementById('target');
+  const top = () => document.elementFromPoint(1, 1);
+  const list = () => document.elementsFromPoint(1, 1)
+    .map(element => element.id || element.localName)
+    .join(',');
+  const values = [top() === target];
+
+  container.inert = true;
+  values.push(top()?.id, list());
+  container.inert = false;
+  values.push(top() === target);
+
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('style', 'position:fixed;inset:0;width:100px;height:100px');
+  const rect = document.createElementNS(svg.namespaceURI, 'rect');
+  rect.setAttribute('width', '100');
+  rect.setAttribute('height', '100');
+  svg.appendChild(rect);
+  document.body.appendChild(svg);
+  const svgHit = top();
+  svg.setAttribute('inert', '');
+  values.push(top() === svgHit);
+
+  const inertHtmlAncestor = document.createElement('div');
+  inertHtmlAncestor.inert = true;
+  inertHtmlAncestor.appendChild(svg);
+  document.body.appendChild(inertHtmlAncestor);
+  values.push(top() === target);
+  return values.join('|');
+})()
+"#,
+        )
+        .expect("dynamic inert point-query probe should evaluate");
+
+    assert_eq!(result, "true|under|under,html|true|true|true");
+}
