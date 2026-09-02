@@ -193,6 +193,11 @@ where
         .filter(|id| is_table_root(world.boxes[id.index()].kind))
         .collect::<Vec<_>>();
     for root in roots {
+        let writing_mode = world.boxes[root.index()].style.writing_mode();
+        defer_table_block_intrinsics_until_row_layout(
+            &mut world.boxes[root.index()].style.taffy,
+            writing_mode,
+        );
         let mut parts = Vec::new();
         collect_table_parts(world, root, &mut parts);
         if parts.is_empty() {
@@ -213,6 +218,39 @@ where
         prepare_collapsed_table_borders(world, root);
         apply_parent_facing_table_inline_constraints(world, root);
     }
+}
+
+/// Keep intrinsic block-axis constraints unresolved until table rows exist.
+///
+/// A generic formatting context asks its child for a content-based block size
+/// before the table adapter has measured row minima. Treating the intermediate
+/// Grid result as the table's min/max-content block size can therefore clamp a
+/// specified table height to its row content. Blink avoids that ordering bug by
+/// passing an indefinite intrinsic block size into `ComputeBlockSizeForFragment`
+/// until `TableLayoutAlgorithm::ComputeRows` has completed. Moli expresses the
+/// same phase boundary in the pass-local Taffy projection; the authoritative
+/// Stylo computed values remain unchanged for CSSOM and subsequent restyles.
+fn defer_table_block_intrinsics_until_row_layout(
+    style: &mut Style<Atom>,
+    writing_mode: WritingMode,
+) {
+    let defer = |dimension: Dimension| {
+        if dimension.is_intrinsic() {
+            Dimension::auto()
+        } else {
+            dimension
+        }
+    };
+
+    let mut size = writing_mode.to_logical(style.size);
+    let mut min_size = writing_mode.to_logical(style.min_size);
+    let mut max_size = writing_mode.to_logical(style.max_size);
+    size.block_size = defer(size.block_size);
+    min_size.block_size = defer(min_size.block_size);
+    max_size.block_size = defer(max_size.block_size);
+    style.size = writing_mode.to_physical(size);
+    style.min_size = writing_mode.to_physical(min_size);
+    style.max_size = writing_mode.to_physical(max_size);
 }
 
 /// Expose the table grid's minimum inline size to the parent formatting
@@ -291,10 +329,12 @@ where
     context.collect_cell_inline_constraints(world);
     let grid_inputs = context.resolve_column_tracks(inputs);
     let mut output = run_table_grid(world, &mut context, grid_inputs);
+    context.encompass_minimum_row_block_size(&mut output);
 
     if inputs.run_mode == RunMode::PerformLayout && context.resolve_row_tracks(output.size) {
         context.detailed = None;
         output = run_table_grid(world, &mut context, grid_inputs);
+        context.encompass_minimum_row_block_size(&mut output);
     }
 
     if inputs.run_mode == RunMode::PerformLayout {
@@ -707,6 +747,43 @@ impl TableContext {
         )
     }
 
+    /// Tables cannot shrink their grid box below the rows' minimum extent.
+    ///
+    /// Grid has already measured each cell and exposes the resulting row
+    /// tracks here, even when a smaller known table block size constrained the
+    /// container. Blink applies the same floor in `EndTableBoxLayout` by
+    /// taking the maximum of the laid-out sections and the CSS table size.
+    fn encompass_minimum_row_block_size(&self, output: &mut LayoutOutput) {
+        let Some(detailed) = self.detailed.as_ref() else {
+            return;
+        };
+        if detailed.rows.sizes.is_empty() {
+            return;
+        }
+
+        let logical_output_size = self.writing_mode.to_logical(output.size);
+        let percentage_basis = Some(logical_output_size.inline_size);
+        let padding = self
+            .style
+            .padding
+            .resolve_or_zero(percentage_basis, resolve_stylo_calc_value);
+        let border = self
+            .style
+            .border
+            .resolve_or_zero(percentage_basis, resolve_stylo_calc_value);
+        let minimum_block_size = track_extent(&detailed.rows.sizes, &detailed.rows.gutters)
+            + physical_block_sum(self.writing_mode, padding)
+            + physical_block_sum(self.writing_mode, border);
+        if logical_output_size.block_size >= minimum_block_size {
+            return;
+        }
+
+        output.size = self.writing_mode.to_physical(LogicalSize {
+            inline_size: logical_output_size.inline_size,
+            block_size: minimum_block_size,
+        });
+    }
+
     /// Convert Grid's intrinsic row measurements into CSS table row sizes.
     ///
     /// Grid owns cell measurement and placement, but its `align-content:
@@ -723,7 +800,8 @@ impl TableContext {
             return false;
         }
 
-        let percentage_basis = Some(grid_size.width);
+        let logical_grid_size = self.writing_mode.to_logical(grid_size);
+        let percentage_basis = Some(logical_grid_size.inline_size);
         let padding = self
             .style
             .padding
@@ -732,8 +810,10 @@ impl TableContext {
             .style
             .border
             .resolve_or_zero(percentage_basis, resolve_stylo_calc_value);
-        let grid_block_size =
-            (grid_size.height - padding.top - padding.bottom - border.top - border.bottom).max(0.0);
+        let grid_block_size = (logical_grid_size.block_size
+            - physical_block_sum(self.writing_mode, padding)
+            - physical_block_sum(self.writing_mode, border))
+        .max(0.0);
         let mut row_sizes = detailed.rows.sizes.clone();
         let original_row_sizes = row_sizes.clone();
 
@@ -1546,6 +1626,14 @@ fn physical_inline_sum(writing_mode: WritingMode, rect: Rect<f32>) -> f32 {
     }
 }
 
+fn physical_block_sum(writing_mode: WritingMode, rect: Rect<f32>) -> f32 {
+    if writing_mode.is_horizontal() {
+        rect.top + rect.bottom
+    } else {
+        rect.left + rect.right
+    }
+}
+
 fn clear_table_cell_inline_sizing(style: &mut Style<Atom>, writing_mode: WritingMode) {
     set_physical_inline_dimension(writing_mode, &mut style.size, Dimension::auto());
     set_physical_inline_dimension(writing_mode, &mut style.min_size, Dimension::auto());
@@ -2004,6 +2092,64 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn table_block_intrinsics_remain_unresolved_until_rows_are_measured() {
+        for writing_mode in [WritingMode::HorizontalTb, WritingMode::VerticalRl] {
+            let mut style = Style {
+                size: writing_mode.to_physical(LogicalSize {
+                    inline_size: Dimension::length(101.0),
+                    block_size: Dimension::max_content(),
+                }),
+                min_size: writing_mode.to_physical(LogicalSize {
+                    inline_size: Dimension::percent(0.25),
+                    block_size: Dimension::min_content(),
+                }),
+                max_size: writing_mode.to_physical(LogicalSize {
+                    inline_size: Dimension::length(202.0),
+                    block_size: Dimension::fit_content(),
+                }),
+                ..Style::default()
+            };
+
+            defer_table_block_intrinsics_until_row_layout(&mut style, writing_mode);
+
+            let size = writing_mode.to_logical(style.size);
+            let min_size = writing_mode.to_logical(style.min_size);
+            let max_size = writing_mode.to_logical(style.max_size);
+            assert_eq!(size.inline_size, Dimension::length(101.0));
+            assert_eq!(min_size.inline_size, Dimension::percent(0.25));
+            assert_eq!(max_size.inline_size, Dimension::length(202.0));
+            assert!(size.block_size.is_auto());
+            assert!(min_size.block_size.is_auto());
+            assert!(max_size.block_size.is_auto());
+        }
+    }
+
+    #[test]
+    fn table_numeric_block_constraints_remain_parent_facing() {
+        let mut style = Style {
+            size: Size {
+                width: Dimension::auto(),
+                height: Dimension::length(150.0),
+            },
+            min_size: Size {
+                width: Dimension::auto(),
+                height: Dimension::percent(0.25),
+            },
+            max_size: Size {
+                width: Dimension::auto(),
+                height: Dimension::stretch(),
+            },
+            ..Style::default()
+        };
+
+        defer_table_block_intrinsics_until_row_layout(&mut style, WritingMode::HorizontalTb);
+
+        assert_eq!(style.size.height, Dimension::length(150.0));
+        assert_eq!(style.min_size.height, Dimension::percent(0.25));
+        assert_eq!(style.max_size.height, Dimension::stretch());
+    }
 
     #[test]
     fn percentage_dependent_fixed_table_has_unbounded_parent_max_content_size() {
