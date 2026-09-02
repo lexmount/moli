@@ -102,9 +102,7 @@ impl RendererSyntheticResponseBody {
     /// Converts a synthetic fulfill body into the renderer-neutral subresource
     /// record body without reopening a loose text/byte pair at each call site.
     pub fn into_subresource_response_body(self) -> crate::protocol_types::SubresourceResponseBody {
-        crate::protocol_types::SubresourceResponseBody::from_materialized_body(
-            self.into_response_body(),
-        )
+        crate::protocol_types::SubresourceResponseBody::from_bytes(self.into_body_bytes())
     }
 
     /// Builds a materialized fetch response for worker/Web compatibility paths

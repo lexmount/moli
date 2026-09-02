@@ -558,10 +558,8 @@ mod tests {
 
     #[test]
     fn captured_body_from_subresource_response_body_reads_shared_source() -> Result<()> {
-        let subresource_body = moli_core::page::SubresourceResponseBody::from_text_and_bytes(
-            "hello world".to_owned(),
-            b"hello world".to_vec(),
-        );
+        let subresource_body =
+            moli_core::page::SubresourceResponseBody::from_bytes(b"hello world".to_vec());
         let body = CapturedBody::from_subresource_response_body(&subresource_body);
 
         assert!(matches!(

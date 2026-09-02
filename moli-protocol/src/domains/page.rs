@@ -4114,10 +4114,9 @@ mod producer_tests {
                     status: 200,
                     response_headers: vec![("Content-Type".to_owned(), "text/html".to_owned())],
                     encoded_data_length: 3,
-                    response_body: Some(SubresourceResponseBody::from_text_and_bytes(
-                        "\0\u{fffd}a".to_owned(),
-                        vec![0x00, 0xff, b'a'],
-                    )),
+                    response_body: Some(SubresourceResponseBody::from_bytes(vec![
+                        0x00, 0xff, b'a',
+                    ])),
                     from_cache: true,
                 }),
             }],
@@ -4251,8 +4250,8 @@ mod producer_tests {
                     status: 200,
                     response_headers: vec![("Content-Type".to_owned(), "text/html".to_owned())],
                     encoded_data_length: 21,
-                    response_body: Some(SubresourceResponseBody::from_text(
-                        "historical child body".to_owned(),
+                    response_body: Some(SubresourceResponseBody::from_bytes(
+                        b"historical child body".to_vec(),
                     )),
                     from_cache: false,
                 },

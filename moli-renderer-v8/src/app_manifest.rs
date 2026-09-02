@@ -303,10 +303,7 @@ impl RendererPreparedAppManifestLoad {
                             false,
                         )
                     };
-                    let response_body = SubresourceResponseBody::from_text_and_bytes(
-                        String::from_utf8_lossy(&response.body).into_owned(),
-                        response.body,
-                    );
+                    let response_body = SubresourceResponseBody::from_bytes(response.body);
                     let record = SubresourceNetworkRecord::success_with_body(
                         frame_id,
                         document_url.clone(),

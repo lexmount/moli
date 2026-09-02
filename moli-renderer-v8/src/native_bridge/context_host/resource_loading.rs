@@ -28,6 +28,17 @@ enum ImageSubresourceFetchRegistration {
     Dispatched(moli_fetch::FetchCancelHandle),
 }
 
+fn navigation_response_from_subresource_body(
+    body: &SubresourceResponseBody,
+    head: moli_fetch::ResponseHead,
+) -> crate::types::NavigationResponse {
+    let bytes = body.materialize_bytes().unwrap_or_default();
+    crate::types::NavigationResponse::from_head_and_materialized_body(
+        head,
+        moli_fetch::ResponseBody::materialized_bytes(bytes),
+    )
+}
+
 impl JsContextHost {
     #[cfg(test)]
     pub(crate) fn has_pending_load_event_delaying_subresource_requests(&self) -> bool {
@@ -2795,9 +2806,9 @@ impl JsContextHost {
                 request_method: in_flight.request_method,
                 request_headers: in_flight.request_headers,
                 request_body: in_flight.request_body,
-                response: info
-                    .response_body
-                    .to_navigation_response(moli_fetch::ResponseHead {
+                response: navigation_response_from_subresource_body(
+                    &info.response_body,
+                    moli_fetch::ResponseHead {
                         final_url: info.url.clone(),
                         status: info.response_status,
                         headers: info.response_headers.clone(),
@@ -2807,8 +2818,9 @@ impl JsContextHost {
                         redirect_chain: Vec::new(),
                         from_cache: info.from_cache,
                         negotiated_http_version: None,
-                    })
-                    .with_network_request_headers(info.network_request_headers.clone()),
+                    },
+                )
+                .with_network_request_headers(info.network_request_headers.clone()),
             });
             self.record_pending_subresource_continue_event(
                 PendingSubresourceContinueEvent::ResponsePaused(info),
@@ -2838,9 +2850,9 @@ impl JsContextHost {
                 request_body: in_flight.request_body,
                 intercept_response: info.intercept_response,
                 initial_network_request_headers: info.network_request_headers.clone(),
-                response: info
-                    .response_body
-                    .to_navigation_response(moli_fetch::ResponseHead {
+                response: navigation_response_from_subresource_body(
+                    &info.response_body,
+                    moli_fetch::ResponseHead {
                         final_url: info.response_final_url.clone(),
                         status: info.response_status,
                         headers: info.response_headers.clone(),
@@ -2850,8 +2862,9 @@ impl JsContextHost {
                         redirect_chain: Vec::new(),
                         from_cache: info.response_from_cache,
                         negotiated_http_version: None,
-                    })
-                    .with_network_request_headers(info.network_request_headers.clone()),
+                    },
+                )
+                .with_network_request_headers(info.network_request_headers.clone()),
             });
             self.record_pending_subresource_continue_event(
                 PendingSubresourceContinueEvent::AuthRequired(info),

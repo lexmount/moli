@@ -2914,7 +2914,7 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
                 WorkerFetchResponseParts::Subresource { mut head, body } => {
                     head.headers = filtered_headers;
                     let body = if opaque_response_blocked {
-                        SubresourceResponseBody::from_text(String::new())
+                        SubresourceResponseBody::from_bytes(Vec::new())
                     } else {
                         body
                     };

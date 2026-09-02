@@ -1170,7 +1170,7 @@ mod tests {
             request_url.clone(),
             200,
             Vec::new(),
-            SubresourceResponseBody::from_text("complete".to_owned()),
+            SubresourceResponseBody::from_bytes(b"complete".to_vec()),
             Vec::new(),
         );
         assert_xhr_terminal_retains_internal_resource_type(vec![
@@ -1200,7 +1200,7 @@ mod tests {
         );
         let body = SubresourceBodyFinished::ready(
             handle,
-            SubresourceResponseBody::from_text("staged".to_owned()),
+            SubresourceResponseBody::from_bytes(b"staged".to_vec()),
         );
         assert_xhr_terminal_retains_internal_resource_type(vec![
             ScriptNetworkOutputItem::SubresourceRequestStarted(Box::new(request)),

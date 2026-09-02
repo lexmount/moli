@@ -2695,7 +2695,6 @@ dependencies = [
  "moli-dom",
  "moli-fetch",
  "moli-web-mime",
- "parking_lot",
  "regex",
  "serde",
  "serde_json",

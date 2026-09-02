@@ -743,7 +743,10 @@ fn child_document_load_outcome_from_response(
     if child_document_response_should_ignore_navigation(head.status, &head.headers) {
         return Ok(ChildDocumentLoadOutcome::IgnoredNavigation);
     }
-    let response_body = SubresourceResponseBody::from_materialized_body(body);
+    let response_body = SubresourceResponseBody::from_bytes(
+        body.try_into_materialized_bytes()
+            .map_err(|_| "child document response body should remain materialized".to_owned())?,
+    );
     let encoded_data_length = response_body.len();
     let content_type = child_document_content_type_from_headers(&head.headers)
         .or_else(|| child_document_content_type_for_url(&head.final_url));

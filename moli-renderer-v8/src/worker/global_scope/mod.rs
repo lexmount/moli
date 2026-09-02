@@ -1266,8 +1266,8 @@ impl WorkerXhrResponse {
         match self {
             Self::Materialized(response) => Ok(response.into_body()),
             Self::Streamed { head, body } => body
-                .try_materialized_body()
-                .map(|body| (*head, body))
+                .materialize_bytes()
+                .map(|bytes| (*head, ResponseBody::materialized_bytes(bytes)))
                 .map_err(|error| format!("failed to materialize worker XHR body: {error}")),
         }
     }

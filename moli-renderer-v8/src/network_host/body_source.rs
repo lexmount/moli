@@ -2057,10 +2057,7 @@ mod tests {
 
     #[test]
     fn network_body_source_subresource_reads_through_fallible_source() {
-        let body = SubresourceResponseBody::from_text_and_bytes(
-            "hello world".to_owned(),
-            b"hello world".to_vec(),
-        );
+        let body = SubresourceResponseBody::from_bytes(b"hello world".to_vec());
         let id = register_network_body_subresource_body(body);
 
         assert_eq!(

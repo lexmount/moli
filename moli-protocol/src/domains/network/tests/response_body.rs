@@ -362,7 +362,7 @@ async fn get_response_body_returns_partial_body_after_staged_loading_failed() {
     let body = SubresourceBodyFinished::failed_with_partial_body(
         handle,
         "net::ERR_ABORTED".to_owned(),
-        SubresourceResponseBody::from_text("partial body".to_owned()),
+        SubresourceResponseBody::from_bytes(b"partial body".to_vec()),
     );
     let items = vec![
         ScriptNetworkOutputItem::SubresourceRequestStarted(Box::new(request)),

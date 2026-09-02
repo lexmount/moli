@@ -5539,14 +5539,14 @@ impl ScriptVm {
                         ) {
                             let materialize_started =
                                 moli_trace::cdp_runtime_trace_enabled().then(Instant::now);
-                            match response_body.try_materialized_body() {
-                                Ok(body) => {
+                            match response_body.materialize_bytes() {
+                                Ok(bytes) => {
                                     trace_async_subresource_stage(
                                         "async_subresource_streaming_xhr_body_materialized",
                                         trace_fields,
                                         materialize_started,
                                     );
-                                    Some(body)
+                                    Some(moli_fetch::ResponseBody::materialized_bytes(bytes))
                                 }
                                 Err(error) => {
                                     let error_text = format!(

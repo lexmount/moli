@@ -2316,7 +2316,7 @@ async fn streaming_fetch_body_error_records_response_started_then_body_failed() 
                     partial_body,
                 } => {
                     assert_eq!(error_text, crate::network_host::ABORTED_ERROR_TEXT);
-                    assert_eq!(partial_body.diagnostic_text(), "partial");
+                    assert_eq!(partial_body.diagnostic_bytes().as_ref(), b"partial");
                 }
                 other => panic!("expected failed body with partial payload, got {other:?}"),
             }
@@ -2679,7 +2679,7 @@ async fn streaming_fetch_body_cancel_records_response_started_then_body_failed()
                     partial_body,
                 } => {
                     assert_eq!(error_text, crate::network_host::ABORTED_ERROR_TEXT);
-                    assert_eq!(partial_body.diagnostic_text(), "partial");
+                    assert_eq!(partial_body.diagnostic_bytes().as_ref(), b"partial");
                 }
                 other => panic!("expected failed body with partial payload, got {other:?}"),
             }

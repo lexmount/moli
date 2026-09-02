@@ -26,7 +26,6 @@ use std::{
 #[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 
-use parking_lot::Mutex;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -1477,15 +1476,17 @@ pub struct SubresourceResponseBody {
 
 #[derive(Debug)]
 enum SubresourceResponseBodyInner {
-    Memory {
-        text: String,
-        bytes: Vec<u8>,
-    },
-    File {
-        path: PathBuf,
-        len: usize,
-        text_cache: Mutex<Option<String>>,
-    },
+    Memory(Vec<u8>),
+    File { path: PathBuf, len: usize },
+}
+
+impl SubresourceResponseBodyInner {
+    fn in_memory_bytes(&self) -> Option<&[u8]> {
+        match self {
+            Self::Memory(bytes) => Some(bytes),
+            Self::File { .. } => None,
+        }
+    }
 }
 
 impl Drop for SubresourceResponseBodyInner {
@@ -1501,19 +1502,13 @@ impl PartialEq for SubresourceResponseBody {
         if Arc::ptr_eq(&self.inner, &other.inner) {
             return true;
         }
-        match (self.inner.as_ref(), other.inner.as_ref()) {
-            (
-                SubresourceResponseBodyInner::Memory {
-                    text: left_text,
-                    bytes: left_bytes,
-                },
-                SubresourceResponseBodyInner::Memory {
-                    text: right_text,
-                    bytes: right_bytes,
-                },
-            ) => left_text == right_text && left_bytes == right_bytes,
-            _ => false,
-        }
+        let Some(left_bytes) = self.inner.in_memory_bytes() else {
+            return false;
+        };
+        let Some(right_bytes) = other.inner.in_memory_bytes() else {
+            return false;
+        };
+        left_bytes == right_bytes
     }
 }
 
@@ -1593,7 +1588,6 @@ impl SubresourceResponseBodyWriter {
                     inner: Arc::new(SubresourceResponseBodyInner::File {
                         path,
                         len: self.len,
-                        text_cache: Mutex::new(None),
                     }),
                 };
             }
@@ -1603,10 +1597,7 @@ impl SubresourceResponseBodyWriter {
         if let Some(path) = self.path.take() {
             let _ = fs::remove_file(path);
         }
-        SubresourceResponseBody::from_text_and_bytes(
-            String::from_utf8_lossy(&self.memory).into_owned(),
-            std::mem::take(&mut self.memory),
-        )
+        SubresourceResponseBody::from_bytes(std::mem::take(&mut self.memory))
     }
 
     fn ensure_file(&mut self) -> io::Result<()> {
@@ -1659,115 +1650,22 @@ impl Drop for SubresourceResponseBodyWriter {
 }
 
 impl SubresourceResponseBody {
-    pub fn from_text(text: String) -> Self {
-        let bytes = text.as_bytes().to_vec();
-        Self::from_text_and_bytes(text, bytes)
-    }
-
-    pub fn from_text_and_bytes(text: String, bytes: Vec<u8>) -> Self {
+    pub fn from_bytes(bytes: Vec<u8>) -> Self {
         Self {
-            inner: Arc::new(SubresourceResponseBodyInner::Memory { text, bytes }),
+            inner: Arc::new(SubresourceResponseBodyInner::Memory(bytes)),
         }
     }
 
-    pub fn from_materialized_body(body: ResponseBody) -> Self {
-        let (text, bytes) = body
-            .try_into_lossy_materialized_text()
-            .expect("SubresourceResponseBody should be built from a materialized body");
-        Self::from_text_and_bytes(text, bytes)
-    }
-
-    /// Builds the neutral subresource body carrier from a materialized fetch
-    /// response without exposing a loose `(String, Vec<u8>)` pair to callers.
+    /// Copies the exact bytes from a materialized fetch response into the
+    /// renderer-neutral subresource body carrier.
     pub fn from_fetch_response(response: &Response) -> Self {
-        Self::from_materialized_body(response.materialized_body())
+        Self::from_bytes(response.body_bytes().to_vec())
     }
 
-    /// Builds the neutral subresource body carrier from a materialized
-    /// navigation response at the explicit compatibility boundary.
+    /// Copies the exact bytes from a materialized navigation response into the
+    /// renderer-neutral subresource body carrier.
     pub fn from_navigation_response(response: &NavigationResponse) -> Self {
-        Self::from_materialized_body(response.materialized_body())
-    }
-
-    /// Builds a materialized navigation response at a compatibility boundary
-    /// that still needs both the lossy text view and exact bytes.
-    pub fn to_navigation_response(&self, head: ResponseHead) -> NavigationResponse {
-        self.diagnostic_navigation_response(head)
-    }
-
-    /// Best-effort navigation response for diagnostics and legacy tests.
-    /// Production protocol paths should use `try_to_navigation_response`.
-    pub fn diagnostic_navigation_response(&self, head: ResponseHead) -> NavigationResponse {
-        NavigationResponse::from_head_and_materialized_body(
-            head,
-            self.diagnostic_materialized_body(),
-        )
-    }
-
-    /// Fallible variant of `to_navigation_response` for callers that can
-    /// surface file-backed body source errors instead of treating them as an
-    /// empty body.
-    pub fn try_to_navigation_response(&self, head: ResponseHead) -> io::Result<NavigationResponse> {
-        self.try_materialized_body()
-            .map(|body| NavigationResponse::from_head_and_materialized_body(head, body))
-    }
-
-    /// Builds a materialized response body at an explicit compatibility
-    /// boundary. File-backed bodies are read once so callers that need both the
-    /// text view and exact bytes do not duplicate spool I/O.
-    pub fn materialized_body(&self) -> ResponseBody {
-        self.diagnostic_materialized_body()
-    }
-
-    /// Best-effort materialized body for diagnostics and legacy tests.
-    /// Production protocol paths should use `try_materialized_body`.
-    pub fn diagnostic_materialized_body(&self) -> ResponseBody {
-        self.try_materialized_body()
-            .unwrap_or_else(|_| ResponseBody::materialized_text(String::new(), Vec::new()))
-    }
-
-    /// Fallible materialization for production paths that need to distinguish
-    /// source read failure from a legitimate empty body.
-    pub fn try_materialized_body(&self) -> io::Result<ResponseBody> {
-        match self.inner.as_ref() {
-            SubresourceResponseBodyInner::Memory { text, bytes } => {
-                Ok(ResponseBody::materialized_text(text.clone(), bytes.clone()))
-            }
-            SubresourceResponseBodyInner::File { text_cache, .. } => {
-                let bytes = self.materialize_bytes()?;
-                let mut cache = text_cache.lock();
-                let text = cache
-                    .get_or_insert_with(|| String::from_utf8_lossy(&bytes).into_owned())
-                    .clone();
-                Ok(ResponseBody::materialized_text(text, bytes))
-            }
-        }
-    }
-
-    pub fn text(&self) -> Cow<'_, str> {
-        self.diagnostic_text()
-    }
-
-    /// Best-effort text view for diagnostics and legacy tests. Production
-    /// protocol paths should use `try_text` so source read failures remain
-    /// visible instead of becoming an empty string.
-    pub fn diagnostic_text(&self) -> Cow<'_, str> {
-        self.try_text()
-            .unwrap_or_else(|_| Cow::Owned(String::new()))
-    }
-
-    pub fn try_text(&self) -> io::Result<Cow<'_, str>> {
-        match self.inner.as_ref() {
-            SubresourceResponseBodyInner::Memory { text, .. } => Ok(Cow::Borrowed(text)),
-            SubresourceResponseBodyInner::File { text_cache, .. } => {
-                let mut cache = text_cache.lock();
-                if cache.is_none() {
-                    let bytes = self.materialize_bytes()?;
-                    *cache = Some(String::from_utf8_lossy(&bytes).into_owned());
-                }
-                Ok(Cow::Owned(cache.as_deref().unwrap_or_default().to_owned()))
-            }
-        }
+        Self::from_bytes(response.body_bytes().to_vec())
     }
 
     pub fn bytes(&self) -> Cow<'_, [u8]> {
@@ -1782,7 +1680,7 @@ impl SubresourceResponseBody {
 
     pub fn try_bytes(&self) -> io::Result<Cow<'_, [u8]>> {
         match self.inner.as_ref() {
-            SubresourceResponseBodyInner::Memory { bytes, .. } => Ok(Cow::Borrowed(bytes)),
+            SubresourceResponseBodyInner::Memory(bytes) => Ok(Cow::Borrowed(bytes)),
             SubresourceResponseBodyInner::File { .. } => self.materialize_bytes().map(Cow::Owned),
         }
     }
@@ -1829,7 +1727,7 @@ impl SubresourceResponseBody {
 
     pub fn materialize_bytes_from(&self, offset: usize) -> io::Result<Vec<u8>> {
         match self.inner.as_ref() {
-            SubresourceResponseBodyInner::Memory { bytes, .. } => {
+            SubresourceResponseBodyInner::Memory(bytes) => {
                 Ok(bytes.get(offset..).map(<[u8]>::to_vec).unwrap_or_default())
             }
             SubresourceResponseBodyInner::File { path, len, .. } => {
@@ -1850,7 +1748,7 @@ impl SubresourceResponseBody {
             return Ok(Vec::new());
         }
         match self.inner.as_ref() {
-            SubresourceResponseBodyInner::Memory { bytes, .. } => {
+            SubresourceResponseBodyInner::Memory(bytes) => {
                 let Some(remaining) = bytes.get(offset..) else {
                     return Ok(Vec::new());
                 };
@@ -1873,7 +1771,7 @@ impl SubresourceResponseBody {
 
     pub fn write_bytes_to<W: Write>(&self, writer: &mut W) -> io::Result<()> {
         match self.inner.as_ref() {
-            SubresourceResponseBodyInner::Memory { bytes, .. } => writer.write_all(bytes),
+            SubresourceResponseBodyInner::Memory(bytes) => writer.write_all(bytes),
             SubresourceResponseBodyInner::File { path, .. } => {
                 let mut file = File::open(path)?;
                 let mut buffer = [0; 64 * 1024];
@@ -1891,7 +1789,7 @@ impl SubresourceResponseBody {
 
     pub fn len(&self) -> usize {
         match self.inner.as_ref() {
-            SubresourceResponseBodyInner::Memory { bytes, .. } => bytes.len(),
+            SubresourceResponseBodyInner::Memory(bytes) => bytes.len(),
             SubresourceResponseBodyInner::File { len, .. } => *len,
         }
     }
@@ -1998,11 +1896,12 @@ impl SubresourceResponseWaitCriteria {
             return Ok(!self.requires_response_body());
         };
 
-        let response_body_text = if self.requires_response_body() {
-            Some(response_body.try_text()?)
+        let response_body_bytes = if self.requires_response_body() {
+            Some(response_body.try_bytes()?)
         } else {
             None
         };
+        let response_body_text = response_body_bytes.as_deref().map(String::from_utf8_lossy);
 
         if let Some(needle) = self.body_contains.as_deref()
             && !response_body_text
@@ -2244,7 +2143,7 @@ impl SubresourceNetworkRecord {
             final_url,
             status,
             response_headers,
-            SubresourceResponseBody::from_text(response_body),
+            SubresourceResponseBody::from_bytes(response_body.into_bytes()),
             cookie_set_reports,
         )
     }
@@ -3852,7 +3751,7 @@ mod tests {
         );
         let body = SubresourceBodyFinished::ready(
             handle,
-            SubresourceResponseBody::from_text_and_bytes(String::new(), vec![1, 2, 3]),
+            SubresourceResponseBody::from_bytes(vec![1, 2, 3]),
         );
         let mut report = ScriptExecutionReport::default();
         report.extend_network_output(ScriptNetworkOutput::from_items([
@@ -4060,6 +3959,55 @@ mod tests {
     }
 
     #[test]
+    fn subresource_response_body_stores_only_exact_response_bytes() {
+        let response = Response::from_head_and_body(
+            ResponseHead {
+                final_url: test_url("/utf8.txt"),
+                status: 200,
+                headers: Vec::new(),
+                request_cookie_report: None,
+                cookie_set_reports: Vec::new(),
+                redirected: false,
+                redirect_chain: Vec::new(),
+                from_cache: false,
+                negotiated_http_version: None,
+            },
+            "hello".to_owned(),
+            b"hello".to_vec(),
+        );
+        let body = SubresourceResponseBody::from_fetch_response(&response);
+        let SubresourceResponseBodyInner::Memory(bytes) = body.inner.as_ref() else {
+            panic!("fetch response should use in-memory byte storage");
+        };
+
+        assert_eq!(bytes, b"hello");
+        assert_eq!(body.try_bytes().unwrap().as_ref(), b"hello");
+    }
+
+    #[test]
+    fn subresource_response_body_preserves_non_utf8_response_bytes() {
+        let response = Response::from_head_and_body(
+            ResponseHead {
+                final_url: test_url("/legacy.txt"),
+                status: 200,
+                headers: Vec::new(),
+                request_cookie_report: None,
+                cookie_set_reports: Vec::new(),
+                redirected: false,
+                redirect_chain: Vec::new(),
+                from_cache: false,
+                negotiated_http_version: None,
+            },
+            "é".to_owned(),
+            vec![0xe9],
+        );
+        let body = SubresourceResponseBody::from_fetch_response(&response);
+
+        assert_eq!(body.try_bytes().unwrap().as_ref(), &[0xe9]);
+        assert_eq!(String::from_utf8_lossy(&body.try_bytes().unwrap()), "�");
+    }
+
+    #[test]
     fn subresource_response_body_writer_keeps_small_body_in_memory() {
         let mut writer = SubresourceResponseBodyWriter::new(16);
         writer.append(b"hello");
@@ -4067,7 +4015,7 @@ mod tests {
         let body = writer.finish();
 
         assert_eq!(body.len(), 11);
-        assert_eq!(body.diagnostic_text(), "hello world");
+        assert_eq!(body.try_bytes().unwrap().as_ref(), b"hello world");
         assert_eq!(body.clone_body_bytes(), b"hello world");
     }
 
@@ -4079,7 +4027,7 @@ mod tests {
         let body = writer.finish();
 
         assert_eq!(body.len(), 11);
-        assert_eq!(body.diagnostic_text(), "hello world");
+        assert_eq!(body.try_bytes().unwrap().as_ref(), b"hello world");
 
         let mut copied = Vec::new();
         body.write_bytes_to(&mut copied)
@@ -4089,10 +4037,7 @@ mod tests {
 
     #[test]
     fn subresource_response_body_reads_memory_and_spooled_chunks_by_offset() {
-        let memory = SubresourceResponseBody::from_text_and_bytes(
-            "hello world".to_owned(),
-            b"hello world".to_vec(),
-        );
+        let memory = SubresourceResponseBody::from_bytes(b"hello world".to_vec());
         assert_eq!(memory.read_chunk(6, 3).unwrap(), b"wor");
         assert_eq!(memory.materialize_bytes_from(6).unwrap(), b"world");
         assert_eq!(memory.diagnostic_clone_body_bytes_from(6), b"world");
@@ -4117,35 +4062,13 @@ mod tests {
             inner: Arc::new(SubresourceResponseBodyInner::File {
                 path: missing_path,
                 len: 5,
-                text_cache: Mutex::new(None),
             }),
         };
 
         assert!(body.materialize_bytes().is_err());
         assert!(body.materialize_bytes_from(2).is_err());
-        assert!(body.try_materialized_body().is_err());
-        assert!(body.try_text().is_err());
         assert!(body.try_bytes().is_err());
-        assert!(
-            body.try_to_navigation_response(ResponseHead {
-                final_url: Url::parse("https://example.test/missing").unwrap(),
-                status: 200,
-                headers: Vec::new(),
-                request_cookie_report: None,
-                cookie_set_reports: Vec::new(),
-                redirected: false,
-                redirect_chain: Vec::new(),
-                from_cache: false,
-                negotiated_http_version: None,
-            })
-            .is_err()
-        );
         assert_eq!(body.diagnostic_clone_body_bytes(), Vec::<u8>::new());
-        assert_eq!(
-            body.diagnostic_materialized_body().as_materialized_bytes(),
-            Some(&[][..])
-        );
-        assert_eq!(body.diagnostic_text(), "");
         assert_eq!(body.diagnostic_bytes().as_ref(), &[] as &[u8]);
 
         let record = SubresourceNetworkRecord::success_with_body(
@@ -4231,10 +4154,7 @@ mod tests {
             Url::parse("https://example.test/api").unwrap(),
             200,
             vec![("content-type".to_owned(), "text/plain".to_owned())],
-            SubresourceResponseBody::from_text_and_bytes(
-                "order #42 ready".to_owned(),
-                b"order #42 ready".to_vec(),
-            ),
+            SubresourceResponseBody::from_bytes(b"order #42 ready".to_vec()),
             Vec::new(),
         );
 
@@ -4334,14 +4254,12 @@ mod tests {
             inner: Arc::new(SubresourceResponseBodyInner::File {
                 path: missing_path_a,
                 len: 5,
-                text_cache: Mutex::new(None),
             }),
         };
         let body_b = SubresourceResponseBody {
             inner: Arc::new(SubresourceResponseBodyInner::File {
                 path: missing_path_b,
                 len: 5,
-                text_cache: Mutex::new(None),
             }),
         };
 
@@ -4427,28 +4345,16 @@ mod tests {
     }
 
     #[test]
-    fn subresource_response_body_to_navigation_response_materializes_spooled_body_once() {
+    fn subresource_response_body_preserves_invalid_bytes_when_spooled() {
         let mut writer = SubresourceResponseBodyWriter::new(2);
         writer.append(b"hi ");
         writer.append(&[0xff, b'!']);
         let body = writer.finish();
-        let navigation = body.diagnostic_navigation_response(ResponseHead {
-            final_url: Url::parse("https://example.test/data").unwrap(),
-            status: 200,
-            headers: vec![(
-                "content-type".to_owned(),
-                "application/octet-stream".to_owned(),
-            )],
-            request_cookie_report: None,
-            cookie_set_reports: Vec::new(),
-            redirected: false,
-            redirect_chain: Vec::new(),
-            from_cache: false,
-            negotiated_http_version: None,
-        });
 
-        assert_eq!(navigation.body_bytes(), &[b'h', b'i', b' ', 0xff, b'!']);
-        assert_eq!(navigation.body_text(), "hi \u{fffd}!");
+        assert_eq!(
+            body.materialize_bytes().unwrap(),
+            &[b'h', b'i', b' ', 0xff, b'!']
+        );
     }
 
     #[test]

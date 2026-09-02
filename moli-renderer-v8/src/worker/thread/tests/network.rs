@@ -3081,7 +3081,10 @@ async fn worker_xhr_response_stage_interception_pauses_before_done() {
     assert_eq!(info.internal_id, 37);
     assert_eq!(info.resource_type, SubresourceResourceType::Xhr);
     assert_eq!(info.response_status, 200);
-    assert_eq!(info.response_body.text().as_ref(), "origin-worker-xhr");
+    assert_eq!(
+        info.response_body.try_bytes().unwrap().as_ref(),
+        b"origin-worker-xhr"
+    );
 
     handle.continue_pending_xhr_response(
         request,
@@ -4207,7 +4210,10 @@ async fn worker_fetch_response_stage_interception_pauses_before_resolving_respon
     };
     assert_eq!(info.internal_id, 23);
     assert_eq!(info.response_status, 200);
-    assert_eq!(info.response_body.text().as_ref(), "origin-worker-body");
+    assert_eq!(
+        info.response_body.try_bytes().unwrap().as_ref(),
+        b"origin-worker-body"
+    );
 
     handle.continue_pending_fetch_response(
         request,

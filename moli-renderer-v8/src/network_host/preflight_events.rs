@@ -50,7 +50,7 @@ impl CorsPreflightNetworkObserver {
                 response.final_url.clone(),
                 response.status,
                 response.headers.clone(),
-                SubresourceResponseBody::from_text(String::new()),
+                SubresourceResponseBody::from_bytes(Vec::new()),
                 response.cookie_set_reports.clone(),
             )
             .with_from_cache(response.from_cache)

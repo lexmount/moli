@@ -124,23 +124,13 @@ impl SubresourceResponseBody {
     #[doc(hidden)]
     pub fn renderer_transport_retained_memory_bytes(&self) -> usize {
         match self.inner.as_ref() {
-            SubresourceResponseBodyInner::Memory { text, bytes } => text
+            SubresourceResponseBodyInner::Memory(bytes) => bytes
                 .capacity()
-                .saturating_add(bytes.capacity())
                 .saturating_add(std::mem::size_of::<SubresourceResponseBodyInner>()),
-            SubresourceResponseBodyInner::File {
-                path, text_cache, ..
-            } => path
+            SubresourceResponseBodyInner::File { path, .. } => path
                 .as_os_str()
                 .len()
                 .saturating_mul(2)
-                .saturating_add(
-                    text_cache
-                        .lock()
-                        .as_ref()
-                        .map(String::capacity)
-                        .unwrap_or(0),
-                )
                 .saturating_add(std::mem::size_of::<SubresourceResponseBodyInner>()),
         }
     }

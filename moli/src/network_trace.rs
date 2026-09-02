@@ -375,7 +375,8 @@ fn render_subresource_network_record_with_body_option(
             payload.insert("body_length".to_owned(), json!(response_body.len()));
             // Trace diagnostics are textual hints. Keep exact protocol bytes in
             // the subresource carrier and derive the lossy view only here.
-            let response_body_text = response_body.diagnostic_text();
+            let response_body_bytes = response_body.diagnostic_bytes();
+            let response_body_text = String::from_utf8_lossy(response_body_bytes.as_ref());
             if include_body_text {
                 payload.insert("body_text".to_owned(), json!(response_body_text.as_ref()));
             }

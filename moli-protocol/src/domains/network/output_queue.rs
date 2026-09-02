@@ -3363,7 +3363,7 @@ mod tests {
         .with_from_cache(true);
         let body = SubresourceBodyFinished::ready(
             handle,
-            SubresourceResponseBody::from_text_and_bytes(String::new(), vec![1, 2, 3]),
+            SubresourceResponseBody::from_bytes(vec![1, 2, 3]),
         );
         let items = vec![
             ScriptNetworkOutputItem::SubresourceRequestStarted(Box::new(request)),
@@ -3759,7 +3759,7 @@ mod tests {
             delivery_order_index,
             index,
             loader_id: "LOADER-1".to_owned(),
-            response_body: Some(SubresourceResponseBody::from_text(String::new())),
+            response_body: Some(SubresourceResponseBody::from_bytes(Vec::new())),
             request_handle: None,
             websocket_socket_id: (resource_type == SubresourceResourceType::WebSocket).then_some(7),
             frame_id: None,
@@ -4286,8 +4286,9 @@ mod tests {
             success_output
                 .response_body()
                 .expect("success response should retain a body source")
-                .diagnostic_text(),
-            "api-body"
+                .diagnostic_bytes()
+                .as_ref(),
+            b"api-body"
         );
     }
 
@@ -4779,8 +4780,8 @@ mod tests {
             .expect("first subresource output should exist");
         subresource_output.url =
             Url::parse("https://example.com/mutated.js").expect("test URL should parse");
-        subresource_output.response_body = Some(SubresourceResponseBody::from_text(
-            "mutated-body".to_owned(),
+        subresource_output.response_body = Some(SubresourceResponseBody::from_bytes(
+            b"mutated-body".to_vec(),
         ));
         let TargetWebSocketDeliveryPlanRecord::Handshake(handshake) = output_queue
             .delivery_outputs
@@ -4828,8 +4829,9 @@ mod tests {
                 .metadata()
                 .response_body()
                 .expect("prepared success output should own its response body")
-                .diagnostic_text(),
-            "prepared-body",
+                .diagnostic_bytes()
+                .as_ref(),
+            b"prepared-body",
             "prepared subresource token must own prepare-time body source instead of rereading queue slots"
         );
 

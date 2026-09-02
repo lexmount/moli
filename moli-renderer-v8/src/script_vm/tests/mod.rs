@@ -2648,7 +2648,10 @@ fn cancel_pending_window_fetch_auth_preserves_401_for_response_stage() {
     };
     assert_eq!(info.internal_id, internal_id);
     assert_eq!(info.response_status, 401);
-    assert_eq!(info.response_body.text(), "auth required");
+    assert_eq!(
+        info.response_body.try_bytes().unwrap().as_ref(),
+        b"auth required"
+    );
 
     let pending = vm
         ._context_host

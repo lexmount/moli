@@ -63,7 +63,7 @@ fn service_worker_csp_report_seen(
                         && matches!(
                             body.result(),
                             crate::types::SubresourceBodyFinishedResult::Ready(response_body)
-                                if response_body.diagnostic_text() == expected_body
+                                if response_body.diagnostic_bytes().as_ref() == expected_body.as_bytes()
                         )
             )
         })
@@ -82,7 +82,7 @@ fn service_worker_csp_report_seen(
                             response_body,
                             ..
                         } if final_url.as_str() == report_url
-                            && response_body.diagnostic_text() == expected_body
+                            && response_body.diagnostic_bytes().as_ref() == expected_body.as_bytes()
                     )
         )
     });
@@ -12993,7 +12993,7 @@ async fn navigator_service_worker_intercepts_element_resource_destinations_once(
                                     status: 200,
                                     response_body,
                                     ..
-                                } if response_body.diagnostic_text() == expected_body
+                                } if response_body.diagnostic_bytes().as_ref() == expected_body.as_bytes()
                             )
                 )
             }) {
@@ -13025,7 +13025,7 @@ async fn navigator_service_worker_intercepts_element_resource_destinations_once(
                                 && matches!(
                                     body.result(),
                                     crate::types::SubresourceBodyFinishedResult::Ready(response_body)
-                                        if response_body.diagnostic_text() == expected_body
+                                        if response_body.diagnostic_bytes().as_ref() == expected_body.as_bytes()
                                 )
                     )
                 })
@@ -13236,8 +13236,8 @@ async fn navigator_service_worker_intercepts_stylesheet_font_face_destination() 
                             response_body,
                             ..
                         } if final_url.as_str() == expected_font_url
-                            && response_body.diagnostic_text()
-                                == "stylesheet-font:font:/app/fonts/demo.woff2"
+                            && response_body.diagnostic_bytes().as_ref()
+                                == b"stylesheet-font:font:/app/fonts/demo.woff2"
                     )
             })
         });
