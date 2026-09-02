@@ -111,8 +111,7 @@ pub(crate) use mutation_effect::{
     StyleAttributeImpact, StyleMutationEffect, normalized_style_attribute_name,
 };
 pub(crate) use property_metadata::{
-    computed_longhand_count, computed_longhand_first_vendor_index, computed_longhand_name_at,
-    computed_property_is_queryable,
+    computed_longhand_count, computed_longhand_name_at, computed_property_is_queryable,
 };
 pub(crate) use registered_properties::{
     CssCustomPropertyRegistration, CssCustomPropertyRegistrationError,

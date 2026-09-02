@@ -7677,7 +7677,7 @@ fn computed_absolute_logical_inline_insets_resolve_physical_sides() {
     assert_eq!(result, "0px|140px|140px|0px");
 }
 #[test]
-fn computed_style_property_names_are_sorted() {
+fn computed_style_property_names_follow_cssom_order() {
     let mut vm = new_storage_test_vm("https://computed-style-order.test/");
 
     let result = vm
@@ -7704,7 +7704,7 @@ fn computed_style_property_names_are_sorted() {
   const style = getComputedStyle(target);
   const properties = Array.from(style);
   const sorted = properties.slice().sort((left, right) => {
-    const segment = name => name.startsWith('--') ? 1 : name.startsWith('-') ? 2 : 0;
+    const segment = name => name.startsWith('--') ? 2 : name.startsWith('-') ? 1 : 0;
     if (segment(left) !== segment(right)) {
       return segment(left) - segment(right);
     }
@@ -8381,6 +8381,47 @@ fn computed_style_enumerates_registered_custom_properties() {
         r#"{"innerRegistered":true,"innerInherited":true,"innerOwn":true,"innerNoInitial":false,"siblingInherited":true,"siblingOwnNoInitial":true,"siblingInnerAbsent":false}"#
     );
 }
+
+#[test]
+fn computed_style_property_names_place_custom_properties_after_longhands() {
+    let mut vm = new_storage_test_vm("https://computed-style-custom-property-order.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const root = document.body || document.documentElement ||
+    document.appendChild(document.createElement('html'));
+  const target = document.createElement('div');
+  const plain = document.createElement('div');
+  target.style.cssText = '--z-token: z; --a-token: a;';
+  root.append(target, plain);
+
+  const computed = getComputedStyle(target);
+  const names = Array.from(
+    { length: computed.length },
+    (_, index) => computed.item(index)
+  );
+  const customStart = names.indexOf('--a-token');
+  const lastVendor = names.findLastIndex(
+    name => name.startsWith('-') && !name.startsWith('--')
+  );
+  return [
+    computed.getPropertyValue('--a-token'),
+    computed.length - getComputedStyle(plain).length,
+    names.slice(-2).join(','),
+    computed.item(computed.length - 1),
+    computed[computed.length - 1],
+    customStart > lastVendor
+  ].join('|');
+})()
+"#,
+        )
+        .expect("computed custom property order should evaluate");
+
+    assert_eq!(result, "a|2|--a-token,--z-token|--z-token|--z-token|true");
+}
+
 #[test]
 fn css_register_property_validates_and_updates_computed_style() {
     let mut vm = new_storage_test_vm("https://css-register-property.test/");
