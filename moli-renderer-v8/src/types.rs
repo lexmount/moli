@@ -32,6 +32,7 @@ impl std::fmt::Display for DedicatedWorkerId {
 pub(crate) enum ScriptErrorConstructorKind {
     Error,
     SyntaxError,
+    TypeError,
     WebAssemblyCompileError,
     WebAssemblyLinkError,
 }

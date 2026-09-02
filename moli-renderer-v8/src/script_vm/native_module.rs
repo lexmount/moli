@@ -4896,6 +4896,7 @@ fn script_error_value<'s>(
         ScriptErrorConstructorKind::SyntaxError => {
             Some(v8::Exception::syntax_error(scope, message))
         }
+        ScriptErrorConstructorKind::TypeError => Some(v8::Exception::type_error(scope, message)),
         ScriptErrorConstructorKind::WebAssemblyCompileError => {
             captured_webassembly_error_constructor(
                 scope,
@@ -4923,6 +4924,7 @@ fn script_error_prototype<'s>(
     let error = match constructor_kind {
         ScriptErrorConstructorKind::Error => v8::Exception::error(scope, empty),
         ScriptErrorConstructorKind::SyntaxError => v8::Exception::syntax_error(scope, empty),
+        ScriptErrorConstructorKind::TypeError => v8::Exception::type_error(scope, empty),
         ScriptErrorConstructorKind::WebAssemblyCompileError => {
             let constructor = captured_webassembly_error_constructor(
                 scope,
