@@ -4,6 +4,10 @@ use super::*;
 use anyhow::Context as _;
 
 impl CdpConnection {
+    pub(crate) fn moli_allocator_stats_for_diagnostics(&self) -> Value {
+        collect_jemalloc_stats_for_diagnostics()
+    }
+
     pub async fn evaluate_runtime_expression_with_await_async(
         &mut self,
         expression: &str,

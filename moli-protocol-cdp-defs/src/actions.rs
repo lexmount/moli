@@ -237,6 +237,7 @@ pub enum HeapProfilerAction {
     StopSampling,
     StopTrackingHeapObjects,
     TakeHeapSnapshot,
+    MoliAllocatorStats,
     MoliDiagnostics,
     MoliResetIdleEngine,
 }
