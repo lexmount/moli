@@ -1556,12 +1556,10 @@ css/css-grid/abspos/orthogonal-positioned-grid-items-017.html
 css/css-grid/abspos/positioned-grid-descendants-003.html
 css/css-grid/abspos/positioned-grid-descendants-006.html
 css/css-grid/abspos/positioned-grid-descendants-008.html
-css/css-grid/abspos/positioned-grid-descendants-010.html
 css/css-grid/abspos/positioned-grid-descendants-011.html
 css/css-grid/abspos/positioned-grid-descendants-012.html
 css/css-grid/abspos/positioned-grid-descendants-013.html
 css/css-grid/abspos/positioned-grid-descendants-014.html
-css/css-grid/abspos/positioned-grid-descendants-015.html
 css/css-grid/abspos/positioned-grid-descendants-016.html
 css/css-grid/abspos/positioned-grid-descendants-017.html
 css/css-grid/abspos/positioned-grid-items-001.html
@@ -3861,7 +3859,7 @@ domparsing/DOMParser-parseFromString-stylesheets.html
 domparsing/DOMParser-parseFromString-url-base-pushstate.html
 domparsing/DOMParser-parseFromString-url-base.html
 domparsing/DOMParser-parseFromString-url-moretests.html
-domparsing/DOMParser-parseFromString-url-pushstate.html
+domparsing/DOMParser-parseFromString-url.html
 domparsing/DOMParser-parseFromString-xml-doctype.html
 domparsing/DOMParser-parseFromString-xml-internal-subset.html
 domparsing/DOMParser-parseFromString-xml-parsererror.html
@@ -6250,6 +6248,7 @@ html/semantics/scripting-1/the-script-element/execution-timing/077.html
 html/semantics/scripting-1/the-script-element/execution-timing/078.html
 html/semantics/scripting-1/the-script-element/execution-timing/079.html
 html/semantics/scripting-1/the-script-element/execution-timing/081.html
+html/semantics/scripting-1/the-script-element/execution-timing/082.html
 html/semantics/scripting-1/the-script-element/execution-timing/084.html
 html/semantics/scripting-1/the-script-element/execution-timing/086.html
 html/semantics/scripting-1/the-script-element/execution-timing/087.html
@@ -6709,6 +6708,9 @@ html/syntax/parsing/html5lib_tricky01.html?run_type=write_single
 html/syntax/parsing/html5lib_webkit01.html?run_type=uri
 html/syntax/parsing/html5lib_webkit01.html?run_type=write
 html/syntax/parsing/html5lib_webkit01.html?run_type=write_single
+html/syntax/parsing/html5lib_webkit02.html?run_type=uri
+html/syntax/parsing/html5lib_webkit02.html?run_type=write
+html/syntax/parsing/html5lib_webkit02.html?run_type=write_single
 html/syntax/parsing/html_content_in_foreign_context.html
 html/syntax/parsing/inhead-noscript-head.html
 html/syntax/parsing/math-parse01.html
@@ -6759,6 +6761,7 @@ html/webappapis/animation-frames/callback-multicalls.html
 html/webappapis/animation-frames/callback-timestamp.html
 html/webappapis/animation-frames/cancel-invoked.html
 html/webappapis/animation-frames/cancel-pending.html
+html/webappapis/animation-frames/same-dispatch-time.html
 html/webappapis/animation-frames/spurious-frame-callbacks-optimization.html
 html/webappapis/dynamic-markup-insertion/document-write/001.html
 html/webappapis/dynamic-markup-insertion/document-write/002.html
@@ -6841,6 +6844,7 @@ html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLU
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe-style-attribute.html
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe-url-base-pushstate.html
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe-url-base.html
+html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe-url-moretests.html
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe-url-pushstate.html
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe-url.html
 html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe.html
@@ -7627,7 +7631,6 @@ service-workers/service-worker/ServiceWorkerGlobalScope/service-worker-error-eve
 service-workers/service-worker/activate-event-after-install-state-change.https.html
 service-workers/service-worker/activation-after-registration.https.html
 service-workers/service-worker/claim-not-using-registration.https.html
-service-workers/service-worker/claim-shared-worker-fetch.https.html
 service-workers/service-worker/client-id.https.html
 service-workers/service-worker/client-url-of-blob-url-worker.https.html
 service-workers/service-worker/controller-on-disconnect.https.html
