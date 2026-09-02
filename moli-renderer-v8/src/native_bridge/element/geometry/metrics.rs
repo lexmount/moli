@@ -62,25 +62,38 @@ fn node_scroll_position_setter_for_object<'s>(
     }
     let runtime = unsafe { &mut *runtime_ptr };
     let (minimum, maximum) = if runtime.layout_policy().uses_real_layout() {
-        observable_element_metrics(
+        let mut metrics = observable_element_metrics(
             runtime,
             handle,
             moli_layout::LayoutFlushReason::SynchronousGeometry,
-        )?
-        .map(|metrics| {
-            if horizontal {
-                (
-                    f64::from(metrics.minimum_scroll_offset.x),
-                    f64::from(metrics.maximum_scroll_offset.x),
-                )
-            } else {
-                (
-                    f64::from(metrics.minimum_scroll_offset.y),
-                    f64::from(metrics.maximum_scroll_offset.y),
-                )
-            }
-        })
-        .unwrap_or((0.0, 0.0))
+        )?;
+        // Ordinary geometry getters intentionally share the latest frozen
+        // tree across same-task DOM mutations. A newly connected receiver can
+        // therefore be absent from that tree, but a scroll setter must clamp
+        // against its current range instead of treating it as non-scrollable.
+        if metrics.is_none() && runtime.dom_host().is_connected(handle) {
+            runtime.invalidate_layout_after_interaction_state_change();
+            metrics = observable_element_metrics(
+                runtime,
+                handle,
+                moli_layout::LayoutFlushReason::SynchronousGeometry,
+            )?;
+        }
+        metrics
+            .map(|metrics| {
+                if horizontal {
+                    (
+                        f64::from(metrics.minimum_scroll_offset.x),
+                        f64::from(metrics.maximum_scroll_offset.x),
+                    )
+                } else {
+                    (
+                        f64::from(metrics.minimum_scroll_offset.y),
+                        f64::from(metrics.maximum_scroll_offset.y),
+                    )
+                }
+            })
+            .unwrap_or((0.0, 0.0))
     } else {
         // Mock intentionally preserves the old synthetic geometry behavior:
         // non-negative scroll values are stored even without real overflow.
