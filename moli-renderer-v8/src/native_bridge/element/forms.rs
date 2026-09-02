@@ -200,6 +200,7 @@ pub(in crate::native_bridge) use self::select::{
     select_size_getter_function, select_size_setter_function, select_value_getter_function,
     select_value_setter_function, set_select_indexed_option,
 };
+pub(in crate::native_bridge::element) use self::simple_controls::normalized_button_command;
 pub(in crate::native_bridge) use self::simple_controls::{
     button_command_for_element_getter_function, button_command_for_element_setter_function,
     button_command_getter_function, button_command_setter_function,

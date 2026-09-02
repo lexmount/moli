@@ -143,6 +143,15 @@ pub(crate) fn dispatch_popover_show_events(
     let _ = set_popover_open_state(scope, runtime_ptr, target, true, Some(source_handle));
 }
 
+pub(crate) fn dispatch_popover_hide_events(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    target: DomHandle,
+    source_handle: DomHandle,
+) {
+    let _ = set_popover_open_state(scope, runtime_ptr, target, false, Some(source_handle));
+}
+
 pub(crate) fn dispatch_popover_toggle_events(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
@@ -617,26 +626,12 @@ pub(crate) fn perform_popover_invoker_default_action(
     invoker: DomHandle,
 ) -> bool {
     let runtime = unsafe { &*runtime_ptr };
-    let (target_id, action) =
-        if let Some(target_id) = element_attribute(runtime, invoker, "popovertarget") {
-            let action = element_attribute(runtime, invoker, "popovertargetaction")
-                .map(|value| value.to_ascii_lowercase())
-                .unwrap_or_else(|| "toggle".to_owned());
-            (target_id, action)
-        } else if let Some(target_id) = element_attribute(runtime, invoker, "commandfor") {
-            let action = match element_attribute(runtime, invoker, "command")
-                .map(|value| value.to_ascii_lowercase())
-                .as_deref()
-            {
-                Some("show-popover") => "show",
-                Some("hide-popover") => "hide",
-                Some("toggle-popover") => "toggle",
-                _ => return false,
-            };
-            (target_id, action.to_owned())
-        } else {
-            return false;
-        };
+    let Some(target_id) = element_attribute(runtime, invoker, "popovertarget") else {
+        return false;
+    };
+    let action = element_attribute(runtime, invoker, "popovertargetaction")
+        .map(|value| value.to_ascii_lowercase())
+        .unwrap_or_else(|| "toggle".to_owned());
     if target_id.is_empty() {
         return false;
     }
