@@ -7,16 +7,19 @@
 
 use style::Atom;
 use taffy::{
-    AvailableSpace, BoxSizing, CoreStyle as _, MaybeMath, MaybeResolve, RequestedAxis,
-    ResolveOrZero as _, ResolvedAspectRatio, Size, SizeContainment, SizingMode,
+    AbsoluteAxis, AvailableSpace, BoxSizing, CoreStyle as _, MaybeMath, MaybeResolve,
+    RequestedAxis, ResolveOrZero as _, ResolvedAspectRatio, Size, SizeContainment, SizingMode,
+    WritingMode,
 };
 
-use crate::{LayoutReplacedKind, ReplacedMetrics, style::resolve_stylo_calc_value};
+use crate::{
+    LayoutReplacedKind, ReplacedMetrics, ReplacedNaturalSizing, style::resolve_stylo_calc_value,
+};
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ReplacedContext {
-    inherent_size: Size<f32>,
-    inherent_ratio: Option<f32>,
+    natural_sizing: ReplacedNaturalSizing,
+    fallback_size: Size<f32>,
 }
 
 impl ReplacedContext {
@@ -49,25 +52,32 @@ impl ReplacedContext {
             },
         };
 
-        let natural = metrics.natural_sizing.unwrap_or_default();
-        let inherent_ratio = natural.ratio;
-        let inherent_size =
-            concrete_object_size(natural.width, natural.height, inherent_ratio, default_size);
+        let natural_sizing = metrics.natural_sizing.unwrap_or_default();
+        let fallback_size = concrete_object_size(
+            natural_sizing.width,
+            natural_sizing.height,
+            natural_sizing.ratio,
+            default_size,
+        );
         Self {
-            inherent_size,
-            inherent_ratio,
+            natural_sizing,
+            fallback_size,
         }
     }
 
     pub(crate) fn form_control(size: Size<f32>) -> Self {
         Self {
-            inherent_size: size,
-            inherent_ratio: None,
+            natural_sizing: ReplacedNaturalSizing {
+                width: Some(size.width),
+                height: Some(size.height),
+                ratio: None,
+            },
+            fallback_size: size,
         }
     }
 
     pub(crate) const fn inherent_ratio(&self) -> Option<f32> {
-        self.inherent_ratio
+        self.natural_sizing.ratio
     }
 }
 
@@ -179,6 +189,70 @@ fn apply_aspect_ratio_to_content_size(
         .maybe_max(Size::ZERO)
 }
 
+/// Normalizes sparse natural dimensions only after the preferred ratio and
+/// its sizing box are known.
+///
+/// Replaced resources expose content-box dimensions independently. In
+/// particular, an SVG may have a natural width but no natural height. The
+/// missing axis cannot be defaulted earlier because an authored border-box
+/// ratio needs the element's eventual padding and border to derive it. Blink
+/// performs the same normalization in `ComputeNormalizedNaturalSize` at the
+/// replaced-sizing boundary.
+fn normalize_natural_content_size(
+    natural_size: Size<Option<f32>>,
+    fallback_size: Size<f32>,
+    aspect_ratio: Option<ResolvedAspectRatio>,
+    padding_border: Size<f32>,
+    writing_mode: WritingMode,
+) -> Size<f32> {
+    let Some(aspect_ratio) = aspect_ratio else {
+        return natural_size.unwrap_or(fallback_size);
+    };
+
+    match writing_mode.inline_axis() {
+        AbsoluteAxis::Horizontal => {
+            if let Some(width) = natural_size.width {
+                return Size {
+                    width,
+                    // When a preferred ratio exists, the natural block
+                    // dimension is normalized from the natural inline
+                    // dimension.
+                    height: content_height_from_width(width, aspect_ratio, padding_border)
+                        .expect("a resolved ratio transfers natural width to height"),
+                };
+            }
+            if let Some(height) = natural_size.height {
+                return Size {
+                    width: content_width_from_height(height, aspect_ratio, padding_border)
+                        .expect("a resolved ratio transfers natural height to width"),
+                    height,
+                };
+            }
+        }
+        AbsoluteAxis::Vertical => {
+            if let Some(height) = natural_size.height {
+                return Size {
+                    width: content_width_from_height(height, aspect_ratio, padding_border)
+                        .expect("a resolved ratio transfers natural height to width"),
+                    height,
+                };
+            }
+            if let Some(width) = natural_size.width {
+                return Size {
+                    width,
+                    height: content_height_from_width(width, aspect_ratio, padding_border)
+                        .expect("a resolved ratio transfers natural width to height"),
+                };
+            }
+        }
+    }
+
+    // Keep the existing default-object-size behavior when the resource has no
+    // natural dimensions. Ratio-only default sizing is a separate decision
+    // from normalizing sparse dimensions.
+    fallback_size
+}
+
 fn ratio_basis_scale(constrained: f32, original: f32, inset: f32, sizing_box: BoxSizing) -> f32 {
     match sizing_box {
         BoxSizing::ContentBox => constrained / original,
@@ -205,6 +279,7 @@ pub(crate) fn measure_replaced(
     parent_size: Size<Option<f32>>,
     available_space: Size<AvailableSpace>,
     context: &ReplacedContext,
+    writing_mode: WritingMode,
     resolved_aspect_ratio: Option<ResolvedAspectRatio>,
     size_containment: SizeContainment,
     style: &taffy::Style<Atom>,
@@ -243,14 +318,29 @@ pub(crate) fn measure_replaced(
                 .unwrap_or(0.0),
         ),
     };
-    let inherent_size = Size {
+    let natural_size = Size {
         width: contained_content_size
             .width
-            .unwrap_or(context.inherent_size.width),
+            .or(context.natural_sizing.width),
         height: contained_content_size
             .height
-            .unwrap_or(context.inherent_size.height),
+            .or(context.natural_sizing.height),
     };
+    let fallback_size = Size {
+        width: contained_content_size
+            .width
+            .unwrap_or(context.fallback_size.width),
+        height: contained_content_size
+            .height
+            .unwrap_or(context.fallback_size.height),
+    };
+    let inherent_size = normalize_natural_content_size(
+        natural_size,
+        fallback_size,
+        resolved_aspect_ratio,
+        padding_border_sum,
+        writing_mode,
+    );
     // The browser-owned style seam has already resolved the three CSS states
     // (`auto`, `<ratio>`, and `auto <ratio>`) against the natural ratio. Do not
     // reconstruct that precedence from Taffy's lossy numeric field here.
@@ -368,7 +458,44 @@ pub(crate) fn measure_replaced(
     } else {
         inherent_size
     };
-    let size = unclamped.map(|value| value.max(0.0));
+    let mut size = unclamped.map(|value| value.max(0.0));
+    // Blink resolves the main block length before an automatic inline length.
+    // When neither preferred axis resolved to a numeric length, this ordering
+    // matters for a replaced box with a ratio: block-axis constraints apply to
+    // the normalized natural block size first, and the inline size is then
+    // transferred from that result. Apart from matching logical sizing order,
+    // this preserves the ratio when padding or border floors the block axis.
+    if preferred_size.width.is_none()
+        && preferred_size.height.is_none()
+        && let Some(resolved_aspect_ratio) = resolved_aspect_ratio
+    {
+        size = match writing_mode.block_axis() {
+            AbsoluteAxis::Vertical => {
+                let height = size.height.maybe_clamp(min_size.height, max_size.height);
+                Size {
+                    width: content_width_from_height(
+                        height,
+                        resolved_aspect_ratio,
+                        padding_border_sum,
+                    )
+                    .expect("a resolved ratio transfers automatic block size to inline size"),
+                    height,
+                }
+            }
+            AbsoluteAxis::Horizontal => {
+                let width = size.width.maybe_clamp(min_size.width, max_size.width);
+                Size {
+                    width,
+                    height: content_height_from_width(
+                        width,
+                        resolved_aspect_ratio,
+                        padding_border_sum,
+                    )
+                    .expect("a resolved ratio transfers automatic block size to inline size"),
+                }
+            }
+        };
+    }
     let width_violation = if size.width < min_size.width.unwrap_or(0.0) {
         Violation::Min
     } else if size.width > max_size.width.unwrap_or(f32::INFINITY) {
@@ -545,13 +672,21 @@ mod tests {
             }),
         );
         assert_eq!(
-            width_only.inherent_size,
+            width_only.fallback_size,
             Size {
                 width: 20.0,
                 height: 150.0
             }
         );
-        assert_eq!(width_only.inherent_ratio, None);
+        assert_eq!(width_only.inherent_ratio(), None);
+        assert_eq!(
+            width_only.natural_sizing,
+            ReplacedNaturalSizing {
+                width: Some(20.0),
+                height: None,
+                ratio: None,
+            }
+        );
 
         let no_dimensions = ReplacedContext::for_element(
             LayoutReplacedKind::Image,
@@ -560,20 +695,20 @@ mod tests {
             }),
         );
         assert_eq!(
-            no_dimensions.inherent_size,
+            no_dimensions.fallback_size,
             Size {
                 width: 300.0,
                 height: 150.0
             }
         );
-        assert_eq!(no_dimensions.inherent_ratio, None);
+        assert_eq!(no_dimensions.inherent_ratio(), None);
 
         let unavailable = ReplacedContext::for_element(
             LayoutReplacedKind::Image,
             Some(ReplacedMetrics::default()),
         );
-        assert_eq!(unavailable.inherent_size, Size::ZERO);
-        assert_eq!(unavailable.inherent_ratio, None);
+        assert_eq!(unavailable.fallback_size, Size::ZERO);
+        assert_eq!(unavailable.inherent_ratio(), None);
     }
 
     #[test]
@@ -592,18 +727,106 @@ mod tests {
         };
 
         let zero_width = context(0.0, 20.0);
-        assert_eq!(zero_width.inherent_size, Size::ZERO);
-        assert_eq!(zero_width.inherent_ratio, Some(0.5));
+        assert_eq!(zero_width.fallback_size, Size::ZERO);
+        assert_eq!(zero_width.inherent_ratio(), Some(0.5));
 
         let zero_height = context(20.0, 0.0);
         assert_eq!(
-            zero_height.inherent_size,
+            zero_height.fallback_size,
             Size {
                 width: 20.0,
                 height: 40.0
             }
         );
-        assert_eq!(zero_height.inherent_ratio, Some(0.5));
+        assert_eq!(zero_height.inherent_ratio(), Some(0.5));
+    }
+
+    #[test]
+    fn sparse_natural_dimensions_are_normalized_after_ratio_box_resolution() {
+        let width_only = ReplacedContext::for_element(
+            LayoutReplacedKind::Image,
+            Some(ReplacedMetrics {
+                natural_sizing: Some(ReplacedNaturalSizing {
+                    width: Some(50.0),
+                    height: None,
+                    ratio: None,
+                }),
+            }),
+        );
+        let padding = taffy::Rect {
+            left: taffy::LengthPercentage::length(50.0),
+            ..taffy::Rect::zero()
+        };
+        let measure_width_only = |box_sizing| {
+            let style = taffy::Style::<Atom> {
+                box_sizing,
+                size: Size {
+                    width: taffy::Dimension::auto(),
+                    height: taffy::Dimension::min_content(),
+                },
+                padding,
+                ..taffy::Style::default()
+            };
+            measure_with_containment(
+                &width_only,
+                &style,
+                SizeContainment::NONE,
+                ResolvedAspectRatio::new(1.0, box_sizing),
+            )
+        };
+
+        assert_eq!(
+            measure_width_only(BoxSizing::BorderBox),
+            Size {
+                width: 100.0,
+                height: 100.0,
+            },
+            "a border-box ratio must include inline padding before deriving the missing natural height",
+        );
+        assert_eq!(
+            measure_width_only(BoxSizing::ContentBox),
+            Size {
+                width: 100.0,
+                height: 50.0,
+            },
+            "a content-box ratio must derive the missing natural height from content only",
+        );
+
+        let height_only = ReplacedContext::for_element(
+            LayoutReplacedKind::Image,
+            Some(ReplacedMetrics {
+                natural_sizing: Some(ReplacedNaturalSizing {
+                    width: None,
+                    height: Some(50.0),
+                    ratio: None,
+                }),
+            }),
+        );
+        let style = taffy::Style::<Atom> {
+            box_sizing: BoxSizing::BorderBox,
+            size: Size {
+                width: taffy::Dimension::min_content(),
+                height: taffy::Dimension::auto(),
+            },
+            padding: taffy::Rect {
+                top: taffy::LengthPercentage::length(50.0),
+                ..taffy::Rect::zero()
+            },
+            ..taffy::Style::default()
+        };
+        assert_eq!(
+            measure_with_containment(
+                &height_only,
+                &style,
+                SizeContainment::NONE,
+                ResolvedAspectRatio::new(1.0, BoxSizing::BorderBox),
+            ),
+            Size {
+                width: 100.0,
+                height: 100.0,
+            },
+            "normalization must be symmetric when only natural height exists",
+        );
     }
 
     fn measure_with_known_dimensions(
@@ -618,6 +841,7 @@ mod tests {
                 height: AvailableSpace::MaxContent,
             },
             &image_context(),
+            WritingMode::HorizontalTb,
             style
                 .aspect_ratio
                 .filter(|ratio| ratio.is_finite() && *ratio > 0.0)
@@ -648,6 +872,7 @@ mod tests {
                 height: AvailableSpace::MaxContent,
             },
             context,
+            WritingMode::HorizontalTb,
             aspect_ratio,
             containment,
             style,
@@ -803,6 +1028,7 @@ mod tests {
                     height: AvailableSpace::MaxContent,
                 },
                 &image_context(),
+                WritingMode::HorizontalTb,
                 ResolvedAspectRatio::new(2.0, box_sizing),
                 SizeContainment::NONE,
                 &style,

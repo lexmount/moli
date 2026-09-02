@@ -1957,6 +1957,7 @@ where
                 inputs.parent_size,
                 inputs.available_space,
                 &context,
+                writing_mode,
                 resolved_aspect_ratio,
                 size_containment,
                 &style,

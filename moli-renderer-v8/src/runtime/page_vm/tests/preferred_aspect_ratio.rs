@@ -191,6 +191,69 @@ document.body.innerHTML = `
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn screenshot_normalizes_sparse_natural_sizes_with_the_preferred_ratio_box() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/sparse-natural-size-aspect-ratio.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0}
+img{display:block;aspect-ratio:1/1}
+#border-box{box-sizing:border-box;padding-left:50px;height:min-content}
+#content-box{box-sizing:content-box;padding-left:50px;height:min-content}
+#horizontal-flow,#vertical-flow{box-sizing:border-box;border:20px solid;aspect-ratio:2/1}
+#vertical-flow{writing-mode:vertical-rl}
+</style>`;
+const source = `<svg xmlns="http://www.w3.org/2000/svg" width="50px"></svg>`;
+const fixedSource = `<svg xmlns="http://www.w3.org/2000/svg" width="20px" height="50px"></svg>`;
+document.body.innerHTML = `
+<img id=border-box src="data:image/svg+xml,${encodeURIComponent(source)}">
+<img id=content-box src="data:image/svg+xml,${encodeURIComponent(source)}">
+<img id=horizontal-flow src="data:image/svg+xml,${encodeURIComponent(fixedSource)}">
+<img id=vertical-flow src="data:image/svg+xml,${encodeURIComponent(fixedSource)}">`;
+'installed'
+"#,
+        )?;
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                "[...document.images].map(image=>`${image.complete}:${image.naturalWidth}`).join(',')",
+            )?,
+            "true:50,true:50,true:20,true:20",
+            "the SVG fixtures must expose their natural widths before layout",
+        );
+        page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(320, 320, 1.0))?
+            .expect("sparse natural-size fixture must retain a layout root");
+
+        let geometry = page_vm.vm_mut().eval(
+            r#"JSON.stringify(Object.fromEntries([...document.images].map(image=>{const rect=image.getBoundingClientRect();return [image.id,[rect.width,rect.height]]})))"#,
+        )?;
+        let geometry: serde_json::Value = serde_json::from_str(&geometry)?;
+        assert_eq!(
+            geometry,
+            serde_json::json!({
+                "border-box": [100, 100],
+                "content-box": [100, 50],
+                "horizontal-flow": [80, 40],
+                "vertical-flow": [180, 90],
+            }),
+            "the preferred ratio must normalize natural sizes only after its sizing box, insets, and logical axes are known",
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("sparse natural-size aspect-ratio fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn screenshot_recomputes_flex_ratio_cross_size_from_the_final_main_size() {
     run_page_vm_async_test(async move {
         let loader =
