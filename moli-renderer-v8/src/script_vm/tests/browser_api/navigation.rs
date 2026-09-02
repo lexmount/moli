@@ -451,6 +451,68 @@ fn performance_entries_hide_backing_slots_and_ignore_spoofing() {
 }
 
 #[test]
+fn performance_entry_ids_follow_the_current_navigation() {
+    let mut vm = new_storage_test_vm("https://performance-entry-identity.test/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const navigation = performance.getEntriesByType("navigation")[0];
+              const mark = performance.mark("identity-mark", { startTime: 1 });
+              const measure = performance.measure("identity-measure", {
+                start: 1,
+                duration: 2
+              });
+              const detached = new PerformanceMark("detached", { startTime: 3 });
+              const markJson = mark.toJSON();
+              const descriptors = ["id", "navigationId"].map(name => {
+                const descriptor = Object.getOwnPropertyDescriptor(
+                  PerformanceEntry.prototype,
+                  name
+                );
+                return [
+                  name,
+                  typeof descriptor?.get,
+                  descriptor?.get?.name,
+                  descriptor?.get?.length,
+                  typeof descriptor?.set,
+                  descriptor?.enumerable,
+                  descriptor?.configurable
+                ].join(":");
+              });
+              return JSON.stringify({
+                descriptors,
+                navigation:
+                  Number.isSafeInteger(navigation.id)
+                  && navigation.id > 0
+                  && navigation.navigationId === navigation.id,
+                queued:
+                  Number.isSafeInteger(mark.id)
+                  && Number.isSafeInteger(measure.id)
+                  && navigation.id < mark.id
+                  && mark.id < measure.id
+                  && mark.navigationId === navigation.id
+                  && measure.navigationId === navigation.id,
+                detached: detached.id === 0 && detached.navigationId === 0,
+                json:
+                  Object.keys(markJson).join(",") ===
+                    "id,name,entryType,startTime,duration,navigationId"
+                  && markJson.id === mark.id
+                  && markJson.navigationId === navigation.id
+              });
+            })()
+            "#,
+        )
+        .expect("PerformanceEntry identity probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"descriptors":["id:function:get id:0:undefined:true:true","navigationId:function:get navigationId:0:undefined:true:true"],"navigation":true,"queued":true,"detached":true,"json":true}"#
+    );
+}
+
+#[test]
 fn performance_user_timing_enforces_mark_and_measure_boundaries() {
     let mut vm = new_storage_test_vm("https://performance-user-timing-boundaries.test/");
 
@@ -625,6 +687,17 @@ fn performance_entry_to_json_returns_native_base_snapshot() {
               } catch (error) {
                 fakeError = error.name;
               }
+              const markJson = mark.toJSON();
+              const measureJson = measure.toJSON();
+              const identities =
+                markJson.id === mark.id
+                && markJson.navigationId === mark.navigationId
+                && measureJson.id === measure.id
+                && measureJson.navigationId === measure.navigationId;
+              delete markJson.id;
+              delete markJson.navigationId;
+              delete measureJson.id;
+              delete measureJson.navigationId;
               return JSON.stringify({
                 descriptor: [
                   descriptor.value.name,
@@ -637,8 +710,9 @@ fn performance_entry_to_json_returns_native_base_snapshot() {
                   && PerformanceMeasure.prototype.toJSON === descriptor.value
                   && !Object.prototype.hasOwnProperty.call(PerformanceMark.prototype, "toJSON")
                   && !Object.prototype.hasOwnProperty.call(PerformanceMeasure.prototype, "toJSON"),
-                mark: mark.toJSON(),
-                measure: measure.toJSON(),
+                mark: markJson,
+                measure: measureJson,
+                identities,
                 fakeError
               });
             })()
@@ -648,7 +722,7 @@ fn performance_entry_to_json_returns_native_base_snapshot() {
 
     assert_eq!(
         result,
-        r#"{"descriptor":"toJSON:0:true:true:true","inherited":true,"mark":{"name":"json-mark","entryType":"mark","startTime":12,"duration":0},"measure":{"name":"json-measure","entryType":"measure","startTime":3,"duration":4},"fakeError":"TypeError"}"#
+        r#"{"descriptor":"toJSON:0:true:true:true","inherited":true,"mark":{"name":"json-mark","entryType":"mark","startTime":12,"duration":0},"measure":{"name":"json-measure","entryType":"measure","startTime":3,"duration":4},"identities":true,"fakeError":"TypeError"}"#
     );
 }
 
@@ -697,10 +771,12 @@ fn parser_script_network_results_populate_buffered_resource_timing_snapshots() {
                 fakeToJSONError = error.name;
               }
               const expectedJsonKeys = [
+                "id",
                 "name",
                 "entryType",
                 "startTime",
                 "duration",
+                "navigationId",
                 "initiatorType",
                 "nextHopProtocol",
                 "workerStart",
@@ -736,6 +812,11 @@ fn parser_script_network_results_populate_buffered_resource_timing_snapshots() {
                 transferSizePositive: entry.transferSize > entry.encodedBodySize,
                 encodedBodySize: entry.encodedBodySize,
                 decodedBodySize: entry.decodedBodySize,
+                identity:
+                  Number.isSafeInteger(entry.id)
+                  && entry.id > 0
+                  && entry.navigationId ===
+                    performance.getEntriesByType("navigation")[0].id,
                 jsonOwnKeys: expectedJsonKeys.every(key =>
                   Object.prototype.hasOwnProperty.call(json, key)),
                 jsonMatchesEntry: expectedJsonKeys.every(key => json[key] === entry[key]),
@@ -755,7 +836,7 @@ fn parser_script_network_results_populate_buffered_resource_timing_snapshots() {
 
     assert_eq!(
         result,
-        r#"{"length":1,"name":"https://resource-timing-script.test/app.js","entryType":"resource","initiatorType":"script","instance":true,"responseStatus":200,"contentType":"application/javascript","renderBlockingStatusValid":true,"transferSizePositive":true,"encodedBodySize":7,"decodedBodySize":7,"jsonOwnKeys":true,"jsonMatchesEntry":true,"toJSONDescriptor":"toJSON:0:true:true:true","fakeToJSONError":"TypeError"}"#
+        r#"{"length":1,"name":"https://resource-timing-script.test/app.js","entryType":"resource","initiatorType":"script","instance":true,"responseStatus":200,"contentType":"application/javascript","renderBlockingStatusValid":true,"transferSizePositive":true,"encodedBodySize":7,"decodedBodySize":7,"identity":true,"jsonOwnKeys":true,"jsonMatchesEntry":true,"toJSONDescriptor":"toJSON:0:true:true:true","fakeToJSONError":"TypeError"}"#
     );
 }
 
