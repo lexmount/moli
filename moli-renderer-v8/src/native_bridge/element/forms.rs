@@ -202,6 +202,7 @@ pub(in crate::native_bridge) use self::select::{
 };
 pub(in crate::native_bridge) use self::simple_controls::{
     button_command_for_element_getter_function, button_command_for_element_setter_function,
+    button_command_getter_function, button_command_setter_function,
     button_disabled_getter_function, button_disabled_setter_function,
     button_form_action_getter_function, button_form_action_setter_function,
     button_form_enctype_getter_function, button_form_enctype_setter_function,

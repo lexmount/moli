@@ -30,9 +30,9 @@ pub(super) struct CloseInit {
 pub(super) struct CommandInit<'s> {
     #[webidl(inherit)]
     base: EventInit,
-    #[webidl(default = webidl::DomString16(Vec::new()), converter = "raw", snapshot_order = 1)]
+    #[webidl(default = webidl::DomString16(Vec::new()), converter = "raw", snapshot_order = 1, snapshot_slot = COMMAND_EVENT_COMMAND_SLOT)]
     command: webidl::DomString16,
-    #[webidl(nullable, interface = web_api_interfaces::Element, snapshot_order = 0)]
+    #[webidl(nullable, interface = web_api_interfaces::Element, snapshot_order = 0, snapshot_slot = COMMAND_EVENT_SOURCE_SLOT)]
     source: Option<v8::Local<'s, v8::Object>>,
 }
 
