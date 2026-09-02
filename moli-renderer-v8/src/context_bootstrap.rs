@@ -341,7 +341,7 @@ pub(crate) use self::events::{
     event_private_value, initialize_event_object,
     initialize_native_security_policy_violation_event, mark_agent_submit_event, mark_event_trusted,
     new_event_state, new_event_wrapper, node_event_callback_values, set_event_composed_path,
-    set_event_internal_flag, set_event_private_value, set_event_trusted,
+    set_event_internal_flag, set_event_private_value, set_event_source_value, set_event_trusted,
     submit_event_submitter_value,
 };
 #[cfg(all(test, feature = "devtools"))]

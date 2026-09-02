@@ -347,6 +347,7 @@ pub(crate) use forms::cache_input_files_from_selected_files;
 pub(crate) use forms::perform_implicit_submission_from_control;
 pub(super) use forms::{
     button_command_for_element_getter_function, button_command_for_element_setter_function,
+    button_command_getter_function, button_command_setter_function,
     button_disabled_getter_function, button_disabled_setter_function,
     button_form_action_getter_function, button_form_action_setter_function,
     button_form_enctype_getter_function, button_form_enctype_setter_function,

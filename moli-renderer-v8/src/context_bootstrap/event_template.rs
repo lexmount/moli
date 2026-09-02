@@ -20,6 +20,8 @@ use super::{
         mouse_event_related_target_getter_function, pointer_event_get_predicted_events_callback,
         submit_event_submitter_getter_function, ui_event_pseudo_target_getter_function,
         ui_event_which_getter_function,
+        command_event_command_getter_function,
+        command_event_source_getter_function,
     },
     selection_surface::document_get_selection_callback,
     specs::ConstructorSpec,
@@ -149,6 +151,16 @@ struct FormDataEventTemplateAccessorsDeclaration {
 struct DragEventTemplateAccessorsDeclaration {
     #[webapi(accessor_property = "dataTransfer", getter = event_platform_attribute_getter, data = crate::util::v8str(scope, "dataTransfer"))]
     data_transfer: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::CommandEvent, enumerable)]
+struct CommandEventTemplateAccessorsDeclaration {
+    #[webapi(accessor_property, getter = command_event_source_getter_function)]
+    source: (),
+
+    #[webapi(accessor_property, getter = command_event_command_getter_function)]
+    command: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -387,6 +399,9 @@ fn event_template_declaration(interface: &str) -> Option<EventTemplateDeclaratio
         return Some(declaration);
     }
     Some(match interface {
+        "CommandEvent" => {
+            EventTemplateDeclaration::new::<CommandEventTemplateAccessorsDeclaration>()
+        }
         "Event" => EventTemplateDeclaration::new::<EventBaseTemplateMethodsDeclaration>(),
         "DragEvent" => EventTemplateDeclaration::new::<DragEventTemplateAccessorsDeclaration>(),
         "UIEvent" => EventTemplateDeclaration::new::<UiEventTemplateMethodsDeclaration>(),
