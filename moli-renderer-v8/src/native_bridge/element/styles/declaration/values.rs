@@ -1514,6 +1514,15 @@ pub(crate) fn style_property_value(
     style_property_value_with_viewport_width(runtime, handle, mode, property, None)
 }
 
+fn normalize_specified_cssom_value(property: &str, value: String) -> String {
+    let value = if property == "font-family" {
+        normalize_cssom_font_family_value(&value).unwrap_or(value)
+    } else {
+        value
+    };
+    normalize_touch_action_serialization(property, &value)
+}
+
 pub(in crate::native_bridge::element::styles) fn style_property_value_with_viewport_width(
     runtime: &JsContextHost,
     handle: DomHandle,
@@ -1544,11 +1553,11 @@ pub(in crate::native_bridge::element::styles) fn style_property_value_with_viewp
     if let Some(state) = runtime.element_inline_style_declaration_state(handle)
         && let Some(value) = inline_state_property_value_with_pdb(state, &property)
     {
-        return normalize_touch_action_serialization(&property, &value);
+        return normalize_specified_cssom_value(&property, value);
     }
     let entries = style_entries(runtime, handle);
     if let Some(value) = style_entries_property_value_with_pdb(&entries, &property) {
-        return normalize_touch_action_serialization(&property, &value);
+        return normalize_specified_cssom_value(&property, value);
     }
     if property == "overflow" {
         if let Some(entry) = inline_style_entry_for_inline_style(runtime, handle, &property) {

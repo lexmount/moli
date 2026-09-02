@@ -9507,6 +9507,36 @@ fn live_inline_style_css_text_getter_serializes_declaration_block() {
 }
 
 #[test]
+fn live_inline_font_family_getter_normalizes_quoted_family_names() {
+    let mut vm = new_storage_test_vm("https://inline-font-family-serialization.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const target = document.createElement('div');
+  const read = value => {
+    target.setAttribute('style', `font-family: ${value}`);
+    return [target.style.fontFamily, target.style.getPropertyValue('font-family')];
+  };
+  return JSON.stringify([
+    read("'Twisty Tie'"),
+    read("'Veronica'"),
+    read("'34J'"),
+    read("'serif'")
+  ]);
+})()
+"#,
+        )
+        .expect("inline font-family serialization should evaluate");
+
+    assert_eq!(
+        result,
+        r#"[["Twisty Tie","Twisty Tie"],["Veronica","Veronica"],["\"34J\"","\"34J\""],["\"serif\"","\"serif\""]]"#
+    );
+}
+
+#[test]
 fn live_inline_css_text_setter_uses_stylo_declaration_block_for_plain_properties() {
     let mut vm = new_storage_test_vm("https://inline-style-pdb-csstext.test/");
 
