@@ -10,7 +10,7 @@ use moli_layout::LayoutScrollbarHit;
 use super::provider::{
     observable_geometry_batch, observable_hit_test_all, provider_contract_error,
 };
-use crate::{document_runtime::DomHandle, native_bridge::JsContextHost};
+use crate::{document_runtime::DomHandle, dom::native::DomHost, native_bridge::JsContextHost};
 
 const CHILD_FRAME_DEPTH_LIMIT: usize = 16;
 
@@ -200,6 +200,13 @@ fn input_surface_hit_test_in_tree(
         for surface in tree.painted_surface_hits(point, ignore_pointer_events_none) {
             match surface {
                 LayoutPaintedSurfaceHit::Control(mut control) => {
+                    let source = match &control {
+                        LayoutControlSurfaceHit::Scrollbar(hit) => hit.source,
+                        LayoutControlSurfaceHit::ScrollbarCorner(hit) => hit.source,
+                    };
+                    if live_interaction_target(runtime, source).is_none() {
+                        continue;
+                    }
                     match &mut control {
                         LayoutControlSurfaceHit::Scrollbar(hit) => {
                             hit.viewport_to_local =
@@ -216,13 +223,11 @@ fn input_surface_hit_test_in_tree(
                     };
                 }
                 LayoutPaintedSurfaceHit::Dom(layout_hit) => {
-                    let Some(target) = element_for_hit_source(runtime, layout_hit.source) else {
+                    let Some(target) = live_interaction_target(runtime, layout_hit.source) else {
                         continue;
                     };
-                    if runtime.dom_host().is_connected(target) {
-                        live_dom_hit = Some((layout_hit, target));
-                        break;
-                    }
+                    live_dom_hit = Some((layout_hit, target));
+                    break;
                 }
             }
         }
@@ -298,25 +303,14 @@ fn live_hit_in_tree(
     ignore_pointer_events_none: bool,
 ) -> Option<(LayoutHit<DomHandle>, DomHandle)> {
     let first_hit = tree.hit_test(point, ignore_pointer_events_none);
-    let live_first_hit = first_hit.and_then(|hit| {
-        let target = element_for_hit_source(runtime, hit.source)?;
-        runtime
-            .dom_host()
-            .is_connected(target)
-            .then_some((hit, target))
-    });
+    let live_first_hit = first_hit
+        .and_then(|hit| live_interaction_target(runtime, hit.source).map(|target| (hit, target)));
     if live_first_hit.is_some() || first_hit.is_none() {
         return live_first_hit;
     }
     tree.hit_test_all(point, ignore_pointer_events_none)
         .into_iter()
-        .find_map(|hit| {
-            let target = element_for_hit_source(runtime, hit.source)?;
-            runtime
-                .dom_host()
-                .is_connected(target)
-                .then_some((hit, target))
-        })
+        .find_map(|hit| live_interaction_target(runtime, hit.source).map(|target| (hit, target)))
 }
 
 fn live_hit_in_frame(
@@ -331,17 +325,12 @@ fn live_hit_in_frame(
         frame.point,
         ignore_pointer_events_none,
     )?;
-    let live_first_hit = first_hit.and_then(|hit| {
-        let target = element_for_hit_source(runtime, hit.source)?;
-        runtime
-            .dom_host()
-            .is_connected(target)
-            .then_some((hit, target))
-    });
+    let live_first_hit = first_hit
+        .and_then(|hit| live_interaction_target(runtime, hit.source).map(|target| (hit, target)));
     // A latest-layout snapshot may still contain a text fragment whose DOM
-    // node was replaced after the snapshot was published. Walk the sampled
-    // paint stack only on that stale-source path until it identifies a
-    // currently connected element. This live DOM check neither refreshes nor
+    // node was replaced after publication, and `inert` can change without
+    // changing geometry. Walk the sampled paint stack only when the live DOM
+    // rejects the foremost candidate. This check neither refreshes nor
     // invalidates layout; the common case retains the single-hit fast path.
     if live_first_hit.is_some() || first_hit.is_none() {
         return Ok(live_first_hit);
@@ -353,13 +342,9 @@ fn live_hit_in_frame(
         frame.point,
         ignore_pointer_events_none,
     )?;
-    Ok(hits.into_iter().find_map(|hit| {
-        let target = element_for_hit_source(runtime, hit.source)?;
-        runtime
-            .dom_host()
-            .is_connected(target)
-            .then_some((hit, target))
-    }))
+    Ok(hits
+        .into_iter()
+        .find_map(|hit| live_interaction_target(runtime, hit.source).map(|target| (hit, target))))
 }
 
 fn observable_hit_test_in_viewport(
@@ -478,9 +463,123 @@ fn element_for_hit_source(runtime: &JsContextHost, mut source: DomHandle) -> Opt
     }
 }
 
+fn live_interaction_target(runtime: &JsContextHost, source: DomHandle) -> Option<DomHandle> {
+    let target = element_for_hit_source(runtime, source)?;
+    (runtime.dom_host().is_connected(target)
+        && !element_is_inert_for_hit_testing(runtime.dom_host(), target))
+    .then_some(target)
+}
+
+/// Returns whether an element is suppressed from hit testing by an explicit
+/// `inert` attribute in its flat-tree ancestry.
+///
+/// A modal dialog escapes inertness inherited from ancestors outside the
+/// dialog, while an `inert` attribute on the dialog itself still applies.
+pub(crate) fn element_is_inert_for_hit_testing(host: &DomHost, handle: DomHandle) -> bool {
+    let mut current = Some(handle);
+    while let Some(candidate) = current {
+        if let Some(element) = host.node(candidate).and_then(|node| node.as_element()) {
+            if element.namespace() == "http://www.w3.org/1999/xhtml"
+                && element.has_attribute("inert")
+            {
+                return true;
+            }
+            if element.is_html_element("dialog")
+                && element.dialog_modal()
+                && element.has_attribute("open")
+                && host.is_connected(candidate)
+            {
+                return false;
+            }
+        }
+        current = flat_tree_parent(host, candidate);
+    }
+    false
+}
+
+fn flat_tree_parent(host: &DomHost, handle: DomHandle) -> Option<DomHandle> {
+    if let Some(slot) = host.assigned_slot_for_node(handle) {
+        return Some(slot);
+    }
+    let parent = host.parent_node(handle)?;
+    if host.is_shadow_root(parent) {
+        return host.shadow_root_host(parent);
+    }
+    Some(parent)
+}
+
 fn css_viewport_dimension(value: f32) -> u32 {
     if !value.is_finite() {
         return 0;
     }
     value.round().clamp(0.0, u32::MAX as f32) as u32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DomHost, element_is_inert_for_hit_testing};
+    use crate::dom::native::NativeDom;
+    use url::Url;
+
+    fn test_host() -> DomHost {
+        DomHost::from_dom(NativeDom::new_html(
+            Url::parse("https://inert-hit-testing.test/").expect("test URL"),
+        ))
+    }
+
+    #[test]
+    fn inert_hit_testing_follows_html_flat_tree_ancestry_and_modal_escape() {
+        let mut host = test_host();
+        let body = host.create_element("body");
+        assert!(host.append_child(host.document_handle(), body));
+
+        let shadow_host = host.create_element("div");
+        assert!(host.append_child(body, shadow_host));
+        let shadow_root = host
+            .attach_shadow_root(shadow_host, "open")
+            .expect("shadow root");
+        let slot = host.create_element("slot");
+        let slotted = host.create_element("button");
+        let shadow_child = host.create_element("button");
+        assert!(host.append_child(shadow_root, slot));
+        assert!(host.append_child(shadow_root, shadow_child));
+        assert!(host.append_child(shadow_host, slotted));
+        assert_eq!(host.assigned_slot_for_node(slotted), Some(slot));
+
+        assert!(host.set_attribute(slot, "inert", ""));
+        assert!(element_is_inert_for_hit_testing(&host, slotted));
+        assert!(host.remove_attribute(slot, "inert"));
+        assert!(!element_is_inert_for_hit_testing(&host, slotted));
+
+        assert!(host.set_attribute(shadow_host, "inert", ""));
+        assert!(element_is_inert_for_hit_testing(&host, shadow_child));
+
+        let svg = host
+            .create_element_ns(Some("http://www.w3.org/2000/svg"), "svg")
+            .expect("SVG element");
+        assert!(host.set_attribute(svg, "inert", ""));
+        assert!(host.append_child(body, svg));
+        assert!(!element_is_inert_for_hit_testing(&host, svg));
+        let svg_wrapper = host.create_element("div");
+        assert!(host.set_attribute(svg_wrapper, "inert", ""));
+        assert!(host.append_child(body, svg_wrapper));
+        assert!(host.remove_child(body, svg));
+        assert!(host.append_child(svg_wrapper, svg));
+        assert!(element_is_inert_for_hit_testing(&host, svg));
+
+        let inert_ancestor = host.create_element("div");
+        let dialog = host.create_element("dialog");
+        let dialog_child = host.create_element("button");
+        assert!(host.set_attribute(inert_ancestor, "inert", ""));
+        assert!(host.append_child(body, inert_ancestor));
+        assert!(host.append_child(inert_ancestor, dialog));
+        assert!(host.append_child(dialog, dialog_child));
+        assert!(element_is_inert_for_hit_testing(&host, dialog_child));
+
+        assert!(host.set_attribute(dialog, "open", ""));
+        assert!(host.set_dialog_modal(dialog, true));
+        assert!(!element_is_inert_for_hit_testing(&host, dialog_child));
+        assert!(host.set_attribute(dialog, "inert", ""));
+        assert!(element_is_inert_for_hit_testing(&host, dialog_child));
+    }
 }
