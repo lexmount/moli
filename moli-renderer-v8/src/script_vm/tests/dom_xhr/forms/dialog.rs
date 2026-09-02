@@ -121,6 +121,35 @@ fn dialog_show_skips_hidden_and_nonsequential_descendants() {
     );
 }
 
+#[test]
+fn inert_modal_dialog_clears_focus_outside_its_subtree() {
+    let mut vm = new_storage_test_vm("https://inert-modal-focus-fixup.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const root = document.documentElement || document.appendChild(document.createElement('html'));
+  const host = document.body || root.appendChild(document.createElement('body'));
+  const outer = document.createElement('input');
+  const dialog = document.createElement('dialog');
+  dialog.inert = true;
+  dialog.innerHTML = '<input autofocus>';
+  host.append(outer, dialog);
+  outer.focus();
+  dialog.showModal();
+  return JSON.stringify({
+    focusedBody: document.activeElement === document.body,
+    dialogOpen: dialog.open
+  });
+})()
+"#,
+        )
+        .expect("inert modal focus-fixup probe should evaluate");
+
+    assert_eq!(result, r#"{"focusedBody":true,"dialogOpen":true}"#);
+}
+
 #[tokio::test]
 async fn dialog_toggle_events_cancel_opening_and_coalesce_state_changes() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
