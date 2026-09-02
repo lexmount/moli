@@ -136,6 +136,7 @@ impl<'a> QueryElement<'a> {
                     shared_lock: self.shared_lock,
                     style_data: self.style_data,
                     atom_cache: self.atom_cache,
+                    validity_states: self.validity_states,
                 })
                 .is_locally_invalid()
             {
@@ -146,6 +147,12 @@ impl<'a> QueryElement<'a> {
     }
 
     pub(super) fn is_invalid(self) -> bool {
+        if let Some(invalid) = self
+            .validity_states
+            .and_then(|states| states.get(&self.handle))
+        {
+            return *invalid;
+        }
         if self.is_locally_invalid() {
             return true;
         }
@@ -436,7 +443,9 @@ impl<'a> QueryElement<'a> {
     }
 
     pub(super) fn matches_validity_pseudo(self) -> bool {
-        matches!(self.element().local_name(), "form" | "fieldset")
+        self.validity_states
+            .is_some_and(|states| states.contains_key(&self.handle))
+            || matches!(self.element().local_name(), "form" | "fieldset")
             || self.is_constraint_validation_candidate()
     }
 
