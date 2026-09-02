@@ -67,6 +67,7 @@ struct ActiveRuntimeCommandOutputBarrier {
     command_scope: CommandOwnerScope,
     causal_owner: RuntimeCommandCausalOwner,
     renderer_cause: RendererRuntimeCommandCausalIdentity,
+    awaiting: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -187,6 +188,7 @@ impl RuntimeCommandOutputBarriers {
         conn: &CdpConnection,
         command_id: u64,
         session_id: Option<&str>,
+        awaiting: bool,
     ) -> Option<RuntimeCommandOutputBarrierPermit> {
         let command_scope = CommandOwnerScope::capture(conn, session_id);
         let causal_owner = RuntimeCommandCausalOwner::capture(conn, session_id)?;
@@ -211,6 +213,7 @@ impl RuntimeCommandOutputBarriers {
                 command_scope,
                 causal_owner,
                 renderer_cause,
+                awaiting,
             },
         );
         assert!(
@@ -296,8 +299,17 @@ impl RuntimeCommandOutputBarriers {
         outputs: PreparedProtocolOutputs,
         command_context: &mut CommandDispatchContext,
     ) {
+        let awaiting = self
+            .active
+            .get(&barrier_id)
+            .is_some_and(|barrier| barrier.awaiting);
         let Some(outputs) = outputs
-            .project_before_command_response_and_hold_after(conn, session_id, command_context)
+            .project_before_command_response_and_hold_after(
+                conn,
+                session_id,
+                command_context,
+                !awaiting,
+            )
             .await
         else {
             return;
@@ -558,7 +570,7 @@ mod tests {
         )
         .expect("test Runtime command should register its renderer call");
         barriers
-            .admit(conn, frontend_command_id, Some(SESSION_ID))
+            .admit(conn, frontend_command_id, Some(SESSION_ID), false)
             .expect("registered Runtime command should admit an exact output barrier")
     }
 

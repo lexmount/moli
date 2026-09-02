@@ -496,11 +496,24 @@ impl PreparedProtocolOutputs {
         conn: &mut CdpConnection,
         session_id: Option<&str>,
         command_context: &mut CommandDispatchContext,
+        defer_fetch_pause_after_response: bool,
     ) -> Option<Self> {
         let mut before_response = Vec::new();
         let mut after_response = Vec::new();
         for slot in std::mem::take(&mut self.ordered_slots) {
-            match slot.command_response_order() {
+            let order = slot.command_response_order();
+            let order = if defer_fetch_pause_after_response
+                && slot == ProtocolOutputSlot::SubresourceFetchInterception
+            {
+                // Chromium pauses a subresource Fetch request only after the
+                // invoking Runtime command has returned. Defer the pause for a
+                // non-awaiting command so a client that awaits the evaluate
+                // response still observes `Fetch.requestPaused` afterwards.
+                ProtocolOutputResponseOrder::AfterResponse
+            } else {
+                order
+            };
+            match order {
                 ProtocolOutputResponseOrder::BeforeResponse => before_response.push(slot),
                 ProtocolOutputResponseOrder::AfterResponse => after_response.push(slot),
             }

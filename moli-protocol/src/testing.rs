@@ -774,10 +774,17 @@ impl TestContext {
         command
             .runtime_command_executes_page_javascript()
             .then(|| {
+                let awaiting = command.request().params().is_some_and(|params| {
+                    params
+                        .get("awaitPromise")
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(false)
+                }) || command.request().method() == "Runtime.awaitPromise";
                 self.runtime_command_output_barriers.admit(
                     &self.conn,
                     command.request().id(),
                     command.command_output_session_id(),
+                    awaiting,
                 )
             })
             .flatten()

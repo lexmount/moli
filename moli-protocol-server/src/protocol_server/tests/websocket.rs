@@ -5108,6 +5108,138 @@ async fn websocket_cdp_runtime_call_function_awaitpromise_fetch_interception_unb
 }
 
 #[tokio::test]
+async fn websocket_cdp_runtime_evaluate_fetch_interception_orders_pause_after_response() {
+    async fn page() -> impl IntoResponse {
+        (
+            [(axum::http::header::CONTENT_TYPE.as_str(), "text/html")],
+            "<!doctype html><html><body>ready</body></html>",
+        )
+    }
+
+    async fn api() -> impl IntoResponse {
+        "api body"
+    }
+
+    let fixture_app = Router::new()
+        .route("/page", get(page))
+        .route("/api", get(api));
+    let (fixture_addr, _fixture_server) =
+        spawn_dedicated_fixture_server(fixture_app, "runtime-evaluate-fetch-ordering");
+
+    let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
+    let (mut socket, _) = connect_async(format!(
+        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
+    ))
+    .await
+    .expect("connect to cdp websocket");
+    let page_url = format!("http://{fixture_addr}/page");
+    let session_id = cdp_create_session_and_navigate(&mut socket, &page_url).await;
+
+    let _ = send_cdp_command(
+        &mut socket,
+        6,
+        "Fetch.enable",
+        Some(&session_id),
+        json!({
+            "patterns": [{
+                "urlPattern": "*",
+                "requestStage": "Request"
+            }]
+        }),
+    )
+    .await;
+
+    // A non-awaiting Runtime.evaluate triggers the subresource fetch. Chromium
+    // delivers `Fetch.requestPaused` only after the evaluate response, so a
+    // client that awaits the response before listening must still observe the
+    // pause.
+    socket
+        .send(WsMessage::Text(
+            json!({
+                "id": 7_u64,
+                "method": "Runtime.evaluate",
+                "sessionId": session_id,
+                "params": {
+                    "expression": "fetch('/api').then(r => { window.__r = r.status }).catch(e => { window.__er = e.name }); 'scheduled'",
+                    "returnByValue": true
+                }
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .expect("send non-awaiting evaluate fetch");
+
+    let pause_messages = recv_until_match(&mut socket, |message| {
+        message["sessionId"].as_str() == Some(session_id.as_str())
+            && message["method"] == json!("Fetch.requestPaused")
+    })
+    .await;
+    let response_index = pause_messages
+        .iter()
+        .position(|message| message["id"] == json!(7_u64))
+        .unwrap_or_else(|| panic!("expected evaluate response: {pause_messages:?}"));
+    let pause_index = pause_messages
+        .iter()
+        .position(|message| message["method"] == json!("Fetch.requestPaused"))
+        .expect("requestPaused observed");
+    assert!(
+        response_index < pause_index,
+        "Fetch.requestPaused must follow the evaluate response: {pause_messages:?}"
+    );
+
+    let request_id = pause_messages
+        .iter()
+        .find(|message| message["method"] == json!("Fetch.requestPaused"))
+        .and_then(|message| message["params"]["requestId"].as_str())
+        .expect("requestPaused requestId")
+        .to_owned();
+    let _ = send_cdp_command(
+        &mut socket,
+        8,
+        "Fetch.continueRequest",
+        Some(&session_id),
+        json!({ "requestId": request_id }),
+    )
+    .await;
+
+    let resolved = {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let result = send_cdp_command(
+                &mut socket,
+                9,
+                "Runtime.evaluate",
+                Some(&session_id),
+                json!({
+                    "expression": "window.__r === 200 ? 'done' : 'pending'",
+                    "returnByValue": true
+                }),
+            )
+            .await;
+            let value = result
+                .iter()
+                .find(|message| message["id"] == json!(9_u64))
+                .and_then(|message| message["result"]["result"]["value"].as_str())
+                .unwrap_or_default()
+                .to_owned();
+            if value == "done" {
+                break value;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "continued fetch should resolve with status 200"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    };
+    assert_eq!(resolved, "done");
+
+    let _ = socket.close(None).await;
+    protocol_server.abort();
+}
+
+#[tokio::test]
 async fn websocket_cdp_fetch_routes_pending_background_parser_script_to_exact_session() {
     async fn page() -> impl IntoResponse {
         (
