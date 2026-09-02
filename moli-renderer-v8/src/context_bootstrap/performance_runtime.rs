@@ -278,6 +278,9 @@ pub(crate) fn record_resource_performance_entry(
     scope: &mut v8::PinScope<'_, '_>,
     entry: ResourcePerformanceEntry,
 ) {
+    if !url::Url::parse(&entry.name).is_ok_and(|url| matches!(url.scheme(), "http" | "https")) {
+        return;
+    }
     let Some(performance) = window_performance_value(scope) else {
         window_state::queue_pending_resource_entry(scope, entry);
         return;
