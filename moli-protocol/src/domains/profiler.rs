@@ -122,6 +122,26 @@ mod tests {
         ctx.sent.remove(pos)
     }
 
+    #[tokio::test]
+    async fn heap_profiler_allocator_stats_reports_feature_availability() {
+        let mut ctx = TestContext::new();
+        let response = process_and_take_response(
+            &mut ctx,
+            json!({"id": 30, "method": "HeapProfiler.moliAllocatorStats"}),
+            30,
+        )
+        .await;
+        let result = &response["result"];
+
+        #[cfg(all(feature = "jemalloc-prof-diagnostics", moli_jemalloc_target))]
+        assert!(
+            result["allocatedBytes"].is_u64(),
+            "diagnostic jemalloc builds should expose allocator counters: {response:?}"
+        );
+        #[cfg(not(all(feature = "jemalloc-prof-diagnostics", moli_jemalloc_target)))]
+        assert_eq!(result["unavailable"], json!(true));
+    }
+
     async fn active_runtime_session_diagnostics(ctx: &mut TestContext, id: u64) -> Value {
         process_and_take_response(
             ctx,

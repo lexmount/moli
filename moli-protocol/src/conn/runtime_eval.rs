@@ -1,5 +1,12 @@
 use std::{collections::hash_map::Entry, future::Future, pin::Pin};
 
+#[cfg(all(feature = "jemalloc-prof-diagnostics", moli_jemalloc_target))]
+use std::{
+    ffi::{CStr, CString},
+    mem::size_of_val,
+    ptr,
+};
+
 use moli_page_types::{FrontendCommandId, RendererCallId, RendererInspectorResponseDelivery};
 use moli_protocol_cdp::CdpRendererCommandReplayDispatch;
 use moli_shared_worker::SharedWorkerInstanceId;
@@ -39,6 +46,103 @@ type RuntimeInspectorResponseReceiver = RuntimeInspectorAsyncCompletionReceiver;
 const SHARED_WORKER_RUNTIME_REMOTE_OBJECT_CLEANUP_COMMAND_ID_BASE: u64 = 900_600_000;
 const BIDI_SCRIPT_RESULT_OBJECT_GROUP: &str = "webdriver-bidi";
 const BIDI_CHANNEL_OBJECT_GROUP_PREFIX: &str = "webdriver-bidi-channel-";
+
+#[cfg(all(feature = "jemalloc-prof-diagnostics", moli_jemalloc_target))]
+fn dump_jemalloc_profile_for_diagnostics(path: String) -> Value {
+    let filename = match CString::new(path.as_bytes()) {
+        Ok(filename) => filename,
+        Err(error) => return json!({ "path": path, "error": error.to_string() }),
+    };
+    let filename_ptr = filename.as_ptr();
+    // SAFETY: `prof.dump` reads one `const char *` from `newp`; both the
+    // pointer slot and its NUL-terminated target live through this call.
+    let result = unsafe {
+        tikv_jemalloc_sys::mallctl(
+            c"prof.dump".as_ptr(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+            ptr::from_ref(&filename_ptr).cast_mut().cast(),
+            size_of_val(&filename_ptr),
+        )
+    };
+    if result == 0 {
+        json!({ "path": path })
+    } else {
+        json!({ "path": path, "errorCode": result })
+    }
+}
+
+#[cfg(all(feature = "jemalloc-prof-diagnostics", moli_jemalloc_target))]
+fn collect_jemalloc_stats_for_diagnostics() -> Value {
+    let mut epoch = 0_u64;
+    let mut epoch_len = size_of_val(&epoch);
+    // SAFETY: `epoch` is read and written as a `u64`, with its exact size.
+    let epoch_result = unsafe {
+        tikv_jemalloc_sys::mallctl(
+            c"epoch".as_ptr(),
+            (&raw mut epoch).cast(),
+            &raw mut epoch_len,
+            (&raw mut epoch).cast(),
+            epoch_len,
+        )
+    };
+    if epoch_result != 0 {
+        return json!({ "epochErrorCode": epoch_result });
+    }
+
+    let mut stats = serde_json::Map::new();
+    let mut errors = serde_json::Map::new();
+    for (json_name, ctl_name) in [
+        ("allocatedBytes", c"stats.allocated"),
+        ("activeBytes", c"stats.active"),
+        ("metadataBytes", c"stats.metadata"),
+        ("residentBytes", c"stats.resident"),
+        ("mappedBytes", c"stats.mapped"),
+        ("retainedBytes", c"stats.retained"),
+    ] {
+        match read_jemalloc_usize_stat(ctl_name) {
+            Ok(value) => {
+                stats.insert(json_name.to_owned(), json!(value));
+            }
+            Err(error_code) => {
+                errors.insert(json_name.to_owned(), json!(error_code));
+            }
+        }
+    }
+    if !errors.is_empty() {
+        stats.insert("errors".to_owned(), Value::Object(errors));
+    }
+    if let Ok(path) = std::env::var("MOLI_JEMALLOC_PROFILE_DUMP_PATH") {
+        stats.insert(
+            "profileDump".to_owned(),
+            dump_jemalloc_profile_for_diagnostics(path),
+        );
+    }
+    Value::Object(stats)
+}
+
+#[cfg(all(feature = "jemalloc-prof-diagnostics", moli_jemalloc_target))]
+fn read_jemalloc_usize_stat(name: &CStr) -> Result<usize, i32> {
+    let mut value = 0_usize;
+    let mut value_len = size_of_val(&value);
+    // SAFETY: the requested controls return `size_t`; `value` and its exact
+    // size remain valid and writable through the call.
+    let result = unsafe {
+        tikv_jemalloc_sys::mallctl(
+            name.as_ptr(),
+            (&raw mut value).cast(),
+            &raw mut value_len,
+            ptr::null_mut(),
+            0,
+        )
+    };
+    if result == 0 { Ok(value) } else { Err(result) }
+}
+
+#[cfg(not(all(feature = "jemalloc-prof-diagnostics", moli_jemalloc_target)))]
+fn collect_jemalloc_stats_for_diagnostics() -> Value {
+    json!({ "unavailable": true })
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct RuntimeBindingCallEvent {
@@ -4851,6 +4955,10 @@ impl CdpConnection {
         }
 
         Ok(PendingMoliDiagnosticsDispatch { pending })
+    }
+
+    pub(crate) fn moli_allocator_stats_for_diagnostics(&self) -> Value {
+        collect_jemalloc_stats_for_diagnostics()
     }
 
     pub(crate) fn complete_moli_diagnostics(

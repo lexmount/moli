@@ -6,6 +6,11 @@ edition = "2024"
 build = "build.rs"
 
 [features]
+jemalloc-prof-diagnostics = [
+    "dep:tikv-jemalloc-sys",
+    "tikv-jemalloc-sys/profiling",
+    "tikv-jemalloc-sys/stats",
+]
 test-support = []
 
 [dependencies]
@@ -46,6 +51,9 @@ data-url = "0.3.2"
 moli-crypto = { path = "../moli-crypto" }
 http = "1"
 sanitize-filename = "=0.6.0"
+
+[target.'cfg(all(not(target_os = "windows"), not(any(all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"), all(target_os = "macos", any(target_arch = "x86_64", target_arch = "aarch64"))))))'.dependencies]
+tikv-jemalloc-sys = { version = "0.7.1", optional = true, default-features = false }
 
 [dev-dependencies]
 axum = { version = "0.8.6", features = ["ws"] }

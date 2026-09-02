@@ -11,6 +11,7 @@ path = "src/main.rs"
 [features]
 default = ["jemalloc"]
 jemalloc = ["dep:tikv-jemalloc-sys", "dep:tikv-jemallocator"]
+memory-diagnostics = ["jemalloc", "moli-protocol/jemalloc-prof-diagnostics"]
 
 [dependencies]
 anyhow = "1.0.100"

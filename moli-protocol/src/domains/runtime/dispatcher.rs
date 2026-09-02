@@ -1161,12 +1161,12 @@ pub(crate) fn start_heap_profiler_inspector_command_dispatch(
             | HeapProfilerAction::TakeHeapSnapshot => {
                 CommandOutputPlan::error(-32000, "NoDocumentLoaded")
             }
-            HeapProfilerAction::MoliDiagnostics | HeapProfilerAction::MoliResetIdleEngine => {
-                runtime_inspector_error_plan(
-                    cmd.id,
-                    "UnsupportedHeapProfilerInspectorCommand".to_owned(),
-                )
-            }
+            HeapProfilerAction::MoliAllocatorStats
+            | HeapProfilerAction::MoliDiagnostics
+            | HeapProfilerAction::MoliResetIdleEngine => runtime_inspector_error_plan(
+                cmd.id,
+                "UnsupportedHeapProfilerInspectorCommand".to_owned(),
+            ),
         });
     }
 
@@ -1345,9 +1345,9 @@ fn heap_profiler_action_protocol_method(action: HeapProfilerAction) -> &'static 
         HeapProfilerAction::StopSampling => "HeapProfiler.stopSampling",
         HeapProfilerAction::StopTrackingHeapObjects => "HeapProfiler.stopTrackingHeapObjects",
         HeapProfilerAction::TakeHeapSnapshot => "HeapProfiler.takeHeapSnapshot",
-        HeapProfilerAction::MoliDiagnostics | HeapProfilerAction::MoliResetIdleEngine => {
-            "HeapProfiler.moliExtension"
-        }
+        HeapProfilerAction::MoliAllocatorStats
+        | HeapProfilerAction::MoliDiagnostics
+        | HeapProfilerAction::MoliResetIdleEngine => "HeapProfiler.moliExtension",
     }
 }
 

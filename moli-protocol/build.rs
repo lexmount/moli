@@ -2,6 +2,17 @@ use std::process::Command;
 use vergen_gitcl::{Emitter, Gitcl};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    println!("cargo::rustc-check-cfg=cfg(moli_jemalloc_target)");
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS")?;
+    let target_env = std::env::var("CARGO_CFG_TARGET_ENV")?;
+    let target_arch = std::env::var("CARGO_CFG_TARGET_ARCH")?;
+    let uses_partition_alloc =
+        (target_os == "linux" && target_env == "gnu" && target_arch == "x86_64")
+            || (target_os == "macos" && matches!(target_arch.as_str(), "x86_64" | "aarch64"));
+    if target_os != "windows" && !uses_partition_alloc {
+        println!("cargo::rustc-cfg=moli_jemalloc_target");
+    }
+
     let git = Gitcl::builder().sha(false).build();
     Emitter::default()
         .fail_on_error()
