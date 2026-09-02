@@ -6,6 +6,7 @@ use super::{
         ui_event_init_callback,
     },
     events::{
+        toggle_event_source_getter_function,
         command_event_command_getter_function, command_event_source_getter_function,
         before_unload_event_return_value_getter_function,
         before_unload_event_return_value_setter_function,
@@ -186,6 +187,13 @@ struct CommandEventTemplateAccessorsDeclaration {
 
     #[webapi(accessor_property, getter = command_event_command_getter_function)]
     command: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::ToggleEvent, enumerable, receiver)]
+struct ToggleEventTemplateAccessorsDeclaration {
+    #[webapi(accessor_property, getter = toggle_event_source_getter_function)]
+    source: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -528,6 +536,7 @@ fn install_declaration<'s, D: WebApiFunctionTemplateDeclaration>(
 // prototype mutations cannot change which fields are exposed as own properties.
 fn event_template_declaration(interface: &str) -> Option<EventTemplateDeclaration> {
     Some(match interface {
+        "ToggleEvent" => EventTemplateDeclaration::new::<ToggleEventTemplateAccessorsDeclaration>(),
         "CommandEvent" => EventTemplateDeclaration::new::<CommandEventTemplateAccessorsDeclaration>(),
         "BeforeUnloadEvent" => EventTemplateDeclaration::new::<BeforeUnloadEventTemplateAccessorsDeclaration>(),
         "ErrorEvent" => EventTemplateDeclaration::new::<ErrorEventTemplateAccessorsDeclaration>(),

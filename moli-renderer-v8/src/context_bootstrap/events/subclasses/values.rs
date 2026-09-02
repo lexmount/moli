@@ -47,8 +47,7 @@ pub(super) struct ToggleInit<'s> {
     #[webidl(default = webidl::DomString16(Vec::new()), converter = "raw", snapshot_order = 0)]
     #[webidl(snapshot_attributes = v8::PropertyAttribute::READ_ONLY | v8::PropertyAttribute::DONT_DELETE | v8::PropertyAttribute::DONT_ENUM)]
     old_state: webidl::DomString16,
-    #[webidl(nullable, interface = web_api_interfaces::Element, snapshot_order = 2)]
-    #[webidl(snapshot_attributes = v8::PropertyAttribute::READ_ONLY | v8::PropertyAttribute::DONT_DELETE | v8::PropertyAttribute::DONT_ENUM)]
+    #[webidl(nullable, interface = web_api_interfaces::Element, snapshot_order = 2, snapshot_slot = TOGGLE_EVENT_SOURCE_SLOT)]
     source: Option<v8::Local<'s, v8::Object>>,
 }
 
