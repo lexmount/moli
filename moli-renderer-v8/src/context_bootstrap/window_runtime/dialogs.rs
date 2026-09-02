@@ -338,13 +338,31 @@ pub(in crate::context_bootstrap) fn entered_window_api_base_url(
     scope: &mut v8::PinScope<'_, '_>,
     host: &crate::native_bridge::JsContextHost,
 ) -> Url {
-    if let Some(handle) = entered_child_window_handle(scope)
-        && let Some(url) = host.child_browsing_context_base_url(handle)
-    {
-        return url;
-    }
-    if let Some(url) = host.active_lightweight_popup_base_url(scope) {
-        return url;
+    // The HTML entry settings object follows the context that entered the
+    // script or microtask, not the borrowed Window method's native realm.
+    let ambient_scope = host.entered_owner_dispatch_scope(scope);
+    let entry_scope = match ambient_scope {
+        crate::native_bridge::OwnerDispatchScope::LightweightPopup(_) => ambient_scope,
+        crate::native_bridge::OwnerDispatchScope::Top
+        | crate::native_bridge::OwnerDispatchScope::Child(_) => {
+            let entry_context = scope.get_entered_or_microtask_context();
+            host.window_execution_context_identity_for_access_check(entry_context)
+                .map(|identity| identity.dispatch_scope())
+                .unwrap_or(ambient_scope)
+        }
+    };
+    match entry_scope {
+        crate::native_bridge::OwnerDispatchScope::Child(handle) => {
+            if let Some(url) = host.child_browsing_context_base_url(handle) {
+                return url;
+            }
+        }
+        crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id) => {
+            if let Some(url) = host.lightweight_popup_request_base_url(scope, popup_id) {
+                return url;
+            }
+        }
+        crate::native_bridge::OwnerDispatchScope::Top => {}
     }
     host.dom_host()
         .document_base_url()

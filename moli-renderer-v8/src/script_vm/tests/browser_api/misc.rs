@@ -25113,6 +25113,67 @@ fn window_open_rejects_invalid_urls_before_selecting_a_target() {
 }
 
 #[test]
+fn window_open_resolves_relative_urls_against_the_entry_function_realm() {
+    let mut vm = new_storage_test_vm("https://entry-realm.test/top/page.html");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const parent = document.body || document.documentElement || document;
+              const makeFrame = base => {
+                const frame = document.createElement("iframe");
+                parent.appendChild(frame);
+                frame.contentDocument.open();
+                frame.contentDocument.write(
+                  `<!doctype html><base href="https://entry-realm.test/${base}/">`
+                );
+                frame.contentDocument.close();
+                return frame.contentWindow;
+              };
+              const current = makeFrame("current");
+              const relevant = makeFrame("relevant");
+              const entry = makeFrame("function");
+              entry.openArgs = { open: current.open, relevant };
+
+              const makeEntryFunction = target => entry.Function(
+                `window.openArgs.open.call(
+                   window.openArgs.relevant,
+                   "resources/window-to-open.html",
+                   "${target}"
+                 );`
+              );
+              Promise.resolve().then(makeEntryFunction("promise-entry"));
+
+              const startFunction = makeEntryFunction("wasm-entry");
+              const startModule = new WebAssembly.Module(new Uint8Array([
+                0, 97, 115, 109, 1, 0, 0, 0,
+                1, 4, 1, 96, 0, 0,
+                2, 19, 1, 6, 109, 111, 100, 117, 108, 101,
+                8, 105, 109, 112, 111, 114, 116, 101, 100, 0, 0,
+                8, 1, 0
+              ]));
+              new WebAssembly.Instance(startModule, {
+                module: { imported: startFunction }
+              });
+              return "queued";
+            })()
+            "#,
+        )
+        .expect("cross-realm entry window.open calls should evaluate");
+    assert_eq!(result, "queued");
+
+    let mut activations = vm.take_pending_popup_activations();
+    activations.sort_by(|left, right| left.target_name().cmp(right.target_name()));
+    assert_eq!(activations.len(), 2);
+    assert_eq!(activations[0].target_name(), "promise-entry");
+    assert_eq!(activations[1].target_name(), "wasm-entry");
+    assert!(activations.iter().all(|activation| {
+        activation.url() == "https://entry-realm.test/function/resources/window-to-open.html"
+    }));
+}
+
+#[test]
 fn window_open_about_blank_returns_lightweight_popup_window() {
     let mut vm = new_storage_test_vm("https://example.com/");
 
