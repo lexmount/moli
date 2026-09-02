@@ -23599,6 +23599,98 @@ fn standalone_dialog_handler_without_page_residence_uses_headless_defaults() {
     );
 }
 
+#[tokio::test]
+async fn sandboxed_child_without_allow_modals_uses_dialog_defaults_without_opening_one() {
+    let mut vm = new_storage_test_vm("https://sandbox-dialogs.test/");
+    vm.eval(
+        r#"
+(() => {
+  const frame = document.createElement("iframe");
+  frame.id = "sandboxed-dialog-frame";
+  frame.sandbox = "allow-scripts allow-same-origin";
+  frame.srcdoc = `<script>
+    function openDialogs() {
+      return [
+        String(alert("blocked alert")),
+        String(confirm("blocked confirm")),
+        String(prompt("blocked prompt", "default"))
+      ].join("|");
+    }
+  <\/script>`;
+  (document.body || document.documentElement || document).appendChild(frame);
+})()
+"#,
+    )
+    .expect("sandboxed dialog child setup should evaluate");
+    run_realm_prerequisite_then_expected_child_frame_semantic_turn_for_test(
+        &mut vm,
+        ChildFrameSemanticTurnKind::NavigationCommit,
+        "sandboxed dialog child should commit before its parser script",
+    )
+    .await;
+    run_realm_prerequisite_then_expected_child_frame_semantic_turn_for_test(
+        &mut vm,
+        ChildFrameSemanticTurnKind::DocumentScriptReady,
+        "sandboxed dialog child script should run",
+    )
+    .await;
+    run_child_document_lifecycle_and_host_load_for_test(&mut vm, "sandboxed dialog child").await;
+
+    assert_eq!(
+        vm.eval("document.getElementById('sandboxed-dialog-frame').contentWindow.openDialogs()")
+            .expect("sandboxed child dialog defaults should evaluate"),
+        "undefined|false|null"
+    );
+    assert!(
+        vm.take_pending_javascript_dialogs().is_empty(),
+        "a child without allow-modals must not publish a JavaScript dialog"
+    );
+}
+
+#[tokio::test]
+async fn sandboxed_child_with_allow_modals_can_open_a_dialog() {
+    let mut vm = new_storage_test_vm("https://sandbox-dialogs.test/");
+    vm.eval(
+        r#"
+(() => {
+  const frame = document.createElement("iframe");
+  frame.id = "allowed-dialog-frame";
+  frame.sandbox = "allow-scripts allow-same-origin allow-modals";
+  frame.srcdoc = `<script>
+    function openAlert() { return alert("allowed alert"); }
+  <\/script>`;
+  (document.body || document.documentElement || document).appendChild(frame);
+})()
+"#,
+    )
+    .expect("allowed dialog child setup should evaluate");
+    run_realm_prerequisite_then_expected_child_frame_semantic_turn_for_test(
+        &mut vm,
+        ChildFrameSemanticTurnKind::NavigationCommit,
+        "allowed dialog child should commit before its parser script",
+    )
+    .await;
+    run_realm_prerequisite_then_expected_child_frame_semantic_turn_for_test(
+        &mut vm,
+        ChildFrameSemanticTurnKind::DocumentScriptReady,
+        "allowed dialog child script should run",
+    )
+    .await;
+    run_child_document_lifecycle_and_host_load_for_test(&mut vm, "allowed dialog child").await;
+
+    assert_eq!(
+        vm.eval(
+            "String(document.getElementById('allowed-dialog-frame').contentWindow.openAlert())"
+        )
+        .expect("allowed child dialog should evaluate"),
+        "undefined"
+    );
+    let dialogs = vm.take_pending_javascript_dialogs();
+    assert_eq!(dialogs.len(), 1);
+    assert_eq!(dialogs[0].dialog_type(), "alert");
+    assert_eq!(dialogs[0].message(), "allowed alert");
+}
+
 #[test]
 fn window_open_rejects_invalid_urls_before_selecting_a_target() {
     let mut vm = new_storage_test_vm("https://example.com/");

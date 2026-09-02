@@ -439,6 +439,7 @@ fn inherit_lightweight_popup_opener_sandbox(
     };
     target.forces_opaque_origin |= opener.forces_opaque_origin;
     target.allows_scripts &= opener.allows_scripts;
+    target.allows_modals &= opener.allows_modals;
     target.allows_popups_to_escape &= opener.allows_popups_to_escape;
     target.sandboxes_document_domain |= opener.sandboxes_document_domain;
 }

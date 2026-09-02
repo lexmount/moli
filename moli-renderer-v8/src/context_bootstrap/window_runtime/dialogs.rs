@@ -6,7 +6,7 @@ use crate::{
     context_bootstrap::CHILD_BROWSING_CONTEXT_HANDLE_SLOT,
     document_runtime::{DocumentPolicyContainer, DomHandle},
     native_bridge::{
-        InputNavigationPolicy, child_window_handle_from_marker_data,
+        InputNavigationPolicy, OwnerDispatchScope, child_window_handle_from_marker_data,
         element::{
             SpecialBrowsingContextTarget, navigate_existing_browsing_context_target,
             navigate_named_iframe_target,
@@ -431,6 +431,18 @@ fn open_dialog(
     // Page/Document source. A standalone or stale realm uses the headless
     // default result instead of claiming a dialog that cannot be emitted.
     let (target, source_document, source) = host.current_renderer_window_document_source(scope)?;
+    let allows_modals = match target.dispatch_scope() {
+        OwnerDispatchScope::Top => host.document_policy_container().sandbox.allows_modals,
+        OwnerDispatchScope::Child(handle) => host
+            .child_browsing_context_policy_container_snapshot(handle)
+            .is_some_and(|policy| policy.sandbox.allows_modals),
+        OwnerDispatchScope::LightweightPopup(popup_id) => host
+            .lightweight_popup_policy_container(popup_id)
+            .is_some_and(|policy| policy.sandbox.allows_modals),
+    };
+    if !allows_modals {
+        return None;
+    }
     let source_url = window_open_entered_document_url(scope, host).to_string();
     let dialog_id = host.allocate_javascript_dialog_id();
     host.open_modal_javascript_dialog(

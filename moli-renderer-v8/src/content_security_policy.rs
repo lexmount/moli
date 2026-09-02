@@ -343,6 +343,12 @@ pub(crate) fn content_security_policy_sandbox_allows_scripts(policies: &[String]
         .all(|policy| policy_sandbox_allows_scripts(policy).unwrap_or(true))
 }
 
+pub(crate) fn content_security_policy_sandbox_allows_modals(policies: &[String]) -> bool {
+    policies
+        .iter()
+        .all(|policy| policy_sandbox_allows_modals(policy).unwrap_or(true))
+}
+
 pub(crate) fn content_security_policy_sandbox_allows_popups_to_escape(policies: &[String]) -> bool {
     let mut has_sandbox = false;
     for policy in policies {
@@ -1171,6 +1177,11 @@ fn policy_sandbox_allows_scripts(policy: &str) -> Option<bool> {
     directive_source_list(&directives, SANDBOX).map(sandbox_sources_allow_scripts)
 }
 
+fn policy_sandbox_allows_modals(policy: &str) -> Option<bool> {
+    let directives = parsed_directives(policy);
+    directive_source_list(&directives, SANDBOX).map(sandbox_sources_allow_modals)
+}
+
 fn policy_sandbox_allows_popups_to_escape(policy: &str) -> Option<bool> {
     let directives = parsed_directives(policy);
     directive_source_list(&directives, SANDBOX).map(sandbox_sources_allow_popups_to_escape)
@@ -1186,6 +1197,12 @@ fn sandbox_sources_allow_scripts(sources: &[&str]) -> bool {
     sources
         .iter()
         .any(|token| token.eq_ignore_ascii_case("allow-scripts"))
+}
+
+fn sandbox_sources_allow_modals(sources: &[&str]) -> bool {
+    sources
+        .iter()
+        .any(|token| token.eq_ignore_ascii_case("allow-modals"))
 }
 
 fn sandbox_sources_allow_popups_to_escape(sources: &[&str]) -> bool {
@@ -3394,6 +3411,28 @@ mod tests {
         assert!(!allows_scripts(&[
             "sandbox allow-scripts",
             "sandbox allow-same-origin"
+        ]));
+    }
+
+    #[test]
+    fn sandbox_directive_allows_modals_only_when_all_active_sandboxes_allow_it() {
+        let allows_modals = |policies: &[&str]| {
+            content_security_policy_sandbox_allows_modals(
+                &policies
+                    .iter()
+                    .map(|policy| policy.to_string())
+                    .collect::<Vec<_>>(),
+            )
+        };
+
+        assert!(allows_modals(&[]));
+        assert!(allows_modals(&["script-src 'self'"]));
+        assert!(!allows_modals(&["sandbox"]));
+        assert!(allows_modals(&["sandbox allow-modals"]));
+        assert!(allows_modals(&["sandbox ALLOW-MODALS"]));
+        assert!(!allows_modals(&[
+            "sandbox allow-modals",
+            "sandbox allow-scripts"
         ]));
     }
 
