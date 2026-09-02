@@ -50,6 +50,10 @@ input, textarea, select, button {
   display: inline-block;
 }
 
+marquee {
+  overflow: hidden !important;
+}
+
 pre, xmp, plaintext, listing {
   font-family: monospace;
   white-space: pre;

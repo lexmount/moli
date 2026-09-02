@@ -279,6 +279,30 @@ fn table_elements_use_table_user_agent_display_defaults() {
 }
 
 #[test]
+fn marquee_user_agent_overflow_overrides_author_styles() {
+    let mut vm = new_parsed_test_vm(
+        "https://marquee-user-agent-overflow.test/",
+        r#"<!doctype html>
+<marquee style="overflow: visible"></marquee>
+<marquee style="overflow: scroll"></marquee>
+<marquee style="overflow: clip"></marquee>
+<marquee style="overflow: auto"></marquee>"#,
+    );
+
+    let result = vm
+        .eval(
+            r#"
+[...document.querySelectorAll('marquee')]
+  .map(element => getComputedStyle(element).overflow)
+  .join('|')
+"#,
+        )
+        .expect("marquee user-agent overflow should evaluate");
+
+    assert_eq!(result, "hidden|hidden|hidden|hidden");
+}
+
+#[test]
 fn dialog_user_agent_display_tracks_open_state() {
     let mut vm = new_parsed_test_vm(
         "https://dialog-user-agent-display.test/",
