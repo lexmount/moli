@@ -322,7 +322,7 @@ pub(crate) fn evaluate_match_media_query_list_with_viewport(
     viewport: StyleViewport,
 ) -> bool {
     if query.trim().is_empty() {
-        return false;
+        return true;
     }
     evaluate_media_query_list(query, emulated_media, viewport)
 }
@@ -361,6 +361,8 @@ mod tests {
 
     #[test]
     fn match_media_stylo_evaluates_multiple_conditions_and_not_modifier() {
+        assert!(evaluate_match_media_query_list("", None));
+        assert!(evaluate_match_media_query_list(" \n\t", None));
         assert!(evaluate_match_media_query_list(
             "screen and (orientation: landscape) and (prefers-color-scheme: light)",
             None,
