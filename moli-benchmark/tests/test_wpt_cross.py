@@ -3993,6 +3993,17 @@ test(() => {}, "ok");
         self.assertIn(b"ctrlKey: !!modifiers.Control", BENCH_TESTDRIVER_VENDOR_BRIDGE)
         self.assertIn(b"shiftKey: !!modifiers.Shift", BENCH_TESTDRIVER_VENDOR_BRIDGE)
 
+    def test_testdriver_vendor_bridge_send_keys_runs_text_edit_default_action(
+        self,
+    ) -> None:
+        self.assertIn(b"insertSendKeyText", BENCH_TESTDRIVER_VENDOR_BRIDGE)
+        self.assertIn(
+            b"doc.execCommand('insertText', false, key)",
+            BENCH_TESTDRIVER_VENDOR_BRIDGE,
+        )
+        self.assertIn(b"codePoint >= 0xE000", BENCH_TESTDRIVER_VENDOR_BRIDGE)
+        self.assertIn(b"if (keyAllowed)", BENCH_TESTDRIVER_VENDOR_BRIDGE)
+
     def test_testdriver_vendor_bridge_focuses_user_activation_target(self) -> None:
         self.assertIn(b"focusForUserActivation", BENCH_TESTDRIVER_VENDOR_BRIDGE)
         self.assertIn(b"document.activeElement === before", BENCH_TESTDRIVER_VENDOR_BRIDGE)
