@@ -431,6 +431,56 @@ pub(super) fn apply_modal_dialog_focus_fixup(
     }
 }
 
+pub(super) fn remember_dialog_previously_focused_element(
+    runtime_ptr: *mut JsContextHost,
+    dialog: DomHandle,
+) {
+    let focused = unsafe { &*runtime_ptr }.active_element_handle();
+    let _ = unsafe { &mut *runtime_ptr }
+        .dom_host_mut()
+        .set_dialog_previously_focused_element(dialog, focused);
+}
+
+pub(super) fn restore_dialog_focus_after_close(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    dialog: DomHandle,
+    was_modal: bool,
+) {
+    let (previously_focused, should_restore) = {
+        let runtime = unsafe { &*runtime_ptr };
+        let previously_focused = runtime
+            .dom_host()
+            .node(dialog)
+            .and_then(Node::as_element)
+            .and_then(|element| element.dialog_previously_focused_element());
+        let focus_is_inside_dialog = runtime
+            .active_element_handle()
+            .is_some_and(|active| flat_tree_contains(runtime, dialog, active));
+        (previously_focused, was_modal || focus_is_inside_dialog)
+    };
+    let _ = unsafe { &mut *runtime_ptr }
+        .dom_host_mut()
+        .set_dialog_previously_focused_element(dialog, None);
+    let Some(previously_focused) = previously_focused.filter(|_| should_restore) else {
+        return;
+    };
+    if let Err(error) = focus_element_with_options(scope, runtime_ptr, previously_focused, true) {
+        tracing::warn!(?previously_focused, %error, "failed to restore focus after closing dialog");
+    }
+}
+
+fn flat_tree_contains(runtime: &JsContextHost, ancestor: DomHandle, node: DomHandle) -> bool {
+    let mut current = Some(node);
+    while let Some(candidate) = current {
+        if candidate == ancestor {
+            return true;
+        }
+        current = flat_tree_parent(runtime, candidate);
+    }
+    false
+}
+
 fn focused_chain_requires_async_blur(runtime: &JsContextHost, active: DomHandle) -> bool {
     let mut current = Some(active);
     while let Some(handle) = current {
