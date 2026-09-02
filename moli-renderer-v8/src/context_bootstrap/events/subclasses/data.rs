@@ -172,13 +172,11 @@ struct InterestEventInitDeclaration<'scope> {
 
 #[derive(WebApiObject)]
 #[webapi(plain)]
-struct ToggleEventStateDeclaration<'scope> {
+struct ToggleEventStateDeclaration {
     #[webapi(data_property = "oldState", readonly, dont_delete)]
     old_state: String,
     #[webapi(data_property = "newState", readonly, dont_delete)]
     new_state: String,
-    #[webapi(data_property, readonly, dont_delete)]
-    source: v8::Local<'scope, v8::Value>,
 }
 
 #[derive(WebApiObject)]
@@ -571,8 +569,9 @@ pub(in crate::context_bootstrap::events::subclasses) fn initialize_toggle_event<
         },
     };
     let source = parsed.source.unwrap_or_else(|| v8::null(scope).into());
-    let _ = ToggleEventStateDeclaration::new(parsed.old_state, parsed.new_state, source)
+    let _ = ToggleEventStateDeclaration::new(parsed.old_state, parsed.new_state)
         .initialize(scope, event);
+    set_private_value(scope, event, TOGGLE_EVENT_SOURCE_SLOT, source);
     true
 }
 
