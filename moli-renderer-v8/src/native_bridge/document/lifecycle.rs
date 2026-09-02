@@ -700,7 +700,7 @@ fn exec_command_select_all_target(
     runtime: &JsContextHost,
     document_handle: DomHandle,
 ) -> Option<DomHandle> {
-    let active_modal_dialog = current_modal_dialog(runtime);
+    let active_modal_dialog = current_modal_dialog(runtime, document_handle);
     if let Some(active) = runtime.active_element_handle()
         && let Some(editing_host) = contenteditable_editing_host(runtime, active)
         && active_modal_dialog
@@ -720,7 +720,7 @@ fn exec_command_select_all_target(
         .or(Some(document_handle))
 }
 
-fn current_modal_dialog(runtime: &JsContextHost) -> Option<DomHandle> {
+fn current_modal_dialog(runtime: &JsContextHost, document: DomHandle) -> Option<DomHandle> {
     runtime
         .dom_host()
         .dom()
@@ -728,7 +728,9 @@ fn current_modal_dialog(runtime: &JsContextHost) -> Option<DomHandle> {
         .iter()
         .rev()
         .find_map(|node| {
-            if !node.is_connected() {
+            if !node.is_connected()
+                || runtime.dom_host().owner_document_handle(node.id()) != Some(document)
+            {
                 return None;
             }
             let element = node.as_element()?;
