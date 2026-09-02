@@ -6,6 +6,7 @@ use super::{
         ui_event_init_callback,
     },
     events::{
+        command_event_command_getter_function, command_event_source_getter_function,
         before_unload_event_return_value_getter_function,
         before_unload_event_return_value_setter_function,
         close_event_code_getter_function, close_event_reason_getter_function,
@@ -175,6 +176,16 @@ struct SubmitEventTemplateAccessorsDeclaration {
 struct FormDataEventTemplateAccessorsDeclaration {
     #[webapi(accessor_property = "formData", getter = form_data_event_form_data_getter_function)]
     form_data: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::CommandEvent, enumerable, receiver)]
+struct CommandEventTemplateAccessorsDeclaration {
+    #[webapi(accessor_property, getter = command_event_source_getter_function)]
+    source: (),
+
+    #[webapi(accessor_property, getter = command_event_command_getter_function)]
+    command: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -517,6 +528,7 @@ fn install_declaration<'s, D: WebApiFunctionTemplateDeclaration>(
 // prototype mutations cannot change which fields are exposed as own properties.
 fn event_template_declaration(interface: &str) -> Option<EventTemplateDeclaration> {
     Some(match interface {
+        "CommandEvent" => EventTemplateDeclaration::new::<CommandEventTemplateAccessorsDeclaration>(),
         "BeforeUnloadEvent" => EventTemplateDeclaration::new::<BeforeUnloadEventTemplateAccessorsDeclaration>(),
         "ErrorEvent" => EventTemplateDeclaration::new::<ErrorEventTemplateAccessorsDeclaration>(),
         "SecurityPolicyViolationEvent" => EventTemplateDeclaration::new::<
