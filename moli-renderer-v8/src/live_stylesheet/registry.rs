@@ -192,6 +192,7 @@ impl LiveStylesheetRegistry {
             allow_import_rules,
             LiveStylesheetRuntimeStateKind::Cascade,
             None,
+            None,
         ));
         self.entries
             .borrow_mut()
@@ -525,6 +526,8 @@ impl LiveStylesheetRegistry {
             path,
             rule,
             shared_lock: stylesheet.stylesheet.shared_lock.clone(),
+            source_declaration_override: Rc::clone(&stylesheet.source_declaration_override),
+            detached_source_declaration_override: None,
         };
 
         if let Some(id) = existing_id {

@@ -40,6 +40,112 @@ pub fn parse_declaration_list(
         .collect()
 }
 
+/// Recover the declaration-list serialization for a stylesheet that ended in
+/// one valid, unclosed `var()` reference.
+///
+/// Stylo accepts the EOF-recovered rule but currently appends the missing `)`
+/// to its stored value. This helper only removes that character when the raw
+/// final declaration and Stylo's serialized final declaration otherwise match
+/// exactly. The caller is responsible for associating the result with the
+/// rightmost native style rule.
+pub fn recover_stylesheet_eof_open_var_declaration_text(
+    stylesheet_text: &str,
+    serialized_declaration_text: &str,
+) -> Option<String> {
+    let options = DeclarationParseOptions {
+        canonicalize_property_name: false,
+        unescape_value_semicolons: true,
+        preserve_empty_values: false,
+    };
+    let serialized_declaration = parse_declaration_list(serialized_declaration_text, options)
+        .into_iter()
+        .last()?;
+
+    for block_start in eof_open_curly_block_starts(stylesheet_text) {
+        let Some(source_declaration) =
+            parse_declaration_list(&stylesheet_text[block_start + 1..], options)
+                .into_iter()
+                .last()
+        else {
+            continue;
+        };
+        if !crate::value::css_value_is_eof_open_var_function(&source_declaration.value)
+            || crate::canonical_style_property_name(&source_declaration.name)
+                != crate::canonical_style_property_name(&serialized_declaration.name)
+            || source_declaration.important != serialized_declaration.important
+            || serialized_declaration.value != format!("{})", source_declaration.value)
+        {
+            continue;
+        }
+
+        let value_start = serialized_declaration_text.rfind(&serialized_declaration.value)?;
+        let closing_parenthesis = value_start + serialized_declaration.value.len() - 1;
+        if serialized_declaration_text.as_bytes()[closing_parenthesis] != b')'
+            || !serialized_declaration_suffix_matches(
+                &serialized_declaration_text[closing_parenthesis + 1..],
+                serialized_declaration.important,
+            )
+        {
+            continue;
+        }
+
+        let mut recovered = String::with_capacity(serialized_declaration_text.len() - 1);
+        recovered.push_str(&serialized_declaration_text[..closing_parenthesis]);
+        recovered.push_str(&serialized_declaration_text[closing_parenthesis + 1..]);
+        return Some(recovered);
+    }
+    None
+}
+
+fn serialized_declaration_suffix_matches(suffix: &str, important: bool) -> bool {
+    let suffix = suffix.trim();
+    if important {
+        suffix.eq_ignore_ascii_case("!important;")
+    } else {
+        suffix == ";"
+    }
+}
+
+fn eof_open_curly_block_starts(css_text: &str) -> Vec<usize> {
+    let mut open_blocks = Vec::new();
+    let mut input = ParserInput::new(css_text);
+    let mut input = Parser::new(&mut input);
+    collect_eof_open_curly_block_starts(&mut input, &mut open_blocks);
+    open_blocks
+}
+
+fn collect_eof_open_curly_block_starts<'i, 't>(
+    input: &mut Parser<'i, 't>,
+    open_blocks: &mut Vec<usize>,
+) {
+    loop {
+        let token_start = input.position();
+        let Ok(token) = input.next_including_whitespace_and_comments().cloned() else {
+            break;
+        };
+        let is_curly = matches!(token, cssparser::Token::CurlyBracketBlock);
+        if !matches!(
+            token,
+            cssparser::Token::Function(_)
+                | cssparser::Token::ParenthesisBlock
+                | cssparser::Token::SquareBracketBlock
+                | cssparser::Token::CurlyBracketBlock
+        ) {
+            continue;
+        }
+
+        let mut nested_end = None;
+        let nested: Result<(), ParseError<'i, ()>> = input.parse_nested_block(|input| {
+            collect_eof_open_curly_block_starts(input, open_blocks);
+            nested_end = Some(input.position());
+            Ok(())
+        });
+        if nested.is_ok() && is_curly && nested_end == Some(input.position()) {
+            open_blocks.push(token_start.byte_index());
+        }
+    }
+}
+
 struct DeclarationListParser {
     options: DeclarationParseOptions,
 }
@@ -176,6 +282,37 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].name, "width");
         assert_eq!(entries[0].value, "var(--prop");
+    }
+
+    #[test]
+    fn stylesheet_eof_open_var_recovery_removes_only_stylos_inserted_parenthesis() {
+        let source = r#"
+            .ignored::before { content: "}"; }
+            /* ignored { */
+            @media all { .target { color: red; width: var(--prop
+        "#;
+        assert_eq!(
+            super::recover_stylesheet_eof_open_var_declaration_text(
+                source,
+                "color: red; width: var(--prop);",
+            )
+            .as_deref(),
+            Some("color: red; width: var(--prop;")
+        );
+        assert_eq!(
+            super::recover_stylesheet_eof_open_var_declaration_text(
+                ".target { width: var(--prop)",
+                "width: var(--prop);",
+            ),
+            None
+        );
+        assert_eq!(
+            super::recover_stylesheet_eof_open_var_declaration_text(
+                ".target { width: var(--prop",
+                "width: var(--other);",
+            ),
+            None
+        );
     }
 
     #[test]
