@@ -6913,6 +6913,58 @@ fn opening_auto_popovers_preserves_flat_tree_ancestors() {
 }
 
 #[test]
+fn input_button_popover_invokers_run_across_form_ownership() {
+    let mut vm = new_storage_test_vm("https://input-button-popover.test/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const html = document.appendChild(document.createElement("html"));
+              const body = html.appendChild(document.createElement("body"));
+              const form = document.createElement("form");
+              form.id = "owner";
+              const popover = document.createElement("div");
+              popover.id = "target";
+              popover.popover = "auto";
+              const makeInvoker = () => {
+                const input = document.createElement("input");
+                input.type = "button";
+                input.setAttribute("popovertarget", "target");
+                return input;
+              };
+              const ownedByAncestor = makeInvoker();
+              const ownedByAttribute = makeInvoker();
+              ownedByAttribute.setAttribute("form", "owner");
+              const outsideForm = makeInvoker();
+              const canceled = makeInvoker();
+              const text = makeInvoker();
+              text.type = "text";
+              canceled.addEventListener("click", event => event.preventDefault());
+              form.append(ownedByAncestor);
+              body.append(form, ownedByAttribute, outsideForm, canceled, text, popover);
+              const invoke = input => {
+                input.click();
+                const opened = popover.matches(":popover-open");
+                popover.hidePopover();
+                return opened;
+              };
+              return [
+                invoke(ownedByAncestor),
+                invoke(ownedByAttribute),
+                invoke(outsideForm),
+                invoke(canceled),
+                invoke(text)
+              ].join("|");
+            })()
+            "#,
+        )
+        .expect("input button popover invoker probe should evaluate");
+
+    assert_eq!(result, "true|true|true|false|false");
+}
+
+#[test]
 fn stale_popover_element_matches_false_after_document_open_replacement() {
     let mut vm = new_storage_test_vm("https://popover-document-open.test/");
 

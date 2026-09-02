@@ -672,6 +672,14 @@ fn is_checkbox_input(runtime: &JsContextHost, handle: DomHandle) -> bool {
         })
 }
 
+fn is_button_input(runtime: &JsContextHost, handle: DomHandle) -> bool {
+    runtime
+        .dom_host()
+        .node(handle)
+        .and_then(Node::as_element)
+        .is_some_and(|element| element.is_html_input() && element.input_type() == InputType::Button)
+}
+
 fn radio_group_members(runtime: &JsContextHost, handle: DomHandle) -> Vec<DomHandle> {
     let Some(element) = runtime.dom_host().node(handle).and_then(Node::as_element) else {
         return Vec::new();
@@ -1045,6 +1053,7 @@ fn element_has_click_activation_behavior(runtime: &JsContextHost, handle: DomHan
         || is_html_option_element(runtime, handle)
         || is_valid_submit_button(runtime, handle)
         || is_valid_reset_button(runtime, handle)
+        || is_button_input(runtime, handle)
         || runtime.dom_host().is_html_element_named(handle, "button")
         || runtime.dom_host().is_html_element_named(handle, "summary")
 }
