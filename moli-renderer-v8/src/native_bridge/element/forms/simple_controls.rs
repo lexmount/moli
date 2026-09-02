@@ -1249,7 +1249,9 @@ pub(in crate::native_bridge) fn button_command_for_element_getter_function<'s>(
     set_wrapped_button_element_or_null(scope, &mut rv, runtime_ptr, source, target);
 }
 
-fn normalized_button_command(value: Option<String>) -> String {
+pub(in crate::native_bridge::element) fn normalized_button_command(
+    value: Option<String>,
+) -> String {
     let Some(value) = value else {
         return String::new();
     };
