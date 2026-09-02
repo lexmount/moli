@@ -6798,7 +6798,7 @@ fn showing_popover_throws_when_force_close_removes_opening_popover() {
     assert_eq!(result, "InvalidStateError:true|false|false");
 }
 #[test]
-fn show_and_hide_popover_throw_on_redundant_state_changes() {
+fn show_and_hide_popover_are_no_ops_for_redundant_state_changes() {
     let mut vm = new_storage_test_vm("https://popover-redundant-state.test/");
 
     let result = vm
@@ -6828,10 +6828,7 @@ fn show_and_hide_popover_throw_on_redundant_state_changes() {
         )
         .expect("redundant popover state probe should evaluate");
 
-    assert_eq!(
-        result,
-        "InvalidStateError:true|InvalidStateError:true|false"
-    );
+    assert_eq!(result, "ok|ok|false");
 }
 
 #[test]
