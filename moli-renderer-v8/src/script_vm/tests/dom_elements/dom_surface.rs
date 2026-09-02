@@ -4475,7 +4475,11 @@ fn selection_to_string_uses_rendered_native_range_projection() {
   const contentHidden = document.createElement("div");
   contentHidden.setAttribute("style", "content-visibility: hidden");
   contentHidden.textContent = "hidden content";
-  root.append(basic, nested, container, contentHidden);
+  const inlineWhitespace = document.createElement("div");
+  inlineWhitespace.append("alpha\n  ", Object.assign(document.createElement("span"), {
+    textContent: "\n beta\n"
+  }), "\n gamma");
+  root.append(basic, nested, container, contentHidden, inlineWhitespace);
   const scriptStyleRange = document.createRange();
   scriptStyleRange.selectNode(p);
   const scriptStyle = selectedStringFor(scriptStyleRange).replace(/\r\n/g, "\n");
@@ -4492,7 +4496,8 @@ fn selection_to_string_uses_rendered_native_range_projection() {
     selectContents(basic),
     selectContents(nested),
     selectContents(container),
-    selectContents(contentHidden)
+    selectContents(contentHidden),
+    selectContents(inlineWhitespace)
   ].join("|");
 })()
 "##,
@@ -4501,7 +4506,7 @@ fn selection_to_string_uses_rendered_native_range_projection() {
 
     assert_eq!(
         result,
-        "\nstyle text line\nfunction x() { return 1; }\n\nPASS|Hell|ac|start  end|selectabletext|"
+        "\nstyle text line\nfunction x() { return 1; }\n\nPASS|Hell|ac|start  end|selectabletext||alpha beta gamma"
     );
 }
 
