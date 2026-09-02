@@ -4806,6 +4806,72 @@ target:true:true:true:targetDiv,#document-fragment,middleF,#document-fragment|mi
 target:true:true:true:targetForm,#document-fragment,middleI,#document-fragment|middle:true:true"
     );
 }
+#[test]
+fn composed_reference_events_cross_shadow_roots_and_retarget_source() {
+    let mut vm = new_storage_test_vm("https://composed-reference-event-source.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  if (!document.documentElement) {
+    document.appendChild(document.createElement('html'));
+  }
+  if (!document.body) {
+    document.documentElement.appendChild(document.createElement('body'));
+  }
+
+  const outerHost = document.createElement('div');
+  const outerRoot = outerHost.attachShadow({ mode: 'open' });
+  const source = document.createElement('button');
+  const innerHost = document.createElement('section');
+  const innerRoot = innerHost.attachShadow({ mode: 'open' });
+  const target = document.createElement('span');
+  innerRoot.appendChild(target);
+  outerRoot.append(source, innerHost);
+  document.body.appendChild(outerHost);
+
+  const targets = [outerHost, innerHost, target];
+  const dispatch = (event) => {
+    const captureSources = new Map();
+    const bubbleSources = new Map();
+    for (const currentTarget of targets) {
+      currentTarget.addEventListener(event.type, currentEvent => {
+        bubbleSources.set(currentTarget, currentEvent.source);
+      }, { once: true });
+      currentTarget.addEventListener(event.type, currentEvent => {
+        captureSources.set(currentTarget, currentEvent.source);
+      }, { capture: true, once: true });
+    }
+    target.dispatchEvent(event);
+    return targets.every(currentTarget => {
+      const expectedSource = currentTarget === outerHost ? outerHost : source;
+      return captureSources.get(currentTarget) === expectedSource &&
+        bubbleSources.get(currentTarget) === expectedSource;
+    }) && event.source === outerHost;
+  };
+
+  const command = new CommandEvent('command', { composed: true, source });
+  const toggle = new ToggleEvent('toggle', { composed: true, source });
+  const toggleSourceDescriptor = Object.getOwnPropertyDescriptor(
+    ToggleEvent.prototype,
+    'source'
+  );
+  return [
+    dispatch(command),
+    dispatch(toggle),
+    !Object.hasOwn(toggle, 'source'),
+    typeof toggleSourceDescriptor.get,
+    toggleSourceDescriptor.set === undefined,
+    toggleSourceDescriptor.enumerable
+  ].join('|');
+})()
+"#,
+        )
+        .expect("composed reference events should cross shadow roots");
+
+    assert_eq!(result, "true|true|true|function|true|true");
+}
 #[tokio::test]
 async fn toggle_and_interest_events_follow_reference_target_source_path() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
