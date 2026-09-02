@@ -1,5 +1,6 @@
 use super::ordering::point_order_handles;
 use super::*;
+use crate::native_bridge::document::XHTML_NS;
 use crate::native_bridge::element::{
     StyleMode, observable_sources_with_fragments, style_property_value,
 };
@@ -365,7 +366,9 @@ fn selection_text_element_is_inert(
         .dom_host()
         .node(handle)
         .and_then(|node| node.as_element())
-        .is_some_and(|element| element.attribute("inert").is_some())
+        .is_some_and(|element| {
+            element.namespace() == XHTML_NS && element.attribute("inert").is_some()
+        })
 }
 
 fn selection_text_has_inert_ancestor(

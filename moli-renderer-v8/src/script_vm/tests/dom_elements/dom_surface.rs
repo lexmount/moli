@@ -4519,6 +4519,69 @@ fn selection_to_string_uses_rendered_native_range_projection() {
 }
 
 #[test]
+fn selection_only_applies_inert_attribute_to_html_elements() {
+    let mut vm = new_storage_test_vm("https://selection-html-inert-namespace.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const html = document.documentElement || document.appendChild(document.createElement('html'));
+  const body = document.body || html.appendChild(document.createElement('body'));
+  const root = document.createElement('div');
+  body.appendChild(root);
+  const selection = getSelection();
+  const mathml = 'http://www.w3.org/1998/Math/MathML';
+
+  const selectedText = element => {
+    selection.removeAllRanges();
+    selection.selectAllChildren(element);
+    return selection.toString();
+  };
+  const mathWithText = text => {
+    const math = document.createElementNS(mathml, 'math');
+    const mi = document.createElementNS(mathml, 'mi');
+    mi.textContent = text;
+    math.appendChild(mi);
+    return { math, mi };
+  };
+
+  const own = mathWithText('math own');
+  own.math.setAttribute('inert', '');
+  own.mi.setAttribute('inert', '');
+  root.appendChild(own.math);
+
+  const nested = mathWithText('math ancestors');
+  nested.math.setAttribute('inert', '');
+  nested.mi.setAttribute('inert', '');
+  root.appendChild(nested.math);
+
+  const htmlChild = document.createElement('span');
+  htmlChild.textContent = 'html child';
+  htmlChild.inert = true;
+  root.appendChild(htmlChild);
+
+  const htmlAncestor = document.createElement('div');
+  htmlAncestor.inert = true;
+  const inherited = mathWithText('html ancestor');
+  htmlAncestor.appendChild(inherited.math);
+  root.appendChild(htmlAncestor);
+
+  return [
+    selectedText(own.math),
+    selectedText(nested.math),
+    selectedText(htmlChild),
+    selectedText(htmlAncestor)
+  ].join('|');
+})()
+"#,
+        )
+        .expect("Selection inert namespace probe should evaluate");
+
+    assert_eq!(result, "math own|math ancestors||");
+}
+
+#[test]
 fn month_and_week_inputs_do_not_support_variable_length_selection() {
     let mut vm = new_storage_test_vm("https://forms-selection-temporal.test/");
 
