@@ -3,7 +3,7 @@ use std::fmt;
 use moli_module_script_tree as module_tree;
 
 use super::{
-    ModuleCompiledRecordId, ModuleFetchMetadata, ModuleIdentityHash, ModuleLoadError,
+    ModuleCompiledRecordId, ModuleFetchMetadata, ModuleIdentityHash, ModuleKind, ModuleLoadError,
     ModuleMapEntryState, ModuleMapFetchClient, ModuleMapKey, ModuleMapTerminalClients,
     ModuleResolvedDependency, ModuleSource,
 };
@@ -149,6 +149,12 @@ impl ModuleMapEntry {
         identity: ModuleIdentityHash,
         effective_fetch_metadata: ModuleFetchMetadata,
     ) {
+        // V8 owns the compiled JavaScript module from this point onward. Keep
+        // synthetic-module sources because their evaluation callbacks still
+        // consume them after compilation.
+        if effective_key.kind() == ModuleKind::JavaScript {
+            self.source = None;
+        }
         self.key = request_key;
         self.effective_key = effective_key;
         self.state = ModuleMapEntryState::Compiled;
@@ -247,5 +253,49 @@ impl ModuleMapEntry {
             clients.push(client);
         }
         clients
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::document_module_graph::ModuleAttributesKey;
+    use url::Url;
+
+    fn compiled_entry_for(key: ModuleMapKey) -> ModuleMapEntry {
+        let mut entry = ModuleMapEntry::new(key.clone(), ModuleMapEntryState::Fetching);
+        entry.set_fetched_source(
+            key.clone(),
+            key.clone(),
+            ModuleSource::text("export default 1;".to_owned()),
+            ModuleFetchMetadata::default(),
+        );
+        entry.set_compiled_record(
+            key.clone(),
+            key,
+            ModuleCompiledRecordId::from_index(0),
+            ModuleIdentityHash::from_raw(1),
+            ModuleFetchMetadata::default(),
+        );
+        entry
+    }
+
+    #[test]
+    fn compiled_javascript_entry_releases_source() {
+        let key = ModuleMapKey::java_script(
+            Url::parse("https://example.test/module.js").expect("module URL"),
+        );
+
+        assert!(compiled_entry_for(key).source().is_none());
+    }
+
+    #[test]
+    fn compiled_synthetic_entry_retains_source_for_evaluation() {
+        let key = ModuleMapKey::json_with_attributes(
+            Url::parse("https://example.test/data.json").expect("module URL"),
+            ModuleAttributesKey::from_pairs(vec![("type".to_owned(), "json".to_owned())]),
+        );
+
+        assert!(compiled_entry_for(key).source().is_some());
     }
 }
