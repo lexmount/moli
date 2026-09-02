@@ -10,6 +10,7 @@ use super::{
         before_unload_event_return_value_getter_function,
         before_unload_event_return_value_setter_function, close_event_code_getter_function,
         close_event_reason_getter_function, close_event_was_clean_getter_function,
+        command_event_command_getter_function, command_event_source_getter_function,
         event_bubbles_getter_function, event_cancel_bubble_getter_function,
         event_cancel_bubble_setter_function, event_cancelable_getter_function,
         event_composed_getter_function, event_composed_path_callback,
@@ -175,6 +176,16 @@ struct SubmitEventTemplateAccessorsDeclaration {
 struct FormDataEventTemplateAccessorsDeclaration {
     #[webapi(accessor_property = "formData", getter = form_data_event_form_data_getter_function)]
     form_data: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::CommandEvent, enumerable)]
+struct CommandEventTemplateAccessorsDeclaration {
+    #[webapi(accessor_property, getter = command_event_source_getter_function)]
+    source: (),
+
+    #[webapi(accessor_property, getter = command_event_command_getter_function)]
+    command: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -412,6 +423,10 @@ pub(super) fn install_event_template_bindings<'s>(
         "FormDataEvent" => {
             let proto = template.prototype_template(scope);
             FormDataEventTemplateAccessorsDeclaration::initialize_prototype_template(scope, proto);
+        }
+        "CommandEvent" => {
+            let proto = template.prototype_template(scope);
+            CommandEventTemplateAccessorsDeclaration::initialize_prototype_template(scope, proto);
         }
         "EventTarget" => {
             let prototype = template.prototype_template(scope);
