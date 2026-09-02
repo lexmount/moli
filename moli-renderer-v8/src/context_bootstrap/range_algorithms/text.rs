@@ -227,7 +227,11 @@ fn append_selection_rendered_text(
                 if selection_text_element_is_hidden(runtime, handle) {
                     return Some(());
                 }
-                if selection_text_element_is_inert(runtime, handle) {
+                if selection_text_element_is_inert(runtime, handle)
+                    && !state.active_modal_dialog.is_some_and(|dialog| {
+                        selection_text_descendant_or_self(runtime, dialog, handle)
+                    })
+                {
                     return Some(());
                 }
                 if element.is_html_element("head")
@@ -367,13 +371,17 @@ fn selection_text_element_is_inert(
 fn selection_text_has_inert_ancestor(
     runtime: &crate::native_bridge::JsContextHost,
     handle: DomHandle,
+    modal_escape_root: Option<DomHandle>,
 ) -> bool {
     let mut current = Some(handle);
     while let Some(handle) = current {
         if selection_text_element_is_inert(runtime, handle) {
             return true;
         }
-        current = runtime.dom_host().parent_node(handle);
+        if Some(handle) == modal_escape_root {
+            return false;
+        }
+        current = selection_text_flat_tree_parent(runtime, handle);
     }
     false
 }
@@ -407,10 +415,12 @@ fn selection_text_is_inert(
     handle: DomHandle,
     state: SelectionTextState,
 ) -> bool {
-    selection_text_has_inert_ancestor(runtime, handle)
-        || state
-            .active_modal_dialog
-            .is_some_and(|dialog| !selection_text_descendant_or_self(runtime, handle, dialog))
+    let modal_escape_root = match state.active_modal_dialog {
+        Some(dialog) if selection_text_descendant_or_self(runtime, handle, dialog) => Some(dialog),
+        Some(_) => return true,
+        None => None,
+    };
+    selection_text_has_inert_ancestor(runtime, handle, modal_escape_root)
 }
 
 fn selection_text_descendant_or_self(
@@ -423,9 +433,23 @@ fn selection_text_descendant_or_self(
         if handle == ancestor {
             return true;
         }
-        current = runtime.dom_host().parent_node(handle);
+        current = selection_text_flat_tree_parent(runtime, handle);
     }
     false
+}
+
+fn selection_text_flat_tree_parent(
+    runtime: &crate::native_bridge::JsContextHost,
+    handle: DomHandle,
+) -> Option<DomHandle> {
+    if let Some(slot) = runtime.dom_host().assigned_slot_for_node(handle) {
+        return Some(slot);
+    }
+    let parent = runtime.dom_host().parent_node(handle)?;
+    if runtime.dom_host().is_shadow_root(parent) {
+        return runtime.dom_host().shadow_root_host(parent);
+    }
+    Some(parent)
 }
 
 fn selection_text_user_select_value(
