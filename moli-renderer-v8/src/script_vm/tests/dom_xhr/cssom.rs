@@ -13107,6 +13107,66 @@ fn css_style_declaration_parses_content_and_bookmark_properties() {
 }
 
 #[test]
+fn css_style_declaration_accepts_counters_in_content_alt_text() {
+    let mut vm = new_storage_test_vm("https://css-style-content-alt-counter.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const live = document.createElement('div').style;
+  const values = [
+    `"" / counter(cnt)`,
+    `"regular text" / "alt text 1" counter(cnt) "alt text 2"`,
+    `"regular text" / counter(cnt) "alt text"`,
+    `"regular text" / counters(chapter, ".", DECIMAL)`
+  ];
+  const serialized = values.map(value => {
+    live.content = value;
+    const read = live.getPropertyValue('content');
+    live.content = read;
+    return live.getPropertyValue('content');
+  });
+  live.content = `"regular text" / counter()`;
+  const afterInvalid = live.getPropertyValue('content');
+
+  live.cssText = `color: red; content: "" / counter(css-text)`;
+  const cssTextContent = live.getPropertyValue('content');
+  const cssTextColor = live.getPropertyValue('color');
+
+  const sheet = new CSSStyleSheet();
+  sheet.insertRule('div {}');
+  const rule = sheet.cssRules[0].style;
+  rule.setProperty('content', `"rule" / counter(rule-counter) "alt"`, 'important');
+  const ruleValue = rule.getPropertyValue('content');
+  const rulePriority = rule.getPropertyPriority('content');
+  rule.setProperty('content', `"rule" / url(alt.svg) counter(rule-counter)`);
+  const ruleAfterInvalid = rule.getPropertyValue('content');
+
+  return [
+    CSS.supports('content', `"" / counter(cnt)`),
+    CSS.supports('content', `"" / counters(cnt, ".")`),
+    CSS.supports('content', `"" / counter()`),
+    serialized.join('~'),
+    afterInvalid,
+    cssTextContent,
+    cssTextColor,
+    ruleValue,
+    rulePriority,
+    ruleAfterInvalid
+  ].join('|');
+})()
+"#,
+        )
+        .expect("content alt counter CSSOM should evaluate");
+
+    assert_eq!(
+        result,
+        "true|true|false|\"\" / counter(cnt)~\"regular text\" / \"alt text 1\" counter(cnt) \"alt text 2\"~\"regular text\" / counter(cnt) \"alt text\"~\"regular text\" / counters(chapter, \".\")|\"regular text\" / counters(chapter, \".\")|\"\" / counter(css-text)|red|\"rule\" / counter(rule-counter) \"alt\"|important|\"rule\" / counter(rule-counter) \"alt\""
+    );
+}
+
+#[test]
 fn css_style_declaration_supports_will_change() {
     let mut vm = new_storage_test_vm("https://css-style-will-change.test/");
 
