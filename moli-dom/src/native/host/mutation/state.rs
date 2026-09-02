@@ -487,6 +487,26 @@ impl DomHost {
         did_change
     }
 
+    pub fn set_dialog_previously_focused_element(
+        &mut self,
+        handle: DomHandle,
+        focused: Option<DomHandle>,
+    ) -> bool {
+        let did_change = {
+            let Some(element) = self
+                .node_mut(handle)
+                .and_then(|node| node.data_mut().as_element_mut())
+            else {
+                return false;
+            };
+            element.set_dialog_previously_focused_element(focused)
+        };
+        if did_change {
+            self.record_mutation(MutationScope::LocalState);
+        }
+        did_change
+    }
+
     pub fn set_dialog_return_value(&mut self, handle: DomHandle, value: &str) -> bool {
         let did_change = {
             let Some(element) = self
