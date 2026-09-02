@@ -802,6 +802,7 @@ pub(super) struct DocumentRuntime {
     custom_element_reaction_depth: usize,
     structural_mutation_depth: usize,
     dom_content_loaded_dispatched: bool,
+    autofocus_processed: bool,
     document_incarnation: DocumentRuntimeIncarnationIdentity,
     document_input_stream_opened: bool,
     next_document_write_external_script_load_id: u64,

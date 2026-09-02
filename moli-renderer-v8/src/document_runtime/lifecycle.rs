@@ -256,6 +256,7 @@ impl DocumentRuntime {
         self.script_lifecycle.clear_for_document_replacement();
         self.post_parse_schedule_invalidated = true;
         self.dom_content_loaded_dispatched = false;
+        self.autofocus_processed = false;
         self.pending_inspector_issues.clear();
         self.quirks_mode_issue_reported = false;
         self.document_write_script_preload_scanner = None;
