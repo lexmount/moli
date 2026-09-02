@@ -48,6 +48,12 @@ impl DocumentRuntime {
         self.main_document_script_preloads.clear();
     }
 
+    pub(crate) fn main_document_script_preload_memory_diagnostics(
+        &self,
+    ) -> crate::runtime::RendererScriptPreloadMemoryDiagnostics {
+        self.main_document_script_preloads.memory_diagnostics()
+    }
+
     pub(super) fn bind_main_document_runtime_producer(
         &mut self,
         owner: crate::frame_owner_model::FrameDocumentTaskOwner,

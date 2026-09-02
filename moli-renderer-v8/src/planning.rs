@@ -50,6 +50,17 @@ struct SharedScriptSourceLoadState {
     completion_wakes: Vec<Box<dyn FnOnce() + Send + 'static>>,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct SharedScriptSourceLoadMemoryDiagnostics {
+    pub(crate) completed: bool,
+    pub(crate) successful: bool,
+    pub(crate) decoded_source_bytes: usize,
+    pub(crate) source_bytes: usize,
+    pub(crate) response_body_bytes: usize,
+    pub(crate) load_strong_references: usize,
+    pub(crate) response_strong_references: usize,
+}
+
 impl SharedScriptSourceLoad {
     fn pending() -> Self {
         Self {
@@ -105,6 +116,30 @@ impl SharedScriptSourceLoad {
 
     pub(crate) fn try_outcome(&self) -> Option<PreparedScriptSourceLoadOutcome> {
         self.inner.state.lock().result.clone()
+    }
+
+    pub(crate) fn memory_diagnostics(&self) -> SharedScriptSourceLoadMemoryDiagnostics {
+        let state = self.inner.state.lock();
+        let mut diagnostics = SharedScriptSourceLoadMemoryDiagnostics {
+            load_strong_references: Arc::strong_count(&self.inner),
+            ..Default::default()
+        };
+        let Some(result) = state.result.as_ref() else {
+            return diagnostics;
+        };
+        diagnostics.completed = true;
+        if let Ok(source) = &result.source_result {
+            diagnostics.successful = true;
+            diagnostics.decoded_source_bytes = source.len();
+        }
+        diagnostics.source_bytes = result.source_bytes.as_ref().map_or(0, Vec::len);
+        if let Some(response) = result.network_result.as_ref() {
+            diagnostics.response_strong_references = Arc::strong_count(response);
+            if let Ok(response) = response.as_ref() {
+                diagnostics.response_body_bytes = response.body_bytes().len();
+            }
+        }
+        diagnostics
     }
 
     pub(crate) async fn wait_outcome(&self) -> PreparedScriptSourceLoadOutcome {

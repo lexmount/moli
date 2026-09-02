@@ -134,6 +134,36 @@ impl DocumentScriptPreloadStore {
         self.entries.lock().clear();
     }
 
+    pub(crate) fn memory_diagnostics(
+        &self,
+    ) -> crate::runtime::RendererScriptPreloadMemoryDiagnostics {
+        let entries = self.entries.lock();
+        let mut diagnostics = crate::runtime::RendererScriptPreloadMemoryDiagnostics {
+            entry_count: entries.len(),
+            ..Default::default()
+        };
+        for entry in entries.values() {
+            let load = entry.load.memory_diagnostics();
+            diagnostics.pending_count += usize::from(!load.completed);
+            diagnostics.completed_count += usize::from(load.completed);
+            diagnostics.successful_count += usize::from(load.successful);
+            diagnostics.decoded_source_bytes = diagnostics
+                .decoded_source_bytes
+                .saturating_add(load.decoded_source_bytes);
+            diagnostics.source_bytes = diagnostics.source_bytes.saturating_add(load.source_bytes);
+            diagnostics.response_body_bytes = diagnostics
+                .response_body_bytes
+                .saturating_add(load.response_body_bytes);
+            diagnostics.load_strong_references = diagnostics
+                .load_strong_references
+                .saturating_add(load.load_strong_references);
+            diagnostics.response_strong_references = diagnostics
+                .response_strong_references
+                .saturating_add(load.response_strong_references);
+        }
+        diagnostics
+    }
+
     #[cfg(test)]
     pub(super) fn is_empty(&self) -> bool {
         self.entries.lock().is_empty()
