@@ -25,7 +25,7 @@ impl CdpConnection {
         &self,
         owner: &CommandOwnerScope,
     ) -> Option<RendererAgentAttachmentId> {
-        self.runtime_session_owner_slot_for_route(owner.session_id(), owner.session_owner_route())
+        self.runtime_session_owner_slot_for_owner(owner)
             .ok()
             .and_then(|slot| slot.current_renderer_attachment())
             .map(RendererAgentAttachment::id)
@@ -53,12 +53,9 @@ impl CdpConnection {
         agent_token: RendererDevToolsAgentToken,
     ) -> Result<PreparedRendererAgentAttachment, String> {
         self.validate_navigation_target_owner_for_scope(owner, token)?;
-        self.runtime_session_owner_slot_mut_for_route(
-            owner.session_id(),
-            owner.session_owner_route(),
-        )?
-        .prepare_renderer_agent_candidate_token(token, agent_token)
-        .map_err(|error| error.to_string())
+        self.runtime_session_owner_slot_mut_for_owner(owner)?
+            .prepare_renderer_agent_candidate_token(token, agent_token)
+            .map_err(|error| error.to_string())
     }
 
     pub(crate) fn route_current_renderer_inspector_output_for_owner(
@@ -67,13 +64,12 @@ impl CdpConnection {
         batches: Vec<RendererRuntimeInspectorMessageBatch>,
     ) -> Vec<RendererRuntimeInspectorMessageBatch> {
         let session_id = owner.session_id();
-        let owner_route = owner.session_owner_route();
         let mut batches = self.filter_renderer_inspector_batches_for_target_owner(owner, batches);
         if batches.is_empty() {
             return Vec::new();
         }
         let current_attachment = self
-            .runtime_session_owner_slot_for_route(session_id, owner_route)
+            .runtime_session_owner_slot_for_owner(owner)
             .ok()
             .and_then(|slot| slot.current_renderer_attachment());
         if let Some(current_attachment) = current_attachment {
@@ -120,26 +116,23 @@ impl CdpConnection {
             })
             .collect::<Vec<_>>();
         match self
-            .runtime_session_owner_slot_mut_for_route(session_id, owner_route)
+            .runtime_session_owner_slot_mut_for_owner(owner)
             .and_then(|slot| {
                 slot.route_current_renderer_inspector_output(attachment_id, batches)
                     .map_err(|error| error.to_string())
             }) {
             Ok(batches) => {
-                let primary_session_id = self
-                    .runtime_session_owner_primary_session_id_for_route(session_id, owner_route);
+                let primary_session_id =
+                    self.runtime_session_owner_primary_session_id_for_owner(owner);
                 for (session, state) in state_updates {
                     let state_session_id = match &session {
                         DevToolsSessionKey::Primary => primary_session_id.as_deref(),
                         DevToolsSessionKey::Attached(session_id) => Some(session_id.as_str()),
                     };
-                    let state_owner_route =
-                        state_session_id.is_none().then_some(owner_route).flatten();
-                    let _ = self.merge_v8_inspector_session_state_for_route(
-                        state_session_id,
-                        state_owner_route,
-                        state,
-                    );
+                    let state_owner = state_session_id
+                        .map(CommandOwnerScope::for_session)
+                        .unwrap_or_else(|| owner.clone());
+                    let _ = self.merge_v8_inspector_session_state_for_owner(&state_owner, state);
                 }
                 batches
             }
@@ -162,17 +155,11 @@ impl CdpConnection {
     ) -> Result<CommittedRendererAgentAttachment, String> {
         self.validate_navigation_target_owner_for_scope(owner, candidate.navigation())?;
         let transaction = self
-            .runtime_session_owner_slot_mut_for_route(
-                owner.session_id(),
-                owner.session_owner_route(),
-            )?
+            .runtime_session_owner_slot_mut_for_owner(owner)?
             .commit_renderer_agent_candidate_transaction(candidate, renderer_page)
             .map_err(|error| error.to_string())?;
         let page_owner = self
-            .pending_target_page_residence_identity_for_route(
-                owner.session_id(),
-                owner.session_owner_route(),
-            )
+            .pending_target_page_residence_identity_for_owner(owner)
             .ok_or_else(|| "NavigationTargetOwnerMissing".to_owned())?;
         self.bind_renderer_page_output_owner(renderer_page, page_owner);
         Ok(transaction)
@@ -184,12 +171,9 @@ impl CdpConnection {
         transaction: CommittedRendererAgentAttachment,
     ) -> Result<(), String> {
         self.validate_navigation_target_owner_for_scope(owner, transaction.navigation())?;
-        self.runtime_session_owner_slot_mut_for_route(
-            owner.session_id(),
-            owner.session_owner_route(),
-        )?
-        .rollback_committed_renderer_agent_candidate(transaction)
-        .map_err(|error| error.to_string())
+        self.runtime_session_owner_slot_mut_for_owner(owner)?
+            .rollback_committed_renderer_agent_candidate(transaction)
+            .map_err(|error| error.to_string())
     }
 
     pub(crate) fn finish_renderer_document_navigation_for_owner(
@@ -204,10 +188,7 @@ impl CdpConnection {
             return None;
         }
         match self
-            .runtime_session_owner_slot_mut_for_route(
-                owner.session_id(),
-                owner.session_owner_route(),
-            )
+            .runtime_session_owner_slot_mut_for_owner(owner)
             .and_then(|slot| {
                 slot.finish_renderer_document_navigation(token)
                     .map_err(|error| error.to_string())
@@ -230,8 +211,7 @@ impl CdpConnection {
         owner: &CommandOwnerScope,
         batches: Vec<RendererRuntimeInspectorMessageBatch>,
     ) -> Vec<RendererRuntimeInspectorMessageBatch> {
-        let owner_identity =
-            self.target_owner_identity_for_route(owner.session_id(), owner.session_owner_route());
+        let owner_identity = self.target_owner_identity_for_owner(owner);
         batches
             .into_iter()
             .filter(|batch| match &batch.session {
@@ -251,7 +231,7 @@ impl CdpConnection {
         token: &DocumentNavigationToken,
     ) -> Result<(), String> {
         let (_, target_id) = self
-            .target_owner_identity_for_route(owner.session_id(), owner.session_owner_route())
+            .target_owner_identity_for_owner(owner)
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?;
         if target_id.as_deref() != Some(token.target_id.as_str()) {
             return Err("renderer channel navigation target owner mismatch".to_owned());

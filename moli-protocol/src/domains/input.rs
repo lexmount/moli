@@ -343,7 +343,7 @@ fn set_ignore_input_events_command_output_plan(
 }
 
 fn input_events_ignored_for_owner(conn: &CdpConnection, owner: &CommandOwnerScope) -> bool {
-    conn.page_event_session_ids_for_route(owner.session_id(), owner.session_owner_route())
+    conn.page_event_session_ids_for_owner(owner)
         .into_iter()
         .any(|event_session_id| {
             conn.target_page_session_state_for_session(event_session_id.as_deref())
@@ -572,8 +572,7 @@ fn start_pending_input_command(
 ) -> Result<Option<PendingInputCommandDispatch>, PendingInputCommandStartError> {
     let owner = CommandOwnerScope::capture(conn, cmd.session_id);
     if action.requires_document_access()
-        && let Err(message) = conn
-            .ensure_document_accessible_for_route(owner.session_id(), owner.session_owner_route())
+        && let Err(message) = conn.ensure_document_accessible_for_owner(&owner)
     {
         return Err(PendingInputCommandStartError {
             code: -32000,
@@ -1005,27 +1004,18 @@ fn start_page_input_command(
     start: impl FnOnce(&Page) -> anyhow::Result<PendingPageCommand>,
 ) -> Result<Option<PendingInputCommandDispatch>, PendingInputCommandStartError> {
     let page_owner = conn
-        .target_page_residence_identity_for_route(
-            command_owner.session_id(),
-            command_owner.session_owner_route(),
-        )
+        .target_page_residence_identity_for_owner(command_owner)
         .ok_or_else(PendingInputCommandStartError::no_document_loaded)?;
     let page_residence_token = if kind.uses_renderer_host_ack_cleanup() {
         Some(
-            conn.capture_target_page_residence_token_for_route(
-                command_owner.session_id(),
-                command_owner.session_owner_route(),
-            )
-            .ok_or_else(PendingInputCommandStartError::no_document_loaded)?,
+            conn.capture_target_page_residence_token_for_owner(command_owner)
+                .ok_or_else(PendingInputCommandStartError::no_document_loaded)?,
         )
     } else {
         None
     };
     let page = conn
-        .loaded_page_mut_for_protocol_access_for_route(
-            command_owner.session_id(),
-            command_owner.session_owner_route(),
-        )
+        .loaded_page_mut_for_protocol_access_for_owner(command_owner)
         .ok()
         .ok_or_else(PendingInputCommandStartError::no_document_loaded)?;
     let pending = start(page).map_err(PendingInputCommandStartError::renderer_error)?;
@@ -1519,10 +1509,7 @@ impl InputPreparedOutputs {
         owner: &CommandOwnerScope,
         activation: RendererPendingFileChooserActivation,
     ) -> Self {
-        let Some(page_owner) = conn.target_page_residence_identity_for_route(
-            owner.session_id(),
-            owner.session_owner_route(),
-        ) else {
+        let Some(page_owner) = conn.target_page_residence_identity_for_owner(owner) else {
             return Self::default();
         };
         let Some(activation) = file_chooser::PreparedFileChooserActivation::capture(
@@ -1630,7 +1617,7 @@ async fn handle_input_dispatch_outcome_async(
         let mut events = Vec::new();
         conn.handle_pending_download_activation_background_events_async(
             &mut events,
-            session_id,
+            &action_owner,
             download,
             command_context,
         )
@@ -1648,7 +1635,7 @@ async fn handle_input_dispatch_outcome_async(
         file_chooser::emit_prepared_activation_async(
             conn,
             out.events_mut(),
-            session_id,
+            &action_owner,
             file_chooser,
         )
         .await;
@@ -1663,7 +1650,7 @@ async fn handle_input_dispatch_outcome_async(
 pub(in crate::domains) async fn emit_download_activity_background_events_async(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
-    session_id: Option<&str>,
+    owner: &CommandOwnerScope,
     prepared_outputs: Option<&mut ProtocolOutputPayloads>,
     command_context: &mut CommandDispatchContext,
 ) {
@@ -1671,14 +1658,14 @@ pub(in crate::domains) async fn emit_download_activity_background_events_async(
         .and_then(ProtocolOutputPayloads::input_mut)
         .and_then(InputPreparedOutputSlot::take_download_activations)
     {
-        emit_download_activations(conn, out, session_id, activations, command_context).await;
+        emit_download_activations(conn, out, owner, activations, command_context).await;
     }
 }
 
 async fn emit_download_activations(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
-    session_id: Option<&str>,
+    owner: &CommandOwnerScope,
     activations: Vec<RendererPendingDownloadActivation>,
     command_context: &mut CommandDispatchContext,
 ) {
@@ -1686,7 +1673,7 @@ async fn emit_download_activations(
         if let Err(error) = conn
             .handle_pending_download_activation_background_events_async(
                 out,
-                session_id,
+                owner,
                 activation,
                 command_context,
             )
@@ -1703,14 +1690,14 @@ async fn emit_download_activations(
 pub(in crate::domains) async fn emit_file_chooser_activity_background_events_async(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
-    session_id: Option<&str>,
+    owner: &CommandOwnerScope,
     prepared_outputs: Option<&mut ProtocolOutputPayloads>,
 ) {
     if let Some(activations) = prepared_outputs
         .and_then(ProtocolOutputPayloads::input_mut)
         .and_then(InputPreparedOutputSlot::take_file_chooser_activations)
     {
-        file_chooser::emit_prepared_activations_async(conn, out, session_id, activations).await;
+        file_chooser::emit_prepared_activations_async(conn, out, owner, activations).await;
     }
 }
 
@@ -2200,7 +2187,7 @@ mod producer_tests {
         super::file_chooser::emit_prepared_activation_async(
             &mut conn,
             &mut out,
-            Some("SID-typed"),
+            &CommandOwnerScope::for_session("SID-typed"),
             prepared,
         )
         .await;
@@ -2297,7 +2284,7 @@ mod producer_tests {
         super::file_chooser::emit_prepared_activation_async(
             &mut conn,
             &mut out,
-            Some("SID-document-collision"),
+            &CommandOwnerScope::for_session("SID-document-collision"),
             prepared,
         )
         .await;
@@ -2378,7 +2365,7 @@ mod producer_tests {
         super::file_chooser::emit_prepared_activations_async(
             &mut conn,
             &mut out,
-            Some("SID-page-replacement"),
+            &CommandOwnerScope::for_session("SID-page-replacement"),
             vec![stale, current],
         )
         .await;
@@ -2421,7 +2408,7 @@ mod producer_tests {
         super::emit_download_activity_background_events_async(
             &mut conn,
             &mut out,
-            Some("SID-download"),
+            &CommandOwnerScope::for_session("SID-download"),
             Some(&mut prepared),
             &mut command_context,
         )
@@ -2476,7 +2463,7 @@ mod producer_tests {
         super::emit_file_chooser_activity_background_events_async(
             &mut conn,
             &mut out,
-            Some("SID-1"),
+            &CommandOwnerScope::for_session("SID-1"),
             Some(&mut prepared),
         )
         .await;
@@ -2524,7 +2511,7 @@ mod producer_tests {
         super::emit_file_chooser_activity_background_events_async(
             &mut conn,
             &mut out,
-            Some("SID-context"),
+            &CommandOwnerScope::for_session("SID-context"),
             Some(&mut prepared),
         )
         .await;

@@ -503,10 +503,7 @@ pub(crate) async fn complete_popup_target_navigation_owner_action_async(
 ) -> crate::conn::CdpTurnOutcome {
     let (owner_scope, browser_context_id, target_id, url, kind) = action.into_parts();
     let target_is_current = conn
-        .target_owner_identity_for_route(
-            owner_scope.session_id(),
-            owner_scope.session_owner_route(),
-        )
+        .target_owner_identity_for_owner(&owner_scope)
         .is_some_and(|(current_browser_context_id, current_target_id)| {
             current_browser_context_id == browser_context_id
                 && current_target_id.as_deref() == Some(target_id.as_str())
@@ -578,15 +575,13 @@ pub(crate) async fn complete_popup_target_activation_action_async(
     action: PopupTargetActivationAction,
 ) -> crate::conn::CdpTurnOutcome {
     let (owner_scope, browser_context_id, target_id) = action.into_parts();
-    let target_is_current =
-        conn.target_owner_identity_for_route(
-            owner_scope.session_id(),
-            owner_scope.session_owner_route(),
-        )
+    let target_is_current = conn
+        .target_owner_identity_for_owner(&owner_scope)
         .is_some_and(|(current_browser_context_id, current_target_id)| {
             current_browser_context_id == browser_context_id
                 && current_target_id.as_deref() == Some(target_id.as_str())
-        }) && popup_target_has_loaded_page(conn, &browser_context_id, &target_id);
+        })
+        && popup_target_has_loaded_page(conn, &browser_context_id, &target_id);
     if !target_is_current {
         tracing::debug!(
             browser_context_id,
@@ -651,12 +646,12 @@ async fn activate_popup_target_async(
     result
 }
 
-pub(crate) fn emit_target_info_changed_for_session_owner_background_event(
+pub(crate) fn emit_target_info_changed_for_owner_background_event(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
-    session_id: Option<&str>,
+    owner: &CommandOwnerScope,
 ) {
-    out.extend(conn.target_info_changed_event_plan_for_session_owner(session_id));
+    out.extend(conn.target_info_changed_event_plan_for_owner(owner));
 }
 
 fn emit_target_info_changed_for_target_background_event(

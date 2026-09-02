@@ -130,14 +130,12 @@ pub(in crate::domains) fn inspector_issue_prepared_outputs(
     owner: &CommandOwnerScope,
 ) -> ObservablePreparedOutputs {
     let mut prepared = ObservablePreparedOutputs::default();
-    let session_id = owner.session_id();
-    let owner_route = owner.session_owner_route();
     // Inspector issues are Document facts. Resolve them only against the
     // exact committed Document captured by the renderer; otherwise a late
     // issue from a retired generation could be stored and replayed as if it
     // belonged to its replacement.
     let Some(document_binding) = conn
-        .runtime_session_owner_slot_for_route(session_id, owner_route)
+        .runtime_session_owner_slot_for_owner(owner)
         .ok()
         .and_then(|slot| slot.committed_renderer_document_binding())
     else {
@@ -149,14 +147,12 @@ pub(in crate::domains) fn inspector_issue_prepared_outputs(
     let page_attachment_id = document_binding.page_attachment_id;
     let frame_id = document_binding.frame_id.clone();
     let loader_id = document_binding.loader_id.clone();
-    let Some(storage) =
-        conn.with_target_owner_state_for_route_mut(session_id, owner_route, |owner_state| {
-            owner_state
-                .audits_storage_state
-                .append_concrete_issue(issue);
-            owner_state.audits_storage_state.clone()
-        })
-    else {
+    let Some(storage) = conn.with_target_owner_state_for_owner_mut(owner, |owner_state| {
+        owner_state
+            .audits_storage_state
+            .append_concrete_issue(issue);
+        owner_state.audits_storage_state.clone()
+    }) else {
         return prepared;
     };
 
@@ -164,11 +160,13 @@ pub(in crate::domains) fn inspector_issue_prepared_outputs(
     // then fans out to every enabled frontend session. Each session keeps its
     // own cursor, matching Blink's per-session Audits agent state without
     // rediscovering the issue from a later Page snapshot.
-    for event_session_id in conn.page_event_session_ids_for_route(session_id, owner_route) {
+    for event_session_id in conn.page_event_session_ids_for_owner(owner) {
         let event_session_id = event_session_id.as_deref();
-        let event_owner_route = event_session_id.is_none().then_some(owner_route).flatten();
+        let event_owner = event_session_id
+            .map(CommandOwnerScope::for_session)
+            .unwrap_or_else(|| owner.clone());
         let Some(cursor) = conn
-            .target_page_session_state_for_route(event_session_id, event_owner_route)
+            .target_page_session_state_for_owner(&event_owner)
             .and_then(|state| state.audits.pending_cursor(&storage))
         else {
             continue;
@@ -232,50 +230,44 @@ fn push_runtime_observable_tail_prepared_outputs(
     deliver_log_to_enabled_sessions: bool,
     runtime_audience: RuntimeObservableAudience,
 ) {
-    let session_id = owner.session_id();
-    let owner_route = owner.session_owner_route();
     let owner_state = conn
-        .target_owner_state_for_route(session_id, owner_route)
+        .target_owner_state_for_owner(owner)
         .cloned()
         .unwrap_or_default();
-    let include_console_api_messages =
-        !renderer_agent_owns_page_console_api_events(conn, session_id, owner_route);
+    let include_console_api_messages = !renderer_agent_owns_page_console_api_events(conn, owner);
 
     push_console_log_source_prepared_outputs(
         prepared,
         conn,
         source,
-        session_id,
+        owner,
         &owner_state,
         include_console_api_messages,
         deliver_log_to_enabled_sessions,
-        owner_route,
     );
 
     let attachments = match runtime_audience {
         RuntimeObservableAudience::SourceSession => conn
-            .target_page_protocol_attachment_identity_for_route(session_id, owner_route)
+            .target_page_protocol_attachment_identity_for_owner(owner)
             .into_iter()
             .collect(),
         RuntimeObservableAudience::EnabledTargetAttachments => conn
-            .runtime_event_protocol_attachments_for_route(session_id, owner_route)
+            .runtime_event_protocol_attachments_for_owner(owner)
             .unwrap_or_default(),
     };
     for attachment in attachments {
         let event_session_id = attachment.session_id();
-        let event_owner_route = event_session_id.is_none().then_some(owner_route).flatten();
+        let event_owner = event_session_id
+            .map(CommandOwnerScope::for_session)
+            .unwrap_or_else(|| owner.clone());
         if !conn
-            .target_runtime_session_state_for_route(event_session_id, event_owner_route)
+            .target_runtime_session_state_for_owner(&event_owner)
             .is_some_and(|state| state.runtime_frontend_enabled)
         {
             continue;
         }
         let include_runtime_console_api_messages =
-            !renderer_runtime_agent_owns_page_console_api_events(
-                conn,
-                event_session_id,
-                event_owner_route,
-            );
+            !renderer_runtime_agent_owns_page_console_api_events(conn, &event_owner);
         if let Some(items) = source.source_items_prepared_for_state(
             &owner_state.runtime_observable_state,
             include_runtime_console_api_messages,
@@ -289,16 +281,13 @@ fn push_console_log_source_prepared_outputs(
     prepared: &mut ObservablePreparedOutputs,
     conn: &CdpConnection,
     source: &super::TargetRuntimeObservableSourceOutput,
-    session_id: Option<&str>,
+    owner: &CommandOwnerScope,
     owner_state: &crate::conn::TargetOwnerState,
     include_console_api_messages: bool,
     deliver_log_to_enabled_sessions: bool,
-    owner_route: Option<&crate::conn::CdpSessionRoute>,
 ) {
     let queue = TargetObservableOutputQueue::from_runtime_source_output_ref(Some(source));
-    if let Some(devtools_session_state) =
-        conn.target_devtools_session_state_for_route(session_id, owner_route)
-    {
+    if let Some(devtools_session_state) = conn.target_devtools_session_state_for_owner(owner) {
         prepared.extend(
             queue.console_log_backlog_ranges(
                 source.url(),
@@ -310,7 +299,7 @@ fn push_console_log_source_prepared_outputs(
                 include_console_api_messages,
                 owner_state,
                 &devtools_session_state.console_output_session_state,
-                session_id,
+                owner.session_id(),
             ),
         );
     }
@@ -329,30 +318,27 @@ fn push_console_log_source_prepared_outputs(
         source.url(),
         source.page_attachment_id(),
         owner_state,
-        session_id,
-        owner_route,
+        owner,
     );
 }
 
 fn renderer_agent_owns_page_console_api_events(
     conn: &CdpConnection,
-    session_id: Option<&str>,
-    owner_route: Option<&crate::conn::CdpSessionRoute>,
+    owner: &CommandOwnerScope,
 ) -> bool {
-    if session_id.is_some_and(|session_id| {
+    if owner.session_id().is_some_and(|session_id| {
         conn.shared_worker_target_for_session(Some(session_id))
             .is_some()
     }) {
         return false;
     }
-    let Ok(runtime_slot) = conn.runtime_session_owner_slot_for_route(session_id, owner_route)
-    else {
+    let Ok(runtime_slot) = conn.runtime_session_owner_slot_for_owner(owner) else {
         return false;
     };
     if !runtime_slot.has_loaded_page() {
         return false;
     }
-    conn.target_devtools_session_state_for_route(session_id, owner_route)
+    conn.target_devtools_session_state_for_owner(owner)
         .is_some_and(|state| {
             state
                 .console_output_session_state
@@ -362,23 +348,21 @@ fn renderer_agent_owns_page_console_api_events(
 
 fn renderer_runtime_agent_owns_page_console_api_events(
     conn: &CdpConnection,
-    session_id: Option<&str>,
-    owner_route: Option<&crate::conn::CdpSessionRoute>,
+    owner: &CommandOwnerScope,
 ) -> bool {
-    if session_id.is_some_and(|session_id| {
+    if owner.session_id().is_some_and(|session_id| {
         conn.shared_worker_target_for_session(Some(session_id))
             .is_some()
     }) {
         return false;
     }
-    let Ok(runtime_slot) = conn.runtime_session_owner_slot_for_route(session_id, owner_route)
-    else {
+    let Ok(runtime_slot) = conn.runtime_session_owner_slot_for_owner(owner) else {
         return false;
     };
     if !runtime_slot.has_loaded_page() {
         return false;
     }
-    conn.target_devtools_session_state_for_route(session_id, owner_route)
+    conn.target_devtools_session_state_for_owner(owner)
         .is_some_and(|state| {
             state
                 .console_output_session_state
@@ -402,13 +386,8 @@ fn runtime_console_source_tail_for_owner(
     message: RuntimeConsoleMessageSnapshot,
     owner: &CommandOwnerScope,
 ) -> Option<super::TargetRuntimeObservableSourceOutput> {
-    let url = conn.runtime_session_owner_target_url_for_route(
-        owner.session_id(),
-        owner.session_owner_route(),
-    )?;
-    let runtime_slot = conn
-        .runtime_session_owner_slot_mut_for_route(owner.session_id(), owner.session_owner_route())
-        .ok()?;
+    let url = conn.runtime_session_owner_target_url_for_owner(owner)?;
+    let runtime_slot = conn.runtime_session_owner_slot_mut_for_owner(owner).ok()?;
     runtime_slot.append_renderer_runtime_console_message(url, message)
 }
 
@@ -418,13 +397,8 @@ fn runtime_lifecycle_error_source_tail_for_owner(
     execution_context_id: Option<i64>,
     owner: &CommandOwnerScope,
 ) -> Option<super::TargetRuntimeObservableSourceOutput> {
-    let url = conn.runtime_session_owner_target_url_for_route(
-        owner.session_id(),
-        owner.session_owner_route(),
-    )?;
-    let runtime_slot = conn
-        .runtime_session_owner_slot_mut_for_route(owner.session_id(), owner.session_owner_route())
-        .ok()?;
+    let url = conn.runtime_session_owner_target_url_for_owner(owner)?;
+    let runtime_slot = conn.runtime_session_owner_slot_mut_for_owner(owner).ok()?;
     runtime_slot.append_renderer_runtime_lifecycle_error(url, text, execution_context_id)
 }
 
@@ -454,19 +428,14 @@ pub(in crate::domains) fn live_log_prepared_outputs_for_renderer_network_fact(
     conn: &CdpConnection,
     owner: &CommandOwnerScope,
 ) -> ObservablePreparedOutputs {
-    let session_id = owner.session_id();
-    let owner_route = owner.session_owner_route();
     let owner_state = conn
-        .target_owner_state_for_route(session_id, owner_route)
+        .target_owner_state_for_owner(owner)
         .cloned()
         .unwrap_or_default();
-    let Some(runtime_slot) = conn
-        .runtime_session_owner_slot_for_route(session_id, owner_route)
-        .ok()
-    else {
+    let Some(runtime_slot) = conn.runtime_session_owner_slot_for_owner(owner).ok() else {
         return ObservablePreparedOutputs::default();
     };
-    let Some(url) = conn.runtime_session_owner_target_url_for_route(session_id, owner_route) else {
+    let Some(url) = conn.runtime_session_owner_target_url_for_owner(owner) else {
         return ObservablePreparedOutputs::default();
     };
     let Some(queue) = TargetObservableOutputQueue::from_log_storage(runtime_slot) else {
@@ -483,8 +452,7 @@ pub(in crate::domains) fn live_log_prepared_outputs_for_renderer_network_fact(
         &url,
         page_attachment_id,
         &owner_state,
-        session_id,
-        owner_route,
+        owner,
     );
     prepared
 }
@@ -504,8 +472,10 @@ fn observable_console_log_prepared_outputs_for_session_owner(
     let url = conn.runtime_session_owner_target_url(session_id)?;
     let queue = super::output_queue::TargetObservableOutputQueue::from_runtime_slot(runtime_slot)?;
     let page_attachment_id = runtime_slot.page_attachment_id()?;
-    let include_console_api_messages =
-        !renderer_agent_owns_page_console_api_events(conn, session_id, None);
+    let include_console_api_messages = !renderer_agent_owns_page_console_api_events(
+        conn,
+        &CommandOwnerScope::capture(conn, session_id),
+    );
     let mut prepared = ObservablePreparedOutputs::default();
 
     if console_allowed
@@ -529,6 +499,7 @@ fn observable_console_log_prepared_outputs_for_session_owner(
     }
 
     if log_allowed {
+        let owner = CommandOwnerScope::capture(conn, session_id);
         push_log_prepared_outputs_for_enabled_sessions(
             &mut prepared,
             conn,
@@ -536,8 +507,7 @@ fn observable_console_log_prepared_outputs_for_session_owner(
             &url,
             page_attachment_id,
             &owner_state,
-            session_id,
-            None,
+            &owner,
         );
     }
 
@@ -551,18 +521,19 @@ fn push_log_prepared_outputs_for_enabled_sessions(
     url: &str,
     page_attachment_id: crate::conn::TargetPageAttachmentId,
     owner_state: &crate::conn::TargetOwnerState,
-    session_id: Option<&str>,
-    owner_route: Option<&crate::conn::CdpSessionRoute>,
+    owner: &CommandOwnerScope,
 ) {
     // A concrete Page error is stored once but observed by every Log agent
     // attached to that target. The publication route names one canonical
     // session only; it must not accidentally turn a target-owned fact into a
     // single-session event.
-    for event_session_id in conn.page_event_session_ids_for_route(session_id, owner_route) {
+    for event_session_id in conn.page_event_session_ids_for_owner(owner) {
         let event_session_id = event_session_id.as_deref();
-        let event_owner_route = event_session_id.is_none().then_some(owner_route).flatten();
+        let event_owner = event_session_id
+            .map(CommandOwnerScope::for_session)
+            .unwrap_or_else(|| owner.clone());
         let Some(devtools_session_state) =
-            conn.target_devtools_session_state_for_route(event_session_id, event_owner_route)
+            conn.target_devtools_session_state_for_owner(&event_owner)
         else {
             continue;
         };

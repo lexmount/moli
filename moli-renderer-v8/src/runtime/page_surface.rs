@@ -2751,8 +2751,21 @@ impl RendererRuntimeInspectorSessionResponseSettlement {
 #[derive(Debug)]
 pub struct CompletedWorkerRuntimeInspectorCommandDispatch {
     messages: Vec<RendererRuntimeInspectorMessage>,
-    predecessor: RendererOutputFence,
-    response_succeeded: bool,
+    pending_session_response: PendingWorkerRuntimeInspectorSessionResponse,
+}
+
+#[derive(Debug)]
+pub struct PendingWorkerRuntimeInspectorSessionResponse {
+    settlement: oneshot::Receiver<RendererRuntimeInspectorSessionResponseSettlement>,
+}
+
+impl PendingWorkerRuntimeInspectorSessionResponse {
+    pub async fn wait(self) -> Result<(RendererOutputFence, bool), String> {
+        self.settlement
+            .await
+            .map(RendererRuntimeInspectorSessionResponseSettlement::into_parts)
+            .map_err(|_| "WorkerRuntimeInspectorResponseCanceled".to_owned())
+    }
 }
 
 impl CompletedWorkerRuntimeInspectorCommandDispatch {
@@ -2760,28 +2773,33 @@ impl CompletedWorkerRuntimeInspectorCommandDispatch {
         self,
     ) -> (
         Vec<RendererRuntimeInspectorMessage>,
-        RendererOutputFence,
-        bool,
+        PendingWorkerRuntimeInspectorSessionResponse,
     ) {
-        (self.messages, self.predecessor, self.response_succeeded)
+        (self.messages, self.pending_session_response)
     }
 
-    pub(crate) async fn finish(
+    pub(crate) fn finish(
         dispatch: Result<Vec<RendererRuntimeInspectorMessage>, String>,
         settlement: oneshot::Receiver<RendererRuntimeInspectorSessionResponseSettlement>,
-    ) -> Result<Self, String> {
-        match settlement.await {
-            Ok(settlement) => {
-                let (predecessor, response_succeeded) = settlement.into_parts();
-                Ok(Self {
-                    messages: dispatch.unwrap_or_default(),
-                    predecessor,
-                    response_succeeded,
-                })
+        error_response: RendererRuntimeInspectorResponseSender,
+    ) -> Self {
+        let messages = match dispatch {
+            Ok(messages) => messages,
+            Err(message) => {
+                let call_id = error_response.call_id();
+                let _ = error_response.send(json!({
+                    "id": call_id,
+                    "error": {
+                        "code": -32000,
+                        "message": message,
+                    }
+                }));
+                Vec::new()
             }
-            Err(_) => Err(dispatch
-                .err()
-                .unwrap_or_else(|| "WorkerRuntimeInspectorResponseCanceled".to_owned())),
+        };
+        Self {
+            messages,
+            pending_session_response: PendingWorkerRuntimeInspectorSessionResponse { settlement },
         }
     }
 }

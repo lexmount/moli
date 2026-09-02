@@ -260,10 +260,7 @@ fn start_devtools_continue_intercepted_request_command(
         let headers = command.headers.clone().or(chain_headers);
         pending.request_stage_chain = None;
         let configured_response_stage = conn
-            .target_fetch_subresource_interception_snapshot_for_route(
-                command_session_id,
-                owner.session_owner_route(),
-            )
+            .target_fetch_subresource_interception_snapshot_for_owner(owner)
             .is_some_and(|snapshot| {
                 snapshot.has_response_stage_candidate(pending.resource_type.into())
             });
@@ -277,10 +274,7 @@ fn start_devtools_continue_intercepted_request_command(
             }
             return FetchCommandTaskStep::Complete(CommandOutputPlan::success());
         }
-        let handle_auth_requests = conn.target_fetch_handle_auth_requests_for_route(
-            command_session_id,
-            owner.session_owner_route(),
-        );
+        let handle_auth_requests = conn.target_fetch_handle_auth_requests_for_owner(owner);
         let should_register =
             pending.resource_type != SubresourceResourceType::WebSocket || intercept_response;
         let correlation = match if configured_response_stage && !command.intercept_response {
@@ -301,11 +295,8 @@ fn start_devtools_continue_intercepted_request_command(
         } {
             Some(correlation) => correlation,
             None => {
-                conn.register_pending_subresource_fetch_request_for_route(
-                    command_session_id,
-                    owner.session_owner_route(),
-                    request_id,
-                    pending,
+                conn.register_pending_subresource_fetch_request_for_owner(
+                    owner, request_id, pending,
                 );
                 return FetchCommandTaskStep::Complete(CommandOutputPlan::error(
                     -32000,
@@ -313,10 +304,7 @@ fn start_devtools_continue_intercepted_request_command(
                 ));
             }
         };
-        let pending_page = match conn.loaded_page_mut_for_protocol_access_for_route(
-            command_session_id,
-            owner.session_owner_route(),
-        ) {
+        let pending_page = match conn.loaded_page_mut_for_protocol_access_for_owner(owner) {
             Ok(page) => page
                 .start_continue_pending_subresource_fetch(
                     pending.internal_id,
@@ -334,11 +322,8 @@ fn start_devtools_continue_intercepted_request_command(
             Ok(pending_page) => pending_page,
             Err(message) => {
                 correlation.rollback(conn);
-                conn.register_pending_subresource_fetch_request_for_route(
-                    command_session_id,
-                    owner.session_owner_route(),
-                    request_id,
-                    pending,
+                conn.register_pending_subresource_fetch_request_for_owner(
+                    owner, request_id, pending,
                 );
                 return FetchCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message));
             }
@@ -434,10 +419,7 @@ fn finish_continue_subresource_request(
     completed: Option<Result<CompletedPageCommand, String>>,
 ) -> Result<(), String> {
     let completion = completed.ok_or_else(|| "Missing renderer completion".to_owned())??;
-    let page = conn.loaded_page_mut_for_protocol_access_for_route(
-        owner.session_id(),
-        owner.session_owner_route(),
-    )?;
+    let page = conn.loaded_page_mut_for_protocol_access_for_owner(owner)?;
     page.finish_continue_pending_subresource_fetch(completion)
         .map(|_| ())
         .map_err(|error| format!("subresource fetch continue failed: {error}"))
@@ -546,10 +528,7 @@ fn start_devtools_fail_intercepted_request_command(
             let mut plan = CommandOutputPlan::success();
             let mut events = Vec::new();
             let loader_id = conn
-                .current_document_loader_id_for_route(
-                    command_session_id,
-                    owner.session_owner_route(),
-                )
+                .current_document_loader_id_for_owner(owner)
                 .unwrap_or_else(|| DEFAULT_LOADER_ID.to_owned());
             network::emit_loading_failed(
                 &mut events,
@@ -564,10 +543,7 @@ fn start_devtools_fail_intercepted_request_command(
             plan.extend_background_events(events);
             return FetchCommandTaskStep::Complete(plan);
         }
-        let page = match conn.loaded_page_mut_for_protocol_access_for_route(
-            command_session_id,
-            owner.session_owner_route(),
-        ) {
+        let page = match conn.loaded_page_mut_for_protocol_access_for_owner(owner) {
             Ok(page) => page,
             Err(message) if message == "NoDocumentLoaded" => {
                 return FetchCommandTaskStep::Complete(CommandOutputPlan::error(
@@ -608,10 +584,7 @@ fn start_devtools_fail_intercepted_request_command(
         action_session_id,
         &request_id,
     ) {
-        let page = match conn.loaded_page_mut_for_protocol_access_for_route(
-            command_session_id,
-            owner.session_owner_route(),
-        ) {
+        let page = match conn.loaded_page_mut_for_protocol_access_for_owner(owner) {
             Ok(page) => page,
             Err(message) if message == "NoDocumentLoaded" => {
                 return FetchCommandTaskStep::Complete(CommandOutputPlan::error(
@@ -646,11 +619,9 @@ fn start_devtools_fail_intercepted_request_command(
         ));
     }
 
-    if let Some(transfer) = conn.take_pending_fetch_response_transfer_for_terminal_action_for_route(
-        command_session_id,
-        owner.session_owner_route(),
-        &request_id,
-    ) {
+    if let Some(transfer) =
+        conn.take_pending_fetch_response_transfer_for_terminal_action_for_owner(owner, &request_id)
+    {
         return FetchCommandTaskStep::Pending(PendingFetchCommandDispatch::new_for_owner(
             command_id,
             owner.clone(),
@@ -712,10 +683,7 @@ pub(super) async fn complete_fail_request_command_async(
                     return;
                 }
             };
-            match conn.loaded_page_mut_for_protocol_access_for_route(
-                owner.session_id(),
-                owner.session_owner_route(),
-            ) {
+            match conn.loaded_page_mut_for_protocol_access_for_owner(owner) {
                 Ok(page) => {
                     if let Err(error) = page.finish_fail_pending_subresource_fetch(completion) {
                         out.push_error(-32000, format!("subresource fetch fail failed: {error}"));
@@ -754,10 +722,7 @@ pub(super) async fn complete_fail_request_command_async(
                     return;
                 }
             };
-            match conn.loaded_page_mut_for_protocol_access_for_route(
-                owner.session_id(),
-                owner.session_owner_route(),
-            ) {
+            match conn.loaded_page_mut_for_protocol_access_for_owner(owner) {
                 Ok(page) => {
                     if let Err(error) = page.finish_fail_pending_subresource_response(completion) {
                         out.push_error(
@@ -956,10 +921,7 @@ fn start_devtools_fulfill_intercepted_request_command(
         let websocket_socket_id = pending.websocket_socket_id;
         let register_synthetic_websocket =
             pending.resource_type == SubresourceResourceType::WebSocket && response_code == 101;
-        let page = match conn.loaded_page_mut_for_protocol_access_for_route(
-            command_session_id,
-            owner.session_owner_route(),
-        ) {
+        let page = match conn.loaded_page_mut_for_protocol_access_for_owner(owner) {
             Ok(page) => page,
             Err(message) if message == "NoDocumentLoaded" => {
                 return FetchCommandTaskStep::Complete(CommandOutputPlan::error(
@@ -1007,10 +969,7 @@ fn start_devtools_fulfill_intercepted_request_command(
         action_session_id,
         &request_id,
     ) {
-        let page = match conn.loaded_page_mut_for_protocol_access_for_route(
-            command_session_id,
-            owner.session_owner_route(),
-        ) {
+        let page = match conn.loaded_page_mut_for_protocol_access_for_owner(owner) {
             Ok(page) => page,
             Err(message) if message == "NoDocumentLoaded" => {
                 return FetchCommandTaskStep::Complete(CommandOutputPlan::error(
@@ -1064,11 +1023,9 @@ fn start_devtools_fulfill_intercepted_request_command(
         ));
     }
 
-    if let Some(transfer) = conn.take_pending_fetch_response_transfer_for_terminal_action_for_route(
-        command_session_id,
-        owner.session_owner_route(),
-        &request_id,
-    ) {
+    if let Some(transfer) =
+        conn.take_pending_fetch_response_transfer_for_terminal_action_for_owner(owner, &request_id)
+    {
         return FetchCommandTaskStep::Pending(PendingFetchCommandDispatch::new_for_owner(
             command_id,
             owner.clone(),
@@ -1116,10 +1073,7 @@ pub(super) async fn complete_fulfill_request_command_async(
                     return;
                 }
             };
-            match conn.loaded_page_mut_for_protocol_access_for_route(
-                owner.session_id(),
-                owner.session_owner_route(),
-            ) {
+            match conn.loaded_page_mut_for_protocol_access_for_owner(owner) {
                 Ok(page) => {
                     if let Err(error) = page.finish_fulfill_pending_subresource_fetch(completion) {
                         out.push_error(
@@ -1139,9 +1093,8 @@ pub(super) async fn complete_fulfill_request_command_async(
                 }
             }
             if register_synthetic_websocket && let Some(socket_id) = websocket_socket_id {
-                conn.register_synthetic_websocket_request_for_route(
-                    owner.session_id(),
-                    owner.session_owner_route(),
+                conn.register_synthetic_websocket_request_for_owner(
+                    owner,
                     request_id,
                     network_request_id,
                     socket_id,
@@ -1170,10 +1123,7 @@ pub(super) async fn complete_fulfill_request_command_async(
                     return;
                 }
             };
-            match conn.loaded_page_mut_for_protocol_access_for_route(
-                owner.session_id(),
-                owner.session_owner_route(),
-            ) {
+            match conn.loaded_page_mut_for_protocol_access_for_owner(owner) {
                 Ok(page) => {
                     if let Err(error) = page.finish_fulfill_pending_subresource_response(completion)
                     {
@@ -1424,10 +1374,7 @@ pub(super) fn complete_websocket_page_command(
             return;
         }
     };
-    let result = match conn.loaded_page_mut_for_protocol_access_for_route(
-        owner.session_id(),
-        owner.session_owner_route(),
-    ) {
+    let result = match conn.loaded_page_mut_for_protocol_access_for_owner(owner) {
         Ok(page) => match operation {
             PendingWebSocketCommandOperation::DispatchText => {
                 page.finish_receive_synthetic_websocket_text(completion)
@@ -1560,17 +1507,12 @@ fn start_devtools_continue_intercepted_response_command(
         command.context.protocol,
         command.context.session_id.as_ref(),
     );
-    if let Some(transfer) = conn.take_pending_fetch_response_transfer_for_terminal_action_for_route(
-        command_session_id,
-        owner.session_owner_route(),
-        &request_id,
-    ) {
+    if let Some(transfer) =
+        conn.take_pending_fetch_response_transfer_for_terminal_action_for_owner(owner, &request_id)
+    {
         let _ = &command.response_phrase;
         let transfer_response_headers = response_headers.clone().unwrap_or_default();
-        if let Some(sender) = conn.background_navigation_completion_sender_for_route(
-            command_session_id,
-            owner.session_owner_route(),
-        ) {
+        if let Some(sender) = conn.background_navigation_completion_sender_for_owner(owner) {
             match transfer.into_pending_streaming_document_response_navigation() {
                 Ok(pending) => {
                     // Chromium ACKs Fetch.continueResponse when the response-stage
@@ -1627,11 +1569,8 @@ fn start_devtools_continue_intercepted_response_command(
         &request_id,
     ) {
         if pending.response_body_taken_as_stream {
-            conn.register_pending_subresource_fetch_response_request_for_route(
-                command_session_id,
-                owner.session_owner_route(),
-                request_id,
-                pending,
+            conn.register_pending_subresource_fetch_response_request_for_owner(
+                owner, request_id, pending,
             );
             return FetchCommandTaskStep::Complete(CommandOutputPlan::error(
                 -32602,
@@ -1681,11 +1620,8 @@ fn start_devtools_continue_intercepted_response_command(
                 || response_headers.is_some()
                 || command.response_phrase.is_some()
             {
-                conn.register_pending_subresource_fetch_response_request_for_route(
-                    command_session_id,
-                    owner.session_owner_route(),
-                    request_id,
-                    pending,
+                conn.register_pending_subresource_fetch_response_request_for_owner(
+                    owner, request_id, pending,
                 );
                 return FetchCommandTaskStep::Complete(CommandOutputPlan::error(
                     -32602,
@@ -1705,10 +1641,7 @@ fn start_devtools_continue_intercepted_response_command(
             response_headers
         };
         let pending_internal_id = pending.internal_id;
-        let page = match conn.loaded_page_mut_for_protocol_access_for_route(
-            command_session_id,
-            owner.session_owner_route(),
-        ) {
+        let page = match conn.loaded_page_mut_for_protocol_access_for_owner(owner) {
             Ok(page) => page,
             Err(message) if message == "NoDocumentLoaded" => {
                 return FetchCommandTaskStep::Complete(CommandOutputPlan::error(
@@ -1812,12 +1745,7 @@ async fn continue_response_transfer_inline(
             .await;
         }
         Err(transfer) => {
-            conn.register_pending_fetch_response_transfer_for_route(
-                owner.session_id(),
-                owner.session_owner_route(),
-                request_id,
-                transfer,
-            );
+            conn.register_pending_fetch_response_transfer_for_owner(owner, request_id, transfer);
             out.push_error(-32000, "ResponseBodyStreamActive");
         }
     }
@@ -1861,10 +1789,7 @@ pub(super) async fn complete_continue_response_command_async(
                     return;
                 }
             };
-            match conn.loaded_page_mut_for_protocol_access_for_route(
-                owner.session_id(),
-                owner.session_owner_route(),
-            ) {
+            match conn.loaded_page_mut_for_protocol_access_for_owner(owner) {
                 Ok(page) => {
                     if let Err(error) =
                         page.finish_continue_pending_subresource_response(completion)
@@ -2364,9 +2289,8 @@ mod protocol_neutral_tests {
         );
 
         assert!(
-            conn.take_pending_subresource_fetch_response_request_for_route(
-                Some("SID-primary"),
-                None,
+            conn.take_pending_subresource_fetch_response_request_for_owner(
+                &crate::conn::CommandOwnerScope::for_session("SID-primary"),
                 Some("SID-primary"),
                 "FETCH-response-aux",
             )
@@ -2374,9 +2298,8 @@ mod protocol_neutral_tests {
             "old owner action session must not be able to resolve the chained response"
         );
         let chained = conn
-            .take_pending_subresource_fetch_response_request_for_route(
-                Some("SID-aux"),
-                None,
+            .take_pending_subresource_fetch_response_request_for_owner(
+                &crate::conn::CommandOwnerScope::for_session("SID-aux"),
                 Some("SID-aux"),
                 "FETCH-response-aux",
             )
@@ -2480,9 +2403,8 @@ mod protocol_neutral_tests {
             "BiDi-only session id has no CDP route and must not own the stored pending request"
         );
         let chained = conn
-            .take_pending_subresource_fetch_request_for_route(
-                Some("SID-primary"),
-                None,
+            .take_pending_subresource_fetch_request_for_owner(
+                &crate::conn::CommandOwnerScope::for_session("SID-primary"),
                 Some("BIDI-SID"),
                 "FETCH-bidi",
             )

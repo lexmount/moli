@@ -168,11 +168,8 @@ pub(super) fn start_devtools_continue_with_auth_command_for_pending(
                         ) {
                             Some(correlation) => Some(correlation),
                             None => {
-                                conn.register_pending_subresource_fetch_auth_request_for_route(
-                                    command_session_id,
-                                    owner.session_owner_route(),
-                                    request_id,
-                                    pending,
+                                conn.register_pending_subresource_fetch_auth_request_for_owner(
+                                    owner, request_id, pending,
                                 );
                                 return Some(FetchCommandTaskStep::Complete(
                                     CommandOutputPlan::error(-32000, "RequestNotFound"),
@@ -182,10 +179,7 @@ pub(super) fn start_devtools_continue_with_auth_command_for_pending(
                     } else {
                         None
                     };
-                let pending_page = match conn.loaded_page_mut_for_protocol_access_for_route(
-                    command_session_id,
-                    owner.session_owner_route(),
-                ) {
+                let pending_page = match conn.loaded_page_mut_for_protocol_access_for_owner(owner) {
                     Ok(page) => (match command.action {
                         DevToolsAuthChallengeAction::Default => page
                             .start_fail_pending_subresource_auth(
@@ -206,11 +200,8 @@ pub(super) fn start_devtools_continue_with_auth_command_for_pending(
                         if let Some(correlation) = cancel_correlation {
                             correlation.rollback(conn);
                         }
-                        conn.register_pending_subresource_fetch_auth_request_for_route(
-                            command_session_id,
-                            owner.session_owner_route(),
-                            request_id,
-                            pending,
+                        conn.register_pending_subresource_fetch_auth_request_for_owner(
+                            owner, request_id, pending,
                         );
                         return Some(FetchCommandTaskStep::Complete(CommandOutputPlan::error(
                             -32000,
@@ -249,9 +240,8 @@ pub(super) fn start_devtools_continue_with_auth_command_for_pending(
                     command.username.as_deref().unwrap_or_default(),
                     command.password.as_deref().unwrap_or_default(),
                 ) else {
-                    conn.register_pending_subresource_fetch_auth_request_for_route(
-                        command_session_id,
-                        owner.session_owner_route(),
+                    conn.register_pending_subresource_fetch_auth_request_for_owner(
+                        owner,
                         request_id.clone(),
                         pending,
                     );
@@ -270,11 +260,8 @@ pub(super) fn start_devtools_continue_with_auth_command_for_pending(
                 ) {
                     Some(correlation) => correlation,
                     None => {
-                        conn.register_pending_subresource_fetch_auth_request_for_route(
-                            command_session_id,
-                            owner.session_owner_route(),
-                            request_id,
-                            pending,
+                        conn.register_pending_subresource_fetch_auth_request_for_owner(
+                            owner, request_id, pending,
                         );
                         return Some(FetchCommandTaskStep::Complete(CommandOutputPlan::error(
                             -32000,
@@ -282,10 +269,7 @@ pub(super) fn start_devtools_continue_with_auth_command_for_pending(
                         )));
                     }
                 };
-                let pending_page = match conn.loaded_page_mut_for_protocol_access_for_route(
-                    command_session_id,
-                    owner.session_owner_route(),
-                ) {
+                let pending_page = match conn.loaded_page_mut_for_protocol_access_for_owner(owner) {
                     Ok(page) => page
                         .start_continue_pending_subresource_auth(pending.internal_id, auth)
                         .map_err(|error| format!("subresource auth continue failed: {error}")),
@@ -295,11 +279,8 @@ pub(super) fn start_devtools_continue_with_auth_command_for_pending(
                     Ok(pending_page) => pending_page,
                     Err(message) => {
                         correlation.rollback(conn);
-                        conn.register_pending_subresource_fetch_auth_request_for_route(
-                            command_session_id,
-                            owner.session_owner_route(),
-                            request_id,
-                            pending,
+                        conn.register_pending_subresource_fetch_auth_request_for_owner(
+                            owner, request_id, pending,
                         );
                         return Some(FetchCommandTaskStep::Complete(CommandOutputPlan::error(
                             -32000, message,
@@ -371,9 +352,8 @@ pub(super) fn start_devtools_continue_with_auth_command_for_pending(
                 command.username.as_deref().unwrap_or_default(),
                 command.password.as_deref().unwrap_or_default(),
             ) else {
-                conn.register_pending_fetch_auth_navigation_for_route(
-                    command_session_id,
-                    owner.session_owner_route(),
+                conn.register_pending_fetch_auth_navigation_for_owner(
+                    owner,
                     request_id.clone(),
                     pending,
                 );
@@ -617,10 +597,9 @@ async fn complete_subresource_auth_terminal_async(
     out: &mut FetchCommandOutput,
 ) {
     let activity_session_id = pending.owner_session_id.as_deref().or(owner.session_id());
-    let activity_owner_route = activity_session_id
-        .is_none()
-        .then(|| owner.session_owner_route())
-        .flatten();
+    let activity_owner = activity_session_id
+        .map(CommandOwnerScope::for_session)
+        .unwrap_or_else(|| owner.clone());
     let Some(completed) = completed else {
         if let Some(correlation) = correlation {
             correlation.rollback(conn);
@@ -638,9 +617,7 @@ async fn complete_subresource_auth_terminal_async(
             return;
         }
     };
-    let result = match conn
-        .loaded_page_mut_for_protocol_access_for_route(activity_session_id, activity_owner_route)
-    {
+    let result = match conn.loaded_page_mut_for_protocol_access_for_owner(&activity_owner) {
         Ok(page) if expose_challenged_response => page
             .finish_cancel_pending_subresource_auth(completion)
             .map(|_| ()),
@@ -683,10 +660,7 @@ fn finish_continue_subresource_auth(
     completed: Option<Result<CompletedPageCommand, String>>,
 ) -> Result<(), String> {
     let completion = completed.ok_or_else(|| "Missing renderer completion".to_owned())??;
-    let page = conn.loaded_page_mut_for_protocol_access_for_route(
-        owner.session_id(),
-        owner.session_owner_route(),
-    )?;
+    let page = conn.loaded_page_mut_for_protocol_access_for_owner(owner)?;
     page.finish_continue_pending_subresource_auth(completion)
         .map(|_| ())
         .map_err(|error| format!("subresource auth continue failed: {error}"))

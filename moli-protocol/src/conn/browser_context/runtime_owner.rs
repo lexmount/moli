@@ -56,7 +56,8 @@ impl CdpConnection {
         session_id: Option<&str>,
         enabled: bool,
     ) -> SessionOwnerInspectorEnableResult {
-        let accepts_without_target = self.accepts_unmaterialized_page_command(session_id, None);
+        let accepts_without_target =
+            self.accepts_unmaterialized_page_command_for_session(session_id);
         let target_crashed = self
             .target_owner_state_for_session(session_id)
             .is_some_and(|owner_state| owner_state.target_crash_state.is_crashed());
@@ -90,14 +91,11 @@ impl CdpConnection {
         owner: &crate::conn::CommandOwnerScope,
         enabled: bool,
     ) -> SessionOwnerRuntimeFrontendEnableResult {
-        let accepts_without_target = self
-            .accepts_unmaterialized_page_command(owner.session_id(), owner.session_owner_route());
+        let accepts_without_target = self.accepts_unmaterialized_page_command(owner);
         let result = self
-            .with_target_session_owner_mut_for_route(
-                owner.session_id(),
-                owner.session_owner_route(),
-                |owner| owner.set_runtime_frontend_enabled(enabled),
-            )
+            .with_target_session_owner_mut_for_owner(owner, |owner| {
+                owner.set_runtime_frontend_enabled(enabled)
+            })
             .unwrap_or({
                 if accepts_without_target {
                     SessionOwnerRuntimeFrontendEnableResult::Handled
@@ -108,11 +106,9 @@ impl CdpConnection {
         if matches!(result, SessionOwnerRuntimeFrontendEnableResult::Handled) && !enabled {
             let _ = self
                 .set_renderer_runtime_agent_owns_page_console_api_events_for_owner(owner, false);
-            let _ = self.with_target_devtools_session_state_for_route_mut(
-                owner.session_id(),
-                owner.session_owner_route(),
-                |state| state.clear_child_default_context_emission_state(),
-            );
+            let _ = self.with_target_devtools_session_state_for_owner_mut(owner, |state| {
+                state.clear_child_default_context_emission_state()
+            });
         }
         result
     }
@@ -134,27 +130,22 @@ impl CdpConnection {
         }
         let owns = owns
             && self
-                .runtime_session_owner_slot_for_route(session_id, owner.session_owner_route())
+                .runtime_session_owner_slot_for_owner(owner)
                 .is_ok_and(|slot| slot.has_loaded_page());
-        self.with_target_devtools_session_state_for_route_mut(
-            session_id,
-            owner.session_owner_route(),
-            |state| {
-                state
-                    .console_output_session_state
-                    .renderer_runtime_agent_owns_page_console_api_events = owns;
-            },
-        )
+        self.with_target_devtools_session_state_for_owner_mut(owner, |state| {
+            state
+                .console_output_session_state
+                .renderer_runtime_agent_owns_page_console_api_events = owns;
+        })
         .is_some()
     }
 
-    pub(crate) fn merge_v8_inspector_session_state_for_route(
+    pub(crate) fn merge_v8_inspector_session_state_for_owner(
         &mut self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        owner: &crate::conn::CommandOwnerScope,
         state: V8InspectorSessionState,
     ) -> bool {
-        self.with_target_devtools_session_state_for_route_mut(session_id, owner_route, |session| {
+        self.with_target_devtools_session_state_for_owner_mut(owner, |session| {
             session.inspector_session_state.v8_state = Some(state);
         })
         .is_some()

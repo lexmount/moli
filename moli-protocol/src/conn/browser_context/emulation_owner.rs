@@ -94,16 +94,16 @@ impl CdpConnection {
         session_id: Option<&str>,
         f: impl FnOnce(Option<TargetEmulationSessionStateMut<'_>>),
     ) -> bool {
-        self.mutate_emulation_session_state_for_route(session_id, None, f)
+        let owner = crate::conn::CommandOwnerScope::capture(self, session_id);
+        self.mutate_emulation_session_state_for_owner(&owner, f)
     }
 
-    pub(crate) fn mutate_emulation_session_state_for_route(
+    pub(crate) fn mutate_emulation_session_state_for_owner(
         &mut self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        owner: &crate::conn::CommandOwnerScope,
         f: impl FnOnce(Option<TargetEmulationSessionStateMut<'_>>),
     ) -> bool {
-        self.with_target_session_owner_mut_for_route(session_id, owner_route, |owner| {
+        self.with_target_session_owner_mut_for_owner(owner, |owner| {
             owner.mutate_emulation_session_state(f)
         })
         .unwrap_or(false)
@@ -129,26 +129,24 @@ impl CdpConnection {
             .set_devtools_timezone_override(timezone_override)
     }
 
-    pub(crate) fn set_base_locale_override_for_route(
+    pub(crate) fn set_base_locale_override_for_owner(
         &mut self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        owner: &crate::conn::CommandOwnerScope,
         locale_override: Option<String>,
     ) -> bool {
         let fallback_identity = self.base_browser_identity.clone();
-        self.target_session_owner_mut_for_route(session_id, owner_route)
+        self.target_session_owner_mut_for_owner(owner)
             .is_some_and(|mut owner| {
                 owner.set_base_locale_override(locale_override, &fallback_identity)
             })
     }
 
-    pub(crate) fn set_base_timezone_override_for_route(
+    pub(crate) fn set_base_timezone_override_for_owner(
         &mut self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        owner: &crate::conn::CommandOwnerScope,
         timezone_override: Option<String>,
     ) -> bool {
-        self.target_session_owner_mut_for_route(session_id, owner_route)
+        self.target_session_owner_mut_for_owner(owner)
             .is_some_and(|mut owner| owner.set_base_timezone_override(timezone_override))
     }
 

@@ -1139,7 +1139,9 @@ async fn response_body_stream_taken_blocks_chained_bidi_response_stage_pause() {
     let api_url = Url::parse(&hit_url).unwrap();
     let response_pause_sessions = ctx
         .conn
-        .target_fetch_subresource_interception_snapshot_for_route(Some("SID-1"), None)
+        .target_fetch_subresource_interception_snapshot_for_owner(
+            &crate::conn::CommandOwnerScope::for_session("SID-1"),
+        )
         .expect("active target fetch snapshot")
         .matching_response_stage_pause_sessions(
             Some("SID-1"),
@@ -6992,7 +6994,9 @@ async fn cdp_fetch_then_bidi_network_intercept_response_stage_chain_completes() 
     let api_url = Url::parse(&hit_url).unwrap();
     let response_pause_sessions = ctx
         .conn
-        .target_fetch_subresource_interception_snapshot_for_route(Some("SID-1"), None)
+        .target_fetch_subresource_interception_snapshot_for_owner(
+            &crate::conn::CommandOwnerScope::for_session("SID-1"),
+        )
         .expect("active target fetch snapshot")
         .matching_response_stage_pause_sessions(
             Some("SID-1"),

@@ -1,6 +1,4 @@
-#[cfg(test)]
-use crate::conn::BrowserContext;
-use crate::conn::{CdpConnection, CdpSessionRoute, PageTargetHost};
+use crate::conn::{CdpConnection, CdpSessionRoute, CommandOwnerScope, PageTargetHost};
 use moli_page_types::DevToolsSessionKey;
 
 pub(super) struct TargetSessionOwner {
@@ -13,34 +11,23 @@ impl CdpConnection {
     /// Some generated Page-domain agents acknowledge enable/disable commands
     /// before a Page host exists. Keep that protocol behavior at the command
     /// boundary instead of manufacturing an owner that does not own a Page.
-    pub(super) fn accepts_unmaterialized_page_command(
-        &self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
-    ) -> bool {
-        if session_id.is_some() {
+    pub(super) fn accepts_unmaterialized_page_command(&self, owner: &CommandOwnerScope) -> bool {
+        if owner.session_id().is_some() {
             return false;
         }
-        match owner_route {
+        match owner.explicit_route() {
             Some(CdpSessionRoute::Browser | CdpSessionRoute::BrowserContext { .. }) => true,
             Some(_) => false,
-            None => self
-                .browser_context
-                .as_ref()
-                .and_then(|browser_context| browser_context.active_target_id())
-                .is_none(),
+            None => false,
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn with_background_target_session<R>(
-        &mut self,
+    pub(super) fn accepts_unmaterialized_page_command_for_session(
+        &self,
         session_id: Option<&str>,
-        f: impl FnOnce(&mut BrowserContext, &str) -> R,
-    ) -> Option<R> {
-        let (browser_context_id, target_id) = self.background_target_route(session_id)?;
-        let browser_context = self.browser_context_by_id_mut(&browser_context_id)?;
-        Some(f(browser_context, &target_id))
+    ) -> bool {
+        let owner = CommandOwnerScope::capture(self, session_id);
+        self.accepts_unmaterialized_page_command(&owner)
     }
 
     pub(crate) fn mutate_target_page_state_for_session(
@@ -57,32 +44,16 @@ impl CdpConnection {
         &self,
         session_id: Option<&str>,
     ) -> Option<TargetSessionOwner> {
-        self.target_session_owner_for_route(session_id, None)
+        let owner = CommandOwnerScope::capture(self, session_id);
+        self.target_session_owner_for_owner(&owner)
     }
 
-    /// Resolves target ownership from an explicit command route. A concrete
-    /// session always resolves through the session registry; `owner_route`
-    /// selects the owner of an internal command without a CDP session.
-    pub(super) fn target_session_owner_for_route(
+    /// Resolves target ownership from the command's single authority.
+    pub(super) fn target_session_owner_for_owner(
         &self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        owner: &CommandOwnerScope,
     ) -> Option<TargetSessionOwner> {
-        let route = match session_id {
-            Some(session_id) => self.session_route(Some(session_id))?,
-            None => match owner_route {
-                Some(route) => route.clone(),
-                None => {
-                    let browser_context = self.browser_context.as_ref()?;
-                    let target_id = browser_context.active_target_id()?;
-                    return Some(TargetSessionOwner {
-                        browser_context_id: browser_context.id.clone(),
-                        target_id: target_id.to_owned(),
-                        session_key: DevToolsSessionKey::Primary,
-                    });
-                }
-            },
-        };
+        let route = owner.resolve_route(self)?;
 
         match route {
             CdpSessionRoute::Browser => {
@@ -128,6 +99,7 @@ impl CdpConnection {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::conn::BrowserContext;
 
     #[test]
     fn empty_browser_context_does_not_materialize_a_page_owner() {
@@ -135,8 +107,12 @@ mod tests {
         conn.browser_context = Some(BrowserContext::new("BID-empty-owner".to_owned()));
 
         assert!(conn.target_session_owner(None).is_none());
-        assert!(conn.accepts_unmaterialized_page_command(None, None));
-        assert!(!conn.accepts_unmaterialized_page_command(Some("SID-missing"), None));
+        assert!(conn.accepts_unmaterialized_page_command(&CommandOwnerScope::capture(&conn, None)));
+        assert!(
+            !conn.accepts_unmaterialized_page_command(&CommandOwnerScope::for_session(
+                "SID-missing"
+            ))
+        );
     }
 
     #[test]
@@ -152,10 +128,8 @@ mod tests {
             session_key: DevToolsSessionKey::Primary,
         };
 
-        assert!(
-            conn.target_session_owner_for_route(None, Some(&stale_route))
-                .is_none()
-        );
-        assert!(!conn.accepts_unmaterialized_page_command(None, Some(&stale_route)));
+        let owner = CommandOwnerScope::for_route(stale_route);
+        assert!(conn.target_session_owner_for_owner(&owner).is_none());
+        assert!(!conn.accepts_unmaterialized_page_command(&owner));
     }
 }

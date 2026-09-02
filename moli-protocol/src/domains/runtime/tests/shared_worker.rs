@@ -3399,7 +3399,7 @@ async fn shared_worker_await_promise_timer_reply_arrives_through_renderer_receiv
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn shared_worker_await_promise_pending_registers_renderer_response_receiver() {
+async fn shared_worker_await_promise_releases_dispatch_before_session_response() {
     let mut ctx = TestContext::new();
     with_loaded_document_async(&mut ctx, "<!doctype html><body></body>").await;
     let shared_worker_session_id = start_attached_shared_worker_session(
@@ -3429,31 +3429,33 @@ onconnect = event => {
         .conn
         .try_start_pending_command_dispatch(&raw)
         .expect("shared worker Runtime.evaluate awaitPromise should start as a pending command");
-    let mut pending = match ctx
-        .conn
-        .complete_pending_command_dispatch(pending.wait().await)
+    let completed = tokio::time::timeout(std::time::Duration::from_secs(1), pending.wait())
         .await
-    {
-        CdpCommandTaskStep::Pending(pending) => *pending,
-        CdpCommandTaskStep::Complete(outcome) => {
-            panic!(
-                "shared worker Runtime.evaluate awaitPromise should stay pending after initial inspector dispatch: {:?}",
-                outcome.into_parts().0
-            );
-        }
+        .expect("initial Worker Inspector dispatch must not wait for Promise settlement");
+    let CdpCommandTaskStep::Complete(outcome) =
+        ctx.conn.complete_pending_command_dispatch(completed).await
+    else {
+        panic!("a Worker session response must not enter the CommandReply deferred-reply lane");
     };
+    assert!(
+        outcome.into_parts().0.is_empty(),
+        "the unresolved terminal response must remain in the Worker session output journal"
+    );
+    assert!(
+        ctx.conn
+            .has_pending_inspector_awaits_for_session_owner(Some(&shared_worker_session_id)),
+        "the unresolved await must remain registered to its exact Worker session"
+    );
 
-    assert!(
-        pending.waits_for_scheduler_deferred_inspector_reply(),
-        "awaitPromise should enter scheduler deferred-reply state"
-    );
-    assert!(
-        pending
-            .take_scheduler_deferred_inspector_reply_receiver()
-            .is_some(),
-        "shared worker awaitPromise should own the renderer response receiver"
-    );
-    pending.forget_scheduler_deferred_inspector_reply(&mut ctx.conn);
+    ctx.process_async(json!({
+        "id": 91_103,
+        "method": "Target.detachFromTarget",
+        "params": { "sessionId": shared_worker_session_id }
+    }))
+    .await;
+    assert_eq!(take_response_by_id(&mut ctx, 91_103)["result"], json!({}));
+    let failed_await = take_response_by_id(&mut ctx, 91_102);
+    assert_eq!(failed_await["error"]["message"], json!("Target detached"));
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -1343,18 +1343,12 @@ async fn session_route_finds_browser_active_auxiliary_background_and_inactive_se
     );
     assert_eq!(ctx.conn.session_route(Some("SID-missing")), None);
     assert_eq!(
-        ctx.conn
-            .background_target_id_for_session(Some("SID-inactive-background")),
-        Some("TID-000000000D".to_owned())
-    );
-    assert_eq!(
-        ctx.conn
-            .background_target_id_for_session(Some("SID-inactive-aux-background")),
-        Some("TID-000000000D".to_owned())
-    );
-    assert!(
-        ctx.conn
-            .has_background_target_session(Some("SID-inactive-background"))
+        ctx.conn.session_route(Some("SID-inactive-background")),
+        Some(CdpSessionRoute::PageTarget {
+            browser_context_id: "BID-B".to_owned(),
+            target_id: "TID-000000000D".to_owned(),
+            session_key: moli_page_types::DevToolsSessionKey::Primary,
+        })
     );
     assert_eq!(
         ctx.conn.session_route(Some("SID-inactive-aux-background")),
@@ -1373,39 +1367,28 @@ async fn session_route_finds_browser_active_auxiliary_background_and_inactive_se
             target_id: "TID-shared-inactive".to_owned(),
         })
     );
-    assert_eq!(
-        ctx.conn.with_background_target_session(
-            Some("SID-inactive-background"),
-            |bc, target_id| {
-                assert_eq!(bc.id, "BID-B");
-                bc.background_target_mut(target_id)
-                    .expect("background target must exist")
-                    .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-                    .console_output_session_state
-                    .console_enabled = true;
-                target_id.to_owned()
-            }
-        ),
-        Some("TID-000000000D".to_owned())
-    );
+    ctx.conn
+        .browser_context_by_id_mut("BID-B")
+        .expect("inactive browser context")
+        .page_target_mut("TID-000000000D")
+        .expect("stable page target")
+        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+        .console_output_session_state
+        .console_enabled = true;
     assert_eq!(
         ctx.conn.browser_context.as_ref().map(|bc| bc.id.as_str()),
         Some("BID-A"),
         "direct background route helpers must not promote inactive browser contexts"
     );
-    assert_eq!(
-        ctx.conn.with_background_target_session(
-            Some("SID-inactive-background"),
-            |bc, target_id| {
-                assert_eq!(bc.id, "BID-B");
-                bc.background_target(target_id)
-                    .expect("background target must exist")
-                    .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
-                    .console_output_session_state
-                    .console_enabled
-            }
-        ),
-        Some(true)
+    assert!(
+        ctx.conn
+            .browser_context_by_id("BID-B")
+            .expect("inactive browser context")
+            .page_target("TID-000000000D")
+            .expect("stable page target")
+            .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+            .console_output_session_state
+            .console_enabled
     );
 
     assert!(

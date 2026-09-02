@@ -9,9 +9,8 @@ mod state;
 mod subresource;
 
 use crate::conn::{
-    BackgroundProtocolEvent, CdpConnection, CdpSessionRoute, Cmd, CommandOwnerScope,
-    DevToolsCommandExecutionOutput, FetchInterceptionPattern,
-    FetchRequestStage as ConnFetchRequestStage,
+    BackgroundProtocolEvent, CdpConnection, Cmd, CommandOwnerScope, DevToolsCommandExecutionOutput,
+    FetchInterceptionPattern, FetchRequestStage as ConnFetchRequestStage,
 };
 use crate::devtools_runtime::{
     DevToolsAddNetworkInterceptCommand, DevToolsAddNetworkInterceptResult, DevToolsCommand,
@@ -343,15 +342,10 @@ pub(crate) async fn execute_devtools_fetch_command_async_with_protocol_events(
     command: DevToolsCommand,
 ) -> DevToolsCommandExecutionOutput {
     let success_result = devtools_fetch_success_result(&command);
-    let (owner_session_id, owner_route) = match fetch_devtools_command_session_ids(conn, &command) {
-        Ok(session_ids) => session_ids,
+    let owner = match fetch_devtools_command_owner(conn, &command) {
+        Ok(owner) => owner,
         Err(error) => return DevToolsCommandExecutionOutput::new(Err(error)),
     };
-    let owner = CommandOwnerScope::capture_for_route(
-        conn,
-        owner_session_id.as_deref(),
-        owner_route.as_ref(),
-    );
     let step = start_devtools_fetch_command_for_owner(conn, None, &owner, command);
     match step {
         FetchCommandTaskStep::Complete(mut plan) => {
@@ -414,66 +408,64 @@ fn start_devtools_fetch_command_for_owner(
     }
 }
 
-fn fetch_devtools_command_session_ids(
+fn fetch_devtools_command_owner(
     conn: &CdpConnection,
     command: &DevToolsCommand,
-) -> Result<(Option<String>, Option<CdpSessionRoute>), DevToolsError> {
+) -> Result<CommandOwnerScope, DevToolsError> {
     let (context, request_id) = match command {
         DevToolsCommand::AddNetworkIntercept(command) => {
-            return fetch_config_devtools_command_session_ids(conn, command.context.clone());
+            return fetch_config_devtools_command_owner(conn, &command.context);
         }
         DevToolsCommand::RemoveNetworkIntercept(command) => {
-            return fetch_config_devtools_command_session_ids(conn, command.context.clone());
+            return fetch_config_devtools_command_owner(conn, &command.context);
         }
         DevToolsCommand::ContinueInterceptedRequest(command) => {
-            (command.context.clone(), command.request_id.as_str())
+            (&command.context, command.request_id.as_str())
         }
         DevToolsCommand::ContinueInterceptedResponse(command) => {
-            (command.context.clone(), command.request_id.as_str())
+            (&command.context, command.request_id.as_str())
         }
         DevToolsCommand::ContinueWithAuth(command) => {
-            (command.context.clone(), command.request_id.as_str())
+            (&command.context, command.request_id.as_str())
         }
         DevToolsCommand::FailInterceptedRequest(command) => {
-            (command.context.clone(), command.request_id.as_str())
+            (&command.context, command.request_id.as_str())
         }
         DevToolsCommand::FulfillInterceptedRequest(command) => {
-            (command.context.clone(), command.request_id.as_str())
+            (&command.context, command.request_id.as_str())
         }
-        _ => return Ok((None, None)),
+        _ => return Ok(CommandOwnerScope::capture(conn, None)),
     };
-    let response_session_id = context
-        .session_id
-        .as_ref()
-        .map(|session| session.as_str().to_owned());
     if context.protocol == DevToolsProtocol::Cdp {
-        return Ok((response_session_id, None));
+        return Ok(CommandOwnerScope::capture(
+            conn,
+            context.session_id.as_ref().map(|session| session.as_str()),
+        ));
     }
-    Ok((None, conn.pending_fetch_request_session_route(request_id)))
+    Ok(conn
+        .pending_fetch_request_session_route(request_id)
+        .map(CommandOwnerScope::for_route)
+        .unwrap_or_else(|| CommandOwnerScope::capture(conn, None)))
 }
 
-fn fetch_config_devtools_command_session_ids(
+fn fetch_config_devtools_command_owner(
     conn: &CdpConnection,
-    context: crate::devtools_runtime::DevToolsCommandContext,
-) -> Result<(Option<String>, Option<CdpSessionRoute>), DevToolsError> {
-    let response_session_id = context
-        .session_id
-        .as_ref()
-        .map(|session| session.as_str().to_owned());
+    context: &crate::devtools_runtime::DevToolsCommandContext,
+) -> Result<CommandOwnerScope, DevToolsError> {
     if context.protocol == DevToolsProtocol::Cdp {
-        return Ok((response_session_id, None));
+        return Ok(CommandOwnerScope::capture(
+            conn,
+            context.session_id.as_ref().map(|session| session.as_str()),
+        ));
     }
-    let owner_route = if let Some(target_id) = context.target_id.as_ref() {
-        Some(
-            conn.target_session_route_for_target_id(target_id.as_str())
-                .ok_or_else(|| {
-                    DevToolsError::new(DevToolsErrorKind::NoSuchTarget, "NoSuchTarget")
-                })?,
-        )
+    if let Some(target_id) = context.target_id.as_ref() {
+        let route = conn
+            .target_session_route_for_target_id(target_id.as_str())
+            .ok_or_else(|| DevToolsError::new(DevToolsErrorKind::NoSuchTarget, "NoSuchTarget"))?;
+        Ok(CommandOwnerScope::for_route(route))
     } else {
-        None
-    };
-    Ok((None, owner_route))
+        Ok(CommandOwnerScope::capture(conn, None))
+    }
 }
 
 fn start_enable_command(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> FetchCommandTaskStep {
@@ -535,9 +527,8 @@ fn start_devtools_add_network_intercept_command(
             .as_ref()
             .map(|session_id| session_id.as_str().to_owned())
     };
-    match conn.start_add_network_intercept_for_route(
-        owner.session_id(),
-        owner.session_owner_route(),
+    match conn.start_add_network_intercept_for_owner(
+        owner,
         intercept_session_id,
         command.intercept_id.as_str().to_owned(),
         handle_auth_requests,
@@ -573,12 +564,7 @@ fn start_devtools_remove_network_intercept_command(
     intercept_id: &str,
     allow_global_lookup: bool,
 ) -> FetchCommandTaskStep {
-    match conn.start_remove_network_intercept_for_route(
-        owner.session_id(),
-        owner.session_owner_route(),
-        intercept_id,
-        allow_global_lookup,
-    ) {
+    match conn.start_remove_network_intercept_for_owner(owner, intercept_id, allow_global_lookup) {
         Ok(Some(pending)) => {
             FetchCommandTaskStep::Pending(PendingFetchCommandDispatch::new_for_owner(
                 command_id,
@@ -821,10 +807,7 @@ fn complete_fetch_config_update_command(
         Ok(completion) => completion,
         Err(error) => return CommandOutputPlan::error(-32000, error),
     };
-    let page = match conn.loaded_page_mut_for_protocol_access_for_route(
-        owner_scope.session_id(),
-        owner_scope.session_owner_route(),
-    ) {
+    let page = match conn.loaded_page_mut_for_protocol_access_for_owner(&owner_scope) {
         Ok(page) => page,
         Err(message) if message == "NoDocumentLoaded" => {
             return CommandOutputPlan::from_devtools_result(result);
@@ -881,10 +864,7 @@ async fn complete_disable_command_async(
                 return;
             }
         };
-        match conn.loaded_page_mut_for_protocol_access_for_route(
-            owner.session_id(),
-            owner.session_owner_route(),
-        ) {
+        match conn.loaded_page_mut_for_protocol_access_for_owner(owner) {
             Ok(page) => {
                 if let Err(error) = page.finish_set_fetch_subresource_interception(completion) {
                     out.push_error(
@@ -956,9 +936,8 @@ async fn complete_disable_command_async(
     }
     for (_, pending) in pending_subresource_fetches {
         if let Ok(predecessor) = conn
-            .fail_pending_subresource_fetch_for_route_async(
-                owner.session_id(),
-                owner.session_owner_route(),
+            .fail_pending_subresource_fetch_for_owner_async(
+                owner,
                 pending.internal_id,
                 "Fetch interception disabled".to_owned(),
             )
@@ -980,9 +959,8 @@ async fn complete_disable_command_async(
     }
     for (_, pending) in pending_subresource_auths {
         if let Ok(predecessor) = conn
-            .fail_pending_subresource_auth_for_route_async(
-                owner.session_id(),
-                owner.session_owner_route(),
+            .fail_pending_subresource_auth_for_owner_async(
+                owner,
                 pending.internal_id,
                 "Fetch interception disabled".to_owned(),
             )
@@ -1004,9 +982,8 @@ async fn complete_disable_command_async(
     }
     for (_, pending) in pending_subresource_responses {
         if let Ok(predecessor) = conn
-            .fail_pending_subresource_response_for_route_async(
-                owner.session_id(),
-                owner.session_owner_route(),
+            .fail_pending_subresource_response_for_owner_async(
+                owner,
                 pending.internal_id,
                 "Fetch interception disabled".to_owned(),
             )

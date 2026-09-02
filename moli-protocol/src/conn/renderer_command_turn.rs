@@ -18,7 +18,7 @@ impl CdpConnection {
         owner: &TargetPageResidenceIdentity,
         completion: CompletedPageCommand,
     ) -> RendererCommandTurnOutput {
-        if !self.target_page_residence_identity_is_current_for_session(session_id, owner) {
+        if !self.target_page_residence_identity_is_current(owner) {
             return completion.into_output();
         }
 

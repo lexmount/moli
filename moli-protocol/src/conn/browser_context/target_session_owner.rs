@@ -1122,15 +1122,15 @@ impl CdpConnection {
         &self,
         session_id: Option<&str>,
     ) -> TargetNavigationLoadInputs {
-        self.navigation_load_inputs_for_route(session_id, None)
+        let owner = CommandOwnerScope::capture(self, session_id);
+        self.navigation_load_inputs_for_owner(&owner)
     }
 
-    pub(crate) fn navigation_load_inputs_for_route(
+    pub(crate) fn navigation_load_inputs_for_owner(
         &self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        owner: &CommandOwnerScope,
     ) -> TargetNavigationLoadInputs {
-        let mut inputs = match self.target_session_owner_ref_for_route(session_id, owner_route) {
+        let mut inputs = match self.target_session_owner_ref_for_owner(owner) {
             None => self
                 .browser_context
                 .as_ref()
@@ -1152,19 +1152,17 @@ impl CdpConnection {
         inputs
     }
 
-    pub(crate) fn navigation_initiator_url_for_route(
+    pub(crate) fn navigation_initiator_url_for_owner(
         &self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        owner: &CommandOwnerScope,
     ) -> Option<Url> {
-        self.target_session_owner_ref_for_route(session_id, owner_route)
+        self.target_session_owner_ref_for_owner(owner)
             .and_then(|owner| owner.navigation_initiator_url())
     }
 
-    pub(crate) fn prepare_navigation_request_for_route(
+    pub(crate) fn prepare_navigation_request_for_owner(
         &mut self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        owner: &CommandOwnerScope,
         requested_url: &Url,
         referrer: Option<&str>,
         is_data_url: bool,
@@ -1176,9 +1174,9 @@ impl CdpConnection {
         let mut network_request_id_allocator =
             std::mem::take(&mut self.network_request_id_allocator);
         let result = self
-            .target_session_owner_mut_for_route(session_id, owner_route)
-            .and_then(|mut owner| {
-                owner.prepare_navigation_request(
+            .target_session_owner_mut_for_owner(owner)
+            .and_then(|mut resolved| {
+                resolved.prepare_navigation_request(
                     requested_url,
                     referrer,
                     is_data_url,
@@ -1190,13 +1188,12 @@ impl CdpConnection {
         result
     }
 
-    pub(crate) fn register_pending_fetch_navigation_request_for_route(
+    pub(crate) fn register_pending_fetch_navigation_request_for_owner(
         &mut self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        owner: &CommandOwnerScope,
         pending: PendingFetchNavigation,
     ) -> Option<()> {
-        self.target_session_owner_mut_for_route(session_id, owner_route)?
+        self.target_session_owner_mut_for_owner(owner)?
             .register_pending_fetch_navigation_request(pending)
     }
 
@@ -1204,7 +1201,7 @@ impl CdpConnection {
         &mut self,
         owner: &crate::conn::CommandOwnerScope,
     ) -> Option<TargetLoadedNavigationCommitState> {
-        self.target_session_owner_mut_for_route(owner.session_id(), owner.session_owner_route())?
+        self.target_session_owner_mut_for_owner(owner)?
             .prepare_loaded_navigation_commit()
     }
 
@@ -1214,7 +1211,7 @@ impl CdpConnection {
         main_document_commit: &RendererMainDocumentCommit,
         target_url: &Url,
     ) -> Option<()> {
-        self.target_session_owner_mut_for_route(owner.session_id(), owner.session_owner_route())?
+        self.target_session_owner_mut_for_owner(owner)?
             .commit_loaded_navigation_target_identity(main_document_commit, target_url)
     }
 
@@ -1225,18 +1222,16 @@ impl CdpConnection {
         renderer_attachment_commit: LoadedNavigationRendererAttachmentCommit,
         history_url: &Url,
     ) -> Option<anyhow::Result<LoadedNavigationPageCommit>> {
-        self.target_session_owner_mut_for_route(owner.session_id(), owner.session_owner_route())?
+        self.target_session_owner_mut_for_owner(owner)?
             .commit_loaded_navigation_page_async(page, renderer_attachment_commit, history_url)
             .await
     }
 
-    pub(crate) fn initial_document_page_owner_for_route(
+    pub(crate) fn initial_document_page_owner_for_owner(
         &self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        owner: &CommandOwnerScope,
     ) -> Option<InitialDocumentPageOwner> {
-        let (browser_context_id, target_id) =
-            self.target_owner_identity_for_route(session_id, owner_route)?;
+        let (browser_context_id, target_id) = self.target_owner_identity_for_owner(owner)?;
         Some(InitialDocumentPageOwner {
             browser_context_id,
             target_id: target_id?,
@@ -1299,16 +1294,15 @@ impl CdpConnection {
         &mut self,
         owner: &CommandOwnerScope,
     ) -> Option<()> {
-        self.target_session_owner_mut_for_route(owner.session_id(), owner.session_owner_route())?
+        self.target_session_owner_mut_for_owner(owner)?
             .clear_pending_navigation_history_update()
     }
 
-    pub(crate) async fn mark_target_crashed_for_route_async(
+    pub(crate) async fn mark_target_crashed_for_owner_async(
         &mut self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        owner: &CommandOwnerScope,
     ) -> Option<()> {
-        self.target_session_owner_mut_for_route(session_id, owner_route)?
+        self.target_session_owner_mut_for_owner(owner)?
             .mark_target_crashed_async()
             .await
     }
@@ -1318,7 +1312,7 @@ impl CdpConnection {
         owner: &CommandOwnerScope,
         final_url: &Url,
     ) -> Option<()> {
-        self.target_session_owner_mut_for_route(owner.session_id(), owner.session_owner_route())?
+        self.target_session_owner_mut_for_owner(owner)?
             .discard_loaded_page_after_failed_navigation_async(final_url)
             .await
     }
@@ -1330,14 +1324,15 @@ impl CdpConnection {
         reason: &'static str,
     ) -> Option<ClosedPageTarget> {
         let primary_route = self.target_session_route_for_target_id(target_id)?;
+        let primary_owner = CommandOwnerScope::for_route(primary_route);
         let session_owners = self
-            .page_event_session_ids_for_route(None, Some(&primary_route))
+            .page_event_session_ids_for_owner(&primary_owner)
             .into_iter()
             .map(|session_id| {
                 session_id
                     .as_deref()
                     .map(CommandOwnerScope::for_session)
-                    .unwrap_or_else(|| CommandOwnerScope::for_route(primary_route.clone()))
+                    .unwrap_or_else(|| primary_owner.clone())
             })
             .collect::<Vec<_>>();
         let mut claimed_await_events = Vec::new();
@@ -1476,20 +1471,12 @@ impl CdpConnection {
         }
     }
 
-    pub(crate) fn target_session_owner_aggregate_fetch_config(
+    pub(crate) fn target_session_owner_aggregate_fetch_config_for_owner(
         &self,
-        session_id: Option<&str>,
-    ) -> Option<TargetFetchConfig> {
-        self.target_session_owner_aggregate_fetch_config_for_route(session_id, None)
-    }
-
-    pub(crate) fn target_session_owner_aggregate_fetch_config_for_route(
-        &self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        owner: &CommandOwnerScope,
     ) -> Option<TargetFetchConfig> {
         Some(
-            self.target_session_owner_ref_for_route(session_id, owner_route)?
+            self.target_session_owner_ref_for_owner(owner)?
                 .aggregate_fetch_config(),
         )
     }
@@ -1502,12 +1489,11 @@ impl CdpConnection {
             .page_session_state()
     }
 
-    pub(crate) fn target_page_session_state_for_route(
+    pub(crate) fn target_page_session_state_for_owner(
         &self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        owner: &CommandOwnerScope,
     ) -> Option<&TargetPageSessionState> {
-        self.target_session_owner_ref_for_route(session_id, owner_route)?
+        self.target_session_owner_ref_for_owner(owner)?
             .page_session_state()
     }
 
@@ -1515,15 +1501,15 @@ impl CdpConnection {
         &self,
         session_id: Option<&str>,
     ) -> Option<&DevToolsSessionState> {
-        self.target_devtools_session_state_for_route(session_id, None)
+        self.target_session_owner_ref(session_id)?
+            .devtools_session_state()
     }
 
-    pub(crate) fn target_devtools_session_state_for_route(
+    pub(crate) fn target_devtools_session_state_for_owner(
         &self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        owner: &CommandOwnerScope,
     ) -> Option<&DevToolsSessionState> {
-        self.target_session_owner_ref_for_route(session_id, owner_route)?
+        self.target_session_owner_ref_for_owner(owner)?
             .devtools_session_state()
     }
 
@@ -1535,31 +1521,28 @@ impl CdpConnection {
             .runtime_session_state()
     }
 
-    pub(crate) fn target_runtime_session_state_for_route(
+    pub(crate) fn target_runtime_session_state_for_owner(
         &self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        owner: &CommandOwnerScope,
     ) -> Option<&TargetRuntimeSessionState> {
-        self.target_session_owner_ref_for_route(session_id, owner_route)?
+        self.target_session_owner_ref_for_owner(owner)?
             .runtime_session_state()
     }
 
-    pub(crate) fn target_runtime_bindings_for_renderer_route(
+    pub(crate) fn target_runtime_bindings_for_renderer_owner(
         &self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        owner: &CommandOwnerScope,
     ) -> Vec<RuntimeBindingDefinition> {
-        self.target_session_owner_ref_for_route(session_id, owner_route)
+        self.target_session_owner_ref_for_owner(owner)
             .map(|owner| owner.runtime_bindings_for_renderer())
             .unwrap_or_default()
     }
 
-    pub(crate) fn target_runtime_bindings_for_current_inspector_route(
+    pub(crate) fn target_runtime_bindings_for_current_inspector_owner(
         &self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        owner: &CommandOwnerScope,
     ) -> Vec<RuntimeBindingDefinition> {
-        self.target_session_owner_ref_for_route(session_id, owner_route)
+        self.target_session_owner_ref_for_owner(owner)
             .and_then(|owner| owner.devtools_session_state())
             .map(|state| state.runtime_bindings.clone())
             .unwrap_or_default()
@@ -1569,15 +1552,15 @@ impl CdpConnection {
         &self,
         session_id: Option<&str>,
     ) -> Option<String> {
-        self.target_renderer_runtime_inspector_session_id_for_route(session_id, None)
+        self.target_session_owner_ref(session_id)
+            .and_then(|owner| owner.renderer_runtime_inspector_session_id())
     }
 
-    pub(crate) fn target_renderer_runtime_inspector_session_id_for_route(
+    pub(crate) fn target_renderer_runtime_inspector_session_id_for_owner(
         &self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        owner: &CommandOwnerScope,
     ) -> Option<String> {
-        self.target_session_owner_ref_for_route(session_id, owner_route)
+        self.target_session_owner_ref_for_owner(owner)
             .and_then(|owner| owner.renderer_runtime_inspector_session_id())
     }
 
@@ -1585,45 +1568,45 @@ impl CdpConnection {
         &self,
         session_id: Option<&str>,
     ) -> Option<&TargetOwnerState> {
-        self.target_owner_state_for_route(session_id, None)
-    }
-
-    pub(crate) fn target_owner_state_for_route(
-        &self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
-    ) -> Option<&TargetOwnerState> {
         Some(
-            self.target_session_owner_ref_for_route(session_id, owner_route)?
+            self.target_session_owner_ref(session_id)?
                 .target_owner_state(),
         )
     }
 
-    pub(crate) fn target_owner_has_bidi_channel_preload_script_for_route(
+    pub(crate) fn target_owner_state_for_owner(
         &self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        owner: &CommandOwnerScope,
+    ) -> Option<&TargetOwnerState> {
+        Some(
+            self.target_session_owner_ref_for_owner(owner)?
+                .target_owner_state(),
+        )
+    }
+
+    pub(crate) fn target_owner_has_bidi_channel_preload_script_for_owner(
+        &self,
+        owner: &CommandOwnerScope,
     ) -> bool {
         let target_owner_has_script = self
-            .target_owner_state_for_route(session_id, owner_route)
+            .target_owner_state_for_owner(owner)
             .is_some_and(TargetOwnerState::has_bidi_channel_preload_script);
         if target_owner_has_script {
             return true;
         }
-        self.target_owner_identity_for_route(session_id, owner_route)
+        self.target_owner_identity_for_owner(owner)
             .and_then(|(browser_context_id, _)| self.browser_context_by_id(&browser_context_id))
             .is_some_and(|browser_context| {
                 browser_context.has_default_bidi_channel_preload_script()
             })
     }
 
-    pub(crate) fn target_owner_bidi_channel_preload_handoffs_for_route(
+    pub(crate) fn target_owner_bidi_channel_preload_handoffs_for_owner(
         &self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        owner: &CommandOwnerScope,
     ) -> Vec<BidiPreloadChannelHandoff> {
         let mut handoffs = Vec::new();
-        if let Some(owner_state) = self.target_owner_state_for_route(session_id, owner_route) {
+        if let Some(owner_state) = self.target_owner_state_for_owner(owner) {
             handoffs.extend(
                 owner_state
                     .document_start_scripts
@@ -1632,7 +1615,7 @@ impl CdpConnection {
             );
         }
         if let Some(browser_context) = self
-            .target_owner_identity_for_route(session_id, owner_route)
+            .target_owner_identity_for_owner(owner)
             .and_then(|(browser_context_id, _)| self.browser_context_by_id(&browser_context_id))
         {
             handoffs.extend(
@@ -1650,17 +1633,17 @@ impl CdpConnection {
         session_id: Option<&str>,
         f: impl FnOnce(&mut TargetOwnerState) -> R,
     ) -> Option<R> {
-        self.with_target_owner_state_for_route_mut(session_id, None, f)
+        let owner = CommandOwnerScope::capture(self, session_id);
+        self.with_target_owner_state_for_owner_mut(&owner, f)
     }
 
-    pub(crate) fn with_target_owner_state_for_route_mut<R>(
+    pub(crate) fn with_target_owner_state_for_owner_mut<R>(
         &mut self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        owner: &CommandOwnerScope,
         f: impl FnOnce(&mut TargetOwnerState) -> R,
     ) -> Option<R> {
         Some(
-            self.target_session_owner_mut_for_route(session_id, owner_route)?
+            self.target_session_owner_mut_for_owner(owner)?
                 .mutate_target_owner_state(f),
         )
     }
@@ -1674,13 +1657,12 @@ impl CdpConnection {
             .mutate_session_state(|mut state| Some(f(state.devtools_session_state_mut())))
     }
 
-    pub(crate) fn with_target_devtools_session_state_for_route_mut<R>(
+    pub(crate) fn with_target_devtools_session_state_for_owner_mut<R>(
         &mut self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        owner: &CommandOwnerScope,
         f: impl FnOnce(&mut DevToolsSessionState) -> R,
     ) -> Option<R> {
-        self.target_session_owner_mut_for_route(session_id, owner_route)?
+        self.target_session_owner_mut_for_owner(owner)?
             .mutate_session_state(|mut state| Some(f(state.devtools_session_state_mut())))
     }
 
@@ -1691,20 +1673,20 @@ impl CdpConnection {
         Some(self.target_session_owner_ref(session_id)?.owner_identity())
     }
 
-    pub(crate) fn target_owner_identity_for_route(
+    pub(crate) fn target_owner_identity_for_owner(
         &self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        owner: &CommandOwnerScope,
     ) -> Option<(String, Option<String>)> {
-        if session_id.is_none()
-            && let Some(CdpSessionRoute::BrowserContext { browser_context_id }) = owner_route
+        if owner.session_id().is_none()
+            && let Some(CdpSessionRoute::BrowserContext { browser_context_id }) =
+                owner.explicit_route()
         {
             return self
                 .browser_context_by_id(browser_context_id)
                 .map(|_| (browser_context_id.clone(), None));
         }
         Some(
-            self.target_session_owner_ref_for_route(session_id, owner_route)?
+            self.target_session_owner_ref_for_owner(owner)?
                 .owner_identity(),
         )
     }
@@ -1720,16 +1702,15 @@ impl CdpConnection {
         &self,
         session_id: Option<&str>,
     ) -> Option<TargetPageResidenceIdentity> {
-        self.target_page_residence_identity_for_route(session_id, None)
+        let owner = CommandOwnerScope::capture(self, session_id);
+        self.target_page_residence_identity_for_owner(&owner)
     }
 
-    pub(crate) fn target_page_residence_identity_for_route(
+    pub(crate) fn target_page_residence_identity_for_owner(
         &self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        owner: &CommandOwnerScope,
     ) -> Option<TargetPageResidenceIdentity> {
-        let (browser_context_id, routed_target_id) =
-            self.target_owner_identity_for_route(session_id, owner_route)?;
+        let (browser_context_id, routed_target_id) = self.target_owner_identity_for_owner(owner)?;
         // Context-scoped work may not carry a Page id. Freeze its concrete
         // active target before an async boundary so later foreground changes
         // cannot redirect output from the old Page.
@@ -1739,7 +1720,7 @@ impl CdpConnection {
                 .map(str::to_owned)
         });
         let page_attachment_id = self
-            .runtime_session_owner_slot_for_route(session_id, owner_route)
+            .runtime_session_owner_slot_for_owner(owner)
             .ok()?
             .page_attachment_id()?;
         Some(TargetPageResidenceIdentity::new(
@@ -1756,20 +1737,18 @@ impl CdpConnection {
     /// before protocol commits that Page into the target slot. The reservation
     /// therefore owns an explicit attachment id before renderer work starts;
     /// callers never predict that identity from mutable current-Page state.
-    pub(crate) fn pending_target_page_residence_identity_for_route(
+    pub(crate) fn pending_target_page_residence_identity_for_owner(
         &self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        owner: &CommandOwnerScope,
     ) -> Option<TargetPageResidenceIdentity> {
-        let (browser_context_id, routed_target_id) =
-            self.target_owner_identity_for_route(session_id, owner_route)?;
+        let (browser_context_id, routed_target_id) = self.target_owner_identity_for_owner(owner)?;
         let target_id = routed_target_id.or_else(|| {
             self.browser_context_by_id(&browser_context_id)
                 .and_then(|browser_context| browser_context.active_target_id())
                 .map(str::to_owned)
         });
         let page_attachment_id = self
-            .runtime_session_owner_slot_for_route(session_id, owner_route)
+            .runtime_session_owner_slot_for_owner(owner)
             .ok()?
             .pending_page_attachment_id()?;
         Some(TargetPageResidenceIdentity::new(
@@ -1779,21 +1758,19 @@ impl CdpConnection {
         ))
     }
 
-    pub(crate) fn reserve_target_page_residence_identity_for_route(
+    pub(crate) fn reserve_target_page_residence_identity_for_owner(
         &mut self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        owner: &CommandOwnerScope,
         renderer_page: crate::conn::RendererPageResidenceIdentity,
     ) -> Option<TargetPageResidenceIdentity> {
-        let (browser_context_id, routed_target_id) =
-            self.target_owner_identity_for_route(session_id, owner_route)?;
+        let (browser_context_id, routed_target_id) = self.target_owner_identity_for_owner(owner)?;
         let target_id = routed_target_id.or_else(|| {
             self.browser_context_by_id(&browser_context_id)
                 .and_then(|browser_context| browser_context.active_target_id())
                 .map(str::to_owned)
         });
         let page_attachment_id = self
-            .runtime_session_owner_slot_mut_for_route(session_id, owner_route)
+            .runtime_session_owner_slot_mut_for_owner(owner)
             .ok()?
             .reserve_renderer_page_attachment(renderer_page);
         Some(TargetPageResidenceIdentity::new(
@@ -1805,9 +1782,8 @@ impl CdpConnection {
 
     /// Checks that deferred Page-owned work still addresses the same target
     /// Page-slot residence from which it was captured.
-    pub(crate) fn target_page_residence_identity_is_current_for_session(
+    pub(crate) fn target_page_residence_identity_is_current(
         &self,
-        _session_id: Option<&str>,
         expected: &TargetPageResidenceIdentity,
     ) -> bool {
         self.browser_context_by_id(expected.browser_context_id())
@@ -1816,12 +1792,11 @@ impl CdpConnection {
             })
     }
 
-    pub(crate) fn capture_target_page_residence_token_for_route(
+    pub(crate) fn capture_target_page_residence_token_for_owner(
         &mut self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        owner: &CommandOwnerScope,
     ) -> Option<crate::conn::TargetPageResidenceToken> {
-        self.runtime_session_owner_slot_mut_for_route(session_id, owner_route)
+        self.runtime_session_owner_slot_mut_for_owner(owner)
             .ok()?
             .page_slot_mut()
             .page_residence_token()
@@ -1832,17 +1807,17 @@ impl CdpConnection {
         &self,
         session_id: Option<&str>,
     ) -> Option<crate::conn::TargetPageProtocolAttachmentIdentity> {
-        self.target_page_protocol_attachment_identity_for_route(session_id, None)
+        let owner = CommandOwnerScope::capture(self, session_id);
+        self.target_page_protocol_attachment_identity_for_owner(&owner)
     }
 
-    pub(crate) fn target_page_protocol_attachment_identity_for_route(
+    pub(crate) fn target_page_protocol_attachment_identity_for_owner(
         &self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        owner: &CommandOwnerScope,
     ) -> Option<crate::conn::TargetPageProtocolAttachmentIdentity> {
         Some(crate::conn::TargetPageProtocolAttachmentIdentity::new(
-            self.target_page_residence_identity_for_route(session_id, owner_route)?,
-            session_id.map(str::to_owned),
+            self.target_page_residence_identity_for_owner(owner)?,
+            owner.session_id().map(str::to_owned),
         ))
     }
 
@@ -1856,15 +1831,15 @@ impl CdpConnection {
         &self,
         session_id: Option<&str>,
     ) -> Option<crate::conn::RendererPageResidenceIdentity> {
-        self.renderer_page_residence_identity_for_route(session_id, None)
+        let owner = CommandOwnerScope::capture(self, session_id);
+        self.renderer_page_residence_identity_for_owner(&owner)
     }
 
-    pub(crate) fn renderer_page_residence_identity_for_route(
+    pub(crate) fn renderer_page_residence_identity_for_owner(
         &self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        owner: &CommandOwnerScope,
     ) -> Option<crate::conn::RendererPageResidenceIdentity> {
-        self.runtime_session_owner_slot_for_route(session_id, owner_route)
+        self.runtime_session_owner_slot_for_owner(owner)
             .ok()?
             .loaded_page()
             .map(crate::conn::RendererPageResidenceIdentity::from_page)
@@ -1885,32 +1860,19 @@ impl CdpConnection {
         source_owner: &crate::conn::CommandOwnerScope,
         renderer_inspector_session_id: Option<&str>,
     ) -> Option<crate::conn::TargetPageProtocolAttachmentIdentity> {
-        let source = self.target_page_protocol_attachment_identity_for_route(
-            source_owner.session_id(),
-            source_owner.session_owner_route(),
-        )?;
+        let source = self.target_page_protocol_attachment_identity_for_owner(source_owner)?;
         let protocol_session_id = renderer_inspector_session_id
             .map(str::to_owned)
-            .or_else(|| {
-                self.runtime_session_owner_primary_session_id_for_route(
-                    source_owner.session_id(),
-                    source_owner.session_owner_route(),
-                )
-            });
-        let protocol_owner_route = protocol_session_id
-            .is_none()
-            .then(|| source_owner.session_owner_route())
-            .flatten();
-        let attachment = self.target_page_protocol_attachment_identity_for_route(
-            protocol_session_id.as_deref(),
-            protocol_owner_route,
-        )?;
+            .or_else(|| self.runtime_session_owner_primary_session_id_for_owner(source_owner));
+        let protocol_owner = protocol_session_id
+            .as_deref()
+            .map(CommandOwnerScope::for_session)
+            .unwrap_or_else(|| source_owner.clone());
+        let attachment =
+            self.target_page_protocol_attachment_identity_for_owner(&protocol_owner)?;
         if attachment.page_owner() != source.page_owner()
             || self
-                .target_renderer_runtime_inspector_session_id_for_route(
-                    protocol_session_id.as_deref(),
-                    protocol_owner_route,
-                )
+                .target_renderer_runtime_inspector_session_id_for_owner(&protocol_owner)
                 .as_deref()
                 != renderer_inspector_session_id
         {
@@ -1931,7 +1893,7 @@ impl CdpConnection {
                 .as_ref()
                 == Some(expected);
         }
-        self.target_page_residence_identity_is_current_for_session(None, expected.page_owner())
+        self.target_page_residence_identity_is_current(expected.page_owner())
     }
 
     /// Binds renderer-produced child-frame activity to the Page attachment
@@ -1942,21 +1904,17 @@ impl CdpConnection {
         session_id: Option<&str>,
         root_document: moli_core::RendererDocumentLifecycleIdentity,
     ) -> Option<crate::conn::TargetRootDocumentProtocolAttachmentIdentity> {
-        self.target_root_document_protocol_attachment_identity_for_route(
-            session_id,
-            None,
-            root_document,
-        )
+        let owner = CommandOwnerScope::capture(self, session_id);
+        self.target_root_document_protocol_attachment_identity_for_owner(&owner, root_document)
     }
 
-    pub(crate) fn target_root_document_protocol_attachment_identity_for_route(
+    pub(crate) fn target_root_document_protocol_attachment_identity_for_owner(
         &self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        owner: &CommandOwnerScope,
         root_document: moli_core::RendererDocumentLifecycleIdentity,
     ) -> Option<crate::conn::TargetRootDocumentProtocolAttachmentIdentity> {
         let binding = crate::conn::TargetRootDocumentProtocolAttachmentIdentity::new(
-            self.target_page_protocol_attachment_identity_for_route(session_id, owner_route)?,
+            self.target_page_protocol_attachment_identity_for_owner(owner)?,
             root_document,
         );
         self.target_root_document_protocol_attachment_identity_is_current(&binding)
@@ -1979,12 +1937,11 @@ impl CdpConnection {
             == Some(expected.root_document())
     }
 
-    pub(crate) fn target_root_document_lifecycle_identity_for_route(
+    pub(crate) fn target_root_document_lifecycle_identity_for_owner(
         &self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        owner: &CommandOwnerScope,
     ) -> Option<moli_core::RendererDocumentLifecycleIdentity> {
-        self.runtime_session_owner_slot_for_route(session_id, owner_route)
+        self.runtime_session_owner_slot_for_owner(owner)
             .ok()?
             .page_slot()
             .renderer_document_lifecycle_binding()
@@ -2070,18 +2027,18 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
     ) -> Result<&mut TargetRuntimeSlot, String> {
-        self.runtime_session_owner_slot_mut_for_route(session_id, None)
+        let owner = CommandOwnerScope::capture(self, session_id);
+        self.runtime_session_owner_slot_mut_for_owner(&owner)
     }
 
-    pub(crate) fn runtime_session_owner_slot_mut_for_route(
+    pub(crate) fn runtime_session_owner_slot_mut_for_owner(
         &mut self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        owner: &CommandOwnerScope,
     ) -> Result<&mut TargetRuntimeSlot, String> {
         let renderer_inspector_session_id =
-            self.target_renderer_runtime_inspector_session_id_for_route(session_id, owner_route);
+            self.target_renderer_runtime_inspector_session_id_for_owner(owner);
         let slot = self
-            .target_session_owner_mut_for_route(session_id, owner_route)
+            .target_session_owner_mut_for_owner(owner)
             .map(TargetSessionOwnerMut::into_runtime_slot_mut)
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?;
         if let Some(page) = slot.loaded_page_mut() {
@@ -2094,15 +2051,15 @@ impl CdpConnection {
         &self,
         session_id: Option<&str>,
     ) -> Result<&TargetRuntimeSlot, String> {
-        self.runtime_session_owner_slot_for_route(session_id, None)
+        let owner = CommandOwnerScope::capture(self, session_id);
+        self.runtime_session_owner_slot_for_owner(&owner)
     }
 
-    pub(crate) fn runtime_session_owner_slot_for_route(
+    pub(crate) fn runtime_session_owner_slot_for_owner(
         &self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        owner: &CommandOwnerScope,
     ) -> Result<&TargetRuntimeSlot, String> {
-        self.target_session_owner_ref_for_route(session_id, owner_route)
+        self.target_session_owner_ref_for_owner(owner)
             .map(|owner| owner.runtime_slot())
             .ok_or_else(|| "NoDocumentLoaded".to_owned())
     }
@@ -2111,40 +2068,31 @@ impl CdpConnection {
         &self,
         session_id: Option<&str>,
     ) -> Option<String> {
-        self.runtime_session_owner_primary_session_id_for_route(session_id, None)
+        let owner = CommandOwnerScope::capture(self, session_id);
+        self.runtime_session_owner_primary_session_id_for_owner(&owner)
     }
 
-    pub(crate) fn runtime_session_owner_primary_session_id_for_route(
+    pub(crate) fn runtime_session_owner_primary_session_id_for_owner(
         &self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        owner: &CommandOwnerScope,
     ) -> Option<String> {
-        self.target_session_owner_ref_for_route(session_id, owner_route)?
+        self.target_session_owner_ref_for_owner(owner)?
             .primary_session_id()
     }
 
-    pub(crate) fn page_event_session_ids_for_session_owner(
+    pub(crate) fn page_event_session_ids_for_owner(
         &self,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
     ) -> Vec<Option<String>> {
-        self.page_event_session_ids_for_route(session_id, None)
-    }
-
-    pub(crate) fn page_event_session_ids_for_route(
-        &self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
-    ) -> Vec<Option<String>> {
-        let Some((browser_context_id, target_id)) =
-            self.target_owner_identity_for_route(session_id, owner_route)
+        let Some((browser_context_id, target_id)) = self.target_owner_identity_for_owner(owner)
         else {
-            return vec![session_id.map(str::to_owned)];
+            return vec![owner.session_id().map(str::to_owned)];
         };
         let Some(browser_context) = self.browser_context_by_id(&browser_context_id) else {
-            return vec![session_id.map(str::to_owned)];
+            return vec![owner.session_id().map(str::to_owned)];
         };
         let Some(target_id) = target_id else {
-            return vec![session_id.map(str::to_owned)];
+            return vec![owner.session_id().map(str::to_owned)];
         };
 
         let mut session_ids = Vec::new();
@@ -2155,7 +2103,8 @@ impl CdpConnection {
                 .background_target(&target_id)
                 .and_then(|target| target.session_id().map(str::to_owned))
         };
-        let primary_event_session_id = primary_session_id.or_else(|| session_id.map(str::to_owned));
+        let primary_event_session_id =
+            primary_session_id.or_else(|| owner.session_id().map(str::to_owned));
         session_ids.push(primary_event_session_id.clone());
         for auxiliary_session_id in browser_context.auxiliary_session_ids_for_target(&target_id) {
             if primary_event_session_id.as_deref() != Some(auxiliary_session_id.as_str()) {
@@ -2169,23 +2118,23 @@ impl CdpConnection {
         &self,
         session_id: Option<&str>,
     ) -> Vec<Option<String>> {
-        self.subscribed_page_event_session_ids_for_route(session_id, None)
+        let owner = CommandOwnerScope::capture(self, session_id);
+        self.subscribed_page_event_session_ids_for_owner(&owner)
     }
 
-    pub(crate) fn subscribed_page_event_session_ids_for_route(
+    pub(crate) fn subscribed_page_event_session_ids_for_owner(
         &self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        owner: &CommandOwnerScope,
     ) -> Vec<Option<String>> {
-        self.page_event_session_ids_for_route(session_id, owner_route)
+        self.page_event_session_ids_for_owner(owner)
             .into_iter()
             .filter(|event_session_id| {
-                let event_owner_route = event_session_id.is_none().then_some(owner_route).flatten();
-                self.target_page_session_state_for_route(
-                    event_session_id.as_deref(),
-                    event_owner_route,
-                )
-                .is_some_and(|state| state.page_domain_enabled)
+                let event_owner = event_session_id
+                    .as_deref()
+                    .map(CommandOwnerScope::for_session)
+                    .unwrap_or_else(|| owner.clone());
+                self.target_page_session_state_for_owner(&event_owner)
+                    .is_some_and(|state| state.page_domain_enabled)
             })
             .collect()
     }
@@ -2198,22 +2147,20 @@ impl CdpConnection {
     /// identities, but must never call `page_event_session_ids_for_session_owner`
     /// again: doing so could route an old Page's historical event through a
     /// replacement Page or a newly active implicit attachment.
-    pub(crate) fn page_event_protocol_attachments_for_route(
+    pub(crate) fn page_event_protocol_attachments_for_owner(
         &self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        owner: &CommandOwnerScope,
     ) -> Option<Vec<crate::conn::TargetPageProtocolAttachmentIdentity>> {
-        let source =
-            self.target_page_protocol_attachment_identity_for_route(session_id, owner_route)?;
+        let source = self.target_page_protocol_attachment_identity_for_owner(owner)?;
         let attachments = self
-            .subscribed_page_event_session_ids_for_route(session_id, owner_route)
+            .subscribed_page_event_session_ids_for_owner(owner)
             .into_iter()
             .map(|event_session_id| {
-                let event_owner_route = event_session_id.is_none().then_some(owner_route).flatten();
-                self.target_page_protocol_attachment_identity_for_route(
-                    event_session_id.as_deref(),
-                    event_owner_route,
-                )
+                let event_owner = event_session_id
+                    .as_deref()
+                    .map(CommandOwnerScope::for_session)
+                    .unwrap_or_else(|| owner.clone());
+                self.target_page_protocol_attachment_identity_for_owner(&event_owner)
             })
             .collect::<Option<Vec<_>>>()?;
         (!attachments.is_empty()
@@ -2230,30 +2177,28 @@ impl CdpConnection {
     /// once per Inspector session. Freeze the audience at ingress so a later
     /// detach, target replacement, or `Runtime.enable` cannot retarget that
     /// historical fact.
-    pub(crate) fn runtime_event_protocol_attachments_for_route(
+    pub(crate) fn runtime_event_protocol_attachments_for_owner(
         &self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        owner: &CommandOwnerScope,
     ) -> Option<Vec<crate::conn::TargetPageProtocolAttachmentIdentity>> {
-        let source =
-            self.target_page_protocol_attachment_identity_for_route(session_id, owner_route)?;
+        let source = self.target_page_protocol_attachment_identity_for_owner(owner)?;
         let attachments = self
-            .page_event_session_ids_for_route(session_id, owner_route)
+            .page_event_session_ids_for_owner(owner)
             .into_iter()
             .filter(|event_session_id| {
-                let event_owner_route = event_session_id.is_none().then_some(owner_route).flatten();
-                self.target_runtime_session_state_for_route(
-                    event_session_id.as_deref(),
-                    event_owner_route,
-                )
-                .is_some_and(|state| state.runtime_frontend_enabled)
+                let event_owner = event_session_id
+                    .as_deref()
+                    .map(CommandOwnerScope::for_session)
+                    .unwrap_or_else(|| owner.clone());
+                self.target_runtime_session_state_for_owner(&event_owner)
+                    .is_some_and(|state| state.runtime_frontend_enabled)
             })
             .map(|event_session_id| {
-                let event_owner_route = event_session_id.is_none().then_some(owner_route).flatten();
-                self.target_page_protocol_attachment_identity_for_route(
-                    event_session_id.as_deref(),
-                    event_owner_route,
-                )
+                let event_owner = event_session_id
+                    .as_deref()
+                    .map(CommandOwnerScope::for_session)
+                    .unwrap_or_else(|| owner.clone());
+                self.target_page_protocol_attachment_identity_for_owner(&event_owner)
             })
             .collect::<Option<Vec<_>>>()?;
         attachments
@@ -2266,34 +2211,22 @@ impl CdpConnection {
         &self,
         session_id: Option<&str>,
     ) -> Option<String> {
-        self.runtime_session_owner_target_url_for_route(session_id, None)
+        let owner = CommandOwnerScope::capture(self, session_id);
+        self.runtime_session_owner_target_url_for_owner(&owner)
     }
 
-    pub(crate) fn runtime_session_owner_target_url_for_route(
+    pub(crate) fn runtime_session_owner_target_url_for_owner(
         &self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        owner: &CommandOwnerScope,
     ) -> Option<String> {
-        Some(
-            self.target_session_owner_ref_for_route(session_id, owner_route)?
-                .target_url(),
-        )
+        Some(self.target_session_owner_ref_for_owner(owner)?.target_url())
     }
 
-    pub(crate) fn runtime_session_owner_record_initial_empty_document_url(
+    pub(crate) fn runtime_session_owner_record_initial_empty_document_url_for_owner(
         &self,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
     ) -> Option<String> {
-        self.target_session_owner_ref(session_id)?
-            .initial_empty_document_url_if_current()
-    }
-
-    pub(crate) fn runtime_session_owner_record_initial_empty_document_url_for_route(
-        &self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
-    ) -> Option<String> {
-        self.target_session_owner_ref_for_route(session_id, owner_route)?
+        self.target_session_owner_ref_for_owner(owner)?
             .initial_empty_document_url_if_current()
     }
 
@@ -2305,29 +2238,27 @@ impl CdpConnection {
             .initial_empty_document_storage_key_if_current()
     }
 
-    pub(crate) fn runtime_session_owner_initial_empty_document_storage_key_for_route(
+    pub(crate) fn runtime_session_owner_initial_empty_document_storage_key_for_owner(
         &self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        owner: &CommandOwnerScope,
     ) -> Option<moli_storage_key::MoliStorageKey> {
-        self.target_session_owner_ref_for_route(session_id, owner_route)?
+        self.target_session_owner_ref_for_owner(owner)?
             .initial_empty_document_storage_key_if_current()
     }
 
-    pub(crate) fn runtime_session_owner_record_is_on_initial_empty_document_for_route(
+    pub(crate) fn runtime_session_owner_record_is_on_initial_empty_document_for_owner(
         &self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        owner: &CommandOwnerScope,
     ) -> Option<bool> {
-        self.target_session_owner_ref_for_route(session_id, owner_route)?
+        self.target_session_owner_ref_for_owner(owner)?
             .is_on_initial_empty_document()
     }
 
-    pub(crate) fn runtime_session_owner_initial_empty_document_has_pending_cross_document_navigation(
+    pub(crate) fn runtime_session_owner_initial_empty_document_has_pending_cross_document_navigation_for_owner(
         &self,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
     ) -> bool {
-        self.target_session_owner_ref(session_id)
+        self.target_session_owner_ref_for_owner(owner)
             .is_some_and(|owner| {
                 owner.initial_empty_document_has_pending_cross_document_navigation()
             })
@@ -2337,26 +2268,25 @@ impl CdpConnection {
         &self,
         session_id: Option<&str>,
     ) -> Option<(String, String, String, String)> {
-        self.target_session_owner_frame_tree_identity_for_route(session_id, None)
+        let owner = CommandOwnerScope::capture(self, session_id);
+        self.target_session_owner_frame_tree_identity_for_owner(&owner)
     }
 
-    pub(crate) fn target_session_owner_frame_tree_identity_for_route(
+    pub(crate) fn target_session_owner_frame_tree_identity_for_owner(
         &self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        owner: &CommandOwnerScope,
     ) -> Option<(String, String, String, String)> {
         Some(
-            self.target_session_owner_ref_for_route(session_id, owner_route)?
+            self.target_session_owner_ref_for_owner(owner)?
                 .frame_tree_identity(),
         )
     }
 
-    pub(crate) fn target_session_owner_frame_tree_loader_id_for_route(
+    pub(crate) fn target_session_owner_frame_tree_loader_id_for_owner(
         &self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        owner: &CommandOwnerScope,
     ) -> Option<String> {
-        self.target_session_owner_ref_for_route(session_id, owner_route)?
+        self.target_session_owner_ref_for_owner(owner)?
             .frame_tree_loader_id()
     }
 
@@ -2368,12 +2298,11 @@ impl CdpConnection {
             .emulated_device_metrics()
     }
 
-    pub(crate) fn target_session_owner_emulated_device_metrics_for_route(
+    pub(crate) fn target_session_owner_emulated_device_metrics_for_owner(
         &self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        owner: &CommandOwnerScope,
     ) -> Option<crate::conn::EmulatedDeviceMetrics> {
-        self.target_session_owner_ref_for_route(session_id, owner_route)?
+        self.target_session_owner_ref_for_owner(owner)?
             .emulated_device_metrics()
     }
 
@@ -2381,28 +2310,28 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
     ) -> Option<(usize, Vec<PageNavigationHistoryEntry>)> {
-        self.target_session_owner_navigation_history_snapshot_for_route(session_id, None)
+        let owner = CommandOwnerScope::capture(self, session_id);
+        self.target_session_owner_navigation_history_snapshot_for_owner(&owner)
     }
 
-    pub(crate) fn target_session_owner_navigation_history_snapshot_for_route(
+    pub(crate) fn target_session_owner_navigation_history_snapshot_for_owner(
         &mut self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        owner: &CommandOwnerScope,
     ) -> Option<(usize, Vec<PageNavigationHistoryEntry>)> {
-        self.target_session_owner_mut_for_route(session_id, owner_route)?
+        self.target_session_owner_mut_for_owner(owner)?
             .navigation_history_snapshot()
     }
 
-    pub(crate) fn apply_renderer_document_title_for_session_owner(
+    pub(crate) fn apply_renderer_document_title_for_owner(
         &mut self,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
         change: &moli_core::RendererDocumentTitleChanged,
     ) -> Option<bool> {
-        self.target_root_document_protocol_attachment_identity_for_session(
-            session_id,
+        self.target_root_document_protocol_attachment_identity_for_owner(
+            owner,
             change.source_document,
         )?;
-        self.target_session_owner_mut(session_id)?
+        self.target_session_owner_mut_for_owner(owner)?
             .apply_renderer_document_title(change.title.clone())
     }
 
@@ -2415,12 +2344,11 @@ impl CdpConnection {
             .navigation_history_entry_url(entry_id)
     }
 
-    pub(crate) fn reset_navigation_history_for_route(
+    pub(crate) fn reset_navigation_history_for_owner(
         &mut self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        owner: &CommandOwnerScope,
     ) -> Option<bool> {
-        self.target_session_owner_mut_for_route(session_id, owner_route)?
+        self.target_session_owner_mut_for_owner(owner)?
             .reset_navigation_history()
     }
 
@@ -2432,32 +2360,30 @@ impl CdpConnection {
             .can_reset_navigation_history()
     }
 
-    pub(crate) fn mark_next_navigation_history_replace_current_for_route(
+    pub(crate) fn mark_next_navigation_history_replace_current_for_owner(
         &mut self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        owner: &CommandOwnerScope,
     ) -> Option<()> {
-        self.target_session_owner_mut_for_route(session_id, owner_route)?
+        self.target_session_owner_mut_for_owner(owner)?
             .mark_next_navigation_history_replace_current()
     }
 
-    pub(crate) fn mark_next_navigation_history_traverse_to_entry_for_route(
+    pub(crate) fn mark_next_navigation_history_traverse_to_entry_for_owner(
         &mut self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        owner: &CommandOwnerScope,
         entry_id: i32,
     ) -> Option<()> {
-        self.target_session_owner_mut_for_route(session_id, owner_route)?
+        self.target_session_owner_mut_for_owner(owner)?
             .mark_next_navigation_history_traverse_to_entry(entry_id)
     }
 
-    pub(crate) fn record_same_document_navigation_for_session_owner(
+    pub(crate) fn record_same_document_navigation_for_owner(
         &mut self,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
         url: &Url,
         history_update: moli_core::page::SameDocumentHistoryUpdate,
     ) -> Option<String> {
-        self.target_session_owner_mut(session_id)?
+        self.target_session_owner_mut_for_owner(owner)?
             .record_same_document_navigation(url, history_update)
     }
 
@@ -2465,21 +2391,21 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
     ) -> Option<TargetSessionOwnerMut<'_>> {
-        self.target_session_owner_mut_for_route(session_id, None)
+        let owner = CommandOwnerScope::capture(self, session_id);
+        self.target_session_owner_mut_for_owner(&owner)
     }
 
-    pub(super) fn target_session_owner_mut_for_route(
+    pub(super) fn target_session_owner_mut_for_owner(
         &mut self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        owner: &CommandOwnerScope,
     ) -> Option<TargetSessionOwnerMut<'_>> {
-        let owner = self.target_session_owner_for_route(session_id, owner_route)?;
-        self.browser_context_by_id_mut(&owner.browser_context_id)
+        let resolved = self.target_session_owner_for_owner(owner)?;
+        self.browser_context_by_id_mut(&resolved.browser_context_id)
             .map(|browser_context| TargetSessionOwnerMut {
                 browser_context,
-                target_id: owner.target_id,
-                command_session_id: session_id.map(str::to_owned),
-                session_key: owner.session_key,
+                target_id: resolved.target_id,
+                command_session_id: owner.session_id().map(str::to_owned),
+                session_key: resolved.session_key,
             })
     }
 
@@ -2487,20 +2413,20 @@ impl CdpConnection {
         &self,
         session_id: Option<&str>,
     ) -> Option<TargetSessionOwnerRef<'_>> {
-        self.target_session_owner_ref_for_route(session_id, None)
+        let owner = CommandOwnerScope::capture(self, session_id);
+        self.target_session_owner_ref_for_owner(&owner)
     }
 
-    pub(super) fn target_session_owner_ref_for_route(
+    pub(super) fn target_session_owner_ref_for_owner(
         &self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        owner: &CommandOwnerScope,
     ) -> Option<TargetSessionOwnerRef<'_>> {
-        let owner = self.target_session_owner_for_route(session_id, owner_route)?;
-        self.browser_context_by_id(&owner.browser_context_id)
+        let resolved = self.target_session_owner_for_owner(owner)?;
+        self.browser_context_by_id(&resolved.browser_context_id)
             .map(|browser_context| TargetSessionOwnerRef {
                 browser_context,
-                target_id: owner.target_id,
-                session_key: owner.session_key,
+                target_id: resolved.target_id,
+                session_key: resolved.session_key,
             })
     }
 
@@ -2512,14 +2438,12 @@ impl CdpConnection {
         self.target_session_owner_mut(session_id).map(f)
     }
 
-    pub(super) fn with_target_session_owner_mut_for_route<R>(
+    pub(super) fn with_target_session_owner_mut_for_owner<R>(
         &mut self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        owner: &CommandOwnerScope,
         f: impl FnOnce(TargetSessionOwnerMut<'_>) -> R,
     ) -> Option<R> {
-        self.target_session_owner_mut_for_route(session_id, owner_route)
-            .map(f)
+        self.target_session_owner_mut_for_owner(owner).map(f)
     }
 }
 
@@ -3519,10 +3443,7 @@ mod tests {
         let current = conn
             .target_page_residence_identity_for_session(Some("SID-page-residence"))
             .expect("active target should expose its Page residence identity");
-        assert!(conn.target_page_residence_identity_is_current_for_session(
-            Some("SID-page-residence"),
-            &current,
-        ));
+        assert!(conn.target_page_residence_identity_is_current(&current));
 
         for stale in [
             TargetPageResidenceIdentity::new(
@@ -3542,10 +3463,7 @@ mod tests {
             ),
         ] {
             assert!(
-                !conn.target_page_residence_identity_is_current_for_session(
-                    Some("SID-page-residence"),
-                    &stale,
-                ),
+                !conn.target_page_residence_identity_is_current(&stale),
                 "every Page residence identity component must participate in authorization"
             );
         }
@@ -3578,9 +3496,8 @@ mod tests {
             "a reservation must not masquerade as the current Page"
         );
         assert!(
-            conn.pending_target_page_residence_identity_for_route(
-                Some("SID-pending-residence"),
-                None,
+            conn.pending_target_page_residence_identity_for_owner(
+                &crate::conn::CommandOwnerScope::for_session("SID-pending-residence"),
             )
             .is_some(),
             "the future Page attachment should remain explicitly addressable"
@@ -3607,7 +3524,7 @@ mod tests {
             .expect("browser context")
             .set_active_target_id("TID-replacement");
         assert!(
-            conn.target_page_residence_identity_is_current_for_session(None, &original),
+            conn.target_page_residence_identity_is_current(&original),
             "changing visibility must not retire the original stable Page residence"
         );
         assert_ne!(
@@ -3755,11 +3672,13 @@ mod tests {
         })
         .expect("Runtime-enabled auxiliary session should be mutable");
         assert_eq!(
-            conn.runtime_event_protocol_attachments_for_route(Some("SID-runtime-a"), None)
-                .expect("the current Page should expose its Runtime audience")
-                .into_iter()
-                .map(|attachment| attachment.session_id().map(str::to_owned))
-                .collect::<Vec<_>>(),
+            conn.runtime_event_protocol_attachments_for_owner(
+                &crate::conn::CommandOwnerScope::for_session("SID-runtime-a")
+            )
+            .expect("the current Page should expose its Runtime audience")
+            .into_iter()
+            .map(|attachment| attachment.session_id().map(str::to_owned))
+            .collect::<Vec<_>>(),
             vec![Some("SID-runtime-b".to_owned())],
             "a disabled primary must not hide the enabled peer attachment"
         );
@@ -3769,11 +3688,13 @@ mod tests {
         })
         .expect("Runtime-enabled primary session should be mutable");
         assert_eq!(
-            conn.runtime_event_protocol_attachments_for_route(Some("SID-runtime-b"), None)
-                .expect("the current Page should expose its Runtime audience")
-                .into_iter()
-                .map(|attachment| attachment.session_id().map(str::to_owned))
-                .collect::<Vec<_>>(),
+            conn.runtime_event_protocol_attachments_for_owner(
+                &crate::conn::CommandOwnerScope::for_session("SID-runtime-b")
+            )
+            .expect("the current Page should expose its Runtime audience")
+            .into_iter()
+            .map(|attachment| attachment.session_id().map(str::to_owned))
+            .collect::<Vec<_>>(),
             vec![
                 Some("SID-runtime-a".to_owned()),
                 Some("SID-runtime-b".to_owned()),

@@ -2448,7 +2448,9 @@ async fn page_navigate_network_failure_commits_error_document() {
     );
     let error_document_loader_id = ctx
         .conn
-        .target_session_owner_frame_tree_loader_id_for_route(Some("SID-1"), None)
+        .target_session_owner_frame_tree_loader_id_for_owner(
+            &crate::conn::CommandOwnerScope::for_session("SID-1"),
+        )
         .expect("error Document loader id");
     let stale_request_id = "REQ-before-network-error";
     let stale_body_completion = BackgroundNavigationCompletion::main_document_body(
@@ -2492,7 +2494,9 @@ async fn page_navigate_network_failure_commits_error_document() {
     assert!(stale_completion_scheduler_events.is_empty());
     assert_eq!(
         ctx.conn
-            .target_session_owner_frame_tree_loader_id_for_route(Some("SID-1"), None)
+            .target_session_owner_frame_tree_loader_id_for_owner(
+                &crate::conn::CommandOwnerScope::for_session("SID-1")
+            )
             .as_deref(),
         Some(error_document_loader_id.as_str()),
         "stale body completion must not replace the error Document loader"
@@ -2838,7 +2842,7 @@ async fn evaluate_await_promise_scheduler_routed_reply_clears_pending_await_regi
 }
 
 #[tokio::test]
-async fn runtime_await_promise_pending_registers_renderer_response_receiver() {
+async fn runtime_await_promise_releases_dispatch_before_session_response() {
     let mut ctx = TestContext::new();
     with_loaded_document_async(&mut ctx, "<html><title>ok</title><body></body></html>").await;
 
@@ -2868,50 +2872,45 @@ async fn runtime_await_promise_pending_registers_renderer_response_receiver() {
         .conn
         .try_start_pending_command_dispatch(&raw)
         .expect("Runtime.awaitPromise should start as a pending command");
-    let (mut pending, scheduler_events) = match ctx
-        .conn
-        .complete_pending_command_dispatch(pending.wait().await)
+    let completed = tokio::time::timeout(std::time::Duration::from_secs(1), pending.wait())
         .await
-    {
-        CdpCommandTaskStep::Pending(pending) => (*pending, ctx.conn.take_scheduler_events()),
-        CdpCommandTaskStep::Complete(outcome) => {
-            panic!(
-                "never-settling Runtime.awaitPromise should stay pending after initial inspector dispatch: {:?}",
-                outcome.into_parts().0
-            );
-        }
+        .expect("initial Page Inspector dispatch must not wait for Promise settlement");
+    let CdpCommandTaskStep::Complete(outcome) =
+        ctx.conn.complete_pending_command_dispatch(completed).await
+    else {
+        panic!("a Page session response must not enter the CommandReply deferred-reply lane");
     };
+    drop(outcome);
     assert!(
-        scheduler_events.is_empty(),
-        "pending Runtime.awaitPromise must wait on its inspector response receiver, not scheduler follow-up work: {scheduler_events:?}"
+        ctx.conn.take_scheduler_events().is_empty(),
+        "an unresolved session response must not manufacture scheduler follow-up work"
     );
 
     assert!(
-        pending.waits_for_scheduler_deferred_inspector_reply(),
-        "Runtime.awaitPromise should enter scheduler deferred-reply state"
+        ctx.conn
+            .has_pending_inspector_awaits_for_session_owner(None),
+        "the unresolved await must remain registered to its exact Page session"
     );
     assert!(
         ctx.conn
-            .has_pending_inspector_awaits_for_session_owner(None),
-        "scheduler-deferred Runtime.awaitPromise should remain visible as pending command-owned work"
+            .has_unclaimed_pending_inspector_awaits_for_session_owner(None),
+        "the session output path must leave the await under renderer ownership"
     );
     assert!(
         !ctx.conn
-            .has_unclaimed_pending_inspector_awaits_for_session_owner(None),
-        "scheduler-deferred Runtime.awaitPromise should claim the pending await out of the document registry"
-    );
-    assert!(
-        ctx.conn
             .has_claimed_pending_inspector_awaits_for_session_owner(None),
-        "scheduler-deferred Runtime.awaitPromise should be tracked by the command-owned await index"
+        "the CommandReply claimed-await index must remain unused"
     );
-    assert!(
-        pending
-            .take_scheduler_deferred_inspector_reply_receiver()
-            .is_some(),
-        "pending Runtime.awaitPromise should own the renderer response receiver"
+
+    ctx.process_async(json!({
+        "id": 3_024,
+        "method": "Page.close"
+    }))
+    .await;
+    assert_eq!(
+        take_response_by_id(&mut ctx, 3_023)["error"]["message"],
+        json!("Page closed")
     );
-    pending.forget_scheduler_deferred_inspector_reply(&mut ctx.conn);
 }
 
 #[tokio::test]

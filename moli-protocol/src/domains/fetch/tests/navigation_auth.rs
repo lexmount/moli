@@ -927,7 +927,9 @@ async fn run_navigation_cdp_fetch_then_bidi_network_auth_required_terminal(
     let parsed_url = Url::parse(&url).unwrap();
     let auth_pause_sessions = ctx
         .conn
-        .target_fetch_subresource_interception_snapshot_for_route(Some("SID-1"), None)
+        .target_fetch_subresource_interception_snapshot_for_owner(
+            &crate::conn::CommandOwnerScope::for_session("SID-1"),
+        )
         .expect("active target fetch snapshot")
         .matching_auth_required_pause_sessions(Some("SID-1"), &parsed_url);
     assert_eq!(

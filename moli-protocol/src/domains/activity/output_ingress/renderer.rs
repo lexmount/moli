@@ -28,10 +28,9 @@ fn renderer_owner_action_owner(
     if publication_owner.session_id().is_some() {
         return publication_owner.clone();
     }
-    let Some((browser_context_id, target_id)) = conn.target_owner_identity_for_route(
-        publication_owner.session_id(),
-        publication_owner.session_owner_route(),
-    ) else {
+    let Some((browser_context_id, target_id)) =
+        conn.target_owner_identity_for_owner(publication_owner)
+    else {
         return publication_owner.clone();
     };
     let Some(target_id) = target_id else {
@@ -132,7 +131,7 @@ async fn ingest_renderer_output_publication(
             projection,
         } => {
             let owner = CommandOwnerScope::for_session(&session_id);
-            project_renderer_output_records_for_route(
+            project_renderer_output_records_for_owner(
                 conn,
                 &owner,
                 records,
@@ -148,7 +147,7 @@ async fn ingest_renderer_output_publication(
             projection,
         } => {
             let owner = CommandOwnerScope::for_route(owner_route);
-            project_renderer_output_records_for_route(
+            project_renderer_output_records_for_owner(
                 conn,
                 &owner,
                 records,
@@ -162,7 +161,7 @@ async fn ingest_renderer_output_publication(
     }
 }
 
-async fn project_renderer_output_records_for_route(
+async fn project_renderer_output_records_for_owner(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
     records: Vec<moli_core::RendererOutputRecord>,
@@ -301,10 +300,7 @@ mod tests {
             Some(&RendererRuntimeCommandCausalIdentity::new(None, 2)),
         );
         assert_eq!(
-            conn.target_owner_identity_for_route(
-                implicit.session_id(),
-                implicit.session_owner_route(),
-            ),
+            conn.target_owner_identity_for_owner(&implicit,),
             Some((
                 "BID-owner-action".to_owned(),
                 Some("TID-owner-action".to_owned()),

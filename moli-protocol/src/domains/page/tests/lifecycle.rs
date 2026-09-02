@@ -1575,7 +1575,9 @@ async fn runtime_document_close_emits_lifecycle_for_repeated_playwright_set_cont
     for iteration in 0..32 {
         let previous_document = ctx
             .conn
-            .target_root_document_lifecycle_identity_for_route(Some("SID-1"), None)
+            .target_root_document_lifecycle_identity_for_owner(
+                &crate::conn::CommandOwnerScope::for_session("SID-1"),
+            )
             .expect("the previous replacement must retain an exact Document identity");
         let id = 100 + iteration;
         ctx.process_async(json!({
@@ -3679,13 +3681,18 @@ async fn screencast_commands_update_page_session_state() {
     assert_eq!(config.every_nth_frame(), 1);
 
     assert_eq!(
-        ctx.conn
-            .begin_page_screencast_capture_for_route(Some("SID-screencast"), None, 1),
+        ctx.conn.begin_page_screencast_capture_for_owner(
+            &crate::conn::CommandOwnerScope::for_session("SID-screencast"),
+            1
+        ),
         Some(true)
     );
     assert_eq!(
-        ctx.conn
-            .complete_page_screencast_capture_for_route(Some("SID-screencast"), None, 1, true,),
+        ctx.conn.complete_page_screencast_capture_for_owner(
+            &crate::conn::CommandOwnerScope::for_session("SID-screencast"),
+            1,
+            true,
+        ),
         Some(true)
     );
 
@@ -4164,17 +4171,15 @@ async fn repeated_start_invalidates_old_screencast_ack_generation() {
 
         let generation = i32::try_from(id - 62).expect("small screencast generation");
         assert_eq!(
-            ctx.conn.begin_page_screencast_capture_for_route(
-                Some("SID-screencast-generation"),
-                None,
+            ctx.conn.begin_page_screencast_capture_for_owner(
+                &crate::conn::CommandOwnerScope::for_session("SID-screencast-generation"),
                 generation,
             ),
             Some(true)
         );
         assert_eq!(
-            ctx.conn.complete_page_screencast_capture_for_route(
-                Some("SID-screencast-generation"),
-                None,
+            ctx.conn.complete_page_screencast_capture_for_owner(
+                &crate::conn::CommandOwnerScope::for_session("SID-screencast-generation"),
                 generation,
                 true,
             ),

@@ -22,18 +22,6 @@ impl CommandOwnerScope {
         }
     }
 
-    pub(crate) fn capture_for_route(
-        conn: &CdpConnection,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
-    ) -> Self {
-        match (session_id, owner_route) {
-            (Some(session_id), _) => Self::for_session(session_id),
-            (None, Some(route)) => Self::for_route(route.clone()),
-            (None, None) => Self::capture(conn, None),
-        }
-    }
-
     fn capture_default_route(conn: &CdpConnection) -> CdpSessionRoute {
         let Some(browser_context) = conn.browser_context.as_ref() else {
             return CdpSessionRoute::Browser;
@@ -90,17 +78,23 @@ impl CommandOwnerScope {
         }
     }
 
-    /// Returns the explicit route captured for a command without a session.
+    /// Resolves this command's single authority to its current CDP route.
     ///
-    /// A concrete CDP session remains authoritative through `session_id`; the
-    /// route freezes Chromium's primary Page attachment at command admission
-    /// whenever no more explicit route was supplied. `Browser` and
-    /// `BrowserContext` remain explicit authorities rather than a missing
-    /// owner that can silently acquire a later active Page.
-    pub(crate) fn session_owner_route(&self) -> Option<&CdpSessionRoute> {
+    /// Session owners resolve through the attachment registry. Route owners
+    /// retain the exact route captured at command admission. Callers therefore
+    /// cannot express the old invalid combinations of an absent authority or
+    /// both a session and an explicit route.
+    pub(crate) fn resolve_route(&self, conn: &CdpConnection) -> Option<CdpSessionRoute> {
         match &self.identity {
-            CommandOwnerIdentity::Route(route) => Some(route),
+            CommandOwnerIdentity::Session(session_id) => conn.session_route(Some(session_id)),
+            CommandOwnerIdentity::Route(route) => Some(route.clone()),
+        }
+    }
+
+    pub(crate) fn explicit_route(&self) -> Option<&CdpSessionRoute> {
+        match &self.identity {
             CommandOwnerIdentity::Session(_) => None,
+            CommandOwnerIdentity::Route(route) => Some(route),
         }
     }
 }
@@ -108,7 +102,19 @@ impl CommandOwnerScope {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::conn::BrowserContext;
+    use crate::conn::{BrowserContext, PageTargetHost};
+    use crate::devtools_runtime::{
+        DevToolsCommandContext, DevToolsProtocol, DevToolsSessionId, DevToolsTargetId,
+    };
+
+    fn page_context(session_id: &str, target_id: &str) -> DevToolsCommandContext {
+        DevToolsCommandContext {
+            protocol: DevToolsProtocol::Cdp,
+            session_id: Some(DevToolsSessionId::from(session_id)),
+            target_id: Some(DevToolsTargetId::from(target_id)),
+            browser_context_id: None,
+        }
+    }
 
     #[test]
     fn root_page_scope_freezes_the_concrete_active_target() {
@@ -124,7 +130,7 @@ mod tests {
             .set_active_target_id("TID-replacement");
 
         assert_eq!(
-            conn.target_owner_identity_for_route(scope.session_id(), scope.session_owner_route(),),
+            conn.target_owner_identity_for_owner(&scope,),
             Some(("BID-scope".to_owned(), Some("TID-original".to_owned())))
         );
     }
@@ -135,7 +141,7 @@ mod tests {
 
         let scope = CommandOwnerScope::capture(&conn, None);
 
-        assert_eq!(scope.session_owner_route(), Some(&CdpSessionRoute::Browser));
+        assert_eq!(scope.explicit_route(), Some(&CdpSessionRoute::Browser));
     }
 
     #[test]
@@ -146,10 +152,70 @@ mod tests {
         let scope = CommandOwnerScope::capture(&conn, None);
 
         assert_eq!(
-            scope.session_owner_route(),
+            scope.explicit_route(),
             Some(&CdpSessionRoute::BrowserContext {
                 browser_context_id: "BID-empty".to_owned(),
             })
+        );
+    }
+
+    #[test]
+    fn explicit_target_preserves_matching_auxiliary_session_authority() {
+        let mut conn = CdpConnection::default();
+        let mut browser_context = BrowserContext::new_with_page_for_test("BID-owner", "TID-owner");
+        browser_context.attach_active_session("SID-primary");
+        assert!(
+            browser_context
+                .assign_auxiliary_session_to_target("TID-owner", "SID-auxiliary".to_owned(),)
+        );
+        conn.browser_context = Some(browser_context);
+
+        let owner = conn
+            .command_owner_scope_for_devtools_context(&page_context("SID-auxiliary", "TID-owner"))
+            .expect("matching auxiliary attachment should own the command");
+
+        assert_eq!(owner.session_id(), Some("SID-auxiliary"));
+        assert!(owner.explicit_route().is_none());
+    }
+
+    #[test]
+    fn explicit_target_routes_protocol_neutral_session_and_rejects_wrong_cdp_attachment() {
+        let mut conn = CdpConnection::default();
+        let mut browser_context =
+            BrowserContext::new_with_page_for_test("BID-owner", "TID-primary");
+        browser_context.attach_active_session("SID-primary");
+        assert!(
+            browser_context.insert_page_target_host(PageTargetHost::with_url(
+                "TID-background".to_owned(),
+                Some("SID-background".to_owned()),
+                "about:blank".to_owned(),
+            ))
+        );
+        conn.browser_context = Some(browser_context);
+
+        let protocol_neutral = conn
+            .command_owner_scope_for_devtools_context(&page_context(
+                "webdriver-session",
+                "TID-background",
+            ))
+            .expect("non-CDP session should use its explicit target");
+        assert_eq!(protocol_neutral.session_id(), None);
+        assert_eq!(
+            protocol_neutral.explicit_route(),
+            Some(&CdpSessionRoute::PageTarget {
+                browser_context_id: "BID-owner".to_owned(),
+                target_id: "TID-background".to_owned(),
+                session_key: moli_page_types::DevToolsSessionKey::Primary,
+            })
+        );
+
+        assert!(
+            conn.command_owner_scope_for_devtools_context(&page_context(
+                "SID-primary",
+                "TID-background",
+            ))
+            .is_none(),
+            "a real CDP attachment cannot address another target",
         );
     }
 }

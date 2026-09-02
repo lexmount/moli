@@ -727,9 +727,8 @@ async fn idle_override_updates_idle_detector_and_clear_restores_actual_state() {
     }));
 
     ctx.conn
-        .start_document_navigation_for_route(
-            Some("SID-1"),
-            None,
+        .start_document_navigation_for_owner(
+            &crate::conn::CommandOwnerScope::for_session("SID-1"),
             "LID-idle-cross-document".to_owned(),
         )
         .expect("cross-Document navigation should enter the pending state");

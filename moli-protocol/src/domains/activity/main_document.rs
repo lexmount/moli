@@ -147,10 +147,10 @@ impl MainDocumentNavigationActivity {
             self.emit_navigation_result_from_state_into_buffer(out);
         }
         let mut target_info_events = Vec::new();
-        crate::domains::target::emit_target_info_changed_for_session_owner_background_event(
+        crate::domains::target::emit_target_info_changed_for_owner_background_event(
             conn,
             &mut target_info_events,
-            self.state.owner.session_id(),
+            &self.state.owner,
         );
         out.extend_background_events_after_messages(target_info_events);
         if timing_enabled {
@@ -313,17 +313,10 @@ impl MainDocumentNavigationActivity {
             // The document token is the document identity. A same-document
             // navigation may update the target URL between DCL and load, but
             // it must not make the current document's load completion stale.
-            return conn.accepts_document_body_completion_for_route(
-                self.state.owner.session_id(),
-                self.state.owner.session_owner_route(),
-                token,
-            );
+            return conn.accepts_document_body_completion_for_owner(&self.state.owner, token);
         }
-        conn.runtime_session_owner_target_url_for_route(
-            self.state.owner.session_id(),
-            self.state.owner.session_owner_route(),
-        )
-        .is_some_and(|url| url == self.final_url.as_str())
+        conn.runtime_session_owner_target_url_for_owner(&self.state.owner)
+            .is_some_and(|url| url == self.final_url.as_str())
     }
 
     async fn emit_download_navigation_commit_into_buffer_async(
@@ -581,7 +574,7 @@ impl MainDocumentNavigationActivity {
             let error = conn
                 .handle_pending_download_activation_inline_async(
                     &mut download_events,
-                    self.state.owner.session_id(),
+                    &self.state.owner,
                     download,
                     &mut command_context,
                 )
@@ -672,12 +665,7 @@ impl DeferredMainDocumentLoadCompletionAdmission {
     ) -> DeferredMainDocumentLoadCompletionActivity {
         let is_current = self.is_still_current_for_scheduler(conn);
         let renderer_page_residence_identity = is_current
-            .then(|| {
-                conn.renderer_page_residence_identity_for_route(
-                    self.owner_scope().session_id(),
-                    self.owner_scope().session_owner_route(),
-                )
-            })
+            .then(|| conn.renderer_page_residence_identity_for_owner(self.owner_scope()))
             .flatten();
         let lifecycle_observer = if is_current {
             conn.register_exact_renderer_document_lifecycle_observer_for_owner(
@@ -1622,8 +1610,11 @@ mod tests {
             Some(&binding),
             RendererDocumentLifecycleMilestone::Load,
         );
-        conn.start_document_navigation_for_route(Some("SID-nav"), None, "LID-2".to_owned())
-            .expect("replacement navigation token");
+        conn.start_document_navigation_for_owner(
+            &crate::conn::CommandOwnerScope::for_session("SID-nav"),
+            "LID-2".to_owned(),
+        )
+        .expect("replacement navigation token");
 
         assert_eq!(
             observer.wait().await,
@@ -1654,8 +1645,11 @@ mod tests {
         conn.enqueue_deferred_main_document_load_completion(old_completion);
         let work = take_deferred_load_work_for_test(&mut conn);
 
-        conn.start_document_navigation_for_route(Some("SID-nav"), None, "LID-2".to_owned())
-            .expect("replacement navigation token");
+        conn.start_document_navigation_for_owner(
+            &crate::conn::CommandOwnerScope::for_session("SID-nav"),
+            "LID-2".to_owned(),
+        )
+        .expect("replacement navigation token");
 
         assert!(
             conn.take_scheduler_events().is_empty(),

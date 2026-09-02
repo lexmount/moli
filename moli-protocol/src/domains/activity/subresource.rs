@@ -43,9 +43,8 @@ impl PreparedSubresourceContinueAction {
         event: PendingSubresourceContinueEvent,
     ) -> Self {
         let internal_id = Self::internal_id(&event);
-        let request = conn.claim_subresource_continue_request_for_route(
-            command_owner.session_id(),
-            command_owner.session_owner_route(),
+        let request = conn.claim_subresource_continue_request_for_owner(
+            command_owner,
             &owner,
             internal_id,
             matches!(&event, PendingSubresourceContinueEvent::Completed { .. }),
@@ -64,10 +63,7 @@ impl PreparedSubresourceContinueAction {
         event: PendingSubresourceContinueEvent,
     ) -> Option<Self> {
         let command_owner = CommandOwnerScope::capture(conn, session_id);
-        let owner = conn.target_page_residence_identity_for_route(
-            command_owner.session_id(),
-            command_owner.session_owner_route(),
-        )?;
+        let owner = conn.target_page_residence_identity_for_owner(&command_owner)?;
         Some(Self::capture(conn, &command_owner, owner, event))
     }
 }
@@ -78,17 +74,12 @@ pub(in crate::domains) fn prepare_subresource_continue_action_for_renderer_recor
     source_document: moli_core::RendererDocumentLifecycleIdentity,
     event: PendingSubresourceContinueEvent,
 ) -> Option<PreparedSubresourceContinueAction> {
-    if conn.target_root_document_lifecycle_identity_for_route(
-        command_owner.session_id(),
-        command_owner.session_owner_route(),
-    ) != Some(source_document)
+    if conn.target_root_document_lifecycle_identity_for_owner(command_owner)
+        != Some(source_document)
     {
         return None;
     }
-    let owner = conn.target_page_residence_identity_for_route(
-        command_owner.session_id(),
-        command_owner.session_owner_route(),
-    )?;
+    let owner = conn.target_page_residence_identity_for_owner(command_owner)?;
     Some(PreparedSubresourceContinueAction::capture(
         conn,
         command_owner,
@@ -104,10 +95,7 @@ pub(in crate::domains) async fn flush_prepared_subresource_continue_actions_back
     actions: Vec<PreparedSubresourceContinueAction>,
 ) {
     for action in actions {
-        if conn.target_page_residence_identity_is_current_for_session(
-            command_owner.session_id(),
-            &action.owner,
-        ) {
+        if conn.target_page_residence_identity_is_current(&action.owner) {
             flush_prepared_subresource_continue_action_background_events_async(
                 conn,
                 out,
@@ -126,9 +114,8 @@ async fn flush_prepared_subresource_continue_action_background_events_async(
     action: PreparedSubresourceContinueAction,
 ) {
     let session_id = command_owner.session_id();
-    let owner_route = command_owner.session_owner_route();
     let PreparedSubresourceContinueAction { event, request, .. } = action;
-    let fetch_session_id = conn.target_fetch_event_session_id_for_route(session_id, owner_route);
+    let fetch_session_id = conn.target_fetch_event_session_id_for_owner(command_owner);
     let fetch_event_session_id = fetch_session_id.as_deref().or(session_id);
 
     match event {
@@ -160,9 +147,8 @@ async fn flush_prepared_subresource_continue_action_background_events_async(
             };
             let Some(request_id) = in_flight.request_id else {
                 let _ = conn
-                    .continue_pending_subresource_response_for_route_async(
-                        session_id,
-                        owner_route,
+                    .continue_pending_subresource_response_for_owner_async(
+                        command_owner,
                         response_info.internal_id,
                         None,
                         None,
@@ -183,10 +169,7 @@ async fn flush_prepared_subresource_continue_action_background_events_async(
                 .response_stage_url_match_policy
                 .requires_final_url_match()
                 && !conn
-                    .target_fetch_subresource_interception_snapshot_for_route(
-                        session_id,
-                        owner_route,
-                    )
+                    .target_fetch_subresource_interception_snapshot_for_owner(command_owner)
                     .is_some_and(|snapshot| {
                         snapshot.matches_response_stage(
                             response_info.resource_type.into(),
@@ -195,9 +178,8 @@ async fn flush_prepared_subresource_continue_action_background_events_async(
                     })
             {
                 let _ = conn
-                    .continue_pending_subresource_response_for_route_async(
-                        session_id,
-                        owner_route,
+                    .continue_pending_subresource_response_for_owner_async(
+                        command_owner,
                         response_info.internal_id,
                         None,
                         None,
@@ -215,18 +197,15 @@ async fn flush_prepared_subresource_continue_action_background_events_async(
                 return;
             }
             let blocked_intercepts = if in_flight.response_stage_blocked_intercepts.is_empty() {
-                conn.target_fetch_subresource_interception_snapshot_for_route(
-                    session_id,
-                    owner_route,
-                )
-                .map(|snapshot| {
-                    snapshot.matching_network_intercepts(
-                        FetchRequestStage::Response,
-                        response_info.resource_type.into(),
-                        &response_info.final_url,
-                    )
-                })
-                .unwrap_or_default()
+                conn.target_fetch_subresource_interception_snapshot_for_owner(command_owner)
+                    .map(|snapshot| {
+                        snapshot.matching_network_intercepts(
+                            FetchRequestStage::Response,
+                            response_info.resource_type.into(),
+                            &response_info.final_url,
+                        )
+                    })
+                    .unwrap_or_default()
             } else {
                 in_flight.response_stage_blocked_intercepts.clone()
             };
@@ -248,10 +227,7 @@ async fn flush_prepared_subresource_continue_action_background_events_async(
                     &in_flight.pending.frame_id,
                 )
                 .or_else(|| {
-                    conn.target_fetch_subresource_interception_snapshot_for_route(
-                        session_id,
-                        owner_route,
-                    )
+                    conn.target_fetch_subresource_interception_snapshot_for_owner(command_owner)
                 })
                 .map(|snapshot| {
                     snapshot.matching_response_stage_pause_sessions(
@@ -277,10 +253,7 @@ async fn flush_prepared_subresource_continue_action_background_events_async(
                 let mut remaining_sessions = Vec::new();
                 for session in response_stage_sessions.into_iter().skip(1) {
                     let Ok((next_request_id, _)) = conn
-                        .allocate_pending_subresource_fetch_request_ids_for_route(
-                            session_id,
-                            owner_route,
-                        )
+                        .allocate_pending_subresource_fetch_request_ids_for_owner(command_owner)
                     else {
                         return;
                     };
@@ -305,13 +278,11 @@ async fn flush_prepared_subresource_continue_action_background_events_async(
             pending_response.action_session_id = response_event_session_id.clone();
             let pending_owner_session_id = pending_response.owner_session_id.clone();
             let pending_owner_session_id = pending_owner_session_id.as_deref().or(session_id);
-            let pending_owner_route = pending_owner_session_id
-                .is_none()
-                .then_some(owner_route)
-                .flatten();
-            if !conn.register_pending_subresource_fetch_response_request_for_route(
-                pending_owner_session_id,
-                pending_owner_route,
+            let pending_owner = pending_owner_session_id
+                .map(CommandOwnerScope::for_session)
+                .unwrap_or_else(|| command_owner.clone());
+            if !conn.register_pending_subresource_fetch_response_request_for_owner(
+                &pending_owner,
                 request_id.clone(),
                 pending_response.clone(),
             ) {
@@ -332,9 +303,8 @@ async fn flush_prepared_subresource_continue_action_background_events_async(
             };
             let Some(request_id) = in_flight.request_id else {
                 let _ = conn
-                    .fail_pending_subresource_auth_for_route_async(
-                        session_id,
-                        owner_route,
+                    .fail_pending_subresource_auth_for_owner_async(
+                        command_owner,
                         auth_info.internal_id,
                         "Fetch auth challenge has no DevTools request".to_owned(),
                     )
@@ -351,7 +321,7 @@ async fn flush_prepared_subresource_continue_action_background_events_async(
                 return;
             };
             let blocked_intercepts = conn
-                .target_fetch_subresource_interception_snapshot_for_route(session_id, owner_route)
+                .target_fetch_subresource_interception_snapshot_for_owner(command_owner)
                 .map(|snapshot| snapshot.matching_auth_required_network_intercepts(&auth_info.url))
                 .unwrap_or_default();
             let blocked_intercepts = if blocked_intercepts.is_empty() {
@@ -376,10 +346,7 @@ async fn flush_prepared_subresource_continue_action_background_events_async(
                     &in_flight.pending.frame_id,
                 )
                 .or_else(|| {
-                    conn.target_fetch_subresource_interception_snapshot_for_route(
-                        session_id,
-                        owner_route,
-                    )
+                    conn.target_fetch_subresource_interception_snapshot_for_owner(command_owner)
                 })
                 .map(|snapshot| {
                     snapshot.matching_auth_required_pause_sessions(session_id, &auth_info.url)
@@ -401,10 +368,7 @@ async fn flush_prepared_subresource_continue_action_background_events_async(
                 let mut remaining_sessions = Vec::new();
                 for session in auth_sessions.into_iter().skip(1) {
                     let Ok((next_request_id, _)) = conn
-                        .allocate_pending_subresource_fetch_request_ids_for_route(
-                            session_id,
-                            owner_route,
-                        )
+                        .allocate_pending_subresource_fetch_request_ids_for_owner(command_owner)
                     else {
                         return;
                     };
@@ -429,13 +393,11 @@ async fn flush_prepared_subresource_continue_action_background_events_async(
             pending_auth.action_session_id = auth_event_session_id.clone();
             let pending_owner_session_id = pending_auth.owner_session_id.clone();
             let pending_owner_session_id = pending_owner_session_id.as_deref().or(session_id);
-            let pending_owner_route = pending_owner_session_id
-                .is_none()
-                .then_some(owner_route)
-                .flatten();
-            if !conn.register_pending_subresource_fetch_auth_request_for_route(
-                pending_owner_session_id,
-                pending_owner_route,
+            let pending_owner = pending_owner_session_id
+                .map(CommandOwnerScope::for_session)
+                .unwrap_or_else(|| command_owner.clone());
+            if !conn.register_pending_subresource_fetch_auth_request_for_owner(
+                &pending_owner,
                 request_id.clone(),
                 pending_auth.clone(),
             ) {
@@ -658,10 +620,7 @@ async fn flush_post_subresource_network_activity_background_events_async(
     frame_id: &str,
     network_request_id: &str,
 ) {
-    conn.ingest_runtime_session_owner_output_updates_for_route(
-        owner.session_id(),
-        owner.session_owner_route(),
-    );
+    conn.ingest_runtime_session_owner_output_updates_for_owner(owner);
     project_network_backlog_for_owner(conn, out, owner, frame_id, Some(network_request_id));
     clear_fetch_pause_network_announcement(conn, owner, network_request_id);
 }
@@ -692,9 +651,7 @@ fn clear_fetch_pause_network_announcement(
     owner: &CommandOwnerScope,
     request_id: &str,
 ) {
-    if let Ok(runtime_slot) = conn
-        .runtime_session_owner_slot_mut_for_route(owner.session_id(), owner.session_owner_route())
-    {
+    if let Ok(runtime_slot) = conn.runtime_session_owner_slot_mut_for_owner(owner) {
         runtime_slot.clear_fetch_pause_announced_request_id(request_id);
     }
 }
@@ -708,9 +665,7 @@ fn record_subresource_network_request_handle(
     let Some(request_handle) = request_handle else {
         return;
     };
-    if let Ok(runtime_slot) = conn
-        .runtime_session_owner_slot_mut_for_route(owner.session_id(), owner.session_owner_route())
-    {
+    if let Ok(runtime_slot) = conn.runtime_session_owner_slot_mut_for_owner(owner) {
         runtime_slot.record_subresource_request_id_for_handle_if_absent(
             request_handle,
             request_id.to_owned(),

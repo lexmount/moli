@@ -2,7 +2,7 @@ use crate::domains::activity::{
     ProtocolOutputPayloads, ProtocolOutputProjectionContext, ProtocolOutputSink, ProtocolOutputSlot,
 };
 use crate::{
-    conn::{BackgroundProtocolEvent, CdpConnection, CommandOwnerScope},
+    conn::{BackgroundProtocolEvent, CdpConnection, CdpSessionRoute, CommandOwnerScope},
     domains::command_output::protocol_message_background_event_for_target,
     domains::runtime_context_events::{
         RuntimeContextProtocolEvent, apply_runtime_context_protocol_event_side_effects_typed,
@@ -57,18 +57,19 @@ struct RuntimeInspectorMessageBatch {
 
 /// Projection authority for one prepared Inspector batch.
 ///
-/// Ordinary observations remain tied to the exact Page attachment that
-/// produced them. A retired terminal response is a distinct state rather than
-/// an absent attachment: its exact renderer correlation was already consumed
-/// at ingress, and no notification or renderer state can inhabit this variant.
+/// Document and Worker observations remain tied to their concrete attachment.
+/// Terminal responses instead belong to the DevTools session that registered
+/// their renderer call. This mirrors Chromium's browser-side call-id journal:
+/// replacing a document does not invalidate a response which already won that
+/// session correlation, but it never authorizes observations from the retired
+/// document.
 #[derive(Clone, Debug, PartialEq)]
 enum RuntimeInspectorMessageAuthority {
     CurrentPage(crate::conn::TargetPageProtocolAttachmentIdentity),
     CurrentWorker(crate::conn::TargetWorkerProtocolAttachmentIdentity),
-    AuthorizedRetiredTerminal {
-        browser_context_id: String,
-        target_id: Option<String>,
-        session_id: Option<String>,
+    SessionResponse {
+        owner: CommandOwnerScope,
+        expected_route: CdpSessionRoute,
     },
 }
 
@@ -77,7 +78,7 @@ impl RuntimeInspectorMessageAuthority {
         match self {
             Self::CurrentPage(attachment) => attachment.session_id(),
             Self::CurrentWorker(attachment) => Some(attachment.session_id()),
-            Self::AuthorizedRetiredTerminal { session_id, .. } => session_id.as_deref(),
+            Self::SessionResponse { owner, .. } => owner.session_id(),
         }
     }
 
@@ -87,34 +88,22 @@ impl RuntimeInspectorMessageAuthority {
                 conn.target_page_protocol_attachment_identity_is_current(attachment)
             }
             Self::CurrentWorker(attachment) => attachment.is_current(),
-            Self::AuthorizedRetiredTerminal {
-                browser_context_id,
-                target_id,
-                session_id,
-            } => {
-                let Some((current_browser_context_id, current_target_id)) =
-                    conn.target_owner_identity_for_session(session_id.as_deref())
-                else {
-                    return false;
-                };
-                let current_target_id = current_target_id.or_else(|| {
-                    conn.browser_context_by_id(&current_browser_context_id)
-                        .and_then(|context| context.active_target_id_owned())
-                });
-                current_browser_context_id == *browser_context_id && current_target_id == *target_id
-            }
+            Self::SessionResponse {
+                owner,
+                expected_route,
+            } => owner.resolve_route(conn).as_ref() == Some(expected_route),
         }
     }
 
-    fn command_owner(&self) -> Option<crate::conn::CommandOwnerScope> {
+    fn command_owner(&self) -> crate::conn::CommandOwnerScope {
         match self {
-            Self::CurrentPage(attachment) => Some(
-                crate::conn::CommandOwnerScope::for_page_attachment(attachment),
-            ),
-            Self::CurrentWorker(attachment) => {
-                Some(CommandOwnerScope::for_session(attachment.session_id()))
+            Self::CurrentPage(attachment) => {
+                crate::conn::CommandOwnerScope::for_page_attachment(attachment)
             }
-            Self::AuthorizedRetiredTerminal { .. } => None,
+            Self::CurrentWorker(attachment) => {
+                CommandOwnerScope::for_session(attachment.session_id())
+            }
+            Self::SessionResponse { owner, .. } => owner.clone(),
         }
     }
 }
@@ -218,13 +207,10 @@ impl RuntimeOutputProjectionStep {
                             session_id.as_deref(),
                         );
                         for execution_context_id in batch.created_execution_context_ids {
-                            let Some(owner) = owner.as_ref() else {
-                                continue;
-                            };
                             Box::pin(
                                 super::start_bidi_preload_channel_listeners_for_execution_context_background_events_async(
                                     conn,
-                                    owner,
+                                    &owner,
                                     execution_context_id,
                                     context.command.protocol_events_mut(),
                                 ),
@@ -269,15 +255,49 @@ pub(in crate::domains) async fn project_runtime_inspector_post_response_messages
 }
 
 impl RuntimePreparedOutputs {
+    fn append_inspector_message(
+        &mut self,
+        order: RendererRuntimeInspectorMessageResponseOrder,
+        authority: RuntimeInspectorMessageAuthority,
+        message: RuntimeInspectorMessage,
+    ) {
+        let batches = match order {
+            RendererRuntimeInspectorMessageResponseOrder::BeforeCommandResponse => {
+                &mut self.inspector_message_batches
+            }
+            RendererRuntimeInspectorMessageResponseOrder::AfterCommandResponse => {
+                &mut self.post_response_inspector_message_batches
+            }
+        };
+        let created_execution_context_id = message.created_execution_context_id();
+        if let Some(last) = batches.last_mut()
+            && last.authority == authority
+        {
+            last.messages.push(message);
+            if let Some(execution_context_id) = created_execution_context_id
+                && !last
+                    .created_execution_context_ids
+                    .contains(&execution_context_id)
+            {
+                last.created_execution_context_ids
+                    .push(execution_context_id);
+            }
+            return;
+        }
+        batches.push(RuntimeInspectorMessageBatch {
+            authority,
+            messages: vec![message],
+            created_execution_context_ids: created_execution_context_id.into_iter().collect(),
+        });
+    }
+
     pub(crate) fn from_renderer_runtime_binding_call(
         conn: &CdpConnection,
         owner: &CommandOwnerScope,
         call: moli_core::page::PendingRuntimeBindingCall,
     ) -> Self {
-        let Some(attachment) = conn.target_page_protocol_attachment_identity_for_route(
-            owner.session_id(),
-            owner.session_owner_route(),
-        ) else {
+        let Some(attachment) = conn.target_page_protocol_attachment_identity_for_owner(owner)
+        else {
             return Self::default();
         };
         Self {
@@ -292,13 +312,26 @@ impl RuntimePreparedOutputs {
         }
     }
 
-    pub(crate) fn from_renderer_runtime_inspector_message_batches(
+    pub(crate) fn from_page_renderer_runtime_inspector_message_batches(
         conn: &mut CdpConnection,
         source_owner: &CommandOwnerScope,
-        batches: &[RendererRuntimeInspectorMessageBatch],
+        source_batches: Vec<RendererRuntimeInspectorMessageBatch>,
     ) -> Self {
+        let current_batches = conn.route_current_renderer_inspector_output_for_owner(
+            source_owner,
+            source_batches.clone(),
+        );
+        let observations_are_current = !current_batches.is_empty();
+        let batches = if observations_are_current {
+            current_batches
+        } else {
+            source_batches
+        };
         let mut outputs = Self::default();
-        for batch in batches.iter().filter(|batch| !batch.messages.is_empty()) {
+        for batch in batches
+            .into_iter()
+            .filter(|batch| !batch.messages.is_empty())
+        {
             let Some(attachment) = conn
                 .target_page_protocol_attachment_identity_for_renderer_inspector_owner(
                     source_owner,
@@ -307,47 +340,53 @@ impl RuntimePreparedOutputs {
             else {
                 continue;
             };
-            let mut renderer_messages = batch.messages.clone();
-            if let Some(renderer_agent_attachment_id) = batch.renderer_agent_attachment_id() {
-                conn.restore_frontend_command_ids_in_devtools_session_output(
-                    attachment.session_id(),
-                    renderer_agent_attachment_id,
-                    &mut renderer_messages,
+            let response_owner = CommandOwnerScope::for_page_attachment(&attachment);
+            let response_route = response_owner.resolve_route(conn);
+            let renderer_agent_attachment_id = batch.renderer_agent_attachment_id();
+            let order = batch.command_response_order();
+            for message in batch.messages {
+                let is_terminal_response = matches!(
+                    &message,
+                    RendererRuntimeInspectorMessage::Protocol(message)
+                        if message.renderer_call_id().is_some()
                 );
-            }
-            if renderer_messages.is_empty() {
-                continue;
-            }
-            let messages = renderer_messages
-                .into_iter()
-                .map(|message| {
-                    RuntimeInspectorMessage::from_renderer_message(
-                        message,
-                        attachment.page_owner().target_id(),
-                    )
-                })
-                .collect::<Vec<_>>();
-            let mut created_execution_context_ids = Vec::new();
-            for execution_context_id in messages
-                .iter()
-                .filter_map(RuntimeInspectorMessage::created_execution_context_id)
-            {
-                if !created_execution_context_ids.contains(&execution_context_id) {
-                    created_execution_context_ids.push(execution_context_id);
+                if is_terminal_response {
+                    let Some(expected_route) = response_route.clone() else {
+                        continue;
+                    };
+                    let mut response = vec![message];
+                    conn.restore_frontend_command_ids_in_devtools_session_output_for_owner(
+                        &response_owner,
+                        renderer_agent_attachment_id,
+                        &mut response,
+                        observations_are_current,
+                    );
+                    let Some(response) = response.pop() else {
+                        continue;
+                    };
+                    outputs.append_inspector_message(
+                        order,
+                        RuntimeInspectorMessageAuthority::SessionResponse {
+                            owner: response_owner.clone(),
+                            expected_route,
+                        },
+                        RuntimeInspectorMessage::from_renderer_message(
+                            response,
+                            attachment.page_owner().target_id(),
+                        ),
+                    );
+                    continue;
                 }
-            }
-            let prepared = RuntimeInspectorMessageBatch {
-                authority: RuntimeInspectorMessageAuthority::CurrentPage(attachment),
-                messages,
-                created_execution_context_ids,
-            };
-            match batch.command_response_order() {
-                RendererRuntimeInspectorMessageResponseOrder::BeforeCommandResponse => {
-                    outputs.inspector_message_batches.push(prepared);
+                if observations_are_current {
+                    outputs.append_inspector_message(
+                        order,
+                        RuntimeInspectorMessageAuthority::CurrentPage(attachment.clone()),
+                        RuntimeInspectorMessage::from_renderer_message(
+                            message,
+                            attachment.page_owner().target_id(),
+                        ),
+                    );
                 }
-                RendererRuntimeInspectorMessageResponseOrder::AfterCommandResponse => outputs
-                    .post_response_inspector_message_batches
-                    .push(prepared),
             }
         }
         outputs
@@ -366,122 +405,45 @@ impl RuntimePreparedOutputs {
         else {
             return Self::default();
         };
-        let mut renderer_messages = batch.messages.clone();
-        conn.restore_frontend_command_ids_in_worker_devtools_session_output(
-            session_id,
-            &mut renderer_messages,
-        );
-        if renderer_messages.is_empty() {
+        let response_owner = CommandOwnerScope::for_session(session_id);
+        let Some(response_route) = response_owner.resolve_route(conn) else {
             return Self::default();
-        }
-        let target_id = attachment.target_id().to_owned();
-        let prepared = RuntimeInspectorMessageBatch {
-            authority: RuntimeInspectorMessageAuthority::CurrentWorker(attachment),
-            messages: renderer_messages
-                .into_iter()
-                .map(|message| {
-                    RuntimeInspectorMessage::from_renderer_message(message, Some(&target_id))
-                })
-                .collect(),
-            // Worker contexts never own Page/BiDi preload-channel listeners.
-            created_execution_context_ids: Vec::new(),
         };
+        let target_id = attachment.target_id().to_owned();
         let mut outputs = Self::default();
-        match batch.command_response_order() {
-            RendererRuntimeInspectorMessageResponseOrder::BeforeCommandResponse => {
-                outputs.inspector_message_batches.push(prepared);
-            }
-            RendererRuntimeInspectorMessageResponseOrder::AfterCommandResponse => {
-                outputs
-                    .post_response_inspector_message_batches
-                    .push(prepared);
-            }
-        }
-        outputs
-    }
-
-    /// Preserves only terminal session responses from an attachment that was
-    /// current when the response lease was claimed but retired before its Page
-    /// journal crossed protocol ingress.
-    ///
-    /// The exact renderer correlation is consumed here.  This makes the
-    /// resulting response an already-authorized session fact, while all
-    /// notifications, context events, V8 state, and remote-object projection
-    /// from the retired document are discarded.
-    pub(crate) fn from_retired_renderer_runtime_inspector_session_responses(
-        conn: &mut CdpConnection,
-        source_owner: &CommandOwnerScope,
-        batches: &[RendererRuntimeInspectorMessageBatch],
-    ) -> Self {
-        let mut outputs = Self::default();
-        for batch in batches {
-            let Some(renderer_agent_attachment_id) = batch.renderer_agent_attachment_id() else {
-                continue;
-            };
-            let Some(protocol_attachment) = conn
-                .target_page_protocol_attachment_identity_for_renderer_inspector_owner(
-                    source_owner,
-                    batch.session.wire_session_id(),
-                )
-            else {
-                continue;
-            };
-            let session_id = protocol_attachment.session_id().map(str::to_owned);
-            if conn.renderer_agent_attachment_is_current_for_session_owner(
-                session_id.as_deref(),
-                renderer_agent_attachment_id,
-            ) {
-                continue;
-            }
-
-            let mut responses = batch
-                .messages
-                .iter()
-                .filter(|message| {
-                    matches!(
-                        message,
-                        RendererRuntimeInspectorMessage::Protocol(message)
-                            if message.renderer_call_id().is_some()
-                    )
-                })
-                .cloned()
-                .collect::<Vec<_>>();
-            conn.restore_frontend_command_ids_in_retired_devtools_session_output(
-                session_id.as_deref(),
-                renderer_agent_attachment_id,
-                &mut responses,
+        let order = batch.command_response_order();
+        for message in batch.messages.clone() {
+            let is_terminal_response = matches!(
+                &message,
+                RendererRuntimeInspectorMessage::Protocol(message)
+                    if message.renderer_call_id().is_some()
             );
-            if responses.is_empty() {
+            if is_terminal_response {
+                let mut response = vec![message];
+                conn.restore_frontend_command_ids_in_devtools_session_output_for_owner(
+                    &response_owner,
+                    None,
+                    &mut response,
+                    true,
+                );
+                let Some(response) = response.pop() else {
+                    continue;
+                };
+                outputs.append_inspector_message(
+                    order,
+                    RuntimeInspectorMessageAuthority::SessionResponse {
+                        owner: response_owner.clone(),
+                        expected_route: response_route.clone(),
+                    },
+                    RuntimeInspectorMessage::from_renderer_message(response, Some(&target_id)),
+                );
                 continue;
             }
-            let target_id = protocol_attachment.page_owner().target_id();
-            let messages = responses
-                .into_iter()
-                .map(|message| RuntimeInspectorMessage::from_renderer_message(message, target_id))
-                .collect();
-            let prepared = RuntimeInspectorMessageBatch {
-                authority: RuntimeInspectorMessageAuthority::AuthorizedRetiredTerminal {
-                    browser_context_id: protocol_attachment
-                        .page_owner()
-                        .browser_context_id()
-                        .to_owned(),
-                    target_id: protocol_attachment
-                        .page_owner()
-                        .target_id()
-                        .map(str::to_owned),
-                    session_id,
-                },
-                messages,
-                created_execution_context_ids: Vec::new(),
-            };
-            match batch.command_response_order() {
-                RendererRuntimeInspectorMessageResponseOrder::BeforeCommandResponse => {
-                    outputs.inspector_message_batches.push(prepared);
-                }
-                RendererRuntimeInspectorMessageResponseOrder::AfterCommandResponse => outputs
-                    .post_response_inspector_message_batches
-                    .push(prepared),
-            }
+            outputs.append_inspector_message(
+                order,
+                RuntimeInspectorMessageAuthority::CurrentWorker(attachment.clone()),
+                RuntimeInspectorMessage::from_renderer_message(message, Some(&target_id)),
+            );
         }
         outputs
     }
@@ -594,8 +556,8 @@ pub(in crate::domains) fn push_routed_renderer_runtime_inspector_message_batch_b
         Some(session_id) => CommandOwnerScope::for_session(session_id),
         None => CommandOwnerScope::capture(conn, None),
     };
-    let prepared = RuntimePreparedOutputs::from_renderer_runtime_inspector_message_batches(
-        conn, &owner, &batches,
+    let prepared = RuntimePreparedOutputs::from_page_renderer_runtime_inspector_message_batches(
+        conn, &owner, batches,
     );
     for batch in prepared
         .inspector_message_batches
@@ -618,8 +580,8 @@ pub(in crate::domains) fn push_routed_renderer_runtime_inspector_message_batch_b
 #[cfg(test)]
 mod tests {
     use moli_core::page::{
-        DevToolsSessionKey, RendererAgentAttachmentId, RendererDevToolsAgentToken,
-        RendererRuntimeInspectorMessage, RendererRuntimeInspectorMessageBatch,
+        DevToolsSessionKey, RendererAgentAttachmentId, RendererRuntimeInspectorMessage,
+        RendererRuntimeInspectorMessageBatch,
     };
     use moli_page_types::RendererInspectorResponseDelivery;
     use serde_json::Value;
@@ -732,20 +694,33 @@ mod tests {
             .map_or(DevToolsSessionKey::Primary, |session_id| {
                 DevToolsSessionKey::Attached(session_id.to_owned())
             });
+        let agent_token = conn
+            .runtime_session_owner_slot_for_owner(&owner)
+            .expect("runtime owner slot")
+            .current_renderer_attachment()
+            .expect("current renderer attachment")
+            .agent_token();
         let batches = vec![RendererRuntimeInspectorMessageBatch::new(
-            RendererDevToolsAgentToken::allocate(),
+            agent_token,
             session,
             renderer_messages(messages),
         )];
-        RuntimePreparedOutputs::from_renderer_runtime_inspector_message_batches(
-            conn, &owner, &batches,
+        RuntimePreparedOutputs::from_page_renderer_runtime_inspector_message_batches(
+            conn, &owner, batches,
         )
     }
 
-    #[test]
-    fn renderer_inspector_batches_keep_their_command_response_side() {
-        let (mut conn, _) = runtime_binding_attachment_fixture();
-        let agent_token = RendererDevToolsAgentToken::allocate();
+    #[tokio::test(flavor = "multi_thread")]
+    async fn renderer_inspector_batches_keep_their_command_response_side() {
+        let mut ctx = TestContext::new();
+        load_document(&mut ctx, "<!doctype html><main>batch order</main>").await;
+        let agent_token = ctx
+            .conn
+            .runtime_session_owner_slot(Some("SID-1"))
+            .expect("runtime owner slot")
+            .current_renderer_attachment()
+            .expect("current renderer attachment")
+            .agent_token();
         let session = DevToolsSessionKey::Primary;
         let batches = vec![
             RendererRuntimeInspectorMessageBatch::new(
@@ -766,10 +741,10 @@ mod tests {
             ),
         ];
 
-        let outputs = RuntimePreparedOutputs::from_renderer_runtime_inspector_message_batches(
-            &mut conn,
+        let outputs = RuntimePreparedOutputs::from_page_renderer_runtime_inspector_message_batches(
+            &mut ctx.conn,
             &CommandOwnerScope::for_session("SID-1"),
-            &batches,
+            batches,
         );
 
         assert_eq!(outputs.inspector_message_batches.len(), 1);
@@ -857,12 +832,11 @@ mod tests {
         );
         batch.bind_renderer_agent_attachment(retired_attachment);
 
-        let outputs =
-            RuntimePreparedOutputs::from_retired_renderer_runtime_inspector_session_responses(
-                &mut ctx.conn,
-                &CommandOwnerScope::for_session("SID-1"),
-                &[batch],
-            );
+        let outputs = RuntimePreparedOutputs::from_page_renderer_runtime_inspector_message_batches(
+            &mut ctx.conn,
+            &CommandOwnerScope::for_session("SID-1"),
+            vec![batch],
+        );
         let outputs_after_detach = outputs.clone();
         let events = drain_runtime_inspector_outputs(&mut ctx.conn, outputs, None)
             .await
@@ -1047,9 +1021,10 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn runtime_inspector_activity_uses_capture_time_attachment() {
-        let (mut conn, _attachment) = runtime_binding_attachment_fixture();
+        let mut ctx = TestContext::new();
+        load_document(&mut ctx, "<!doctype html><main>capture</main>").await;
         let outputs = renderer_inspector_outputs(
-            &mut conn,
+            &mut ctx.conn,
             Some("SID-1"),
             None,
             vec![json!({
@@ -1062,7 +1037,8 @@ mod tests {
             })],
         );
         let events =
-            drain_runtime_inspector_outputs(&mut conn, outputs, Some("SID-unrelated-drain")).await;
+            drain_runtime_inspector_outputs(&mut ctx.conn, outputs, Some("SID-unrelated-drain"))
+                .await;
 
         assert_eq!(events.len(), 1);
         let (message, automation_event) = events.into_iter().next().unwrap().into_parts();
@@ -1083,20 +1059,22 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn runtime_inspector_activity_discards_replaced_page_output() {
-        let (mut conn, _attachment) = runtime_binding_attachment_fixture();
+        let mut ctx = TestContext::new();
+        load_document(&mut ctx, "<!doctype html><main>old</main>").await;
         let outputs = renderer_inspector_outputs(
-            &mut conn,
+            &mut ctx.conn,
             Some("SID-1"),
             None,
             vec![json!({
-                "id": 91,
-                "result": { "value": "old-page-response" }
+                "method": "Debugger.scriptParsed",
+                "params": { "scriptId": "old-page" }
             })],
         );
-        conn.runtime_session_owner_slot_mut(Some("SID-1"))
+        ctx.conn
+            .runtime_session_owner_slot_mut(Some("SID-1"))
             .expect("Runtime inspector target")
             .replace_page_attachment_id_for_test();
-        let events = drain_runtime_inspector_outputs(&mut conn, outputs, Some("SID-1")).await;
+        let events = drain_runtime_inspector_outputs(&mut ctx.conn, outputs, Some("SID-1")).await;
 
         assert!(
             events.is_empty(),
@@ -1106,9 +1084,10 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn runtime_inspector_activity_discards_detached_attachment() {
-        let (mut conn, _attachment) = runtime_binding_attachment_fixture();
+        let mut ctx = TestContext::new();
+        load_document(&mut ctx, "<!doctype html><main>detach</main>").await;
         let outputs = renderer_inspector_outputs(
-            &mut conn,
+            &mut ctx.conn,
             Some("SID-1"),
             None,
             vec![json!({
@@ -1117,14 +1096,15 @@ mod tests {
             })],
         );
         assert_eq!(
-            conn.browser_context
+            ctx.conn
+                .browser_context
                 .as_mut()
                 .expect("browser context")
                 .detach_active_session()
                 .as_deref(),
             Some("SID-1"),
         );
-        let events = drain_runtime_inspector_outputs(&mut conn, outputs, None).await;
+        let events = drain_runtime_inspector_outputs(&mut ctx.conn, outputs, None).await;
 
         assert!(
             events.is_empty(),
@@ -1133,73 +1113,76 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn runtime_inspector_activity_preserves_auxiliary_renderer_route() {
-        let (mut conn, _attachment) = runtime_binding_attachment_fixture();
+    async fn runtime_inspector_activity_preserves_attached_renderer_route() {
+        let mut ctx = TestContext::new();
+        load_document(&mut ctx, "<!doctype html><main>attached</main>").await;
         assert!(
-            conn.browser_context
+            ctx.conn
+                .browser_context
                 .as_mut()
                 .expect("browser context")
                 .assign_auxiliary_session_to_target("TID-1", "SID-aux".to_owned())
         );
         let outputs = renderer_inspector_outputs(
-            &mut conn,
+            &mut ctx.conn,
             Some("SID-1"),
             Some("SID-aux"),
             vec![json!({
-                "id": 92,
-                "result": { "value": "auxiliary-response" }
+                "method": "Debugger.scriptParsed",
+                "params": { "scriptId": "attached-session" }
             })],
         );
-        let events = drain_runtime_inspector_outputs(&mut conn, outputs, Some("SID-1"))
+        let events = drain_runtime_inspector_outputs(&mut ctx.conn, outputs, Some("SID-1"))
             .await
             .into_iter()
             .map(crate::conn::BackgroundProtocolEvent::into_protocol_message)
             .collect::<Vec<_>>();
 
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0]["id"], json!(92));
+        assert_eq!(events[0]["method"], json!("Debugger.scriptParsed"));
         assert_eq!(
             events[0]["sessionId"],
             json!("SID-aux"),
-            "an auxiliary renderer inspector batch must retain its own attachment instead of following the source or drain session"
+            "an attached renderer inspector batch must retain its own session instead of following the source or drain session"
         );
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn runtime_inspector_activity_authorizes_each_page_batch_independently() {
-        let (mut conn, _attachment) = runtime_binding_attachment_fixture();
+        let mut ctx = TestContext::new();
+        load_document(&mut ctx, "<!doctype html><main>first</main>").await;
         let mut outputs = renderer_inspector_outputs(
-            &mut conn,
+            &mut ctx.conn,
             Some("SID-1"),
             None,
             vec![json!({
-                "id": 93,
-                "result": { "value": "old-page" }
+                "method": "Debugger.scriptParsed",
+                "params": { "scriptId": "old-page" }
             })],
         );
-        conn.runtime_session_owner_slot_mut(Some("SID-1"))
+        ctx.conn
+            .runtime_session_owner_slot_mut(Some("SID-1"))
             .expect("Runtime inspector target")
             .replace_page_attachment_id_for_test();
         outputs.extend(renderer_inspector_outputs(
-            &mut conn,
+            &mut ctx.conn,
             Some("SID-1"),
             None,
             vec![json!({
-                "id": 94,
-                "result": { "value": "replacement-page" }
+                "method": "Debugger.scriptParsed",
+                "params": { "scriptId": "replacement-page" }
             })],
         ));
         let events =
-            drain_runtime_inspector_outputs(&mut conn, outputs, Some("SID-unrelated-drain"))
+            drain_runtime_inspector_outputs(&mut ctx.conn, outputs, Some("SID-unrelated-drain"))
                 .await
                 .into_iter()
                 .map(crate::conn::BackgroundProtocolEvent::into_protocol_message)
                 .collect::<Vec<_>>();
 
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0]["id"], json!(94));
         assert_eq!(
-            events[0]["result"]["value"],
+            events[0]["params"]["scriptId"],
             json!("replacement-page"),
             "one captured slot must validate each capture-time Page attachment instead of authorizing the whole slot from projection context"
         );

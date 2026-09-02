@@ -97,11 +97,7 @@ pub(crate) fn complete_pending_security_command(
         Err(error) => return CommandOutputPlan::error(-32000, error),
     };
     let owner_scope = completed.owner_scope;
-    match conn.finish_rebuild_resource_runtime_for_route(
-        owner_scope.session_id(),
-        owner_scope.session_owner_route(),
-        completion,
-    ) {
+    match conn.finish_rebuild_resource_runtime_for_owner(&owner_scope, completion) {
         Ok(()) => CommandOutputPlan::success(),
         Err(error) => CommandOutputPlan::error(-32000, error),
     }

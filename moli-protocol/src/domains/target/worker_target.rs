@@ -431,20 +431,14 @@ pub(in crate::domains) fn dedicated_worker_target_lifecycle_prepared_outputs_for
     owner: &CommandOwnerScope,
     event: RendererDedicatedWorkerTargetEvent,
 ) -> TargetPreparedOutputs {
-    let session_id = owner.session_id();
-    let owner_route = owner.session_owner_route();
-    let Some(owner_page) = conn.target_page_residence_identity_for_route(session_id, owner_route)
-    else {
+    let Some(owner_page) = conn.target_page_residence_identity_for_owner(owner) else {
         return TargetPreparedOutputs::default();
     };
-    let Some(owner_renderer_page) =
-        conn.renderer_page_residence_identity_for_route(session_id, owner_route)
-    else {
+    let Some(owner_renderer_page) = conn.renderer_page_residence_identity_for_owner(owner) else {
         return TargetPreparedOutputs::default();
     };
     let browser_context_id = owner_page.browser_context_id().to_owned();
-    let owner_page_network_sessions =
-        conn.network_event_session_ids_for_route(session_id, owner_route);
+    let owner_page_network_sessions = conn.network_event_session_ids_for_owner(owner);
     dedicated_worker_target_lifecycle_outputs_for_events(
         conn,
         browser_context_id,

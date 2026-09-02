@@ -148,10 +148,8 @@ pub(crate) fn complete_pending_dom_snapshot_command(
     conn: &mut CdpConnection,
     completed: CompletedDomSnapshotCommandDispatch,
 ) -> DomSnapshotCommandDispatchStep {
-    let session_id = completed.owner_scope.session_id();
-    let owner_route = completed.owner_scope.session_owner_route();
     let Some(page) = conn
-        .loaded_page_mut_for_protocol_access_for_route(session_id, owner_route)
+        .loaded_page_mut_for_protocol_access_for_owner(&completed.owner_scope)
         .ok()
     else {
         return DomSnapshotCommandDispatchStep::Complete(CommandOutputPlan::error(

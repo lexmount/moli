@@ -1,6 +1,6 @@
 use moli_core::page::RendererDocumentSourcedTopLevelLocationNavigation;
 
-use super::{CdpConnection, CommandOwnerScope, TargetPageResidenceIdentity};
+use super::{CommandOwnerScope, TargetPageResidenceIdentity};
 
 /// One renderer-requested top-level navigation projected from a concrete
 /// renderer output record.
@@ -34,13 +34,12 @@ impl TopLevelLocationNavigationOwnerAction {
     /// concrete action rather than execute the navigation inline or rescan the
     /// current Page.
     pub(crate) fn from_prepared(
-        conn: &CdpConnection,
-        session_id: Option<&str>,
+        owner_scope: CommandOwnerScope,
         page_owner: TargetPageResidenceIdentity,
         navigation: RendererDocumentSourcedTopLevelLocationNavigation,
     ) -> Self {
         Self {
-            owner_scope: CommandOwnerScope::capture(conn, session_id),
+            owner_scope,
             page_owner,
             navigation,
         }

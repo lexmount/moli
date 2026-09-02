@@ -23,10 +23,7 @@ impl BidiChannelPageOwner {
         owner_scope: CommandOwnerScope,
     ) -> Option<Self> {
         Some(Self {
-            attachment: conn.target_page_protocol_attachment_identity_for_route(
-                owner_scope.session_id(),
-                owner_scope.session_owner_route(),
-            )?,
+            attachment: conn.target_page_protocol_attachment_identity_for_owner(&owner_scope)?,
             owner_scope,
         })
     }
@@ -234,7 +231,7 @@ mod tests {
         .expect("implicit owner must capture the scoped Page");
 
         assert_eq!(
-            owner.command_owner().session_owner_route(),
+            owner.command_owner().explicit_route(),
             Some(&owner_route),
             "deferred work must retain its exact Page route"
         );

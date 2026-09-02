@@ -452,10 +452,7 @@ impl CdpConnection {
         }
         let mut listener_events = Vec::new();
         if has_default_bidi_channel_preload_script
-            || self.target_owner_has_bidi_channel_preload_script_for_route(
-                command_owner.session_id(),
-                command_owner.session_owner_route(),
-            )
+            || self.target_owner_has_bidi_channel_preload_script_for_owner(&command_owner)
         {
             let mut execution_context_ids = initial_runtime_execution_context_ids;
             // Target lifecycle creation can materialize initial about:blank without Runtime.enable;

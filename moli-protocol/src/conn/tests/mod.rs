@@ -435,13 +435,17 @@ fn background_navigation_completion_sender_routes_explicit_session_owners() {
     conn.set_background_navigation_completion_sender(sender);
 
     assert!(
-        conn.background_navigation_completion_sender_for_route(Some("SID-active"), None)
-            .is_some(),
+        conn.background_navigation_completion_sender_for_owner(
+            &crate::conn::CommandOwnerScope::for_session("SID-active")
+        )
+        .is_some(),
         "a command scoped to a concrete target owner can continue navigation work in the background"
     );
     assert!(
-        conn.background_navigation_completion_sender_for_route(Some("SID-inactive"), None)
-            .is_some(),
+        conn.background_navigation_completion_sender_for_owner(
+            &crate::conn::CommandOwnerScope::for_session("SID-inactive")
+        )
+        .is_some(),
         "inactive-context target owners should also be routable by explicit session id"
     );
 }

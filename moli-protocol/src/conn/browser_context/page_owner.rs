@@ -475,7 +475,8 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
     ) -> SessionOwnerAuditsEnableResult {
-        let accepts_without_target = self.accepts_unmaterialized_page_command(session_id, None);
+        let accepts_without_target =
+            self.accepts_unmaterialized_page_command_for_session(session_id);
         self.with_target_session_owner_mut(session_id, |owner| owner.enable_audits())
             .unwrap_or({
                 if accepts_without_target {
@@ -487,7 +488,8 @@ impl CdpConnection {
     }
 
     pub(crate) fn disable_audits_for_session_owner(&mut self, session_id: Option<&str>) -> bool {
-        let accepts_without_target = self.accepts_unmaterialized_page_command(session_id, None);
+        let accepts_without_target =
+            self.accepts_unmaterialized_page_command_for_session(session_id);
         self.with_target_session_owner_mut(session_id, |owner| owner.disable_audits())
             .unwrap_or(accepts_without_target)
     }
@@ -496,15 +498,12 @@ impl CdpConnection {
         &self,
         session_id: Option<&str>,
     ) -> Option<bool> {
-        self.page_domain_enabled_for_route(session_id, None)
+        let owner = CommandOwnerScope::capture(self, session_id);
+        self.page_domain_enabled_for_owner(&owner)
     }
 
-    pub(crate) fn page_domain_enabled_for_route(
-        &self,
-        session_id: Option<&str>,
-        owner_route: Option<&crate::conn::CdpSessionRoute>,
-    ) -> Option<bool> {
-        self.target_session_owner_ref_for_route(session_id, owner_route)
+    pub(crate) fn page_domain_enabled_for_owner(&self, owner: &CommandOwnerScope) -> Option<bool> {
+        self.target_session_owner_ref_for_owner(owner)
             .and_then(|owner| owner.devtools_session_state())
             .map(devtools_session_page_domain_enabled)
     }
@@ -536,10 +535,9 @@ impl CdpConnection {
             })
     }
 
-    pub(crate) fn record_main_document_resource_body_for_route(
+    pub(crate) fn record_main_document_resource_body_for_owner(
         &mut self,
-        session_id: Option<&str>,
-        owner_route: Option<&crate::conn::CdpSessionRoute>,
+        owner: &CommandOwnerScope,
         frame_id: String,
         loader_id: String,
         url: url::Url,
@@ -547,7 +545,7 @@ impl CdpConnection {
         from_cache: bool,
         body: crate::conn::CapturedBody,
     ) -> bool {
-        self.with_target_owner_state_for_route_mut(session_id, owner_route, |owner_state| {
+        self.with_target_owner_state_for_owner_mut(owner, |owner_state| {
             owner_state.page_resource_store.record_main_document_body(
                 frame_id,
                 loader_id,
@@ -571,27 +569,23 @@ impl CdpConnection {
         body: Option<crate::conn::CapturedBody>,
     ) -> bool {
         if self
-            .runtime_session_owner_slot_for_route(owner.session_id(), owner.session_owner_route())
+            .runtime_session_owner_slot_for_owner(owner)
             .ok()
             .and_then(TargetRuntimeSlot::committed_document_loader_id)
             != Some(loader_id.as_str())
         {
             return false;
         }
-        self.with_target_owner_state_for_route_mut(
-            owner.session_id(),
-            owner.session_owner_route(),
-            |owner_state| {
-                owner_state.page_resource_store.commit_main_document(
-                    frame_id,
-                    loader_id,
-                    url,
-                    response_headers,
-                    from_cache,
-                    body,
-                );
-            },
-        )
+        self.with_target_owner_state_for_owner_mut(owner, |owner_state| {
+            owner_state.page_resource_store.commit_main_document(
+                frame_id,
+                loader_id,
+                url,
+                response_headers,
+                from_cache,
+                body,
+            );
+        })
         .is_some()
     }
 
@@ -623,15 +617,11 @@ impl CdpConnection {
         owner: &CommandOwnerScope,
         loader_id: &str,
     ) {
-        let _ = self.with_target_owner_state_for_route_mut(
-            owner.session_id(),
-            owner.session_owner_route(),
-            |owner_state| {
-                owner_state
-                    .page_resource_store
-                    .discard_uncommitted_loader(loader_id);
-            },
-        );
+        let _ = self.with_target_owner_state_for_owner_mut(owner, |owner_state| {
+            owner_state
+                .page_resource_store
+                .discard_uncommitted_loader(loader_id);
+        });
     }
 
     pub(crate) fn set_page_domain_enabled_for_session_owner(
@@ -650,7 +640,7 @@ impl CdpConnection {
             .with_target_session_owner_mut(session_id, |owner| {
                 owner.set_page_domain_enabled(enabled, subscription_generation)
             })
-            .unwrap_or_else(|| self.accepts_unmaterialized_page_command(session_id, None));
+            .unwrap_or_else(|| self.accepts_unmaterialized_page_command_for_session(session_id));
         if handled && let Some(browser_context_id) = owner_browser_context_id.as_deref() {
             self.sync_javascript_dialog_handler_enabled_for_browser_context(browser_context_id);
         }
@@ -682,33 +672,23 @@ impl CdpConnection {
         owner: &crate::conn::CommandOwnerScope,
         enabled: bool,
     ) -> bool {
-        let accepts_without_target = self
-            .accepts_unmaterialized_page_command(owner.session_id(), owner.session_owner_route());
+        let accepts_without_target = self.accepts_unmaterialized_page_command(owner);
         let handled = self
-            .with_target_session_owner_mut_for_route(
-                owner.session_id(),
-                owner.session_owner_route(),
-                |owner| owner.set_console_enabled(enabled),
-            )
+            .with_target_session_owner_mut_for_owner(owner, |owner| {
+                owner.set_console_enabled(enabled)
+            })
             .unwrap_or(accepts_without_target);
         if handled {
             let renderer_console_agent_owns_page_console_api_events = enabled
                 && self
-                    .runtime_session_owner_slot_for_route(
-                        owner.session_id(),
-                        owner.session_owner_route(),
-                    )
+                    .runtime_session_owner_slot_for_owner(owner)
                     .is_ok_and(|slot| slot.has_loaded_page());
-            let _ = self.with_target_devtools_session_state_for_route_mut(
-                owner.session_id(),
-                owner.session_owner_route(),
-                |state| {
-                    state
-                        .console_output_session_state
-                        .renderer_console_agent_owns_page_console_api_events =
-                        renderer_console_agent_owns_page_console_api_events;
-                },
-            );
+            let _ = self.with_target_devtools_session_state_for_owner_mut(owner, |state| {
+                state
+                    .console_output_session_state
+                    .renderer_console_agent_owns_page_console_api_events =
+                    renderer_console_agent_owns_page_console_api_events;
+            });
         }
         handled
     }
@@ -725,21 +705,17 @@ impl CdpConnection {
         &mut self,
         owner: &crate::conn::CommandOwnerScope,
     ) -> bool {
-        let accepts_without_target = self
-            .accepts_unmaterialized_page_command(owner.session_id(), owner.session_owner_route());
-        self.with_target_session_owner_mut_for_route(
-            owner.session_id(),
-            owner.session_owner_route(),
-            |owner| owner.clear_console_messages(),
-        )
-        .unwrap_or(accepts_without_target)
+        let accepts_without_target = self.accepts_unmaterialized_page_command(owner);
+        self.with_target_session_owner_mut_for_owner(owner, |owner| owner.clear_console_messages())
+            .unwrap_or(accepts_without_target)
     }
 
     pub(crate) fn enable_log_for_session_owner(
         &mut self,
         session_id: Option<&str>,
     ) -> SessionOwnerLogEnableResult {
-        let accepts_without_target = self.accepts_unmaterialized_page_command(session_id, None);
+        let accepts_without_target =
+            self.accepts_unmaterialized_page_command_for_session(session_id);
         self.with_target_session_owner_mut(session_id, |owner| owner.enable_log())
             .unwrap_or({
                 if accepts_without_target {
@@ -751,13 +727,15 @@ impl CdpConnection {
     }
 
     pub(crate) fn disable_log_for_session_owner(&mut self, session_id: Option<&str>) -> bool {
-        let accepts_without_target = self.accepts_unmaterialized_page_command(session_id, None);
+        let accepts_without_target =
+            self.accepts_unmaterialized_page_command_for_session(session_id);
         self.with_target_session_owner_mut(session_id, |owner| owner.disable_log())
             .unwrap_or(accepts_without_target)
     }
 
     pub(crate) fn clear_log_for_session_owner(&mut self, session_id: Option<&str>) -> bool {
-        let accepts_without_target = self.accepts_unmaterialized_page_command(session_id, None);
+        let accepts_without_target =
+            self.accepts_unmaterialized_page_command_for_session(session_id);
         self.with_target_session_owner_mut(session_id, |owner| owner.clear_log())
             .unwrap_or(accepts_without_target)
     }
@@ -786,18 +764,17 @@ impl CdpConnection {
         session_id: Option<&str>,
         enabled: bool,
     ) -> bool {
-        self.set_page_file_chooser_opened_event_enabled_for_route(session_id, None, enabled)
+        let owner = CommandOwnerScope::capture(self, session_id);
+        self.set_page_file_chooser_opened_event_enabled_for_owner(&owner, enabled)
     }
 
-    fn set_page_file_chooser_opened_event_enabled_for_route(
+    fn set_page_file_chooser_opened_event_enabled_for_owner(
         &mut self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        owner: &CommandOwnerScope,
         enabled: bool,
     ) -> bool {
-        let accepts_without_target =
-            self.accepts_unmaterialized_page_command(session_id, owner_route);
-        self.with_target_session_owner_mut_for_route(session_id, owner_route, |owner| {
+        let accepts_without_target = self.accepts_unmaterialized_page_command(owner);
+        self.with_target_session_owner_mut_for_owner(owner, |owner| {
             owner.set_page_file_chooser_opened_event_enabled(enabled)
         })
         .unwrap_or(accepts_without_target)
@@ -812,7 +789,7 @@ impl CdpConnection {
             .map(|(browser_context_id, _)| browser_context_id);
         let handled = self
             .with_target_session_owner_mut(session_id, |owner| owner.disable_page_domain())
-            .unwrap_or_else(|| self.accepts_unmaterialized_page_command(session_id, None));
+            .unwrap_or_else(|| self.accepts_unmaterialized_page_command_for_session(session_id));
         if handled && let Some(browser_context_id) = owner_browser_context_id.as_deref() {
             self.sync_javascript_dialog_handler_enabled_for_browser_context(browser_context_id);
         }
@@ -823,14 +800,20 @@ impl CdpConnection {
         let Some(route) = self.target_session_route_for_target_id(target_id) else {
             return false;
         };
-        self.set_page_file_chooser_opened_event_enabled_for_route(None, Some(&route), true)
+        self.set_page_file_chooser_opened_event_enabled_for_owner(
+            &CommandOwnerScope::for_route(route),
+            true,
+        )
     }
 
     pub fn disable_file_dialog_opened_listener_for_target(&mut self, target_id: &str) -> bool {
         let Some(route) = self.target_session_route_for_target_id(target_id) else {
             return false;
         };
-        self.set_page_file_chooser_opened_event_enabled_for_route(None, Some(&route), false)
+        self.set_page_file_chooser_opened_event_enabled_for_owner(
+            &CommandOwnerScope::for_route(route),
+            false,
+        )
     }
 
     pub(crate) fn set_page_lifecycle_events_enabled_for_session_owner(
@@ -838,7 +821,8 @@ impl CdpConnection {
         session_id: Option<&str>,
         enabled: bool,
     ) -> PageLifecycleEventsEnableResult {
-        let accepts_without_target = self.accepts_unmaterialized_page_command(session_id, None);
+        let accepts_without_target =
+            self.accepts_unmaterialized_page_command_for_session(session_id);
         self.with_target_session_owner_mut(session_id, |owner| {
             owner.set_page_lifecycle_events_enabled(enabled)
         })
@@ -858,7 +842,8 @@ impl CdpConnection {
         session_id: Option<&str>,
         enabled: bool,
     ) -> bool {
-        let accepts_without_target = self.accepts_unmaterialized_page_command(session_id, None);
+        let accepts_without_target =
+            self.accepts_unmaterialized_page_command_for_session(session_id);
         self.with_target_session_owner_mut(session_id, |owner| {
             owner.set_page_bypass_csp_enabled(enabled)
         })
@@ -870,7 +855,8 @@ impl CdpConnection {
         session_id: Option<&str>,
         font_families: serde_json::Map<String, Value>,
     ) -> bool {
-        let accepts_without_target = self.accepts_unmaterialized_page_command(session_id, None);
+        let accepts_without_target =
+            self.accepts_unmaterialized_page_command_for_session(session_id);
         self.with_target_session_owner_mut(session_id, |owner| {
             owner.set_page_font_families(font_families)
         })
@@ -882,7 +868,8 @@ impl CdpConnection {
         session_id: Option<&str>,
         enabled: bool,
     ) -> bool {
-        let accepts_without_target = self.accepts_unmaterialized_page_command(session_id, None);
+        let accepts_without_target =
+            self.accepts_unmaterialized_page_command_for_session(session_id);
         self.with_target_session_owner_mut(session_id, |owner| {
             owner.set_page_intercept_file_chooser_dialog_enabled(enabled)
         })
@@ -915,27 +902,25 @@ impl CdpConnection {
             .unwrap_or(false)
     }
 
-    pub(crate) fn begin_page_screencast_capture_for_route(
+    pub(crate) fn begin_page_screencast_capture_for_owner(
         &mut self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        owner: &CommandOwnerScope,
         generation: i32,
     ) -> Option<bool> {
         Some(
-            self.target_session_owner_mut_for_route(session_id, owner_route)?
+            self.target_session_owner_mut_for_owner(owner)?
                 .begin_page_screencast_capture(generation),
         )
     }
 
-    pub(crate) fn complete_page_screencast_capture_for_route(
+    pub(crate) fn complete_page_screencast_capture_for_owner(
         &mut self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        owner: &CommandOwnerScope,
         generation: i32,
         frame_emitted: bool,
     ) -> Option<bool> {
         Some(
-            self.target_session_owner_mut_for_route(session_id, owner_route)?
+            self.target_session_owner_mut_for_owner(owner)?
                 .complete_page_screencast_capture(generation, frame_emitted),
         )
     }
@@ -961,7 +946,8 @@ impl CdpConnection {
         session_id: Option<&str>,
         time_domain: PerformanceTimeDomain,
     ) -> Option<bool> {
-        let accepts_without_target = self.accepts_unmaterialized_page_command(session_id, None);
+        let accepts_without_target =
+            self.accepts_unmaterialized_page_command_for_session(session_id);
         self.with_target_session_owner_mut(session_id, |owner| {
             owner.enable_performance(time_domain)
         })
@@ -972,7 +958,8 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
     ) -> bool {
-        let accepts_without_target = self.accepts_unmaterialized_page_command(session_id, None);
+        let accepts_without_target =
+            self.accepts_unmaterialized_page_command_for_session(session_id);
         self.with_target_session_owner_mut(session_id, |owner| owner.disable_performance())
             .unwrap_or(accepts_without_target)
     }
@@ -982,7 +969,8 @@ impl CdpConnection {
         session_id: Option<&str>,
         time_domain: PerformanceTimeDomain,
     ) -> Option<bool> {
-        let accepts_without_target = self.accepts_unmaterialized_page_command(session_id, None);
+        let accepts_without_target =
+            self.accepts_unmaterialized_page_command_for_session(session_id);
         self.with_target_session_owner_mut(session_id, |owner| {
             owner.set_performance_time_domain(time_domain)
         })

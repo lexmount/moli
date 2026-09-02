@@ -1,7 +1,8 @@
 use serde::Deserialize;
 
 use crate::conn::{
-    BackgroundProtocolEvent, BrowserContext, CdpConnection, Cmd, TargetHandlerAccessMode,
+    BackgroundProtocolEvent, BrowserContext, CdpConnection, Cmd, CommandOwnerScope,
+    TargetHandlerAccessMode,
 };
 use crate::devtools_runtime::{
     DevToolsActivateTargetCommand, DevToolsCloseTargetCommand, DevToolsCommand,
@@ -35,19 +36,16 @@ pub(crate) use popup::{
     PopupTargetCreation, PopupTargetOpenerIdentity, complete_popup_target_activation_action_async,
     complete_popup_target_navigation_owner_action_async,
     create_popup_target_from_renderer_output_background_events_async,
-    emit_target_info_changed_for_session_owner_background_event,
+    emit_target_info_changed_for_owner_background_event,
     schedule_initial_document_target_url_navigation_after_debugger_barrier_release_for_target,
     schedule_initial_document_target_url_navigation_after_debugger_resume,
 };
-pub(crate) fn popup_activation_creates_new_target_for_route(
+pub(crate) fn popup_activation_creates_new_target_for_owner(
     conn: &CdpConnection,
-    owner_session_id: Option<&str>,
-    owner_route: Option<&crate::conn::CdpSessionRoute>,
+    owner: &CommandOwnerScope,
     target_name: &str,
 ) -> bool {
-    if let Some((browser_context_id, _)) =
-        conn.target_owner_identity_for_route(owner_session_id, owner_route)
-    {
+    if let Some((browser_context_id, _)) = conn.target_owner_identity_for_owner(owner) {
         return conn
             .browser_context_by_id(&browser_context_id)
             .is_none_or(|browser_context| {

@@ -152,11 +152,14 @@ mod tests {
             .map(str::to_owned)
             .expect("Debugger.scriptParsed for the suspended-renderer source");
 
+        let navigation_owner = CommandOwnerScope::capture(&ctx.conn, None);
         let navigation = ctx
             .conn
-            .start_document_navigation_for_route(None, None, "LOADER-debugger-interrupt".to_owned())
+            .start_document_navigation_for_owner(
+                &navigation_owner,
+                "LOADER-debugger-interrupt".to_owned(),
+            )
             .expect("start cross-Document navigation");
-        let navigation_owner = CommandOwnerScope::capture(&ctx.conn, None);
         assert!(
             ctx.conn
                 .renderer_document_navigation_is_suspended_for_session_owner(None)

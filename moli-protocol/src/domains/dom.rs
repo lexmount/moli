@@ -145,15 +145,12 @@ pub(crate) fn dom_agent_enabled_for_session(
     conn: &CdpConnection,
     session_id: Option<&str>,
 ) -> bool {
-    dom_agent_enabled_for_route(conn, session_id, None)
+    let owner = CommandOwnerScope::capture(conn, session_id);
+    dom_agent_enabled_for_owner(conn, &owner)
 }
 
-pub(crate) fn dom_agent_enabled_for_route(
-    conn: &CdpConnection,
-    session_id: Option<&str>,
-    owner_route: Option<&crate::conn::CdpSessionRoute>,
-) -> bool {
-    conn.target_devtools_session_state_for_route(session_id, owner_route)
+pub(crate) fn dom_agent_enabled_for_owner(conn: &CdpConnection, owner: &CommandOwnerScope) -> bool {
+    conn.target_devtools_session_state_for_owner(owner)
         .is_some_and(|state| state.dom_session_state.enabled)
 }
 
@@ -179,12 +176,11 @@ fn disable_dom_agent_for_session(conn: &mut CdpConnection, session_id: Option<&s
     .is_some()
 }
 
-pub(crate) fn dom_agent_includes_whitespace_for_route(
+pub(crate) fn dom_agent_includes_whitespace_for_owner(
     conn: &CdpConnection,
-    session_id: Option<&str>,
-    owner_route: Option<&crate::conn::CdpSessionRoute>,
+    owner: &CommandOwnerScope,
 ) -> bool {
-    conn.target_devtools_session_state_for_route(session_id, owner_route)
+    conn.target_devtools_session_state_for_owner(owner)
         .is_some_and(|state| {
             state.dom_session_state.enabled && state.dom_session_state.include_whitespace
         })
@@ -194,25 +190,19 @@ fn loaded_page_mut_for_owner<'a>(
     conn: &'a mut CdpConnection,
     owner: &CommandOwnerScope,
 ) -> Option<&'a mut Page> {
-    conn.loaded_page_mut_for_protocol_access_for_route(
-        owner.session_id(),
-        owner.session_owner_route(),
-    )
-    .ok()
+    conn.loaded_page_mut_for_protocol_access_for_owner(owner)
+        .ok()
 }
 
 fn target_owner_exists_for_owner(conn: &CdpConnection, owner: &CommandOwnerScope) -> bool {
-    conn.target_owner_identity_for_route(owner.session_id(), owner.session_owner_route())
+    conn.target_owner_identity_for_owner(owner)
         .and_then(|(_, target_id)| target_id)
         .is_some()
 }
 
 fn top_frame_id_for_owner(conn: &CdpConnection, owner: &CommandOwnerScope) -> Option<String> {
-    conn.target_session_owner_frame_tree_identity_for_route(
-        owner.session_id(),
-        owner.session_owner_route(),
-    )
-    .map(|(frame_id, _, _, _)| frame_id)
+    conn.target_session_owner_frame_tree_identity_for_owner(owner)
+        .map(|(frame_id, _, _, _)| frame_id)
 }
 
 fn cached_dom_remote_object_node_for_owner(
@@ -220,8 +210,7 @@ fn cached_dom_remote_object_node_for_owner(
     owner: &CommandOwnerScope,
     object_id: &str,
 ) -> Option<Value> {
-    let (browser_context_id, target_id) =
-        conn.target_owner_identity_for_route(owner.session_id(), owner.session_owner_route())?;
+    let (browser_context_id, target_id) = conn.target_owner_identity_for_owner(owner)?;
     let browser_context = conn.browser_context_by_id(&browser_context_id)?;
     let target_id = target_id
         .as_deref()
@@ -239,9 +228,7 @@ fn cache_dom_remote_object_node_for_owner(
     object_id: String,
     node: Value,
 ) {
-    let Some((browser_context_id, target_id)) =
-        conn.target_owner_identity_for_route(owner.session_id(), owner.session_owner_route())
-    else {
+    let Some((browser_context_id, target_id)) = conn.target_owner_identity_for_owner(owner) else {
         return;
     };
     if let Some(browser_context) = conn.browser_context_by_id_mut(&browser_context_id) {

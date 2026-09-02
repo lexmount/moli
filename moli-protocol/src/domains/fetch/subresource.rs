@@ -61,11 +61,7 @@ pub(crate) async fn subresource_fetch_pause_prepared_outputs_for_renderer_record
     source_document: moli_core::RendererDocumentLifecycleIdentity,
     info: moli_core::page::PendingSubresourceFetchInfo,
 ) -> network::NetworkPreparedOutputs {
-    if conn.target_root_document_lifecycle_identity_for_route(
-        owner.session_id(),
-        owner.session_owner_route(),
-    ) != Some(source_document)
-    {
+    if conn.target_root_document_lifecycle_identity_for_owner(owner) != Some(source_document) {
         return network::NetworkPreparedOutputs::default();
     }
     network::NetworkPreparedOutputs::from_subresource_fetch_pauses(
@@ -90,11 +86,7 @@ pub(crate) async fn detached_parser_script_fetch_pause_prepared_outputs_for_rend
     info: moli_core::page::PendingSubresourceFetchInfo,
     continuation: DetachedParserScriptFetchContinuation,
 ) -> network::NetworkPreparedOutputs {
-    if conn.target_root_document_lifecycle_identity_for_route(
-        owner.session_id(),
-        owner.session_owner_route(),
-    ) != Some(source_document)
-    {
+    if conn.target_root_document_lifecycle_identity_for_owner(owner) != Some(source_document) {
         return network::NetworkPreparedOutputs::default();
     }
     network::NetworkPreparedOutputs::from_subresource_fetch_pauses(
@@ -121,22 +113,21 @@ async fn prepare_subresource_fetch_pause_sources_async(
 ) -> Vec<network::TargetSubresourceFetchPauseOutput> {
     let mut outputs = Vec::new();
     let session_id = owner.session_id();
-    let owner_route = owner.session_owner_route();
-    let page_owner = conn.target_page_residence_identity_for_route(session_id, owner_route);
+    let page_owner = conn.target_page_residence_identity_for_owner(owner);
     let Some((fetch_snapshot, frame_id)) = (|| {
         let target_frame_id = conn
-            .target_session_owner_frame_tree_identity_for_route(session_id, owner_route)
+            .target_session_owner_frame_tree_identity_for_owner(owner)
             .map(|(target_id, _, _, _)| target_id)?;
         let frame_id = frame_id.unwrap_or(&target_frame_id);
         Some((
-            conn.target_fetch_subresource_interception_snapshot_for_route(session_id, owner_route)?,
+            conn.target_fetch_subresource_interception_snapshot_for_owner(owner)?,
             frame_id.to_owned(),
         ))
     })() else {
         return outputs;
     };
     let loader_id = conn
-        .current_document_loader_id_for_route(session_id, owner_route)
+        .current_document_loader_id_for_owner(owner)
         .unwrap_or_else(|| DEFAULT_LOADER_ID.to_owned());
     for source in sources {
         let PendingSubresourceFetchPauseSource {
@@ -144,7 +135,7 @@ async fn prepare_subresource_fetch_pause_sources_async(
             detached_parser_script_fetch_continuation,
         } = source;
         let Ok((request_id, network_request_id)) =
-            conn.allocate_pending_subresource_fetch_request_ids_for_route(session_id, owner_route)
+            conn.allocate_pending_subresource_fetch_request_ids_for_owner(owner)
         else {
             return outputs;
         };
@@ -307,8 +298,8 @@ async fn prepare_subresource_fetch_pause_sources_async(
         );
         let mut remaining_sessions = Vec::new();
         for session in request_stage_pause_sessions.into_iter().skip(1) {
-            let Ok((next_request_id, _)) = conn
-                .allocate_pending_subresource_fetch_request_ids_for_route(session_id, owner_route)
+            let Ok((next_request_id, _)) =
+                conn.allocate_pending_subresource_fetch_request_ids_for_owner(owner)
             else {
                 return outputs;
             };
@@ -385,10 +376,9 @@ pub(crate) fn emit_subresource_fetch_pause_outputs(
             .as_deref()
             .filter(|session_id| conn.session_route(Some(session_id)).is_some())
             .or(owner.session_id());
-        let pending_owner_route = pending_owner_session_id
-            .is_none()
-            .then(|| owner.session_owner_route())
-            .flatten();
+        let pending_owner = pending_owner_session_id
+            .map(CommandOwnerScope::for_session)
+            .unwrap_or_else(|| owner.clone());
         pending.action_session_id = event_session_id.clone();
         let blocked_intercepts = blocked_intercepts_from_fetch_payload(&payload);
         let fetch_event = subresource_request_paused_event(
@@ -398,17 +388,14 @@ pub(crate) fn emit_subresource_fetch_pause_outputs(
             payload,
             blocked_intercepts,
         );
-        if !conn.register_pending_subresource_fetch_request_for_route(
-            pending_owner_session_id,
-            pending_owner_route,
+        if !conn.register_pending_subresource_fetch_request_for_owner(
+            &pending_owner,
             request_id,
             pending,
         ) {
             return;
         }
-        if let Ok(runtime_slot) = conn
-            .runtime_session_owner_slot_mut_for_route(pending_owner_session_id, pending_owner_route)
-        {
+        if let Ok(runtime_slot) = conn.runtime_session_owner_slot_mut_for_owner(&pending_owner) {
             // Chromium publishes Network.requestWillBeSent before the Fetch pause.
             // The renderer's later transport start belongs to the same lifecycle
             // and must not publish a second initial Network event.

@@ -47,11 +47,9 @@ impl PreparedProtocolOutputs {
         source_document: moli_core::RendererDocumentLifecycleIdentity,
         item: &moli_core::page::ScriptNetworkOutputItem,
     ) -> Option<Self> {
-        let session_id = owner.session_id();
         let renderer_live = conn
-            .ingest_renderer_page_network_output_item_and_prepare_live_delivery_for_route(
-                session_id,
-                owner.session_owner_route(),
+            .ingest_renderer_page_network_output_item_and_prepare_live_delivery_for_owner(
+                owner,
                 source_renderer_page,
                 source_document,
                 item,
@@ -138,26 +136,11 @@ impl PreparedProtocolOutputs {
                         .append_to_output_sink(&mut prepared);
                     return prepared;
                 }
-                let source_batches = vec![batch.clone()];
-                let batches = conn.route_current_renderer_inspector_output_for_owner(
-                    owner,
-                    source_batches.clone(),
-                );
-                if batches.is_empty() {
-                    crate::domains::runtime::RuntimePreparedOutputs::
-                        from_retired_renderer_runtime_inspector_session_responses(
-                            conn,
-                            owner,
-                            &source_batches,
-                        )
-                        .append_to_output_sink(&mut prepared);
-                    return prepared;
-                }
                 crate::domains::runtime::RuntimePreparedOutputs::
-                    from_renderer_runtime_inspector_message_batches(
+                    from_page_renderer_runtime_inspector_message_batches(
                         conn,
                         owner,
-                        &batches,
+                        vec![batch.clone()],
                     )
                     .append_to_output_sink(&mut prepared);
             }
@@ -219,7 +202,6 @@ impl PreparedProtocolOutputs {
         owner: &CommandOwnerScope,
         action: RendererOwnerAction,
     ) -> Self {
-        let session_id = owner.session_id();
         let mut prepared = Self::empty();
         match action {
             RendererOwnerAction::FileChooser(activation) => {
@@ -360,9 +342,7 @@ impl PreparedProtocolOutputs {
                     .append_to_output_sink(&mut prepared);
             }
             RendererOwnerAction::SharedWorkerTargetLifecycle(event) => {
-                if let Some((browser_context_id, _)) =
-                    conn.target_owner_identity_for_route(session_id, owner.session_owner_route())
-                {
+                if let Some((browser_context_id, _)) = conn.target_owner_identity_for_owner(owner) {
                     crate::domains::target::
                         shared_worker_target_lifecycle_prepared_outputs_for_event(
                             conn,
@@ -375,9 +355,7 @@ impl PreparedProtocolOutputs {
                 }
             }
             RendererOwnerAction::ServiceWorkerTargetLifecycle(event) => {
-                if let Some((browser_context_id, _)) =
-                    conn.target_owner_identity_for_route(session_id, owner.session_owner_route())
-                {
+                if let Some((browser_context_id, _)) = conn.target_owner_identity_for_owner(owner) {
                     crate::domains::target::
                         service_worker_target_lifecycle_prepared_outputs_for_event(
                             conn,

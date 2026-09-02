@@ -407,10 +407,7 @@ impl NetworkOutputProjectionStep {
                     .and_then(NetworkPreparedOutputSlot::take_subresource_fetch_pauses)
                 {
                     let mut events = Vec::new();
-                    let network_session_ids = conn.network_event_session_ids_for_route(
-                        owner.session_id(),
-                        owner.session_owner_route(),
-                    );
+                    let network_session_ids = conn.network_event_session_ids_for_owner(&owner);
                     fetch::emit_subresource_fetch_pause_outputs(
                         conn,
                         &mut events,
@@ -472,13 +469,9 @@ pub(in crate::domains) fn network_backlog_prepared_outputs_for_owner(
 ) -> NetworkPreparedOutputs {
     let mut outputs = NetworkPreparedOutputs::default();
     let session_id = owner.session_id();
-    let primary_session_id = conn.runtime_session_owner_primary_session_id_for_route(
-        session_id,
-        owner.session_owner_route(),
-    );
-    if let Some(backlog) = conn.network_backlog_prepared_delivery_for_route(
-        session_id,
-        owner.session_owner_route(),
+    let primary_session_id = conn.runtime_session_owner_primary_session_id_for_owner(owner);
+    if let Some(backlog) = conn.network_backlog_prepared_delivery_for_owner(
+        owner,
         session_id,
         primary_session_id.as_deref(),
         preferred_request_id,
@@ -613,9 +606,8 @@ mod tests {
             request_stage_chain: None,
         };
         assert!(
-            conn.register_in_flight_subresource_fetch_request_for_route(
-                Some("SID-1"),
-                None,
+            conn.register_in_flight_subresource_fetch_request_for_owner(
+                &crate::conn::CommandOwnerScope::for_session("SID-1"),
                 Some("fetch-req-1".to_owned()),
                 pending,
             ),
@@ -694,9 +686,8 @@ mod tests {
             .target_page_residence_identity_for_session(Some("SID-collision"))
             .expect("old Page residence should exist");
         let reused_handle = SubresourceNetworkRequestHandle::new(9);
-        assert!(conn.register_in_flight_subresource_fetch_request_for_route(
-            Some("SID-collision"),
-            None,
+        assert!(conn.register_in_flight_subresource_fetch_request_for_owner(
+            &crate::conn::CommandOwnerScope::for_session("SID-collision"),
             Some("FETCH-old".to_owned()),
             pending_request_for_page(old_owner, 7, "NETWORK-old", reused_handle),
         ));
@@ -730,9 +721,8 @@ mod tests {
         let replacement_owner = conn
             .target_page_residence_identity_for_session(Some("SID-collision"))
             .expect("replacement Page residence should exist");
-        assert!(conn.register_in_flight_subresource_fetch_request_for_route(
-            Some("SID-collision"),
-            None,
+        assert!(conn.register_in_flight_subresource_fetch_request_for_owner(
+            &crate::conn::CommandOwnerScope::for_session("SID-collision"),
             Some("FETCH-new".to_owned()),
             pending_request_for_page(replacement_owner, 7, "NETWORK-new", reused_handle),
         ));
@@ -752,8 +742,11 @@ mod tests {
             "stale continuation must not project an event for the replacement request"
         );
         assert_eq!(
-            conn.in_flight_subresource_fetch_request_id_for_route(Some("SID-collision"), None, 7,)
-                .as_deref(),
+            conn.in_flight_subresource_fetch_request_id_for_owner(
+                &crate::conn::CommandOwnerScope::for_session("SID-collision"),
+                7,
+            )
+            .as_deref(),
             Some("FETCH-new"),
             "stale apply must not claim the replacement request even when both renderer IDs collide"
         );

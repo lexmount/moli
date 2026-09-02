@@ -318,11 +318,8 @@ pub(super) fn start_disable_dom_agent_command(
     cmd: &Cmd<'_>,
 ) -> Result<Option<PendingDomCommandDispatch>, PendingDomCommandStartError> {
     let owner = CommandOwnerScope::capture(conn, cmd.session_id);
-    let renderer_inspector_session_id = conn
-        .target_renderer_runtime_inspector_session_id_for_route(
-            owner.session_id(),
-            owner.session_owner_route(),
-        );
+    let renderer_inspector_session_id =
+        conn.target_renderer_runtime_inspector_session_id_for_owner(&owner);
     let Some(page) = loaded_page_mut_for_owner(conn, &owner) else {
         return Ok(None);
     };
@@ -817,8 +814,7 @@ fn start_pending_dom_command(
         });
     }
     if action.requires_document_access()
-        && let Err(message) = conn
-            .ensure_document_accessible_for_route(owner.session_id(), owner.session_owner_route())
+        && let Err(message) = conn.ensure_document_accessible_for_owner(&owner)
     {
         return Err(PendingDomCommandStartError {
             code: -32000,
@@ -1262,11 +1258,8 @@ fn start_cdp_dom_edit_command(
 ) -> Result<PendingDomCommandDispatch, PendingDomCommandStartError> {
     let owner = CommandOwnerScope::capture(conn, cmd.session_id);
     let edit = super::edit::renderer_dom_edit_from_cdp(cmd, action)?;
-    let renderer_inspector_session_id = conn
-        .target_renderer_runtime_inspector_session_id_for_route(
-            owner.session_id(),
-            owner.session_owner_route(),
-        );
+    let renderer_inspector_session_id =
+        conn.target_renderer_runtime_inspector_session_id_for_owner(&owner);
     let page = loaded_page_mut_for_owner(conn, &owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
     let pending = page
@@ -1465,16 +1458,9 @@ fn start_devtools_describe_node_command(
             },
         );
     }
-    let renderer_inspector_session_id = conn
-        .target_renderer_runtime_inspector_session_id_for_route(
-            owner.session_id(),
-            owner.session_owner_route(),
-        );
-    let include_whitespace = dom_agent_includes_whitespace_for_route(
-        conn,
-        owner.session_id(),
-        owner.session_owner_route(),
-    );
+    let renderer_inspector_session_id =
+        conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
+    let include_whitespace = dom_agent_includes_whitespace_for_owner(conn, owner);
     let page = loaded_page_mut_for_owner(conn, owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
     let pending = start_inspector_document_node_snapshot_for_reference(
@@ -1536,16 +1522,9 @@ fn start_devtools_request_child_nodes_command(
     command: DevToolsRequestChildNodesCommand,
 ) -> Result<Option<PendingDomCommandDispatch>, PendingDomCommandStartError> {
     let top_frame_id = top_frame_id_for_owner(conn, owner);
-    let renderer_inspector_session_id = conn
-        .target_renderer_runtime_inspector_session_id_for_route(
-            owner.session_id(),
-            owner.session_owner_route(),
-        );
-    let include_whitespace = dom_agent_includes_whitespace_for_route(
-        conn,
-        owner.session_id(),
-        owner.session_owner_route(),
-    );
+    let renderer_inspector_session_id =
+        conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
+    let include_whitespace = dom_agent_includes_whitespace_for_owner(conn, owner);
     let next_depth = if command.depth > 0 {
         command.depth - 1
     } else {
@@ -1675,16 +1654,9 @@ fn start_devtools_query_selector_command(
     command: DevToolsQuerySelectorCommand,
 ) -> Result<Option<PendingDomCommandDispatch>, PendingDomCommandStartError> {
     let top_frame_id = top_frame_id_for_owner(conn, owner);
-    let renderer_inspector_session_id = conn
-        .target_renderer_runtime_inspector_session_id_for_route(
-            owner.session_id(),
-            owner.session_owner_route(),
-        );
-    let include_whitespace = dom_agent_includes_whitespace_for_route(
-        conn,
-        owner.session_id(),
-        owner.session_owner_route(),
-    );
+    let renderer_inspector_session_id =
+        conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
+    let include_whitespace = dom_agent_includes_whitespace_for_owner(conn, owner);
     let Some(reference) = command.root else {
         let page =
             loaded_page_mut_for_owner(conn, owner).ok_or_else(|| PendingDomCommandStartError {
@@ -1910,16 +1882,9 @@ fn start_devtools_get_document_command(
         PendingDomDocumentSnapshotOperation::GetDocument
     };
     let top_frame_id = top_frame_id_for_owner(conn, owner);
-    let renderer_inspector_session_id = conn
-        .target_renderer_runtime_inspector_session_id_for_route(
-            owner.session_id(),
-            owner.session_owner_route(),
-        );
-    let include_whitespace = dom_agent_includes_whitespace_for_route(
-        conn,
-        owner.session_id(),
-        owner.session_owner_route(),
-    );
+    let renderer_inspector_session_id =
+        conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
+    let include_whitespace = dom_agent_includes_whitespace_for_owner(conn, owner);
     let page = loaded_page_mut_for_owner(conn, owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
     let depth = match operation {
@@ -1969,11 +1934,8 @@ fn start_devtools_get_frame_owner_command(
     owner: &CommandOwnerScope,
     command: DevToolsGetFrameOwnerCommand,
 ) -> Result<Option<PendingDomCommandDispatch>, PendingDomCommandStartError> {
-    let renderer_inspector_session_id = conn
-        .target_renderer_runtime_inspector_session_id_for_route(
-            owner.session_id(),
-            owner.session_owner_route(),
-        );
+    let renderer_inspector_session_id =
+        conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
     let page =
         loaded_page_mut_for_owner(conn, owner).ok_or_else(|| PendingDomCommandStartError {
             code: -32000,
@@ -2029,16 +1991,10 @@ fn start_devtools_get_node_for_location_command(
     command: DevToolsGetNodeForLocationCommand,
 ) -> Result<Option<PendingDomCommandDispatch>, PendingDomCommandStartError> {
     let top_frame_id = conn
-        .target_session_owner_frame_tree_identity_for_route(
-            owner.session_id(),
-            owner.session_owner_route(),
-        )
+        .target_session_owner_frame_tree_identity_for_owner(owner)
         .map(|identity| identity.0)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
-    let inspector_session_id = conn.target_renderer_runtime_inspector_session_id_for_route(
-        owner.session_id(),
-        owner.session_owner_route(),
-    );
+    let inspector_session_id = conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
     let page = loaded_page_mut_for_owner(conn, owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
     let pending = page
@@ -2130,11 +2086,8 @@ fn start_devtools_resolve_node_command(
 ) -> Result<Option<PendingDomCommandDispatch>, PendingDomCommandStartError> {
     let reference = command.reference;
     let top_frame_id = top_frame_id_for_owner(conn, owner);
-    let renderer_inspector_session_id = conn
-        .target_renderer_runtime_inspector_session_id_for_route(
-            owner.session_id(),
-            owner.session_owner_route(),
-        );
+    let renderer_inspector_session_id =
+        conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
     if let DevToolsDomNodeReference::FrontendNodeId(frontend_node_id) = reference {
         return start_document_frontend_node_binding_command(
             conn,
@@ -2301,16 +2254,9 @@ fn start_dom_object_reference_operation(
     operation: PendingDomObjectReferenceOperation,
 ) -> Result<Option<PendingDomCommandDispatch>, PendingDomCommandStartError> {
     let reference = dom_object_reference_id_for_owner(conn, owner, &object_id);
-    let renderer_inspector_session_id = conn
-        .target_renderer_runtime_inspector_session_id_for_route(
-            owner.session_id(),
-            owner.session_owner_route(),
-        );
-    let include_whitespace = dom_agent_includes_whitespace_for_route(
-        conn,
-        owner.session_id(),
-        owner.session_owner_route(),
-    );
+    let renderer_inspector_session_id =
+        conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
+    let include_whitespace = dom_agent_includes_whitespace_for_owner(conn, owner);
     let page = loaded_page_mut_for_owner(conn, owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
     let object_id = reference;
@@ -2424,11 +2370,8 @@ fn start_devtools_push_nodes_by_backend_ids_command(
     owner: &CommandOwnerScope,
     command: DevToolsPushNodesByBackendIdsCommand,
 ) -> Result<Option<PendingDomCommandDispatch>, PendingDomCommandStartError> {
-    let renderer_runtime_inspector_session_id = conn
-        .target_renderer_runtime_inspector_session_id_for_route(
-            owner.session_id(),
-            owner.session_owner_route(),
-        );
+    let renderer_runtime_inspector_session_id =
+        conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
     let page = loaded_page_mut_for_owner(conn, owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
     let renderer_backend_positions = (0..command.backend_node_ids.len()).collect::<Vec<_>>();
@@ -2513,16 +2456,9 @@ fn complete_pending_dom_command(
     };
     let CompletedDomCommandWork::Page(completion) = completed_work;
     let completion = *completion;
-    let renderer_inspector_session_id = conn
-        .target_renderer_runtime_inspector_session_id_for_route(
-            session_id,
-            owner_scope.session_owner_route(),
-        );
-    let include_whitespace = dom_agent_includes_whitespace_for_route(
-        conn,
-        session_id,
-        owner_scope.session_owner_route(),
-    );
+    let renderer_inspector_session_id =
+        conn.target_renderer_runtime_inspector_session_id_for_owner(&owner_scope);
+    let include_whitespace = dom_agent_includes_whitespace_for_owner(conn, &owner_scope);
 
     let kind = match completed.kind {
         PendingDomCommandKind::PerformSearchLive => {
@@ -3214,17 +3150,9 @@ fn complete_pending_dom_command_result(
     completed: CompletedDomCommandDispatch,
 ) -> DevToolsDomCommandTaskStep {
     let owner_scope = completed.owner_scope.clone();
-    let session_id = owner_scope.session_id();
-    let renderer_inspector_session_id = conn
-        .target_renderer_runtime_inspector_session_id_for_route(
-            session_id,
-            owner_scope.session_owner_route(),
-        );
-    let include_whitespace = dom_agent_includes_whitespace_for_route(
-        conn,
-        session_id,
-        owner_scope.session_owner_route(),
-    );
+    let renderer_inspector_session_id =
+        conn.target_renderer_runtime_inspector_session_id_for_owner(&owner_scope);
+    let include_whitespace = dom_agent_includes_whitespace_for_owner(conn, &owner_scope);
     let completed_work = match completed.completed {
         Ok(completion) => completion,
         Err(error) => {
@@ -4335,16 +4263,9 @@ fn complete_frontend_node_binding_for_describe_node(
     top_frame_id: Option<String>,
     out: &mut DomCommandOutput,
 ) -> DomCommandTaskStep {
-    let renderer_inspector_session_id = conn
-        .target_renderer_runtime_inspector_session_id_for_route(
-            owner.session_id(),
-            owner.session_owner_route(),
-        );
-    let include_whitespace = dom_agent_includes_whitespace_for_route(
-        conn,
-        owner.session_id(),
-        owner.session_owner_route(),
-    );
+    let renderer_inspector_session_id =
+        conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
+    let include_whitespace = dom_agent_includes_whitespace_for_owner(conn, owner);
     complete_frontend_node_binding_followup(
         conn,
         command_id,
@@ -4383,16 +4304,9 @@ fn complete_frontend_node_binding_for_describe_node_result(
     pierce: bool,
     top_frame_id: Option<String>,
 ) -> DevToolsDomCommandTaskStep {
-    let renderer_inspector_session_id = conn
-        .target_renderer_runtime_inspector_session_id_for_route(
-            owner.session_id(),
-            owner.session_owner_route(),
-        );
-    let include_whitespace = dom_agent_includes_whitespace_for_route(
-        conn,
-        owner.session_id(),
-        owner.session_owner_route(),
-    );
+    let renderer_inspector_session_id =
+        conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
+    let include_whitespace = dom_agent_includes_whitespace_for_owner(conn, owner);
     complete_frontend_node_binding_followup_result(
         conn,
         command_id,
@@ -4431,16 +4345,9 @@ fn complete_frontend_node_binding_for_request_child_nodes(
     top_frame_id: Option<String>,
     out: &mut DomCommandOutput,
 ) -> DomCommandTaskStep {
-    let renderer_inspector_session_id = conn
-        .target_renderer_runtime_inspector_session_id_for_route(
-            owner.session_id(),
-            owner.session_owner_route(),
-        );
-    let include_whitespace = dom_agent_includes_whitespace_for_route(
-        conn,
-        owner.session_id(),
-        owner.session_owner_route(),
-    );
+    let renderer_inspector_session_id =
+        conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
+    let include_whitespace = dom_agent_includes_whitespace_for_owner(conn, owner);
     complete_frontend_node_binding_followup(
         conn,
         command_id,
@@ -4470,16 +4377,9 @@ fn complete_frontend_node_binding_for_request_child_nodes_result(
     pierce: bool,
     top_frame_id: Option<String>,
 ) -> DevToolsDomCommandTaskStep {
-    let renderer_inspector_session_id = conn
-        .target_renderer_runtime_inspector_session_id_for_route(
-            owner.session_id(),
-            owner.session_owner_route(),
-        );
-    let include_whitespace = dom_agent_includes_whitespace_for_route(
-        conn,
-        owner.session_id(),
-        owner.session_owner_route(),
-    );
+    let renderer_inspector_session_id =
+        conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
+    let include_whitespace = dom_agent_includes_whitespace_for_owner(conn, owner);
     complete_frontend_node_binding_followup_result(
         conn,
         command_id,
@@ -4510,16 +4410,9 @@ fn complete_frontend_node_binding_for_query_selector(
     top_frame_id: Option<String>,
     out: &mut DomCommandOutput,
 ) -> DomCommandTaskStep {
-    let renderer_inspector_session_id = conn
-        .target_renderer_runtime_inspector_session_id_for_route(
-            owner.session_id(),
-            owner.session_owner_route(),
-        );
-    let include_whitespace = dom_agent_includes_whitespace_for_route(
-        conn,
-        owner.session_id(),
-        owner.session_owner_route(),
-    );
+    let renderer_inspector_session_id =
+        conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
+    let include_whitespace = dom_agent_includes_whitespace_for_owner(conn, owner);
     complete_frontend_node_binding_followup(
         conn,
         command_id,
@@ -4549,16 +4442,9 @@ fn complete_frontend_node_binding_for_query_selector_result(
     selector: String,
     multiple: bool,
 ) -> DevToolsDomCommandTaskStep {
-    let renderer_inspector_session_id = conn
-        .target_renderer_runtime_inspector_session_id_for_route(
-            owner.session_id(),
-            owner.session_owner_route(),
-        );
-    let include_whitespace = dom_agent_includes_whitespace_for_route(
-        conn,
-        owner.session_id(),
-        owner.session_owner_route(),
-    );
+    let renderer_inspector_session_id =
+        conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
+    let include_whitespace = dom_agent_includes_whitespace_for_owner(conn, owner);
     complete_frontend_node_binding_followup_result(
         conn,
         command_id,
@@ -4614,11 +4500,8 @@ fn complete_frontend_node_binding_for_resolve_node(
     top_frame_id: Option<String>,
     out: &mut DomCommandOutput,
 ) -> DomCommandTaskStep {
-    let renderer_inspector_session_id = conn
-        .target_renderer_runtime_inspector_session_id_for_route(
-            owner.session_id(),
-            owner.session_owner_route(),
-        );
+    let renderer_inspector_session_id =
+        conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
     complete_frontend_node_binding_followup(
         conn,
         command_id,
@@ -4649,11 +4532,8 @@ fn complete_frontend_node_binding_for_resolve_node_result(
     object_group: Option<String>,
     top_frame_id: Option<String>,
 ) -> DevToolsDomCommandTaskStep {
-    let renderer_inspector_session_id = conn
-        .target_renderer_runtime_inspector_session_id_for_route(
-            owner.session_id(),
-            owner.session_owner_route(),
-        );
+    let renderer_inspector_session_id =
+        conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
     complete_frontend_node_binding_followup_result(
         conn,
         command_id,
@@ -5780,11 +5660,8 @@ fn start_document_frontend_node_binding_command(
     frontend_node_id: u32,
     kind: PendingDomCommandKind,
 ) -> Result<Option<PendingDomCommandDispatch>, PendingDomCommandStartError> {
-    let renderer_inspector_session_id = conn
-        .target_renderer_runtime_inspector_session_id_for_route(
-            owner.session_id(),
-            owner.session_owner_route(),
-        );
+    let renderer_inspector_session_id =
+        conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
     let page = loaded_page_mut_for_owner(conn, owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
     let pending = page
@@ -5932,28 +5809,30 @@ pub(crate) async fn execute_devtools_dom_command_async(
     conn: &mut CdpConnection,
     command: DevToolsCommand,
 ) -> Result<DevToolsCommandResult, DevToolsError> {
-    let (target_id, command_session_id) = devtools_dom_command_route(&command)?;
-    let owner = if let Some(target_id) = target_id.as_deref() {
-        if conn.target_session_route_for_target_id(target_id).is_none() {
-            let result = super::child_frame::execute_devtools_dom_command(conn, target_id, command)
+    let context = devtools_dom_command_context(&command)?;
+    let target_id = context
+        .target_id
+        .as_ref()
+        .map(|target_id| target_id.to_string());
+    let owner = conn
+        .command_owner_scope_for_devtools_context(context)
+        .ok_or_else(|| DevToolsError::new(DevToolsErrorKind::NoSuchTarget, "NoSuchTarget"))?;
+    if let Some(target_id) = target_id.as_deref()
+        && conn.target_session_route_for_target_id(target_id).is_none()
+    {
+        let result =
+            super::child_frame::execute_devtools_dom_command(conn, target_id, &owner, command)
                 .await
                 .map_err(DevToolsError::from)?;
-            return Ok(result);
-        }
-        let route = conn
-            .target_session_route_for_target_id(target_id)
-            .ok_or_else(|| DevToolsError::new(DevToolsErrorKind::NoSuchTarget, "NoSuchTarget"))?;
-        CommandOwnerScope::for_route(route)
-    } else {
-        CommandOwnerScope::capture(conn, command_session_id.as_deref())
-    };
+        return Ok(result);
+    }
 
     execute_devtools_dom_command_for_owner(conn, &owner, command).await
 }
 
-fn devtools_dom_command_route(
+fn devtools_dom_command_context(
     command: &DevToolsCommand,
-) -> Result<(Option<String>, Option<String>), DevToolsError> {
+) -> Result<&crate::devtools_runtime::DevToolsCommandContext, DevToolsError> {
     let context = match command {
         DevToolsCommand::QuerySelector(command) => &command.context,
         DevToolsCommand::GetAttributes(command) => &command.context,
@@ -5983,16 +5862,7 @@ fn devtools_dom_command_route(
             ));
         }
     };
-    Ok((
-        context
-            .target_id
-            .as_ref()
-            .map(|target_id| target_id.to_string()),
-        context
-            .session_id
-            .as_ref()
-            .map(|session_id| session_id.to_string()),
-    ))
+    Ok(context)
 }
 
 async fn execute_devtools_dom_command_for_owner(

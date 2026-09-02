@@ -1,6 +1,6 @@
 use moli_core::page::RendererMainDocumentCommit;
 
-use crate::conn::CdpConnection;
+use crate::conn::{CdpConnection, CommandOwnerScope};
 use crate::domains::activity::{
     ProtocolOutputPayloads, ProtocolOutputProjectionContext, ProtocolOutputSink, ProtocolOutputSlot,
 };
@@ -46,18 +46,14 @@ pub(in crate::domains) async fn project_main_document_commit_async(
 
     for commit in commits {
         let owner = context.owner();
-        let Some((current_frame_id, _, _, _)) = conn
-            .target_session_owner_frame_tree_identity_for_route(
-                owner.session_id(),
-                owner.session_owner_route(),
-            )
+        let Some((current_frame_id, _, _, _)) =
+            conn.target_session_owner_frame_tree_identity_for_owner(owner)
         else {
             continue;
         };
-        let Some(current_loader_id) = conn.target_session_owner_frame_tree_loader_id_for_route(
-            owner.session_id(),
-            owner.session_owner_route(),
-        ) else {
+        let Some(current_loader_id) =
+            conn.target_session_owner_frame_tree_loader_id_for_owner(owner)
+        else {
             continue;
         };
         if current_frame_id != commit.frame_id || current_loader_id != commit.loader_id {
@@ -67,16 +63,15 @@ pub(in crate::domains) async fn project_main_document_commit_async(
             continue;
         }
 
-        let session_ids =
-            conn.page_event_session_ids_for_route(owner.session_id(), owner.session_owner_route());
+        let session_ids = conn.page_event_session_ids_for_owner(owner);
         let mut events = Vec::new();
         for session_id in session_ids {
-            let event_owner_route = session_id
-                .is_none()
-                .then_some(owner.session_owner_route())
-                .flatten();
+            let event_owner = session_id
+                .as_deref()
+                .map(CommandOwnerScope::for_session)
+                .unwrap_or_else(|| owner.clone());
             let lifecycle_enabled = conn
-                .target_page_session_state_for_route(session_id.as_deref(), event_owner_route)
+                .target_page_session_state_for_owner(&event_owner)
                 .is_some_and(|state| state.page_lifecycle_events);
             super::emit_navigation_lifecycle_init_background_events(
                 &mut events,
@@ -87,11 +82,7 @@ pub(in crate::domains) async fn project_main_document_commit_async(
                 commit.timestamp,
             );
 
-            let dom_enabled = crate::domains::dom::dom_agent_enabled_for_route(
-                conn,
-                session_id.as_deref(),
-                event_owner_route,
-            );
+            let dom_enabled = crate::domains::dom::dom_agent_enabled_for_owner(conn, &event_owner);
             super::emit_navigation_frame_commit_background_events(
                 &mut events,
                 session_id.as_deref(),

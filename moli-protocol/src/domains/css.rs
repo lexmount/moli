@@ -399,10 +399,7 @@ pub(crate) fn complete_pending_css_command(
     } = completed;
     let session_id = owner_scope.session_id();
     let Some(page) = conn
-        .loaded_page_mut_for_protocol_access_for_route(
-            session_id,
-            owner_scope.session_owner_route(),
-        )
+        .loaded_page_mut_for_protocol_access_for_owner(&owner_scope)
         .ok()
     else {
         return CssCommandDispatchStep::Complete(CommandOutputPlan::error(

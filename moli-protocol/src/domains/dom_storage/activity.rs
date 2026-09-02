@@ -77,9 +77,7 @@ fn dom_storage_subscriptions_for_browser_context_owner(
     conn: &CdpConnection,
     owner: &CommandOwnerScope,
 ) -> Vec<(Option<String>, WebStorageMutationSubscription)> {
-    let Some((browser_context_id, _)) =
-        conn.target_owner_identity_for_route(owner.session_id(), owner.session_owner_route())
-    else {
+    let Some((browser_context_id, _)) = conn.target_owner_identity_for_owner(owner) else {
         return dom_storage_subscriptions_for_owner(conn, owner);
     };
     let Some(browser_context) = conn.browser_context_by_id(&browser_context_id) else {
@@ -116,7 +114,7 @@ fn dom_storage_subscriptions_for_owner(
     conn: &CdpConnection,
     owner: &CommandOwnerScope,
 ) -> Vec<(Option<String>, WebStorageMutationSubscription)> {
-    conn.page_event_session_ids_for_route(owner.session_id(), owner.session_owner_route())
+    conn.page_event_session_ids_for_owner(owner)
         .into_iter()
         .filter_map(|event_session_id| {
             let subscription = conn

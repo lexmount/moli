@@ -19,8 +19,8 @@ use url::Url;
 
 use super::{
     BackgroundProtocolEvent, BrowserDownloadBehaviorSettings, CdpConnection,
-    CommandDispatchContext, CompletedDownloadBody, CompletedDownloadBodyArtifact,
-    NavigationDispatchState, output::BackgroundEventSender,
+    CommandDispatchContext, CommandOwnerScope, CompletedDownloadBody,
+    CompletedDownloadBodyArtifact, NavigationDispatchState, output::BackgroundEventSender,
 };
 
 #[derive(Clone, Default)]
@@ -227,13 +227,13 @@ impl CdpConnection {
     pub(crate) async fn handle_pending_download_activation_background_events_async(
         &mut self,
         out: &mut Vec<BackgroundProtocolEvent>,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
         activation: RendererPendingDownloadActivation,
         command_context: &mut CommandDispatchContext,
     ) -> Result<(), String> {
         self.handle_pending_download_activation_with_event_route_async(
             out,
-            session_id,
+            owner,
             activation,
             true,
             command_context,
@@ -244,13 +244,13 @@ impl CdpConnection {
     pub(crate) async fn handle_pending_download_activation_inline_async(
         &mut self,
         out: &mut Vec<BackgroundProtocolEvent>,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
         activation: RendererPendingDownloadActivation,
         command_context: &mut CommandDispatchContext,
     ) -> Result<(), String> {
         self.handle_pending_download_activation_with_event_route_async(
             out,
-            session_id,
+            owner,
             activation,
             false,
             command_context,
@@ -261,14 +261,12 @@ impl CdpConnection {
     async fn handle_pending_download_activation_with_event_route_async(
         &mut self,
         out: &mut Vec<BackgroundProtocolEvent>,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
         activation: RendererPendingDownloadActivation,
         allow_background_events: bool,
         command_context: &mut CommandDispatchContext,
     ) -> Result<(), String> {
-        if let Some(events) =
-            self.denied_pending_download_activation_events(session_id, &activation)?
-        {
+        if let Some(events) = self.denied_pending_download_activation_events(owner, &activation)? {
             if allow_background_events && let Some(sender) = self.background_event_sender() {
                 if command_context.response_flush().is_active() {
                     command_context.extend_post_response_events(events);
@@ -282,8 +280,7 @@ impl CdpConnection {
         }
 
         if activation.response.is_some() {
-            let Some(prepared) =
-                self.prepare_prefetched_download_activation(session_id, activation)?
+            let Some(prepared) = self.prepare_prefetched_download_activation(owner, activation)?
             else {
                 return Ok(());
             };
@@ -306,8 +303,7 @@ impl CdpConnection {
             return Ok(());
         }
 
-        let Some(prepared) = self.prepare_pending_download_activation(session_id, activation)?
-        else {
+        let Some(prepared) = self.prepare_pending_download_activation(owner, activation)? else {
             return Ok(());
         };
 
@@ -397,10 +393,10 @@ impl CdpConnection {
 
     fn prepare_pending_download_activation(
         &mut self,
-        session_id: Option<&str>,
+        command_owner: &CommandOwnerScope,
         activation: RendererPendingDownloadActivation,
     ) -> Result<Option<PreparedDownloadActivation>, String> {
-        let Some(owner) = self.pending_download_owner_context(session_id) else {
+        let Some(owner) = self.pending_download_owner_context(command_owner) else {
             return Ok(None);
         };
         let Some(settings) =
@@ -434,7 +430,8 @@ impl CdpConnection {
             download_root,
             guid,
             behavior: settings.behavior,
-            event_route: self.download_event_route(session_id, settings.automation_events_enabled),
+            event_route: self
+                .download_event_route(command_owner, settings.automation_events_enabled),
             suggested_filename_hint: activation.suggested_filename,
             cancel_handle,
             registry: self.download_registry.clone(),
@@ -443,10 +440,10 @@ impl CdpConnection {
 
     fn denied_pending_download_activation_events(
         &mut self,
-        session_id: Option<&str>,
+        command_owner: &CommandOwnerScope,
         activation: &RendererPendingDownloadActivation,
     ) -> Result<Option<Vec<BackgroundProtocolEvent>>, String> {
-        let Some(owner) = self.pending_download_owner_context(session_id) else {
+        let Some(owner) = self.pending_download_owner_context(command_owner) else {
             return Ok(None);
         };
         let settings = self
@@ -457,7 +454,8 @@ impl CdpConnection {
         {
             return Ok(None);
         }
-        let event_route = self.download_event_route(session_id, settings.automation_events_enabled);
+        let event_route =
+            self.download_event_route(command_owner, settings.automation_events_enabled);
         if !event_route.has_observers() {
             return Ok(Some(Vec::new()));
         }
@@ -496,10 +494,10 @@ impl CdpConnection {
 
     fn prepare_prefetched_download_activation(
         &mut self,
-        session_id: Option<&str>,
+        command_owner: &CommandOwnerScope,
         activation: RendererPendingDownloadActivation,
     ) -> Result<Option<PreparedNavigationDownload>, String> {
-        let Some(owner) = self.pending_download_owner_context(session_id) else {
+        let Some(owner) = self.pending_download_owner_context(command_owner) else {
             return Ok(None);
         };
         let Some(settings) =
@@ -529,7 +527,8 @@ impl CdpConnection {
             download_root,
             guid: generate_download_guid()?,
             behavior: settings.behavior,
-            event_route: self.download_event_route(session_id, settings.automation_events_enabled),
+            event_route: self
+                .download_event_route(command_owner, settings.automation_events_enabled),
             registry: self.download_registry.clone(),
         }))
     }
@@ -540,13 +539,9 @@ impl CdpConnection {
         final_url: Url,
         body_artifact: CompletedDownloadBodyArtifact,
     ) -> Result<Option<PreparedNavigationDownload>, String> {
-        let owner_context_id = state
-            .session_id
-            .as_deref()
-            .and_then(|session_id| {
-                self.target_owner_identity_for_session(Some(session_id))
-                    .map(|(browser_context_id, _)| browser_context_id)
-            })
+        let owner_context_id = self
+            .target_owner_identity_for_owner(&state.owner)
+            .map(|(browser_context_id, _)| browser_context_id)
             .or_else(|| self.browser_context.as_ref().map(|bc| bc.id.clone()));
         let Some(settings) =
             self.effective_download_behavior_for_browser_context(owner_context_id.as_deref())
@@ -570,10 +565,8 @@ impl CdpConnection {
             download_root,
             guid: generate_download_guid()?,
             behavior: settings.behavior,
-            event_route: self.download_event_route(
-                state.session_id.as_deref(),
-                settings.automation_events_enabled,
-            ),
+            event_route: self
+                .download_event_route(&state.owner, settings.automation_events_enabled),
             registry: self.download_registry.clone(),
         }))
     }
@@ -621,9 +614,9 @@ impl CdpConnection {
 
     fn pending_download_owner_context(
         &self,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
     ) -> Option<PendingDownloadOwnerContext> {
-        let (browser_context_id, target_id) = self.target_owner_identity_for_session(session_id)?;
+        let (browser_context_id, target_id) = self.target_owner_identity_for_owner(owner)?;
         let browser_context = self.browser_context_by_id(&browser_context_id)?;
         let frame_id = target_id
             .clone()
@@ -634,7 +627,7 @@ impl CdpConnection {
             .map(|target_id| browser_context.effective_extra_headers_for_target(target_id))
             .unwrap_or_else(|| browser_context.effective_extra_headers());
         let initiator_url = self
-            .runtime_session_owner_slot(session_id)
+            .runtime_session_owner_slot_for_owner(owner)
             .ok()
             .and_then(|slot| slot.loaded_page().map(|page| page.final_url().clone()));
         Some(PendingDownloadOwnerContext {
@@ -662,11 +655,11 @@ impl CdpConnection {
 
     fn download_event_route(
         &self,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
         automation_events_enabled: bool,
     ) -> DownloadEventRoute {
         let page_observers = self
-            .page_event_session_ids_for_session_owner(session_id)
+            .page_event_session_ids_for_owner(owner)
             .into_iter()
             .filter_map(|event_session_id| {
                 self.page_domain_subscription_generation_for_session_owner(
@@ -1497,7 +1490,10 @@ mod tests {
     use moli_fetch::FetchCancelHandle;
 
     use crate::{
-        conn::{BackgroundProtocolEvent, BrowserContext, CdpConnection, PageTargetHost},
+        conn::{
+            BackgroundProtocolEvent, BrowserContext, CdpConnection, CommandOwnerScope,
+            PageTargetHost,
+        },
         devtools_runtime::AutomationEvent,
     };
 
@@ -1554,7 +1550,7 @@ mod tests {
         connection.browser_context = Some(browser_context);
 
         let owner = connection
-            .pending_download_owner_context(Some("SID-background"))
+            .pending_download_owner_context(&CommandOwnerScope::for_session("SID-background"))
             .expect("background session must resolve its Page target");
         assert_eq!(owner.frame_id, "TID-background");
         assert_eq!(

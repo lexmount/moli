@@ -1,9 +1,8 @@
 use super::super::{BrowserContext, ConnectionNetworkRequestIdAllocator, PageTargetHost};
 #[cfg(test)]
 use super::super::{
-    DocumentBodySource, DocumentNavigationToken, NavigationDispatchState, PausedDocumentTransfer,
-    PendingFetchAuthNavigation, PendingFetchNavigation, PendingSubresourceFetchAuthRequest,
-    PendingSubresourceFetchRequest, PendingSubresourceFetchResponseRequest,
+    DocumentBodySource, DocumentNavigationToken, NavigationDispatchState,
+    PendingSubresourceFetchRequest,
 };
 
 fn document_navigation_loader_id(sequence: u64) -> String {
@@ -70,22 +69,6 @@ impl BrowserContext {
             debug_assert!(replaced.is_none());
         }
         self.page_targets.insert(host)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn take_active_target_pending_fetch_state(
-        &mut self,
-    ) -> (
-        Vec<PendingFetchNavigation>,
-        Vec<PendingFetchAuthNavigation>,
-        Vec<PausedDocumentTransfer>,
-        Vec<(String, PendingSubresourceFetchRequest)>,
-        Vec<(String, PendingSubresourceFetchAuthRequest)>,
-        Vec<(String, PendingSubresourceFetchResponseRequest)>,
-    ) {
-        self.active_page_target_mut()
-            .fetch_owner
-            .drain_pending_requests()
     }
 
     #[cfg(test)]
@@ -425,7 +408,10 @@ mod tests {
                 .fetch_owner
                 .has_in_flight_subresource_fetches_for_test()
         );
-        let _ = bc.take_active_target_pending_fetch_state();
+        let _ = bc
+            .active_page_target_mut()
+            .fetch_owner
+            .drain_pending_requests();
         assert!(
             !bc.active_page_target()
                 .fetch_owner

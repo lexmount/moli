@@ -356,23 +356,17 @@ impl CdpConnection {
         data_type: DevToolsNetworkDataType,
         encoded_data_size: usize,
     ) -> Vec<String> {
-        self.network_data_collector_ids_for_route_body(
-            session_id,
-            None,
-            data_type,
-            encoded_data_size,
-        )
+        let owner = crate::conn::CommandOwnerScope::capture(self, session_id);
+        self.network_data_collector_ids_for_owner_body(&owner, data_type, encoded_data_size)
     }
 
-    pub(crate) fn network_data_collector_ids_for_route_body(
+    pub(crate) fn network_data_collector_ids_for_owner_body(
         &self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        owner: &crate::conn::CommandOwnerScope,
         data_type: DevToolsNetworkDataType,
         encoded_data_size: usize,
     ) -> Vec<String> {
-        let Some((browser_context_id, target_id)) =
-            self.target_owner_identity_for_route(session_id, owner_route)
+        let Some((browser_context_id, target_id)) = self.target_owner_identity_for_owner(owner)
         else {
             return Vec::new();
         };
@@ -445,10 +439,9 @@ impl CdpConnection {
             .is_ok_and(|runtime_slot| runtime_slot.has_network_event_listeners())
     }
 
-    pub(crate) fn network_backlog_prepared_delivery_for_route(
+    pub(crate) fn network_backlog_prepared_delivery_for_owner(
         &mut self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        owner: &crate::conn::CommandOwnerScope,
         trigger_session_id: Option<&str>,
         primary_session_id: Option<&str>,
         preferred_request_id: Option<NetworkBacklogPreferredRequestId<'_>>,
@@ -456,7 +449,7 @@ impl CdpConnection {
         let mut network_request_id_allocator =
             std::mem::take(&mut self.network_request_id_allocator);
         let result = self
-            .runtime_session_owner_slot_mut_for_route(session_id, owner_route)
+            .runtime_session_owner_slot_mut_for_owner(owner)
             .ok()
             .map(|runtime_slot| {
                 runtime_slot.network_backlog_prepared_delivery(
@@ -490,10 +483,9 @@ impl CdpConnection {
         result
     }
 
-    pub(crate) fn pending_network_backlog_delivery_snapshot_for_route(
+    pub(crate) fn pending_network_backlog_delivery_snapshot_for_owner(
         &mut self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        owner: &crate::conn::CommandOwnerScope,
         trigger_session_id: Option<&str>,
         primary_session_id: Option<&str>,
         preferred_request_id: Option<NetworkBacklogPreferredRequestId<'_>>,
@@ -501,7 +493,7 @@ impl CdpConnection {
         let mut network_request_id_allocator =
             std::mem::take(&mut self.network_request_id_allocator);
         let result = self
-            .runtime_session_owner_slot_mut_for_route(session_id, owner_route)
+            .runtime_session_owner_slot_mut_for_owner(owner)
             .ok()
             .and_then(|runtime_slot| {
                 runtime_slot.pending_network_backlog_delivery_snapshot(
@@ -519,51 +511,49 @@ impl CdpConnection {
         &self,
         session_id: Option<&str>,
     ) -> Vec<Option<String>> {
-        self.network_event_session_ids_for_route(session_id, None)
+        let owner = crate::conn::CommandOwnerScope::capture(self, session_id);
+        self.network_event_session_ids_for_owner(&owner)
     }
 
-    pub(crate) fn network_event_session_ids_for_route(
+    pub(crate) fn network_event_session_ids_for_owner(
         &self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        owner: &crate::conn::CommandOwnerScope,
     ) -> Vec<Option<String>> {
-        let Ok(runtime_slot) = self.runtime_session_owner_slot_for_route(session_id, owner_route)
-        else {
-            return vec![session_id.map(str::to_owned)];
+        let Ok(runtime_slot) = self.runtime_session_owner_slot_for_owner(owner) else {
+            return vec![owner.session_id().map(str::to_owned)];
         };
-        let primary_session_id =
-            self.runtime_session_owner_primary_session_id_for_route(session_id, owner_route);
-        runtime_slot.network_event_session_ids(session_id, primary_session_id.as_deref())
+        let primary_session_id = self.runtime_session_owner_primary_session_id_for_owner(owner);
+        runtime_slot.network_event_session_ids(owner.session_id(), primary_session_id.as_deref())
     }
 
     pub(crate) fn enable_network_listener_for_session_owner(
         &mut self,
         session_id: Option<&str>,
     ) -> bool {
-        self.set_network_listener_enabled_for_route(session_id, None, true)
+        let owner = crate::conn::CommandOwnerScope::capture(self, session_id);
+        self.set_network_listener_enabled_for_owner(&owner, true)
     }
 
-    fn set_network_listener_enabled_for_route(
+    fn set_network_listener_enabled_for_owner(
         &mut self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        owner: &crate::conn::CommandOwnerScope,
         enabled: bool,
     ) -> bool {
-        if let Some(session_id) = session_id
+        if let Some(session_id) = owner.session_id()
             && let Some(target) = self.service_worker_target_for_session_mut(Some(session_id))
         {
             return target.set_network_enabled(session_id, enabled);
         }
-        if let Some(session_id) = session_id
+        if let Some(session_id) = owner.session_id()
             && let Some(target) = self.dedicated_worker_target_for_session_mut(Some(session_id))
         {
             return target.set_network_enabled(session_id, enabled);
         }
-        self.with_target_session_owner_mut_for_route(session_id, owner_route, |owner| {
+        self.with_target_session_owner_mut_for_owner(owner, |resolved| {
             if enabled {
-                owner.enable_listener()
+                resolved.enable_listener()
             } else {
-                owner.disable_listener()
+                resolved.disable_listener()
             }
         })
         .unwrap_or(false)
@@ -573,14 +563,20 @@ impl CdpConnection {
         let Some(route) = self.target_session_route_for_target_id(target_id) else {
             return false;
         };
-        self.set_network_listener_enabled_for_route(None, Some(&route), true)
+        self.set_network_listener_enabled_for_owner(
+            &crate::conn::CommandOwnerScope::for_route(route),
+            true,
+        )
     }
 
     pub fn disable_network_listener_for_target(&mut self, target_id: &str) -> bool {
         let Some(route) = self.target_session_route_for_target_id(target_id) else {
             return false;
         };
-        self.set_network_listener_enabled_for_route(None, Some(&route), false)
+        self.set_network_listener_enabled_for_owner(
+            &crate::conn::CommandOwnerScope::for_route(route),
+            false,
+        )
     }
 
     pub(crate) fn set_global_cache_disabled(&mut self, cache_disabled: bool) {
@@ -611,7 +607,8 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
     ) -> bool {
-        self.set_network_listener_enabled_for_route(session_id, None, false)
+        let owner = crate::conn::CommandOwnerScope::capture(self, session_id);
+        self.set_network_listener_enabled_for_owner(&owner, false)
     }
 
     pub(crate) fn start_set_cache_disabled_for_session_owner(
@@ -676,13 +673,12 @@ impl CdpConnection {
         owner.start_set_extra_http_headers(extra_headers)
     }
 
-    pub(crate) fn start_set_target_extra_http_headers_for_route(
+    pub(crate) fn start_set_target_extra_http_headers_for_owner(
         &mut self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        command_owner: &crate::conn::CommandOwnerScope,
         extra_headers: Vec<(String, String)>,
     ) -> Result<Option<PendingPageCommand>, String> {
-        let Some(owner) = self.target_session_owner_mut_for_route(session_id, owner_route) else {
+        let Some(owner) = self.target_session_owner_mut_for_owner(command_owner) else {
             return Err("BrowserContextNotLoaded".to_owned());
         };
         owner.start_set_target_extra_http_headers(extra_headers)
@@ -708,10 +704,9 @@ impl CdpConnection {
         owner.start_replay_effective_network_request_policy()
     }
 
-    pub(crate) fn start_set_base_user_agent_override_for_route(
+    pub(crate) fn start_set_base_user_agent_override_for_owner(
         &mut self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        command_owner: &crate::conn::CommandOwnerScope,
         user_agent: Option<String>,
     ) -> Result<Option<PendingPageCommand>, String> {
         let browser_identity = user_agent.as_ref().map(|user_agent| {
@@ -720,22 +715,21 @@ impl CdpConnection {
                 self.base_browser_identity.accept_language(),
             )
         });
-        if owner_route.is_none()
-            && let Some(result) =
-                self.start_set_non_page_browser_identity_override(session_id, browser_identity)
-        {
+        if let Some(result) = self.start_set_non_page_browser_identity_override(
+            command_owner.session_id(),
+            browser_identity,
+        ) {
             return result;
         }
 
         let fallback_identity = self.base_browser_identity.clone();
-        let Some(mut owner) = self.target_session_owner_mut_for_route(session_id, owner_route)
-        else {
+        let Some(mut owner) = self.target_session_owner_mut_for_owner(command_owner) else {
             return Err("BrowserContextNotLoaded".to_owned());
         };
         if !owner.set_base_user_agent_override(user_agent, &fallback_identity) {
             return Err("BrowserContextNotLoaded".to_owned());
         }
-        self.start_rebuild_resource_runtime_for_route(session_id, owner_route)
+        self.start_rebuild_resource_runtime_for_owner(command_owner)
     }
 
     fn start_set_non_page_browser_identity_override(
@@ -833,9 +827,9 @@ impl CdpConnection {
         upload_throughput: f64,
         connection_type: Option<String>,
     ) -> Result<Option<PendingPageCommand>, String> {
-        self.start_set_emulated_network_conditions_for_route(
-            session_id,
-            None,
+        let owner = crate::conn::CommandOwnerScope::capture(self, session_id);
+        self.start_set_emulated_network_conditions_for_owner(
+            &owner,
             offline,
             latency,
             download_throughput,
@@ -844,17 +838,16 @@ impl CdpConnection {
         )
     }
 
-    pub(crate) fn start_set_emulated_network_conditions_for_route(
+    pub(crate) fn start_set_emulated_network_conditions_for_owner(
         &mut self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        command_owner: &crate::conn::CommandOwnerScope,
         offline: bool,
         latency: f64,
         download_throughput: f64,
         upload_throughput: f64,
         connection_type: Option<String>,
     ) -> Result<Option<PendingPageCommand>, String> {
-        let Some(owner) = self.target_session_owner_mut_for_route(session_id, owner_route) else {
+        let Some(owner) = self.target_session_owner_mut_for_owner(command_owner) else {
             return Err("BrowserContextNotLoaded".to_owned());
         };
         owner.start_set_emulated_network_conditions(
@@ -921,13 +914,19 @@ mod tests {
         conn.browser_context = Some(browser_context);
 
         let (active_fetch_id, active_network_request_id) = conn
-            .allocate_pending_subresource_fetch_request_ids_for_route(Some("SID-active"), None)
+            .allocate_pending_subresource_fetch_request_ids_for_owner(
+                &crate::conn::CommandOwnerScope::for_session("SID-active"),
+            )
             .expect("active owner should allocate request ids");
         let (background_fetch_id, background_network_request_id) = conn
-            .allocate_pending_subresource_fetch_request_ids_for_route(Some("SID-background"), None)
+            .allocate_pending_subresource_fetch_request_ids_for_owner(
+                &crate::conn::CommandOwnerScope::for_session("SID-background"),
+            )
             .expect("background owner should allocate request ids");
         let (second_active_fetch_id, second_active_network_request_id) = conn
-            .allocate_pending_subresource_fetch_request_ids_for_route(Some("SID-active"), None)
+            .allocate_pending_subresource_fetch_request_ids_for_owner(
+                &crate::conn::CommandOwnerScope::for_session("SID-active"),
+            )
             .expect("active owner should allocate a second request id");
 
         assert_eq!(active_fetch_id, "INT-SUB-1");

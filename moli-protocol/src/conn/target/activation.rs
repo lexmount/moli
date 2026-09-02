@@ -1,4 +1,4 @@
-use crate::conn::{BackgroundProtocolEvent, BrowserContext, CdpConnection};
+use crate::conn::{BackgroundProtocolEvent, BrowserContext, CdpConnection, CommandOwnerScope};
 
 /// The stable Target identities on both sides of one foreground selection.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -144,10 +144,15 @@ impl CdpConnection {
         let Some(route) = self.target_session_route_for_target_id(target_id) else {
             return Vec::new();
         };
-        self.page_event_session_ids_for_route(None, Some(&route))
+        let owner = CommandOwnerScope::for_route(route);
+        self.page_event_session_ids_for_owner(&owner)
             .into_iter()
             .filter(|session_id| {
-                self.target_page_session_state_for_route(session_id.as_deref(), Some(&route))
+                let event_owner = session_id
+                    .as_deref()
+                    .map(CommandOwnerScope::for_session)
+                    .unwrap_or_else(|| owner.clone());
+                self.target_page_session_state_for_owner(&event_owner)
                     .is_some_and(|state| state.page_screencast.is_active())
             })
             .collect()

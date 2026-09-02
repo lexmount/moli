@@ -115,23 +115,31 @@ impl RendererBrowserContextRuntime {
         };
         let response = response
             .route_to_worker_devtools_session_output(inspector_session_id.clone(), output_journal);
+        let error_response = response.clone();
         let settlement = response
             .take_session_response_settlement_receiver()
             .expect("a Worker DevTools response must own one settlement receiver");
         let (response_tx, response_rx) = oneshot::channel();
-        if !target.handle.dispatch_runtime_protocol_message(
+        let dispatched = target.handle.dispatch_runtime_protocol_message(
             Some(inspector_session_id),
             raw_json,
             Some(response),
             response_tx,
-        ) {
-            return Err("DedicatedWorkerRuntimeUnavailable".to_owned());
-        }
-        let dispatch = response_rx
-            .await
-            .map_err(|_| "DedicatedWorkerRuntimeUnavailable".to_owned())?;
-        crate::runtime::CompletedWorkerRuntimeInspectorCommandDispatch::finish(dispatch, settlement)
-            .await
+        );
+        let dispatch = if dispatched {
+            response_rx
+                .await
+                .unwrap_or_else(|_| Err("DedicatedWorkerRuntimeUnavailable".to_owned()))
+        } else {
+            Err("DedicatedWorkerRuntimeUnavailable".to_owned())
+        };
+        Ok(
+            crate::runtime::CompletedWorkerRuntimeInspectorCommandDispatch::finish(
+                dispatch,
+                settlement,
+                error_response,
+            ),
+        )
     }
 
     async fn dispatch_dedicated_worker_runtime_protocol_message_with_optional_deferred_response(

@@ -134,7 +134,9 @@ async fn arm_popup_route(
     ctx.expect_result(base + 2, json!({}), Some(popup_session_id));
     let fetch_snapshot = ctx
         .conn
-        .target_fetch_subresource_interception_snapshot_for_route(Some(popup_session_id), None)
+        .target_fetch_subresource_interception_snapshot_for_owner(
+            &crate::conn::CommandOwnerScope::for_session(popup_session_id),
+        )
         .expect("popup target Fetch configuration");
     let matching_sessions = fetch_snapshot.matching_request_stage_pause_sessions(
         Some(popup_session_id),

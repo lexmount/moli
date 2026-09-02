@@ -299,7 +299,7 @@ fn complete_error(message: impl Into<String>) -> PageCommandTaskStep {
 }
 
 fn loaded_page<'a>(conn: &'a mut CdpConnection, owner: &CommandOwnerScope) -> Option<&'a mut Page> {
-    conn.runtime_session_owner_slot_mut_for_route(owner.session_id(), owner.session_owner_route())
+    conn.runtime_session_owner_slot_mut_for_owner(owner)
         .ok()?
         .loaded_page_mut()
 }

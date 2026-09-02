@@ -333,9 +333,10 @@ async fn pending_mouse_event_acknowledges_when_page_is_replaced_before_renderer_
         .conn
         .target_page_residence_identity_for_session(None)
         .expect("the original Page should have a residence identity");
+    let command_owner = CommandOwnerScope::capture(&ctx.conn, None);
     let page_residence_token = ctx
         .conn
-        .capture_target_page_residence_token_for_route(None, None)
+        .capture_target_page_residence_token_for_owner(&command_owner)
         .expect("the original Page should expose its attachment lifetime");
 
     let replacement_url = "data:text/html,<body>replacement-before-completion</body>";
@@ -375,9 +376,10 @@ async fn completed_renderer_ack_wins_when_page_replacement_is_already_observable
     let mut ctx = TestContext::new();
     with_loaded_document(&mut ctx, "<body>origin</body>").await;
 
+    let command_owner = CommandOwnerScope::capture(&ctx.conn, None);
     let page_residence_token = ctx
         .conn
-        .capture_target_page_residence_token_for_route(None, None)
+        .capture_target_page_residence_token_for_owner(&command_owner)
         .expect("the original Page should expose its attachment lifetime");
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<body>replacement-after-ack</body>",

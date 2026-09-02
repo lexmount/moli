@@ -23,17 +23,13 @@ pub(in crate::domains) fn advance_runtime_observable_cursors_to_current_for_owne
     if let Some((context_console_counts, exception_entries)) =
         runtime_observable_cursor_end_from_owner_queue_for_owner(conn, owner)
     {
-        let _ = conn.with_target_owner_state_for_route_mut(
-            owner.session_id(),
-            owner.session_owner_route(),
-            |owner_state| {
-                owner_state.runtime_observable_state.advance_to_current(
-                    context_console_counts,
-                    0,
-                    exception_entries,
-                );
-            },
-        );
+        let _ = conn.with_target_owner_state_for_owner_mut(owner, |owner_state| {
+            owner_state.runtime_observable_state.advance_to_current(
+                context_console_counts,
+                0,
+                exception_entries,
+            );
+        });
         return;
     }
     let Some((owner_queue_console_entries, exception_entries)) =
@@ -41,31 +37,22 @@ pub(in crate::domains) fn advance_runtime_observable_cursors_to_current_for_owne
     else {
         return;
     };
-    let _ = conn.with_target_owner_state_for_route_mut(
-        owner.session_id(),
-        owner.session_owner_route(),
-        |owner_state| {
-            owner_state.runtime_observable_state.advance_to_current(
-                HashMap::new(),
-                owner_queue_console_entries,
-                exception_entries,
-            );
-        },
-    );
+    let _ = conn.with_target_owner_state_for_owner_mut(owner, |owner_state| {
+        owner_state.runtime_observable_state.advance_to_current(
+            HashMap::new(),
+            owner_queue_console_entries,
+            exception_entries,
+        );
+    });
 }
 
 fn runtime_observable_cursor_end_from_owner_queue_for_owner(
     conn: &CdpConnection,
     owner: &CommandOwnerScope,
 ) -> Option<(HashMap<i64, usize>, usize)> {
-    let runtime_slot = conn
-        .runtime_session_owner_slot_for_route(owner.session_id(), owner.session_owner_route())
-        .ok()?;
+    let runtime_slot = conn.runtime_session_owner_slot_for_owner(owner).ok()?;
     let source = runtime_slot.observable_output_latest_source_tail()?;
-    let url = conn.runtime_session_owner_target_url_for_route(
-        owner.session_id(),
-        owner.session_owner_route(),
-    )?;
+    let url = conn.runtime_session_owner_target_url_for_owner(owner)?;
     (source.url() == url && runtime_slot.page_attachment_id() == Some(source.page_attachment_id()))
         .then_some(source)?
         .cursor_end()
@@ -75,7 +62,7 @@ fn runtime_observable_cursor_end_from_owner_observable_queue_for_owner(
     conn: &CdpConnection,
     owner: &CommandOwnerScope,
 ) -> Option<(usize, usize)> {
-    conn.runtime_session_owner_slot_for_route(owner.session_id(), owner.session_owner_route())
+    conn.runtime_session_owner_slot_for_owner(owner)
         .ok()?
         .observable_output_cursor_end()
 }

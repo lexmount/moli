@@ -128,8 +128,6 @@ pub(super) fn complete_get_app_manifest_command(
     completed: CompletedGetAppManifestCommand,
     command_context: &mut CommandDispatchContext,
 ) -> PageCommandTaskStep {
-    let session_id = owner.session_id();
-    let owner_route = owner.session_owner_route();
     match completed.work {
         CompletedGetAppManifestWork::Prepare(completion) => {
             let completion = match completion {
@@ -142,7 +140,7 @@ pub(super) fn complete_get_app_manifest_command(
                 }
             };
             let preparation = match conn
-                .loaded_page_mut_for_protocol_access_for_route(session_id, owner_route)
+                .loaded_page_mut_for_protocol_access_for_owner(owner)
                 .and_then(|page| {
                     page.finish_prepare_app_manifest_load(completion)
                         .map_err(|error| error.to_string())
@@ -174,15 +172,14 @@ pub(super) fn complete_get_app_manifest_command(
         }
         CompletedGetAppManifestWork::Fetch(outcome) => {
             let (result, publication) = (*outcome).into_parts();
-            let pending =
-                match conn.loaded_page_mut_for_protocol_access_for_route(session_id, owner_route) {
-                    Ok(page) => page.start_publish_app_manifest_load(publication),
-                    Err(message) => {
-                        return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                            -32000, message,
-                        ));
-                    }
-                };
+            let pending = match conn.loaded_page_mut_for_protocol_access_for_owner(owner) {
+                Ok(page) => page.start_publish_app_manifest_load(publication),
+                Err(message) => {
+                    return PageCommandTaskStep::Complete(CommandOutputPlan::error(
+                        -32000, message,
+                    ));
+                }
+            };
             match pending {
                 Ok(pending) => pending_step(
                     command_id,
@@ -212,7 +209,7 @@ pub(super) fn complete_get_app_manifest_command(
                 }
             };
             let output = match conn
-                .loaded_page_mut_for_protocol_access_for_route(session_id, owner_route)
+                .loaded_page_mut_for_protocol_access_for_owner(owner)
                 .and_then(|page| {
                     page.finish_publish_app_manifest_load(completion)
                         .map_err(|error| error.to_string())
@@ -226,7 +223,7 @@ pub(super) fn complete_get_app_manifest_command(
             };
             let mut ordered_events = Vec::new();
             command_context.consume_renderer_command_turn_output(output);
-            conn.ingest_runtime_session_owner_output_updates_for_route(session_id, owner_route);
+            conn.ingest_runtime_session_owner_output_updates_for_owner(owner);
             emit_pending_network_backlog_activity_background_events(
                 conn,
                 &mut ordered_events,

@@ -227,15 +227,15 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
     ) -> Result<Option<PendingPageCommand>, String> {
-        self.start_rebuild_resource_runtime_for_route(session_id, None)
+        let owner = super::CommandOwnerScope::capture(self, session_id);
+        self.start_rebuild_resource_runtime_for_owner(&owner)
     }
 
-    pub(crate) fn start_rebuild_resource_runtime_for_route(
+    pub(crate) fn start_rebuild_resource_runtime_for_owner(
         &mut self,
-        session_id: Option<&str>,
-        owner_route: Option<&super::CdpSessionRoute>,
+        owner: &super::CommandOwnerScope,
     ) -> Result<Option<PendingPageCommand>, String> {
-        let load_inputs = self.navigation_load_inputs_for_route(session_id, owner_route);
+        let load_inputs = self.navigation_load_inputs_for_owner(owner);
         let navigator_identity = load_inputs
             .navigator_identity_override
             .clone()
@@ -249,7 +249,7 @@ impl CdpConnection {
                 storage.into_navigation_storage(),
             )
             .map_err(|error| format!("failed to rebuild resource runtime: {error}"))?;
-        let Some(page) = self.resource_runtime_apply_page_for_route(session_id, owner_route) else {
+        let Some(page) = self.resource_runtime_apply_page_for_owner(owner) else {
             return Ok(None);
         };
         page.start_replace_browser_resource_runtime_with_navigator_identity(
@@ -271,14 +271,13 @@ impl CdpConnection {
         )
     }
 
-    pub(crate) fn finish_rebuild_resource_runtime_for_route(
+    pub(crate) fn finish_rebuild_resource_runtime_for_owner(
         &mut self,
-        session_id: Option<&str>,
-        owner_route: Option<&super::CdpSessionRoute>,
+        owner: &super::CommandOwnerScope,
         completion: CompletedPageCommand,
     ) -> Result<(), String> {
         finish_resource_runtime_update_on_current_attachment(
-            self.resource_runtime_apply_page_for_route(session_id, owner_route),
+            self.resource_runtime_apply_page_for_owner(owner),
             completion,
         )
     }
@@ -300,13 +299,12 @@ impl CdpConnection {
             .ok()
     }
 
-    fn resource_runtime_apply_page_for_route(
+    fn resource_runtime_apply_page_for_owner(
         &mut self,
-        session_id: Option<&str>,
-        owner_route: Option<&super::CdpSessionRoute>,
+        owner: &super::CommandOwnerScope,
     ) -> Option<&mut moli_core::page::Page> {
         if matches!(
-            session_id.and_then(|session_id| self.session_route(Some(session_id))),
+            owner.resolve_route(self),
             Some(super::CdpSessionRoute::Browser)
         ) {
             return self
@@ -314,7 +312,7 @@ impl CdpConnection {
                 .as_mut()
                 .and_then(|bc| bc.active_page_target_mut().runtime_slot.loaded_page_mut());
         }
-        self.loaded_page_mut_for_target_configuration_for_route(session_id, owner_route)
+        self.loaded_page_mut_for_target_configuration_for_owner(owner)
             .ok()
     }
 }

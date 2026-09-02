@@ -130,10 +130,8 @@ pub(crate) fn complete_pending_autofill_command(
     conn: &mut CdpConnection,
     completed: CompletedAutofillCommandDispatch,
 ) -> CommandOutputPlan {
-    let session_id = completed.owner_scope.session_id();
-    let owner_route = completed.owner_scope.session_owner_route();
     let outcome = completed.completed.and_then(|completion| {
-        conn.loaded_page_mut_for_protocol_access_for_route(session_id, owner_route)
+        conn.loaded_page_mut_for_protocol_access_for_owner(&completed.owner_scope)
             .and_then(|page| {
                 page.finish_autofill_trigger(completion)
                     .map_err(|error| error.to_string())

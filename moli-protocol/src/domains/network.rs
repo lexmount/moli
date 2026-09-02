@@ -738,11 +738,8 @@ fn complete_network_policy_refresh(
         }
     };
     if let Err(error) = finish_network_page_operation_on_current_attachment(
-        conn.loaded_page_mut_for_target_configuration_for_route(
-            owner_scope.session_id(),
-            owner_scope.session_owner_route(),
-        )
-        .ok(),
+        conn.loaded_page_mut_for_target_configuration_for_owner(&owner_scope)
+            .ok(),
         NetworkPageCommandFinish::RequestPolicy,
         completion,
     ) {
@@ -780,11 +777,8 @@ fn complete_unit_page_network_command(
         }
     };
     match finish_network_page_operation_on_current_attachment(
-        conn.loaded_page_mut_for_target_configuration_for_route(
-            owner_scope.session_id(),
-            owner_scope.session_owner_route(),
-        )
-        .ok(),
+        conn.loaded_page_mut_for_target_configuration_for_owner(&owner_scope)
+            .ok(),
         finish,
         completion,
     ) {
@@ -854,11 +848,7 @@ fn complete_rebuild_loader_network_command(
             return CommandOutputPlan::error(-32000, "InvalidNetworkCommandCompletion");
         }
     };
-    match conn.finish_rebuild_resource_runtime_for_route(
-        owner_scope.session_id(),
-        owner_scope.session_owner_route(),
-        completion,
-    ) {
+    match conn.finish_rebuild_resource_runtime_for_owner(&owner_scope, completion) {
         Ok(()) => CommandOutputPlan::success(),
         Err(error) => CommandOutputPlan::error(-32000, error),
     }
@@ -872,17 +862,9 @@ fn network_page_configuration_will_be_replayed(
     let Some(dispatched_attachment) = dispatched_attachment else {
         return false;
     };
-    let owner_still_exists = conn
-        .target_owner_identity_for_route(
-            owner_scope.session_id(),
-            owner_scope.session_owner_route(),
-        )
-        .is_some();
+    let owner_still_exists = conn.target_owner_identity_for_owner(owner_scope).is_some();
     let current_attachment = conn
-        .loaded_page_mut_for_target_configuration_for_route(
-            owner_scope.session_id(),
-            owner_scope.session_owner_route(),
-        )
+        .loaded_page_mut_for_target_configuration_for_owner(owner_scope)
         .ok()
         .and_then(|page| page.renderer_agent_attachment_id());
     owner_still_exists && current_attachment != Some(dispatched_attachment)

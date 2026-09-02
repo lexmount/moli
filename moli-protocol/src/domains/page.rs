@@ -517,22 +517,19 @@ impl PagePreparedOutputs {
         owner: &CommandOwnerScope,
         dialog: moli_core::page::RendererPendingJavaScriptDialog,
     ) -> Self {
-        let session_id = owner.session_id();
-        let owner_route = owner.session_owner_route();
         let Some(source_attachment) =
-            conn.target_page_protocol_attachment_identity_for_route(session_id, owner_route)
+            conn.target_page_protocol_attachment_identity_for_owner(owner)
         else {
             let _ = dialog.finish(false, String::new());
             return Self::default();
         };
         let Some((root_frame_id, _, _, _)) =
-            conn.target_session_owner_frame_tree_identity_for_route(session_id, owner_route)
+            conn.target_session_owner_frame_tree_identity_for_owner(owner)
         else {
             let _ = dialog.finish(false, String::new());
             return Self::default();
         };
-        let Ok(runtime_slot) = conn.runtime_session_owner_slot_for_route(session_id, owner_route)
-        else {
+        let Ok(runtime_slot) = conn.runtime_session_owner_slot_for_owner(owner) else {
             let _ = dialog.finish(false, String::new());
             return Self::default();
         };
@@ -552,10 +549,7 @@ impl PagePreparedOutputs {
         owner: &CommandOwnerScope,
         activation: moli_core::page::RendererPendingPopupActivation,
     ) -> Self {
-        let Some(page_owner) = conn.target_page_residence_identity_for_route(
-            owner.session_id(),
-            owner.session_owner_route(),
-        ) else {
+        let Some(page_owner) = conn.target_page_residence_identity_for_owner(owner) else {
             return Self::default();
         };
         Self {
@@ -573,10 +567,7 @@ impl PagePreparedOutputs {
     ) -> Self {
         Self {
             window_open_events: vec![popup::PagePreparedWindowOpenEvent::new(
-                conn.subscribed_page_event_session_ids_for_route(
-                    owner.session_id(),
-                    owner.session_owner_route(),
-                ),
+                conn.subscribed_page_event_session_ids_for_owner(owner),
                 event,
             )],
             ..Self::default()
@@ -588,10 +579,7 @@ impl PagePreparedOutputs {
         owner: &CommandOwnerScope,
         navigation: RendererDocumentSourcedSameDocumentNavigation,
     ) -> Self {
-        let Some(page_owner) = conn.target_page_residence_identity_for_route(
-            owner.session_id(),
-            owner.session_owner_route(),
-        ) else {
+        let Some(page_owner) = conn.target_page_residence_identity_for_owner(owner) else {
             return Self::default();
         };
         Self {
@@ -607,10 +595,7 @@ impl PagePreparedOutputs {
         owner: &CommandOwnerScope,
         navigation: RendererDocumentSourcedTopLevelLocationNavigation,
     ) -> Self {
-        let Some(page_owner) = conn.target_page_residence_identity_for_route(
-            owner.session_id(),
-            owner.session_owner_route(),
-        ) else {
+        let Some(page_owner) = conn.target_page_residence_identity_for_owner(owner) else {
             return Self::default();
         };
         Self {
@@ -636,17 +621,13 @@ impl PagePreparedOutputs {
         source_document: RendererDocumentLifecycleIdentity,
         event: ChildFrameTreeEventSnapshot,
     ) -> Self {
-        let session_id = owner.session_id();
-        let owner_route = owner.session_owner_route();
-        let Some(binding) = conn.target_root_document_protocol_attachment_identity_for_route(
-            session_id,
-            owner_route,
-            source_document,
-        ) else {
+        let Some(binding) = conn
+            .target_root_document_protocol_attachment_identity_for_owner(owner, source_document)
+        else {
             return Self::default();
         };
         let Some((root_frame_id, _, security_origin, secure_context_type)) =
-            conn.target_session_owner_frame_tree_identity_for_route(session_id, owner_route)
+            conn.target_session_owner_frame_tree_identity_for_owner(owner)
         else {
             return Self::default();
         };
@@ -686,17 +667,13 @@ impl PagePreparedOutputs {
         source_document: RendererDocumentLifecycleIdentity,
         mut event: ChildFrameDocumentOpenedSnapshot,
     ) -> Self {
-        let session_id = owner.session_id();
-        let owner_route = owner.session_owner_route();
-        let Some(binding) = conn.target_root_document_protocol_attachment_identity_for_route(
-            session_id,
-            owner_route,
-            source_document,
-        ) else {
+        let Some(binding) = conn
+            .target_root_document_protocol_attachment_identity_for_owner(owner, source_document)
+        else {
             return Self::default();
         };
         let Some((root_frame_id, _, security_origin, secure_context_type)) =
-            conn.target_session_owner_frame_tree_identity_for_route(session_id, owner_route)
+            conn.target_session_owner_frame_tree_identity_for_owner(owner)
         else {
             return Self::default();
         };
@@ -726,17 +703,13 @@ impl PagePreparedOutputs {
         source_document: RendererDocumentLifecycleIdentity,
         event: ChildFrameDocumentNetworkActivitySnapshot,
     ) -> Self {
-        let session_id = owner.session_id();
-        let owner_route = owner.session_owner_route();
-        let Some(binding) = conn.target_root_document_protocol_attachment_identity_for_route(
-            session_id,
-            owner_route,
-            source_document,
-        ) else {
+        let Some(binding) = conn
+            .target_root_document_protocol_attachment_identity_for_owner(owner, source_document)
+        else {
             return Self::default();
         };
         let Some((_, _, security_origin, secure_context_type)) =
-            conn.target_session_owner_frame_tree_identity_for_route(session_id, owner_route)
+            conn.target_session_owner_frame_tree_identity_for_owner(owner)
         else {
             return Self::default();
         };
@@ -763,17 +736,13 @@ impl PagePreparedOutputs {
         source_document: RendererDocumentLifecycleIdentity,
         mut event: ChildFrameNavigationSnapshot,
     ) -> Self {
-        let session_id = owner.session_id();
-        let owner_route = owner.session_owner_route();
-        let Some(binding) = conn.target_root_document_protocol_attachment_identity_for_route(
-            session_id,
-            owner_route,
-            source_document,
-        ) else {
+        let Some(binding) = conn
+            .target_root_document_protocol_attachment_identity_for_owner(owner, source_document)
+        else {
             return Self::default();
         };
         let Some((root_frame_id, _, security_origin, secure_context_type)) =
-            conn.target_session_owner_frame_tree_identity_for_route(session_id, owner_route)
+            conn.target_session_owner_frame_tree_identity_for_owner(owner)
         else {
             return Self::default();
         };
@@ -1222,7 +1191,7 @@ impl PageOutputProjectionStep {
                 input::emit_download_activity_background_events_async(
                     conn,
                     &mut events,
-                    owner.session_id(),
+                    &owner,
                     prepared_outputs,
                     context.command,
                 )
@@ -1260,16 +1229,13 @@ impl PageOutputProjectionStep {
                     let mut events = Vec::new();
                     for change in changes {
                         if conn
-                            .apply_renderer_document_title_for_session_owner(
-                                owner.session_id(),
-                                &change,
-                            )
+                            .apply_renderer_document_title_for_owner(&owner, &change)
                             .unwrap_or(false)
                         {
-                            crate::domains::target::emit_target_info_changed_for_session_owner_background_event(
+                            crate::domains::target::emit_target_info_changed_for_owner_background_event(
                                 conn,
                                 &mut events,
-                                owner.session_id(),
+                                &owner,
                             );
                         }
                     }
@@ -1281,7 +1247,7 @@ impl PageOutputProjectionStep {
                 input::emit_file_chooser_activity_background_events_async(
                     conn,
                     &mut events,
-                    owner.session_id(),
+                    &owner,
                     prepared_outputs,
                 )
                 .await;
@@ -1292,7 +1258,6 @@ impl PageOutputProjectionStep {
                 emit_javascript_dialog_activity_background_events_async(
                     conn,
                     &mut events,
-                    owner.session_id(),
                     prepared_outputs,
                 )
                 .await;
@@ -1313,13 +1278,8 @@ impl PageOutputProjectionStep {
             }
             PageOutputProjectionStep::Popup => {
                 let mut events = Vec::new();
-                emit_popup_activity_background_events_async(
-                    conn,
-                    &mut events,
-                    owner.session_id(),
-                    prepared_outputs,
-                )
-                .await;
+                emit_popup_activity_background_events_async(conn, &mut events, prepared_outputs)
+                    .await;
                 context.command.protocol_events_mut().extend(events);
             }
             PageOutputProjectionStep::ChildFrameActivity => {
@@ -1339,7 +1299,7 @@ impl PageOutputProjectionStep {
                 emit_same_document_navigation_activity_background_events_async(
                     conn,
                     &mut events,
-                    owner.session_id(),
+                    &owner,
                     prepared_outputs,
                 )
                 .await;
@@ -1348,7 +1308,7 @@ impl PageOutputProjectionStep {
             PageOutputProjectionStep::TopLevelLocationNavigation => {
                 publish_prepared_top_level_location_navigation_owner_action(
                     conn,
-                    owner.session_id(),
+                    &owner,
                     prepared_outputs,
                 );
             }
@@ -1357,7 +1317,7 @@ impl PageOutputProjectionStep {
                 emit_top_level_history_traversal_activity_background_events_async(
                     conn,
                     &mut events,
-                    owner.session_id(),
+                    &owner,
                     prepared_outputs,
                 )
                 .await;
@@ -1910,10 +1870,9 @@ impl CdpConnection {
         &mut self,
         registration: &PageScreencastRegistration,
     ) -> PageScreencastSubscriptionStatus {
-        page_screencast_subscription_status_for_route(
+        page_screencast_subscription_status_for_owner(
             self,
-            registration.session_id(),
-            registration.owner_scope.session_owner_route(),
+            &registration.owner_scope,
             registration.generation,
         )
     }
@@ -1926,25 +1885,19 @@ impl CdpConnection {
         let session_id = registration.session_id().map(str::to_owned);
         let generation = registration.generation;
         let owner_scope = registration.owner_scope.clone();
-        let session_id_ref = session_id.as_deref();
-        let owner_route = owner_scope.session_owner_route();
-        if page_screencast_subscription_status_for_route(
-            self,
-            session_id_ref,
-            owner_route,
-            generation,
-        ) != PageScreencastSubscriptionStatus::Ready
+        if page_screencast_subscription_status_for_owner(self, &owner_scope, generation)
+            != PageScreencastSubscriptionStatus::Ready
         {
             return PageScreencastCaptureStart::Stale;
         }
         let Some(config) = self
-            .target_page_session_state_for_route(session_id_ref, owner_route)
+            .target_page_session_state_for_owner(&owner_scope)
             .and_then(|state| state.page_screencast.config())
             .cloned()
         else {
             return PageScreencastCaptureStart::Stale;
         };
-        let viewport = current_viewport_surface_for_route(self, session_id_ref, owner_route);
+        let viewport = current_viewport_surface_for_owner(self, &owner_scope);
         let request = RendererCaptureScreencastFrameRequest {
             format: match config.format() {
                 PageScreencastFormat::Png => RendererScreenshotFormat::Png,
@@ -1956,20 +1909,17 @@ impl CdpConnection {
             max_height: config.max_height(),
             known_visual_state,
         };
-        let pending =
-            match self.loaded_page_mut_for_protocol_access_for_route(session_id_ref, owner_route) {
-                Ok(page) => match page.start_capture_screencast_frame(request) {
-                    Ok(pending) => pending,
-                    Err(error) => {
-                        tracing::debug!(?error, "failed to start screencast frame capture");
-                        return PageScreencastCaptureStart::Retry;
-                    }
-                },
-                Err(_) => return PageScreencastCaptureStart::Retry,
-            };
-        if self.begin_page_screencast_capture_for_route(session_id_ref, owner_route, generation)
-            != Some(true)
-        {
+        let pending = match self.loaded_page_mut_for_protocol_access_for_owner(&owner_scope) {
+            Ok(page) => match page.start_capture_screencast_frame(request) {
+                Ok(pending) => pending,
+                Err(error) => {
+                    tracing::debug!(?error, "failed to start screencast frame capture");
+                    return PageScreencastCaptureStart::Retry;
+                }
+            },
+            Err(_) => return PageScreencastCaptureStart::Retry,
+        };
+        if self.begin_page_screencast_capture_for_owner(&owner_scope, generation) != Some(true) {
             tracing::debug!(
                 generation,
                 ?session_id,
@@ -1998,27 +1948,19 @@ impl CdpConnection {
             completed,
         } = completed;
         let session_id_ref = session_id.as_deref();
-        let owner_route = owner_scope.session_owner_route();
-        if page_screencast_subscription_status_for_route(
-            self,
-            session_id_ref,
-            owner_route,
-            generation,
-        ) != PageScreencastSubscriptionStatus::CaptureInProgress
+        if page_screencast_subscription_status_for_owner(self, &owner_scope, generation)
+            != PageScreencastSubscriptionStatus::CaptureInProgress
         {
             return PageScreencastCaptureCompletion::Stale;
         }
 
         let frame = match completed {
             Ok(completion) => {
-                let page = match self
-                    .loaded_page_mut_for_protocol_access_for_route(session_id_ref, owner_route)
-                {
+                let page = match self.loaded_page_mut_for_protocol_access_for_owner(&owner_scope) {
                     Ok(page) => page,
                     Err(_) => {
-                        let _ = self.complete_page_screencast_capture_for_route(
-                            session_id_ref,
-                            owner_route,
+                        let _ = self.complete_page_screencast_capture_for_owner(
+                            &owner_scope,
                             generation,
                             false,
                         );
@@ -2028,9 +1970,8 @@ impl CdpConnection {
                 match page.finish_capture_screencast_frame(*completion) {
                     Ok(RendererCaptureScreencastFrameReply::Captured(frame)) => frame,
                     Ok(RendererCaptureScreencastFrameReply::Unchanged) => {
-                        if self.complete_page_screencast_capture_for_route(
-                            session_id_ref,
-                            owner_route,
+                        if self.complete_page_screencast_capture_for_owner(
+                            &owner_scope,
                             generation,
                             false,
                         ) != Some(true)
@@ -2044,9 +1985,8 @@ impl CdpConnection {
                         | RendererCaptureScreencastFrameReply::NoDocument,
                     )
                     | Err(_) => {
-                        let _ = self.complete_page_screencast_capture_for_route(
-                            session_id_ref,
-                            owner_route,
+                        let _ = self.complete_page_screencast_capture_for_owner(
+                            &owner_scope,
                             generation,
                             false,
                         );
@@ -2055,9 +1995,8 @@ impl CdpConnection {
                 }
             }
             Err(_) => {
-                let _ = self.complete_page_screencast_capture_for_route(
-                    session_id_ref,
-                    owner_route,
+                let _ = self.complete_page_screencast_capture_for_owner(
+                    &owner_scope,
                     generation,
                     false,
                 );
@@ -2066,12 +2005,8 @@ impl CdpConnection {
         };
 
         let visual_state = frame.visual_state;
-        if self.complete_page_screencast_capture_for_route(
-            session_id_ref,
-            owner_route,
-            generation,
-            true,
-        ) != Some(true)
+        if self.complete_page_screencast_capture_for_owner(&owner_scope, generation, true)
+            != Some(true)
         {
             return PageScreencastCaptureCompletion::Stale;
         }
@@ -2099,13 +2034,12 @@ impl CdpConnection {
     }
 }
 
-fn page_screencast_subscription_status_for_route(
+fn page_screencast_subscription_status_for_owner(
     conn: &CdpConnection,
-    session_id: Option<&str>,
-    owner_route: Option<&CdpSessionRoute>,
+    owner: &CommandOwnerScope,
     generation: i32,
 ) -> PageScreencastSubscriptionStatus {
-    let Some(state) = conn.target_page_session_state_for_route(session_id, owner_route) else {
+    let Some(state) = conn.target_page_session_state_for_owner(owner) else {
         return PageScreencastSubscriptionStatus::Inactive;
     };
     let screencast = &state.page_screencast;
@@ -2160,7 +2094,11 @@ fn complete_devtools_handle_javascript_dialog_command(
     conn: &mut CdpConnection,
     command: DevToolsHandleJavaScriptDialogCommand,
 ) -> CommandOutputPlan {
-    match finish_devtools_handle_javascript_dialog_command(conn, command, None) {
+    let owner = match page_command_owner(conn, &command.context) {
+        Ok(owner) => owner,
+        Err(error) => return CommandOutputPlan::from_devtools_error(error),
+    };
+    match finish_devtools_handle_javascript_dialog_command(conn, command, &owner) {
         Ok(closed_event) => {
             let mut plan = CommandOutputPlan::default();
             plan.push_background_event(closed_event);
@@ -2173,13 +2111,11 @@ fn complete_devtools_handle_javascript_dialog_command(
 
 fn finish_devtools_get_javascript_dialog_command(
     conn: &CdpConnection,
-    command: DevToolsGetJavaScriptDialogCommand,
-    owner_route: Option<&CdpSessionRoute>,
+    owner: &CommandOwnerScope,
 ) -> Result<DevToolsJavaScriptDialogResult, DevToolsError> {
-    let session_id = command.context.session_id.as_ref().map(|id| id.as_str());
-    let current_page_owner = conn.target_page_residence_identity_for_route(session_id, owner_route);
+    let current_page_owner = conn.target_page_residence_identity_for_owner(owner);
     let Some(dialog) = conn
-        .target_page_session_state_for_route(session_id, owner_route)
+        .target_page_session_state_for_owner(owner)
         .and_then(|page_state| page_state.javascript_dialog_state.peek_next())
         .filter(|dialog| current_page_owner.as_ref() == Some(dialog.page_owner()))
     else {
@@ -2198,37 +2134,34 @@ fn finish_devtools_get_javascript_dialog_command(
 fn finish_devtools_set_javascript_dialog_prompt_text_command(
     conn: &mut CdpConnection,
     command: DevToolsSetJavaScriptDialogPromptTextCommand,
-    owner_route: Option<&CdpSessionRoute>,
+    owner: &CommandOwnerScope,
 ) -> Result<DevToolsCommandResult, DevToolsError> {
-    let session_id = command.context.session_id.as_ref().map(|id| id.as_str());
-    let current_page_owner = conn.target_page_residence_identity_for_route(session_id, owner_route);
-    let Some(result) =
-        conn.with_target_devtools_session_state_for_route_mut(session_id, owner_route, |state| {
-            let dialog_state = &mut state.page_session_state.javascript_dialog_state;
-            let Some(dialog) = dialog_state
-                .peek_next()
-                .filter(|dialog| current_page_owner.as_ref() == Some(dialog.page_owner()))
-            else {
-                return Err(DevToolsError::new(
-                    DevToolsErrorKind::NoSuchAlert,
-                    "No dialog is showing",
-                ));
-            };
-            if dialog.dialog_type() != "prompt" {
-                return Err(DevToolsError::new(
-                    DevToolsErrorKind::InvalidArgument,
-                    "Dialog is not a prompt",
-                ));
-            }
-            if !dialog_state.set_next_prompt_text(command.prompt_text) {
-                return Err(DevToolsError::new(
-                    DevToolsErrorKind::NoSuchAlert,
-                    "No dialog is showing",
-                ));
-            }
-            Ok(DevToolsCommandResult::Empty)
-        })
-    else {
+    let current_page_owner = conn.target_page_residence_identity_for_owner(owner);
+    let Some(result) = conn.with_target_devtools_session_state_for_owner_mut(owner, |state| {
+        let dialog_state = &mut state.page_session_state.javascript_dialog_state;
+        let Some(dialog) = dialog_state
+            .peek_next()
+            .filter(|dialog| current_page_owner.as_ref() == Some(dialog.page_owner()))
+        else {
+            return Err(DevToolsError::new(
+                DevToolsErrorKind::NoSuchAlert,
+                "No dialog is showing",
+            ));
+        };
+        if dialog.dialog_type() != "prompt" {
+            return Err(DevToolsError::new(
+                DevToolsErrorKind::InvalidArgument,
+                "Dialog is not a prompt",
+            ));
+        }
+        if !dialog_state.set_next_prompt_text(command.prompt_text) {
+            return Err(DevToolsError::new(
+                DevToolsErrorKind::NoSuchAlert,
+                "No dialog is showing",
+            ));
+        }
+        Ok(DevToolsCommandResult::Empty)
+    }) else {
         return Err(DevToolsError::new(
             DevToolsErrorKind::NoSuchAlert,
             "No dialog is showing",
@@ -2240,13 +2173,13 @@ fn finish_devtools_set_javascript_dialog_prompt_text_command(
 fn finish_devtools_handle_javascript_dialog_command(
     conn: &mut CdpConnection,
     command: DevToolsHandleJavaScriptDialogCommand,
-    owner_route: Option<&CdpSessionRoute>,
+    owner: &CommandOwnerScope,
 ) -> Result<BackgroundProtocolEvent, DevToolsError> {
     let session_id = command.context.session_id.as_ref().map(|id| id.as_str());
     let command_prompt_text = command.prompt_text;
-    let current_page_owner = conn.target_page_residence_identity_for_route(session_id, owner_route);
+    let current_page_owner = conn.target_page_residence_identity_for_owner(owner);
     let Some(dialog) = conn
-        .with_target_devtools_session_state_for_route_mut(session_id, owner_route, |state| {
+        .with_target_devtools_session_state_for_owner_mut(owner, |state| {
             let dialog_state = &mut state.page_session_state.javascript_dialog_state;
             if dialog_state
                 .peek_next()
@@ -2287,7 +2220,6 @@ fn finish_devtools_handle_javascript_dialog_command(
 pub(in crate::domains) async fn emit_javascript_dialog_activity_background_events_async(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
-    _session_id: Option<&str>,
     prepared_outputs: Option<&mut ProtocolOutputPayloads>,
 ) {
     if let Some(dialogs) = prepared_outputs
@@ -2301,7 +2233,6 @@ pub(in crate::domains) async fn emit_javascript_dialog_activity_background_event
 pub(in crate::domains) async fn emit_popup_activity_background_events_async(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
-    _session_id: Option<&str>,
     prepared_outputs: Option<&mut ProtocolOutputPayloads>,
 ) {
     if let Some(popups) = prepared_outputs
@@ -2319,7 +2250,7 @@ pub(in crate::domains) async fn emit_popup_activity_background_events_async(
 /// would let network/download side effects bypass scheduler predecessors.
 pub(in crate::domains) fn publish_prepared_top_level_location_navigation_owner_action(
     conn: &mut CdpConnection,
-    session_id: Option<&str>,
+    command_owner: &CommandOwnerScope,
     prepared_outputs: Option<&mut ProtocolOutputPayloads>,
 ) {
     if let Some(navigation) = prepared_outputs
@@ -2328,7 +2259,9 @@ pub(in crate::domains) fn publish_prepared_top_level_location_navigation_owner_a
     {
         let (owner, navigation) = navigation.into_parts();
         conn.publish_prepared_top_level_location_navigation_owner_action(
-            session_id, owner, navigation,
+            command_owner,
+            owner,
+            navigation,
         );
     }
 }
@@ -2336,7 +2269,7 @@ pub(in crate::domains) fn publish_prepared_top_level_location_navigation_owner_a
 pub(in crate::domains) async fn emit_top_level_history_traversal_activity_background_events_async(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
-    session_id: Option<&str>,
+    owner: &CommandOwnerScope,
     prepared_outputs: Option<&mut ProtocolOutputPayloads>,
 ) {
     if let Some(traversal) = prepared_outputs
@@ -2346,7 +2279,7 @@ pub(in crate::domains) async fn emit_top_level_history_traversal_activity_backgr
         traverse_session_owner_history_from_renderer_background_events_async(
             conn,
             out,
-            session_id,
+            owner,
             traversal.delta,
         )
         .await;
@@ -2362,7 +2295,7 @@ pub(crate) async fn navigate_page_owned_top_level_location_background_events_asy
 ) {
     let session_id = command_owner.session_id();
     let source_document = navigation.source_document();
-    if !conn.target_page_residence_identity_is_current_for_session(session_id, owner) {
+    if !conn.target_page_residence_identity_is_current(owner) {
         tracing::debug!(
             session_id,
             ?source_document,
@@ -2433,11 +2366,10 @@ async fn navigate_command_owner_from_renderer_request_background_events_async(
 pub(crate) async fn traverse_session_owner_history_from_renderer_background_events_async(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
-    session_id: Option<&str>,
+    owner: &CommandOwnerScope,
     delta: i64,
 ) {
-    let step =
-        navigation::start_session_owner_history_traversal_from_renderer(conn, session_id, delta);
+    let step = navigation::start_session_owner_history_traversal_from_renderer(conn, owner, delta);
     complete_renderer_navigation_step_background_events_async(conn, out, step).await;
 }
 
@@ -2463,29 +2395,28 @@ async fn complete_renderer_navigation_step_background_events_async(
     }
 }
 
-pub(crate) fn emit_page_window_open_background_events_for_route(
+pub(crate) fn emit_page_window_open_background_events_for_owner(
     conn: &CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
-    owner_session_id: Option<&str>,
-    owner_route: Option<&crate::conn::CdpSessionRoute>,
+    owner: &CommandOwnerScope,
     url: &str,
     window_name: &str,
     window_features: &[String],
     user_gesture: bool,
 ) {
-    if !crate::domains::target::popup_activation_creates_new_target_for_route(
+    if !crate::domains::target::popup_activation_creates_new_target_for_owner(
         conn,
-        owner_session_id,
-        owner_route,
+        owner,
         window_name,
     ) {
         return;
     }
-    for event_session_id in conn.page_event_session_ids_for_route(owner_session_id, owner_route) {
-        let event_owner_route = event_session_id.is_none().then_some(owner_route).flatten();
-        if conn.page_domain_enabled_for_route(event_session_id.as_deref(), event_owner_route)
-            == Some(true)
-        {
+    for event_session_id in conn.page_event_session_ids_for_owner(owner) {
+        let event_owner = event_session_id
+            .as_deref()
+            .map(CommandOwnerScope::for_session)
+            .unwrap_or_else(|| owner.clone());
+        if conn.page_domain_enabled_for_owner(&event_owner) == Some(true) {
             out.push(BackgroundProtocolEvent::page_window_open(
                 event_session_id.as_deref(),
                 url,
@@ -2500,7 +2431,7 @@ pub(crate) fn emit_page_window_open_background_events_for_route(
 pub(in crate::domains) async fn emit_same_document_navigation_activity_background_events_async(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
-    session_id: Option<&str>,
+    owner: &CommandOwnerScope,
     prepared_outputs: Option<&mut ProtocolOutputPayloads>,
 ) {
     if let Some(navigations) = prepared_outputs
@@ -2510,7 +2441,7 @@ pub(in crate::domains) async fn emit_same_document_navigation_activity_backgroun
         navigation::emit_same_document_navigation_background_events_async(
             conn,
             out,
-            session_id,
+            owner,
             navigations,
         )
         .await;
@@ -2535,7 +2466,9 @@ mod producer_tests {
     };
     use serde_json::{Value, json};
 
-    use crate::conn::{BackgroundProtocolEvent, BrowserContext, CdpConnection, CdpTargetFilter};
+    use crate::conn::{
+        BackgroundProtocolEvent, BrowserContext, CdpConnection, CdpTargetFilter, CommandOwnerScope,
+    };
     use crate::devtools_runtime::{AutomationEvent, NavigationFrameEventKind};
     use crate::domains::activity::{ProtocolOutputPayloads, ProtocolOutputProjectionContext};
     use crate::domains::input::{InputPreparedOutputSlot, InputPreparedOutputs};
@@ -2750,8 +2683,8 @@ mod producer_tests {
             predecessor,
         );
         assert_eq!(
-            conn.apply_renderer_document_title_for_session_owner(
-                Some("SID-title-source"),
+            conn.apply_renderer_document_title_for_owner(
+                &CommandOwnerScope::for_session("SID-title-source"),
                 &RendererDocumentTitleChanged {
                     source_document: predecessor,
                     title: "predecessor".to_owned(),
@@ -2768,8 +2701,8 @@ mod producer_tests {
             replacement,
         );
         assert_eq!(
-            conn.apply_renderer_document_title_for_session_owner(
-                Some("SID-title-source"),
+            conn.apply_renderer_document_title_for_owner(
+                &CommandOwnerScope::for_session("SID-title-source"),
                 &RendererDocumentTitleChanged {
                     source_document: replacement,
                     title: "replacement".to_owned(),
@@ -2779,8 +2712,8 @@ mod producer_tests {
         );
 
         assert_eq!(
-            conn.apply_renderer_document_title_for_session_owner(
-                Some("SID-title-source"),
+            conn.apply_renderer_document_title_for_owner(
+                &CommandOwnerScope::for_session("SID-title-source"),
                 &RendererDocumentTitleChanged {
                     source_document: predecessor,
                     title: "late predecessor".to_owned(),
@@ -2827,7 +2760,6 @@ mod producer_tests {
         super::emit_javascript_dialog_activity_background_events_async(
             &mut conn,
             &mut out,
-            Some("SID-1"),
             Some(&mut prepared),
         )
         .await;
@@ -2892,7 +2824,6 @@ mod producer_tests {
         super::emit_javascript_dialog_activity_background_events_async(
             &mut conn,
             &mut out,
-            Some("SID-primary"),
             Some(&mut prepared),
         )
         .await;
@@ -2960,7 +2891,6 @@ mod producer_tests {
         super::emit_javascript_dialog_activity_background_events_async(
             &mut conn,
             &mut out,
-            Some("SID-primary"),
             Some(&mut prepared),
         )
         .await;
@@ -3009,7 +2939,6 @@ mod producer_tests {
         super::emit_javascript_dialog_activity_background_events_async(
             &mut conn,
             &mut out,
-            Some("SID-primary"),
             Some(&mut dialog_output),
         )
         .await;
@@ -3044,7 +2973,6 @@ mod producer_tests {
         super::emit_popup_activity_background_events_async(
             &mut conn,
             &mut out,
-            Some("SID-primary"),
             Some(&mut popup_output),
         )
         .await;
@@ -3117,7 +3045,6 @@ mod producer_tests {
         super::emit_javascript_dialog_activity_background_events_async(
             &mut conn,
             &mut out,
-            Some("SID-opener"),
             Some(&mut prepared),
         )
         .await;
@@ -3129,7 +3056,6 @@ mod producer_tests {
         super::emit_popup_activity_background_events_async(
             &mut conn,
             &mut out,
-            Some("SID-opener"),
             Some(&mut prepared),
         )
         .await;
@@ -3197,7 +3123,6 @@ mod producer_tests {
         super::emit_javascript_dialog_activity_background_events_async(
             &mut conn,
             &mut later_out,
-            Some("SID-opener"),
             Some(&mut later_dialog),
         )
         .await;
@@ -3273,14 +3198,12 @@ mod producer_tests {
         super::emit_javascript_dialog_activity_background_events_async(
             &mut conn,
             &mut out,
-            Some("SID-opener-no-session"),
             Some(&mut prepared),
         )
         .await;
         super::emit_popup_activity_background_events_async(
             &mut conn,
             &mut out,
-            Some("SID-opener-no-session"),
             Some(&mut prepared),
         )
         .await;
@@ -3381,7 +3304,6 @@ mod producer_tests {
         super::emit_javascript_dialog_activity_background_events_async(
             &mut conn,
             &mut out,
-            Some("SID-dialog-stale-page"),
             Some(&mut prepared),
         )
         .await;
@@ -3440,7 +3362,6 @@ mod producer_tests {
         super::emit_javascript_dialog_activity_background_events_async(
             &mut conn,
             &mut out,
-            Some("SID-dialog-generation"),
             Some(&mut prepared),
         )
         .await;
@@ -3492,7 +3413,6 @@ mod producer_tests {
         super::emit_javascript_dialog_activity_background_events_async(
             &mut conn,
             &mut out,
-            Some("SID-dialog-source"),
             Some(&mut prepared),
         )
         .await;
@@ -4811,7 +4731,6 @@ mod producer_tests {
         super::emit_popup_activity_background_events_async(
             &mut conn,
             &mut out,
-            Some("SID-1"),
             Some(&mut prepared),
         )
         .await;
@@ -4895,7 +4814,6 @@ mod producer_tests {
         super::emit_popup_activity_background_events_async(
             &mut conn,
             &mut out,
-            Some("SID-opener"),
             Some(&mut prepared),
         )
         .await;
@@ -4962,7 +4880,7 @@ mod producer_tests {
         super::emit_same_document_navigation_activity_background_events_async(
             &mut conn,
             &mut out,
-            Some("SID-1"),
+            &CommandOwnerScope::for_session("SID-1"),
             Some(&mut prepared),
         )
         .await;
@@ -5050,7 +4968,7 @@ mod producer_tests {
         super::emit_same_document_navigation_activity_background_events_async(
             &mut conn,
             &mut out,
-            Some("SID-document-open-same-document"),
+            &CommandOwnerScope::for_session("SID-document-open-same-document"),
             Some(&mut prepared),
         )
         .await;
@@ -5102,7 +5020,7 @@ mod producer_tests {
         super::emit_same_document_navigation_activity_background_events_async(
             &mut conn,
             &mut out,
-            Some("SID-stale-page-same-document"),
+            &CommandOwnerScope::for_session("SID-stale-page-same-document"),
             Some(&mut prepared),
         )
         .await;
@@ -5143,7 +5061,7 @@ mod producer_tests {
 
         super::publish_prepared_top_level_location_navigation_owner_action(
             &mut conn,
-            Some("SID-location"),
+            &CommandOwnerScope::for_session("SID-location"),
             Some(&mut prepared),
         );
 
@@ -5229,7 +5147,7 @@ mod producer_tests {
             ));
         super::publish_prepared_top_level_location_navigation_owner_action(
             &mut conn,
-            Some("SID-document-open-location"),
+            &CommandOwnerScope::for_session("SID-document-open-location"),
             Some(&mut prepared),
         );
         let work = take_top_level_location_navigation_work_for_test(&mut conn);
@@ -5289,7 +5207,7 @@ mod producer_tests {
             ));
         super::publish_prepared_top_level_location_navigation_owner_action(
             &mut conn,
-            Some("SID-stale-page-location"),
+            &CommandOwnerScope::for_session("SID-stale-page-location"),
             Some(&mut prepared),
         );
         let work = take_top_level_location_navigation_work_for_test(&mut conn);
@@ -5844,13 +5762,12 @@ fn current_viewport_surface(
     )
 }
 
-fn current_viewport_surface_for_route(
+fn current_viewport_surface_for_owner(
     conn: &CdpConnection,
-    session_id: Option<&str>,
-    owner_route: Option<&CdpSessionRoute>,
+    owner: &CommandOwnerScope,
 ) -> EmulatedViewportSurface {
     EmulatedViewportSurface::from_metrics(
-        conn.target_session_owner_emulated_device_metrics_for_route(session_id, owner_route)
+        conn.target_session_owner_emulated_device_metrics_for_owner(owner)
             .as_ref(),
     )
 }
@@ -5859,33 +5776,19 @@ async fn execute_devtools_get_layout_metrics_command(
     conn: &mut CdpConnection,
     command: DevToolsGetLayoutMetricsCommand,
 ) -> Result<DevToolsCommandResult, DevToolsError> {
-    let mut command = command;
-    let route = if let Some(target_id) = command.context.target_id.as_ref() {
-        Some(page_route_for_context_id(conn, target_id.as_str())?)
-    } else {
-        None
-    };
-    if route.is_some() {
-        command.context.session_id = None;
-    }
-    let result =
-        execute_devtools_get_layout_metrics_for_current_owner(conn, command, route.as_ref()).await;
+    let owner = page_command_owner(conn, &command.context)?;
+    let result = execute_devtools_get_layout_metrics_for_current_owner(conn, &owner).await;
     result.map(DevToolsCommandResult::LayoutMetrics)
 }
 
 async fn execute_devtools_get_layout_metrics_for_current_owner(
     conn: &mut CdpConnection,
-    command: DevToolsGetLayoutMetricsCommand,
-    owner_route: Option<&CdpSessionRoute>,
+    owner: &CommandOwnerScope,
 ) -> Result<DevToolsLayoutMetricsResult, DevToolsError> {
-    let session_id = command.context.session_id.as_ref().map(|id| id.as_str());
-    let fallback = layout_metrics_result_from_surface(current_viewport_surface_for_route(
-        conn,
-        session_id,
-        owner_route,
-    ));
+    let fallback =
+        layout_metrics_result_from_surface(current_viewport_surface_for_owner(conn, owner));
     let Some(page) = conn
-        .runtime_session_owner_slot_mut_for_route(session_id, owner_route)
+        .runtime_session_owner_slot_mut_for_owner(owner)
         .ok()
         .and_then(|slot| slot.loaded_page_mut())
     else {
@@ -5898,7 +5801,7 @@ async fn execute_devtools_get_layout_metrics_for_current_owner(
         devtools_layout_metrics_error(format!("Failed to produce layout metrics: {error}"))
     })?;
     let Some(page) = conn
-        .runtime_session_owner_slot_mut_for_route(session_id, owner_route)
+        .runtime_session_owner_slot_mut_for_owner(owner)
         .ok()
         .and_then(|slot| slot.loaded_page_mut())
     else {
@@ -6186,7 +6089,7 @@ fn devtools_browsing_context_target_infos(conn: &CdpConnection) -> Vec<DevToolsT
 
 async fn execute_devtools_get_frame_tree_command_async(
     conn: &mut CdpConnection,
-    mut command: DevToolsGetFrameTreeCommand,
+    command: DevToolsGetFrameTreeCommand,
 ) -> Result<DevToolsCommandResult, DevToolsError> {
     let target_info = command
         .context
@@ -6203,17 +6106,9 @@ async fn execute_devtools_get_frame_tree_command_async(
         )
         .map(DevToolsCommandResult::GetFrameTree);
     }
-    let route = if let Some(target_id) = command.context.target_id.as_ref() {
-        let route = conn
-            .target_session_route_for_target_id(target_id.as_str())
-            .ok_or_else(|| DevToolsError::new(DevToolsErrorKind::NoSuchTarget, "NoSuchTarget"))?;
-        command.context.session_id = None;
-        Some(route)
-    } else {
-        None
-    };
+    let owner = page_command_owner(conn, &command.context)?;
     let max_depth = command.max_depth;
-    execute_devtools_get_frame_tree_command_for_current_owner_async(conn, command, route)
+    devtools_frame_tree_for_current_owner_async(conn, command, &owner)
         .await
         .map(|frame_tree| {
             DevToolsCommandResult::GetFrameTree(DevToolsGetFrameTreeResult {
@@ -6246,34 +6141,21 @@ fn devtools_service_worker_frame_tree_result(
     })
 }
 
-async fn execute_devtools_get_frame_tree_command_for_current_owner_async(
-    conn: &mut CdpConnection,
-    command: DevToolsGetFrameTreeCommand,
-    route: Option<CdpSessionRoute>,
-) -> Result<Value, DevToolsError> {
-    devtools_frame_tree_for_current_owner_async(conn, command, route.as_ref()).await
-}
-
 async fn devtools_frame_tree_for_current_owner_async(
     conn: &mut CdpConnection,
     command: DevToolsGetFrameTreeCommand,
-    owner_route: Option<&CdpSessionRoute>,
+    owner: &CommandOwnerScope,
 ) -> Result<Value, DevToolsError> {
     let command_session_id = command.context.session_id.as_ref().map(|id| id.as_str());
     if command_session_id.is_none() && conn.browser_context.is_none() {
         return Err(devtools_frame_tree_error("BrowserContextNotLoaded"));
     }
     let (target_id, target_url, target_security_origin, target_secure_context_type) = conn
-        .target_session_owner_frame_tree_identity_for_route(command_session_id, owner_route)
+        .target_session_owner_frame_tree_identity_for_owner(owner)
         .ok_or_else(|| devtools_frame_tree_error("TargetNotLoaded"))?;
-    let target_unreachable_url =
-        network_error_page_unreachable_url(conn, command_session_id, owner_route, &target_url);
-    let target_loader_id =
-        frame_tree_loader_id_for_current_owner(conn, command_session_id, owner_route);
-    if conn
-        .ensure_document_accessible_for_route(command_session_id, owner_route)
-        .is_err()
-    {
+    let target_unreachable_url = network_error_page_unreachable_url(conn, owner, &target_url);
+    let target_loader_id = frame_tree_loader_id_for_current_owner(conn, owner);
+    if conn.ensure_document_accessible_for_owner(owner).is_err() {
         return Ok(frame_tree_payload(
             target_id,
             target_loader_id,
@@ -6286,7 +6168,7 @@ async fn devtools_frame_tree_for_current_owner_async(
         ));
     }
     let Some(page) = conn
-        .runtime_session_owner_slot_mut_for_route(command_session_id, owner_route)
+        .runtime_session_owner_slot_mut_for_owner(owner)
         .ok()
         .and_then(|slot| slot.loaded_page_mut())
     else {
@@ -6308,10 +6190,7 @@ async fn devtools_frame_tree_for_current_owner_async(
     let completed = pending.wait().await.map_err(|error| {
         devtools_frame_tree_error(format!("Failed to snapshot child frame tree: {error}"))
     })?;
-    if conn
-        .ensure_document_accessible_for_route(command_session_id, owner_route)
-        .is_err()
-    {
+    if conn.ensure_document_accessible_for_owner(owner).is_err() {
         return Ok(frame_tree_payload(
             target_id,
             target_loader_id,
@@ -6324,7 +6203,7 @@ async fn devtools_frame_tree_for_current_owner_async(
         ));
     }
     let Some(page) = conn
-        .runtime_session_owner_slot_mut_for_route(command_session_id, owner_route)
+        .runtime_session_owner_slot_mut_for_owner(owner)
         .ok()
         .and_then(|slot| slot.loaded_page_mut())
     else {
@@ -6362,12 +6241,11 @@ fn default_document_mime_type() -> String {
 
 fn network_error_page_unreachable_url(
     conn: &CdpConnection,
-    session_id: Option<&str>,
-    owner_route: Option<&CdpSessionRoute>,
+    owner: &CommandOwnerScope,
     document_url: &str,
 ) -> Option<String> {
     (document_url == NETWORK_ERROR_PAGE_URL)
-        .then(|| conn.runtime_session_owner_target_url_for_route(session_id, owner_route))
+        .then(|| conn.runtime_session_owner_target_url_for_owner(owner))
         .flatten()
 }
 
@@ -6388,10 +6266,9 @@ fn devtools_frame_tree_error(message: impl Into<String>) -> DevToolsError {
 /// instead claim that the frame belongs to an unrelated document/navigation.
 fn frame_tree_loader_id_for_current_owner(
     conn: &CdpConnection,
-    session_id: Option<&str>,
-    owner_route: Option<&CdpSessionRoute>,
+    owner: &CommandOwnerScope,
 ) -> String {
-    conn.target_session_owner_frame_tree_loader_id_for_route(session_id, owner_route)
+    conn.target_session_owner_frame_tree_loader_id_for_owner(owner)
         .unwrap_or_default()
 }
 
@@ -6415,16 +6292,8 @@ fn execute_devtools_get_javascript_dialog_command(
     conn: &mut CdpConnection,
     command: DevToolsGetJavaScriptDialogCommand,
 ) -> Result<DevToolsCommandResult, DevToolsError> {
-    let mut command = command;
-    let route = if let Some(target_id) = command.context.target_id.as_ref() {
-        Some(page_route_for_context_id(conn, target_id.as_str())?)
-    } else {
-        None
-    };
-    if route.is_some() {
-        command.context.session_id = None;
-    }
-    let result = finish_devtools_get_javascript_dialog_command(conn, command, route.as_ref());
+    let owner = page_command_owner(conn, &command.context)?;
+    let result = finish_devtools_get_javascript_dialog_command(conn, &owner);
     result.map(DevToolsCommandResult::JavaScriptDialog)
 }
 
@@ -6432,16 +6301,8 @@ fn execute_devtools_set_javascript_dialog_prompt_text_command(
     conn: &mut CdpConnection,
     command: DevToolsSetJavaScriptDialogPromptTextCommand,
 ) -> Result<DevToolsCommandResult, DevToolsError> {
-    let mut command = command;
-    let route = if let Some(target_id) = command.context.target_id.as_ref() {
-        Some(page_route_for_context_id(conn, target_id.as_str())?)
-    } else {
-        None
-    };
-    if route.is_some() {
-        command.context.session_id = None;
-    }
-    finish_devtools_set_javascript_dialog_prompt_text_command(conn, command, route.as_ref())
+    let owner = page_command_owner(conn, &command.context)?;
+    finish_devtools_set_javascript_dialog_prompt_text_command(conn, command, &owner)
 }
 
 fn execute_devtools_handle_javascript_dialog_command(
@@ -6451,19 +6312,11 @@ fn execute_devtools_handle_javascript_dialog_command(
     Result<DevToolsCommandResult, DevToolsError>,
     Vec<BackgroundProtocolEvent>,
 ) {
-    let mut command = command;
-    let route = if let Some(target_id) = command.context.target_id.as_ref() {
-        Some(match page_route_for_context_id(conn, target_id.as_str()) {
-            Ok(route) => route,
-            Err(error) => return (Err(error), Vec::new()),
-        })
-    } else {
-        None
+    let owner = match page_command_owner(conn, &command.context) {
+        Ok(owner) => owner,
+        Err(error) => return (Err(error), Vec::new()),
     };
-    if route.is_some() {
-        command.context.session_id = None;
-    }
-    let result = finish_devtools_handle_javascript_dialog_command(conn, command, route.as_ref());
+    let result = finish_devtools_handle_javascript_dialog_command(conn, command, &owner);
     match result {
         Ok(event) => (Ok(DevToolsCommandResult::Empty), vec![event]),
         Err(error) => (Err(error), Vec::new()),
@@ -6502,6 +6355,20 @@ fn page_route_for_context_id(
     conn.target_session_route_for_target_id(context_id)
         .or_else(|| conn.target_session_route_for_child_frame_id(context_id))
         .ok_or_else(|| DevToolsError::new(DevToolsErrorKind::NoSuchTarget, "NoSuchTarget"))
+}
+
+fn page_command_owner(
+    conn: &CdpConnection,
+    context: &DevToolsCommandContext,
+) -> Result<CommandOwnerScope, DevToolsError> {
+    conn.command_owner_scope_for_devtools_context(context)
+        .ok_or_else(|| {
+            if context.target_id.is_some() {
+                DevToolsError::new(DevToolsErrorKind::NoSuchTarget, "NoSuchTarget")
+            } else {
+                devtools_frame_tree_error("TargetNotLoaded")
+            }
+        })
 }
 
 fn try_start_page_enable_command(
@@ -6688,20 +6555,30 @@ fn start_devtools_page_command(
         DevToolsCommand::GetLayoutMetrics(command) => {
             start_devtools_get_layout_metrics_command(conn, command_id, command)
         }
-        DevToolsCommand::GetJavaScriptDialog(command) => PageCommandTaskStep::Complete(
-            match finish_devtools_get_javascript_dialog_command(conn, command, None) {
-                Ok(result) => CommandOutputPlan::from_devtools_result(
-                    DevToolsCommandResult::JavaScriptDialog(result),
-                ),
+        DevToolsCommand::GetJavaScriptDialog(command) => {
+            let owner = page_command_owner(conn, &command.context);
+            PageCommandTaskStep::Complete(match owner {
+                Ok(owner) => match finish_devtools_get_javascript_dialog_command(conn, &owner) {
+                    Ok(result) => CommandOutputPlan::from_devtools_result(
+                        DevToolsCommandResult::JavaScriptDialog(result),
+                    ),
+                    Err(error) => CommandOutputPlan::from_devtools_error(error),
+                },
                 Err(error) => CommandOutputPlan::from_devtools_error(error),
-            },
-        ),
-        DevToolsCommand::SetJavaScriptDialogPromptText(command) => PageCommandTaskStep::Complete(
-            match finish_devtools_set_javascript_dialog_prompt_text_command(conn, command, None) {
-                Ok(result) => CommandOutputPlan::from_devtools_result(result),
+            })
+        }
+        DevToolsCommand::SetJavaScriptDialogPromptText(command) => {
+            let owner = page_command_owner(conn, &command.context);
+            PageCommandTaskStep::Complete(match owner {
+                Ok(owner) => match finish_devtools_set_javascript_dialog_prompt_text_command(
+                    conn, command, &owner,
+                ) {
+                    Ok(result) => CommandOutputPlan::from_devtools_result(result),
+                    Err(error) => CommandOutputPlan::from_devtools_error(error),
+                },
                 Err(error) => CommandOutputPlan::from_devtools_error(error),
-            },
-        ),
+            })
+        }
         DevToolsCommand::HandleJavaScriptDialog(command) => PageCommandTaskStep::Complete(
             complete_devtools_handle_javascript_dialog_command(conn, command),
         ),
@@ -6894,8 +6771,9 @@ fn start_devtools_get_frame_tree_command(
             "BrowserContextNotLoaded",
         ));
     };
+    let owner = CommandOwnerScope::capture(conn, command_session_id);
     let (target_id, target_url, target_security_origin, target_secure_context_type) =
-        match conn.target_session_owner_frame_tree_identity(command_session_id) {
+        match conn.target_session_owner_frame_tree_identity_for_owner(&owner) {
             Some(identity) => identity,
             None => {
                 return PageCommandTaskStep::Complete(CommandOutputPlan::error(
@@ -6904,13 +6782,9 @@ fn start_devtools_get_frame_tree_command(
                 ));
             }
         };
-    let target_unreachable_url =
-        network_error_page_unreachable_url(conn, command_session_id, None, &target_url);
-    let target_loader_id = frame_tree_loader_id_for_current_owner(conn, command_session_id, None);
-    if conn
-        .ensure_document_accessible_for_session_owner(command_session_id)
-        .is_err()
-    {
+    let target_unreachable_url = network_error_page_unreachable_url(conn, &owner, &target_url);
+    let target_loader_id = frame_tree_loader_id_for_current_owner(conn, &owner);
+    if conn.ensure_document_accessible_for_owner(&owner).is_err() {
         return PageCommandTaskStep::Complete(get_frame_tree_command_output_plan(
             output_kind,
             target_id,
@@ -6925,7 +6799,7 @@ fn start_devtools_get_frame_tree_command(
         ));
     }
     let Some(page) = conn
-        .runtime_session_owner_slot_mut(command_session_id)
+        .runtime_session_owner_slot_mut_for_owner(&owner)
         .ok()
         .and_then(|slot| slot.loaded_page_mut())
     else {
@@ -7497,8 +7371,6 @@ pub(crate) async fn complete_pending_page_command(
 ) -> PageCommandTaskStep {
     let command_id = completed.command_id;
     let owner_scope = completed.owner_scope.clone();
-    let session_id = completed.owner_scope.session_id().map(str::to_owned);
-    let owner_route = completed.owner_scope.session_owner_route().cloned();
     if let Some(predecessor) = completed.kind.renderer_output_predecessor() {
         command_context.set_renderer_output_predecessor(predecessor);
     }
@@ -7534,10 +7406,7 @@ pub(crate) async fn complete_pending_page_command(
             };
             let completed_script = {
                 let Some(page) = conn
-                    .runtime_session_owner_slot_mut_for_route(
-                        session_id.as_deref(),
-                        owner_route.as_ref(),
-                    )
+                    .runtime_session_owner_slot_mut_for_owner(&owner_scope)
                     .ok()
                     .and_then(|slot| slot.loaded_page_mut())
                 else {
@@ -7570,10 +7439,7 @@ pub(crate) async fn complete_pending_page_command(
                 }
             };
             let Some(page) = conn
-                .runtime_session_owner_slot_mut_for_route(
-                    session_id.as_deref(),
-                    owner_route.as_ref(),
-                )
+                .runtime_session_owner_slot_mut_for_owner(&owner_scope)
                 .ok()
                 .and_then(|slot| slot.loaded_page_mut())
             else {
@@ -7636,10 +7502,7 @@ pub(crate) async fn complete_pending_page_command(
                 }
             };
             let Some(page) = conn
-                .runtime_session_owner_slot_mut_for_route(
-                    session_id.as_deref(),
-                    owner_route.as_ref(),
-                )
+                .runtime_session_owner_slot_mut_for_owner(&owner_scope)
                 .ok()
                 .and_then(|slot| slot.loaded_page_mut())
             else {
@@ -7667,10 +7530,7 @@ pub(crate) async fn complete_pending_page_command(
             };
             let (result, output) = {
                 let Some(page) = conn
-                    .runtime_session_owner_slot_mut_for_route(
-                        session_id.as_deref(),
-                        owner_route.as_ref(),
-                    )
+                    .runtime_session_owner_slot_mut_for_owner(&owner_scope)
                     .ok()
                     .and_then(|slot| slot.loaded_page_mut())
                 else {
@@ -7723,7 +7583,7 @@ pub(crate) async fn complete_pending_page_command(
             completed,
         } => {
             if conn
-                .ensure_document_accessible_for_route(session_id.as_deref(), owner_route.as_ref())
+                .ensure_document_accessible_for_owner(&owner_scope)
                 .is_err()
             {
                 return PageCommandTaskStep::Complete(get_frame_tree_command_output_plan(
@@ -7740,10 +7600,7 @@ pub(crate) async fn complete_pending_page_command(
                 ));
             }
             let Some(page) = conn
-                .runtime_session_owner_slot_mut_for_route(
-                    session_id.as_deref(),
-                    owner_route.as_ref(),
-                )
+                .runtime_session_owner_slot_mut_for_owner(&owner_scope)
                 .ok()
                 .and_then(|slot| slot.loaded_page_mut())
             else {
@@ -7801,10 +7658,7 @@ pub(crate) async fn complete_pending_page_command(
                 }
             };
             let Some(page) = conn
-                .runtime_session_owner_slot_mut_for_route(
-                    session_id.as_deref(),
-                    owner_route.as_ref(),
-                )
+                .runtime_session_owner_slot_mut_for_owner(&owner_scope)
                 .ok()
                 .and_then(|slot| slot.loaded_page_mut())
             else {
@@ -7835,10 +7689,7 @@ pub(crate) async fn complete_pending_page_command(
                     ));
                 }
             };
-            let page = match conn.loaded_page_mut_for_protocol_access_for_route(
-                session_id.as_deref(),
-                owner_route.as_ref(),
-            ) {
+            let page = match conn.loaded_page_mut_for_protocol_access_for_owner(&owner_scope) {
                 Ok(page) => page,
                 Err(message) => {
                     return PageCommandTaskStep::Complete(CommandOutputPlan::error(
@@ -7868,10 +7719,7 @@ pub(crate) async fn complete_pending_page_command(
                     ));
                 }
             };
-            let page = match conn.loaded_page_mut_for_protocol_access_for_route(
-                session_id.as_deref(),
-                owner_route.as_ref(),
-            ) {
+            let page = match conn.loaded_page_mut_for_protocol_access_for_owner(&owner_scope) {
                 Ok(page) => page,
                 Err(message) => {
                     return PageCommandTaskStep::Complete(CommandOutputPlan::error(
@@ -7916,10 +7764,7 @@ pub(crate) async fn complete_pending_page_command(
                     ));
                 }
             };
-            let page = match conn.loaded_page_mut_for_protocol_access_for_route(
-                session_id.as_deref(),
-                owner_route.as_ref(),
-            ) {
+            let page = match conn.loaded_page_mut_for_protocol_access_for_owner(&owner_scope) {
                 Ok(page) => page,
                 Err(message) => {
                     return PageCommandTaskStep::Complete(CommandOutputPlan::error(
@@ -7975,9 +7820,8 @@ pub(crate) async fn complete_pending_page_command(
                     }))
                 }
                 DevToolsPrintToPdfTransferMode::ReturnAsStream => {
-                    let stream = match conn.open_io_stream_body_source_for_route(
-                        session_id.as_deref(),
-                        owner_route.as_ref(),
+                    let stream = match conn.open_io_stream_body_source_for_owner(
+                        &owner_scope,
                         CapturedBody::from_bytes_spooled(pdf),
                     ) {
                         Ok(stream) => stream,

@@ -28,11 +28,8 @@ pub(super) fn start_set_node_stack_traces_enabled_command(
         Ok(Some(params)) => params,
         _ => return Err(PendingDomCommandStartError::invalid_params()),
     };
-    let renderer_inspector_session_id = conn
-        .target_renderer_runtime_inspector_session_id_for_route(
-            owner.session_id(),
-            owner.session_owner_route(),
-        );
+    let renderer_inspector_session_id =
+        conn.target_renderer_runtime_inspector_session_id_for_owner(&owner);
     let page = super::loaded_page_mut_for_owner(conn, &owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
     let pending = page
@@ -55,11 +52,8 @@ pub(super) fn start_get_node_stack_traces_command(
         Ok(Some(params)) => params,
         _ => return Err(PendingDomCommandStartError::invalid_params()),
     };
-    let renderer_inspector_session_id = conn
-        .target_renderer_runtime_inspector_session_id_for_route(
-            owner.session_id(),
-            owner.session_owner_route(),
-        );
+    let renderer_inspector_session_id =
+        conn.target_renderer_runtime_inspector_session_id_for_owner(&owner);
     let page = super::loaded_page_mut_for_owner(conn, &owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
     let pending = page

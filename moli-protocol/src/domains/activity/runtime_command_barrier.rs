@@ -157,14 +157,10 @@ impl RuntimeCommandCausalOwner {
     }
 
     fn capture_for_scope(conn: &CdpConnection, scope: &CommandOwnerScope) -> Option<Self> {
-        if let Some(page) = conn.target_page_residence_identity_for_route(
-            scope.session_id(),
-            scope.session_owner_route(),
-        ) {
+        if let Some(page) = conn.target_page_residence_identity_for_owner(scope) {
             return Some(Self::Page(page));
         }
-        let (browser_context_id, target_id) =
-            conn.target_owner_identity_for_route(scope.session_id(), scope.session_owner_route())?;
+        let (browser_context_id, target_id) = conn.target_owner_identity_for_owner(scope)?;
         Some(Self::Target {
             browser_context_id,
             target_id,

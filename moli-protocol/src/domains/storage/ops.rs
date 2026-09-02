@@ -479,19 +479,11 @@ fn start_get_storage_key_for_frame_command(
     };
 
     let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
-    let Some((target_id, target_url, _, _)) = conn
-        .target_session_owner_frame_tree_identity_for_route(
-            owner_scope.session_id(),
-            owner_scope.session_owner_route(),
-        )
+    let Some((target_id, target_url, _, _)) =
+        conn.target_session_owner_frame_tree_identity_for_owner(&owner_scope)
     else {
         let plan = if conn.browser_context.is_none()
-            && conn
-                .target_owner_identity_for_route(
-                    owner_scope.session_id(),
-                    owner_scope.session_owner_route(),
-                )
-                .is_none()
+            && conn.target_owner_identity_for_owner(&owner_scope).is_none()
         {
             CommandOutputPlan::error(-31998, "BrowserContextNotLoaded")
         } else {
@@ -501,9 +493,7 @@ fn start_get_storage_key_for_frame_command(
     };
 
     if params.frame_id == target_id {
-        if let Some(page) =
-            loaded_page_mut_for_session(conn, cmd.session_id, owner_scope.session_owner_route())
-        {
+        if let Some(page) = loaded_page_mut_for_owner(conn, &owner_scope) {
             return match page.start_document_storage_key_snapshot() {
                 Ok(pending) => StorageCommandTaskStep::Pending(PendingStorageCommandDispatch {
                     command_id: cmd.id,
@@ -526,15 +516,10 @@ fn start_get_storage_key_for_frame_command(
         ));
     }
 
-    if let Err(message) = conn.ensure_document_accessible_for_route(
-        owner_scope.session_id(),
-        owner_scope.session_owner_route(),
-    ) {
+    if let Err(message) = conn.ensure_document_accessible_for_owner(&owner_scope) {
         return StorageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message));
     }
-    let Some(page) =
-        loaded_page_mut_for_session(conn, cmd.session_id, owner_scope.session_owner_route())
-    else {
+    let Some(page) = loaded_page_mut_for_owner(conn, &owner_scope) else {
         return StorageCommandTaskStep::Complete(CommandOutputPlan::error(
             -32000,
             "NoFrameForGivenId",
@@ -782,11 +767,7 @@ fn complete_get_storage_key_for_top_frame_command(
         Ok(completion) => completion,
         Err(error) => return CommandOutputPlan::error(-32000, error),
     };
-    let Some(page) = loaded_page_mut_for_session(
-        conn,
-        owner_scope.session_id(),
-        owner_scope.session_owner_route(),
-    ) else {
+    let Some(page) = loaded_page_mut_for_owner(conn, owner_scope) else {
         return CommandOutputPlan::error(-32000, "NoFrameForGivenId");
     };
     match page.finish_document_storage_key_snapshot(completion) {
@@ -805,11 +786,7 @@ fn complete_get_storage_key_for_frame_command(
         Ok(completion) => completion,
         Err(error) => return CommandOutputPlan::error(-32000, error),
     };
-    let Some(page) = loaded_page_mut_for_session(
-        conn,
-        owner_scope.session_id(),
-        owner_scope.session_owner_route(),
-    ) else {
+    let Some(page) = loaded_page_mut_for_owner(conn, owner_scope) else {
         return CommandOutputPlan::error(-32000, "NoFrameForGivenId");
     };
     let child_frames = match page.finish_child_frame_tree_snapshot(completion) {
@@ -920,12 +897,11 @@ fn complete_set_cookies_result(
     Ok(set_cookie_reports_result(&reports))
 }
 
-fn loaded_page_mut_for_session<'a>(
+fn loaded_page_mut_for_owner<'a>(
     conn: &'a mut CdpConnection,
-    session_id: Option<&str>,
-    owner_route: Option<&crate::conn::CdpSessionRoute>,
+    owner: &CommandOwnerScope,
 ) -> Option<&'a mut moli_core::page::Page> {
-    conn.loaded_page_mut_for_protocol_access_for_route(session_id, owner_route)
+    conn.loaded_page_mut_for_protocol_access_for_owner(owner)
         .ok()
 }
 

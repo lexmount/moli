@@ -50,6 +50,7 @@ impl SharedWorkerRuntimeService {
             inspector_session_id.clone(),
             host.target_output().clone(),
         );
+        let error_response = response.clone();
         let settlement = response
             .take_session_response_settlement_receiver()
             .expect("a Worker DevTools response must own one settlement receiver");
@@ -60,8 +61,13 @@ impl SharedWorkerRuntimeService {
                 response,
             )
             .await;
-        crate::runtime::CompletedWorkerRuntimeInspectorCommandDispatch::finish(dispatch, settlement)
-            .await
+        Ok(
+            crate::runtime::CompletedWorkerRuntimeInspectorCommandDispatch::finish(
+                dispatch,
+                settlement,
+                error_response,
+            ),
+        )
     }
 
     pub(crate) fn detach_runtime_inspector_session(

@@ -35,18 +35,15 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
     ) -> Option<(&mut NavigationEngine, &mut TargetRuntimeSlot)> {
-        self.activity_source_engine_and_runtime_slot_mut_for_route(session_id, None)
+        let owner = CommandOwnerScope::capture(self, session_id);
+        self.activity_source_engine_and_runtime_slot_mut_for_owner(&owner)
     }
 
-    fn activity_source_engine_and_runtime_slot_mut_for_route(
+    fn activity_source_engine_and_runtime_slot_mut_for_owner(
         &mut self,
-        session_id: Option<&str>,
-        owner_route: Option<&CdpSessionRoute>,
+        owner: &CommandOwnerScope,
     ) -> Option<(&mut NavigationEngine, &mut TargetRuntimeSlot)> {
-        let route = match session_id {
-            Some(_) => self.session_route(session_id)?,
-            None => owner_route.cloned().unwrap_or(CdpSessionRoute::Browser),
-        };
+        let route = owner.resolve_route(self)?;
         let (browser_context_id, target_id) = match &route {
             CdpSessionRoute::PageTarget {
                 browser_context_id,
@@ -74,23 +71,13 @@ impl CdpConnection {
             .navigation_engine_and_runtime_slot_mut()
     }
 
-    fn activity_source_engine_and_runtime_slot_mut_for_owner(
-        &mut self,
-        owner: &CommandOwnerScope,
-    ) -> Option<(&mut NavigationEngine, &mut TargetRuntimeSlot)> {
-        self.activity_source_engine_and_runtime_slot_mut_for_route(
-            owner.session_id(),
-            owner.session_owner_route(),
-        )
-    }
-
     pub(crate) fn start_child_frame_lifecycle_work_for_owner(
         &mut self,
         owner: CommandOwnerScope,
         timeout: std::time::Duration,
     ) -> Result<PendingChildFrameLifecycleWork, String> {
         let storage = self
-            .navigation_load_inputs_for_route(owner.session_id(), owner.session_owner_route())
+            .navigation_load_inputs_for_owner(&owner)
             .resource_storage_handles();
         let Some((engine, slot)) =
             self.activity_source_engine_and_runtime_slot_mut_for_owner(&owner)

@@ -101,11 +101,8 @@ pub(super) fn start_devtools_set_file_input_files_command(
 ) -> Result<Option<PendingDomCommandDispatch>, PendingDomCommandStartError> {
     let is_shared_node_id = is_webdriver_bidi_node_shared_id(command.object_id.as_str());
     if is_shared_node_id {
-        let renderer_inspector_session_id = conn
-            .target_renderer_runtime_inspector_session_id_for_route(
-                owner.session_id(),
-                owner.session_owner_route(),
-            );
+        let renderer_inspector_session_id =
+            conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
         let page = loaded_page_mut_for_owner(conn, owner)
             .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
         let pending = page
@@ -424,11 +421,8 @@ fn start_set_file_input_files_frontend_node_binding(
     file_paths: Vec<String>,
     append: bool,
 ) -> Result<Option<PendingDomCommandDispatch>, PendingDomCommandStartError> {
-    let renderer_inspector_session_id = conn
-        .target_renderer_runtime_inspector_session_id_for_route(
-            owner.session_id(),
-            owner.session_owner_route(),
-        );
+    let renderer_inspector_session_id =
+        conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
     let page = loaded_page_mut_for_owner(conn, owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
     let pending = page
@@ -455,11 +449,8 @@ fn start_set_file_input_files_for_remote_reference(
     append: bool,
 ) -> Result<PendingDomCommandDispatch, PendingDomCommandStartError> {
     let reference = dom_object_reference_id_for_owner(conn, owner, &object_id);
-    let renderer_inspector_session_id = conn
-        .target_renderer_runtime_inspector_session_id_for_route(
-            owner.session_id(),
-            owner.session_owner_route(),
-        );
+    let renderer_inspector_session_id =
+        conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
     let page = loaded_page_mut_for_owner(conn, owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
     let object_id = reference;

@@ -219,9 +219,7 @@ fn emit_complete_subresource_network_delivery_record(
     let record_document_url = output.document_url();
     let timestamp = base_timestamp + ((output.index() + 1) as f64 * 0.000_001);
     let resource_type = output.resource_type().into();
-    let Ok(runtime_slot) = conn
-        .runtime_session_owner_slot_mut_for_route(owner.session_id(), owner.session_owner_route())
-    else {
+    let Ok(runtime_slot) = conn.runtime_session_owner_slot_mut_for_owner(owner) else {
         return false;
     };
     let request_was_announced_by_fetch_pause =
@@ -423,7 +421,7 @@ fn emit_staged_subresource_request_started(
     let timestamp = base_timestamp + ((output.index() + 1) as f64 * 0.000_001);
     let resource_type = output.resource_type().into();
     let request_was_announced_by_fetch_pause = conn
-        .runtime_session_owner_slot_mut_for_route(owner.session_id(), owner.session_owner_route())
+        .runtime_session_owner_slot_mut_for_owner(owner)
         .is_ok_and(|runtime_slot| runtime_slot.take_fetch_pause_announced_request_id(request_id));
     if output.resource_type() != moli_core::page::SubresourceResourceType::WebSocket {
         record_subresource_pending_response_body(conn, owner, request_id, event_session_ids);
@@ -551,11 +549,7 @@ fn emit_staged_subresource_response_started(
         );
         let fetch_request_id = (!blocked_intercepts.is_empty())
             .then(|| {
-                conn.in_flight_subresource_fetch_request_id_for_route(
-                    owner.session_id(),
-                    owner.session_owner_route(),
-                    output.handle().get(),
-                )
+                conn.in_flight_subresource_fetch_request_id_for_owner(owner, output.handle().get())
             })
             .flatten();
         emit_response_received(
@@ -589,12 +583,9 @@ fn matching_subresource_network_intercepts(
     resource_type: DevToolsNetworkResourceType,
     url: &url::Url,
 ) -> Vec<DevToolsNetworkInterceptId> {
-    conn.target_fetch_subresource_interception_snapshot_for_route(
-        owner.session_id(),
-        owner.session_owner_route(),
-    )
-    .map(|snapshot| snapshot.matching_network_intercepts(request_stage, resource_type, url))
-    .unwrap_or_default()
+    conn.target_fetch_subresource_interception_snapshot_for_owner(owner)
+        .map(|snapshot| snapshot.matching_network_intercepts(request_stage, resource_type, url))
+        .unwrap_or_default()
 }
 
 fn emit_staged_subresource_body_finished(
@@ -714,15 +705,11 @@ pub(crate) fn emit_pending_network_backlog_activity_background_events(
         preferred_request_id,
         prepared_outputs,
     } = context;
-    let primary_session_id = conn.runtime_session_owner_primary_session_id_for_route(
-        owner.session_id(),
-        owner.session_owner_route(),
-    );
+    let primary_session_id = conn.runtime_session_owner_primary_session_id_for_owner(&owner);
     let Some((frame_id, snapshot)) = (|| {
-        let frame_id = frame_id.map(str::to_owned).or_else(|| {
-            conn.target_owner_identity_for_route(owner.session_id(), owner.session_owner_route())?
-                .1
-        })?;
+        let frame_id = frame_id
+            .map(str::to_owned)
+            .or_else(|| conn.target_owner_identity_for_owner(&owner)?.1)?;
         let snapshot = pending_network_backlog_delivery_snapshot(
             conn,
             &owner,
@@ -757,13 +744,10 @@ pub(crate) fn emit_prepared_renderer_network_live_background_events(
     owner: &CommandOwnerScope,
     prepared: &mut TargetNetworkBacklogPreparedDelivery,
 ) {
-    let session_id = owner.session_id();
     let Some((frame_id, snapshot)) = (|| {
-        let frame_id = conn
-            .target_owner_identity_for_route(session_id, owner.session_owner_route())?
-            .1?;
+        let frame_id = conn.target_owner_identity_for_owner(owner)?.1?;
         let snapshot = conn
-            .runtime_session_owner_slot_mut_for_route(session_id, owner.session_owner_route())
+            .runtime_session_owner_slot_mut_for_owner(owner)
             .ok()?
             .pending_network_backlog_delivery_snapshot_from_backlog(prepared)?;
         Some((frame_id, snapshot))
@@ -822,19 +806,13 @@ fn pending_network_backlog_delivery_snapshot(
     prepared_network_outputs: Option<&mut NetworkPreparedOutputs>,
 ) -> Option<PendingNetworkBacklogDeliverySnapshot> {
     if let Some(prepared_network_outputs) = prepared_network_outputs {
-        let runtime_slot = conn
-            .runtime_session_owner_slot_mut_for_route(
-                owner.session_id(),
-                owner.session_owner_route(),
-            )
-            .ok()?;
+        let runtime_slot = conn.runtime_session_owner_slot_mut_for_owner(owner).ok()?;
         return runtime_slot.pending_network_backlog_delivery_snapshot_from_backlog(
             prepared_network_outputs.backlog_mut(),
         );
     }
-    conn.pending_network_backlog_delivery_snapshot_for_route(
-        owner.session_id(),
-        owner.session_owner_route(),
+    conn.pending_network_backlog_delivery_snapshot_for_owner(
+        owner,
         owner.session_id(),
         primary_session_id,
         preferred_request_id,
@@ -846,9 +824,7 @@ fn mark_network_backlog_delivery_snapshot_emitted(
     owner: &CommandOwnerScope,
     snapshot: &PendingNetworkBacklogDeliverySnapshot,
 ) {
-    let Ok(runtime_slot) = conn
-        .runtime_session_owner_slot_mut_for_route(owner.session_id(), owner.session_owner_route())
-    else {
+    let Ok(runtime_slot) = conn.runtime_session_owner_slot_mut_for_owner(owner) else {
         return;
     };
     runtime_slot.mark_network_backlog_delivery_snapshot_emitted(snapshot);
@@ -863,12 +839,8 @@ fn record_subresource_response_body_source(
 ) {
     let captured_body = crate::conn::CapturedBody::from_subresource_response_body(response_body);
     let data_type = crate::devtools_runtime::DevToolsNetworkDataType::Response;
-    let collector_ids = conn.network_data_collector_ids_for_route_body(
-        owner.session_id(),
-        owner.session_owner_route(),
-        data_type,
-        captured_body.len(),
-    );
+    let collector_ids =
+        conn.network_data_collector_ids_for_owner_body(owner, data_type, captured_body.len());
     let collection_was_gated = conn.network_data_collection_is_gated_for_body(data_type);
     conn.record_collected_network_data_body(
         request_id.to_owned(),
@@ -877,9 +849,7 @@ fn record_subresource_response_body_source(
         collector_ids.iter().cloned(),
         collection_was_gated,
     );
-    let Ok(runtime_slot) = conn
-        .runtime_session_owner_slot_mut_for_route(owner.session_id(), owner.session_owner_route())
-    else {
+    let Ok(runtime_slot) = conn.runtime_session_owner_slot_mut_for_owner(owner) else {
         return;
     };
     runtime_slot.record_captured_response_body_source_with_collector_scope(
@@ -902,12 +872,8 @@ fn record_subresource_request_body(
         return;
     };
     let data_type = crate::devtools_runtime::DevToolsNetworkDataType::Request;
-    let collector_ids = conn.network_data_collector_ids_for_route_body(
-        owner.session_id(),
-        owner.session_owner_route(),
-        data_type,
-        request_body.len(),
-    );
+    let collector_ids =
+        conn.network_data_collector_ids_for_owner_body(owner, data_type, request_body.len());
     let collection_was_gated = conn.network_data_collection_is_gated_for_body(data_type);
     conn.record_collected_network_data_body(
         request_id.to_owned(),
@@ -916,9 +882,7 @@ fn record_subresource_request_body(
         collector_ids.iter().cloned(),
         collection_was_gated,
     );
-    let Ok(runtime_slot) = conn
-        .runtime_session_owner_slot_mut_for_route(owner.session_id(), owner.session_owner_route())
-    else {
+    let Ok(runtime_slot) = conn.runtime_session_owner_slot_mut_for_owner(owner) else {
         return;
     };
     runtime_slot.record_captured_request_body_with_collector_scope(
@@ -936,18 +900,15 @@ fn record_subresource_pending_response_body(
     request_id: &str,
     session_ids: &[Option<String>],
 ) {
-    let collector_ids = conn.network_data_collector_ids_for_route_body(
-        owner.session_id(),
-        owner.session_owner_route(),
+    let collector_ids = conn.network_data_collector_ids_for_owner_body(
+        owner,
         crate::devtools_runtime::DevToolsNetworkDataType::Response,
         0,
     );
     let collection_was_gated = conn.network_data_collection_is_gated_for_body(
         crate::devtools_runtime::DevToolsNetworkDataType::Response,
     );
-    let Ok(runtime_slot) = conn
-        .runtime_session_owner_slot_mut_for_route(owner.session_id(), owner.session_owner_route())
-    else {
+    let Ok(runtime_slot) = conn.runtime_session_owner_slot_mut_for_owner(owner) else {
         return;
     };
     runtime_slot.record_pending_response_body_with_collector_scope(
@@ -965,18 +926,15 @@ fn record_subresource_failed_response_body(
     request_id: &str,
     session_ids: &[Option<String>],
 ) {
-    let collector_ids = conn.network_data_collector_ids_for_route_body(
-        owner.session_id(),
-        owner.session_owner_route(),
+    let collector_ids = conn.network_data_collector_ids_for_owner_body(
+        owner,
         crate::devtools_runtime::DevToolsNetworkDataType::Response,
         0,
     );
     let collection_was_gated = conn.network_data_collection_is_gated_for_body(
         crate::devtools_runtime::DevToolsNetworkDataType::Response,
     );
-    let Ok(runtime_slot) = conn
-        .runtime_session_owner_slot_mut_for_route(owner.session_id(), owner.session_owner_route())
-    else {
+    let Ok(runtime_slot) = conn.runtime_session_owner_slot_mut_for_owner(owner) else {
         return;
     };
     runtime_slot.record_failed_response_body_with_collector_scope(

@@ -295,9 +295,7 @@ pub(crate) fn qualify_runtime_context_protocol_event_for_owner_typed(
         );
         return;
     }
-    let Some((_, Some(target_id))) =
-        conn.target_owner_identity_for_route(owner.session_id(), owner.session_owner_route())
-    else {
+    let Some((_, Some(target_id))) = conn.target_owner_identity_for_owner(owner) else {
         return;
     };
     match event {
@@ -422,18 +420,16 @@ pub(crate) fn should_emit_child_default_context_inventory_replay_once_for_owner(
         return true;
     }
     if conn
-        .target_devtools_session_state_for_route(owner.session_id(), owner.session_owner_route())
+        .target_devtools_session_state_for_owner(owner)
         .is_some_and(|state| {
             state.has_emitted_child_default_execution_context_id(execution_context_id)
         })
     {
         return false;
     }
-    let _ = conn.with_target_devtools_session_state_for_route_mut(
-        owner.session_id(),
-        owner.session_owner_route(),
-        |state| state.mark_child_default_execution_context_id_emitted(execution_context_id),
-    );
+    let _ = conn.with_target_devtools_session_state_for_owner_mut(owner, |state| {
+        state.mark_child_default_execution_context_id_emitted(execution_context_id)
+    });
     true
 }
 
@@ -473,9 +469,7 @@ fn record_child_default_context_delivery_for_owner(
     let Some(execution_context_id) = child_default_execution_context_id(event) else {
         return;
     };
-    let Some(root_frame_id) = conn
-        .runtime_session_owner_frame_id_for_route(owner.session_id(), owner.session_owner_route())
-    else {
+    let Some(root_frame_id) = conn.runtime_session_owner_frame_id_for_owner(owner) else {
         return;
     };
     if event
@@ -485,11 +479,9 @@ fn record_child_default_context_delivery_for_owner(
     {
         return;
     }
-    let _ = conn.with_target_devtools_session_state_for_route_mut(
-        owner.session_id(),
-        owner.session_owner_route(),
-        |state| state.mark_child_default_execution_context_id_emitted(execution_context_id),
-    );
+    let _ = conn.with_target_devtools_session_state_for_owner_mut(owner, |state| {
+        state.mark_child_default_execution_context_id_emitted(execution_context_id)
+    });
 }
 
 fn mark_child_default_context_event_emitted(

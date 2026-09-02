@@ -507,17 +507,14 @@ async fn restore_and_commit_loaded_navigation_page_async(
                 .unwrap_or_default(),
         );
     }
-    let preload_channel_execution_context_ids = if conn
-        .target_owner_has_bidi_channel_preload_script_for_route(
-            state.owner.session_id(),
-            state.owner.session_owner_route(),
-        ) {
-        dedupe_preload_channel_execution_context_ids(std::mem::take(
-            &mut outcome.preload_channel_execution_context_ids,
-        ))
-    } else {
-        Vec::new()
-    };
+    let preload_channel_execution_context_ids =
+        if conn.target_owner_has_bidi_channel_preload_script_for_owner(&state.owner) {
+            dedupe_preload_channel_execution_context_ids(std::mem::take(
+                &mut outcome.preload_channel_execution_context_ids,
+            ))
+        } else {
+            Vec::new()
+        };
     let mut preload_channel_listener_events = Vec::new();
     for execution_context_id in preload_channel_execution_context_ids {
         Box::pin(

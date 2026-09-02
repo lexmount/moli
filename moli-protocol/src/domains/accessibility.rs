@@ -678,16 +678,13 @@ pub(crate) async fn complete_pending_accessibility_command(
     let CompletedAccessibilityCommandWork::Page(completed) = completed;
     let completed = *completed;
 
-    let session_id = owner_scope.session_id().map(str::to_owned);
-    let session_id_ref = session_id.as_deref();
-    let owner_route = owner_scope.session_owner_route();
-    if let Err(message) = conn.ensure_document_accessible_for_route(session_id_ref, owner_route) {
+    if let Err(message) = conn.ensure_document_accessible_for_owner(&owner_scope) {
         return AccessibilityCommandDispatchStep::Complete(CommandOutputPlan::error(
             -32000, message,
         ));
     }
     let Some(page) = conn
-        .loaded_page_mut_for_protocol_access_for_route(session_id_ref, owner_route)
+        .loaded_page_mut_for_protocol_access_for_owner(&owner_scope)
         .ok()
     else {
         return AccessibilityCommandDispatchStep::Complete(CommandOutputPlan::error(

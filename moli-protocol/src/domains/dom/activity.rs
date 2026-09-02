@@ -87,10 +87,7 @@ impl DomPreparedOutputs {
         batches: &[RendererDomMutationEventBatch],
     ) -> Self {
         let current_attachment = conn
-            .runtime_session_owner_slot_for_route(
-                source_owner.session_id(),
-                source_owner.session_owner_route(),
-            )
+            .runtime_session_owner_slot_for_owner(source_owner)
             .ok()
             .and_then(|slot| slot.current_renderer_attachment());
         Self {

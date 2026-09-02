@@ -103,10 +103,7 @@ pub(super) fn complete_network_resource_preparation(
         }
     };
     let preparation = match conn
-        .loaded_page_mut_for_protocol_access_for_route(
-            owner_scope.session_id(),
-            owner_scope.session_owner_route(),
-        )
+        .loaded_page_mut_for_protocol_access_for_owner(&owner_scope)
         .and_then(|page| {
             if page.renderer_agent_attachment_id() != completion.renderer_agent_attachment_id() {
                 return Err("Document changed while preparing the network resource load".to_owned());
@@ -177,9 +174,8 @@ pub(super) fn complete_network_resource_fetch(
                     Some(headers),
                 );
             }
-            let stream = match conn.open_io_stream_body_source_for_route(
-                owner_scope.session_id(),
-                owner_scope.session_owner_route(),
+            let stream = match conn.open_io_stream_body_source_for_owner(
+                &owner_scope,
                 CapturedBody::from_bytes_spooled(response.body),
             ) {
                 Ok(stream) => stream,

@@ -83,16 +83,9 @@ pub(super) fn start_devtools_perform_search_command(
     owner: &CommandOwnerScope,
     command: DevToolsPerformSearchCommand,
 ) -> Result<Option<PendingDomCommandDispatch>, PendingDomCommandStartError> {
-    let renderer_inspector_session_id = conn
-        .target_renderer_runtime_inspector_session_id_for_route(
-            owner.session_id(),
-            owner.session_owner_route(),
-        );
-    let include_whitespace = super::dom_agent_includes_whitespace_for_route(
-        conn,
-        owner.session_id(),
-        owner.session_owner_route(),
-    );
+    let renderer_inspector_session_id =
+        conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
+    let include_whitespace = super::dom_agent_includes_whitespace_for_owner(conn, owner);
     let Some(page) = super::loaded_page_mut_for_owner(conn, owner) else {
         return Ok(None);
     };
@@ -119,11 +112,8 @@ pub(super) fn start_devtools_get_search_results_command(
     owner: &CommandOwnerScope,
     command: DevToolsGetSearchResultsCommand,
 ) -> Result<Option<PendingDomCommandDispatch>, PendingDomCommandStartError> {
-    let renderer_inspector_session_id = conn
-        .target_renderer_runtime_inspector_session_id_for_route(
-            owner.session_id(),
-            owner.session_owner_route(),
-        );
+    let renderer_inspector_session_id =
+        conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
     let Some(page) = super::loaded_page_mut_for_owner(conn, owner) else {
         return Ok(None);
     };
@@ -149,11 +139,8 @@ pub(super) fn start_devtools_discard_search_results_command(
     owner: &CommandOwnerScope,
     command: DevToolsDiscardSearchResultsCommand,
 ) -> Result<Option<PendingDomCommandDispatch>, PendingDomCommandStartError> {
-    let renderer_inspector_session_id = conn
-        .target_renderer_runtime_inspector_session_id_for_route(
-            owner.session_id(),
-            owner.session_owner_route(),
-        );
+    let renderer_inspector_session_id =
+        conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
     let Some(page) = super::loaded_page_mut_for_owner(conn, owner) else {
         return Ok(None);
     };
