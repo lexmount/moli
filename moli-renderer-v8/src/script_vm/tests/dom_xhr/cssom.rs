@@ -4997,6 +4997,40 @@ fn computed_css_style_declaration_is_read_only() {
         "true|NoModificationAllowedError:7|NoModificationAllowedError:7|NoModificationAllowedError:7|NoModificationAllowedError:7|NoModificationAllowedError:7"
     );
 }
+
+#[test]
+fn computed_flex_flow_serializes_direction_and_wrap() {
+    let mut vm = new_storage_test_vm("https://computed-flex-flow.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const target = document.createElement('div');
+  (document.body || document.documentElement || document).appendChild(target);
+  const values = [
+    'initial',
+    'column',
+    'wrap',
+    'column wrap-reverse',
+    'row-reverse wrap'
+  ];
+  return values.map(value => {
+    target.style.flexFlow = value;
+    const computed = getComputedStyle(target);
+    return [computed.flexFlow, computed.flexDirection, computed.flexWrap].join('|');
+  }).join('/');
+})()
+"#,
+        )
+        .expect("computed flex-flow serialization should evaluate");
+
+    assert_eq!(
+        result,
+        "row nowrap|row|nowrap/column nowrap|column|nowrap/row wrap|row|wrap/column wrap-reverse|column|wrap-reverse/row-reverse wrap|row-reverse|wrap"
+    );
+}
+
 #[test]
 fn css_media_rule_exposes_mutable_media_list() {
     let mut vm = new_storage_test_vm("https://css-media-list.test/");

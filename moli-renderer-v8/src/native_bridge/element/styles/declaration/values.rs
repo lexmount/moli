@@ -2368,6 +2368,13 @@ fn computed_style_property_value_after_style_update(
     if property == "transition" {
         return computed_transition_shorthand_value(runtime, handle, context);
     }
+    if property == "flex-flow" {
+        let direction =
+            computed_style_property_value_with_context(runtime, handle, "flex-direction", context);
+        let wrap =
+            computed_style_property_value_with_context(runtime, handle, "flex-wrap", context);
+        return format!("{direction} {wrap}");
+    }
     if property == "text-decoration" {
         return computed_text_decoration_shorthand_value(runtime, handle, context);
     }
