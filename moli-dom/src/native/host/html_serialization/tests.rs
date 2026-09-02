@@ -4,6 +4,10 @@ fn test_url() -> url::Url {
     url::Url::parse("https://inspector-shadow-serialization.test/").expect("test URL")
 }
 
+fn scripting_enabled(_: DomHandle) -> bool {
+    true
+}
+
 #[test]
 fn inspector_outer_html_uses_chromium_shadow_template_attributes() {
     let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
@@ -29,8 +33,13 @@ fn inspector_outer_html_uses_chromium_shadow_template_attributes() {
     assert!(host.append_child(element, light_text));
 
     assert_eq!(
-        host.outer_html_with_shadow_roots(element, true, ShadowRootInclusion::None, None)
-            .as_deref(),
+        host.outer_html_with_shadow_roots(
+            element,
+            &scripting_enabled,
+            ShadowRootInclusion::None,
+            None,
+        )
+        .as_deref(),
         Some("<section id=\"host\">light &amp; more</section>")
     );
 
@@ -38,7 +47,7 @@ fn inspector_outer_html_uses_chromium_shadow_template_attributes() {
     assert_eq!(
         host.outer_html_with_shadow_roots(
             element,
-            true,
+            &scripting_enabled,
             ShadowRootInclusion::AllAuthorForInspector,
             Some(&include_registry),
         )
@@ -54,7 +63,7 @@ fn inspector_outer_html_uses_chromium_shadow_template_attributes() {
     assert_eq!(
         host.get_html_with_shadow_root_registry_attribute_policy(
             element,
-            true,
+            &scripting_enabled,
             false,
             &[shadow_root],
             Some(&include_registry),
@@ -94,14 +103,19 @@ fn inspector_outer_html_includes_nested_open_and_closed_author_roots() {
     assert!(host.append_child(outer_host, outer_light));
 
     assert_eq!(
-        host.outer_html_with_shadow_roots(outer_host, true, ShadowRootInclusion::None, None)
-            .as_deref(),
+        host.outer_html_with_shadow_roots(
+            outer_host,
+            &scripting_enabled,
+            ShadowRootInclusion::None,
+            None,
+        )
+        .as_deref(),
         Some("<x-outer>outer-light</x-outer>")
     );
     assert_eq!(
         host.outer_html_with_shadow_roots(
             outer_host,
-            true,
+            &scripting_enabled,
             ShadowRootInclusion::SerializableOrExplicit {
                 serializable: false,
                 explicit: &[outer_root],
@@ -122,7 +136,7 @@ fn inspector_outer_html_includes_nested_open_and_closed_author_roots() {
     assert_eq!(
         host.outer_html_with_shadow_roots(
             outer_host,
-            true,
+            &scripting_enabled,
             ShadowRootInclusion::AllAuthorForInspector,
             None,
         )
@@ -132,7 +146,7 @@ fn inspector_outer_html_includes_nested_open_and_closed_author_roots() {
     assert_eq!(
         host.outer_html_with_shadow_roots(
             host.document_node_id(),
-            true,
+            &scripting_enabled,
             ShadowRootInclusion::AllAuthorForInspector,
             None,
         )
@@ -142,7 +156,7 @@ fn inspector_outer_html_includes_nested_open_and_closed_author_roots() {
     assert_eq!(
         host.outer_html_with_shadow_roots(
             outer_root,
-            true,
+            &scripting_enabled,
             ShadowRootInclusion::AllAuthorForInspector,
             None,
         )
@@ -175,12 +189,22 @@ fn inspector_outer_html_walks_deep_shadow_trees_iteratively() {
     assert!(host.append_child(shadow_host, leaf));
 
     assert_eq!(
-        host.outer_html_with_shadow_roots(root, true, ShadowRootInclusion::None, None)
-            .as_deref(),
+        host.outer_html_with_shadow_roots(
+            root,
+            &scripting_enabled,
+            ShadowRootInclusion::None,
+            None,
+        )
+        .as_deref(),
         Some("<div></div>")
     );
     let html = host
-        .outer_html_with_shadow_roots(root, true, ShadowRootInclusion::AllAuthorForInspector, None)
+        .outer_html_with_shadow_roots(
+            root,
+            &scripting_enabled,
+            ShadowRootInclusion::AllAuthorForInspector,
+            None,
+        )
         .expect("deep inspector outer HTML");
     assert_eq!(html.matches("<template shadowrootmode=").count(), DEPTH);
     assert!(html.starts_with("<div><template shadowrootmode=\"open\"><div>"));
@@ -247,7 +271,12 @@ fn shadow_excluding_outer_html_matches_native_serializer() {
         fragment_child,
     ] {
         assert_eq!(
-            host.outer_html_with_shadow_roots(handle, true, ShadowRootInclusion::None, None),
+            host.outer_html_with_shadow_roots(
+                handle,
+                &scripting_enabled,
+                ShadowRootInclusion::None,
+                None,
+            ),
             host.dom().outer_html(handle),
             "shadow-excluding host serializer diverged for {handle:?}"
         );

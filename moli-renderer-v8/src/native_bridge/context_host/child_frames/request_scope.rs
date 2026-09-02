@@ -736,12 +736,13 @@ impl JsContextHost {
             .unwrap_or(false)
     }
 
+    /// Returns the scripting state of the node's actual node Document.
+    ///
+    /// Associated-tree identity is deliberately not used here: template
+    /// contents map to their outer host for CDP registries, but remain owned by
+    /// a separate inert Document for HTML parsing and serialization semantics.
     pub(crate) fn node_document_scripting_enabled(&self, handle: DomHandle) -> bool {
-        let Some(document_handle) = self
-            .dom_host()
-            .document_identity_handle(handle)
-            .and_then(|identity| self.dom_host().owner_document_handle(identity))
-        else {
+        let Some(document_handle) = self.dom_host().owner_document_handle(handle) else {
             return false;
         };
         self.document_scripting_enabled(document_handle)

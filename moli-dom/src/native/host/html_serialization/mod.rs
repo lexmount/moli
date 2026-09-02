@@ -36,13 +36,13 @@ impl DomHost {
     pub fn get_html(
         &self,
         handle: DomHandle,
-        scripting_enabled: bool,
+        scripting_enabled_for_node: &dyn Fn(DomHandle) -> bool,
         serializable_shadow_roots: bool,
         explicit_shadow_roots: &[DomHandle],
     ) -> Option<String> {
         self.get_html_with_shadow_root_registry_attribute_policy(
             handle,
-            scripting_enabled,
+            scripting_enabled_for_node,
             serializable_shadow_roots,
             explicit_shadow_roots,
             None,
@@ -52,7 +52,7 @@ impl DomHost {
     pub fn get_html_with_shadow_root_registry_attribute_policy(
         &self,
         handle: DomHandle,
-        scripting_enabled: bool,
+        scripting_enabled_for_node: &dyn Fn(DomHandle) -> bool,
         serializable_shadow_roots: bool,
         explicit_shadow_roots: &[DomHandle],
         registry_attribute_policy: Option<&ShadowRootRegistryAttributePolicy<'_>>,
@@ -60,7 +60,7 @@ impl DomHost {
         self.serialize_html_with_shadow_roots(
             handle,
             HtmlSerializationTarget::ChildrenOnly,
-            scripting_enabled,
+            scripting_enabled_for_node,
             ShadowRootInclusion::SerializableOrExplicit {
                 serializable: serializable_shadow_roots,
                 explicit: explicit_shadow_roots,
@@ -72,14 +72,14 @@ impl DomHost {
     pub fn outer_html_with_shadow_roots(
         &self,
         handle: DomHandle,
-        scripting_enabled: bool,
+        scripting_enabled_for_node: &dyn Fn(DomHandle) -> bool,
         shadow_root_inclusion: ShadowRootInclusion<'_>,
         registry_attribute_policy: Option<&ShadowRootRegistryAttributePolicy<'_>>,
     ) -> Option<String> {
         self.serialize_html_with_shadow_roots(
             handle,
             HtmlSerializationTarget::IncludeNode,
-            scripting_enabled,
+            scripting_enabled_for_node,
             shadow_root_inclusion,
             registry_attribute_policy,
         )
@@ -89,7 +89,7 @@ impl DomHost {
         &self,
         handle: DomHandle,
         target: HtmlSerializationTarget,
-        scripting_enabled: bool,
+        scripting_enabled_for_node: &dyn Fn(DomHandle) -> bool,
         shadow_root_inclusion: ShadowRootInclusion<'_>,
         registry_attribute_policy: Option<&ShadowRootRegistryAttributePolicy<'_>>,
     ) -> Option<String> {
@@ -111,7 +111,7 @@ impl DomHost {
             &self.dom,
             handle,
             target,
-            scripting_enabled,
+            scripting_enabled_for_node,
             &shadow_root_provider,
         )
     }

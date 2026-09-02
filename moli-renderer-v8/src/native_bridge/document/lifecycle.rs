@@ -338,7 +338,11 @@ pub(in crate::native_bridge) fn append_detached_html_document_body_html(
         let Some(body) = detached_html_document_body_handle(runtime, document_handle) else {
             return false;
         };
-        let mut next = runtime.dom_host().inner_html(body).unwrap_or_default();
+        let scripting_enabled_for_node = |node| runtime.node_document_scripting_enabled(node);
+        let mut next = runtime
+            .dom_host()
+            .get_html(body, &scripting_enabled_for_node, false, &[])
+            .unwrap_or_default();
         next.push_str(html);
         runtime.set_inner_html(scope, runtime_ptr, body, &next)
     })

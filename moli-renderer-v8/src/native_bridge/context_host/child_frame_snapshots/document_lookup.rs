@@ -66,9 +66,10 @@ impl JsContextHost {
                 .then_some(binding.root)
             })
             .collect::<Vec<_>>();
+        let scripting_enabled_for_node = |node| self.node_document_scripting_enabled(node);
         let markup = self.dom_host().get_html(
             document_handle,
-            self.child_browsing_context_scripting_enabled(handle),
+            &scripting_enabled_for_node,
             false,
             &explicit_shadow_roots,
         )?;

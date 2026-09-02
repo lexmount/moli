@@ -3203,7 +3203,7 @@ mod tests {
         );
 
         let html = host
-            .get_html(root, true, false, &[shadow_root])
+            .get_html(root, &|_| true, false, &[shadow_root])
             .expect("shadow-including HTML");
         assert!(html.contains("<template shadowrootmode=\"open\">"));
         assert!(html.contains("</template></article><script></script>"));

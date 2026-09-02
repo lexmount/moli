@@ -5,6 +5,10 @@ fn test_url() -> url::Url {
     url::Url::parse("https://serialization.test/").expect("test URL")
 }
 
+fn scripting_enabled(_: NativeNodeId) -> bool {
+    true
+}
+
 #[test]
 fn html_serializers_share_the_complete_void_element_set() {
     let mut dom = NativeDom::new_html(test_url());
@@ -41,12 +45,14 @@ fn html_serializers_share_the_complete_void_element_set() {
     let param = host.create_element("param");
     assert!(host.append_child(container, param));
     assert_eq!(
-        host.get_html(container, true, false, &[]).as_deref(),
+        host.get_html(container, &scripting_enabled, false, &[])
+            .as_deref(),
         Some(format!("{expected}<param>").as_str())
     );
     for element in void_elements {
         assert_eq!(
-            host.get_html(element, true, false, &[]).as_deref(),
+            host.get_html(element, &scripting_enabled, false, &[])
+                .as_deref(),
             Some("")
         );
     }
@@ -109,11 +115,12 @@ fn html_text_serialization_uses_the_actual_parent_and_scripting_mode() {
             (true, literal_with_scripting),
             (false, literal_without_scripting),
         ] {
+            let scripting_enabled_for_node = |_: NativeNodeId| scripting_enabled;
             let contents = if literal { "<&" } else { "&lt;&amp;" };
             assert_eq!(
                 host.get_html_with_shadow_root_registry_attribute_policy(
                     element,
-                    scripting_enabled,
+                    &scripting_enabled_for_node,
                     false,
                     &[],
                     None,
@@ -125,7 +132,7 @@ fn html_text_serialization_uses_the_actual_parent_and_scripting_mode() {
             assert_eq!(
                 host.outer_html_with_shadow_roots(
                     element,
-                    scripting_enabled,
+                    &scripting_enabled_for_node,
                     crate::native::ShadowRootInclusion::None,
                     None,
                 ),
@@ -134,6 +141,46 @@ fn html_text_serialization_uses_the_actual_parent_and_scripting_mode() {
             );
         }
     }
+}
+
+#[test]
+fn html_serialization_queries_scripting_state_for_each_noscript_text_node() {
+    let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
+    let container = host.create_element("main");
+    let enabled_noscript = host.create_element("noscript");
+    let enabled_text = host.create_text_node("<enabled&>");
+    let disabled_noscript = host.create_element("noscript");
+    let disabled_text = host.create_text_node("<disabled&>");
+    assert!(host.append_child(enabled_noscript, enabled_text));
+    assert!(host.append_child(disabled_noscript, disabled_text));
+    assert!(host.append_child(container, enabled_noscript));
+    assert!(host.append_child(container, disabled_noscript));
+
+    let scripting_enabled_for_node = |node| node == enabled_text;
+    let expected = concat!(
+        "<noscript><enabled&></noscript>",
+        "<noscript>&lt;disabled&amp;&gt;</noscript>"
+    );
+    assert_eq!(
+        host.get_html_with_shadow_root_registry_attribute_policy(
+            container,
+            &scripting_enabled_for_node,
+            false,
+            &[],
+            None,
+        )
+        .as_deref(),
+        Some(expected)
+    );
+    assert_eq!(
+        host.outer_html_with_shadow_roots(
+            container,
+            &scripting_enabled_for_node,
+            crate::native::ShadowRootInclusion::None,
+            None,
+        ),
+        Some(format!("<main>{expected}</main>"))
+    );
 }
 
 #[test]
@@ -200,7 +247,8 @@ fn html_serializers_apply_attribute_serialized_name_rules() {
 
     let host = DomHost::from_dom(dom);
     assert_eq!(
-        host.get_html(container, true, false, &[]).as_deref(),
+        host.get_html(container, &scripting_enabled, false, &[])
+            .as_deref(),
         Some(expected)
     );
 }
@@ -244,7 +292,8 @@ fn html_serializers_escape_adopted_cdata_as_text() {
 
     let host = DomHost::from_dom(html_dom);
     assert_eq!(
-        host.get_html(html_svg, true, false, &[]).as_deref(),
+        host.get_html(html_svg, &scripting_enabled, false, &[])
+            .as_deref(),
         Some("&lt;img&gt;&amp;")
     );
 }

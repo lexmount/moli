@@ -833,9 +833,10 @@ fn node_inner_text(
 }
 
 fn node_inner_html(runtime: &JsContextHost, handle: DomHandle) -> Option<String> {
+    let scripting_enabled_for_node = |node| runtime.node_document_scripting_enabled(node);
     runtime
         .dom_host()
-        .inner_html_with_scripting_enabled(handle, runtime.node_document_scripting_enabled(handle))
+        .get_html(handle, &scripting_enabled_for_node, false, &[])
 }
 
 fn is_element_or_shadow_root_receiver(runtime: &JsContextHost, handle: DomHandle) -> bool {
@@ -897,10 +898,15 @@ pub(in crate::native_bridge) fn node_outer_html_getter_function<'s>(
         rv.set_undefined();
         return;
     }
+    let scripting_enabled_for_node = |node| runtime.node_document_scripting_enabled(node);
     let value = runtime
         .dom_host()
-        .dom()
-        .outer_html_with_scripting_enabled(handle, runtime.node_document_scripting_enabled(handle))
+        .outer_html_with_shadow_roots(
+            handle,
+            &scripting_enabled_for_node,
+            crate::dom::native::ShadowRootInclusion::None,
+            None,
+        )
         .unwrap_or_default();
     let Some(value) = v8_string(scope, &value) else {
         rv.set_null();
@@ -1053,11 +1059,12 @@ pub(in crate::native_bridge) fn node_get_html_callback<'s>(
         |_: DomHandle, shadow_root: DomHandle, _: &crate::dom::native::ShadowRootInit| {
             runtime.should_serialize_shadow_root_registry_attribute(shadow_root)
         };
+    let scripting_enabled_for_node = |node| runtime.node_document_scripting_enabled(node);
     let Some(html) = runtime
         .dom_host()
         .get_html_with_shadow_root_registry_attribute_policy(
             handle,
-            runtime.node_document_scripting_enabled(handle),
+            &scripting_enabled_for_node,
             serializable_shadow_roots,
             &explicit_shadow_roots,
             Some(&should_serialize_registry_attribute),

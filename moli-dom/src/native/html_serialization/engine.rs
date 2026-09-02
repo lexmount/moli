@@ -50,15 +50,20 @@ where
 #[derive(Clone, Copy)]
 struct HtmlSerializationOptions<'a> {
     target: HtmlSerializationTarget,
-    scripting_enabled: bool,
+    // This is node-scoped: one traversal can enter inert template contents
+    // whose owner Document has different scripting state from the outer tree.
+    scripting_enabled_for_node: &'a dyn Fn(NativeNodeId) -> bool,
     shadow_root_provider: Option<&'a dyn HtmlShadowRootProvider>,
 }
 
 impl<'a> HtmlSerializationOptions<'a> {
-    const fn new(target: HtmlSerializationTarget, scripting_enabled: bool) -> Self {
+    const fn new(
+        target: HtmlSerializationTarget,
+        scripting_enabled_for_node: &'a dyn Fn(NativeNodeId) -> bool,
+    ) -> Self {
         Self {
             target,
-            scripting_enabled,
+            scripting_enabled_for_node,
             shadow_root_provider: None,
         }
     }
@@ -287,7 +292,7 @@ fn serialize_html_node_frame<'a, S>(
             }
         }
         NodeData::Text(text) => {
-            if text_data_serializes_literally(dom, node_id, options.scripting_enabled) {
+            if text_data_serializes_literally(dom, node_id, options.scripting_enabled_for_node) {
                 out.push_str(text.data());
             } else {
                 escape_html_text(text.data(), out);
@@ -297,7 +302,7 @@ fn serialize_html_node_frame<'a, S>(
             serialize_cdata_section(
                 cdata.data(),
                 out,
-                text_data_serializes_literally(dom, node_id, options.scripting_enabled),
+                text_data_serializes_literally(dom, node_id, options.scripting_enabled_for_node),
                 dom.node_document_is_html_document(node_id).unwrap_or(false),
             );
         }
@@ -350,7 +355,7 @@ fn push_shadow_root_frame(
 fn text_data_serializes_literally(
     dom: &NativeDom,
     node_id: NativeNodeId,
-    scripting_enabled: bool,
+    scripting_enabled_for_node: &dyn Fn(NativeNodeId) -> bool,
 ) -> bool {
     if !dom.node_document_is_html_document(node_id).unwrap_or(false) {
         return false;
@@ -368,7 +373,7 @@ fn text_data_serializes_literally(
     matches!(
         parent.local_name(),
         "style" | "script" | "xmp" | "iframe" | "noembed" | "noframes" | "plaintext"
-    ) || scripting_enabled && parent.local_name() == "noscript"
+    ) || parent.local_name() == "noscript" && scripting_enabled_for_node(node_id)
 }
 
 struct BoundedHtmlSerialization {
@@ -441,11 +446,12 @@ pub(super) fn serialize_html(
     target: HtmlSerializationTarget,
     scripting_enabled: bool,
 ) -> Option<String> {
+    let scripting_enabled_for_node = |_: NativeNodeId| scripting_enabled;
     let mut html = String::new();
     serialize_html_into_sink(
         dom,
         node_id,
-        HtmlSerializationOptions::new(target, scripting_enabled),
+        HtmlSerializationOptions::new(target, &scripting_enabled_for_node),
         &mut html,
     )
     .then_some(html)
@@ -455,13 +461,13 @@ pub(in crate::native) fn serialize_html_with_shadow_root_provider<F>(
     dom: &NativeDom,
     node_id: NativeNodeId,
     target: HtmlSerializationTarget,
-    scripting_enabled: bool,
+    scripting_enabled_for_node: &dyn Fn(NativeNodeId) -> bool,
     shadow_root_provider: &F,
 ) -> Option<String>
 where
     F: Fn(NativeNodeId) -> Option<HtmlSerializedShadowRoot>,
 {
-    let options = HtmlSerializationOptions::new(target, scripting_enabled)
+    let options = HtmlSerializationOptions::new(target, scripting_enabled_for_node)
         .with_shadow_root_provider(shadow_root_provider);
     let mut html = String::new();
     serialize_html_into_sink(dom, node_id, options, &mut html).then_some(html)
@@ -476,11 +482,15 @@ pub(super) fn serialize_html_with_limit(
     node_id: NativeNodeId,
     max_bytes: usize,
 ) -> Result<Option<String>, HtmlSerializationLimitExceeded> {
+    let scripting_enabled_for_node = |_: NativeNodeId| true;
     let mut out = BoundedHtmlSerialization::new(max_bytes);
     if !serialize_html_into_sink(
         dom,
         node_id,
-        HtmlSerializationOptions::new(HtmlSerializationTarget::IncludeNode, true),
+        HtmlSerializationOptions::new(
+            HtmlSerializationTarget::IncludeNode,
+            &scripting_enabled_for_node,
+        ),
         &mut out,
     ) {
         return Ok(None);

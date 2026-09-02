@@ -50,6 +50,80 @@ fn detached_domparser_parses_noscript_with_scripting_disabled() {
 }
 
 #[test]
+fn template_contents_serialize_noscript_with_the_inert_node_document() {
+    let mut vm = new_storage_test_vm("https://template-noscript-serialization.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const template = document.createElement("template");
+  const noscript = document.createElement("noscript");
+  noscript.textContent = "<em>fallback&</em>";
+  template.content.append(noscript);
+
+  return [
+    template.innerHTML,
+    template.outerHTML,
+    template.getHTML(),
+    noscript.innerHTML,
+    noscript.outerHTML,
+    noscript.getHTML(),
+    noscript.ownerDocument === template.content.ownerDocument,
+    noscript.ownerDocument === document
+  ].join("|");
+})()
+"#,
+        )
+        .expect("template noscript serialization probe should evaluate");
+
+    assert_eq!(
+        result,
+        concat!(
+            "<noscript>&lt;em&gt;fallback&amp;&lt;/em&gt;</noscript>|",
+            "<template><noscript>&lt;em&gt;fallback&amp;&lt;/em&gt;</noscript></template>|",
+            "<noscript>&lt;em&gt;fallback&amp;&lt;/em&gt;</noscript>|",
+            "&lt;em&gt;fallback&amp;&lt;/em&gt;|",
+            "<noscript>&lt;em&gt;fallback&amp;&lt;/em&gt;</noscript>|",
+            "&lt;em&gt;fallback&amp;&lt;/em&gt;|true|false"
+        )
+    );
+}
+
+#[test]
+fn detached_document_write_preserves_existing_noscript_text() {
+    let mut vm = new_storage_test_vm("https://detached-write-noscript-serialization.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const doc = document.implementation.createHTMLDocument("");
+  const noscript = doc.createElement("noscript");
+  noscript.textContent = "<em>fallback&</em>";
+  doc.body.append(noscript);
+  doc.write("<span>tail</span>");
+  return [
+    doc.body.innerHTML,
+    noscript.innerHTML,
+    noscript.firstElementChild === null,
+    doc.body.lastElementChild?.localName
+  ].join("|");
+})()
+"#,
+        )
+        .expect("detached document.write noscript probe should evaluate");
+
+    assert_eq!(
+        result,
+        concat!(
+            "<noscript>&lt;em&gt;fallback&amp;&lt;/em&gt;</noscript><span>tail</span>|",
+            "&lt;em&gt;fallback&amp;&lt;/em&gt;|true|span"
+        )
+    );
+}
+
+#[test]
 fn detached_domparser_query_and_element_collections_use_native_handles() {
     let mut vm = new_storage_test_vm("https://detached-domparser-query.test/");
 

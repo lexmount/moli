@@ -1331,9 +1331,10 @@ impl ScriptVm {
             |_: DomHandle, shadow_root: DomHandle, _: &crate::dom::native::ShadowRootInit| {
                 host.should_serialize_shadow_root_registry_attribute(shadow_root)
             };
+        let scripting_enabled_for_node = |node| host.node_document_scripting_enabled(node);
         host.dom_host().outer_html_with_shadow_roots(
             handle,
-            host.node_document_scripting_enabled(handle),
+            &scripting_enabled_for_node,
             shadow_root_inclusion,
             Some(&should_serialize_registry_attribute),
         )
