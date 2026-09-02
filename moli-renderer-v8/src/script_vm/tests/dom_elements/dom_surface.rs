@@ -4222,10 +4222,12 @@ fn exec_command_select_all_respects_modal_dialog_inertness() {
   body.textContent = "";
   body.append(
     document.createTextNode("Here is a text node you can't select while the dialog is open."),
-    document.createElement("dialog"),
+    document.createElement("div"),
     document.createTextNode("Trailing text.")
   );
-  const dialog = body.querySelector("dialog");
+  const wrapper = body.querySelector("div");
+  const dialog = document.createElement("dialog");
+  wrapper.appendChild(dialog);
   dialog.textContent = "I'm selectable.";
   const selection = getSelection();
 
@@ -4243,6 +4245,11 @@ fn exec_command_select_all_respects_modal_dialog_inertness() {
     commandRange.endContainer === dialog &&
     commandRange.endOffset === dialog.childNodes.length;
 
+  wrapper.inert = true;
+  selection.selectAllChildren(body);
+  const inertAncestorText = selection.toString();
+  wrapper.inert = false;
+
   dialog.close();
   selection.selectAllChildren(body);
   const afterCloseText = selection.toString();
@@ -4252,6 +4259,7 @@ fn exec_command_select_all_respects_modal_dialog_inertness() {
     commandReturned,
     commandText,
     commandRangeSpansDialog,
+    inertAncestorText,
     afterCloseHasOutside: afterCloseText.includes("text node you can't select"),
     afterCloseHasDialog: afterCloseText.includes("I'm selectable."),
     afterCloseHasTrailing: afterCloseText.includes("Trailing text.")
@@ -4263,7 +4271,7 @@ fn exec_command_select_all_respects_modal_dialog_inertness() {
 
     assert_eq!(
         result,
-        r#"{"manualBodyText":"I'm selectable.","commandReturned":true,"commandText":"I'm selectable.","commandRangeSpansDialog":true,"afterCloseHasOutside":true,"afterCloseHasDialog":false,"afterCloseHasTrailing":true}"#
+        r#"{"manualBodyText":"I'm selectable.","commandReturned":true,"commandText":"I'm selectable.","commandRangeSpansDialog":true,"inertAncestorText":"I'm selectable.","afterCloseHasOutside":true,"afterCloseHasDialog":false,"afterCloseHasTrailing":true}"#
     );
 }
 
