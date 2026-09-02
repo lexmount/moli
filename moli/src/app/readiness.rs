@@ -15,7 +15,7 @@ use moli_core::{
     runtime::{Browser, FetchDeadline, FetchedDocument, RenderedDomWaitUntil},
 };
 use moli_fetch::Request;
-use std::time::Duration;
+use std::{path::Path, time::Duration};
 
 #[derive(Debug)]
 pub(super) struct ReadinessPlan {
@@ -123,9 +123,9 @@ fn resolve_wait_script(args: &FetchArgs) -> Result<Option<String>> {
             bail!("`--wait-script` and `--wait-script-file` are mutually exclusive")
         }
         (Some(script), None) => Ok(Some(script.to_owned())),
-        (None, Some(path)) => std::fs::read_to_string(path)
-            .map(Some)
-            .with_context(|| anyhow!("failed to read wait script file `{path}`")),
+        (None, Some(path)) => {
+            super::read_script_file_arg("--wait-script-file", Path::new(path)).map(Some)
+        }
         (None, None) => Ok(None),
     }
 }

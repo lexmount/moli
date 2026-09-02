@@ -11,7 +11,7 @@ use std::{
 };
 
 use crate::{
-    cli::{Cli, Commands, normalize_args_for_compat},
+    cli::{Cli, Commands, FetchArgs, normalize_args_for_compat},
     config::AppConfig,
     cookie_cache, eval_output, fetch_dump, robots,
 };
@@ -47,21 +47,14 @@ pub async fn run_cli_with_config<W: Write>(
 ) -> Result<()> {
     match cli.command {
         Commands::Fetch(mut args) => {
+            reject_multiple_stdin_script_sources(&args)?;
             let eval_expression = if let Some(path) = args.eval_file.as_deref() {
-                if path == Path::new("-") {
-                    let mut expression = String::new();
-                    std::io::stdin()
-                        .read_to_string(&mut expression)
-                        .context("failed to read --eval-file `-` from stdin")?;
-                    Some(expression)
-                } else {
-                    Some(std::fs::read_to_string(path).with_context(|| {
-                        format!("failed to read --eval-file `{}`", path.display())
-                    })?)
-                }
+                Some(read_script_file_arg("--eval-file", path)?)
             } else {
                 args.eval.take()
             };
+            let readiness =
+                ReadinessPlan::from_fetch_args(&args, config.fetch.response_wait.clone())?;
             let request = build_fetch_request(&args.url, &config)?;
             if config.browser.fetch().obey_robots() {
                 // Checked before the browser starts so a refused fetch costs
@@ -72,8 +65,6 @@ pub async fn run_cli_with_config<W: Write>(
             }
             let browser = Browser::new(config.browser.clone())?;
             load_cookie_state(&browser, &config)?;
-            let readiness =
-                ReadinessPlan::from_fetch_args(&args, config.fetch.response_wait.clone())?;
             let fetch_result = readiness.fetch_document(&browser, request).await;
             let fetched_document = match fetch_result {
                 Ok(document) => document,
@@ -175,6 +166,30 @@ pub async fn run_cli_with_config<W: Write>(
     }
 
     Ok(())
+}
+
+fn reject_multiple_stdin_script_sources(args: &FetchArgs) -> Result<()> {
+    if args.eval_file.as_deref() == Some(Path::new("-"))
+        && args.wait_script_file.as_deref() == Some("-")
+    {
+        return Err(anyhow!(
+            "`--eval-file -` and `--wait-script-file -` cannot both read from stdin"
+        ));
+    }
+    Ok(())
+}
+
+fn read_script_file_arg(option: &str, path: &Path) -> Result<String> {
+    if path == Path::new("-") {
+        let mut source = String::new();
+        std::io::stdin()
+            .read_to_string(&mut source)
+            .with_context(|| format!("failed to read {option} `-` from stdin"))?;
+        Ok(source)
+    } else {
+        std::fs::read_to_string(path)
+            .with_context(|| format!("failed to read {option} `{}`", path.display()))
+    }
 }
 
 fn build_fetch_request(url: &str, config: &AppConfig) -> Result<Request> {

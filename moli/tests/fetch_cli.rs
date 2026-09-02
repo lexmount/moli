@@ -40,6 +40,8 @@ mod anubis_deferred_module;
 mod disable_js;
 #[path = "fetch_cli/eval.rs"]
 mod eval;
+#[path = "fetch_cli/readiness.rs"]
+mod readiness;
 
 struct Output {
     status: OutputStatus,

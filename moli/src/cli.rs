@@ -123,8 +123,9 @@ pub struct FetchArgs {
     #[arg(long)]
     pub wait_script: Option<String>,
 
-    /// Read the JavaScript wait expression or function predicate from a file.
-    #[arg(long)]
+    /// Read the JavaScript wait expression or function predicate from a UTF-8
+    /// file, or from stdin when PATH is `-`.
+    #[arg(long, value_name = "PATH")]
     pub wait_script_file: Option<String>,
 
     #[arg(long, default_value_t = 0)]
