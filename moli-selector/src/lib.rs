@@ -56,7 +56,8 @@ pub use stylo::{
     StyloSourceStyleInvalidationTargetResultRecord, StyloStateInvalidationRoot,
     StyloStyleInvalidationQuery, StyloStyleInvalidationSnapshot,
     StyloStyleInvalidationSnapshotAttribute, StyloStyleSourceScope,
-    StyloStylesheetSourceScopeFallbackInput, is_svg_presentation_attribute_name,
+    StyloStylesheetSourceScopeFallbackInput, dom_api_selector_uses_validity_pseudo,
+    is_svg_presentation_attribute_name,
     stylo_attribute_change_can_skip_fallback_without_dependency,
     stylo_attribute_change_can_use_retained_invalidator, stylo_element_dependency_snapshot,
     stylo_fallback_roots_plan, stylo_flat_tree_heading_descendants,
@@ -80,7 +81,7 @@ pub use stylo::{
 
 use moli_dom::native::DomHost;
 use moli_dom::{NodeId, native::NativeDom};
-use std::sync::OnceLock;
+use std::{collections::HashMap, sync::OnceLock};
 
 // Temporary self-alias so the extracted module tree can keep compiling while
 // `moli` keeps its historical `crate::selector::*` references.
@@ -147,7 +148,17 @@ impl QueryEngine {
         host: &DomHost,
         selector: &str,
     ) -> Result<Option<NodeId>, SelectorError> {
-        self.adapter().query_selector(host, selector)
+        self.adapter().query_selector(host, selector, None)
+    }
+
+    pub fn query_selector_host_with_validity_states(
+        &self,
+        host: &DomHost,
+        selector: &str,
+        validity_states: &HashMap<NodeId, bool>,
+    ) -> Result<Option<NodeId>, SelectorError> {
+        self.adapter()
+            .query_selector(host, selector, Some(validity_states))
     }
 
     pub fn query_selector_all_host(
@@ -155,7 +166,17 @@ impl QueryEngine {
         host: &DomHost,
         selector: &str,
     ) -> Result<Vec<NodeId>, SelectorError> {
-        self.adapter().query_selector_all(host, selector)
+        self.adapter().query_selector_all(host, selector, None)
+    }
+
+    pub fn query_selector_all_host_with_validity_states(
+        &self,
+        host: &DomHost,
+        selector: &str,
+        validity_states: &HashMap<NodeId, bool>,
+    ) -> Result<Vec<NodeId>, SelectorError> {
+        self.adapter()
+            .query_selector_all(host, selector, Some(validity_states))
     }
 
     pub fn query_selector_in_host(
@@ -164,7 +185,18 @@ impl QueryEngine {
         root: NodeId,
         selector: &str,
     ) -> Result<Option<NodeId>, SelectorError> {
-        self.adapter().query_selector_in(host, root, selector)
+        self.adapter().query_selector_in(host, root, selector, None)
+    }
+
+    pub fn query_selector_in_host_with_validity_states(
+        &self,
+        host: &DomHost,
+        root: NodeId,
+        selector: &str,
+        validity_states: &HashMap<NodeId, bool>,
+    ) -> Result<Option<NodeId>, SelectorError> {
+        self.adapter()
+            .query_selector_in(host, root, selector, Some(validity_states))
     }
 
     pub fn query_selector_all_in_host(
@@ -173,7 +205,19 @@ impl QueryEngine {
         root: NodeId,
         selector: &str,
     ) -> Result<Vec<NodeId>, SelectorError> {
-        self.adapter().query_selector_all_in(host, root, selector)
+        self.adapter()
+            .query_selector_all_in(host, root, selector, None)
+    }
+
+    pub fn query_selector_all_in_host_with_validity_states(
+        &self,
+        host: &DomHost,
+        root: NodeId,
+        selector: &str,
+        validity_states: &HashMap<NodeId, bool>,
+    ) -> Result<Vec<NodeId>, SelectorError> {
+        self.adapter()
+            .query_selector_all_in(host, root, selector, Some(validity_states))
     }
 
     pub fn matches_host(
@@ -182,7 +226,18 @@ impl QueryEngine {
         node_id: NodeId,
         selector: &str,
     ) -> Result<bool, SelectorError> {
-        self.adapter().matches(host, node_id, selector)
+        self.adapter().matches(host, node_id, selector, None)
+    }
+
+    pub fn matches_host_with_validity_states(
+        &self,
+        host: &DomHost,
+        node_id: NodeId,
+        selector: &str,
+        validity_states: &HashMap<NodeId, bool>,
+    ) -> Result<bool, SelectorError> {
+        self.adapter()
+            .matches(host, node_id, selector, Some(validity_states))
     }
 
     pub fn matches_with_scope_host(
@@ -193,7 +248,7 @@ impl QueryEngine {
         scope_root: NodeId,
     ) -> Result<bool, SelectorError> {
         self.adapter()
-            .matches_with_scope(host, node_id, selector, scope_root)
+            .matches_with_scope(host, node_id, selector, scope_root, None)
     }
 
     pub fn closest_host(
@@ -202,7 +257,18 @@ impl QueryEngine {
         start: NodeId,
         selector: &str,
     ) -> Result<Option<NodeId>, SelectorError> {
-        self.adapter().closest(host, start, selector)
+        self.adapter().closest(host, start, selector, None)
+    }
+
+    pub fn closest_host_with_validity_states(
+        &self,
+        host: &DomHost,
+        start: NodeId,
+        selector: &str,
+        validity_states: &HashMap<NodeId, bool>,
+    ) -> Result<Option<NodeId>, SelectorError> {
+        self.adapter()
+            .closest(host, start, selector, Some(validity_states))
     }
 
     pub fn query_selector(
