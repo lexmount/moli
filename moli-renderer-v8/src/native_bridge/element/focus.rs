@@ -511,6 +511,22 @@ pub(super) fn run_dialog_focusing_steps(
     }
 }
 
+pub(super) fn apply_modal_dialog_focus_fixup(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut PageScriptHost,
+    dialog: DomHandle,
+) {
+    let should_clear_focus = {
+        let runtime = unsafe { &*runtime_ptr };
+        runtime
+            .active_element_handle()
+            .is_some_and(|active| !shadow_including_contains(runtime, dialog, active))
+    };
+    if should_clear_focus {
+        update_focus(scope, runtime_ptr, None);
+    }
+}
+
 fn blur_if_focused_chain_is_display_none_callback(
     scope: &mut v8::PinScope<'_, '_>,
     _args: v8::FunctionCallbackArguments<'_>,
