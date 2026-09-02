@@ -1238,76 +1238,90 @@ fn parser_owner_style_import_handoff_is_stylesheet_gated_on_live_page_vm() {
         .expect("current-thread runtime should build");
 
     runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
-            let _js_runtime = crate::JsRuntime::initialize();
-            let final_url = Url::parse("https://example.test/").expect("test url");
-            let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("default loader");
-            let mut state = ParseTimeDriverState::new_with_scripting_enabled_for_test(final_url);
-            let parser_dom_host = state.parser_session.stream_handle().borrow_mut().take_parser_stream_dom_host();
-            let local_executor = JsLocalExecutor::new();
-            let mut page_vm = PageVm::new(
-                PageId::new_for_testing(1),
-                local_executor,
-                &loader,
-                &PageVmEnvConfig {
-            web_storage: crate::RendererWebStorageHandles::ephemeral(),
-                    root_frame_id: None,
-                    main_document_commit: None,
-                    top_level_storage_key: None,
-                    document_start_scripts: vec![],
-                    runtime_bindings: vec![],
-                    runtime_inspector_session_restore_snapshots: vec![],
-                    runtime_isolated_worlds: vec![],
-                    permission_overrides: vec![],
-                    extra_http_headers: Default::default(),
-                    navigator_identity: Default::default(),
-                    document_policy_container: Default::default(),
-                    document_default_language: None,
-                    document_last_modified: None,
-                    script_execution_disabled: false,
-                    bypass_content_security_policy: false,
-                    emulated_media: crate::protocol_types::EmulatedMediaOverrides::default(),
-                    idle_override: None,
-                    navigator_overrides: Default::default(),
-                    viewport_surface: None,
-                    document_activity: Default::default(),
-                    network_offline: false,
-                    blocked_url_patterns: Vec::new(),
-                indexed_db_manager: None,
-            storage_bucket_store: None,
-                    fetch_subresource_interception_enabled: false,
-                    fetch_subresource_interception_resource_type: None,
-                    layout_policy: moli_page_types::LayoutPolicy::default(),
-                    wpt_extensions_enabled: false,
-                navigation_bootstrap_entry: None,
-            reserved_service_worker_client_id: None,
-                },
-            PageVmRuntimeHooks::standalone_without_owner_reservation_for_test(),
-                parser_dom_host,
-                Instant::now(),
+        let _js_runtime = crate::JsRuntime::initialize();
+        let final_url = Url::parse("https://example.test/").expect("test url");
+        let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("default loader");
+        let mut state = ParseTimeDriverState::new_with_scripting_enabled_for_test(final_url);
+        let parser_dom_host = state.parser_session.stream_handle().borrow_mut().take_parser_stream_dom_host();
+        let local_executor = JsLocalExecutor::new();
+        let mut page_vm = PageVm::new(
+            PageId::new_for_testing(1),
+            local_executor,
+            &loader,
+            &PageVmEnvConfig {
+        web_storage: crate::RendererWebStorageHandles::ephemeral(),
+                root_frame_id: None,
+                main_document_commit: None,
+                top_level_storage_key: None,
+                document_start_scripts: vec![],
+                runtime_bindings: vec![],
+                runtime_inspector_session_restore_snapshots: vec![],
+                runtime_isolated_worlds: vec![],
+                permission_overrides: vec![],
+                extra_http_headers: Default::default(),
+                navigator_identity: Default::default(),
+                document_policy_container: Default::default(),
+                document_default_language: None,
+                document_last_modified: None,
+                script_execution_disabled: false,
+                bypass_content_security_policy: false,
+                emulated_media: crate::protocol_types::EmulatedMediaOverrides::default(),
+                idle_override: None,
+                navigator_overrides: Default::default(),
+                viewport_surface: None,
+                document_activity: Default::default(),
+                network_offline: false,
+                blocked_url_patterns: Vec::new(),
+            indexed_db_manager: None,
+        storage_bucket_store: None,
+                fetch_subresource_interception_enabled: false,
+                fetch_subresource_interception_resource_type: None,
+                layout_policy: moli_page_types::LayoutPolicy::default(),
+                wpt_extensions_enabled: false,
+            navigation_bootstrap_entry: None,
+        reserved_service_worker_client_id: None,
+            },
+        PageVmRuntimeHooks::standalone_without_owner_reservation_for_test(),
+            parser_dom_host,
+            Instant::now(),
+        )
+        .expect("page vm");
+        let mut driver = ParserDriver {
+            loader: &loader,
+            final_url: &state.final_url,
+            parser_session: &mut state.parser_session,
+            scheduler: &mut state.scheduler,
+            buffered_document_preloads: &mut state.buffered_document_preloads,
+            service_worker_preload_context: state.service_worker_preload_context.as_ref(),
+            input_closed: &state.input_closed,
+        };
+
+        let outcome = driver
+            .advance_parser_step(
+                &mut page_vm,
+                "<!doctype html><html><head><style id='blocking-style'>@import url('/style.css');</style><script>window.afterStyle = true;</script></head></html>",
+                None,
             )
-            .expect("page vm");
-            let mut driver = ParserDriver {
-                loader: &loader,
-                final_url: &state.final_url,
-                parser_session: &mut state.parser_session,
-                scheduler: &mut state.scheduler,
-                buffered_document_preloads: &mut state.buffered_document_preloads,
-                service_worker_preload_context: state.service_worker_preload_context.as_ref(),
-                input_closed: &state.input_closed,
-            };
+            .await
+            .expect("parser step should complete");
 
-            let outcome = driver
-                .advance_parser_step(
-                    &mut page_vm,
-                    "<!doctype html><html><head><style>@import url('/style.css');</style><script>window.afterStyle = true;</script></head></html>",
-                    None,
-                )
-                .await
-                .expect("parser step should complete");
-
-            assert!(
-                matches!(outcome, ParserStepAdvanceOutcome::BlockedOnStylesheet(_)),
-                "parser-created style import should gate parser-blocking script on live PageVm"
-            );
-        }));
+        assert!(
+            matches!(outcome, ParserStepAdvanceOutcome::BlockedOnStylesheet(_)),
+            "parser-created style import should gate parser-blocking script on live PageVm"
+        );
+        let style = page_vm
+            .vm()
+            .document_runtime
+            .dom_host()
+            .element_handle_by_id("blocking-style")
+            .expect("parser-created style owner");
+        assert_eq!(
+            page_vm
+                .vm()
+                .document_runtime
+                .pending_style_import_binding_for_test(style),
+            Some((1, true)),
+            "the parser-discovered import must bind its live stylesheet root before the script gate is released"
+        );
+    }));
 }
