@@ -304,9 +304,9 @@ pub(super) fn heap_profiler_action_protocol_method(action: HeapProfilerAction) -
         HeapProfilerAction::StopSampling => "HeapProfiler.stopSampling",
         HeapProfilerAction::StopTrackingHeapObjects => "HeapProfiler.stopTrackingHeapObjects",
         HeapProfilerAction::TakeHeapSnapshot => "HeapProfiler.takeHeapSnapshot",
-        HeapProfilerAction::MoliDiagnostics | HeapProfilerAction::MoliResetIdleEngine => {
-            "HeapProfiler.moliExtension"
-        }
+        HeapProfilerAction::MoliDiagnostics
+        | HeapProfilerAction::MoliAllocatorStats
+        | HeapProfilerAction::MoliResetIdleEngine => "HeapProfiler.moliExtension",
     }
 }
 

@@ -3302,6 +3302,7 @@ dependencies = [
  "serde_path_to_error",
  "strum",
  "thiserror",
+ "tikv-jemalloc-sys",
  "time",
  "tokio",
  "tokio-tungstenite",

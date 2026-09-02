@@ -11,6 +11,9 @@ pub(crate) fn try_start_heap_profiler_command_dispatch(
     cmd: &Cmd<'_>,
 ) -> Option<RuntimeCommandTaskStep> {
     match cmd.parse_action::<HeapProfilerAction>() {
+        Some(HeapProfilerAction::MoliAllocatorStats) => Some(RuntimeCommandTaskStep::Complete(
+            CommandOutputPlan::result(conn.moli_allocator_stats_for_diagnostics()),
+        )),
         Some(HeapProfilerAction::MoliDiagnostics) => {
             Some(start_moli_diagnostics_command_dispatch(conn, cmd))
         }

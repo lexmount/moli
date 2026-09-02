@@ -12,6 +12,7 @@ path = "src/main.rs"
 default = ["jemalloc"]
 ace-protocol = ["moli-protocol-server/ace-protocol"]
 jemalloc = ["dep:tikv-jemalloc-sys", "dep:tikv-jemallocator"]
+memory-diagnostics = ["jemalloc", "moli-protocol/jemalloc-prof-diagnostics"]
 
 [dependencies]
 anyhow = "1.0.100"
