@@ -142,6 +142,27 @@ impl JsContextHost {
             .frame_viewport(frame)
     }
 
+    pub(crate) fn invalidate_published_frame_viewports(
+        &self,
+        frames: impl IntoIterator<Item = DomHandle>,
+    ) {
+        let frames = frames.into_iter().collect::<Vec<_>>();
+        if frames.is_empty() {
+            return;
+        }
+        let changed = {
+            let mut state = self.document_layout_state.borrow_mut();
+            let changed =
+                state.update_frame_viewports(frames.into_iter().map(|frame| (frame, None)));
+            state.clear_latest_layout();
+            changed
+        };
+        if changed {
+            self.style_viewport_generation
+                .set(self.style_viewport_generation.get().saturating_add(1));
+        }
+    }
+
     #[cfg(debug_assertions)]
     pub(crate) fn style_viewport_generation(&self) -> u64 {
         self.style_viewport_generation.get()
