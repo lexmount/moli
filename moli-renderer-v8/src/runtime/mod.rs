@@ -392,7 +392,7 @@ pub use self::page_surface::{
     RendererRuntimeInspectorProtocolMessage, RendererRuntimeInspectorResponseChannel,
     RendererRuntimeInspectorResponseSender, RendererRuntimeObservableSourceItem,
     RendererRuntimeObservableSourceSummary, RendererRuntimeRealmInfo, RendererRuntimeRemoteObject,
-    RendererRuntimeRemoteObjectResolution, RendererScriptExecutionMemoryDiagnostics,
+    RendererRuntimeRemoteObjectResolution, RendererScriptExecutionMemoryDiagnostics, RendererScriptPreloadMemoryDiagnostics,
     RendererScriptSourceMemoryDiagnostics, RendererScrollIntoViewResult,
     RendererServiceWorkerConsoleMessage, RendererServiceWorkerExceptionMessage,
     RendererServiceWorkerFetchDiagnostic, RendererServiceWorkerFetchDiagnosticResult,

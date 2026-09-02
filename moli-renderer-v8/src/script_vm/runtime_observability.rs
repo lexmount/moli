@@ -451,6 +451,9 @@ impl ScriptVm {
                 v8_foreground_task_wake_external_policy: "post-turn-runtime-output",
             },
             script_execution: self.script_execution_memory.to_diagnostics(),
+            script_preloads: self
+                .document_runtime
+                .main_document_script_preload_memory_diagnostics(),
         }
     }
 

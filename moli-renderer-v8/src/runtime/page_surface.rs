@@ -1948,6 +1948,20 @@ pub struct RendererScriptExecutionMemoryDiagnostics {
     pub largest_sources: Vec<RendererScriptSourceMemoryDiagnostics>,
 }
 
+#[derive(Debug, Clone, Default, serde::Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RendererScriptPreloadMemoryDiagnostics {
+    pub entry_count: usize,
+    pub pending_count: usize,
+    pub completed_count: usize,
+    pub successful_count: usize,
+    pub decoded_source_bytes: usize,
+    pub source_bytes: usize,
+    pub response_body_bytes: usize,
+    pub load_strong_references: usize,
+    pub response_strong_references: usize,
+}
+
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct RendererMoliMemoryDiagnostics {
@@ -1955,6 +1969,7 @@ pub struct RendererMoliMemoryDiagnostics {
     pub dom: RendererMoliDomMemoryDiagnostics,
     pub runtime: RendererMoliRuntimeMemoryDiagnostics,
     pub script_execution: RendererScriptExecutionMemoryDiagnostics,
+    pub script_preloads: RendererScriptPreloadMemoryDiagnostics,
 }
 
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
