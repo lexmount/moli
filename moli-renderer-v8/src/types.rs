@@ -287,7 +287,10 @@ pub(super) struct ImageRequestKey {
 impl ImageRequestKey {
     pub(super) fn with_density(url: String, cors_mode: ImageRequestCorsMode, density: f64) -> Self {
         let density = if density == 0.0 { 0.0 } else { density };
-        debug_assert!(density.is_finite() && density >= 0.0);
+        // A width descriptor divided by a zero source size has positive
+        // infinite density. Preserve it so the image's natural dimensions
+        // become zero instead of incorrectly falling back to 1x.
+        debug_assert!(!density.is_nan() && density >= 0.0);
         Self {
             url,
             cors_mode,
@@ -1626,6 +1629,13 @@ mod tests {
             ImageRequestKey::with_density(url, ImageRequestCorsMode::NoCors, 2.0),
             "responsive-image identity must include the selected candidate density"
         );
+
+        let infinite_density = ImageRequestKey::with_density(
+            "https://example.test/zero-source-size.png".to_owned(),
+            ImageRequestCorsMode::NoCors,
+            f64::INFINITY,
+        );
+        assert!(infinite_density.density().is_infinite());
     }
 
     #[test]

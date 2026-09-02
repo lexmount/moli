@@ -1343,4 +1343,14 @@ mod tests {
         assert_eq!(selected.url, "retina.png");
         assert_eq!(selected.density, 2.0);
     }
+
+    #[test]
+    fn srcset_zero_source_size_produces_infinite_density() {
+        let selected =
+            selected_srcset_candidate("image.png 256w", Some("0px"), None, false, TEST_VIEWPORT)
+                .expect("a responsive image candidate");
+
+        assert_eq!(selected.url, "image.png");
+        assert!(selected.density.is_infinite());
+    }
 }
