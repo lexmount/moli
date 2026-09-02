@@ -432,10 +432,14 @@ fn serialize_cssom_style_rule_selector_text(
 ) -> String {
     let prefixes_matching_default_namespace =
         namespace_context.prefixes_matching_default_namespace();
-    cssom_selector::serialize_cssom_selector_text(
+    cssom_selector::serialize_cssom_selector_text_preserving_invalid_forgiving_items(
         selector,
         namespace_context.has_default_namespace(),
         &prefixes_matching_default_namespace,
+        |candidate| {
+            stylo::validate_supports_selector_list_with_namespaces(candidate, namespace_context)
+                .is_ok()
+        },
     )
     .unwrap_or_else(|| selector.to_owned())
 }
