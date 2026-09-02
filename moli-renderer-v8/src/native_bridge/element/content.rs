@@ -13,6 +13,7 @@ use super::super::{
     JsContextHost, document::set_detached_text_replacement_value,
     node::node_runtime_and_handle_from_object_or_detached, throw_dom_exception,
 };
+use super::geometry::observable_client_rects;
 use super::{
     html_element_getter_receiver, html_element_setter_receiver, observable_sources_with_fragments,
     property_string_value,
@@ -817,6 +818,29 @@ fn node_inner_text(
         return Ok(String::new());
     }
     if rendered_state.box_state() == ElementBoxState::NoBox {
+        return Ok(node.text_content(runtime.dom_host().dom()));
+    }
+    // The lightweight rendered-state path derives box presence from computed
+    // display values. A selectedcontent element can still have no box when
+    // its native select ancestor suppresses author children. Consult the
+    // actual layout surface for this control-specific boundary so innerText
+    // follows its required textContent fallback. Once a customizable select
+    // produces real child boxes, its non-empty rect list keeps it on the
+    // normal rendered-text path.
+    if runtime
+        .dom_host()
+        .selectedcontent_nearest_ancestor_select(handle)
+        .is_some()
+        && rendered_state
+            .target_style()
+            .is_some_and(|style| style.display != ComputedDisplayKind::Contents)
+        && observable_client_rects(
+            runtime,
+            handle,
+            moli_layout::LayoutFlushReason::SynchronousGeometry,
+        )?
+        .is_empty()
+    {
         return Ok(node.text_content(runtime.dom_host().dom()));
     }
 
