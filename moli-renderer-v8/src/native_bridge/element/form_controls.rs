@@ -58,6 +58,12 @@ pub(super) struct HtmlLegendElementPrototypeDeclaration {
 pub(super) struct HtmlButtonElementValuePrototypeDeclaration {
     #[webapi(
         accessor_property,
+        getter = button_command_getter_function,
+        setter = button_command_setter_function
+    )]
+    command: (),
+    #[webapi(
+        accessor_property,
         getter = button_disabled_getter_function,
         setter = button_disabled_setter_function
     )]
