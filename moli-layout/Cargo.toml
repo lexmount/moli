@@ -8,7 +8,7 @@ license = "MIT OR Apache-2.0"
 euclid = "=0.22.14"
 kurbo = "=0.13.1"
 moli-image = { path = "../moli-image" }
-parley = { git = "https://github.com/ldm0/parley.git", rev = "1b563e95cd7c96c4e721d702204f9ea0d729a4f0" }
+parley = { git = "https://github.com/ldm0/parley.git", rev = "7d4bab993c96505ba2ee2104a8807d6d7cee071c" }
 parking_lot = "0.12"
 skrifa = "=0.44.0"
 stylo = "0.20"

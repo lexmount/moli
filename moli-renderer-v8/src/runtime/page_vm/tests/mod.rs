@@ -133,6 +133,7 @@ mod history_traversal;
 mod image_load_event;
 mod image_root_coordinates;
 mod indexed_db;
+mod inline_intrinsic_sizing;
 mod inline_svg_paint;
 mod internal_loading_completion;
 mod intrinsic_percentage_resolution;
