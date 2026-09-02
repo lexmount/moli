@@ -4016,6 +4016,66 @@ fn text_value_change_invalidates_validity_computed_style() {
         "rgb(0, 128, 0),rgb(255, 0, 0)|rgb(255, 0, 0),rgb(0, 0, 255)"
     );
 }
+
+#[test]
+fn child_list_change_invalidates_form_and_fieldset_validity_computed_style() {
+    let mut vm = new_parsed_test_vm(
+        "https://computed-style-validity-child-list-invalidation.test/",
+        r#"<!doctype html><html><head><style>
+          form, fieldset { background-color: rgb(0, 128, 0); }
+          form:invalid, fieldset:invalid { background-color: rgb(0, 255, 0); }
+          .target { color: rgb(255, 0, 0); }
+          #form:invalid + #form-target { color: rgb(0, 0, 255); }
+          #fieldset:invalid + #fieldset-target { color: rgb(1, 2, 3); }
+        </style></head><body>
+          <form id="form"></form><span id="form-target" class="target"></span>
+          <fieldset id="fieldset"></fieldset><span id="fieldset-target" class="target"></span>
+        </body></html>"#,
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const form = document.getElementById('form');
+  const fieldset = document.getElementById('fieldset');
+  const formTarget = document.getElementById('form-target');
+  const fieldsetTarget = document.getElementById('fieldset-target');
+  const invalid = document.createElement('input');
+  invalid.type = 'number';
+  invalid.min = '8';
+  invalid.value = '4';
+  const state = () => [
+    getComputedStyle(form).backgroundColor,
+    getComputedStyle(formTarget).color,
+    getComputedStyle(fieldset).backgroundColor,
+    getComputedStyle(fieldsetTarget).color
+  ].join(',');
+
+  const initial = state();
+  form.append(invalid);
+  const inForm = state();
+  fieldset.append(invalid);
+  const inFieldset = state();
+  invalid.remove();
+  const removed = state();
+  return [initial, inForm, inFieldset, removed].join('|');
+})()
+"#,
+        )
+        .expect("child-list validity invalidation should evaluate");
+
+    assert_eq!(
+        result,
+        concat!(
+            "rgb(0, 128, 0),rgb(255, 0, 0),rgb(0, 128, 0),rgb(255, 0, 0)|",
+            "rgb(0, 255, 0),rgb(0, 0, 255),rgb(0, 128, 0),rgb(255, 0, 0)|",
+            "rgb(0, 128, 0),rgb(255, 0, 0),rgb(0, 255, 0),rgb(1, 2, 3)|",
+            "rgb(0, 128, 0),rgb(255, 0, 0),rgb(0, 128, 0),rgb(255, 0, 0)"
+        )
+    );
+}
+
 #[test]
 fn text_value_change_invalidates_range_computed_style() {
     let mut vm = new_storage_test_vm("https://computed-style-range-invalidation.test/");

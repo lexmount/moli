@@ -2224,10 +2224,33 @@ impl JsContextHost {
             .collect()
     }
 
+    fn validity_containers_for_child_list_mutations(
+        &self,
+        effects: &[StyleMutationEffect],
+    ) -> Vec<DomHandle> {
+        let mut containers = Vec::new();
+        for effect in effects {
+            let StyleMutationEffect::ChildList { parent, .. } = effect else {
+                continue;
+            };
+            let mut current = Some(*parent);
+            while let Some(handle) = current {
+                if self.dom_host().is_html_element_named(handle, "form")
+                    || self.dom_host().is_html_element_named(handle, "fieldset")
+                {
+                    push_unique_handle(&mut containers, handle);
+                }
+                current = self.dom_host().parent_node(handle);
+            }
+        }
+        containers
+    }
+
     pub(crate) fn note_style_mutation_effects(&mut self, effects: &[StyleMutationEffect]) {
         if style_mutation_effects_affect_layout_metric(effects) {
             self.clear_layout_rect_cache();
         }
+        let validity_containers = self.validity_containers_for_child_list_mutations(effects);
         let dom_host = self.dom_host() as *const _;
         let emulated_media = self.emulated_media().clone();
         let viewport = self.style_viewport();
@@ -2237,6 +2260,16 @@ impl JsContextHost {
             &emulated_media,
             viewport,
         );
+        for container in validity_containers {
+            // Child-list effects are produced after the tree splice, so the
+            // previous aggregate validity is unavailable. An absent old state
+            // deliberately selects the conservative state invalidation path.
+            self.note_element_state_style_activity_with_old_state(
+                container,
+                StyloElementState::VALIDITY_STATES,
+                None,
+            );
+        }
     }
 
     pub(crate) fn note_element_inline_style_subtree_activity(&mut self, root: DomHandle) {
