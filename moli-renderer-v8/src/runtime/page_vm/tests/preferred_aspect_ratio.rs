@@ -122,6 +122,75 @@ document.body.innerHTML = `
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn screenshot_normalizes_border_box_insets_before_ratio_sizing() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/border-box-aspect-ratio-floor.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0}
+.item{box-sizing:border-box;border:20px solid blue;display:block}
+.horizontal{aspect-ratio:2/1}
+.vertical{aspect-ratio:1/2}
+.spacer{margin-bottom:10px}
+</style>`;
+const source='data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyMCIgaGVpZ2h0PSI1MCI+PC9zdmc+';
+document.body.innerHTML = `
+<img class="item horizontal" id="image-height" style="width:auto;height:20px" src="${source}">
+<img class="item horizontal" id="image-max-height" style="width:auto;max-height:20px" src="${source}">
+<img class="item vertical" id="image-width" style="height:auto;width:20px" src="${source}">
+<img class="item vertical" id="image-max-width" style="height:auto;max-width:20px" src="${source}">
+<div class="item horizontal spacer" id="block-height" style="width:auto;height:20px"></div>
+<div class="item horizontal spacer" id="block-max-height" style="width:auto;max-height:20px"></div>
+<div class="item vertical spacer" id="block-width" style="height:auto;width:20px"></div>
+<div class="item vertical" id="block-max-width" style="height:auto;max-width:20px"></div>`;
+'installed'
+"#,
+        )?;
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                "[...document.images].every(image=>image.complete&&image.naturalWidth===20&&image.naturalHeight===50)",
+            )?,
+            "true",
+            "the replaced fixtures must expose their natural sizes before layout",
+        );
+        page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(320, 640, 1.0))?
+            .expect("border-box aspect-ratio fixture must retain a layout root");
+
+        let geometry = page_vm.vm_mut().eval(
+            r#"JSON.stringify(Object.fromEntries([...document.querySelectorAll('[id]')].map(element=>{const rect=element.getBoundingClientRect();return [element.id,[rect.width,rect.height]]})))"#,
+        )?;
+        let geometry: serde_json::Value = serde_json::from_str(&geometry)?;
+        for id in ["image-height", "image-max-height", "block-height", "block-max-height"] {
+            assert_eq!(
+                geometry[id],
+                serde_json::json!([80, 40]),
+                "horizontal ratio must use the inset-floored block size: {geometry}",
+            );
+        }
+        for id in ["image-width", "image-max-width", "block-width", "block-max-width"] {
+            assert_eq!(
+                geometry[id],
+                serde_json::json!([40, 80]),
+                "vertical ratio must use the inset-floored inline size: {geometry}",
+            );
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("border-box aspect-ratio floor fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn screenshot_recomputes_flex_ratio_cross_size_from_the_final_main_size() {
     run_page_vm_async_test(async move {
         let loader =

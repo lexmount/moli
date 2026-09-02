@@ -186,6 +186,20 @@ fn ratio_basis_scale(constrained: f32, original: f32, inset: f32, sizing_box: Bo
     }
 }
 
+fn resolve_replaced_content_box_size(
+    value: Size<taffy::Dimension>,
+    percentage_basis: Size<Option<f32>>,
+    border_box_adjustment: Size<f32>,
+) -> Size<Option<f32>> {
+    value
+        .maybe_resolve(percentage_basis, resolve_stylo_calc_value)
+        .maybe_sub(border_box_adjustment)
+        // The replaced sizing algorithm works in content-box coordinates.
+        // A border-box length smaller than its padding and border therefore
+        // has a zero content size, never a negative one.
+        .maybe_max(Size::ZERO)
+}
+
 pub(crate) fn measure_replaced(
     known_dimensions: Size<Option<f32>>,
     parent_size: Size<Option<f32>>,
@@ -252,23 +266,17 @@ pub(crate) fn measure_replaced(
             parent_size.height
         },
     };
-    let mut preferred_size = style
-        .size
-        .maybe_resolve(preferred_basis, resolve_stylo_calc_value)
-        .maybe_sub(box_sizing_adjustment);
-    let mut min_size = style
-        .min_size
-        .maybe_resolve(parent_size, resolve_stylo_calc_value)
-        .maybe_sub(box_sizing_adjustment);
+    let mut preferred_size =
+        resolve_replaced_content_box_size(style.size, preferred_basis, box_sizing_adjustment);
+    let mut min_size =
+        resolve_replaced_content_box_size(style.min_size, parent_size, box_sizing_adjustment);
     // Available space is not an implicit `max-width`/`max-height`. Blink
     // resolves a replaced atomic inline's used size before line breaking and
     // lets an oversized result overflow; only authored max-size constraints
     // belong in this clamp.
-    let mut max_size = style
-        .max_size
-        .maybe_resolve(preferred_basis, resolve_stylo_calc_value)
-        .maybe_sub(box_sizing_adjustment)
-        .maybe_max(min_size);
+    let mut max_size =
+        resolve_replaced_content_box_size(style.max_size, preferred_basis, box_sizing_adjustment)
+            .maybe_max(min_size);
 
     // Intrinsic sizing keywords observe the same overridden natural
     // dimension. This is separate from explicit CSS and HTML dimensions,
@@ -331,12 +339,15 @@ pub(crate) fn measure_replaced(
     }
 
     if known_dimensions.width.is_some() || known_dimensions.height.is_some() {
-        let style_max_size = style
-            .max_size
-            .maybe_resolve(preferred_basis, resolve_stylo_calc_value)
-            .maybe_sub(box_sizing_adjustment)
-            .maybe_max(min_size);
-        let content_known = known_dimensions.maybe_sub(padding_border_sum);
+        let style_max_size = resolve_replaced_content_box_size(
+            style.max_size,
+            preferred_basis,
+            box_sizing_adjustment,
+        )
+        .maybe_max(min_size);
+        let content_known = known_dimensions
+            .maybe_sub(padding_border_sum)
+            .maybe_max(Size::ZERO);
         let transferred = apply_aspect_ratio_to_content_size(
             content_known.maybe_clamp(min_size, style_max_size),
             resolved_aspect_ratio,
@@ -595,9 +606,12 @@ mod tests {
         assert_eq!(zero_height.inherent_ratio, Some(0.5));
     }
 
-    fn measure(style: &taffy::Style<Atom>) -> Size<f32> {
+    fn measure_with_known_dimensions(
+        known_dimensions: Size<Option<f32>>,
+        style: &taffy::Style<Atom>,
+    ) -> Size<f32> {
         measure_replaced(
-            Size::NONE,
+            known_dimensions,
             Size::NONE,
             Size {
                 width: AvailableSpace::MaxContent,
@@ -614,6 +628,10 @@ mod tests {
             SizingMode::InherentSize,
             RequestedAxis::Both,
         )
+    }
+
+    fn measure(style: &taffy::Style<Atom>) -> Size<f32> {
+        measure_with_known_dimensions(Size::NONE, style)
     }
 
     fn measure_with_containment(
@@ -806,6 +824,65 @@ mod tests {
                 width: 100.0,
                 height: 60.0,
             }
+        );
+    }
+
+    #[test]
+    fn border_box_max_constraints_cannot_squash_insets_before_ratio_sizing() {
+        let border = taffy::Rect {
+            left: taffy::LengthPercentage::length(20.0),
+            right: taffy::LengthPercentage::length(20.0),
+            top: taffy::LengthPercentage::length(20.0),
+            bottom: taffy::LengthPercentage::length(20.0),
+        };
+        let horizontal = taffy::Style::<Atom> {
+            box_sizing: BoxSizing::BorderBox,
+            max_size: Size {
+                width: taffy::Dimension::auto(),
+                height: taffy::Dimension::length(20.0),
+            },
+            border,
+            aspect_ratio: Some(2.0),
+            ..taffy::Style::default()
+        };
+        let vertical = taffy::Style::<Atom> {
+            box_sizing: BoxSizing::BorderBox,
+            max_size: Size {
+                width: taffy::Dimension::length(20.0),
+                height: taffy::Dimension::auto(),
+            },
+            border,
+            aspect_ratio: Some(0.5),
+            ..taffy::Style::default()
+        };
+
+        assert_eq!(
+            measure(&horizontal),
+            Size {
+                width: 80.0,
+                height: 40.0
+            }
+        );
+        assert_eq!(
+            measure(&vertical),
+            Size {
+                width: 40.0,
+                height: 80.0
+            }
+        );
+        assert_eq!(
+            measure_with_known_dimensions(
+                Size {
+                    width: None,
+                    height: Some(20.0),
+                },
+                &horizontal,
+            ),
+            Size {
+                width: 80.0,
+                height: 40.0,
+            },
+            "a parent-owned border-box size must obey the same inset floor",
         );
     }
 
