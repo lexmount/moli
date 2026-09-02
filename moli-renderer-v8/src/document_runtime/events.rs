@@ -539,7 +539,12 @@ impl DocumentRuntime {
         let composed = event
             .get(scope, v8str(scope, "composed").into())
             .is_some_and(|value| value.boolean_value(scope));
-        let mut path = if let Some(source_target) =
+        // A caller-created composed event is not confined to the tree that
+        // contains its reference source. Its path crosses shadow boundaries
+        // normally while `source` is retargeted for each listener.
+        let mut path = if composed {
+            self.build_propagation_path(dispatch_target, composed)
+        } else if let Some(source_target) =
             source_target_for_reference_event(scope, host_ptr, event)
         {
             self.build_source_scoped_propagation_path(dispatch_target, source_target)
