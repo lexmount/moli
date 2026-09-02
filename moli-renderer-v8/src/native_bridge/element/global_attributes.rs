@@ -2563,7 +2563,7 @@ pub(in crate::native_bridge) fn node_inert_getter_function<'s>(
         throw_incompatible_getter_receiver(scope, "HTMLElement", "inert");
         return;
     }
-    rv.set_bool(element_attribute(runtime, handle, "inert").is_some());
+    rv.set_bool(element_has_attribute(runtime, handle, "inert"));
 }
 
 pub(in crate::native_bridge) fn node_inert_setter_function<'s>(
