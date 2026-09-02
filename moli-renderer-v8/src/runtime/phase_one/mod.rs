@@ -635,6 +635,35 @@ html, body, main { display: block; margin: 0 }
     }
 
     #[test]
+    fn layout_renderer_uses_the_initial_containing_block_for_orthogonal_inline_percentages() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html, body { display: block; margin: 0; padding: 0 }
+html { scrollbar-width: none }
+#subject {
+  writing-mode: vertical-lr;
+  inline-size: 100%;
+  block-size: 20px;
+  background: rgb(13, 73, 173);
+}
+</style></head><body><div id="subject"></div></body></html>"#,
+            )
+            .await;
+
+            assert_paint_rect(
+                solid_paint_rect(&snapshot, rgb(13, 73, 173)),
+                moli_layout::PaintRect::new(0.0, 0.0, 20.0, 600.0),
+            );
+        }));
+    }
+
+    #[test]
     fn layout_renderer_computes_phase_two_grid_calc_and_positioned_geometry_from_stylo() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
