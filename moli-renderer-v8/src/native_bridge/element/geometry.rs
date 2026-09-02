@@ -11,7 +11,7 @@ pub use client_rect::ClientRect;
 #[cfg(test)]
 pub(crate) use hit_test::observable_scrollbar_hit_test;
 pub(crate) use hit_test::{
-    InputSurfaceHit, input_surface_hit_test, observable_deep_hit_test, observable_hit_test,
+    element_is_inert_for_hit_testing, InputSurfaceHit, input_surface_hit_test, observable_deep_hit_test, observable_hit_test,
     observable_input_hit_test,
 };
 pub(in crate::native_bridge) use metrics::{
