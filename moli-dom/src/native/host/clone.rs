@@ -554,8 +554,12 @@ impl DomHost {
         let _ = clone_element
             .set_custom_element_is_name(element.custom_element_is_name().map(str::to_owned));
         let _ = clone_element.mark_undefined_custom_element_candidate_from_identity();
-        let _ = clone_element
-            .set_input_value_with_dirty(&element.input_value(), element.input_value_dirty());
+        let input_value = element.input_value();
+        let _ = if element.input_value_user_edited() {
+            clone_element.set_input_value_from_user_edit(&input_value)
+        } else {
+            clone_element.set_input_value_with_dirty(&input_value, element.input_value_dirty())
+        };
         let _ = clone_element.set_checked_with_dirty(element.checked(), element.checked_dirty());
         let _ = clone_element.set_selected(element.selected());
         let _ = clone_element.set_indeterminate(element.indeterminate());
@@ -638,6 +642,25 @@ mod tests {
         assert_eq!(clone.script_text_internal_slot(), "");
         assert!(!clone.script_children_changed_by_api());
         assert!(clone.script_already_started());
+    }
+
+    #[test]
+    fn text_control_clone_preserves_user_edited_value_provenance() {
+        let mut host = test_host();
+        for tag in ["input", "textarea"] {
+            let source = host.create_element(tag);
+            assert!(host.set_input_value_from_user_edit(source, "something"));
+
+            let clone = host.clone_node(source, true).expect("text control clone");
+            let clone = host
+                .node(clone)
+                .and_then(Node::as_element)
+                .expect("cloned text control");
+
+            assert_eq!(clone.input_value(), "something");
+            assert!(clone.input_value_dirty());
+            assert!(clone.input_value_user_edited());
+        }
     }
 
     #[test]

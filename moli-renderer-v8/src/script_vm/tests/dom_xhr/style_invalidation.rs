@@ -2686,6 +2686,43 @@ fn live_input_validity_state_preserves_expected_shape() {
         "valueMissing,typeMismatch,patternMismatch,tooLong,tooShort,rangeUnderflow,rangeOverflow,stepMismatch,badInput,customError,valid|true|false|false|false|false|false|false|false|false|false|false"
     );
 }
+
+#[test]
+fn cloned_text_controls_preserve_user_edited_length_validity() {
+    let mut vm = new_parsed_test_vm(
+        "https://clone-user-edited-validity.test/",
+        "<!doctype html><body></body>",
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => ['input', 'textarea'].map(tag => {
+  const control = document.createElement(tag);
+  document.body.append(control);
+  control.focus();
+  document.execCommand('insertText', false, 'something');
+  control.maxLength = 0;
+  const clone = control.cloneNode(true);
+  return [
+    control.value,
+    control.validity.tooLong,
+    control.matches(':invalid'),
+    clone.value,
+    clone.validity.tooLong,
+    clone.matches(':invalid')
+  ].join(':');
+}).join('|'))()
+"#,
+        )
+        .expect("cloned text-control validity should evaluate");
+
+    assert_eq!(
+        result,
+        "something:true:true:something:true:true|something:true:true:something:true:true"
+    );
+}
+
 #[test]
 fn detached_input_and_textarea_track_dirty_state_for_form_reset() {
     let mut vm = new_storage_test_vm("https://detached-input-dirty-state.test/path/page.html");
