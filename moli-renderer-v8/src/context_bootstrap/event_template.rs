@@ -22,8 +22,8 @@ use super::{
         event_time_stamp_getter_function, event_type_getter_function,
         focus_event_related_target_getter_function, form_data_event_form_data_getter_function,
         mouse_event_related_target_getter_function, pointer_event_get_predicted_events_callback,
-        submit_event_submitter_getter_function, track_event_track_getter_function,
-        ui_event_pseudo_target_getter_function,
+        submit_event_submitter_getter_function, toggle_event_source_getter_function,
+        track_event_track_getter_function, ui_event_pseudo_target_getter_function,
     },
     selection_surface::document_get_selection_callback,
     specs::{ConstructorKind, ConstructorSpec},
@@ -186,6 +186,13 @@ struct CommandEventTemplateAccessorsDeclaration {
 
     #[webapi(accessor_property, getter = command_event_command_getter_function)]
     command: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::ToggleEvent, enumerable)]
+struct ToggleEventTemplateAccessorsDeclaration {
+    #[webapi(accessor_property, getter = toggle_event_source_getter_function)]
+    source: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -427,6 +434,10 @@ pub(super) fn install_event_template_bindings<'s>(
         "CommandEvent" => {
             let proto = template.prototype_template(scope);
             CommandEventTemplateAccessorsDeclaration::initialize_prototype_template(scope, proto);
+        }
+        "ToggleEvent" => {
+            let proto = template.prototype_template(scope);
+            ToggleEventTemplateAccessorsDeclaration::initialize_prototype_template(scope, proto);
         }
         "EventTarget" => {
             let prototype = template.prototype_template(scope);
