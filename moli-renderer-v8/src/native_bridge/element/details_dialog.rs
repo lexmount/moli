@@ -13,7 +13,10 @@ use moli_selector::stylo_flat_tree_heading_descendants;
 use super::super::{
     JsContextHost, node::node_runtime_and_handle_from_object_or_detached, throw_dom_exception,
 };
-use super::focus::{apply_modal_dialog_focus_fixup, run_dialog_focusing_steps};
+use super::focus::{
+    apply_modal_dialog_focus_fixup, remember_dialog_previously_focused_element,
+    restore_dialog_focus_after_close, run_dialog_focusing_steps,
+};
 use super::popover::popover_is_open;
 use super::toggle_event::queue_element_toggle_event;
 use super::{
@@ -516,6 +519,7 @@ pub(super) fn dialog_show_callback<'s>(
         return;
     }
     dialog_set_open_state_for_handle(scope, runtime_ptr, handle, true, false);
+    remember_dialog_previously_focused_element(runtime_ptr, handle);
     run_dialog_focusing_steps(scope, runtime_ptr, handle);
 }
 
@@ -562,6 +566,7 @@ pub(super) fn dialog_show_modal_callback<'s>(
         return;
     }
     dialog_set_open_state_for_handle(scope, runtime_ptr, handle, true, true);
+    remember_dialog_previously_focused_element(runtime_ptr, handle);
     apply_modal_dialog_focus_fixup(scope, runtime_ptr, handle);
     run_dialog_focusing_steps(scope, runtime_ptr, handle);
 }
@@ -629,14 +634,16 @@ pub(in crate::native_bridge::element) fn close_dialog_element(
     if !dispatch_dialog_toggle_events(scope, runtime_ptr, handle, false, false) {
         return false;
     }
+    let was_modal = dialog_is_modal(unsafe { &*runtime_ptr }, handle);
     set_reflected_boolean_attribute(scope, runtime_ptr, handle, "open", false);
     let _ = set_dialog_modal_state(runtime_ptr, handle, false);
-    let runtime = unsafe { &mut *runtime_ptr };
     if let Some(return_value) = return_value {
-        let _ = runtime
+        let _ = unsafe { &mut *runtime_ptr }
             .dom_host_mut()
             .set_dialog_return_value(handle, return_value);
     }
+    restore_dialog_focus_after_close(scope, runtime_ptr, handle, was_modal);
+    let runtime = unsafe { &mut *runtime_ptr };
     queue_dialog_close_event(scope, runtime, handle);
     true
 }
