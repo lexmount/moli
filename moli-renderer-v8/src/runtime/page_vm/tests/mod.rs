@@ -2987,6 +2987,70 @@ async fn main_document_lifecycle_sets_interactive_before_defer_and_loads_later()
     .await;
 }
 
+#[test]
+fn parser_eof_releases_preloads_only_for_the_current_document_transition() {
+    fn ready_store(url: Url) -> crate::runtime::DocumentScriptPreloadStore {
+        let request = crate::runtime::BufferedScriptPreloadRequest {
+            url: url.clone(),
+            initiator_url: url,
+            kind_hint: ScriptKind::Classic,
+            mode_hint: ScriptMode::Normal,
+            resource_type_hint: moli_fetch::RequestResourceType::ParserBlockingScript,
+            fetch_metadata: ScriptFetchMetadata::default(),
+        };
+        let mut store = crate::runtime::DocumentScriptPreloadStore::default();
+        store.insert(
+            request.cache_key(),
+            crate::runtime::script_preloads::BufferedScriptPreloadEntry {
+                request,
+                load: SharedScriptSourceLoad::ready_ok("window.ready = true;"),
+            },
+        );
+        store
+    }
+
+    let mut page_vm = test_page_vm();
+    let owner = page_vm
+        .vm()
+        .current_main_document_task_owner()
+        .expect("test page should have a main document owner");
+    let live_store =
+        ready_store(Url::parse("https://example.test/preloaded.js").expect("preload URL"));
+    let live_store_observer = live_store.clone();
+    page_vm
+        .vm_mut()
+        .document_runtime
+        .bind_main_document_script_preload_store(live_store);
+
+    assert!(!live_store_observer.is_empty());
+    assert!(
+        page_vm
+            .vm_mut()
+            .finish_current_main_document_parsing(owner)
+            .is_some()
+    );
+    assert!(live_store_observer.is_empty());
+
+    let stale_store =
+        ready_store(Url::parse("https://example.test/stale.js").expect("preload URL"));
+    let stale_store_observer = stale_store.clone();
+    page_vm
+        .vm_mut()
+        .document_runtime
+        .bind_main_document_script_preload_store(stale_store);
+
+    assert!(
+        page_vm
+            .vm_mut()
+            .finish_current_main_document_parsing(owner)
+            .is_none()
+    );
+    assert!(
+        !stale_store_observer.is_empty(),
+        "a stale parser completion must not clear the current preload store"
+    );
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn main_document_replacement_during_interactive_retires_old_lifecycle_actions() {
     run_page_vm_async_test(async move {

@@ -130,6 +130,10 @@ impl DocumentScriptPreloadStore {
         self.entries.lock().len()
     }
 
+    pub(crate) fn clear(&self) {
+        self.entries.lock().clear();
+    }
+
     #[cfg(test)]
     pub(super) fn is_empty(&self) -> bool {
         self.entries.lock().is_empty()

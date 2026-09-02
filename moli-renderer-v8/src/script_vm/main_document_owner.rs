@@ -70,9 +70,15 @@ impl ScriptVm {
         &mut self,
         owner: FrameDocumentTaskOwner,
     ) -> Option<MainDocumentInteractiveLifecycleAction> {
-        self._context_host
+        let action = self
+            ._context_host
             .borrow_mut()
-            .finish_current_main_document_parsing(owner)
+            .finish_current_main_document_parsing(owner);
+        if action.is_some() {
+            self.document_runtime
+                .clear_main_document_script_preload_store();
+        }
+        action
     }
 
     pub(super) fn apply_pending_main_document_owner_transitions(&mut self) {

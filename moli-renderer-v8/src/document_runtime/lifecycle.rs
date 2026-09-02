@@ -44,6 +44,10 @@ impl DocumentRuntime {
         self.main_document_script_preloads = store;
     }
 
+    pub(crate) fn clear_main_document_script_preload_store(&mut self) {
+        self.main_document_script_preloads.clear();
+    }
+
     pub(super) fn bind_main_document_runtime_producer(
         &mut self,
         owner: crate::frame_owner_model::FrameDocumentTaskOwner,
