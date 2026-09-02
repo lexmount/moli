@@ -558,6 +558,11 @@ async fn runtime_add_binding_with_child_default_execution_context_id_installs_ch
         .conn
         .try_start_pending_command_dispatch(&raw)
         .expect("child-default Runtime.addBinding should start as a command task");
+    assert_eq!(
+        pending.ordering(),
+        crate::conn::CdpPendingCommandOrdering::Interleavable,
+        "ordinary pending Runtime commands must not serialize a whole CDP session"
+    );
     let (messages, scheduler_events) =
         complete_pending_command_task_for_test(&mut ctx, pending).await;
     let binding_result = messages

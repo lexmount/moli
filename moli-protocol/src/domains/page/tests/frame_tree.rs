@@ -464,6 +464,11 @@ async fn get_frame_tree_can_complete_through_pending_command_dispatch() {
         .conn
         .try_start_pending_command_dispatch(&raw)
         .expect("Page.getFrameTree should start as a pending command for loaded pages");
+    assert_eq!(
+        pending.ordering(),
+        crate::conn::CdpPendingCommandOrdering::SameSessionResponseBarrier,
+        "the internally asynchronous frame snapshot must preserve Chromium's synchronous Page handler ordering"
+    );
     let (messages, scheduler_events) =
         complete_pending_command_task_for_test(&mut ctx, pending).await;
     assert!(

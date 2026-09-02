@@ -37,9 +37,9 @@ use url::Url;
 
 use super::input;
 use crate::conn::{
-    BackgroundProtocolEvent, CapturedBody, CdpSessionRoute, CommandDispatchContext,
-    CommandOwnerScope, NETWORK_ERROR_PAGE_URL, PageLifecycleEventsEnableResult,
-    PageScreencastConfig, PageScreencastFormat,
+    BackgroundProtocolEvent, CapturedBody, CdpPendingCommandOrdering, CdpSessionRoute,
+    CommandDispatchContext, CommandOwnerScope, NETWORK_ERROR_PAGE_URL,
+    PageLifecycleEventsEnableResult, PageScreencastConfig, PageScreencastFormat,
 };
 use crate::conn::{CdpConnection, Cmd, EmulatedViewportSurface};
 pub(crate) use crate::conn::{DEFAULT_LOADER_ID as LOADER_ID, monotonic_timestamp_seconds};
@@ -450,6 +450,65 @@ impl PendingPageCommandDispatch {
             owner_scope: self.owner_scope,
             kind: Box::new(kind),
         }
+    }
+}
+
+/// Returns the frontend ordering contract of Chromium's handler for a Page
+/// command that Moli happened to implement through a pending internal task.
+///
+/// This must be classified from the original protocol action, not from
+/// [`PendingPageCommandKind`]. Different Chromium handlers can share the same
+/// Moli navigation future: `Page.enable` is synchronous, while `Page.navigate`
+/// and `Page.reload` complete through callbacks.
+pub(crate) fn pending_command_ordering(cmd: &Cmd<'_>) -> CdpPendingCommandOrdering {
+    cmd.parse_action::<PageAction>().map_or(
+        CdpPendingCommandOrdering::Interleavable,
+        page_action_pending_command_ordering,
+    )
+}
+
+fn page_action_pending_command_ordering(action: PageAction) -> CdpPendingCommandOrdering {
+    match action {
+        // Chromium exposes these through synchronous protocol::Response
+        // handlers. Retain that observable ordering when Moli crosses an
+        // internal renderer, navigation, or owner-lifecycle async boundary.
+        PageAction::Enable
+        | PageAction::Disable
+        | PageAction::SetLifecycleEventsEnabled
+        | PageAction::SetBypassCsp
+        | PageAction::SetFontFamilies
+        | PageAction::SetInterceptFileChooserDialog
+        | PageAction::HandleJavaScriptDialog
+        | PageAction::SetDownloadBehavior
+        | PageAction::StartScreencast
+        | PageAction::StopScreencast
+        | PageAction::ScreencastFrameAck
+        | PageAction::GetNavigationHistory
+        | PageAction::ResetNavigationHistory
+        | PageAction::BringToFront
+        | PageAction::SetDocumentContent
+        | PageAction::GetFrameTree
+        | PageAction::GetResourceTree
+        | PageAction::GetLayoutMetrics
+        | PageAction::NavigateToHistoryEntry
+        | PageAction::StopLoading
+        | PageAction::Crash
+        | PageAction::Close
+        | PageAction::AddScriptToEvaluateOnNewDocument
+        | PageAction::RemoveScriptToEvaluateOnNewDocument => {
+            CdpPendingCommandOrdering::SameSessionResponseBarrier
+        }
+        // Chromium explicitly receives a callback for these handlers, so a
+        // later command on the same session may be dispatched while the
+        // callback remains pending.
+        PageAction::CaptureScreenshot
+        | PageAction::CaptureSnapshot
+        | PageAction::PrintToPdf
+        | PageAction::GetAppManifest
+        | PageAction::SearchInResource
+        | PageAction::Navigate
+        | PageAction::Reload
+        | PageAction::CreateIsolatedWorld => CdpPendingCommandOrdering::Interleavable,
     }
 }
 

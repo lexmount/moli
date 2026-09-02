@@ -95,7 +95,10 @@ pub(crate) use cookie_owner::{
 };
 pub use devtools_command::DevToolsCommandDispatchOutcome;
 pub(crate) use devtools_command::DevToolsCommandExecutionOutput;
-pub use dispatch::{CdpCommandTaskStep, CompletedCdpCommandDispatch, PendingCdpCommandDispatch};
+pub use dispatch::{
+    CdpCommandTaskStep, CdpPendingCommandOrdering, CompletedCdpCommandDispatch,
+    PendingCdpCommandDispatch,
+};
 pub(crate) use downloads::SharedDownloadRegistry;
 pub(crate) use fetch_support::PendingStreamingDocumentResponseNavigation;
 pub(crate) use fetch_support::{

@@ -1,16 +1,17 @@
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     time::Instant,
 };
 
 use moli_core::{RendererOutputFence, RendererOutputTransportMessage};
 use moli_protocol::{
-    BackgroundNavigationCompletion, BackgroundProtocolEvent, CdpSchedulerEvent,
-    CommandDispatchContext, CompletedCdpCommandDispatch, CompletedPageScreencastCapture,
-    DeferredMainDocumentLoadObservationId, ParsedCdpCommand, PendingCdpCommandDispatch,
+    BackgroundNavigationCompletion, BackgroundProtocolEvent, CdpPendingCommandOrdering,
+    CdpSchedulerEvent, CommandDispatchContext, CompletedCdpCommandDispatch,
+    CompletedPageScreencastCapture, DeferredMainDocumentLoadObservationId, ParsedCdpCommand,
+    PendingCdpCommandDispatch,
     conn::{RuntimeInspectorAsyncCompletionReceiver, RuntimeInspectorResponseReady},
 };
-use serde_json::json;
+use serde_json::{Value, json};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::Instant as TokioInstant;
@@ -40,6 +41,7 @@ struct PendingRuntimeDeferredReplyState {
 
 #[derive(Clone)]
 struct InFlightCommandMetadata {
+    frontend_id: u64,
     method: Option<String>,
     id: Option<u64>,
     session_id: Option<String>,
@@ -50,6 +52,7 @@ struct InFlightCommandMetadata {
 
 struct InFlightCommandState {
     metadata: InFlightCommandMetadata,
+    response_barrier: Option<FrontendSessionKey>,
     dispatch: CommandDispatchState,
     output_release_permit: CommandOutputReleasePermit,
     command_context: CommandDispatchContext,
@@ -61,12 +64,123 @@ struct PendingCommandCompletion {
     completed: CompletedCdpCommandDispatch,
 }
 
-struct BlockedCommandDispatch {
-    command: ParsedCdpCommand,
-    metadata: InFlightCommandMetadata,
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct FrontendSessionKey {
+    frontend_id: u64,
+    session_id: Option<String>,
+}
+
+impl InFlightCommandMetadata {
+    fn session_key(&self) -> FrontendSessionKey {
+        FrontendSessionKey {
+            frontend_id: self.frontend_id,
+            session_id: self.session_id.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum FrontendDispatchOrderingScope {
+    /// The input has a resolved internal CDP session.
+    Session(FrontendSessionKey),
+    /// Parsing or routing failed before a trustworthy session could be resolved.
+    Frontend(u64),
+}
+
+/// One frontend input that may publish directly to its socket or enter domain
+/// dispatch. Keeping both variants in this queue gives the actor one ordering
+/// gate instead of an error-output bypass around command scheduling.
+enum QueuedFrontendDispatch {
+    Command {
+        command: Box<ParsedCdpCommand>,
+        metadata: InFlightCommandMetadata,
+    },
+    ImmediateResponse {
+        frontend_id: u64,
+        message: Value,
+    },
+}
+
+impl QueuedFrontendDispatch {
+    fn ordering_scope(&self) -> FrontendDispatchOrderingScope {
+        match self {
+            Self::Command { metadata, .. } => {
+                FrontendDispatchOrderingScope::Session(metadata.session_key())
+            }
+            Self::ImmediateResponse { frontend_id, .. } => {
+                FrontendDispatchOrderingScope::Frontend(*frontend_id)
+            }
+        }
+    }
 }
 
 type InFlightCommands = HashMap<u64, InFlightCommandState>;
+
+fn response_barrier_blocks_scope<'a>(
+    barrier_sessions: impl IntoIterator<Item = &'a FrontendSessionKey>,
+    scope: &FrontendDispatchOrderingScope,
+) -> bool {
+    barrier_sessions.into_iter().any(|barrier| match scope {
+        FrontendDispatchOrderingScope::Session(session) => barrier == session,
+        FrontendDispatchOrderingScope::Frontend(frontend_id) => barrier.frontend_id == *frontend_id,
+    })
+}
+
+fn frontend_dispatch_is_blocked(
+    in_flight_commands: &InFlightCommands,
+    scope: &FrontendDispatchOrderingScope,
+) -> bool {
+    response_barrier_blocks_scope(
+        in_flight_commands
+            .values()
+            .filter_map(|state| state.response_barrier.as_ref()),
+        scope,
+    )
+}
+
+/// Take the command and its response barrier before decoding the completion.
+///
+/// A terminal error and a terminal success release the same ordering edge. A
+/// multi-turn pending command explicitly restores the state after decoding.
+fn take_in_flight_command_for_completion(
+    in_flight_commands: &mut InFlightCommands,
+    token: u64,
+) -> Option<InFlightCommandState> {
+    in_flight_commands.remove(&token)
+}
+
+fn scope_is_stalled(
+    scope: &FrontendDispatchOrderingScope,
+    stalled_frontends: &HashSet<u64>,
+    stalled_sessions: &HashSet<FrontendSessionKey>,
+) -> bool {
+    match scope {
+        FrontendDispatchOrderingScope::Session(session) => {
+            stalled_frontends.contains(&session.frontend_id) || stalled_sessions.contains(session)
+        }
+        FrontendDispatchOrderingScope::Frontend(frontend_id) => {
+            stalled_frontends.contains(frontend_id)
+                || stalled_sessions
+                    .iter()
+                    .any(|session| session.frontend_id == *frontend_id)
+        }
+    }
+}
+
+fn mark_scope_stalled(
+    scope: FrontendDispatchOrderingScope,
+    stalled_frontends: &mut HashSet<u64>,
+    stalled_sessions: &mut HashSet<FrontendSessionKey>,
+) {
+    match scope {
+        FrontendDispatchOrderingScope::Session(session) => {
+            stalled_sessions.insert(session);
+        }
+        FrontendDispatchOrderingScope::Frontend(frontend_id) => {
+            stalled_frontends.insert(frontend_id);
+        }
+    }
+}
 
 fn page_javascript_owner_is_blocked(
     scheduler: &CdpScheduler,
@@ -249,7 +363,7 @@ async fn run_cdp_scheduler_actor(
     let (page_screencast_completion_tx, mut page_screencast_completion_rx) =
         mpsc::unbounded_channel::<CompletedPageScreencastCapture>();
     let mut in_flight_commands = InFlightCommands::new();
-    let mut blocked_commands = VecDeque::new();
+    let mut queued_frontend_dispatches = VecDeque::new();
     let mut next_in_flight_command_token = 0_u64;
     let mut frontend_control = CdpFrontendControlState::default();
 
@@ -282,7 +396,7 @@ async fn run_cdp_scheduler_actor(
                 {
                     break;
                 }
-                if !drain_blocked_commands_after_navigation_gate(
+                if !drain_queued_frontend_dispatches(
                     &frontend_router,
                     &mut scheduler,
                     &mut scheduler_input_rx,
@@ -291,7 +405,7 @@ async fn run_cdp_scheduler_actor(
                     &mut adapter_scheduler,
                     &pending_command_completion_tx,
                     &mut in_flight_commands,
-                    &mut blocked_commands,
+                    &mut queued_frontend_dispatches,
                     &mut next_in_flight_command_token,
                 )
                 .await
@@ -361,7 +475,7 @@ async fn run_cdp_scheduler_actor(
                     &mut adapter_scheduler,
                     &pending_command_completion_tx,
                     &mut in_flight_commands,
-                    &mut blocked_commands,
+                    &mut queued_frontend_dispatches,
                     &mut next_in_flight_command_token,
                 )
                 .await
@@ -398,7 +512,7 @@ async fn run_cdp_scheduler_actor(
                     &mut adapter_scheduler,
                     &pending_command_completion_tx,
                     &mut in_flight_commands,
-                    &mut blocked_commands,
+                    &mut queued_frontend_dispatches,
                     &mut next_in_flight_command_token,
                     input,
                 )
@@ -428,7 +542,7 @@ async fn handle_scheduler_input(
     adapter_scheduler: &mut ProtocolAdapterScheduler,
     pending_command_completion_tx: &mpsc::UnboundedSender<PendingCommandCompletion>,
     in_flight_commands: &mut InFlightCommands,
-    blocked_commands: &mut VecDeque<BlockedCommandDispatch>,
+    queued_frontend_dispatches: &mut VecDeque<QueuedFrontendDispatch>,
     next_in_flight_command_token: &mut u64,
     input: SchedulerInput,
 ) -> bool {
@@ -455,7 +569,7 @@ async fn handle_scheduler_input(
             {
                 return false;
             }
-            drain_blocked_commands_after_navigation_gate(
+            drain_queued_frontend_dispatches(
                 frontend_router,
                 scheduler,
                 scheduler_input_rx,
@@ -464,7 +578,7 @@ async fn handle_scheduler_input(
                 adapter_scheduler,
                 pending_command_completion_tx,
                 in_flight_commands,
-                blocked_commands,
+                queued_frontend_dispatches,
                 next_in_flight_command_token,
             )
             .await
@@ -1299,9 +1413,10 @@ fn route_unmatched_runtime_inspector_response(
     output
 }
 
-fn command_metadata(command: &ParsedCdpCommand) -> InFlightCommandMetadata {
+fn command_metadata(frontend_id: u64, command: &ParsedCdpCommand) -> InFlightCommandMetadata {
     let request = command.request();
     InFlightCommandMetadata {
+        frontend_id,
         method: Some(command.method().to_owned()),
         id: Some(request.id()),
         session_id: request.session_id().map(str::to_owned),
@@ -1365,117 +1480,47 @@ async fn handle_frontend_command(
     adapter_scheduler: &mut ProtocolAdapterScheduler,
     pending_command_completion_tx: &mpsc::UnboundedSender<PendingCommandCompletion>,
     in_flight_commands: &mut InFlightCommands,
-    blocked_commands: &mut VecDeque<BlockedCommandDispatch>,
+    queued_frontend_dispatches: &mut VecDeque<QueuedFrontendDispatch>,
     next_in_flight_command_token: &mut u64,
 ) -> bool {
     let CdpFrontendCommand { frontend_id, raw } = frontend_command;
     let Some(prepared) = frontend_router.prepare_command_str(frontend_id, raw) else {
         return true;
     };
-    let command = match prepared {
-        CdpPreparedFrontendCommand::Command(command) => command,
+    let dispatch = match prepared {
+        CdpPreparedFrontendCommand::Command(command) => {
+            trace_command(&command, "frontend_command_received", None, None, None);
+            if moli_trace::command_probe_enabled() {
+                tracing::info!(method = command.method(), "CMD_PROBE_COMMAND_RECEIVED");
+            }
+            let metadata = command_metadata(frontend_id, &command);
+            QueuedFrontendDispatch::Command {
+                command: Box::new(command),
+                metadata,
+            }
+        }
         CdpPreparedFrontendCommand::ImmediateResponse {
             frontend_id,
             message,
-        } => {
-            frontend_router.enqueue_immediate_response(frontend_id, message);
-            return true;
-        }
+        } => QueuedFrontendDispatch::ImmediateResponse {
+            frontend_id,
+            message,
+        },
     };
-    trace_command(&command, "frontend_command_received", None, None, None);
-    handle_client_command_with_interleaved_output(
+    queued_frontend_dispatches.push_back(dispatch);
+    drain_queued_frontend_dispatches(
         frontend_router,
         scheduler,
         scheduler_input_rx,
-        command,
         pending_runtime_deferred_replies,
         deferred_runtime_response_tx,
         adapter_scheduler,
         pending_command_completion_tx,
         in_flight_commands,
-        blocked_commands,
+        queued_frontend_dispatches,
         next_in_flight_command_token,
     )
     .await
-}
-
-async fn handle_client_command_with_interleaved_output(
-    frontend_router: &CdpFrontendRouter,
-    scheduler: &mut CdpScheduler,
-    scheduler_input_rx: &mut SchedulerInputReceivers,
-    command: ParsedCdpCommand,
-    pending_runtime_deferred_replies: &mut VecDeque<PendingRuntimeDeferredReplyState>,
-    deferred_runtime_response_tx: &mpsc::UnboundedSender<RuntimeInspectorResponseReady>,
-    adapter_scheduler: &mut ProtocolAdapterScheduler,
-    pending_command_completion_tx: &mpsc::UnboundedSender<PendingCommandCompletion>,
-    in_flight_commands: &mut InFlightCommands,
-    blocked_commands: &mut VecDeque<BlockedCommandDispatch>,
-    next_in_flight_command_token: &mut u64,
-) -> bool {
-    let metadata = command_metadata(&command);
-    let probe_method = moli_trace::command_probe_enabled().then(|| command.method().to_owned());
-    if let Some(method) = probe_method.as_deref() {
-        tracing::info!(method, "CMD_PROBE_COMMAND_RECEIVED");
-    }
-    if !blocked_commands.is_empty() && scheduler.command_waits_for_navigation_flush(&command) {
-        trace_command(
-            &command,
-            "command_queued_behind_background_navigation_blocked_command",
-            None,
-            None,
-            None,
-        );
-        blocked_commands.push_back(BlockedCommandDispatch { command, metadata });
-        return drain_blocked_commands_after_navigation_gate(
-            frontend_router,
-            scheduler,
-            scheduler_input_rx,
-            pending_runtime_deferred_replies,
-            deferred_runtime_response_tx,
-            adapter_scheduler,
-            pending_command_completion_tx,
-            in_flight_commands,
-            blocked_commands,
-            next_in_flight_command_token,
-        )
-        .await;
-    }
-    match scheduler.start_command_or_request_background_navigation_flush(&command) {
-        CommandStartAction::NeedsBackgroundNavigationFlush => {
-            trace_command(
-                &command,
-                "command_blocked_by_background_navigation",
-                None,
-                None,
-                None,
-            );
-            blocked_commands.push_back(BlockedCommandDispatch { command, metadata });
-            true
-        }
-        CommandStartAction::Dispatch {
-            step,
-            output_release_permit,
-            command_context,
-        } => {
-            start_ready_command_dispatch(
-                frontend_router,
-                scheduler,
-                scheduler_input_rx,
-                &command,
-                metadata,
-                step,
-                output_release_permit,
-                command_context,
-                pending_runtime_deferred_replies,
-                deferred_runtime_response_tx,
-                adapter_scheduler,
-                pending_command_completion_tx,
-                in_flight_commands,
-                next_in_flight_command_token,
-            )
-            .await
-        }
-    }
 }
 
 async fn start_ready_command_dispatch(
@@ -1562,11 +1607,17 @@ async fn start_ready_command_dispatch(
         }
         CommandTaskStep::Pending(pending) => {
             trace_command(command, "command_dispatch_pending", None, None, None);
+            let response_barrier = matches!(
+                pending.ordering(),
+                CdpPendingCommandOrdering::SameSessionResponseBarrier
+            )
+            .then(|| metadata.session_key());
             let token = take_next_in_flight_command_token(next_in_flight_command_token);
             in_flight_commands.insert(
                 token,
                 InFlightCommandState {
                     metadata,
+                    response_barrier,
                     dispatch: CommandDispatchState::pending_command(),
                     output_release_permit,
                     command_context,
@@ -1579,7 +1630,7 @@ async fn start_ready_command_dispatch(
     }
 }
 
-async fn drain_blocked_commands_after_navigation_gate(
+async fn drain_queued_frontend_dispatches(
     frontend_router: &CdpFrontendRouter,
     scheduler: &mut CdpScheduler,
     scheduler_input_rx: &mut SchedulerInputReceivers,
@@ -1588,35 +1639,82 @@ async fn drain_blocked_commands_after_navigation_gate(
     adapter_scheduler: &mut ProtocolAdapterScheduler,
     pending_command_completion_tx: &mpsc::UnboundedSender<PendingCommandCompletion>,
     in_flight_commands: &mut InFlightCommands,
-    blocked_commands: &mut VecDeque<BlockedCommandDispatch>,
+    queued_frontend_dispatches: &mut VecDeque<QueuedFrontendDispatch>,
     next_in_flight_command_token: &mut u64,
 ) -> bool {
-    loop {
-        let Some(blocked) = blocked_commands.pop_front() else {
+    let mut response_stalled_frontends = HashSet::new();
+    let mut response_stalled_sessions = HashSet::new();
+    let mut navigation_stalled_sessions = HashSet::new();
+    let queued_dispatch_count = queued_frontend_dispatches.len();
+    for _ in 0..queued_dispatch_count {
+        let Some(dispatch) = queued_frontend_dispatches.pop_front() else {
             return true;
         };
-        if scheduler.command_waits_for_navigation_flush(&blocked.command) {
-            trace_command(
-                &blocked.command,
-                "blocked_command_still_waiting_for_background_navigation",
-                None,
-                None,
-                None,
-            );
-            blocked_commands.push_front(blocked);
-            return true;
-        }
-        match scheduler.start_command_or_request_background_navigation_flush(&blocked.command) {
-            CommandStartAction::NeedsBackgroundNavigationFlush => {
+        let scope = dispatch.ordering_scope();
+        if scope_is_stalled(
+            &scope,
+            &response_stalled_frontends,
+            &response_stalled_sessions,
+        ) || frontend_dispatch_is_blocked(in_flight_commands, &scope)
+        {
+            if let QueuedFrontendDispatch::Command { command, .. } = &dispatch {
                 trace_command(
-                    &blocked.command,
-                    "blocked_command_still_waiting_for_background_navigation",
+                    command,
+                    "frontend_dispatch_still_waiting_for_response_barrier",
                     None,
                     None,
                     None,
                 );
-                blocked_commands.push_front(blocked);
-                return true;
+            }
+            mark_scope_stalled(
+                scope,
+                &mut response_stalled_frontends,
+                &mut response_stalled_sessions,
+            );
+            queued_frontend_dispatches.push_back(dispatch);
+            continue;
+        }
+
+        let (command, metadata) = match dispatch {
+            QueuedFrontendDispatch::Command { command, metadata } => (command, metadata),
+            QueuedFrontendDispatch::ImmediateResponse {
+                frontend_id,
+                message,
+            } => {
+                frontend_router.enqueue_immediate_response(frontend_id, message);
+                continue;
+            }
+        };
+
+        let session_key = metadata.session_key();
+        if navigation_stalled_sessions.contains(&session_key)
+            && scheduler.command_waits_for_navigation_flush(&command)
+        {
+            trace_command(
+                &command,
+                "frontend_dispatch_still_waiting_for_background_navigation",
+                None,
+                None,
+                None,
+            );
+            navigation_stalled_sessions.insert(session_key);
+            queued_frontend_dispatches
+                .push_back(QueuedFrontendDispatch::Command { command, metadata });
+            continue;
+        }
+        match scheduler.start_command_or_request_background_navigation_flush(&command) {
+            CommandStartAction::NeedsBackgroundNavigationFlush => {
+                trace_command(
+                    &command,
+                    "frontend_dispatch_still_waiting_for_background_navigation",
+                    None,
+                    None,
+                    None,
+                );
+                navigation_stalled_sessions.insert(session_key);
+                queued_frontend_dispatches
+                    .push_back(QueuedFrontendDispatch::Command { command, metadata });
+                continue;
             }
             CommandStartAction::Dispatch {
                 step,
@@ -1627,8 +1725,8 @@ async fn drain_blocked_commands_after_navigation_gate(
                     frontend_router,
                     scheduler,
                     scheduler_input_rx,
-                    &blocked.command,
-                    blocked.metadata,
+                    &command,
+                    metadata,
                     step,
                     output_release_permit,
                     command_context,
@@ -1646,6 +1744,7 @@ async fn drain_blocked_commands_after_navigation_gate(
             }
         }
     }
+    true
 }
 
 async fn flush_completed_command_output(
@@ -1825,7 +1924,9 @@ async fn handle_pending_command_completion(
     in_flight_commands: &mut InFlightCommands,
     completion: PendingCommandCompletion,
 ) -> bool {
-    let Some(mut state) = in_flight_commands.remove(&completion.token) else {
+    let Some(mut state) =
+        take_in_flight_command_for_completion(in_flight_commands, completion.token)
+    else {
         tracing::debug!(
             token = completion.token,
             "dropping stale pending command completion without actor state"
@@ -2056,6 +2157,79 @@ mod tests {
     fn in_flight_command_tokens_never_wrap() {
         let mut next = u64::MAX;
         let _ = take_next_in_flight_command_token(&mut next);
+    }
+
+    #[test]
+    fn response_barrier_does_not_block_a_different_session_or_frontend() {
+        let barrier = FrontendSessionKey {
+            frontend_id: 7,
+            session_id: Some("SID-A".to_owned()),
+        };
+        let same_session = FrontendDispatchOrderingScope::Session(barrier.clone());
+        let other_session = FrontendDispatchOrderingScope::Session(FrontendSessionKey {
+            frontend_id: 7,
+            session_id: Some("SID-B".to_owned()),
+        });
+        let other_frontend = FrontendDispatchOrderingScope::Session(FrontendSessionKey {
+            frontend_id: 8,
+            session_id: Some("SID-A".to_owned()),
+        });
+
+        assert!(response_barrier_blocks_scope([&barrier], &same_session));
+        assert!(!response_barrier_blocks_scope([&barrier], &other_session));
+        assert!(!response_barrier_blocks_scope([&barrier], &other_frontend));
+    }
+
+    #[test]
+    fn immediate_response_waits_for_any_barrier_on_its_frontend() {
+        let barrier = FrontendSessionKey {
+            frontend_id: 7,
+            session_id: Some("SID-A".to_owned()),
+        };
+
+        assert!(response_barrier_blocks_scope(
+            [&barrier],
+            &FrontendDispatchOrderingScope::Frontend(7)
+        ));
+        assert!(!response_barrier_blocks_scope(
+            [&barrier],
+            &FrontendDispatchOrderingScope::Frontend(8)
+        ));
+    }
+
+    #[test]
+    fn stalled_scope_preserves_fifo_without_blocking_other_sessions() {
+        let first_session = FrontendSessionKey {
+            frontend_id: 7,
+            session_id: Some("SID-A".to_owned()),
+        };
+        let second_session = FrontendSessionKey {
+            frontend_id: 7,
+            session_id: Some("SID-B".to_owned()),
+        };
+        let mut stalled_frontends = HashSet::new();
+        let mut stalled_sessions = HashSet::new();
+        mark_scope_stalled(
+            FrontendDispatchOrderingScope::Session(first_session.clone()),
+            &mut stalled_frontends,
+            &mut stalled_sessions,
+        );
+
+        assert!(scope_is_stalled(
+            &FrontendDispatchOrderingScope::Session(first_session),
+            &stalled_frontends,
+            &stalled_sessions
+        ));
+        assert!(!scope_is_stalled(
+            &FrontendDispatchOrderingScope::Session(second_session),
+            &stalled_frontends,
+            &stalled_sessions
+        ));
+        assert!(scope_is_stalled(
+            &FrontendDispatchOrderingScope::Frontend(7),
+            &stalled_frontends,
+            &stalled_sessions
+        ));
     }
 
     #[tokio::test]

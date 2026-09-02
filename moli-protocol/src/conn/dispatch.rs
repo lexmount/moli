@@ -10,11 +10,24 @@ pub struct PendingCdpCommandDispatch {
     inner: PendingCdpCommandDispatchKind,
     owner_scope: Option<CommandOwnerScope>,
     scheduler_events: Vec<CdpSchedulerEvent>,
+    ordering: CdpPendingCommandOrdering,
 }
 
 pub struct CompletedCdpCommandDispatch {
     inner: CompletedCdpCommandDispatchKind,
     owner_scope: Option<CommandOwnerScope>,
+}
+
+/// Frontend ordering required while a pending CDP command is settling.
+///
+/// Most Moli commands may interleave by design. A Chromium-synchronous domain
+/// handler that crosses an internal async boundary instead retains a response
+/// barrier so later commands for that session cannot publish observable output
+/// before its response.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CdpPendingCommandOrdering {
+    Interleavable,
+    SameSessionResponseBarrier,
 }
 
 pub enum CdpCommandTaskStep {
@@ -164,6 +177,7 @@ impl PendingCdpCommandDispatch {
         conn: &CdpConnection,
         inner: PendingCdpCommandDispatchKind,
         scheduler_events: Vec<CdpSchedulerEvent>,
+        ordering: CdpPendingCommandOrdering,
     ) -> Self {
         let owner_scope = inner
             // These domain-local session ids are still used for CDP response
@@ -175,6 +189,7 @@ impl PendingCdpCommandDispatch {
             inner,
             owner_scope,
             scheduler_events,
+            ordering,
         }
     }
 
@@ -184,6 +199,10 @@ impl PendingCdpCommandDispatch {
 
     pub fn kind_name(&self) -> &'static str {
         self.inner.name()
+    }
+
+    pub fn ordering(&self) -> CdpPendingCommandOrdering {
+        self.ordering
     }
 
     #[cfg(test)]
@@ -453,11 +472,20 @@ impl CdpConnection {
     }
 
     fn pending_step(&mut self, inner: PendingCdpCommandDispatchKind) -> CdpCommandTaskStep {
+        self.pending_step_with_ordering(inner, CdpPendingCommandOrdering::Interleavable)
+    }
+
+    fn pending_step_with_ordering(
+        &mut self,
+        inner: PendingCdpCommandDispatchKind,
+        ordering: CdpPendingCommandOrdering,
+    ) -> CdpCommandTaskStep {
         let scheduler_events = self.take_scheduler_events();
         CdpCommandTaskStep::Pending(Box::new(PendingCdpCommandDispatch::new(
             self,
             inner,
             scheduler_events,
+            ordering,
         )))
     }
 
@@ -746,10 +774,14 @@ impl CdpConnection {
                 })
             }
             "Page" => {
+                let ordering = crate::domains::page::pending_command_ordering(&cmd);
                 crate::domains::page::try_start_page_command_dispatch(self, &cmd).map(|step| {
                     match step {
                         crate::domains::page::PageCommandTaskStep::Pending(pending) => {
-                            self.pending_step(PendingCdpCommandDispatchKind::Page(pending))
+                            self.pending_step_with_ordering(
+                                PendingCdpCommandDispatchKind::Page(pending),
+                                ordering,
+                            )
                         }
                         crate::domains::page::PageCommandTaskStep::Complete(plan) => {
                             self.complete_with_output_plan(command_context, plan, cmd.id, cmd.session_id)
