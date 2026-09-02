@@ -355,6 +355,42 @@ fn popover_user_agent_display_tracks_open_state() {
 }
 
 #[test]
+fn dialog_user_agent_colors_follow_its_color_scheme() {
+    let mut vm = new_parsed_test_vm(
+        "https://dialog-user-agent-colors.test/",
+        r#"<!doctype html>
+<style>:root { color: CanvasText; background-color: Canvas }</style>
+<dialog id="default" open></dialog>
+<dialog id="light" open style="color-scheme: only light"></dialog>
+<dialog id="dark" open style="color-scheme: only dark"></dialog>"#,
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const root = getComputedStyle(document.documentElement);
+  const fallback = getComputedStyle(document.getElementById('default'));
+  const light = getComputedStyle(document.getElementById('light'));
+  const dark = getComputedStyle(document.getElementById('dark'));
+  return JSON.stringify({
+    defaultMatchesRoot:
+      fallback.color === root.color && fallback.backgroundColor === root.backgroundColor,
+    schemesDiffer:
+      light.color !== dark.color && light.backgroundColor !== dark.backgroundColor
+  });
+})()
+"#,
+        )
+        .expect("dialog user-agent colors should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"defaultMatchesRoot":true,"schemesDiffer":true}"#
+    );
+}
+
+#[test]
 fn modal_dialog_user_agent_visibility_overrides_inheritance() {
     let mut vm = new_parsed_test_vm(
         "https://modal-dialog-user-agent-visibility.test/",

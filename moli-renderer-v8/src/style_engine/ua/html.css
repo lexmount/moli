@@ -524,6 +524,11 @@ slot {
   display: contents;
 }
 
+dialog {
+  color: CanvasText;
+  background-color: Canvas;
+}
+
 dialog:not([open]), [popover]:where(:not(:popover-open)) {
   display: none;
 }
