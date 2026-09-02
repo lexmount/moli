@@ -240,6 +240,21 @@ impl DocumentRuntime {
         crate::native_bridge::element::handle_popover_attribute_change(
             scope, host_ptr, handle, namespace, local_name, old_value, new_value,
         );
+        if namespace.is_none()
+            && local_name.eq_ignore_ascii_case("inert")
+            && old_value.is_none()
+            && new_value.is_some()
+            && self
+                .dom_host
+                .node(handle)
+                .and_then(Node::as_element)
+                .is_some_and(|element| {
+                    element.namespace() == crate::native_bridge::document::XHTML_NS
+                })
+            && let Some(active) = self.active_element_handle()
+        {
+            crate::native_bridge::element::schedule_focus_blur_if_needed(scope, host_ptr, active);
+        }
     }
 
     pub(crate) fn set_text_content(

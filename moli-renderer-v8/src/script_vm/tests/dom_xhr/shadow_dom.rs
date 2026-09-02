@@ -2535,6 +2535,78 @@ async fn focused_display_none_blur_listener_sees_updated_focus_state() {
     assert_eq!(sync_state, "none|true|true");
     assert_eq!(blur_state, "block,true,true|block");
 }
+
+#[tokio::test]
+async fn focused_element_blurs_after_it_becomes_inert() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm =
+        new_storage_test_vm_with_loader("https://dynamic-inert-focus-fixup.test/", &loader);
+
+    let direct_sync_state = vm
+        .eval(
+            r#"
+(() => {
+  const html = document.documentElement || document.appendChild(document.createElement('html'));
+  const body = document.body || html.appendChild(document.createElement('body'));
+  const wrapper = document.createElement('div');
+  const input = document.createElement('input');
+  wrapper.appendChild(input);
+  body.appendChild(wrapper);
+  globalThis.__dynamicInertFocus = { wrapper, input, blurCount: 0 };
+  input.addEventListener('blur', () => globalThis.__dynamicInertFocus.blurCount++);
+  input.focus();
+  input.inert = true;
+  return [document.activeElement === input, globalThis.__dynamicInertFocus.blurCount].join('|');
+})()
+"#,
+        )
+        .expect("direct inert focus setup should evaluate");
+
+    assert!(
+        vm.run_next_due_timer_callback_for_test(&loader)
+            .await
+            .expect("direct inert focus-fixup timer should run")
+    );
+    let direct_async_state = vm
+        .eval(
+            r#"
+[document.activeElement === document.body, globalThis.__dynamicInertFocus.blurCount].join('|')
+"#,
+        )
+        .expect("direct inert focus-fixup result should evaluate");
+
+    let ancestor_sync_state = vm
+        .eval(
+            r#"
+(() => {
+  const { wrapper, input } = globalThis.__dynamicInertFocus;
+  input.inert = false;
+  input.focus();
+  wrapper.setAttribute('inert', '');
+  return [document.activeElement === input, globalThis.__dynamicInertFocus.blurCount].join('|');
+})()
+"#,
+        )
+        .expect("ancestor inert focus setup should evaluate");
+
+    assert!(
+        vm.run_next_due_timer_callback_for_test(&loader)
+            .await
+            .expect("ancestor inert focus-fixup timer should run")
+    );
+    let ancestor_async_state = vm
+        .eval(
+            r#"
+[document.activeElement === document.body, globalThis.__dynamicInertFocus.blurCount].join('|')
+"#,
+        )
+        .expect("ancestor inert focus-fixup result should evaluate");
+
+    assert_eq!(direct_sync_state, "true|0");
+    assert_eq!(direct_async_state, "true|1");
+    assert_eq!(ancestor_sync_state, "true|1");
+    assert_eq!(ancestor_async_state, "true|2");
+}
 #[test]
 fn scroll_container_focusability_tracks_current_layout() {
     let mut vm = new_storage_test_vm("https://scroll-focusability.test/");
