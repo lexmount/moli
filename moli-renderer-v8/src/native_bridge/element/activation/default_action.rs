@@ -1791,14 +1791,22 @@ fn anchor_click_default_action(
             None,
         );
     }
-    let declared_target_name =
-        element_attribute(runtime, handle, "target").filter(|value| !value.is_empty());
+    let effective_target_name = element_attribute(runtime, handle, "target")
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            let document = runtime.dom_host().owner_document_handle(handle)?;
+            runtime
+                .dom_host()
+                .document_base_target_for_handle(document)
+                .filter(|target| !target.is_empty())
+                .map(str::to_owned)
+        });
     let (target_name, popup_disposition) = match navigation_policy {
         HyperlinkNavigationPolicy::Auxiliary(disposition) => {
             (Some("_blank".to_owned()), disposition)
         }
         HyperlinkNavigationPolicy::Current => {
-            (declared_target_name, RendererPopupDisposition::Foreground)
+            (effective_target_name, RendererPopupDisposition::Foreground)
         }
         HyperlinkNavigationPolicy::Download => {
             unreachable!("download hyperlink policy returned before target selection")
