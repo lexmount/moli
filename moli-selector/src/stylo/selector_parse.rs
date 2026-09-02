@@ -187,9 +187,17 @@ pub(crate) fn validate_style_rule_selector_list(selector: &str) -> Result<(), Se
 }
 
 pub(crate) fn validate_supports_selector_list(selector: &str) -> Result<(), SelectorError> {
-    parse_style_rule_selector_list_for_url(
+    validate_supports_selector_list_with_namespaces(selector, &StyleRuleNamespaceContext::default())
+}
+
+pub(crate) fn validate_supports_selector_list_with_namespaces(
+    selector: &str,
+    namespace_context: &StyleRuleNamespaceContext,
+) -> Result<(), SelectorError> {
+    parse_style_rule_selector_list_for_url_and_namespaces(
         selector,
         Url::parse("about:blank").expect("about:blank is valid"),
+        namespace_context,
         true,
     )
     .map(|_| ())

@@ -143,7 +143,7 @@ pub(crate) use selector_parse::{
     normalize_scope_style_rule_selector_list_with_namespaces, parse_dom_api_selector_list,
     parse_dom_api_selector_list_for_url, validate_style_rule_selector_list,
     validate_style_rule_selector_list_with_namespaces,
-    validate_supports_selector_condition_argument,
+    validate_supports_selector_condition_argument, validate_supports_selector_list_with_namespaces,
 };
 pub use style_traversal::{
     StyloDocument, StyloDomHostBinding, StyloDomStyleAdapter, StyloElement, StyloElementDataStore,
