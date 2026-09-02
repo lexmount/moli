@@ -8,7 +8,7 @@ use moli_layout::{
 
 use super::client_rect::{ClientRect, union_client_rect, zero_client_rect};
 use super::mock::{answer_queries as answer_mock_queries, answer_query as answer_mock_query};
-use crate::{document_runtime::DomHandle, native_bridge::PageScriptHost};
+use crate::{document_runtime::DomHandle, dom::native::DomHost, native_bridge::PageScriptHost};
 
 fn query_source(
     runtime: &PageScriptHost,
@@ -332,6 +332,44 @@ pub(super) fn provider_contract_error(answer: &str) -> LayoutError {
         "renderer geometry provider",
         format!("returned a mismatched {answer} answer"),
     )
+}
+
+/// Returns whether an element is suppressed from hit testing by an explicit
+/// `inert` attribute in its flat-tree ancestry.
+///
+/// A modal dialog escapes inertness inherited from ancestors outside the
+/// dialog, while an `inert` attribute on the dialog itself still applies.
+pub(crate) fn element_is_inert_for_hit_testing(host: &DomHost, handle: DomHandle) -> bool {
+    let mut current = Some(handle);
+    while let Some(candidate) = current {
+        if let Some(element) = host.node(candidate).and_then(|node| node.as_element()) {
+            if element.namespace() == "http://www.w3.org/1999/xhtml"
+                && element.has_attribute("inert")
+            {
+                return true;
+            }
+            if element.is_html_element("dialog")
+                && element.dialog_modal()
+                && element.has_attribute("open")
+                && host.is_connected(candidate)
+            {
+                return false;
+            }
+        }
+        current = flat_tree_parent(host, candidate);
+    }
+    false
+}
+
+fn flat_tree_parent(host: &DomHost, handle: DomHandle) -> Option<DomHandle> {
+    if let Some(slot) = host.assigned_slot_for_node(handle) {
+        return Some(slot);
+    }
+    let parent = host.parent_node(handle)?;
+    if host.is_shadow_root(parent) {
+        return host.shadow_root_host(parent);
+    }
+    Some(parent)
 }
 
 /// Resolve the foremost painted hit and the viewport sampled by the same

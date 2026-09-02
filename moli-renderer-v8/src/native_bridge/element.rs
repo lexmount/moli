@@ -464,6 +464,7 @@ pub(crate) use forms::{
 use rendered_state::{node_check_visibility_callback, node_current_css_zoom_getter_function};
 
 pub use geometry::ClientRect;
+pub(crate) use geometry::element_is_inert_for_hit_testing;
 #[cfg(feature = "devtools")]
 pub(crate) use geometry::observable_input_hit_test;
 #[cfg(test)]
