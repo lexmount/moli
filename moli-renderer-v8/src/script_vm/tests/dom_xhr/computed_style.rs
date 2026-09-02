@@ -424,6 +424,40 @@ fn modal_dialog_user_agent_visibility_overrides_inheritance() {
 }
 
 #[test]
+fn modal_dialog_top_layer_adjusts_non_absolute_positions() {
+    let mut vm = new_parsed_test_vm(
+        "https://modal-dialog-top-layer-position.test/",
+        r#"<!doctype html><dialog id="target"></dialog>"#,
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const dialog = document.getElementById('target');
+  const values = [];
+  for (const position of ['static', 'relative', 'sticky', 'absolute', 'fixed']) {
+    dialog.style.position = position;
+    values.push(getComputedStyle(dialog).position);
+    dialog.showModal();
+    values.push(getComputedStyle(dialog).position);
+    dialog.close();
+    values.push(getComputedStyle(dialog).position);
+  }
+  return values.join('|');
+})()
+"#,
+        )
+        .expect("modal dialog top-layer position should evaluate");
+
+    assert_eq!(
+        result,
+        "static|absolute|static|relative|absolute|relative|sticky|absolute|sticky|\
+         absolute|absolute|absolute|fixed|fixed|fixed"
+    );
+}
+
+#[test]
 fn semantic_text_decoration_uses_user_agent_defaults() {
     let mut vm = new_parsed_test_vm(
         "https://semantic-text-decoration.test/",

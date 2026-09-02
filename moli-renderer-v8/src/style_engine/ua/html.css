@@ -538,6 +538,7 @@ dialog[open], [popover]:popover-open {
 }
 
 dialog:modal {
+  -servo-top-layer: top;
   visibility: visible;
 }
 
