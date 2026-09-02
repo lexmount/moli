@@ -1,5 +1,6 @@
 FileAPI/idlharness.html
 FileAPI/url/sandboxed-iframe.html
+FileAPI/url/url-lifetime.html
 acid/acid3/numbered-tests.html
 client-hints/service-workers/intercept-request.https.html
 client-hints/service-workers/new-request.https.html
@@ -18,6 +19,7 @@ content-security-policy/generic/policy-inherited-correctly-by-plznavigate.html
 content-security-policy/inheritance/document-write-iframe.html
 content-security-policy/inheritance/location-reload.html
 content-security-policy/inside-worker/dedicatedworker-report-only.html
+content-security-policy/inside-worker/dedicatedworker-worker-src.html
 content-security-policy/inside-worker/serviceworker-report-only.https.sub.html
 content-security-policy/navigation/to-javascript-parent-initiated-parent-csp.html
 content-security-policy/object-src/object-src-url-blocked.html
@@ -30,6 +32,7 @@ content-security-policy/sandbox/autoplay-disabled-by-csp.html
 content-security-policy/sandbox/window-reuse-sandboxed.html
 content-security-policy/script-src/non-nonceable-elements.html
 content-security-policy/script-src/nonce-enforce-blocked.html
+content-security-policy/script-src/script-src-trusted_types_eval_DedicatedWorker.html
 content-security-policy/securitypolicyviolation/blockeduri-inline.html
 content-security-policy/unsafe-eval/eval-blocked-in-about-blank-iframe.html
 content-security-policy/webrtc/webrtc-allowed-default-src-none.html
@@ -2348,6 +2351,7 @@ css/css-variables/variable-reference-perspective-origin.html
 css/css-variables/variable-reference.html
 css/css-variables/variable-substitution-variable-declaration.html
 css/css-variables/variables-animation-math-functions.html
+css/cssom-view/DOMRectList.html
 css/cssom-view/HTMLBody-ScrollArea_quirksmode.html
 css/cssom-view/MediaQueryList-addListener-handleEvent.html
 css/cssom-view/MediaQueryList-addListener-removeListener.html
@@ -2470,7 +2474,21 @@ css/cssom/getComputedStyle-insets-sticky.html
 css/cssom/getComputedStyle-layout-dependent-replaced-into-ib-split.html
 css/cssom/idlharness.html
 css/cssom/style-sheet-interfaces-001.html
+css/geometry/DOMMatrix-001.html
+css/geometry/DOMMatrix-003.html
+css/geometry/DOMMatrix-attributes.html
+css/geometry/DOMMatrix-stringifier.html
 css/geometry/DOMMatrix2DInit-validate-fixup.html
+css/geometry/DOMMatrixInit-validate-fixup.html
+css/geometry/DOMPoint-001.html
+css/geometry/DOMPoint-002.html
+css/geometry/DOMQuad-001.html
+css/geometry/DOMQuad-002.html
+css/geometry/DOMQuad-nan.html
+css/geometry/DOMRectList.html
+css/geometry/historical.html
+css/geometry/spec-examples.html
+css/geometry/structured-serialization.html
 css/mediaqueries/at-custom-media-cssom.html
 css/mediaqueries/at-custom-media-parsing.html
 css/mediaqueries/display-mode.html
