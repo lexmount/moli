@@ -23452,6 +23452,51 @@ fn window_open_lightweight_popup_location_assignment_uses_window_setter() {
     );
 }
 
+#[test]
+fn lightweight_popup_location_uses_its_exposed_dom_exception_constructor() {
+    let mut vm = new_storage_test_vm("https://example.com/");
+
+    let result = vm
+        .eval(
+            r##"
+            (() => {
+              const popup = open("about:blank");
+              const originalHref = popup.location.href;
+              const descriptor = Object.getOwnPropertyDescriptor(popup, "DOMException");
+              let thrown;
+              try {
+                popup.location.href = "https://example.com:notaport/common/blank.html";
+              } catch (error) {
+                thrown = [
+                  error.name,
+                  error.code,
+                  error.constructor === popup.DOMException,
+                  error instanceof popup.DOMException
+                ].join(":");
+              }
+              return [
+                typeof popup.DOMException,
+                descriptor.enumerable,
+                descriptor.configurable,
+                descriptor.writable,
+                thrown,
+                popup.location.href === originalHref
+              ].join("|");
+            })()
+            "##,
+        )
+        .expect("popup invalid Location URL probe should evaluate");
+
+    assert_eq!(
+        result,
+        "function|false|true|true|SyntaxError:12:true:true|true"
+    );
+    assert!(
+        vm.take_pending_location_navigation_with_seed().is_none(),
+        "invalid popup Location navigation must not escape to the opener"
+    );
+}
+
 #[tokio::test]
 async fn lightweight_popup_fragment_navigation_dispatches_popstate_and_hashchange() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
