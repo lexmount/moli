@@ -874,6 +874,14 @@ impl DocumentRuntime {
         self.dom_host.set_active_element_handle(handle);
     }
 
+    pub(crate) fn autofocus_processed(&self) -> bool {
+        self.autofocus_processed
+    }
+
+    pub(crate) fn mark_autofocus_processed(&mut self) {
+        self.autofocus_processed = true;
+    }
+
     pub(crate) fn document_focus_fallback_handle(&self) -> Option<DomHandle> {
         self.dom_host
             .document_body_handle()
