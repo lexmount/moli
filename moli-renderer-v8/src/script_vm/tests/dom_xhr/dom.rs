@@ -8004,6 +8004,34 @@ fn dom_parser_inner_text_is_html_only() {
 }
 
 #[test]
+fn selectedcontent_inner_text_falls_back_when_its_select_child_box_is_suppressed() {
+    let mut vm = new_parsed_test_vm(
+        "https://selectedcontent-inner-text.test/",
+        "<!doctype html><html><body><div id=before>before</div></body></html>",
+    );
+
+    let result = vm
+        .eval(
+            r#"
+void document.body.innerText;
+const select = document.createElement('select');
+select.innerHTML = '<button><selectedcontent id="selectedcontent">default</selectedcontent></button><option>one</option>';
+select.style.appearance = 'base-select';
+document.body.append(select);
+const selectedcontent = document.getElementById('selectedcontent');
+[
+  selectedcontent.textContent,
+  selectedcontent.innerText,
+  selectedcontent.getClientRects().length
+].join('|')
+"#,
+        )
+        .expect("selectedcontent innerText should evaluate");
+
+    assert_eq!(result, "one|one|0");
+}
+
+#[test]
 fn live_inner_text_applies_inline_text_transform() {
     let mut vm = new_parsed_test_vm(
         "https://inner-text-transform.test/",
