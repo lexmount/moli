@@ -4,7 +4,7 @@ use crate::{
         CHILD_BROWSING_CONTEXT_HANDLE_SLOT, EventHandlerType,
         apply_before_unload_event_handler_return_value, apply_event_handler_return_value,
         clear_event_composed_path, event_is_error_event, mark_event_trusted,
-        set_event_composed_path,
+        set_event_composed_path, set_event_source_value,
     },
     document_runtime::DocumentRuntime,
     dom_parser::DOM_PARSER_FOREIGN_NODE_SLOT,
@@ -2283,7 +2283,7 @@ fn set_event_source_for_current_target<'s>(
     };
     let source = retarget_event_target(host_ptr, original_source_target, current_target);
     let source_value = event_target_value(scope, host_ptr, source)?;
-    let _ = event.set(scope, v8str(scope, "source").into(), source_value);
+    set_event_source_value(scope, event, source_value);
     Ok(())
 }
 
@@ -2389,7 +2389,7 @@ fn set_event_post_dispatch_source<'s>(
         return Ok(());
     };
     let source_value = event_target_value(scope, host_ptr, source_target)?;
-    let _ = event.set(scope, v8str(scope, "source").into(), source_value);
+    set_event_source_value(scope, event, source_value);
     Ok(())
 }
 
