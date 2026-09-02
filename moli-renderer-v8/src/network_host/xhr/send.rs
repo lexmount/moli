@@ -428,6 +428,15 @@ fn send_synchronous_network_xhr(
 
     match result {
         Ok(response) => {
+            crate::context_bootstrap::record_resource_performance_entry(
+                scope,
+                crate::context_bootstrap::ResourcePerformanceEntry::from_fetch_response(
+                    prepared.resolved_url.as_str(),
+                    "xmlhttprequest",
+                    None,
+                    &response,
+                ),
+            );
             let observable_headers = crate::network_host::filter_cors_exposed_response_headers(
                 &prepared.document_url,
                 &response.final_url,

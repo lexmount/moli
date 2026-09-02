@@ -3733,6 +3733,15 @@ impl ScriptVm {
                             resolver.resolve(scope, response_obj.into());
                         }
                         PendingSubresourceContinuation::Xhr(xhr) => {
+                            crate::context_bootstrap::record_resource_performance_entry(
+                                scope,
+                                crate::context_bootstrap::ResourcePerformanceEntry::from_network_response(
+                                    pending.info.url.as_str(),
+                                    "xmlhttprequest",
+                                    None,
+                                    &observable_response,
+                                ),
+                            );
                             let xhr = v8::Local::new(scope, &xhr);
                             let (head, body) = observable_response.into_body();
                             crate::network_host::apply_xhr_response_body_source_with_status_text(
@@ -5528,6 +5537,7 @@ impl ScriptVm {
                         let finish_body_started =
                             moli_trace::cdp_runtime_trace_enabled().then(Instant::now);
                         let response_body = streaming.body_writer.finish();
+                        let response_body_size = response_body.len();
                         trace_async_subresource_stage(
                             "async_subresource_streaming_body_finished",
                             trace_fields,
@@ -5683,6 +5693,16 @@ impl ScriptVm {
                         {
                             let xhr_started =
                                 moli_trace::cdp_runtime_trace_enabled().then(Instant::now);
+                            crate::context_bootstrap::record_resource_performance_entry(
+                                scope,
+                                crate::context_bootstrap::ResourcePerformanceEntry::from_streaming_network_response(
+                                    streaming.pending.info.url.as_str(),
+                                    "xmlhttprequest",
+                                    None,
+                                    &streaming.head,
+                                    response_body_size,
+                                ),
+                            );
                             let xhr = v8::Local::new(scope, &xhr);
                             let mut observable_head = streaming.head;
                             observable_head.headers =

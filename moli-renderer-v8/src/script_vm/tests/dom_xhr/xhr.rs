@@ -83,6 +83,71 @@ async fn same_origin_window_fetch_and_xhr_post_send_origin_on_wire() {
     }
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn asynchronous_window_xhr_records_resource_timing_with_xmlhttprequest_initiator() {
+    let server = StaticHttpServer::spawn(1).await;
+    let base_url = server.base_url();
+    let loader = static_http_loader(std::iter::empty::<String>());
+    let mut vm = new_page_task_executor_test_vm_with_loader(
+        base_url
+            .join("page.html")
+            .expect("page fixture URL")
+            .as_str(),
+        &loader,
+    );
+
+    vm.eval(
+        r#"
+(() => {
+  globalThis.__xhrResourceTimingProbe = "pending";
+  const xhr = new XMLHttpRequest();
+  xhr.open("GET", "xhr-resource");
+  xhr.onload = () => { globalThis.__xhrResourceTimingProbe = "done"; };
+  xhr.onerror = () => { globalThis.__xhrResourceTimingProbe = "error"; };
+  xhr.send();
+  return "started";
+})()
+"#,
+    )
+    .expect("XHR resource timing probe should evaluate");
+
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(globalThis.__xhrResourceTimingProbe)",
+        "done",
+        "XHR resource timing probe",
+    )
+    .await;
+
+    let entry = vm
+        .eval(
+            r#"
+(() => {
+  const url = new URL("xhr-resource", location.href).href;
+  const entries = performance.getEntriesByName(url, "resource");
+  return JSON.stringify(entries.map(entry => ({
+    name: entry.name,
+    initiatorType: entry.initiatorType,
+    isResourceTiming: entry instanceof PerformanceResourceTiming
+  })));
+})()
+"#,
+        )
+        .expect("XHR resource timing entry should be readable");
+    assert_eq!(
+        entry,
+        format!(
+            r#"[{{"name":"{}","initiatorType":"xmlhttprequest","isResourceTiming":true}}]"#,
+            base_url.join("xhr-resource").expect("XHR resource URL")
+        )
+    );
+
+    let requests = server.finish().await;
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].target, "/xhr-resource");
+}
+
 fn pending_fetch_continuation<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     resolver: v8::Local<'s, v8::PromiseResolver>,

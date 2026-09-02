@@ -277,12 +277,62 @@ impl ResourcePerformanceEntry {
         response: &crate::protocol_types::NavigationResponse,
     ) -> Self {
         let body_size = response.body_bytes().len() as f64;
-        let header_size = response
-            .headers
+        Self::from_response_parts(
+            name,
+            initiator_type,
+            start_unix_millis,
+            response.status,
+            &response.headers,
+            body_size,
+        )
+    }
+
+    pub(crate) fn from_streaming_network_response(
+        name: impl Into<String>,
+        initiator_type: &'static str,
+        start_unix_millis: Option<f64>,
+        response: &moli_fetch::ResponseHead,
+        body_size: usize,
+    ) -> Self {
+        Self::from_response_parts(
+            name,
+            initiator_type,
+            start_unix_millis,
+            response.status,
+            &response.headers,
+            body_size as f64,
+        )
+    }
+
+    pub(crate) fn from_fetch_response(
+        name: impl Into<String>,
+        initiator_type: &'static str,
+        start_unix_millis: Option<f64>,
+        response: &moli_fetch::Response,
+    ) -> Self {
+        Self::from_response_parts(
+            name,
+            initiator_type,
+            start_unix_millis,
+            response.status,
+            &response.headers,
+            response.body_bytes().len() as f64,
+        )
+    }
+
+    fn from_response_parts(
+        name: impl Into<String>,
+        initiator_type: &'static str,
+        start_unix_millis: Option<f64>,
+        response_status: u16,
+        response_headers: &[(String, String)],
+        body_size: f64,
+    ) -> Self {
+        let header_size = response_headers
             .iter()
             .map(|(name, value)| name.len() + value.len() + 4)
             .sum::<usize>() as f64;
-        let content_type = moli_web_mime::response_content_type(&response.headers)
+        let content_type = moli_web_mime::response_content_type(response_headers)
             .and_then(|value| moli_web_mime::mime_essence(&value))
             .unwrap_or_default();
         Self {
@@ -295,7 +345,7 @@ impl ResourcePerformanceEntry {
             // The fetch lifecycle does not yet retain render-blocking metadata.
             // Avoid claiming that a resource blocked rendering until it does.
             render_blocking_status: "non-blocking".to_owned(),
-            response_status: f64::from(response.status),
+            response_status: f64::from(response_status),
             content_type,
         }
     }
