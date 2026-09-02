@@ -1189,6 +1189,8 @@ impl LiveStylesheet {
             self.quirks_mode,
             self.allow_import_rules,
         ));
+        let source_declaration_override =
+            stylesheet_eof_open_var_declaration_override(&replacement, css_text);
         let replacement_contents = {
             let guard = replacement.shared_lock.read();
             replacement.contents.read_with(&guard).clone()
@@ -1209,9 +1211,11 @@ impl LiveStylesheet {
             .entries
             .clear();
         self.note_contents_mutation();
+        *self.source_declaration_override.borrow_mut() = source_declaration_override;
     }
 
     pub(crate) fn note_contents_mutation(&self) {
+        self.source_declaration_override.borrow_mut().take();
         self.contents_revision
             .set(self.contents_revision.get().saturating_add(1));
         self.note_cascade_mutation();
