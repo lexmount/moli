@@ -273,6 +273,23 @@ pub fn parse_font_feature_values_rule_view_with_stylo(
 
 pub fn parse_property_rule_view_with_stylo(css_text: &str) -> Option<CssPropertyRuleView> {
     style::moli_rule_tree::parse_property_rule_view(css_text)
+        .map(normalize_css_property_rule_view_name)
+}
+
+fn normalize_css_property_rule_view_name(mut view: CssPropertyRuleView) -> CssPropertyRuleView {
+    let decoded_name = {
+        let mut input = ParserInput::new(&view.name);
+        let mut parser = Parser::new(&mut input);
+        parser
+            .expect_ident_cloned()
+            .ok()
+            .filter(|name| parser.expect_exhausted().is_ok() && name.starts_with("--"))
+            .map(|name| name.to_string())
+    };
+    if let Some(decoded_name) = decoded_name {
+        view.name = decoded_name;
+    }
+    view
 }
 
 pub fn native_stylesheet_css_text_with_stylo(stylesheet: &CssNativeStylesheet) -> String {
@@ -339,6 +356,7 @@ pub fn native_stylesheet_property_rule_read_with_stylo(
     rule_path: &[usize],
 ) -> Option<CssPropertyRuleView> {
     style::moli_rule_tree::stylesheet_rule_tree_property_rule_view(stylesheet, rule_path)
+        .map(normalize_css_property_rule_view_name)
 }
 
 pub fn native_stylesheet_font_feature_values_rule_read_with_stylo(
@@ -657,6 +675,22 @@ mod tests {
             )
             .is_none(),
             "Stylo rejects initial values that do not match the syntax descriptor"
+        );
+    }
+
+    #[test]
+    fn property_rule_views_decode_escaped_names_without_changing_css_text() {
+        let property_rule = r#"@property --tab\9 tab { syntax: "*"; inherits: true; }"#;
+        let parsed = parse_property_rule_view_with_stylo(property_rule)
+            .expect("escaped @property name should produce a CSSOM view");
+
+        assert_eq!(parsed.name, "--tab\ttab");
+        assert_eq!(parsed.css_text, property_rule);
+
+        let stylesheet = parse_native_stylesheet(property_rule);
+        assert_eq!(
+            native_stylesheet_property_rule_read_with_stylo(&stylesheet, &[0]),
+            Some(parsed),
         );
     }
 
