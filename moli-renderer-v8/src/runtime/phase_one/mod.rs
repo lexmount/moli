@@ -18390,7 +18390,7 @@ document.body.setAttribute("data-range", [
             let outcome = driver
                 .advance_parser_step(
                     &mut page_vm,
-                    "<!doctype html><html><head><style>@import url('/style.css');</style><script>window.afterStyle = true;</script></head></html>",
+                    "<!doctype html><html><head><style id='blocking-style'>@import url('/style.css');</style><script>window.afterStyle = true;</script></head></html>",
                     None,
                 )
                 .await
@@ -18399,6 +18399,20 @@ document.body.setAttribute("data-range", [
             assert!(
                 matches!(outcome, ParserStepAdvanceOutcome::BlockedOnStylesheet(_)),
                 "parser-created style import should gate parser-blocking script on live PageVm"
+            );
+            let style = page_vm
+                .vm()
+                .document_runtime
+                .dom_host()
+                .element_handle_by_id("blocking-style")
+                .expect("parser-created style owner");
+            assert_eq!(
+                page_vm
+                    .vm()
+                    .document_runtime
+                    .pending_style_import_binding_for_test(style),
+                Some((1, true)),
+                "the parser-discovered import must bind its live stylesheet root before the script gate is released"
             );
         }));
     }
