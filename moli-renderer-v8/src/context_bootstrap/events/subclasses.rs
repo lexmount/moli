@@ -5,6 +5,7 @@ use super::*;
 mod constructor;
 mod data;
 mod input;
+mod interaction;
 mod security_policy;
 #[cfg(any(feature = "devtools", test))]
 mod touch;
@@ -28,3 +29,4 @@ pub(crate) use security_policy::initialize_native_security_policy_violation_even
 
 pub(crate) use input::clear_input_event_target_ranges;
 pub(in crate::context_bootstrap) use input::input_event_get_target_ranges_callback;
+pub(in crate::context_bootstrap) use interaction::interaction_event_source_getter;

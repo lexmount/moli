@@ -16,10 +16,10 @@ use super::{
         event_stop_propagation_callback, event_target_getter_function,
         event_time_stamp_getter_function, event_type_getter_function, event_value_attribute_getter,
         focus_event_related_target_getter_function, form_data_event_form_data_getter_function,
-        input_event_get_target_ranges_callback, keyboard_event_init_callback,
-        mouse_event_related_target_getter_function, pointer_event_get_predicted_events_callback,
-        submit_event_submitter_getter_function, ui_event_pseudo_target_getter_function,
-        ui_event_which_getter_function,
+        input_event_get_target_ranges_callback, interaction_event_source_getter,
+        keyboard_event_init_callback, mouse_event_related_target_getter_function,
+        pointer_event_get_predicted_events_callback, submit_event_submitter_getter_function,
+        ui_event_pseudo_target_getter_function, ui_event_which_getter_function,
     },
     selection_surface::document_get_selection_callback,
     specs::ConstructorSpec,
@@ -149,6 +149,16 @@ struct FormDataEventTemplateAccessorsDeclaration {
 struct DragEventTemplateAccessorsDeclaration {
     #[webapi(accessor_property = "dataTransfer", getter = event_platform_attribute_getter, data = crate::util::v8str(scope, "dataTransfer"))]
     data_transfer: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::CommandEvent, enumerable)]
+struct CommandEventTemplateAccessorsDeclaration {
+    #[webapi(accessor_property, getter = interaction_event_source_getter)]
+    source: (),
+
+    #[webapi(accessor_property, getter = event_value_attribute_getter, data = crate::util::v8str(scope, "command"))]
+    command: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -450,6 +460,10 @@ struct DocumentEventTemplateMethodsDeclaration {
 // Installation and wrapper placement share the same native declarations. Public
 // prototype mutations cannot change which fields are exposed as own properties.
 fn event_template_declaration(interface: &str) -> Option<EventTemplateDeclaration> {
+    // The renderer retargets source against currentTarget in the receiver's world.
+    if interface == "CommandEvent" {
+        return Some(EventTemplateDeclaration::new::<CommandEventTemplateAccessorsDeclaration>());
+    }
     if let Some(declaration) = moli_webapi::events::subclasses::template_declaration(interface) {
         return Some(declaration);
     }

@@ -9,10 +9,10 @@ use super::*;
 use crate::context_bootstrap::navigation_entry::wrappers as entry_wrappers;
 use crate::context_bootstrap::{exposed_interfaces, world_wrappers};
 pub(in crate::context_bootstrap) use moli_webapi::events::state::event_value_attribute_getter;
+use moli_webapi::events::subclasses::COMMAND_EVENT_SOURCE_SLOT;
 
 pub(crate) use moli_webapi::events::state::{
-    event_attribute, event_bool_attribute, event_private_value, new_event_state,
-    set_event_private_value,
+    event_bool_attribute, event_private_value, new_event_state, set_event_private_value,
 };
 
 const EVENT_ATTRIBUTE_GETTERS_SLOT: &str = "__moliEventAttributeGetters";
@@ -319,6 +319,19 @@ pub(super) fn event_attribute_in_wrapper<'s>(
 ) -> Option<v8::Local<'s, v8::Value>> {
     let value = event_attribute(scope, wrapper, property)?;
     AttributeProjection::for_property(property).project(scope, wrapper, value)
+}
+
+/// Engine reads bypass public wrappers, including own shadows and getters.
+pub(crate) fn event_attribute<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event: v8::Local<'_, v8::Object>,
+    property: &str,
+) -> Option<v8::Local<'s, v8::Value>> {
+    let state = event_backing(scope, event);
+    if property == "source" && event_subclass_kind(scope, state) == Some(EventSubclassKind::CommandEvent) {
+        return get_private_value(scope, state, COMMAND_EVENT_SOURCE_SLOT);
+    }
+    moli_webapi::events::state::event_attribute(scope, state, property)
 }
 
 #[cfg(test)]

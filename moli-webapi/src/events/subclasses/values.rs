@@ -33,7 +33,7 @@ pub(super) struct CommandInit<'s> {
     base: EventInit,
     #[webidl(default = webidl::DomString16(Vec::new()), converter = "raw", snapshot_order = 1)]
     command: webidl::DomString16,
-    #[webidl(nullable, interface = web_api_interfaces::Element, snapshot_order = 0)]
+    #[webidl(nullable, interface = web_api_interfaces::Element, snapshot_order = 0, snapshot_slot = COMMAND_EVENT_SOURCE_SLOT)]
     source: Option<v8::Local<'s, v8::Object>>,
 }
 

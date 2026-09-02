@@ -22,6 +22,7 @@ mod html_serialization;
 mod mutation;
 mod parser;
 mod query_index;
+mod retarget;
 mod stylesheet_candidates;
 mod subtree;
 mod types;

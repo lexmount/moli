@@ -5,6 +5,7 @@ use crate::{
         apply_before_unload_event_handler_return_value, apply_event_handler_return_value,
         clear_event_composed_path, error_event_handler_arguments,
         event_target_dispatch::finish_dispatch, mark_event_trusted, set_event_composed_path,
+        set_event_source_value,
     },
     dom_parser::DOM_PARSER_FOREIGN_NODE_SLOT,
     util::{get_private_object, get_private_value, serialize_v8_iter_array},
@@ -2340,11 +2341,7 @@ fn set_event_source_for_current_target<'s>(
     };
     let source = retarget_event_target(host_ptr, original_source_target, current_target);
     let source_value = event_target_value(scope, host_ptr, source)?;
-    let _ = crate::context_bootstrap::event_backing(scope, event).set(
-        scope,
-        v8str(scope, "source").into(),
-        source_value,
-    );
+    set_event_source_value(scope, event, source_value);
     Ok(())
 }
 
@@ -2454,11 +2451,7 @@ fn set_event_post_dispatch_source<'s>(
         return Ok(());
     };
     let source_value = event_target_value(scope, host_ptr, source_target)?;
-    let _ = crate::context_bootstrap::event_backing(scope, event).set(
-        scope,
-        v8str(scope, "source").into(),
-        source_value,
-    );
+    set_event_source_value(scope, event, source_value);
     Ok(())
 }
 
@@ -2515,13 +2508,17 @@ fn event_related_target_handle(
         .map(EventTargetHandle::Node)
 }
 
-fn event_source_target_handle(
-    scope: &mut v8::PinScope<'_, '_>,
+fn event_source_target_handle<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     host_ptr: *mut PageScriptHost,
-    event: v8::Local<'_, v8::Object>,
+    event: v8::Local<'s, v8::Object>,
 ) -> Option<EventTargetHandle> {
-    let value = crate::context_bootstrap::event_backing(scope, event)
-        .get(scope, v8str(scope, "source").into())?;
+    // CommandEvent retains its original source and retarget it
+    // on every getter read, including outside dispatch and after tree changes.
+    if crate::context_bootstrap::event_source_retargets_on_access(scope, event) {
+        return None;
+    }
+    let value = crate::context_bootstrap::event_attribute(scope, event, "source")?;
     if value.is_null_or_undefined() || !value.is_object() {
         return None;
     }
@@ -2597,22 +2594,15 @@ fn retarget_event_target(
     original_target: EventTargetHandle,
     current_target: EventTargetHandle,
 ) -> EventTargetHandle {
-    let EventTargetHandle::Node(mut candidate) = original_target else {
+    let EventTargetHandle::Node(candidate) = original_target else {
         return original_target;
     };
+    let against = match current_target {
+        EventTargetHandle::Node(handle) => Some(handle),
+        _ => None,
+    };
     let runtime = unsafe { &*host_ptr };
-    loop {
-        let Some(shadow_root) = runtime.dom_host().containing_shadow_root(candidate) else {
-            return EventTargetHandle::Node(candidate);
-        };
-        if current_target_can_access_shadow_root(host_ptr, current_target, shadow_root) {
-            return EventTargetHandle::Node(candidate);
-        }
-        let Some(host) = runtime.dom_host().shadow_root_host(shadow_root) else {
-            return EventTargetHandle::Node(candidate);
-        };
-        candidate = host;
-    }
+    EventTargetHandle::Node(runtime.dom_host().retarget(candidate, against))
 }
 
 fn visible_event_path(
@@ -2667,26 +2657,7 @@ fn shadow_including_tree_contains(
     root: NativeNodeId,
     handle: NativeNodeId,
 ) -> bool {
-    let mut current = handle;
-    loop {
-        if current == root {
-            return true;
-        }
-        if let Some(parent) = dom_host
-            .node(current)
-            .and_then(moli_dom::native::Node::parent_node)
-        {
-            current = parent;
-            continue;
-        }
-        if dom_host.is_shadow_root(current)
-            && let Some(host) = dom_host.shadow_root_host(current)
-        {
-            current = host;
-            continue;
-        }
-        return false;
-    }
+    dom_host.shadow_including_contains(root, handle)
 }
 
 fn event_bool_property(

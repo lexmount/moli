@@ -46,6 +46,16 @@ struct TrackEventTemplateAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::CommandEvent, enumerable)]
+struct CommandEventTemplateAccessorsDeclaration {
+    #[webapi(accessor_property, getter = nullable_event_slot_getter, data = moli_v8_util::v8str(scope, COMMAND_EVENT_SOURCE_SLOT))]
+    source: (),
+
+    #[webapi(accessor_property, getter = event_value_attribute_getter, data = moli_v8_util::v8str(scope, "command"))]
+    command: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::BeforeUnloadEvent, enumerable)]
 struct BeforeUnloadEventTemplateAccessorsDeclaration {
     #[webapi(accessor_property, getter = before_unload_event_return_value_getter, setter = before_unload_event_return_value_setter)]
@@ -170,6 +180,9 @@ pub fn template_declaration(interface: &str) -> Option<EventTemplateDeclaration>
             EventTemplateDeclaration::new::<BeforeUnloadEventTemplateAccessorsDeclaration>()
         }
         "CustomEvent" => EventTemplateDeclaration::new::<CustomEventTemplateMethodsDeclaration>(),
+        "CommandEvent" => {
+            EventTemplateDeclaration::new::<CommandEventTemplateAccessorsDeclaration>()
+        }
         "CloseEvent" => EventTemplateDeclaration::new::<CloseEventTemplateAccessorsDeclaration>(),
         "TrackEvent" => EventTemplateDeclaration::new::<TrackEventTemplateAccessorsDeclaration>(),
         "HashChangeEvent" => {

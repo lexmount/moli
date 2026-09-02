@@ -33,6 +33,8 @@ pub(in crate::context_bootstrap) use value::{
     ValueEventKind, build_value_event_template, install_value_event_template_bindings,
 };
 
+pub(in crate::context_bootstrap) use subclasses::interaction_event_source_getter;
+
 #[derive(Default, WebApiObject)]
 #[webapi(fragment, prototype = "PointerEvent", enumerable)]
 struct SecurePointerEventPrototypeRuntimeDeclaration {
@@ -138,6 +140,22 @@ pub(crate) fn error_event_handler_arguments<'s>(
         backing.get(scope, v8str(scope, "colno").into())?,
         backing.get(scope, v8str(scope, "error").into())?,
     ])
+}
+
+pub(crate) fn set_event_source_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event: v8::Local<'s, v8::Object>,
+    value: v8::Local<'s, v8::Value>,
+) {
+    let event = event_backing(scope, event);
+    let _ = event.set(scope, v8str(scope, "source").into(), value);
+}
+
+pub(crate) fn event_source_retargets_on_access<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event: v8::Local<'s, v8::Object>,
+) -> bool {
+    event_subclass_kind(scope, event) == Some(EventSubclassKind::CommandEvent)
 }
 
 pub(crate) fn event_is_mouse_event<'s>(
