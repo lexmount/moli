@@ -12142,7 +12142,7 @@ async fn webcrypto_checkpoint_reconciles_document_replacement_before_restoring_p
     let document_open_session = "SID-document-open-agent";
     runtime_enable_events_for_inspector_session_for_test(&page, Some(document_open_session))
         .await
-        .expect("auxiliary Runtime session should attach before document.open");
+        .expect("attached Runtime session should attach before document.open");
     let inspector_before = runtime_heap_usage_for_test(&page).await;
     let inspector_before = &inspector_before["moli"]["runtime"];
     let context_group_before = inspector_before["inspectorContextGroupId"].clone();
@@ -12228,7 +12228,7 @@ async fn webcrypto_checkpoint_reconciles_document_replacement_before_restoring_p
     );
     runtime_enable_events_for_inspector_session_for_test(&page, Some(document_open_session))
         .await
-        .expect("the existing auxiliary Runtime session should remain dispatchable");
+        .expect("the existing attached Runtime session should remain dispatchable");
 
     page.close_async()
         .await

@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeSet, VecDeque},
+    collections::{BTreeMap, VecDeque},
     ffi::c_void,
     sync::{
         Arc,
@@ -243,14 +243,25 @@ impl RendererInspectorIoOwnerWake {
 struct RendererInspectorIoState {
     commands: VecDeque<RendererInspectorIoCommand>,
     active_command_id: Option<u64>,
-    detached_sessions: BTreeSet<RendererDevToolsSessionLaneKey>,
+    // One count per lane is enough: every detach guard completes at most once,
+    // and commands stay blocked until all outstanding guards have completed.
+    session_detaches: BTreeMap<RendererDevToolsSessionLaneKey, usize>,
     closed: bool,
     owner_wake_tx: Option<tokio::sync::mpsc::UnboundedSender<RendererInspectorIoOwnerWake>>,
 }
 
 impl RendererInspectorIoState {
     fn has_ready(&self) -> bool {
-        !self.closed && self.active_command_id.is_none() && !self.commands.is_empty()
+        !self.closed
+            && self.active_command_id.is_none()
+            && self.commands.iter().any(|command| {
+                !self
+                    .session_detaches
+                    .contains_key(&RendererDevToolsSessionLaneKey::new(
+                        command.agent_token,
+                        command.ticket().session().clone(),
+                    ))
+            })
     }
 
     fn drain_commands(
@@ -363,7 +374,7 @@ impl RendererInspectorIoIngress {
                 state: Mutex::new(RendererInspectorIoState {
                     commands: VecDeque::new(),
                     active_command_id: None,
-                    detached_sessions: BTreeSet::new(),
+                    session_detaches: BTreeMap::new(),
                     closed: false,
                     owner_wake_tx: None,
                 }),
@@ -425,8 +436,6 @@ impl RendererInspectorIoIngress {
             RendererInspectorCommandRoute::Io,
             "only IO DevTools commands may enter RendererInspectorIoIngress"
         );
-        let lane_key =
-            RendererDevToolsSessionLaneKey::new(agent_token, envelope.ticket().session().clone());
         let mut state = self.shared.state.lock();
         let (first_dispatch_tx, first_dispatch_rx) = tokio::sync::oneshot::channel();
         let session_response_settlement_rx = envelope.response().and_then(
@@ -443,8 +452,6 @@ impl RendererInspectorIoIngress {
         };
         let rejected = if state.closed {
             Some((command, "Inspector IO target is closed"))
-        } else if state.detached_sessions.contains(&lane_key) {
-            Some((command, "Inspector IO session was detached"))
         } else {
             state.commands.push_back(command);
             None
@@ -505,10 +512,22 @@ impl RendererInspectorIoIngress {
         if !state.has_ready() {
             return None;
         }
+        let position = state
+            .commands
+            .iter()
+            .position(|command| {
+                !state
+                    .session_detaches
+                    .contains_key(&RendererDevToolsSessionLaneKey::new(
+                        command.agent_token,
+                        command.ticket().session().clone(),
+                    ))
+            })
+            .expect("a ready Inspector task runner must have an eligible command");
         let mut command = state
             .commands
-            .pop_front()
-            .expect("a ready Inspector task runner must have a command");
+            .remove(position)
+            .expect("the located Inspector IO command must remain queued");
         state.active_command_id = Some(command.command_id);
         command.claimed_by = Some(consumer);
         Some(command)
@@ -559,7 +578,7 @@ impl RendererInspectorIoIngress {
         }
     }
 
-    pub(crate) fn detach_session(
+    pub(crate) fn begin_session_detach(
         &self,
         agent_token: RendererDevToolsAgentToken,
         session: &DevToolsSessionKey,
@@ -567,14 +586,48 @@ impl RendererInspectorIoIngress {
         let lane_key = RendererDevToolsSessionLaneKey::new(agent_token, session.clone());
         let commands = {
             let mut state = self.shared.state.lock();
-            state.detached_sessions.insert(lane_key);
-            state.drain_commands(|command| {
-                command.agent_token == agent_token && command.ticket().session() == session
-            })
+            if state.closed {
+                Vec::new()
+            } else {
+                let pending_detaches = state.session_detaches.entry(lane_key).or_default();
+                *pending_detaches = pending_detaches
+                    .checked_add(1)
+                    .expect("renderer Inspector IO pending-detach count overflow");
+                state.drain_commands(|command| {
+                    command.agent_token == agent_token && command.ticket().session() == session
+                })
+            }
         };
         for command in commands {
             fail_io_command(command, "Inspector IO session was detached");
         }
+    }
+
+    pub(crate) fn finish_session_detach(
+        &self,
+        agent_token: RendererDevToolsAgentToken,
+        session: &DevToolsSessionKey,
+    ) {
+        let lane_key = RendererDevToolsSessionLaneKey::new(agent_token, session.clone());
+        let mut state = self.shared.state.lock();
+        let finished_last_detach = match state.session_detaches.get_mut(&lane_key) {
+            Some(pending_detaches) => {
+                *pending_detaches -= 1;
+                *pending_detaches == 0
+            }
+            None => {
+                debug_assert!(
+                    state.closed,
+                    "only a closed target may finish an unarmed IO detach"
+                );
+                false
+            }
+        };
+        if finished_last_detach {
+            state.session_detaches.remove(&lane_key);
+        }
+        drop(state);
+        self.notify_execution_opportunities();
     }
 
     pub(crate) fn close(&self, message: &str) {
@@ -897,7 +950,7 @@ mod tests {
         let attachment = moli_page_types::RendererAgentAttachmentId::allocate();
         let session = DevToolsSessionKey::Attached("session-output".to_owned());
         let (channel, response_rx) = RendererRuntimeInspectorResponseChannel::new_for_delivery(
-            moli_page_types::RendererInspectorResponseDelivery::DevToolsSession,
+            moli_page_types::RendererInspectorResponseDelivery::SessionSink,
         );
         assert!(response_rx.is_none());
         let stream = RendererOutputStreamIdentity::new_page_for_protocol_test(
@@ -953,7 +1006,7 @@ mod tests {
         let attachment = moli_page_types::RendererAgentAttachmentId::allocate();
         let session = DevToolsSessionKey::Attached("session-replayed-output".to_owned());
         let (channel, response_rx) = RendererRuntimeInspectorResponseChannel::new_for_delivery(
-            moli_page_types::RendererInspectorResponseDelivery::DevToolsSession,
+            moli_page_types::RendererInspectorResponseDelivery::SessionSink,
         );
         assert!(response_rx.is_none());
         let original_response = channel.activate_sender(32, Some(attachment));
@@ -1006,7 +1059,7 @@ mod tests {
         let agent = RendererDevToolsAgentToken::allocate();
         let attachment = moli_page_types::RendererAgentAttachmentId::allocate();
         let (channel, response_rx) = RendererRuntimeInspectorResponseChannel::new_for_delivery(
-            moli_page_types::RendererInspectorResponseDelivery::DevToolsSession,
+            moli_page_types::RendererInspectorResponseDelivery::SessionSink,
         );
         assert!(response_rx.is_none());
         let route = ingress.enqueue_command(
@@ -1141,11 +1194,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn detach_cancels_all_queued_commands_while_active_first_dispatch_retires_safely() {
+    async fn overlapping_primary_detaches_hold_io_ingress_until_all_complete() {
         let ingress = ingress();
         let agent = RendererDevToolsAgentToken::allocate();
         let mut routes = (0..64)
-            .map(|index| enqueue(&ingress, agent, Some("session-a"), &format!("a-{index}")))
+            .map(|index| enqueue(&ingress, agent, None, &format!("a-{index}")))
             .collect::<Vec<_>>();
         let first_route = routes.remove(0);
 
@@ -1159,7 +1212,7 @@ mod tests {
             Ok(RendererRuntimeInspectorIoCommandClaim::Dispatched)
         );
 
-        ingress.detach_session(agent, &DevToolsSessionKey::Attached("session-a".to_owned()));
+        ingress.begin_session_detach(agent, &DevToolsSessionKey::Primary);
         for (index, route) in routes.into_iter().enumerate() {
             assert!(
                 matches!(
@@ -1181,6 +1234,37 @@ mod tests {
             },
             "the detached session's tasks must retire"
         );
+
+        let replacement = enqueue(&ingress, agent, None, "replacement");
+        ingress.begin_session_detach(agent, &DevToolsSessionKey::Primary);
+        assert!(matches!(
+            replacement.wait_for_first_dispatch().await,
+            Ok(RendererRuntimeInspectorIoCommandClaim::Canceled(_))
+        ));
+
+        let post_detach = enqueue(&ingress, agent, None, "post-detach");
+        let peer = enqueue(&ingress, agent, Some("session-b"), "peer");
+        let mut peer_command = ingress
+            .claim_for_owner()
+            .expect("an unrelated session must bypass the suspended session");
+        assert_eq!(peer_command.command_id(), peer.command_id);
+        ingress.first_dispatch_guard(&mut peer_command).release();
+        assert!(
+            ingress.claim_for_owner().is_none(),
+            "replacement IO work must remain behind owner-side cleanup"
+        );
+
+        ingress.finish_session_detach(agent, &DevToolsSessionKey::Primary);
+        assert!(
+            ingress.claim_for_owner().is_none(),
+            "the first cleanup must not bypass the second IO detach barrier"
+        );
+
+        ingress.finish_session_detach(agent, &DevToolsSessionKey::Primary);
+        let replacement_command = ingress
+            .claim_for_owner()
+            .expect("replacement IO work should run after owner cleanup");
+        assert_eq!(replacement_command.command_id(), post_detach.command_id);
     }
 
     #[tokio::test]

@@ -117,19 +117,44 @@ pub struct RendererPageTestingHandle {
 #[must_use = "the owner detach command must retain this guard until it drops the V8 session"]
 pub struct RendererRuntimeInspectorSessionDetachGuard {
     inspector_pause_bridge: Option<crate::devtools::pause::RendererInspectorPauseBridge>,
+    pending_detach: Option<(
+        crate::devtools::target::RendererDevToolsTargetHandle,
+        RendererDevToolsAgentToken,
+        DevToolsSessionKey,
+    )>,
 }
 
 impl RendererRuntimeInspectorSessionDetachGuard {
-    fn new(inspector_pause_bridge: crate::devtools::pause::RendererInspectorPauseBridge) -> Self {
+    fn new(
+        inspector_pause_bridge: crate::devtools::pause::RendererInspectorPauseBridge,
+        devtools_target: crate::devtools::target::RendererDevToolsTargetHandle,
+        agent_token: RendererDevToolsAgentToken,
+        session: DevToolsSessionKey,
+    ) -> Self {
         inspector_pause_bridge.arm_session_detach();
+        devtools_target.begin_session_detach(agent_token, &session);
         Self {
             inspector_pause_bridge: Some(inspector_pause_bridge),
+            pending_detach: Some((devtools_target, agent_token, session)),
+        }
+    }
+
+    pub(crate) fn complete(&mut self) {
+        if let Some((target, agent_token, session)) = self.pending_detach.take() {
+            target.finish_session_detach(agent_token, &session);
         }
     }
 }
 
 impl Drop for RendererRuntimeInspectorSessionDetachGuard {
     fn drop(&mut self) {
+        if let Some((target, _agent_token, _session)) = self.pending_detach.take() {
+            // Reopening the ingress after owner-side V8 cleanup failed would
+            // let a replacement attachment reuse the stale session. Close the
+            // target so queued replacement commands fail instead of hanging or
+            // inheriting the retired frontend's state.
+            target.close("Inspector session detach did not reach the renderer owner");
+        }
         if let Some(inspector_pause_bridge) = self.inspector_pause_bridge.take() {
             inspector_pause_bridge.disarm_session_detach();
         }
@@ -297,12 +322,6 @@ impl RendererPageHandle {
         )
     }
 
-    pub fn arm_runtime_inspector_session_detach(
-        &self,
-    ) -> RendererRuntimeInspectorSessionDetachGuard {
-        RendererRuntimeInspectorSessionDetachGuard::new(self.devtools_target.pause())
-    }
-
     /// Disconnects one frontend Inspector route without waiting for the Page
     /// owner to return from JavaScript.
     ///
@@ -311,8 +330,8 @@ impl RendererPageHandle {
     /// V8InspectorSession is a subsequent Main-thread task. Mirror that
     /// boundary here: cancel both ingress lanes synchronously, then enqueue an
     /// owner-only cleanup whose reply is deliberately detached. The retained
-    /// pause guard also releases a nested debugger loop so the cleanup can
-    /// eventually reach the owner.
+    /// guard also releases a nested debugger loop and holds any replacement
+    /// attachment's commands until cleanup reaches the owner.
     pub fn detach_runtime_inspector_session(
         &self,
         inspector_session_id: Option<String>,
@@ -322,10 +341,12 @@ impl RendererPageHandle {
                 .as_deref()
                 .filter(|session_id| !session_id.is_empty()),
         );
-        self.devtools_target
-            .detach_session(self.devtools_agent_token, &session);
-
-        let pause_guard = self.arm_runtime_inspector_session_detach();
+        let pause_guard = RendererRuntimeInspectorSessionDetachGuard::new(
+            self.devtools_target.pause(),
+            self.devtools_target.clone(),
+            self.devtools_agent_token,
+            session,
+        );
         let reply_rx = self.render_runtime.enqueue(
             RendererOwnerCommand::FinalizeRuntimeInspectorSessionDetach {
                 token: self.token(),

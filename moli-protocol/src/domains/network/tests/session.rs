@@ -255,33 +255,33 @@ async fn commit_configuration_resolves_the_exact_target_network_runtime() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn auxiliary_network_enable_does_not_enable_primary_session() {
+async fn attached_network_enable_does_not_enable_primary_session() {
     let mut ctx = TestContext::new();
     let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
     bc.set_active_target_id("TID-1".to_owned());
     bc.attach_active_session("SID-primary".to_owned());
-    assert!(bc.assign_auxiliary_session_to_target("TID-1", "SID-aux".to_owned()));
+    assert!(bc.assign_attached_session_to_target("TID-1", "SID-attached".to_owned()));
     ctx.conn.browser_context = Some(bc);
 
     ctx.process_async(json!({
         "id": 10_101,
         "method": "Network.enable",
-        "sessionId": "SID-aux"
+        "sessionId": "SID-attached"
     }))
     .await;
-    ctx.expect_result(10_101, json!({}), Some("SID-aux"));
+    ctx.expect_result(10_101, json!({}), Some("SID-attached"));
 
     let bc = ctx.conn.browser_context.as_ref().unwrap();
     assert!(
         !bc.active_page_target()
             .runtime_slot
             .primary_network_events_enabled(),
-        "auxiliary Network.enable must not enable the primary session"
+        "attached Network.enable must not enable the primary session"
     );
     assert!(bc.has_network_event_listeners());
     assert_eq!(
         bc.network_event_session_ids(Some("SID-primary")),
-        vec![Some("SID-aux".to_owned())]
+        vec![Some("SID-attached".to_owned())]
     );
 }
 
@@ -291,10 +291,10 @@ async fn page_network_policy_aggregates_enabled_sessions_like_chromium_handlers(
     let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
     bc.set_active_target_id("TID-1".to_owned());
     bc.attach_active_session("SID-primary".to_owned());
-    assert!(bc.assign_auxiliary_session_to_target("TID-1", "SID-aux".to_owned()));
+    assert!(bc.assign_attached_session_to_target("TID-1", "SID-attached".to_owned()));
     ctx.conn.browser_context = Some(bc);
 
-    for (id, session_id) in [(20_001, "SID-primary"), (20_002, "SID-aux")] {
+    for (id, session_id) in [(20_001, "SID-primary"), (20_002, "SID-attached")] {
         ctx.process_async(json!({
             "id": id,
             "method": "Network.enable",
@@ -331,25 +331,25 @@ async fn page_network_policy_aggregates_enabled_sessions_like_chromium_handlers(
         ),
         (
             20_006,
-            "SID-aux",
+            "SID-attached",
             "Network.setCacheDisabled",
             json!({"cacheDisabled": false}),
         ),
         (
             20_007,
-            "SID-aux",
+            "SID-attached",
             "Network.setBypassServiceWorker",
             json!({"bypass": false}),
         ),
         (
             20_008,
-            "SID-aux",
+            "SID-attached",
             "Network.setExtraHTTPHeaders",
             json!({"headers": {"X-Aux": "aux", "x-shared": "aux"}}),
         ),
         (
             20_012,
-            "SID-aux",
+            "SID-attached",
             "Network.setBlockedURLs",
             json!({"urls": ["*aux-only*", "*shared-pattern*"]}),
         ),
@@ -541,7 +541,7 @@ async fn enable_after_page_load_does_not_replay_historical_subresource_events() 
     server.abort();
 }
 #[tokio::test(flavor = "multi_thread")]
-async fn auxiliary_enable_after_pending_subresource_does_not_replay_history_to_new_session() {
+async fn attached_enable_after_pending_subresource_does_not_replay_history_to_new_session() {
     async fn page() -> impl IntoResponse {
         (
             [(CONTENT_TYPE.as_str(), "text/html")],
@@ -575,7 +575,7 @@ async fn auxiliary_enable_after_pending_subresource_does_not_replay_history_to_n
     let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-primary");
-    assert!(bc.assign_auxiliary_session_to_target("TID-1", "SID-aux".into()));
+    assert!(bc.assign_attached_session_to_target("TID-1", "SID-attached".into()));
     ctx.conn.browser_context = Some(bc);
 
     ctx.process_async(json!({
@@ -601,7 +601,7 @@ async fn auxiliary_enable_after_pending_subresource_does_not_replay_history_to_n
     wait_until_messages(
         &mut ctx,
         "SID-primary",
-        "primary subresource delivery before auxiliary Network.enable",
+        "primary subresource delivery before attached Network.enable",
         |messages| {
             messages.iter().any(|message| {
                 message["method"] == json!("Network.requestWillBeSent")
@@ -628,38 +628,38 @@ async fn auxiliary_enable_after_pending_subresource_does_not_replay_history_to_n
     ctx.process_async(json!({
         "id": 10_122,
         "method": "Network.enable",
-        "sessionId": "SID-aux"
+        "sessionId": "SID-attached"
     }))
     .await;
-    ctx.expect_result(10_122, json!({}), Some("SID-aux"));
+    ctx.expect_result(10_122, json!({}), Some("SID-attached"));
 
     ctx.process_async(json!({
         "id": 10_123,
         "method": "Runtime.evaluate",
-        "sessionId": "SID-aux",
+        "sessionId": "SID-attached",
         "params": { "expression": "globalThis.__pending_before_aux_network_enable" }
     }))
     .await;
     ctx.expect_result(
         10_123,
         json!({ "result": { "type": "boolean", "value": true }}),
-        Some("SID-aux"),
+        Some("SID-attached"),
     );
 
     let messages = ctx.take_all();
     assert!(
         !messages.iter().any(|message| {
             message["method"] == json!("Network.requestWillBeSent")
-                && message["sessionId"] == json!("SID-aux")
+                && message["sessionId"] == json!("SID-attached")
                 && message["params"]["request"]["url"] == json!(script_url)
         }),
-        "newly enabled auxiliary listener must not receive subresource events from before its Network.enable"
+        "newly enabled attached listener must not receive subresource events from before its Network.enable"
     );
 
     server.abort();
 }
 #[tokio::test(flavor = "multi_thread")]
-async fn websocket_runtime_activity_broadcasts_to_auxiliary_network_session() {
+async fn websocket_runtime_activity_broadcasts_to_attached_network_session() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
@@ -683,8 +683,8 @@ async fn websocket_runtime_activity_broadcasts_to_auxiliary_network_session() {
         .enable_primary_network_events();
     bc.attach_active_session("SID-primary".to_owned());
     bc.set_active_target_id("TID-1".to_owned());
-    assert!(bc.assign_auxiliary_session_to_target("TID-1", "SID-aux".to_owned()));
-    bc.enable_auxiliary_network_events("SID-aux");
+    assert!(bc.assign_attached_session_to_target("TID-1", "SID-attached".to_owned()));
+    bc.enable_attached_network_events("SID-attached");
     ctx.conn.browser_context = Some(bc);
     ctx.install_navigation_fixture_for_session_owner(&page_url, Some("SID-primary"))
         .await;
@@ -708,11 +708,11 @@ async fn websocket_runtime_activity_broadcasts_to_auxiliary_network_session() {
 
     wait_until_messages(
         &mut ctx,
-        "SID-aux",
-        "auxiliary session websocket CDP frame events",
+        "SID-attached",
+        "attached session websocket CDP frame events",
         |messages| {
             messages.iter().any(|message| {
-                message["sessionId"] == json!("SID-aux")
+                message["sessionId"] == json!("SID-attached")
                     && message["method"] == json!("Network.webSocketFrameReceived")
                     && message["params"]["response"]["payloadLength"] == json!(9)
             })
@@ -734,19 +734,19 @@ async fn websocket_runtime_activity_broadcasts_to_auxiliary_network_session() {
         .expect("primary websocket request id")
         .to_owned();
 
-    let auxiliary_created = ctx
+    let attached_created = ctx
         .sent
         .iter()
         .find(|message| {
-            message["sessionId"] == json!("SID-aux")
+            message["sessionId"] == json!("SID-attached")
                 && message["method"] == json!("Network.webSocketCreated")
         })
-        .expect("auxiliary webSocketCreated event");
-    assert_eq!(auxiliary_created["params"]["url"], socket_url);
+        .expect("attached webSocketCreated event");
+    assert_eq!(attached_created["params"]["url"], socket_url);
     assert_eq!(
-        auxiliary_created["params"]["requestId"],
+        attached_created["params"]["requestId"],
         json!(request_id),
-        "primary and auxiliary sessions must observe the same WebSocket requestId"
+        "primary and attached sessions must observe the same WebSocket requestId"
     );
     assert!(ctx.sent.iter().any(|message| {
         message["sessionId"] == json!("SID-primary")
@@ -755,7 +755,7 @@ async fn websocket_runtime_activity_broadcasts_to_auxiliary_network_session() {
             && message["params"]["response"]["payloadLength"] == json!(9)
     }));
     assert!(ctx.sent.iter().any(|message| {
-        message["sessionId"] == json!("SID-aux")
+        message["sessionId"] == json!("SID-attached")
             && message["method"] == json!("Network.webSocketFrameReceived")
             && message["params"]["requestId"] == json!(request_id)
             && message["params"]["response"]["payloadLength"] == json!(9)
@@ -764,7 +764,7 @@ async fn websocket_runtime_activity_broadcasts_to_auxiliary_network_session() {
     server.abort();
 }
 #[tokio::test(flavor = "multi_thread")]
-async fn auxiliary_network_enable_after_websocket_activity_does_not_replay_history() {
+async fn attached_network_enable_after_websocket_activity_does_not_replay_history() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
@@ -788,7 +788,7 @@ async fn auxiliary_network_enable_after_websocket_activity_does_not_replay_histo
         .runtime_slot
         .enable_primary_network_events();
     bc.attach_active_session("SID-primary".to_owned());
-    assert!(bc.assign_auxiliary_session_to_target("TID-1", "SID-aux".to_owned()));
+    assert!(bc.assign_attached_session_to_target("TID-1", "SID-attached".to_owned()));
     ctx.conn.browser_context = Some(bc);
     ctx.install_navigation_fixture_for_session_owner(&page_url, Some("SID-primary"))
         .await;
@@ -813,7 +813,7 @@ async fn auxiliary_network_enable_after_websocket_activity_does_not_replay_histo
     wait_until_messages(
         &mut ctx,
         "SID-primary",
-        "primary websocket history before auxiliary Network.enable",
+        "primary websocket history before attached Network.enable",
         |messages| {
             let Some(request_id) = messages.iter().find_map(|message| {
                 (message["sessionId"] == json!("SID-primary")
@@ -840,14 +840,14 @@ async fn auxiliary_network_enable_after_websocket_activity_does_not_replay_histo
     ctx.process_async(json!({
         "id": 7_112,
         "method": "Network.enable",
-        "sessionId": "SID-aux"
+        "sessionId": "SID-attached"
     }))
     .await;
-    ctx.expect_result(7_112, json!({}), Some("SID-aux"));
+    ctx.expect_result(7_112, json!({}), Some("SID-attached"));
     ctx.process_async(json!({
         "id": 7_113,
         "method": "Runtime.evaluate",
-        "sessionId": "SID-aux",
+        "sessionId": "SID-attached",
         "params": { "expression": "42" }
     }))
     .await;
@@ -855,19 +855,19 @@ async fn auxiliary_network_enable_after_websocket_activity_does_not_replay_histo
 
     assert!(
         ctx.sent.iter().all(|message| {
-            message["sessionId"] != json!("SID-aux")
+            message["sessionId"] != json!("SID-attached")
                 || !message["method"]
                     .as_str()
                     .is_some_and(|method| method.starts_with("Network.webSocket"))
         }),
-        "late auxiliary Network.enable must not replay old WebSocket events: {:?}",
+        "late attached Network.enable must not replay old WebSocket events: {:?}",
         ctx.sent
     );
 
     server.abort();
 }
 #[tokio::test(flavor = "multi_thread")]
-async fn fetch_runtime_activity_broadcasts_to_auxiliary_network_session() {
+async fn fetch_runtime_activity_broadcasts_to_attached_network_session() {
     async fn data() -> impl IntoResponse {
         ([(CONTENT_TYPE.as_str(), "text/plain")], "aux body")
     }
@@ -893,8 +893,8 @@ async fn fetch_runtime_activity_broadcasts_to_auxiliary_network_session() {
         .runtime_slot
         .enable_primary_network_events();
     bc.attach_active_session("SID-primary".to_owned());
-    assert!(bc.assign_auxiliary_session_to_target("TID-1", "SID-aux".to_owned()));
-    bc.enable_auxiliary_network_events("SID-aux");
+    assert!(bc.assign_attached_session_to_target("TID-1", "SID-attached".to_owned()));
+    bc.enable_attached_network_events("SID-attached");
     ctx.conn.browser_context = Some(bc);
     ctx.install_navigation_fixture_for_session_owner(&page_url, Some("SID-primary"))
         .await;
@@ -914,10 +914,10 @@ async fn fetch_runtime_activity_broadcasts_to_auxiliary_network_session() {
     wait_until_messages(
         &mut ctx,
         "SID-primary",
-        "auxiliary session fetch CDP events",
+        "attached session fetch CDP events",
         |messages| {
             let Some(request_id) = messages.iter().find_map(|message| {
-                if message["sessionId"] == json!("SID-aux")
+                if message["sessionId"] == json!("SID-attached")
                     && message["method"] == json!("Network.requestWillBeSent")
                     && message["params"]["type"] == json!("Fetch")
                 {
@@ -929,7 +929,7 @@ async fn fetch_runtime_activity_broadcasts_to_auxiliary_network_session() {
                 return false;
             };
             messages.iter().any(|message| {
-                message["sessionId"] == json!("SID-aux")
+                message["sessionId"] == json!("SID-attached")
                     && message["method"] == json!("Network.loadingFinished")
                     && message["params"]["requestId"] == json!(request_id)
             })
@@ -941,11 +941,11 @@ async fn fetch_runtime_activity_broadcasts_to_auxiliary_network_session() {
     let aux_request = messages
         .iter()
         .find(|message| {
-            message["sessionId"] == json!("SID-aux")
+            message["sessionId"] == json!("SID-attached")
                 && message["method"] == json!("Network.requestWillBeSent")
                 && message["params"]["type"] == json!("Fetch")
         })
-        .expect("auxiliary fetch request event");
+        .expect("attached fetch request event");
     assert_eq!(aux_request["params"]["documentURL"], page_url);
     assert_eq!(
         aux_request["params"]["request"]["url"],
@@ -953,7 +953,7 @@ async fn fetch_runtime_activity_broadcasts_to_auxiliary_network_session() {
     );
     let request_id = aux_request["params"]["requestId"]
         .as_str()
-        .expect("auxiliary fetch request id")
+        .expect("attached fetch request id")
         .to_owned();
     assert!(messages.iter().any(|message| {
         message["sessionId"] == json!("SID-primary")
@@ -964,7 +964,7 @@ async fn fetch_runtime_activity_broadcasts_to_auxiliary_network_session() {
     ctx.process_async(json!({
         "id": 7_202,
         "method": "Network.getResponseBody",
-        "sessionId": "SID-aux",
+        "sessionId": "SID-attached",
         "params": { "requestId": request_id }
     }))
     .await;
@@ -974,13 +974,13 @@ async fn fetch_runtime_activity_broadcasts_to_auxiliary_network_session() {
             "body": "aux body",
             "base64Encoded": false
         }),
-        Some("SID-aux"),
+        Some("SID-attached"),
     );
 
     server.abort();
 }
 #[tokio::test(flavor = "multi_thread")]
-async fn background_fetch_runtime_activity_broadcasts_to_auxiliary_network_session() {
+async fn background_fetch_runtime_activity_broadcasts_to_attached_network_session() {
     async fn data() -> impl IntoResponse {
         (
             [(CONTENT_TYPE.as_str(), "text/plain")],
@@ -1013,7 +1013,10 @@ async fn background_fetch_runtime_activity_broadcasts_to_auxiliary_network_sessi
     let mut bc = BrowserContext::new("BID-background".into());
     bc.insert_page_target_host(target);
     assert!(
-        bc.assign_auxiliary_session_to_target("TID-background", "SID-aux-background".to_owned())
+        bc.assign_attached_session_to_target(
+            "TID-background",
+            "SID-attached-background".to_owned()
+        )
     );
     ctx.conn.browser_context = Some(bc);
     ctx.install_navigation_fixture_for_session_owner(&page_url, Some("SID-background"))
@@ -1022,10 +1025,10 @@ async fn background_fetch_runtime_activity_broadcasts_to_auxiliary_network_sessi
     ctx.process_async(json!({
         "id": 7_221,
         "method": "Network.enable",
-        "sessionId": "SID-aux-background"
+        "sessionId": "SID-attached-background"
     }))
     .await;
-    ctx.expect_result(7_221, json!({}), Some("SID-aux-background"));
+    ctx.expect_result(7_221, json!({}), Some("SID-attached-background"));
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -1042,10 +1045,10 @@ async fn background_fetch_runtime_activity_broadcasts_to_auxiliary_network_sessi
     wait_until_messages(
         &mut ctx,
         "SID-background",
-        "background auxiliary session fetch CDP events",
+        "background attached session fetch CDP events",
         |messages| {
             let Some(request_id) = messages.iter().find_map(|message| {
-                if message["sessionId"] == json!("SID-aux-background")
+                if message["sessionId"] == json!("SID-attached-background")
                     && message["method"] == json!("Network.requestWillBeSent")
                     && message["params"]["type"] == json!("Fetch")
                 {
@@ -1057,7 +1060,7 @@ async fn background_fetch_runtime_activity_broadcasts_to_auxiliary_network_sessi
                 return false;
             };
             messages.iter().any(|message| {
-                message["sessionId"] == json!("SID-aux-background")
+                message["sessionId"] == json!("SID-attached-background")
                     && message["method"] == json!("Network.loadingFinished")
                     && message["params"]["requestId"] == json!(request_id)
             })
@@ -1069,11 +1072,11 @@ async fn background_fetch_runtime_activity_broadcasts_to_auxiliary_network_sessi
     let aux_request = messages
         .iter()
         .find(|message| {
-            message["sessionId"] == json!("SID-aux-background")
+            message["sessionId"] == json!("SID-attached-background")
                 && message["method"] == json!("Network.requestWillBeSent")
                 && message["params"]["type"] == json!("Fetch")
         })
-        .expect("background auxiliary fetch request event");
+        .expect("background attached fetch request event");
     assert_eq!(aux_request["params"]["documentURL"], page_url);
     assert_eq!(
         aux_request["params"]["request"]["url"],
@@ -1083,7 +1086,7 @@ async fn background_fetch_runtime_activity_broadcasts_to_auxiliary_network_sessi
     server.abort();
 }
 #[tokio::test(flavor = "multi_thread")]
-async fn main_document_navigation_broadcasts_to_auxiliary_network_session() {
+async fn main_document_navigation_broadcasts_to_attached_network_session() {
     async fn next_page() -> impl IntoResponse {
         (
             [(CONTENT_TYPE.as_str(), "text/html")],
@@ -1113,8 +1116,8 @@ async fn main_document_navigation_broadcasts_to_auxiliary_network_session() {
         .runtime_slot
         .enable_primary_network_events();
     bc.attach_active_session("SID-primary".to_owned());
-    assert!(bc.assign_auxiliary_session_to_target("TID-1", "SID-aux".to_owned()));
-    bc.enable_auxiliary_network_events("SID-aux");
+    assert!(bc.assign_attached_session_to_target("TID-1", "SID-attached".to_owned()));
+    bc.enable_attached_network_events("SID-attached");
     ctx.conn.browser_context = Some(bc);
     ctx.install_navigation_fixture_for_session_owner(&page_url, Some("SID-primary"))
         .await;
@@ -1136,10 +1139,10 @@ async fn main_document_navigation_broadcasts_to_auxiliary_network_session() {
     wait_until_messages(
         &mut ctx,
         Some("SID-primary"),
-        "auxiliary session document navigation CDP events",
+        "attached session document navigation CDP events",
         |messages| {
             messages.iter().any(|message| {
-                message["sessionId"] == json!("SID-aux")
+                message["sessionId"] == json!("SID-attached")
                     && message["method"] == json!("Network.loadingFinished")
                     && message["params"]["requestId"] == json!(LOADER_ID)
             })
@@ -1151,16 +1154,16 @@ async fn main_document_navigation_broadcasts_to_auxiliary_network_session() {
     let aux_request = messages
         .iter()
         .find(|message| {
-            message["sessionId"] == json!("SID-aux")
+            message["sessionId"] == json!("SID-attached")
                 && message["method"] == json!("Network.requestWillBeSent")
                 && message["params"]["type"] == json!("Document")
                 && message["params"]["request"]["url"] == json!(next_url)
         })
-        .expect("auxiliary document request event");
+        .expect("attached document request event");
     assert_eq!(aux_request["params"]["requestId"], json!(LOADER_ID));
     assert_eq!(aux_request["params"]["loaderId"], json!(LOADER_ID));
     assert!(messages.iter().any(|message| {
-        message["sessionId"] == json!("SID-aux")
+        message["sessionId"] == json!("SID-attached")
             && message["method"] == json!("Network.responseReceived")
             && message["params"]["requestId"] == json!(LOADER_ID)
             && message["params"]["type"] == json!("Document")
@@ -1176,7 +1179,7 @@ async fn main_document_navigation_broadcasts_to_auxiliary_network_session() {
     server.abort();
 }
 #[tokio::test(flavor = "multi_thread")]
-async fn get_response_body_reads_background_auxiliary_target_slot() {
+async fn get_response_body_reads_background_attached_target_slot() {
     let mut ctx = TestContext::new();
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-active".to_owned());
@@ -1187,34 +1190,37 @@ async fn get_response_body_reads_background_auxiliary_target_slot() {
         "https://background.example/".to_owned(),
     ));
     assert!(
-        bc.assign_auxiliary_session_to_target("TID-background", "SID-aux-background".to_owned())
+        bc.assign_attached_session_to_target(
+            "TID-background",
+            "SID-attached-background".to_owned()
+        )
     );
     ctx.conn.browser_context = Some(bc);
 
     assert!(
         ctx.conn
-            .enable_network_listener_for_session_owner(Some("SID-aux-background"))
+            .enable_network_listener_for_session_owner(Some("SID-attached-background"))
     );
     ctx.conn
-        .runtime_session_owner_slot_mut(Some("SID-aux-background"))
-        .expect("background auxiliary runtime slot")
+        .runtime_session_owner_slot_mut(Some("SID-attached-background"))
+        .expect("background attached runtime slot")
         .record_captured_response_body(
             "REQ-background".to_owned(),
             "background body".to_owned(),
-            [Some("SID-aux-background".to_owned())],
+            [Some("SID-attached-background".to_owned())],
         );
 
     ctx.process_async(json!({
         "id": 7_282,
         "method": "Network.getResponseBody",
-        "sessionId": "SID-aux-background",
+        "sessionId": "SID-attached-background",
         "params": { "requestId": "REQ-background" }
     }))
     .await;
     ctx.expect_result(
         7_282,
         json!({ "body": "background body", "base64Encoded": false }),
-        Some("SID-aux-background"),
+        Some("SID-attached-background"),
     );
 
     ctx.process_async(json!({
@@ -1235,50 +1241,53 @@ async fn network_disable_removes_session_response_body_visibility() {
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    assert!(bc.assign_auxiliary_session_to_target("TID-1", "SID-aux".to_owned()));
-    bc.enable_auxiliary_network_events("SID-aux");
+    assert!(bc.assign_attached_session_to_target("TID-1", "SID-attached".to_owned()));
+    bc.enable_attached_network_events("SID-attached");
     bc.record_captured_response_body(
         "REQ-shared".to_owned(),
         "shared body".to_owned(),
-        [Some("SID-primary".to_owned()), Some("SID-aux".to_owned())],
+        [
+            Some("SID-primary".to_owned()),
+            Some("SID-attached".to_owned()),
+        ],
     );
     bc.record_captured_response_body(
         "REQ-aux-only".to_owned(),
         "aux-only body".to_owned(),
-        [Some("SID-aux".to_owned())],
+        [Some("SID-attached".to_owned())],
     );
     ctx.conn.browser_context = Some(bc);
 
     ctx.process_async(json!({
         "id": 7_290,
         "method": "Network.disable",
-        "sessionId": "SID-aux"
+        "sessionId": "SID-attached"
     }))
     .await;
-    ctx.expect_result(7_290, json!({}), Some("SID-aux"));
+    ctx.expect_result(7_290, json!({}), Some("SID-attached"));
 
     let bc = ctx.conn.browser_context.as_ref().unwrap();
     assert!(
         bc.has_captured_response_body_for_test("REQ-shared"),
-        "shared body remains visible to primary after auxiliary Network.disable"
+        "shared body remains visible to primary after attached Network.disable"
     );
     assert!(
         !bc.has_captured_response_body_for_test("REQ-aux-only"),
-        "auxiliary-only body is dropped when that session disables Network"
+        "attached-only body is dropped when that session disables Network"
     );
 
     ctx.process_async(json!({
         "id": 7_291,
         "method": "Network.enable",
-        "sessionId": "SID-aux"
+        "sessionId": "SID-attached"
     }))
     .await;
-    ctx.expect_result(7_291, json!({}), Some("SID-aux"));
+    ctx.expect_result(7_291, json!({}), Some("SID-attached"));
 
     ctx.process_async(json!({
         "id": 7_292,
         "method": "Network.getResponseBody",
-        "sessionId": "SID-aux",
+        "sessionId": "SID-attached",
         "params": { "requestId": "REQ-shared" }
     }))
     .await;
@@ -1320,7 +1329,7 @@ async fn disable_clears_enabled_flag_and_captured_bodies() {
     assert!(bc.captured_response_bodies_empty_for_test());
 }
 #[tokio::test(flavor = "multi_thread")]
-async fn primary_network_disable_preserves_auxiliary_network_session() {
+async fn primary_network_disable_preserves_attached_network_session() {
     let mut ctx = TestContext::new();
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1".to_owned());
@@ -1328,12 +1337,15 @@ async fn primary_network_disable_preserves_auxiliary_network_session() {
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    assert!(bc.assign_auxiliary_session_to_target("TID-1", "SID-aux".to_owned()));
-    bc.enable_auxiliary_network_events("SID-aux");
+    assert!(bc.assign_attached_session_to_target("TID-1", "SID-attached".to_owned()));
+    bc.enable_attached_network_events("SID-attached");
     bc.record_captured_response_body(
         "REQ-1".to_owned(),
         "body".to_owned(),
-        [Some("SID-primary".to_owned()), Some("SID-aux".to_owned())],
+        [
+            Some("SID-primary".to_owned()),
+            Some("SID-attached".to_owned()),
+        ],
     );
     ctx.conn.browser_context = Some(bc);
 
@@ -1355,31 +1367,31 @@ async fn primary_network_disable_preserves_auxiliary_network_session() {
     assert!(
         bc.active_page_target()
             .runtime_slot
-            .has_auxiliary_network_events_for_session("SID-aux")
+            .has_attached_network_events_for_session("SID-attached")
     );
     assert!(
         bc.has_captured_response_body_for_test("REQ-1"),
-        "shared body cache remains observable while an auxiliary Network session is enabled"
+        "shared body cache remains observable while an attached Network session is enabled"
     );
     assert_eq!(
         bc.network_event_session_ids(Some("SID-primary")),
-        vec![Some("SID-aux".to_owned())]
+        vec![Some("SID-attached".to_owned())]
     );
 
     ctx.process_async(json!({
         "id": 10_202,
         "method": "Network.disable",
-        "sessionId": "SID-aux"
+        "sessionId": "SID-attached"
     }))
     .await;
-    ctx.expect_result(10_202, json!({}), Some("SID-aux"));
+    ctx.expect_result(10_202, json!({}), Some("SID-attached"));
 
     let bc = ctx.conn.browser_context.as_ref().unwrap();
     assert!(!bc.has_network_event_listeners());
     assert!(bc.captured_response_bodies_empty_for_test());
 }
 #[tokio::test(flavor = "multi_thread")]
-async fn parser_external_script_navigation_broadcasts_network_events_to_auxiliary_session() {
+async fn parser_external_script_navigation_broadcasts_network_events_to_attached_session() {
     const SCRIPT_BODY: &str =
         r#"globalThis.__lm_aux_parser_script_loaded = "aux parser script body";"#;
 
@@ -1419,16 +1431,16 @@ async fn parser_external_script_navigation_broadcasts_network_events_to_auxiliar
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-primary");
-    assert!(bc.assign_auxiliary_session_to_target("TID-1", "SID-aux".into()));
+    assert!(bc.assign_attached_session_to_target("TID-1", "SID-attached".into()));
     ctx.conn.browser_context = Some(bc);
 
     ctx.process_async(json!({
         "id": 70_050,
         "method": "Network.enable",
-        "sessionId": "SID-aux"
+        "sessionId": "SID-attached"
     }))
     .await;
-    ctx.expect_result(70_050, json!({}), Some("SID-aux"));
+    ctx.expect_result(70_050, json!({}), Some("SID-attached"));
 
     ctx.process_async(json!({
         "id": 70_051,
@@ -1440,11 +1452,11 @@ async fn parser_external_script_navigation_broadcasts_network_events_to_auxiliar
 
     wait_until_messages(
         &mut ctx,
-        Some("SID-aux"),
-        "auxiliary parser script network events",
+        Some("SID-attached"),
+        "attached parser script network events",
         |messages| {
             let Some(request_id) = messages.iter().find_map(|message| {
-                if message["sessionId"] == json!("SID-aux")
+                if message["sessionId"] == json!("SID-attached")
                     && message["method"] == json!("Network.requestWillBeSent")
                     && message["params"]["type"] == json!("Script")
                     && message["params"]["request"]["url"] == json!(script_url)
@@ -1457,7 +1469,7 @@ async fn parser_external_script_navigation_broadcasts_network_events_to_auxiliar
                 return false;
             };
             messages.iter().any(|message| {
-                message["sessionId"] == json!("SID-aux")
+                message["sessionId"] == json!("SID-attached")
                     && message["method"] == json!("Network.loadingFinished")
                     && message["params"]["requestId"] == json!(request_id)
             })
@@ -1469,15 +1481,15 @@ async fn parser_external_script_navigation_broadcasts_network_events_to_auxiliar
     let script_request = messages
         .iter()
         .find(|message| {
-            message["sessionId"] == json!("SID-aux")
+            message["sessionId"] == json!("SID-attached")
                 && message["method"] == json!("Network.requestWillBeSent")
                 && message["params"]["type"] == json!("Script")
                 && message["params"]["request"]["url"] == json!(script_url)
         })
-        .expect("auxiliary session should receive parser script request event");
+        .expect("attached session should receive parser script request event");
     let script_request_id = script_request["params"]["requestId"]
         .as_str()
-        .expect("auxiliary parser script request id")
+        .expect("attached parser script request id")
         .to_owned();
 
     ctx.process_async(json!({
@@ -1492,7 +1504,7 @@ async fn parser_external_script_navigation_broadcasts_network_events_to_auxiliar
     ctx.process_async(json!({
         "id": 70_053,
         "method": "Network.getResponseBody",
-        "sessionId": "SID-aux",
+        "sessionId": "SID-attached",
         "params": { "requestId": script_request_id }
     }))
     .await;
@@ -1502,7 +1514,7 @@ async fn parser_external_script_navigation_broadcasts_network_events_to_auxiliar
             "body": SCRIPT_BODY,
             "base64Encoded": false
         }),
-        Some("SID-aux"),
+        Some("SID-attached"),
     );
 
     server.abort();

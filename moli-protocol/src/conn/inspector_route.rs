@@ -275,14 +275,12 @@ mod tests {
         ));
         assert!(
             browser_context
-                .assign_auxiliary_session_to_target("TID-active", "SID-active-aux".to_owned(),)
+                .assign_attached_session_to_target("TID-active", "SID-active-attached".to_owned(),)
         );
-        assert!(
-            browser_context.assign_auxiliary_session_to_target(
-                "TID-background",
-                "SID-background-aux".to_owned(),
-            )
-        );
+        assert!(browser_context.assign_attached_session_to_target(
+            "TID-background",
+            "SID-background-attached".to_owned(),
+        ));
         let mut conn = CdpConnection::default();
         conn.browser_context = Some(browser_context);
 
@@ -290,9 +288,11 @@ mod tests {
             &CommandOwnerScope::for_session("SID-active-primary"),
             vec![
                 batch(DevToolsSessionKey::Primary),
-                batch(DevToolsSessionKey::Attached("SID-active-aux".to_owned())),
                 batch(DevToolsSessionKey::Attached(
-                    "SID-background-aux".to_owned(),
+                    "SID-active-attached".to_owned(),
+                )),
+                batch(DevToolsSessionKey::Attached(
+                    "SID-background-attached".to_owned(),
                 )),
                 batch(DevToolsSessionKey::Attached("SID-unknown".to_owned())),
             ],
@@ -302,7 +302,7 @@ mod tests {
         assert_eq!(filtered[0].session, DevToolsSessionKey::Primary);
         assert_eq!(
             filtered[1].session,
-            DevToolsSessionKey::Attached("SID-active-aux".to_owned())
+            DevToolsSessionKey::Attached("SID-active-attached".to_owned())
         );
     }
 
@@ -320,8 +320,10 @@ mod tests {
         browser_context.set_active_target_id("TID-state-route".to_owned());
         browser_context.attach_active_session("SID-state-primary".to_owned());
         assert!(
-            browser_context
-                .assign_auxiliary_session_to_target("TID-state-route", "SID-state-aux".to_owned(),)
+            browser_context.assign_attached_session_to_target(
+                "TID-state-route",
+                "SID-state-attached".to_owned(),
+            )
         );
         browser_context.set_loaded_page_async(page).await;
         let current = browser_context
@@ -357,16 +359,18 @@ mod tests {
             Some(accepted_state.clone())
         );
 
-        let auxiliary_state = V8InspectorSessionState::from_bytes(vec![7, 8]);
-        let mut auxiliary = batch(DevToolsSessionKey::Attached("SID-state-aux".to_owned()));
-        auxiliary.agent_token = current.agent_token();
-        auxiliary.v8_state_update = Some(auxiliary_state.clone());
-        auxiliary.bind_renderer_agent_attachment(current.id());
+        let attached_state = V8InspectorSessionState::from_bytes(vec![7, 8]);
+        let mut attached = batch(DevToolsSessionKey::Attached(
+            "SID-state-attached".to_owned(),
+        ));
+        attached.agent_token = current.agent_token();
+        attached.v8_state_update = Some(attached_state.clone());
+        attached.bind_renderer_agent_attachment(current.id());
         assert_eq!(
             ctx.conn
                 .route_current_renderer_inspector_output_for_owner(
                     &CommandOwnerScope::for_session("SID-state-primary"),
-                    vec![auxiliary],
+                    vec![attached],
                 )
                 .len(),
             1
@@ -378,12 +382,12 @@ mod tests {
                 .expect("browser context")
                 .active_page_target()
                 .devtools_sessions
-                .attached("SID-state-aux")
-                .expect("auxiliary session state")
+                .attached("SID-state-attached")
+                .expect("attached session state")
                 .inspector_session_state
                 .v8_state,
-            Some(auxiliary_state),
-            "auxiliary session cookies must remain isolated from the primary session"
+            Some(attached_state),
+            "attached session cookies must remain isolated from the primary session"
         );
 
         let rejected_state = V8InspectorSessionState::from_bytes(vec![9, 9, 9]);

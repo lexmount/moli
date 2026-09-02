@@ -447,7 +447,7 @@ async fn dropping_io_route_cancels_the_unclaimed_command() {
     );
     assert!(
         response_rx.await.is_err(),
-        "abandoning the frontend route must close its obsolete command-reply capability"
+        "abandoning the frontend route must close its obsolete adapter-reply capability"
     );
 }
 

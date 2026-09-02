@@ -361,16 +361,22 @@ async fn same_context_targets_restore_their_own_network_conditions_after_session
             .as_ref()
             .expect("active browser context after direct background navigation");
         assert_eq!(active.active_target_id(), Some("TID-000000000NA"));
-        let parked = active
+        let background = active
             .background_target(&second_target_id)
             .filter(|target| target.has_non_default_session_state())
-            .expect("second target should keep parked network state");
-        assert!(parked.network_policy.network_offline());
-        assert_eq!(parked.network_policy.emulated_network_latency(), 25.0);
-        assert_eq!(parked.network_policy.emulated_download_throughput(), 2048.0);
-        assert_eq!(parked.network_policy.emulated_upload_throughput(), 256.0);
+            .expect("second target should keep background network state");
+        assert!(background.network_policy.network_offline());
+        assert_eq!(background.network_policy.emulated_network_latency(), 25.0);
         assert_eq!(
-            parked.network_policy.emulated_connection_type(),
+            background.network_policy.emulated_download_throughput(),
+            2048.0
+        );
+        assert_eq!(
+            background.network_policy.emulated_upload_throughput(),
+            256.0
+        );
+        assert_eq!(
+            background.network_policy.emulated_connection_type(),
             Some("wifi")
         );
     }
@@ -636,7 +642,7 @@ async fn same_context_targets_restore_their_own_cookie_manager_surface_after_swi
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn same_context_targets_restore_their_own_cookie_manager_surface_after_close_target_promotion()
+async fn same_context_targets_restore_their_own_cookie_manager_surface_after_close_target_activation()
  {
     let mut ctx = TestContext::new();
     load_bc_with_titled_page_async(
@@ -769,7 +775,7 @@ async fn same_context_targets_restore_their_own_cookie_manager_surface_after_clo
             .conn
             .browser_context
             .as_ref()
-            .expect("active browser context after close promotion");
+            .expect("active browser context after close activation");
         assert_eq!(active.active_target_id(), Some("TID-000000000CKC"));
     }
 
@@ -1145,7 +1151,7 @@ async fn same_context_targets_restore_their_own_proxy_loader_overrides_after_swi
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn same_context_targets_restore_their_own_loader_overrides_after_close_target_promotion() {
+async fn same_context_targets_restore_their_own_loader_overrides_after_close_target_activation() {
     let mut ctx = TestContext::new();
     load_bc_with_titled_page_async(
         &mut ctx,
@@ -1270,13 +1276,13 @@ async fn same_context_targets_restore_their_own_loader_overrides_after_close_tar
     }
     ctx.conn
         .ensure_resource_request_client()
-        .expect("restored loader after close promotion");
+        .expect("restored loader after close activation");
     assert_eq!(ctx.conn.user_agent(), "Moli/Close-A");
     assert!(!ctx.conn.tls_verify_host());
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn same_context_targets_restore_their_own_proxy_loader_overrides_after_close_target_promotion()
+async fn same_context_targets_restore_their_own_proxy_loader_overrides_after_close_target_activation()
  {
     let mut ctx = TestContext::new();
     load_bc_with_titled_page_async(
@@ -1413,7 +1419,7 @@ async fn same_context_targets_restore_their_own_proxy_loader_overrides_after_clo
     }
     ctx.conn
         .ensure_resource_request_client()
-        .expect("restored loader after close promotion");
+        .expect("restored loader after close activation");
     assert_eq!(
         ctx.conn.http_proxy(),
         Some("http://proxy-close-a.test:8080")

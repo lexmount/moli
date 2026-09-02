@@ -529,7 +529,7 @@ impl WorkerRuntimeInspector {
                 let deferred_response = deferred_response.map(|response| {
                     if self.shared_worker
                         || response.response_delivery()
-                            == moli_page_types::RendererInspectorResponseDelivery::DevToolsSession
+                            == moli_page_types::RendererInspectorResponseDelivery::SessionSink
                     {
                         response.defer_publication_to_worker_parent(self.parent_tx.clone())
                     } else {

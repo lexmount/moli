@@ -211,7 +211,7 @@ async fn dom_enable_include_whitespace_controls_inspector_tree_projection() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn dom_document_reads_target_loaded_background_owner_without_promotion() {
+async fn dom_document_reads_target_loaded_background_owner_without_activation() {
     let mut ctx = TestContext::new();
     let background = PageTargetHost::with_url(
         "TID-background".to_owned(),

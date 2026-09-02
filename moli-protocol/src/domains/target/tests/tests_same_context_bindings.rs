@@ -190,9 +190,9 @@ async fn same_context_targets_allocate_document_start_script_identifiers_target_
         "params": { "expression": "document.title" }
     }))
     .await;
-    let promoted_second = take_response_by_id(&mut ctx, 1041947);
+    let activated_second = take_response_by_id(&mut ctx, 1041947);
     assert_eq!(
-        promoted_second["result"]["result"]["value"],
+        activated_second["result"]["result"]["value"],
         json!("second")
     );
 
@@ -336,9 +336,9 @@ async fn same_context_targets_allocate_utility_pre_document_script_identifiers_t
         "params": { "expression": "document.title" }
     }))
     .await;
-    let promoted_second = take_response_by_id(&mut ctx, 1041957);
+    let activated_second = take_response_by_id(&mut ctx, 1041957);
     assert_eq!(
-        promoted_second["result"]["result"]["value"],
+        activated_second["result"]["result"]["value"],
         json!("second")
     );
 
@@ -1359,7 +1359,12 @@ async fn same_context_targets_replay_only_their_own_pre_document_binding_and_pre
         .as_mut()
         .unwrap()
         .attach_active_session("SID-active");
-    ctx.conn.auto_attach = true;
+    ctx.conn.set_auto_attach_owner(
+        None,
+        true,
+        false,
+        crate::conn::CdpTargetFilter::default_auto_attach(),
+    );
 
     ctx.process_async(json!({
         "id": 10416,
@@ -1514,17 +1519,17 @@ async fn same_context_targets_replay_only_their_own_pre_document_binding_and_pre
             "expression": "JSON.stringify({ title: document.title, marker: globalThis.__lm_target_marker, hasA: typeof globalThis.targetABinding, hasB: typeof globalThis.targetBBinding, text: document.getElementById('ok').textContent })"
         }
     })).await;
-    let parked_eval = take_response_by_id(&mut ctx, 10425);
-    let parked_payload = parked_eval["result"]["result"]["value"]
+    let background_eval = take_response_by_id(&mut ctx, 10425);
+    let background_payload = background_eval["result"]["result"]["value"]
         .as_str()
-        .expect("parked target payload should be string");
-    let parked_payload: serde_json::Value =
-        serde_json::from_str(parked_payload).expect("parked target payload should be valid json");
-    assert_eq!(parked_payload["title"], json!("target-b-initial"));
-    assert_eq!(parked_payload["marker"], json!("B"));
-    assert_eq!(parked_payload["hasA"], json!("undefined"));
-    assert_eq!(parked_payload["hasB"], json!("function"));
-    assert_eq!(parked_payload["text"], json!("B initial page"));
+        .expect("background target payload should be string");
+    let background_payload: serde_json::Value = serde_json::from_str(background_payload)
+        .expect("background target payload should be valid json");
+    assert_eq!(background_payload["title"], json!("target-b-initial"));
+    assert_eq!(background_payload["marker"], json!("B"));
+    assert_eq!(background_payload["hasA"], json!("undefined"));
+    assert_eq!(background_payload["hasB"], json!("function"));
+    assert_eq!(background_payload["text"], json!("B initial page"));
     ctx.take_all();
 
     ctx.process_async(json!({
@@ -1532,13 +1537,13 @@ async fn same_context_targets_replay_only_their_own_pre_document_binding_and_pre
         "method": "Page.navigate",
         "sessionId": second_session_id,
         "params": {
-            "url": "data:text/html,<title>target-b-promoted</title><div id='ok'>B promoted page</div>"
+            "url": "data:text/html,<title>target-b-activated</title><div id='ok'>B activated page</div>"
         }
     })).await;
     consume_main_document_navigation_start(&mut ctx);
-    let promoted_navigation = take_response_by_id(&mut ctx, 10426);
+    let activated_navigation = take_response_by_id(&mut ctx, 10426);
     assert_eq!(
-        promoted_navigation["result"]["frameId"],
+        activated_navigation["result"]["frameId"],
         json!(second_target_id)
     );
     assert!(
@@ -1547,7 +1552,7 @@ async fn same_context_targets_replay_only_their_own_pre_document_binding_and_pre
                 && message["params"]["name"] == json!("targetBBinding")
                 && message["params"]["payload"] == json!("payload-B")
         }),
-        "session-scoped promotion should replay target B binding: {:?}",
+        "session-scoped activation should replay target B binding: {:?}",
         ctx.sent
     );
     assert!(
@@ -1555,7 +1560,7 @@ async fn same_context_targets_replay_only_their_own_pre_document_binding_and_pre
             message["method"] == json!("Runtime.bindingCalled")
                 && message["params"]["name"] == json!("targetABinding")
         }),
-        "session-scoped promotion should not leak target A binding into target B: {:?}",
+        "session-scoped activation should not leak target A binding into target B: {:?}",
         ctx.sent
     );
     ctx.take_all();
@@ -1568,21 +1573,21 @@ async fn same_context_targets_replay_only_their_own_pre_document_binding_and_pre
             "expression": "JSON.stringify({ title: document.title, marker: globalThis.__lm_target_marker, hasA: typeof globalThis.targetABinding, hasB: typeof globalThis.targetBBinding, text: document.getElementById('ok').textContent })"
         }
     })).await;
-    let promoted_eval = take_response_by_id(&mut ctx, 10427);
-    let promoted_payload = promoted_eval["result"]["result"]["value"]
+    let activated_eval = take_response_by_id(&mut ctx, 10427);
+    let activated_payload = activated_eval["result"]["result"]["value"]
         .as_str()
-        .expect("promoted target payload should be string");
-    let promoted_payload: serde_json::Value = serde_json::from_str(promoted_payload)
-        .expect("promoted target payload should be valid json");
-    assert_eq!(promoted_payload["title"], json!("target-b-promoted"));
-    assert_eq!(promoted_payload["marker"], json!("B"));
-    assert_eq!(promoted_payload["hasA"], json!("undefined"));
-    assert_eq!(promoted_payload["hasB"], json!("function"));
-    assert_eq!(promoted_payload["text"], json!("B promoted page"));
+        .expect("activated target payload should be string");
+    let activated_payload: serde_json::Value = serde_json::from_str(activated_payload)
+        .expect("activated target payload should be valid json");
+    assert_eq!(activated_payload["title"], json!("target-b-activated"));
+    assert_eq!(activated_payload["marker"], json!("B"));
+    assert_eq!(activated_payload["hasA"], json!("undefined"));
+    assert_eq!(activated_payload["hasB"], json!("function"));
+    assert_eq!(activated_payload["text"], json!("B activated page"));
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn same_context_targets_replay_only_their_own_pre_document_binding_and_preload_after_close_target_promotion()
+async fn same_context_targets_replay_only_their_own_pre_document_binding_and_preload_after_close_target_activation()
  {
     let mut ctx = TestContext::new();
     load_bc_with_target(&mut ctx, "BID-9", "TID-000000000A");
@@ -1591,7 +1596,12 @@ async fn same_context_targets_replay_only_their_own_pre_document_binding_and_pre
         .as_mut()
         .unwrap()
         .attach_active_session("SID-active");
-    ctx.conn.auto_attach = true;
+    ctx.conn.set_auto_attach_owner(
+        None,
+        true,
+        false,
+        crate::conn::CdpTargetFilter::default_auto_attach(),
+    );
 
     ctx.process_async(json!({
         "id": 10470,
@@ -1751,13 +1761,13 @@ async fn same_context_targets_replay_only_their_own_pre_document_binding_and_pre
         "method": "Page.navigate",
         "sessionId": second_session_id,
         "params": {
-            "url": "data:text/html,<title>target-b-promoted</title><div id='ok'>B promoted close page</div>"
+            "url": "data:text/html,<title>target-b-activated</title><div id='ok'>B activated close page</div>"
         }
     })).await;
     consume_main_document_navigation_start(&mut ctx);
-    let promoted_navigation = take_response_by_id(&mut ctx, 10480);
+    let activated_navigation = take_response_by_id(&mut ctx, 10480);
     assert_eq!(
-        promoted_navigation["result"]["frameId"],
+        activated_navigation["result"]["frameId"],
         json!(second_target_id)
     );
     assert!(
@@ -1766,7 +1776,7 @@ async fn same_context_targets_replay_only_their_own_pre_document_binding_and_pre
                 && message["params"]["name"] == json!("targetBBinding")
                 && message["params"]["payload"] == json!("payload-B")
         }),
-        "closeTarget promotion should replay target B binding: {:?}",
+        "closeTarget activation should replay target B binding: {:?}",
         ctx.sent
     );
     assert!(
@@ -1774,7 +1784,7 @@ async fn same_context_targets_replay_only_their_own_pre_document_binding_and_pre
             message["method"] == json!("Runtime.bindingCalled")
                 && message["params"]["name"] == json!("targetABinding")
         }),
-        "closeTarget promotion should not leak target A binding into target B: {:?}",
+        "closeTarget activation should not leak target A binding into target B: {:?}",
         ctx.sent
     );
     ctx.take_all();
@@ -1787,21 +1797,21 @@ async fn same_context_targets_replay_only_their_own_pre_document_binding_and_pre
             "expression": "JSON.stringify({ title: document.title, marker: globalThis.__lm_target_marker, hasA: typeof globalThis.targetABinding, hasB: typeof globalThis.targetBBinding, text: document.getElementById('ok').textContent })"
         }
     })).await;
-    let promoted_eval = take_response_by_id(&mut ctx, 10481);
-    let promoted_payload = promoted_eval["result"]["result"]["value"]
+    let activated_eval = take_response_by_id(&mut ctx, 10481);
+    let activated_payload = activated_eval["result"]["result"]["value"]
         .as_str()
-        .expect("promoted target payload should be string");
-    let promoted_payload: serde_json::Value = serde_json::from_str(promoted_payload)
-        .expect("promoted target payload should be valid json");
-    assert_eq!(promoted_payload["title"], json!("target-b-promoted"));
-    assert_eq!(promoted_payload["marker"], json!("B"));
-    assert_eq!(promoted_payload["hasA"], json!("undefined"));
-    assert_eq!(promoted_payload["hasB"], json!("function"));
-    assert_eq!(promoted_payload["text"], json!("B promoted close page"));
+        .expect("activated target payload should be string");
+    let activated_payload: serde_json::Value = serde_json::from_str(activated_payload)
+        .expect("activated target payload should be valid json");
+    assert_eq!(activated_payload["title"], json!("target-b-activated"));
+    assert_eq!(activated_payload["marker"], json!("B"));
+    assert_eq!(activated_payload["hasA"], json!("undefined"));
+    assert_eq!(activated_payload["hasB"], json!("function"));
+    assert_eq!(activated_payload["text"], json!("B activated close page"));
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn same_context_targets_materialize_only_their_own_utility_pre_document_binding_and_preload_after_close_target_promotion()
+async fn same_context_targets_materialize_only_their_own_utility_pre_document_binding_and_preload_after_close_target_activation()
  {
     let mut ctx = TestContext::new();
     load_bc_with_target(&mut ctx, "BID-9", "TID-000000000A");
@@ -1810,7 +1820,12 @@ async fn same_context_targets_materialize_only_their_own_utility_pre_document_bi
         .as_mut()
         .unwrap()
         .attach_active_session("SID-active");
-    ctx.conn.auto_attach = true;
+    ctx.conn.set_auto_attach_owner(
+        None,
+        true,
+        false,
+        crate::conn::CdpTargetFilter::default_auto_attach(),
+    );
 
     ctx.process_async(json!({
         "id": 10428,
@@ -2059,16 +2074,16 @@ async fn same_context_targets_materialize_only_their_own_utility_pre_document_bi
         "method": "Page.navigate",
         "sessionId": second_session_id,
         "params": {
-            "url": "data:text/html,<title>target-b-utility-promoted</title><div id='ok'>B utility promoted page</div>"
+            "url": "data:text/html,<title>target-b-utility-activated</title><div id='ok'>B utility activated page</div>"
         }
     })).await;
     consume_main_document_navigation_start(&mut ctx);
-    let promoted_navigation = take_response_by_id(&mut ctx, 10440);
+    let activated_navigation = take_response_by_id(&mut ctx, 10440);
     assert_eq!(
-        promoted_navigation["result"]["frameId"],
+        activated_navigation["result"]["frameId"],
         json!(second_target_id)
     );
-    let promoted_binding_called_b_during_navigation = ctx
+    let activated_binding_called_b_during_navigation = ctx
         .sent
         .iter()
         .find(|message| {
@@ -2081,7 +2096,7 @@ async fn same_context_targets_materialize_only_their_own_utility_pre_document_bi
             message["method"] == json!("Runtime.bindingCalled")
                 && message["params"]["name"] == json!("targetAUtilityBinding")
         }),
-        "target A utility binding should not leak into target B promoted navigation/materialization: {:?}",
+        "target A utility binding should not leak into target B activated navigation/materialization: {:?}",
         ctx.sent
     );
     ctx.take_all();
@@ -2096,11 +2111,11 @@ async fn same_context_targets_materialize_only_their_own_utility_pre_document_bi
         }
     }))
     .await;
-    let utility_context_b_promoted =
+    let utility_context_b_activated =
         take_response_by_id(&mut ctx, 10441)["result"]["executionContextId"]
             .as_i64()
-            .expect("promoted target B utility context id");
-    let promoted_binding_called_b = promoted_binding_called_b_during_navigation
+            .expect("activated target B utility context id");
+    let activated_binding_called_b = activated_binding_called_b_during_navigation
         .or_else(|| {
             ctx.sent
                 .iter()
@@ -2110,21 +2125,21 @@ async fn same_context_targets_materialize_only_their_own_utility_pre_document_bi
                 })
                 .cloned()
         })
-        .expect("target B utility binding should replay after closeTarget promotion");
+        .expect("target B utility binding should replay after closeTarget activation");
     assert_eq!(
-        promoted_binding_called_b["params"]["payload"],
+        activated_binding_called_b["params"]["payload"],
         json!("payload-B-utility")
     );
     assert_eq!(
-        promoted_binding_called_b["params"]["executionContextId"],
-        json!(utility_context_b_promoted)
+        activated_binding_called_b["params"]["executionContextId"],
+        json!(utility_context_b_activated)
     );
     assert!(
         !ctx.sent.iter().any(|message| {
             message["method"] == json!("Runtime.bindingCalled")
                 && message["params"]["name"] == json!("targetAUtilityBinding")
         }),
-        "target A utility binding should not leak after closeTarget promotion: {:?}",
+        "target A utility binding should not leak after closeTarget activation: {:?}",
         ctx.sent
     );
     ctx.sent.clear();
@@ -2134,7 +2149,7 @@ async fn same_context_targets_materialize_only_their_own_utility_pre_document_bi
         "method": "Runtime.evaluate",
         "sessionId": second_session_id,
         "params": {
-            "contextId": utility_context_b_promoted,
+            "contextId": utility_context_b_activated,
             "expression": "JSON.stringify({ marker: globalThis.__lm_target_utility_marker, hasA: typeof globalThis.targetAUtilityBinding, hasB: typeof globalThis.targetBUtilityBinding, title: document.title, text: document.getElementById('ok').textContent })"
         }
     })).await;
@@ -2147,8 +2162,8 @@ async fn same_context_targets_materialize_only_their_own_utility_pre_document_bi
     assert_eq!(payload_b["marker"], json!("B"));
     assert_eq!(payload_b["hasA"], json!("undefined"));
     assert_eq!(payload_b["hasB"], json!("function"));
-    assert_eq!(payload_b["title"], json!("target-b-utility-promoted"));
-    assert_eq!(payload_b["text"], json!("B utility promoted page"));
+    assert_eq!(payload_b["title"], json!("target-b-utility-activated"));
+    assert_eq!(payload_b["text"], json!("B utility activated page"));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -2161,7 +2176,12 @@ async fn same_context_targets_materialize_only_their_own_utility_pre_document_bi
         .as_mut()
         .unwrap()
         .attach_active_session("SID-active");
-    ctx.conn.auto_attach = true;
+    ctx.conn.set_auto_attach_owner(
+        None,
+        true,
+        false,
+        crate::conn::CdpTargetFilter::default_auto_attach(),
+    );
 
     ctx.process_async(json!({
         "id": 10482,
@@ -2245,7 +2265,7 @@ async fn same_context_targets_materialize_only_their_own_utility_pre_document_bi
         "method": "Page.navigate",
         "sessionId": second_session_id,
         "params": {
-            "url": "data:text/html,<title>target-b-utility-initial</title><div id='ok'>B utility parked page</div>"
+            "url": "data:text/html,<title>target-b-utility-initial</title><div id='ok'>B utility background page</div>"
         }
     })).await;
     consume_main_document_navigation_start(&mut ctx);
@@ -2316,7 +2336,7 @@ async fn same_context_targets_materialize_only_their_own_utility_pre_document_bi
         "method": "Page.navigate",
         "sessionId": "SID-active",
         "params": {
-            "url": "data:text/html,<title>target-a-utility-initial</title><div id='ok'>A utility parked page</div>"
+            "url": "data:text/html,<title>target-a-utility-initial</title><div id='ok'>A utility background page</div>"
         }
     })).await;
     consume_main_document_navigation_start(&mut ctx);
@@ -2380,9 +2400,9 @@ async fn same_context_targets_materialize_only_their_own_utility_pre_document_bi
         "params": { "expression": "document.title" }
     }))
     .await;
-    let parked_eval = take_response_by_id(&mut ctx, 10493);
+    let background_eval = take_response_by_id(&mut ctx, 10493);
     assert_eq!(
-        parked_eval["result"]["result"]["value"],
+        background_eval["result"]["result"]["value"],
         json!("target-b-utility-initial")
     );
     ctx.take_all();
@@ -2392,12 +2412,12 @@ async fn same_context_targets_materialize_only_their_own_utility_pre_document_bi
         "method": "Page.navigate",
         "sessionId": second_session_id,
         "params": {
-            "url": "data:text/html,<title>target-b-utility-promoted</title><div id='ok'>B utility promoted page</div>"
+            "url": "data:text/html,<title>target-b-utility-activated</title><div id='ok'>B utility activated page</div>"
         }
     })).await;
     consume_main_document_navigation_start(&mut ctx);
     take_response_by_id(&mut ctx, 10494);
-    let promoted_binding_called_b_during_navigation = ctx
+    let activated_binding_called_b_during_navigation = ctx
         .sent
         .iter()
         .find(|message| {
@@ -2410,7 +2430,7 @@ async fn same_context_targets_materialize_only_their_own_utility_pre_document_bi
             message["method"] == json!("Runtime.bindingCalled")
                 && message["params"]["name"] == json!("targetAUtilityBinding")
         }),
-        "session-scoped promotion should not leak target A utility binding into target B: {:?}",
+        "session-scoped activation should not leak target A utility binding into target B: {:?}",
         ctx.sent
     );
     ctx.take_all();
@@ -2425,11 +2445,11 @@ async fn same_context_targets_materialize_only_their_own_utility_pre_document_bi
         }
     }))
     .await;
-    let utility_context_b_promoted =
+    let utility_context_b_activated =
         take_response_by_id(&mut ctx, 10495)["result"]["executionContextId"]
             .as_i64()
-            .expect("promoted target B utility context id");
-    let promoted_binding_called_b = promoted_binding_called_b_during_navigation
+            .expect("activated target B utility context id");
+    let activated_binding_called_b = activated_binding_called_b_during_navigation
         .or_else(|| {
             ctx.sent
                 .iter()
@@ -2439,21 +2459,21 @@ async fn same_context_targets_materialize_only_their_own_utility_pre_document_bi
                 })
                 .cloned()
         })
-        .expect("target B utility binding should replay after session-scoped promotion");
+        .expect("target B utility binding should replay after session-scoped activation");
     assert_eq!(
-        promoted_binding_called_b["params"]["payload"],
+        activated_binding_called_b["params"]["payload"],
         json!("payload-B-utility")
     );
     assert_eq!(
-        promoted_binding_called_b["params"]["executionContextId"],
-        json!(utility_context_b_promoted)
+        activated_binding_called_b["params"]["executionContextId"],
+        json!(utility_context_b_activated)
     );
     assert!(
         !ctx.sent.iter().any(|message| {
             message["method"] == json!("Runtime.bindingCalled")
                 && message["params"]["name"] == json!("targetAUtilityBinding")
         }),
-        "target A utility binding should not leak after session-scoped promotion: {:?}",
+        "target A utility binding should not leak after session-scoped activation: {:?}",
         ctx.sent
     );
     ctx.sent.clear();
@@ -2463,7 +2483,7 @@ async fn same_context_targets_materialize_only_their_own_utility_pre_document_bi
         "method": "Runtime.evaluate",
         "sessionId": second_session_id,
         "params": {
-            "contextId": utility_context_b_promoted,
+            "contextId": utility_context_b_activated,
             "expression": "JSON.stringify({ marker: globalThis.__lm_target_utility_marker, hasA: typeof globalThis.targetAUtilityBinding, hasB: typeof globalThis.targetBUtilityBinding, title: document.title, text: document.getElementById('ok').textContent })"
         }
     })).await;
@@ -2476,8 +2496,8 @@ async fn same_context_targets_materialize_only_their_own_utility_pre_document_bi
     assert_eq!(payload_b["marker"], json!("B"));
     assert_eq!(payload_b["hasA"], json!("undefined"));
     assert_eq!(payload_b["hasB"], json!("function"));
-    assert_eq!(payload_b["title"], json!("target-b-utility-promoted"));
-    assert_eq!(payload_b["text"], json!("B utility promoted page"));
+    assert_eq!(payload_b["title"], json!("target-b-utility-activated"));
+    assert_eq!(payload_b["text"], json!("B utility activated page"));
 }
 
 #[tokio::test(flavor = "multi_thread")]

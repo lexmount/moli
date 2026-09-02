@@ -106,11 +106,9 @@ impl<'a> Cmd<'a> {
         self.renderer_policy
     }
 
-    pub(crate) fn terminal_response_delivery(
-        &self,
-        default: RendererInspectorResponseDelivery,
-    ) -> RendererInspectorResponseDelivery {
-        self.terminal_response_delivery_override.unwrap_or(default)
+    pub(crate) fn terminal_response_delivery(&self) -> RendererInspectorResponseDelivery {
+        self.terminal_response_delivery_override
+            .unwrap_or(RendererInspectorResponseDelivery::SessionSink)
     }
 
     /// Build the protocol-neutral command context for shared DevTools command

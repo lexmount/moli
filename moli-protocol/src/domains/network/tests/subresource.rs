@@ -303,8 +303,10 @@ async fn enabling_and_disabling_sessions_replays_aggregated_headers_to_loaded_pa
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    assert!(bc.assign_auxiliary_session_to_target("TID-1", "SID-aux".to_owned()));
+    assert!(bc.assign_attached_session_to_target("TID-1", "SID-attached".to_owned()));
     ctx.conn.browser_context = Some(bc);
+    ctx.conn.register_bound_session_for_test("SID-1");
+    ctx.conn.register_bound_session_for_test("SID-attached");
 
     ctx.process_async(json!({
         "id": 50_001,
@@ -319,7 +321,10 @@ async fn enabling_and_disabling_sessions_replays_aggregated_headers_to_loaded_pa
         Some("SID-1"),
     );
 
-    for (id, session_id, value) in [(50_002, "SID-1", "primary"), (50_003, "SID-aux", "aux")] {
+    for (id, session_id, value) in [
+        (50_002, "SID-1", "primary"),
+        (50_003, "SID-attached", "aux"),
+    ] {
         ctx.process_async(json!({
             "id": id,
             "method": "Network.setExtraHTTPHeaders",
@@ -371,52 +376,54 @@ async fn enabling_and_disabling_sessions_replays_aggregated_headers_to_loaded_pa
     ctx.process_async(json!({
         "id": 50_007,
         "method": "Network.enable",
-        "sessionId": "SID-aux",
+        "sessionId": "SID-attached",
     }))
     .await;
-    ctx.expect_result(50_007, json!({}), Some("SID-aux"));
+    ctx.expect_result(50_007, json!({}), Some("SID-attached"));
     fetch_header(&mut ctx, 50_008, &api_url, "aux").await;
 
     ctx.process_async(json!({
         "id": 50_009,
         "method": "Network.disable",
-        "sessionId": "SID-aux",
+        "sessionId": "SID-attached",
     }))
     .await;
-    ctx.expect_result(50_009, json!({}), Some("SID-aux"));
+    ctx.expect_result(50_009, json!({}), Some("SID-attached"));
     fetch_header(&mut ctx, 50_010, &api_url, "primary").await;
 
     ctx.process_async(json!({
         "id": 50_011,
         "method": "Network.enable",
-        "sessionId": "SID-aux",
+        "sessionId": "SID-attached",
     }))
     .await;
-    ctx.expect_result(50_011, json!({}), Some("SID-aux"));
+    ctx.expect_result(50_011, json!({}), Some("SID-attached"));
     fetch_header(&mut ctx, 50_012, &api_url, "primary").await;
 
     ctx.process_async(json!({
         "id": 50_013,
         "method": "Network.setExtraHTTPHeaders",
-        "sessionId": "SID-aux",
+        "sessionId": "SID-attached",
         "params": {"headers": {"X-Shared": "aux-after-enable"}},
     }))
     .await;
-    ctx.expect_result(50_013, json!({}), Some("SID-aux"));
+    ctx.expect_result(50_013, json!({}), Some("SID-attached"));
     fetch_header(&mut ctx, 50_014, &api_url, "aux-after-enable").await;
 
     ctx.conn
-        .clear_target_session_overrides_async("SID-aux")
+        .clear_devtools_network_session_policy_async("SID-attached")
         .await
-        .expect("detaching the auxiliary session should restore effective request policy");
-    assert_eq!(
+        .expect("detaching the attached session should restore effective request policy");
+    assert!(
         ctx.conn
             .browser_context
             .as_mut()
             .unwrap()
-            .remove_auxiliary_session("SID-aux")
-            .as_deref(),
-        Some("TID-1")
+            .remove_page_session_binding(
+                "TID-1",
+                "SID-attached",
+                &moli_page_types::DevToolsSessionKey::Attached("SID-attached".to_owned()),
+            )
     );
     fetch_header(&mut ctx, 50_015, &api_url, "primary").await;
 

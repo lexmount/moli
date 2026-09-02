@@ -93,7 +93,7 @@ fn page_domain_subscription_generation_tracks_distinct_enable_lifetimes() {
     assert_eq!(
         state,
         TargetPageSessionState::default(),
-        "internal subscription generations must not keep default parked state alive"
+        "internal subscription generations must not keep default background state alive"
     );
 
     state.enable_page_domain(19);
@@ -308,7 +308,7 @@ fn target_fetch_owner_keeps_fetch_enable_configs_per_session() {
         }],
     );
     owner.configure(
-        Some("SID-aux".to_owned()),
+        Some("SID-attached".to_owned()),
         false,
         vec![FetchInterceptionPattern {
             url_pattern: "https://example.test/aux".to_owned(),
@@ -339,7 +339,7 @@ fn target_fetch_owner_keeps_fetch_enable_configs_per_session() {
         (true, Some(SubresourceResourceType::Fetch))
     );
 
-    let aux = owner.config_snapshot_for_session(Some("SID-aux"));
+    let aux = owner.config_snapshot_for_session(Some("SID-attached"));
     assert!(aux.is_enabled());
     assert!(!aux.handle_auth_requests());
     assert_eq!(aux.patterns().len(), 1);
@@ -365,7 +365,7 @@ fn target_fetch_owner_keeps_fetch_enable_configs_per_session() {
     );
     assert!(
         owner
-            .config_snapshot_for_session(Some("SID-aux"))
+            .config_snapshot_for_session(Some("SID-attached"))
             .is_enabled()
     );
 }
@@ -1340,11 +1340,11 @@ fn background_target_mutates_owner_state_in_place() {
     };
 
     assert_eq!(identifier, "1");
-    let parked_state = &target.owner_state;
-    assert_eq!(parked_state.next_document_start_script_id, 1);
-    assert_eq!(parked_state.document_start_scripts.len(), 1);
+    let background_state = &target.owner_state;
+    assert_eq!(background_state.next_document_start_script_id, 1);
+    assert_eq!(background_state.document_start_scripts.len(), 1);
     assert!(
-        !parked_state
+        !background_state
             .console_output_state
             .has_unemitted_console_domain(7, 3)
     );

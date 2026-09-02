@@ -398,25 +398,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn debugger_paused_auxiliary_session_detach_wakes_owner() {
+    async fn debugger_paused_attached_session_detach_wakes_owner() {
         let mut ctx = TestContext::new();
         with_loaded_document(&mut ctx).await;
         {
             let browser_context = ctx.conn.browser_context.as_mut().expect("browser context");
             browser_context.attach_active_session("SID-debugger-primary");
-            assert!(
-                browser_context.assign_auxiliary_session_to_target(
-                    "TID-debugger",
-                    "SID-debugger-aux".to_owned(),
-                )
-            );
+            assert!(browser_context.assign_attached_session_to_target(
+                "TID-debugger",
+                "SID-debugger-attached".to_owned(),
+            ));
         }
+        ctx.conn
+            .register_bound_session_for_test("SID-debugger-primary");
+        ctx.conn
+            .register_bound_session_for_test("SID-debugger-attached");
 
         let enable = command(
             &mut ctx,
             json!({
                 "id": 41,
-                "sessionId": "SID-debugger-aux",
+                "sessionId": "SID-debugger-attached",
                 "method": "Debugger.enable"
             }),
             41,
@@ -427,7 +429,7 @@ mod tests {
             &mut ctx,
             json!({
                 "id": 42,
-                "sessionId": "SID-debugger-aux",
+                "sessionId": "SID-debugger-attached",
                 "method": "Runtime.evaluate",
                 "params": {
                     "expression": "setTimeout(() => { debugger; globalThis.__afterDebuggerDetach = 1; }, 50); true"
@@ -438,9 +440,9 @@ mod tests {
         .await;
         assert_eq!(timer["result"]["result"]["value"], json!(true));
 
-        ctx.wait_for_scheduler_message("auxiliary Debugger.paused", |message| {
+        ctx.wait_for_scheduler_message("attached Debugger.paused", |message| {
             message["method"] == json!("Debugger.paused")
-                && message["sessionId"] == json!("SID-debugger-aux")
+                && message["sessionId"] == json!("SID-debugger-attached")
         })
         .await;
 
@@ -453,7 +455,7 @@ mod tests {
                     "method": "Target.detachFromTarget",
                     "params": {
                         "targetId": "TID-debugger",
-                        "sessionId": "SID-debugger-aux"
+                        "sessionId": "SID-debugger-attached"
                     }
                 }),
                 43,
@@ -484,15 +486,17 @@ mod tests {
         {
             let browser_context = ctx.conn.browser_context.as_mut().expect("browser context");
             browser_context.attach_active_session("SID-debugger-primary");
-            assert!(
-                browser_context.assign_auxiliary_session_to_target(
-                    "TID-debugger",
-                    "SID-debugger-aux".to_owned(),
-                )
-            );
+            assert!(browser_context.assign_attached_session_to_target(
+                "TID-debugger",
+                "SID-debugger-attached".to_owned(),
+            ));
         }
+        ctx.conn
+            .register_bound_session_for_test("SID-debugger-primary");
+        ctx.conn
+            .register_bound_session_for_test("SID-debugger-attached");
 
-        for (id, session_id) in [(61, "SID-debugger-primary"), (62, "SID-debugger-aux")] {
+        for (id, session_id) in [(61, "SID-debugger-primary"), (62, "SID-debugger-attached")] {
             let enable = command(
                 &mut ctx,
                 json!({
@@ -518,7 +522,7 @@ mod tests {
         .await;
         assert_eq!(timer["result"]["result"]["value"], json!(true));
 
-        for session_id in ["SID-debugger-primary", "SID-debugger-aux"] {
+        for session_id in ["SID-debugger-primary", "SID-debugger-attached"] {
             ctx.wait_for_scheduler_message("multi-session Debugger.paused", |message| {
                 message["method"] == json!("Debugger.paused")
                     && message["sessionId"] == json!(session_id)
@@ -537,7 +541,7 @@ mod tests {
         )
         .await;
         assert_eq!(resume["result"], json!({}), "{resume:?}");
-        for session_id in ["SID-debugger-primary", "SID-debugger-aux"] {
+        for session_id in ["SID-debugger-primary", "SID-debugger-attached"] {
             ctx.wait_for_scheduler_message("multi-session Debugger.resumed", |message| {
                 message["method"] == json!("Debugger.resumed")
                     && message["sessionId"] == json!(session_id)

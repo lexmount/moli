@@ -2028,7 +2028,7 @@ fn hyperlink_navigation_policy(
         InputNavigationPolicy::NewWindow | InputNavigationPolicy::NewForegroundSurface => {
             // The renderer target model has no separate window chrome. Preserve
             // Chromium's selected-surface behavior by folding a new window into a
-            // foreground auxiliary target.
+            // foreground popup Page target.
             HyperlinkNavigationPolicy::Auxiliary(RendererPopupDisposition::Foreground)
         }
     }

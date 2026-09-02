@@ -107,7 +107,7 @@ async fn wait_for_auth_required(
     })
 }
 
-async fn wait_for_auxiliary_fetch_request_paused(
+async fn wait_for_attached_fetch_request_paused(
     ctx: &mut TestContext,
     session_id: &str,
     url: &str,
@@ -171,7 +171,7 @@ async fn wait_for_background_request_paused(
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn auxiliary_session_fetch_enable_receives_subresource_request_pause() {
+async fn attached_session_fetch_enable_receives_subresource_request_pause() {
     async fn page() -> impl IntoResponse {
         (
             [(CONTENT_TYPE.as_str(), "text/html")],
@@ -180,7 +180,7 @@ async fn auxiliary_session_fetch_enable_receives_subresource_request_pause() {
     }
 
     async fn api() -> impl IntoResponse {
-        "auxiliary fetch body"
+        "attached fetch body"
     }
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -205,14 +205,14 @@ async fn auxiliary_session_fetch_enable_receives_subresource_request_pause() {
             .browser_context
             .as_mut()
             .unwrap()
-            .assign_auxiliary_session_to_target("TID-1", "SID-aux".to_owned())
+            .assign_attached_session_to_target("TID-1", "SID-attached".to_owned())
     );
     ctx.sent.clear();
 
     ctx.process_async(json!({
         "id": 35_900,
         "method": "Fetch.enable",
-        "sessionId": "SID-aux",
+        "sessionId": "SID-attached",
         "params": {
             "patterns": [
                 { "urlPattern": "*/api", "requestStage": "Request", "resourceType": "Fetch" }
@@ -220,7 +220,7 @@ async fn auxiliary_session_fetch_enable_receives_subresource_request_pause() {
         }
     }))
     .await;
-    ctx.expect_result(35_900, json!({}), Some("SID-aux"));
+    ctx.expect_result(35_900, json!({}), Some("SID-attached"));
     enable_runtime_async(&mut ctx, "SID-1", 35_901).await;
 
     ctx.process_async(json!({
@@ -241,16 +241,16 @@ async fn auxiliary_session_fetch_enable_receives_subresource_request_pause() {
     let _ = take_response_by_id(&mut ctx, 35_902);
 
     let paused = ctx
-        .wait_for_scheduler_message("auxiliary-session Fetch.requestPaused", |message| {
+        .wait_for_scheduler_message("attached-session Fetch.requestPaused", |message| {
             message["method"] == json!("Fetch.requestPaused")
-                && message["sessionId"] == json!("SID-aux")
+                && message["sessionId"] == json!("SID-attached")
                 && message["params"]["request"]["url"] == json!(api_url)
                 && message["params"]["resourceType"] == json!("XHR")
         })
         .await;
     let request_id = paused["params"]["requestId"]
         .as_str()
-        .expect("auxiliary fetch request id")
+        .expect("attached fetch request id")
         .to_owned();
     ctx.sent.clear();
 
@@ -266,25 +266,22 @@ async fn auxiliary_session_fetch_enable_receives_subresource_request_pause() {
     ctx.process_async(json!({
         "id": 35_904,
         "method": "Fetch.continueRequest",
-        "sessionId": "SID-aux",
+        "sessionId": "SID-attached",
         "params": { "requestId": request_id }
     }))
     .await;
-    ctx.expect_result(35_904, json!({}), Some("SID-aux"));
+    ctx.expect_result(35_904, json!({}), Some("SID-attached"));
 
     let resolved = evaluate_until_value_async(
         &mut ctx,
         "SID-1",
         35_905,
         "globalThis.__lm_aux_fetch_result",
-        &json!("auxiliary fetch body"),
-        "auxiliary-session fetch result",
+        &json!("attached fetch body"),
+        "attached-session fetch result",
     )
     .await;
-    assert_eq!(
-        resolved["result"]["result"]["value"],
-        "auxiliary fetch body"
-    );
+    assert_eq!(resolved["result"]["result"]["value"], "attached fetch body");
 
     server.abort();
 }
@@ -324,7 +321,7 @@ async fn fetch_session_chain_uses_enable_insertion_order_not_session_id_sort() {
             .browser_context
             .as_mut()
             .unwrap()
-            .assign_auxiliary_session_to_target("TID-1", "SID-a".to_owned())
+            .assign_attached_session_to_target("TID-1", "SID-a".to_owned())
     );
     ctx.sent.clear();
 
@@ -396,7 +393,7 @@ async fn fetch_session_chain_uses_enable_insertion_order_not_session_id_sort() {
     .await;
     ctx.expect_result(35_920, json!({}), Some("SID-z"));
 
-    let second_pause = wait_for_auxiliary_fetch_request_paused(
+    let second_pause = wait_for_attached_fetch_request_paused(
         &mut ctx,
         "SID-a",
         &api_url,
@@ -432,7 +429,7 @@ async fn fetch_session_chain_uses_enable_insertion_order_not_session_id_sort() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn auxiliary_session_detach_removes_fetch_enable_interception() {
+async fn attached_session_detach_removes_fetch_enable_interception() {
     async fn page() -> impl IntoResponse {
         (
             [(CONTENT_TYPE.as_str(), "text/html")],
@@ -441,7 +438,7 @@ async fn auxiliary_session_detach_removes_fetch_enable_interception() {
     }
 
     async fn api() -> impl IntoResponse {
-        "detached auxiliary fetch body"
+        "detached attached fetch body"
     }
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -465,14 +462,14 @@ async fn auxiliary_session_detach_removes_fetch_enable_interception() {
             .browser_context
             .as_mut()
             .unwrap()
-            .assign_auxiliary_session_to_target("TID-1", "SID-aux".to_owned())
+            .assign_attached_session_to_target("TID-1", "SID-attached".to_owned())
     );
     ctx.sent.clear();
 
     ctx.process_async(json!({
         "id": 35_910,
         "method": "Fetch.enable",
-        "sessionId": "SID-aux",
+        "sessionId": "SID-attached",
         "params": {
             "patterns": [
                 { "urlPattern": "*/api", "requestStage": "Request", "resourceType": "Fetch" }
@@ -480,13 +477,13 @@ async fn auxiliary_session_detach_removes_fetch_enable_interception() {
         }
     }))
     .await;
-    ctx.expect_result(35_910, json!({}), Some("SID-aux"));
+    ctx.expect_result(35_910, json!({}), Some("SID-attached"));
     enable_runtime_async(&mut ctx, "SID-1", 35_911).await;
 
     ctx.process_async(json!({
         "id": 35_912,
         "method": "Target.detachFromTarget",
-        "params": { "sessionId": "SID-aux" }
+        "params": { "sessionId": "SID-attached" }
     }))
     .await;
     ctx.expect_result(35_912, json!({}), None);
@@ -514,19 +511,19 @@ async fn auxiliary_session_detach_removes_fetch_enable_interception() {
         "SID-1",
         35_914,
         "globalThis.__lm_detached_aux_fetch_result",
-        &json!("detached auxiliary fetch body"),
-        "fetch after auxiliary detach",
+        &json!("detached attached fetch body"),
+        "fetch after attached detach",
     )
     .await;
     assert_eq!(
         resolved["result"]["result"]["value"],
-        "detached auxiliary fetch body"
+        "detached attached fetch body"
     );
     assert!(
         ctx.sent
             .iter()
             .all(|message| message["method"] != json!("Fetch.requestPaused")),
-        "detached auxiliary Fetch session must not keep intercepting requests: {:?}",
+        "detached attached Fetch session must not keep intercepting requests: {:?}",
         ctx.sent
     );
 
@@ -534,7 +531,7 @@ async fn auxiliary_session_detach_removes_fetch_enable_interception() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn auxiliary_session_fetch_response_stage_body_commands_use_session_owner() {
+async fn attached_session_fetch_response_stage_body_commands_use_session_owner() {
     async fn page() -> impl IntoResponse {
         (
             [(CONTENT_TYPE.as_str(), "text/html")],
@@ -545,8 +542,8 @@ async fn auxiliary_session_fetch_response_stage_body_commands_use_session_owner(
     async fn api(axum::extract::Query(query): axum::extract::Query<Value>) -> impl IntoResponse {
         let mode = query.get("mode").and_then(Value::as_str).unwrap_or("body");
         match mode {
-            "stream" => "auxiliary stream body",
-            _ => "auxiliary fetch body",
+            "stream" => "attached stream body",
+            _ => "attached fetch body",
         }
     }
 
@@ -573,14 +570,14 @@ async fn auxiliary_session_fetch_response_stage_body_commands_use_session_owner(
             .browser_context
             .as_mut()
             .unwrap()
-            .assign_auxiliary_session_to_target("TID-1", "SID-aux".to_owned())
+            .assign_attached_session_to_target("TID-1", "SID-attached".to_owned())
     );
     ctx.sent.clear();
 
     ctx.process_async(json!({
         "id": 35_920,
         "method": "Fetch.enable",
-        "sessionId": "SID-aux",
+        "sessionId": "SID-attached",
         "params": {
             "patterns": [
                 { "urlPattern": "*/api*", "requestStage": "Response", "resourceType": "Fetch" }
@@ -588,7 +585,7 @@ async fn auxiliary_session_fetch_response_stage_body_commands_use_session_owner(
         }
     }))
     .await;
-    ctx.expect_result(35_920, json!({}), Some("SID-aux"));
+    ctx.expect_result(35_920, json!({}), Some("SID-attached"));
     enable_runtime_async(&mut ctx, "SID-1", 35_921).await;
 
     ctx.process_async(json!({
@@ -608,17 +605,17 @@ async fn auxiliary_session_fetch_response_stage_body_commands_use_session_owner(
     .await;
     let _ = take_response_by_id(&mut ctx, 35_922);
 
-    let paused = wait_for_auxiliary_fetch_request_paused(
+    let paused = wait_for_attached_fetch_request_paused(
         &mut ctx,
-        "SID-aux",
+        "SID-attached",
         &body_url,
         Some(200),
-        "auxiliary response-stage body pause",
+        "attached response-stage body pause",
     )
     .await;
     let request_id = paused["params"]["requestId"]
         .as_str()
-        .expect("auxiliary fetch request id")
+        .expect("attached fetch request id")
         .to_owned();
 
     ctx.process_async(json!({
@@ -633,31 +630,31 @@ async fn auxiliary_session_fetch_response_stage_body_commands_use_session_owner(
     ctx.process_async(json!({
         "id": 35_923,
         "method": "Fetch.getResponseBody",
-        "sessionId": "SID-aux",
+        "sessionId": "SID-attached",
         "params": { "requestId": request_id.clone() }
     }))
     .await;
     ctx.expect_result(
         35_923,
-        json!({ "body": "auxiliary fetch body", "base64Encoded": false }),
-        Some("SID-aux"),
+        json!({ "body": "attached fetch body", "base64Encoded": false }),
+        Some("SID-attached"),
     );
 
     ctx.process_async(json!({
         "id": 35_924,
         "method": "Fetch.continueResponse",
-        "sessionId": "SID-aux",
+        "sessionId": "SID-attached",
         "params": { "requestId": request_id }
     }))
     .await;
-    ctx.expect_result(35_924, json!({}), Some("SID-aux"));
+    ctx.expect_result(35_924, json!({}), Some("SID-attached"));
     evaluate_until_value_async(
         &mut ctx,
         "SID-1",
         35_925,
         "globalThis.__lm_aux_fetch_body_result",
-        &json!("auxiliary fetch body"),
-        "auxiliary fetch body result",
+        &json!("attached fetch body"),
+        "attached fetch body result",
     )
     .await;
 
@@ -679,17 +676,17 @@ async fn auxiliary_session_fetch_response_stage_body_commands_use_session_owner(
     .await;
     let _ = take_response_by_id(&mut ctx, 35_926);
 
-    let paused = wait_for_auxiliary_fetch_request_paused(
+    let paused = wait_for_attached_fetch_request_paused(
         &mut ctx,
-        "SID-aux",
+        "SID-attached",
         &stream_url,
         Some(200),
-        "auxiliary response-stage stream pause",
+        "attached response-stage stream pause",
     )
     .await;
     let request_id = paused["params"]["requestId"]
         .as_str()
-        .expect("auxiliary fetch stream request id")
+        .expect("attached fetch stream request id")
         .to_owned();
 
     ctx.process_async(json!({
@@ -704,7 +701,7 @@ async fn auxiliary_session_fetch_response_stage_body_commands_use_session_owner(
     ctx.process_async(json!({
         "id": 35_927,
         "method": "Fetch.takeResponseBodyAsStream",
-        "sessionId": "SID-aux",
+        "sessionId": "SID-attached",
         "params": { "requestId": request_id.clone() }
     }))
     .await;
@@ -716,38 +713,38 @@ async fn auxiliary_session_fetch_response_stage_body_commands_use_session_owner(
     ctx.process_async(json!({
         "id": 35_928,
         "method": "IO.read",
-        "sessionId": "SID-aux",
+        "sessionId": "SID-attached",
         "params": { "handle": stream }
     }))
     .await;
     ctx.expect_result(
         35_928,
-        json!({ "base64Encoded": false, "data": "auxiliary stream body", "eof": true }),
-        Some("SID-aux"),
+        json!({ "base64Encoded": false, "data": "attached stream body", "eof": true }),
+        Some("SID-attached"),
     );
 
     ctx.process_async(json!({
         "id": 35_929,
         "method": "Fetch.fulfillRequest",
-        "sessionId": "SID-aux",
+        "sessionId": "SID-attached",
         "params": {
             "requestId": request_id,
             "responseCode": 200,
             "responseHeaders": [
                 { "name": "content-type", "value": "text/plain" }
             ],
-            "body": "YXV4aWxpYXJ5IHN0cmVhbSBib2R5"
+            "body": "YXR0YWNoZWQgc3RyZWFtIGJvZHk="
         }
     }))
     .await;
-    ctx.expect_result(35_929, json!({}), Some("SID-aux"));
+    ctx.expect_result(35_929, json!({}), Some("SID-attached"));
     evaluate_until_value_async(
         &mut ctx,
         "SID-1",
         35_930,
         "globalThis.__lm_aux_fetch_stream_result",
-        &json!("auxiliary stream body"),
-        "auxiliary fetch stream result",
+        &json!("attached stream body"),
+        "attached fetch stream result",
     )
     .await;
 
@@ -789,10 +786,10 @@ async fn multiple_fetch_sessions_chain_subresource_response_stage_pauses() {
             .browser_context
             .as_mut()
             .unwrap()
-            .assign_auxiliary_session_to_target("TID-1", "SID-aux".to_owned())
+            .assign_attached_session_to_target("TID-1", "SID-attached".to_owned())
     );
 
-    for (id, session_id) in [(35_940, "SID-1"), (35_941, "SID-aux")] {
+    for (id, session_id) in [(35_940, "SID-1"), (35_941, "SID-attached")] {
         ctx.process_async(json!({
             "id": id,
             "method": "Fetch.enable",
@@ -826,7 +823,7 @@ async fn multiple_fetch_sessions_chain_subresource_response_stage_pauses() {
     .await;
     let _ = take_response_by_id(&mut ctx, 35_943);
 
-    let first_paused = wait_for_auxiliary_fetch_request_paused(
+    let first_paused = wait_for_attached_fetch_request_paused(
         &mut ctx,
         "SID-1",
         &api_url,
@@ -848,12 +845,12 @@ async fn multiple_fetch_sessions_chain_subresource_response_stage_pauses() {
     .await;
     ctx.expect_result(35_944, json!({}), Some("SID-1"));
 
-    let second_paused = wait_for_auxiliary_fetch_request_paused(
+    let second_paused = wait_for_attached_fetch_request_paused(
         &mut ctx,
-        "SID-aux",
+        "SID-attached",
         &api_url,
         Some(200),
-        "second response-stage pause on auxiliary session",
+        "second response-stage pause on attached session",
     )
     .await;
     let second_request_id = second_paused["params"]["requestId"]
@@ -865,24 +862,24 @@ async fn multiple_fetch_sessions_chain_subresource_response_stage_pauses() {
     ctx.process_async(json!({
         "id": 35_945,
         "method": "Fetch.getResponseBody",
-        "sessionId": "SID-aux",
+        "sessionId": "SID-attached",
         "params": { "requestId": second_request_id.clone() }
     }))
     .await;
     ctx.expect_result(
         35_945,
         json!({ "body": "multi response body", "base64Encoded": false }),
-        Some("SID-aux"),
+        Some("SID-attached"),
     );
 
     ctx.process_async(json!({
         "id": 35_946,
         "method": "Fetch.continueResponse",
-        "sessionId": "SID-aux",
+        "sessionId": "SID-attached",
         "params": { "requestId": second_request_id }
     }))
     .await;
-    ctx.expect_result(35_946, json!({}), Some("SID-aux"));
+    ctx.expect_result(35_946, json!({}), Some("SID-attached"));
     evaluate_until_value_async(
         &mut ctx,
         "SID-1",
@@ -931,10 +928,10 @@ async fn response_body_stream_taken_blocks_chained_response_stage_continue() {
             .browser_context
             .as_mut()
             .unwrap()
-            .assign_auxiliary_session_to_target("TID-1", "SID-aux".to_owned())
+            .assign_attached_session_to_target("TID-1", "SID-attached".to_owned())
     );
 
-    for (id, session_id) in [(35_948, "SID-1"), (35_949, "SID-aux")] {
+    for (id, session_id) in [(35_948, "SID-1"), (35_949, "SID-attached")] {
         ctx.process_async(json!({
             "id": id,
             "method": "Fetch.enable",
@@ -969,7 +966,7 @@ async fn response_body_stream_taken_blocks_chained_response_stage_continue() {
     .await;
     let _ = take_response_by_id(&mut ctx, 35_951);
 
-    let first_paused = wait_for_auxiliary_fetch_request_paused(
+    let first_paused = wait_for_attached_fetch_request_paused(
         &mut ctx,
         "SID-1",
         &api_url,
@@ -1027,7 +1024,7 @@ async fn response_body_stream_taken_blocks_chained_response_stage_continue() {
     assert!(
         !ctx.sent.iter().any(|message| {
             message["method"] == json!("Fetch.requestPaused")
-                && message["sessionId"] == json!("SID-aux")
+                && message["sessionId"] == json!("SID-attached")
                 && message["params"]["request"]["url"] == json!(api_url)
         }),
         "body-taken response should not advance to next Fetch handler"
@@ -1176,7 +1173,7 @@ async fn response_body_stream_taken_blocks_chained_bidi_response_stage_pause() {
     .await;
     let _ = take_response_by_id(&mut ctx, 35_960);
 
-    let cdp_pause = wait_for_auxiliary_fetch_request_paused(
+    let cdp_pause = wait_for_attached_fetch_request_paused(
         &mut ctx,
         "SID-1",
         &hit_url,
@@ -1327,10 +1324,10 @@ async fn response_stage_head_override_is_visible_to_chained_fetch_session() {
             .browser_context
             .as_mut()
             .unwrap()
-            .assign_auxiliary_session_to_target("TID-1", "SID-aux".to_owned())
+            .assign_attached_session_to_target("TID-1", "SID-attached".to_owned())
     );
 
-    for (id, session_id) in [(35_950, "SID-1"), (35_951, "SID-aux")] {
+    for (id, session_id) in [(35_950, "SID-1"), (35_951, "SID-attached")] {
         ctx.process_async(json!({
             "id": id,
             "method": "Fetch.enable",
@@ -1366,7 +1363,7 @@ async fn response_stage_head_override_is_visible_to_chained_fetch_session() {
     .await;
     let _ = take_response_by_id(&mut ctx, 35_953);
 
-    let first_paused = wait_for_auxiliary_fetch_request_paused(
+    let first_paused = wait_for_attached_fetch_request_paused(
         &mut ctx,
         "SID-1",
         &api_url,
@@ -1395,9 +1392,9 @@ async fn response_stage_head_override_is_visible_to_chained_fetch_session() {
     .await;
     ctx.expect_result(35_954, json!({}), Some("SID-1"));
 
-    let second_paused = wait_for_auxiliary_fetch_request_paused(
+    let second_paused = wait_for_attached_fetch_request_paused(
         &mut ctx,
-        "SID-aux",
+        "SID-attached",
         &api_url,
         Some(201),
         "second response-stage pause after head override",
@@ -1424,14 +1421,14 @@ async fn response_stage_head_override_is_visible_to_chained_fetch_session() {
     ctx.process_async(json!({
         "id": 35_955,
         "method": "Fetch.continueResponse",
-        "sessionId": "SID-aux",
+        "sessionId": "SID-attached",
         "params": {
             "requestId": second_request_id,
             "responsePhrase": "Created"
         }
     }))
     .await;
-    ctx.expect_result(35_955, json!({}), Some("SID-aux"));
+    ctx.expect_result(35_955, json!({}), Some("SID-attached"));
     evaluate_until_value_async(
         &mut ctx,
         "SID-1",
@@ -1483,10 +1480,10 @@ async fn response_stage_empty_headers_override_is_visible_to_chained_fetch_sessi
             .browser_context
             .as_mut()
             .unwrap()
-            .assign_auxiliary_session_to_target("TID-1", "SID-aux".to_owned())
+            .assign_attached_session_to_target("TID-1", "SID-attached".to_owned())
     );
 
-    for (id, session_id) in [(35_970, "SID-1"), (35_971, "SID-aux")] {
+    for (id, session_id) in [(35_970, "SID-1"), (35_971, "SID-attached")] {
         ctx.process_async(json!({
             "id": id,
             "method": "Fetch.enable",
@@ -1522,7 +1519,7 @@ async fn response_stage_empty_headers_override_is_visible_to_chained_fetch_sessi
     .await;
     let _ = take_response_by_id(&mut ctx, 35_973);
 
-    let first_paused = wait_for_auxiliary_fetch_request_paused(
+    let first_paused = wait_for_attached_fetch_request_paused(
         &mut ctx,
         "SID-1",
         &api_url,
@@ -1548,9 +1545,9 @@ async fn response_stage_empty_headers_override_is_visible_to_chained_fetch_sessi
     .await;
     ctx.expect_result(35_974, json!({}), Some("SID-1"));
 
-    let second_paused = wait_for_auxiliary_fetch_request_paused(
+    let second_paused = wait_for_attached_fetch_request_paused(
         &mut ctx,
-        "SID-aux",
+        "SID-attached",
         &api_url,
         Some(201),
         "second response-stage pause after empty headers override",
@@ -1571,11 +1568,11 @@ async fn response_stage_empty_headers_override_is_visible_to_chained_fetch_sessi
     ctx.process_async(json!({
         "id": 35_975,
         "method": "Fetch.continueResponse",
-        "sessionId": "SID-aux",
+        "sessionId": "SID-attached",
         "params": { "requestId": second_request_id }
     }))
     .await;
-    ctx.expect_result(35_975, json!({}), Some("SID-aux"));
+    ctx.expect_result(35_975, json!({}), Some("SID-attached"));
     evaluate_until_value_async(
         &mut ctx,
         "SID-1",
@@ -1627,10 +1624,10 @@ async fn response_stage_partial_head_override_is_rejected_and_preserves_chain() 
             .browser_context
             .as_mut()
             .unwrap()
-            .assign_auxiliary_session_to_target("TID-1", "SID-aux".to_owned())
+            .assign_attached_session_to_target("TID-1", "SID-attached".to_owned())
     );
 
-    for (id, session_id) in [(36_020, "SID-1"), (36_021, "SID-aux")] {
+    for (id, session_id) in [(36_020, "SID-1"), (36_021, "SID-attached")] {
         ctx.process_async(json!({
             "id": id,
             "method": "Fetch.enable",
@@ -1666,7 +1663,7 @@ async fn response_stage_partial_head_override_is_rejected_and_preserves_chain() 
     .await;
     let _ = take_response_by_id(&mut ctx, 36_023);
 
-    let first_paused = wait_for_auxiliary_fetch_request_paused(
+    let first_paused = wait_for_attached_fetch_request_paused(
         &mut ctx,
         "SID-1",
         &api_url,
@@ -1704,9 +1701,9 @@ async fn response_stage_partial_head_override_is_rejected_and_preserves_chain() 
     .await;
     ctx.expect_result(36_025, json!({}), Some("SID-1"));
 
-    let second_paused = wait_for_auxiliary_fetch_request_paused(
+    let second_paused = wait_for_attached_fetch_request_paused(
         &mut ctx,
-        "SID-aux",
+        "SID-attached",
         &api_url,
         Some(200),
         "second response-stage pause after rejected partial override",
@@ -1720,11 +1717,11 @@ async fn response_stage_partial_head_override_is_rejected_and_preserves_chain() 
     ctx.process_async(json!({
         "id": 36_026,
         "method": "Fetch.continueResponse",
-        "sessionId": "SID-aux",
+        "sessionId": "SID-attached",
         "params": { "requestId": second_request_id }
     }))
     .await;
-    ctx.expect_result(36_026, json!({}), Some("SID-aux"));
+    ctx.expect_result(36_026, json!({}), Some("SID-attached"));
     evaluate_until_value_async(
         &mut ctx,
         "SID-1",
@@ -3346,7 +3343,7 @@ xhr.send();
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn auxiliary_session_fetch_enable_receives_worker_xhr_request_pause() {
+async fn attached_session_fetch_enable_receives_worker_xhr_request_pause() {
     async fn page() -> impl IntoResponse {
         (
             [(CONTENT_TYPE.as_str(), "text/html")],
@@ -3397,14 +3394,14 @@ xhr.send();
             .browser_context
             .as_mut()
             .unwrap()
-            .assign_auxiliary_session_to_target("TID-1", "SID-aux".to_owned())
+            .assign_attached_session_to_target("TID-1", "SID-attached".to_owned())
     );
     ctx.sent.clear();
 
     ctx.process_async(json!({
         "id": 37_070,
         "method": "Fetch.enable",
-        "sessionId": "SID-aux",
+        "sessionId": "SID-attached",
         "params": {
             "patterns": [
                 { "urlPattern": "*/worker-api*", "requestStage": "Request", "resourceType": "XHR" }
@@ -3412,7 +3409,7 @@ xhr.send();
         }
     }))
     .await;
-    ctx.expect_result(37_070, json!({}), Some("SID-aux"));
+    ctx.expect_result(37_070, json!({}), Some("SID-attached"));
     enable_runtime_async(&mut ctx, "SID-1", 37_071).await;
     ctx.process_async(json!({
         "id": 37_072,
@@ -3432,13 +3429,13 @@ xhr.send();
 
     let paused = wait_for_background_request_paused(
         &mut ctx,
-        Some("SID-aux"),
+        Some("SID-attached"),
         &api_url,
         "XHR",
-        "auxiliary-session worker xhr requestPaused should surface through renderer publication",
+        "attached-session worker xhr requestPaused should surface through renderer publication",
     )
     .await;
-    assert_eq!(paused["sessionId"], json!("SID-aux"));
+    assert_eq!(paused["sessionId"], json!("SID-attached"));
     assert_eq!(paused["params"]["resourceType"], "XHR");
     assert_eq!(paused["params"]["request"]["method"], "GET");
 

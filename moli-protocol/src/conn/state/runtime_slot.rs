@@ -926,21 +926,21 @@ impl TargetRuntimeSlot {
         self.network_agent.has_event_listeners()
     }
 
-    pub(crate) fn enable_auxiliary_network_events(&mut self, session_id: &str) {
-        self.network_agent.enable_auxiliary_events(session_id);
+    pub(crate) fn enable_attached_network_events(&mut self, session_id: &str) {
+        self.network_agent.enable_attached_events(session_id);
     }
 
-    pub(crate) fn disable_auxiliary_network_events(&mut self, session_id: &str) -> bool {
-        self.network_agent.disable_auxiliary_events(session_id)
+    pub(crate) fn disable_attached_network_events(&mut self, session_id: &str) -> bool {
+        self.network_agent.disable_attached_events(session_id)
     }
 
-    pub(crate) fn remove_auxiliary_network_session(&mut self, session_id: &str) {
-        self.network_agent.remove_auxiliary_session(session_id);
+    pub(crate) fn remove_attached_network_session(&mut self, session_id: &str) {
+        self.network_agent.remove_attached_session(session_id);
     }
 
-    pub(crate) fn auxiliary_network_events_enabled_for_session(&self, session_id: &str) -> bool {
+    pub(crate) fn attached_network_events_enabled_for_session(&self, session_id: &str) -> bool {
         self.network_agent
-            .auxiliary_events_enabled_for_session(session_id)
+            .attached_events_enabled_for_session(session_id)
     }
 
     pub(crate) fn network_event_session_ids(
@@ -1233,9 +1233,9 @@ impl TargetRuntimeSlot {
     }
 
     #[cfg(test)]
-    pub(crate) fn has_auxiliary_network_events_for_session(&self, session_id: &str) -> bool {
+    pub(crate) fn has_attached_network_events_for_session(&self, session_id: &str) -> bool {
         self.network_agent
-            .has_auxiliary_events_for_session(session_id)
+            .has_attached_events_for_session(session_id)
     }
 
     #[cfg(test)]

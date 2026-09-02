@@ -591,7 +591,7 @@ fn activating_another_target_retains_pending_initial_document_engine() {
         .as_mut()
         .expect("browser context")
         .stage_background_target(
-            "TID-promoted".to_owned(),
+            "TID-activated".to_owned(),
             None,
             "about:blank".to_owned(),
             Some("about:blank".to_owned()),
@@ -600,7 +600,7 @@ fn activating_another_target_retains_pending_initial_document_engine() {
     conn.browser_context
         .as_mut()
         .expect("browser context")
-        .set_active_target_id("TID-promoted");
+        .set_active_target_id("TID-activated");
 
     let retained = conn
         .browser_context_by_id("CTX-pending-target")
@@ -614,7 +614,7 @@ fn activating_another_target_retains_pending_initial_document_engine() {
 }
 
 #[tokio::test]
-async fn removing_active_browser_context_switches_engine_to_promoted_context() {
+async fn removing_active_browser_context_switches_engine_to_activated_context() {
     let mut conn = CdpConnection::new();
     let mut first = conn.new_browser_context("CTX-first".to_owned());
     first.set_active_target_id("TID-first");

@@ -1593,7 +1593,7 @@ async fn create_isolated_world_returns_unique_context_ids_and_emits_runtime_even
     );
 }
 #[tokio::test(flavor = "multi_thread")]
-async fn create_isolated_world_targets_loaded_background_owner_without_promotion() {
+async fn create_isolated_world_targets_loaded_background_owner_without_activation() {
     let mut ctx = TestContext::new();
     let background = PageTargetHost::with_url(
         "TID-background".to_owned(),
@@ -1663,7 +1663,7 @@ async fn create_isolated_world_targets_loaded_background_owner_without_promotion
             .as_ref()
             .and_then(|browser_context| browser_context.active_target_id()),
         Some("TID-active"),
-        "background Page.createIsolatedWorld should not promote the target"
+        "background Page.createIsolatedWorld should not activate the target"
     );
     ctx.sent.clear();
     ctx.process_async(json!({

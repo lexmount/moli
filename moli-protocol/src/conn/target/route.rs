@@ -1,4 +1,4 @@
-use crate::conn::{BrowserContext, CdpConnection};
+use crate::conn::CdpConnection;
 use moli_page_types::DevToolsSessionKey;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -173,24 +173,23 @@ impl CdpConnection {
 
     pub(crate) fn session_route(&self, session_id: Option<&str>) -> Option<CdpSessionRoute> {
         let session_id = session_id?;
-        if let Some(route) = self.target_control.attached_session_route(session_id) {
-            return Some(route.clone());
+        let committed = self
+            .target_control
+            .attached_session_route(session_id)
+            .cloned();
+        if committed.is_some() {
+            return committed;
         }
+        #[cfg(test)]
+        if self.allow_incomplete_session_fixture_routes {
+            return self.bound_session_route_for_test(session_id, None);
+        }
+        None
+    }
 
-        // The remaining lookups cover only the interval after a target-owned
-        // binding is prepared and before its Target.attachedToTarget event is
-        // committed. Committed sessions always resolve from target_control.
-        if let Some(tab_target_id) = self.tab_target_id_for_session_id(session_id)
-            && let Some(browser_context_id) =
-                self.browser_context_id_for_tab_target_id(tab_target_id)
-        {
-            return Some(CdpSessionRoute::TabTarget {
-                browser_context_id,
-                tab_target_id: tab_target_id.to_owned(),
-            });
-        }
-        self.browser_contexts()
-            .find_map(|bc| prepared_browser_context_session_route(bc, session_id))
+    #[cfg(test)]
+    pub(crate) fn require_committed_session_routes_for_test(&mut self) {
+        self.allow_incomplete_session_fixture_routes = false;
     }
 
     pub(crate) fn target_session_route_for_target_id(
@@ -291,51 +290,11 @@ impl CdpConnection {
             .any(|browser_context| browser_context.has_attached_child_frame_id(frame_id))
     }
 }
-fn prepared_browser_context_session_route(
-    browser_context: &BrowserContext,
-    session_id: &str,
-) -> Option<CdpSessionRoute> {
-    if let Some((target, session_key)) = browser_context.page_targets.iter().find_map(|target| {
-        target
-            .devtools_sessions
-            .key_for_wire_session_id(session_id)
-            .map(|session_key| (target, session_key))
-    }) {
-        return Some(CdpSessionRoute::PageTarget {
-            browser_context_id: browser_context.id.clone(),
-            target_id: target.target_id().to_owned(),
-            session_key,
-        });
-    }
-
-    browser_context
-        .shared_worker_target_id_for_session(session_id)
-        .map(|target_id| CdpSessionRoute::SharedWorkerTarget {
-            browser_context_id: browser_context.id.clone(),
-            target_id: target_id.to_owned(),
-        })
-        .or_else(|| {
-            browser_context
-                .dedicated_worker_target_id_for_session(session_id)
-                .map(|target_id| CdpSessionRoute::DedicatedWorkerTarget {
-                    browser_context_id: browser_context.id.clone(),
-                    target_id: target_id.to_owned(),
-                })
-                .or_else(|| {
-                    browser_context
-                        .service_worker_target_id_for_session(session_id)
-                        .map(|target_id| CdpSessionRoute::ServiceWorkerTarget {
-                            browser_context_id: browser_context.id.clone(),
-                            target_id: target_id.to_owned(),
-                        })
-                })
-        })
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::conn::PageTargetHost;
+    use crate::conn::{BrowserContext, PageTargetHost};
 
     #[test]
     fn committed_page_session_route_is_stable_across_foreground_selection() {
@@ -377,42 +336,13 @@ mod tests {
     }
 
     #[test]
-    fn prepared_page_sessions_resolve_from_their_target_registry() {
-        let mut browser_context = BrowserContext::new("BID-route".to_owned());
-        browser_context.set_active_target_id("TID-active");
-        browser_context.attach_active_session("SID-active");
+    fn target_binding_is_not_globally_routable_before_session_commit() {
+        let mut connection = CdpConnection::new();
+        connection.require_committed_session_routes_for_test();
+        let mut browser_context = BrowserContext::new_with_page_for_test("BID-route", "TID-page");
+        browser_context.attach_active_session("SID-prepared");
+        connection.browser_context = Some(browser_context);
 
-        let mut background = PageTargetHost::with_url(
-            "TID-background".to_owned(),
-            Some("SID-background".to_owned()),
-            "about:blank".to_owned(),
-        );
-        background.devtools_sessions.ensure_attached("SID-attached");
-        assert!(browser_context.insert_page_target_host(background));
-
-        assert_eq!(
-            prepared_browser_context_session_route(&browser_context, "SID-active"),
-            Some(CdpSessionRoute::PageTarget {
-                browser_context_id: "BID-route".to_owned(),
-                target_id: "TID-active".to_owned(),
-                session_key: DevToolsSessionKey::Primary,
-            })
-        );
-        assert_eq!(
-            prepared_browser_context_session_route(&browser_context, "SID-background"),
-            Some(CdpSessionRoute::PageTarget {
-                browser_context_id: "BID-route".to_owned(),
-                target_id: "TID-background".to_owned(),
-                session_key: DevToolsSessionKey::Primary,
-            })
-        );
-        assert_eq!(
-            prepared_browser_context_session_route(&browser_context, "SID-attached"),
-            Some(CdpSessionRoute::PageTarget {
-                browser_context_id: "BID-route".to_owned(),
-                target_id: "TID-background".to_owned(),
-                session_key: DevToolsSessionKey::Attached("SID-attached".to_owned()),
-            })
-        );
+        assert_eq!(connection.session_route(Some("SID-prepared")), None);
     }
 }

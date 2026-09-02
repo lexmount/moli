@@ -1183,7 +1183,7 @@ async fn playwright_connect_over_cdp_auto_attach_child_frame_utility_script_uses
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn playwright_connect_over_cdp_second_page_window_query_keeps_background_target_parked() {
+async fn playwright_connect_over_cdp_second_page_window_query_keeps_background_target_background() {
     let mut ctx = TestContext::new();
     load_bc_with_titled_page_async(
         &mut ctx,
@@ -1257,7 +1257,7 @@ async fn playwright_connect_over_cdp_second_page_window_query_keeps_background_t
     assert_eq!(bc.active_session_id(), Some("SID-first"));
     assert!(
         bc.background_target(&second_target_id).is_some(),
-        "second page should remain parked after Browser.getWindowForTarget"
+        "second page should remain background after Browser.getWindowForTarget"
     );
     assert!(
         bc.background_target("TID-PW-FIRST").is_none(),

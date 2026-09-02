@@ -133,12 +133,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn inspector_enable_replays_crash_to_exact_auxiliary_session() {
+    async fn inspector_enable_replays_crash_to_exact_attached_session() {
         let mut ctx = TestContext::new();
         let mut bc = BrowserContext::new("BID-1".into());
         bc.set_active_target_id("TID-1");
         bc.attach_active_session("SID-primary");
-        assert!(bc.assign_auxiliary_session_to_target("TID-1", "SID-aux".into()));
+        assert!(bc.assign_attached_session_to_target("TID-1", "SID-attached".into()));
         bc.active_page_target_mut()
             .owner_state
             .target_crash_state
@@ -148,13 +148,13 @@ mod tests {
         ctx.process_async(json!({
             "id": 30,
             "method": "Inspector.enable",
-            "sessionId": "SID-aux"
+            "sessionId": "SID-attached"
         }))
         .await;
-        ctx.expect_result(30, json!({}), Some("SID-aux"));
+        ctx.expect_result(30, json!({}), Some("SID-attached"));
         let event = ctx.take_one();
         assert_eq!(event["method"], "Inspector.targetCrashed");
-        assert_eq!(event["sessionId"], "SID-aux");
+        assert_eq!(event["sessionId"], "SID-attached");
         assert!(
             !ctx.conn
                 .target_runtime_session_state_for_session(Some("SID-primary"))
@@ -163,14 +163,14 @@ mod tests {
         );
         assert!(
             ctx.conn
-                .target_runtime_session_state_for_session(Some("SID-aux"))
-                .expect("auxiliary runtime session state")
+                .target_runtime_session_state_for_session(Some("SID-attached"))
+                .expect("attached runtime session state")
                 .inspector_target_crashed_delivered()
         );
     }
 
     #[tokio::test]
-    async fn inspector_enable_replays_background_target_crash_without_promotion() {
+    async fn inspector_enable_replays_background_target_crash_without_activation() {
         let mut ctx = TestContext::new();
         let mut bc = BrowserContext::new("BID-1".into());
         bc.set_active_target_id("TID-active");
@@ -321,7 +321,7 @@ mod tests {
             bc.background_target("TID-B")
                 .filter(|target| target.has_non_default_session_state())
                 .is_none(),
-            "disable should collapse staged parked state back to default"
+            "disable should collapse staged background state back to default"
         );
     }
 }

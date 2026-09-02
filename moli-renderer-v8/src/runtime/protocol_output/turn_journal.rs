@@ -226,7 +226,7 @@ impl RendererTurnOutputJournal {
             return None;
         }
         // A terminal response cannot settle against a deferred publication:
-        // the DevTools session has no command-reply fallback if later
+        // the DevTools session has no adapter-reply fallback if later
         // transport admission fails.
         let transport = state.transport.clone()?;
         state.records.extend(records);

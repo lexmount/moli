@@ -154,7 +154,7 @@ async fn rust_cdp_chromium_target_set_auto_attach_true_records_global_policy() {
 
     set_auto_attach(&mut ctx, 260_003, true).await;
 
-    assert!(ctx.conn.auto_attach);
+    assert!(ctx.conn.auto_attach_enabled());
 }
 
 // Chromium source:
@@ -162,11 +162,16 @@ async fn rust_cdp_chromium_target_set_auto_attach_true_records_global_policy() {
 #[tokio::test(flavor = "multi_thread")]
 async fn rust_cdp_chromium_target_set_auto_attach_false_records_global_policy() {
     let mut ctx = TestContext::new_with_target_discovery(false);
-    ctx.conn.auto_attach = true;
+    ctx.conn.set_auto_attach_owner(
+        None,
+        true,
+        false,
+        crate::conn::CdpTargetFilter::default_auto_attach(),
+    );
 
     set_auto_attach(&mut ctx, 260_004, false).await;
 
-    assert!(!ctx.conn.auto_attach);
+    assert!(!ctx.conn.auto_attach_enabled());
 }
 
 // Chromium source:
@@ -1381,7 +1386,14 @@ async fn rust_cdp_chromium_target_auto_attach_false_detaches_active_session() {
         .as_mut()
         .unwrap()
         .attach_active_session("SID-active");
-    ctx.conn.auto_attach = true;
+    ctx.conn.set_auto_attach_owner(
+        None,
+        true,
+        false,
+        crate::conn::CdpTargetFilter::default_auto_attach(),
+    );
+    ctx.conn
+        .register_auto_attached_session("SID-active".to_owned(), None);
 
     set_auto_attach(&mut ctx, 260_035, false).await;
     let detached = ctx.take_one();
@@ -1398,7 +1410,14 @@ async fn rust_cdp_chromium_target_auto_attach_false_detaches_background_session(
     let mut ctx = TestContext::new_with_target_discovery(false);
     load_bc_with_target(&mut ctx, "BID-detach-bg", "TID-active");
     push_background_target(&mut ctx, "TID-background", "about:blank#bg", Some("SID-bg"));
-    ctx.conn.auto_attach = true;
+    ctx.conn.set_auto_attach_owner(
+        None,
+        true,
+        false,
+        crate::conn::CdpTargetFilter::default_auto_attach(),
+    );
+    ctx.conn
+        .register_auto_attached_session("SID-bg".to_owned(), None);
 
     set_auto_attach(&mut ctx, 260_036, false).await;
     let detached = ctx.take_one();
@@ -1435,8 +1454,7 @@ async fn rust_cdp_chromium_target_attach_to_browser_target_emits_browser_target(
 // Chromium source:
 // third_party/blink/web_tests/http/tests/inspector-protocol/target/browser-auto-attach-tab.js
 #[tokio::test(flavor = "multi_thread")]
-async fn rust_cdp_chromium_target_attach_to_target_from_browser_session_creates_auxiliary_session()
-{
+async fn rust_cdp_chromium_target_attach_to_target_from_browser_session_creates_attached_session() {
     let mut ctx = TestContext::new_with_target_discovery(false);
     let browser_context_id = create_browser_context(&mut ctx, 260_038).await;
     let target_id =
@@ -1607,7 +1625,7 @@ async fn rust_cdp_chromium_target_close_background_target_detaches_sessions() {
             .browser_context
             .as_mut()
             .unwrap()
-            .assign_auxiliary_session_to_target("TID-background", "SID-aux".into())
+            .assign_attached_session_to_target("TID-background", "SID-attached".into())
     );
 
     ctx.process_async(json!({
@@ -1643,7 +1661,7 @@ async fn rust_cdp_chromium_target_close_background_target_detaches_sessions() {
 // Chromium source:
 // third_party/blink/web_tests/http/tests/inspector-protocol/target/tab-target.js
 #[tokio::test(flavor = "multi_thread")]
-async fn rust_cdp_chromium_target_activate_background_target_promotes_it() {
+async fn rust_cdp_chromium_target_activate_background_target_activates_it() {
     let mut ctx = TestContext::new_with_target_discovery(false);
     load_bc_with_target(&mut ctx, "BID-activate", "TID-active");
     push_background_target(

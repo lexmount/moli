@@ -37,7 +37,7 @@ async fn renderer_backend_node_id_for_live_expression(
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn dom_resolve_geometry_and_mutation_target_loaded_background_owner_without_promotion() {
+async fn dom_resolve_geometry_and_mutation_target_loaded_background_owner_without_activation() {
     let mut ctx = TestContext::new();
     let background_url = url::Url::parse("https://background.test/owned").unwrap();
     let background = PageTargetHost::with_url(

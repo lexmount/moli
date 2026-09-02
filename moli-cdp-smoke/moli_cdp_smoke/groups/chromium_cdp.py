@@ -50,8 +50,8 @@ async def run_chromium_cdp_group(state: SmokeState) -> None:
     await _verify_chromium_profiler_nested_console_profile_sample(state)
     await _verify_chromium_profiler_parameterless_profile_end_sample(state)
     await _verify_chromium_profiler_navigation_profile_continuity_sample(state)
-    await _verify_chromium_profiler_auxiliary_session_navigation_profile_continuity_sample(state)
-    await _verify_chromium_profiler_auxiliary_session_detach_clears_state_sample(state)
+    await _verify_chromium_profiler_attached_session_navigation_profile_continuity_sample(state)
+    await _verify_chromium_profiler_attached_session_detach_clears_state_sample(state)
     await _verify_chromium_profiler_precise_coverage_error_sample(state)
     await _verify_chromium_profiler_precise_coverage_sample(state)
     await _verify_chromium_profiler_precise_coverage_counter_reset_sample(state)
@@ -2191,7 +2191,7 @@ async def _verify_chromium_child_frame_multi_session_fanout_sample(
                 )
                 for url in (outer_url, nested_url)
             ),
-            "both auxiliary sessions child Page event fan-out",
+            "both attached sessions child Page event fan-out",
         )
 
         page_only_batch = page_only_events[page_only_start:]
@@ -3641,21 +3641,21 @@ async def _verify_chromium_io_resolve_blob_sample(state: SmokeState) -> None:
             "Runtime.evaluate",
             {"expression": "({owner: 'non-blob-session'})", "returnByValue": False},
         )
-        auxiliary_blob = await blob_session.send(
+        attached_blob = await blob_session.send(
             "Runtime.evaluate",
-            {"expression": "new Blob(['auxiliary'])", "returnByValue": False},
+            {"expression": "new Blob(['attached'])", "returnByValue": False},
         )
-        auxiliary_object_id = auxiliary_blob.get("result", {}).get("objectId")
-        auxiliary_resolution = await blob_session.send(
+        attached_object_id = attached_blob.get("result", {}).get("objectId")
+        attached_resolution = await blob_session.send(
             "IO.resolveBlob",
-            {"objectId": auxiliary_object_id},
+            {"objectId": attached_object_id},
         )
-        if not auxiliary_resolution.get("uuid"):
-            raise SmokeError(f"auxiliary IO.resolveBlob should succeed: {auxiliary_resolution}")
+        if not attached_resolution.get("uuid"):
+            raise SmokeError(f"attached IO.resolveBlob should succeed: {attached_resolution}")
         cross_session_error = await _send_cdp_expect_optional_error(
             non_blob_session,
             "IO.resolveBlob",
-            {"objectId": auxiliary_object_id},
+            {"objectId": attached_object_id},
         )
         if cross_session_error is None:
             raise SmokeError("IO.resolveBlob must unwrap objectId in the calling Inspector session")
@@ -3721,27 +3721,27 @@ async def _verify_chromium_performance_enable_sample(state: SmokeState) -> None:
     await state.cdp.send("Performance.enable", {"timeDomain": None})
     await state.cdp.send("Performance.disable")
 
-    auxiliary = await state.context.new_cdp_session(state.page)
+    attached = await state.context.new_cdp_session(state.page)
     try:
         primary_disabled = await _performance_metrics(state.cdp)
-        auxiliary_disabled = await _performance_metrics(auxiliary)
-        if primary_disabled or auxiliary_disabled:
+        attached_disabled = await _performance_metrics(attached)
+        if primary_disabled or attached_disabled:
             raise SmokeError(
                 "Performance.getMetrics should be empty before each Inspector session is enabled"
             )
 
         await state.cdp.send("Performance.enable")
-        if await _performance_metrics(auxiliary):
-            raise SmokeError("Performance.enable must not enable an auxiliary Inspector session")
-        await auxiliary.send("Performance.enable", {"timeDomain": "threadTicks"})
-        if not await _performance_metrics(state.cdp) or not await _performance_metrics(auxiliary):
+        if await _performance_metrics(attached):
+            raise SmokeError("Performance.enable must not enable an attached Inspector session")
+        await attached.send("Performance.enable", {"timeDomain": "threadTicks"})
+        if not await _performance_metrics(state.cdp) or not await _performance_metrics(attached):
             raise SmokeError("enabled Performance sessions should each expose metrics")
         await state.cdp.send("Performance.disable")
-        if not await _performance_metrics(auxiliary):
+        if not await _performance_metrics(attached):
             raise SmokeError("disabling one Performance session must not disable another")
-        await auxiliary.send("Performance.disable")
+        await attached.send("Performance.disable")
     finally:
-        await auxiliary.detach()
+        await attached.detach()
     state.record("chromium_performance_enable_sample")
 
 
@@ -4240,22 +4240,22 @@ async def _verify_chromium_profiler_navigation_profile_continuity_sample(state: 
     state.record("chromium_profiler_navigation_profile_continuity_sample")
 
 
-async def _verify_chromium_profiler_auxiliary_session_navigation_profile_continuity_sample(state: SmokeState) -> None:
-    await _navigate_with_cdp_until_dom_ready(state, f"{state.fixture}/plain?profiler-aux-navigation-before")
-    aux_cdp = await state.context.new_cdp_session(state.page)
+async def _verify_chromium_profiler_attached_session_navigation_profile_continuity_sample(state: SmokeState) -> None:
+    await _navigate_with_cdp_until_dom_ready(state, f"{state.fixture}/plain?profiler-attached-navigation-before")
+    attached_cdp = await state.context.new_cdp_session(state.page)
     await state.cdp.send("Profiler.enable")
-    await aux_cdp.send("Profiler.enable")
-    await aux_cdp.send("Profiler.setSamplingInterval", {"interval": 100})
-    await aux_cdp.send("Profiler.start")
+    await attached_cdp.send("Profiler.enable")
+    await attached_cdp.send("Profiler.setSamplingInterval", {"interval": 100})
+    await attached_cdp.send("Profiler.start")
     try:
         primary_stop_before = await _send_cdp_expect_optional_error(state.cdp, "Profiler.stop", {})
         if not primary_stop_before or "No recording profiles found" not in str(primary_stop_before):
             raise SmokeError(
-                "Primary CDP session must not observe auxiliary Profiler.start recording: "
+                "Primary CDP session must not observe attached Profiler.start recording: "
                 f"{primary_stop_before}"
             )
 
-        before = await aux_cdp.send(
+        before = await attached_cdp.send(
             "Runtime.evaluate",
             {
                 "expression": """
@@ -4275,16 +4275,16 @@ async def _verify_chromium_profiler_auxiliary_session_navigation_profile_continu
         assert_equal(
             before.get("result", {}).get("value"),
             True,
-            "Chromium Profiler auxiliary pre-navigation work sample",
+            "Chromium Profiler attached pre-navigation work sample",
         )
 
-        await aux_cdp.send(
+        await attached_cdp.send(
             "Page.navigate",
-            {"url": f"{state.fixture}/plain?profiler-aux-navigation-after"},
+            {"url": f"{state.fixture}/plain?profiler-attached-navigation-after"},
         )
         await state.page.wait_for_load_state("load", timeout=10_000)
 
-        after = await aux_cdp.send(
+        after = await attached_cdp.send(
             "Runtime.evaluate",
             {
                 "expression": """
@@ -4304,34 +4304,34 @@ async def _verify_chromium_profiler_auxiliary_session_navigation_profile_continu
         assert_equal(
             after.get("result", {}).get("value"),
             True,
-            "Chromium Profiler auxiliary post-navigation work sample",
+            "Chromium Profiler attached post-navigation work sample",
         )
 
-        profile_result = await aux_cdp.send("Profiler.stop")
+        profile_result = await attached_cdp.send("Profiler.stop")
         primary_stop_after = await _send_cdp_expect_optional_error(state.cdp, "Profiler.stop", {})
         if not primary_stop_after or "No recording profiles found" not in str(primary_stop_after):
             raise SmokeError(
-                "Primary CDP session must stay isolated after auxiliary Profiler.stop: "
+                "Primary CDP session must stay isolated after attached Profiler.stop: "
                 f"{primary_stop_after}"
             )
     finally:
-        await aux_cdp.send("Profiler.disable")
+        await attached_cdp.send("Profiler.disable")
         await state.cdp.send("Profiler.disable")
 
     profile = profile_result.get("profile") or {}
-    _assert_profile_tree_shape(profile, "auxiliary Profiler.stop navigation continuity profile")
+    _assert_profile_tree_shape(profile, "attached Profiler.stop navigation continuity profile")
     function_names = _profile_function_names(profile)
-    # As above, navigation restores the auxiliary session's recording state, not samples from the
+    # As above, navigation restores the attached session's recording state, not samples from the
     # disposed isolate. Session isolation and replacement-backend sampling are the stable contract.
     if "chromiumProfilerAuxAfterNavigationWork" not in function_names:
         raise SmokeError(
-            "Auxiliary Profiler.stop after navigation should include post-navigation work "
+            "Attached Profiler.stop after navigation should include post-navigation work "
             f"function; names={sorted(function_names)}"
         )
-    state.record("chromium_profiler_auxiliary_session_navigation_profile_continuity_sample")
+    state.record("chromium_profiler_attached_session_navigation_profile_continuity_sample")
 
 
-async def _verify_chromium_profiler_auxiliary_session_detach_clears_state_sample(state: SmokeState) -> None:
+async def _verify_chromium_profiler_attached_session_detach_clears_state_sample(state: SmokeState) -> None:
     await _navigate_with_cdp_until_dom_ready(state, f"{state.fixture}/plain?profiler-session-detach")
     old_cdp = await state.context.new_cdp_session(state.page)
     await old_cdp.send("Profiler.enable")
@@ -4343,19 +4343,19 @@ async def _verify_chromium_profiler_auxiliary_session_detach_clears_state_sample
         start_error = await _send_cdp_expect_optional_error(new_cdp, "Profiler.start", {})
         if not start_error or "Profiler is not enabled" not in str(start_error):
             raise SmokeError(
-                "New auxiliary CDP session must not inherit detached Profiler.enable/start state: "
+                "New attached CDP session must not inherit detached Profiler.enable/start state: "
                 f"{start_error}"
             )
         stop_error = await _send_cdp_expect_optional_error(new_cdp, "Profiler.stop", {})
         if not stop_error or "No recording profiles found" not in str(stop_error):
             raise SmokeError(
-                "New auxiliary CDP session must not inherit detached recording state: "
+                "New attached CDP session must not inherit detached recording state: "
                 f"{stop_error}"
             )
     finally:
         await new_cdp.detach()
 
-    state.record("chromium_profiler_auxiliary_session_detach_clears_state_sample")
+    state.record("chromium_profiler_attached_session_detach_clears_state_sample")
 
 
 async def _verify_chromium_profiler_precise_coverage_error_sample(state: SmokeState) -> None:

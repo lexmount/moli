@@ -1554,7 +1554,7 @@ mod tests {
         .await;
         {
             let browser_context = ctx.conn.browser_context.as_mut().expect("browser context");
-            assert!(browser_context.assign_auxiliary_session_to_target(
+            assert!(browser_context.assign_attached_session_to_target(
                 "TID-1",
                 "SID-event-breakpoint-owner".to_owned(),
             ));
@@ -1757,7 +1757,7 @@ mod tests {
 
         {
             let browser_context = ctx.conn.browser_context.as_mut().expect("browser context");
-            assert!(browser_context.assign_auxiliary_session_to_target(
+            assert!(browser_context.assign_attached_session_to_target(
                 "TID-1",
                 "SID-event-breakpoint-owner".to_owned(),
             ));
@@ -2068,10 +2068,12 @@ mod tests {
         load_document(&mut ctx, "<!doctype html><title>XHR owner</title>").await;
         {
             let browser_context = ctx.conn.browser_context.as_mut().expect("browser context");
-            assert!(browser_context.assign_auxiliary_session_to_target(
-                "TID-1",
-                "SID-xhr-breakpoint-owner".to_owned(),
-            ));
+            assert!(
+                browser_context.assign_attached_session_to_target(
+                    "TID-1",
+                    "SID-xhr-breakpoint-owner".to_owned(),
+                )
+            );
         }
 
         let primary_enable = command(
@@ -2214,10 +2216,12 @@ mod tests {
 
         {
             let browser_context = ctx.conn.browser_context.as_mut().expect("browser context");
-            assert!(browser_context.assign_auxiliary_session_to_target(
-                "TID-1",
-                "SID-xhr-breakpoint-owner".to_owned(),
-            ));
+            assert!(
+                browser_context.assign_attached_session_to_target(
+                    "TID-1",
+                    "SID-xhr-breakpoint-owner".to_owned(),
+                )
+            );
         }
         let reattached_enable = command(
             &mut ctx,

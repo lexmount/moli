@@ -758,7 +758,7 @@ mod tests {
         let mut bc = BrowserContext::new("BID-1".into());
         bc.set_active_target_id("TID-1");
         bc.attach_active_session("SID-1");
-        assert!(bc.assign_auxiliary_session_to_target("TID-1", "FETCH-SID".to_owned()));
+        assert!(bc.assign_attached_session_to_target("TID-1", "FETCH-SID".to_owned()));
         bc.active_page_target_mut()
             .runtime_slot
             .set_page_attachment_id_for_test(1);
@@ -817,7 +817,7 @@ mod tests {
         let mut bc = BrowserContext::new("BID-1".into());
         bc.set_active_target_id("TID-1");
         bc.attach_active_session("SID-1");
-        assert!(bc.assign_auxiliary_session_to_target("TID-1", "FETCH-SID".to_owned()));
+        assert!(bc.assign_attached_session_to_target("TID-1", "FETCH-SID".to_owned()));
         bc.active_page_target_mut()
             .runtime_slot
             .set_page_attachment_id_for_test(1);

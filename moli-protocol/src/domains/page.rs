@@ -66,6 +66,16 @@ mod termination;
 #[cfg(test)]
 mod tests;
 
+/// Removes renderer-owned Page resources for one DevTools session while its
+/// Inspector binding is still usable for cleanup commands.
+pub(in crate::domains) async fn dispose_session_async(
+    conn: &mut CdpConnection,
+    session_id: &str,
+) -> anyhow::Result<()> {
+    conn.remove_document_start_scripts_for_detached_session_async(session_id)
+        .await
+}
+
 fn missing_page_target_error_message(
     conn: &CdpConnection,
     session_id: Option<&str>,
@@ -2799,22 +2809,24 @@ mod producer_tests {
         browser_context.set_active_target_id("TID-dialog-attachment");
         browser_context.attach_active_session("SID-primary");
         assert!(
-            browser_context
-                .assign_auxiliary_session_to_target("TID-dialog-attachment", "SID-aux".to_owned(),)
+            browser_context.assign_attached_session_to_target(
+                "TID-dialog-attachment",
+                "SID-attached".to_owned(),
+            )
         );
         conn.browser_context = Some(browser_context);
-        let page_owner = page_residence_identity_for_test(&mut conn, "SID-aux");
+        let page_owner = page_residence_identity_for_test(&mut conn, "SID-attached");
         let mut prepared =
             ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
                 super::PagePreparedOutputs::from_javascript_dialogs_for_test(
                     page_owner,
-                    Some("SID-aux"),
-                    javascript_dialog_scope_for_test(&conn, "SID-aux"),
+                    Some("SID-attached"),
+                    javascript_dialog_scope_for_test(&conn, "SID-attached"),
                     "TID-dialog-attachment",
                     vec![renderer_javascript_dialog_for_test(
                         renderer_document_identity_for_test(1, 1),
                         "FRAME-child",
-                        "auxiliary attachment dialog",
+                        "attached-session dialog",
                         None,
                     )],
                 ),
@@ -2830,7 +2842,7 @@ mod producer_tests {
 
         assert_eq!(out.len(), 1);
         let message = out.remove(0).into_protocol_message();
-        assert_eq!(message["sessionId"], json!("SID-aux"));
+        assert_eq!(message["sessionId"], json!("SID-attached"));
         assert_eq!(message["params"]["frameId"], json!("FRAME-child"));
         assert!(
             conn.target_page_session_state_for_session(Some("SID-primary"))
@@ -2840,8 +2852,8 @@ mod producer_tests {
             "drain-time session must not acquire another attachment's dialog"
         );
         assert_eq!(
-            conn.target_page_session_state_for_session(Some("SID-aux"))
-                .expect("auxiliary session state")
+            conn.target_page_session_state_for_session(Some("SID-attached"))
+                .expect("attached session state")
                 .javascript_dialog_state
                 .pending_dialogs()
                 .len(),
@@ -2856,7 +2868,7 @@ mod producer_tests {
         browser_context.set_active_target_id("TID-dialog-detached");
         browser_context.attach_active_session("SID-primary");
         assert!(
-            browser_context.assign_auxiliary_session_to_target(
+            browser_context.assign_attached_session_to_target(
                 "TID-dialog-detached",
                 "SID-detached".to_owned(),
             )
@@ -2878,13 +2890,15 @@ mod producer_tests {
                     )],
                 ),
             ));
-        assert_eq!(
+        assert!(
             conn.browser_context
                 .as_mut()
                 .expect("browser context")
-                .remove_auxiliary_session("SID-detached")
-                .as_deref(),
-            Some("TID-dialog-detached")
+                .remove_page_session_binding(
+                    "TID-dialog-detached",
+                    "SID-detached",
+                    &moli_page_types::DevToolsSessionKey::Attached("SID-detached".to_owned()),
+                )
         );
 
         let mut out = Vec::new();
@@ -2901,7 +2915,7 @@ mod producer_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn parked_popup_dialog_rejects_a_retired_source_attachment() {
+    async fn pending_popup_dialog_rejects_a_retired_source_attachment() {
         const POPUP_ID: u64 = 76;
 
         let mut conn = CdpConnection::default();
@@ -2909,7 +2923,7 @@ mod producer_tests {
         browser_context.set_active_target_id("TID-popup-stale-source");
         browser_context.attach_active_session("SID-primary");
         assert!(
-            browser_context.assign_auxiliary_session_to_target(
+            browser_context.assign_attached_session_to_target(
                 "TID-popup-stale-source",
                 "SID-source".to_owned(),
             )
@@ -2944,16 +2958,18 @@ mod producer_tests {
         .await;
         assert!(
             out.is_empty(),
-            "dialog should be parked before popup creation"
+            "dialog should remain pending before popup creation"
         );
 
-        assert_eq!(
+        assert!(
             conn.browser_context
                 .as_mut()
                 .expect("browser context")
-                .remove_auxiliary_session("SID-source")
-                .as_deref(),
-            Some("TID-popup-stale-source")
+                .remove_page_session_binding(
+                    "TID-popup-stale-source",
+                    "SID-source",
+                    &moli_page_types::DevToolsSessionKey::Attached("SID-source".to_owned()),
+                )
         );
         let mut popup_output =
             ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
@@ -3910,22 +3926,24 @@ mod producer_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn child_frame_activity_fans_out_page_events_to_enabled_auxiliary_session() {
+    async fn child_frame_activity_fans_out_page_events_to_enabled_attached_session() {
         let mut conn = CdpConnection::default();
         let mut bc = BrowserContext::new("BID-child-page-fanout".into());
         bc.set_active_target_id("TID-child-page-fanout");
         bc.set_target_url("https://example.test/page".to_owned());
         bc.attach_active_session("SID-primary");
-        assert!(bc.assign_auxiliary_session_to_target(
-            "TID-child-page-fanout",
-            "SID-auxiliary".to_owned(),
-        ));
+        assert!(
+            bc.assign_attached_session_to_target(
+                "TID-child-page-fanout",
+                "SID-attached".to_owned(),
+            )
+        );
         conn.browser_context = Some(bc);
-        conn.with_target_devtools_session_state_for_session_mut(Some("SID-auxiliary"), |state| {
+        conn.with_target_devtools_session_state_for_session_mut(Some("SID-attached"), |state| {
             state.page_session_state.page_domain_enabled = true;
             state.page_session_state.page_lifecycle_events = true;
         })
-        .expect("auxiliary session should expose Page state");
+        .expect("attached session should expose Page state");
 
         let source_document = renderer_document_identity_for_test(1, 1);
         bind_renderer_document_for_test(
@@ -3954,10 +3972,10 @@ mod producer_tests {
         ] {
             assert!(
                 out.iter().any(|message| {
-                    message["sessionId"] == json!("SID-auxiliary")
+                    message["sessionId"] == json!("SID-attached")
                         && message["method"] == json!(method)
                 }),
-                "Page-enabled auxiliary session should receive {method}: {out:?}"
+                "Page-enabled attached session should receive {method}: {out:?}"
             );
             assert!(
                 !out.iter().any(|message| {
@@ -3968,7 +3986,7 @@ mod producer_tests {
             );
         }
         assert!(out.iter().any(|message| {
-            message["sessionId"] == json!("SID-auxiliary")
+            message["sessionId"] == json!("SID-attached")
                 && message["method"] == json!("Page.lifecycleEvent")
                 && message["params"]["frameId"] == json!("CHILD-FRAME-1")
         }));
@@ -4046,10 +4064,10 @@ mod producer_tests {
         bc.set_active_target_id("TID-1");
         bc.set_target_url("https://example.test/page".to_owned());
         bc.attach_active_session("SID-1");
-        assert!(bc.assign_auxiliary_session_to_target("TID-1", "SID-AUXILIARY".to_owned(),));
+        assert!(bc.assign_attached_session_to_target("TID-1", "SID-ATTACHED".to_owned(),));
         conn.browser_context = Some(bc);
         assert!(conn.enable_network_listener_for_session_owner(Some("SID-1")));
-        assert!(conn.enable_network_listener_for_session_owner(Some("SID-AUXILIARY")));
+        assert!(conn.enable_network_listener_for_session_owner(Some("SID-ATTACHED")));
         let source_document = renderer_document_identity_for_test(1, 1);
         bind_renderer_document_for_test(&mut conn, "SID-1", "TID-1", source_document);
         let mut background_events = Vec::new();
@@ -4150,7 +4168,7 @@ mod producer_tests {
         assert_eq!(finished["params"]["requestId"], json!("LID-CHILD-1"));
         assert_eq!(finished["params"]["encodedDataLength"], json!(3));
         assert!(out.iter().any(|message| {
-            message["sessionId"] == json!("SID-AUXILIARY")
+            message["sessionId"] == json!("SID-ATTACHED")
                 && message["method"] == json!("Network.loadingFinished")
                 && message["params"]["requestId"] == json!("LID-CHILD-1")
         }));
@@ -4171,14 +4189,14 @@ mod producer_tests {
         ctx.process_async(json!({
             "id": 7_504,
             "method": "Network.getResponseBody",
-            "sessionId": "SID-AUXILIARY",
+            "sessionId": "SID-ATTACHED",
             "params": { "requestId": "LID-CHILD-1" }
         }))
         .await;
         ctx.expect_result(
             7_504,
             json!({ "body": "AP9h", "base64Encoded": true }),
-            Some("SID-AUXILIARY"),
+            Some("SID-ATTACHED"),
         );
     }
 

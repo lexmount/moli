@@ -266,7 +266,7 @@ async fn search_results_keep_hidden_whitespace_positions_session_local() {
     .await;
     let all_session_id = take_response_by_id(&mut ctx, 90)["result"]["sessionId"]
         .as_str()
-        .expect("auxiliary session id")
+        .expect("attached session id")
         .to_owned();
     ctx.sent.clear();
 
@@ -471,7 +471,7 @@ async fn perform_search_selectors_cover_all_frame_documents_and_author_shadow_ro
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn dom_search_targets_loaded_background_owner_without_promotion() {
+async fn dom_search_targets_loaded_background_owner_without_activation() {
     let mut ctx = TestContext::new();
     let background = PageTargetHost::with_url(
         "TID-background".to_owned(),

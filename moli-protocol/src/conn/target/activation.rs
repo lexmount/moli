@@ -26,7 +26,7 @@ impl TargetActivationTransition {
         self.previous_active_target_id.as_deref()
     }
 
-    fn previous_backgrounded_target_id(&self) -> Option<&str> {
+    fn deactivated_target_id(&self) -> Option<&str> {
         self.previous_active_target_id()
             .filter(|target_id| *target_id != self.selected_target_id())
     }
@@ -36,7 +36,7 @@ impl TargetActivationTransition {
     }
 }
 
-/// Successful target selection and the Page events caused by its surface move.
+/// Successful target selection and the Page events caused by its visibility change.
 ///
 /// The events stay attached to the completion so every activation entry point
 /// must preserve their position relative to its own response or owner action.
@@ -62,7 +62,7 @@ impl CdpConnection {
         &mut self,
         transition: &TargetActivationTransition,
     ) -> CompletedTargetActivation {
-        let Some(previous_target_id) = transition.previous_backgrounded_target_id() else {
+        let Some(previous_target_id) = transition.deactivated_target_id() else {
             return CompletedTargetActivation::new(Vec::new());
         };
         let protocol_events = self
@@ -99,7 +99,7 @@ impl CdpConnection {
             .and_then(BrowserContext::active_target_id_owned);
         let transition = TargetActivationTransition::new(target_id, previous_active_target_id);
         let hidden_screencast_sessions = transition
-            .previous_backgrounded_target_id()
+            .deactivated_target_id()
             .map(|active_target_id| self.page_screencast_session_ids_for_target(active_target_id))
             .unwrap_or_default();
         let Some(browser_context) = self.browser_context.as_mut() else {

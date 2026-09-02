@@ -333,7 +333,7 @@ async fn assert_bidi_fetch_action_consumes_background_request(
             .expect("browser context")
             .active_target_id(),
         Some("TID-active"),
-        "resolving a BiDi request id must not promote the background target"
+        "resolving a BiDi request id must not activate the background target"
     );
 }
 
@@ -779,7 +779,7 @@ async fn bidi_fetch_control_resolves_background_request_owner() {
             .expect("browser context")
             .active_target_id(),
         Some("TID-active"),
-        "resolving a BiDi request id must not promote the background target"
+        "resolving a BiDi request id must not activate the background target"
     );
 }
 
@@ -1119,7 +1119,7 @@ async fn devtools_create_target_uses_reference_target_browser_context_when_unspe
         reference_context
             .background_target("TID-reference")
             .is_some(),
-        "the reference context's previous active target should be demoted inside the same browser context"
+        "the reference context's previous active target should be deactivated inside the same browser context"
     );
 }
 
@@ -1179,7 +1179,7 @@ async fn devtools_create_target_explicit_browser_context_overrides_reference_tar
     assert_eq!(
         reference_context.active_target_id(),
         Some("TID-reference"),
-        "reference context should not be demoted when explicit browser context is provided"
+        "reference context should not be deactivated when explicit browser context is provided"
     );
 }
 
@@ -1600,7 +1600,7 @@ async fn devtools_runtime_command_uses_background_initial_document_without_resol
             .any(|script| script
                 .source
                 .contains("defineGetter(document, 'hidden', () => true)")),
-        "background initial document lifecycle should include parked document surface script"
+        "background initial document lifecycle should include background document surface script"
     );
 
     let (name_result, _) = conn
@@ -1675,7 +1675,7 @@ async fn devtools_runtime_command_uses_background_initial_document_without_resol
             "hidden": true,
             "visibilityState": "hidden"
         }),
-        "default background initial document should install parked document surfaces"
+        "default background initial document should install background document surfaces"
     );
 
     let browser_context = conn.browser_context.as_ref().expect("browser context");
@@ -2310,12 +2310,13 @@ async fn target_lifecycle_ensure_installs_initial_about_blank_page_for_active_ta
         "immediate target create path should still only stage owner metadata before lifecycle ensure"
     );
 
+    let initial_document_owner = CommandOwnerScope::capture(&conn, None);
     let pending = conn
-        .start_initial_document_page_ensure_for_session_owner(None)
+        .start_initial_document_page_ensure_for_owner(&initial_document_owner)
         .expect("target lifecycle ensure should start active initial page")
         .expect("fresh initial target should pend active initial document page build");
     let joined_pending = conn
-        .start_initial_document_page_ensure_for_session_owner(None)
+        .start_initial_document_page_ensure_for_owner(&initial_document_owner)
         .expect("second ensure should join the active initial page build")
         .expect("second ensure should wait for the active initial page build");
     let completed = pending
@@ -2341,7 +2342,7 @@ async fn target_lifecycle_ensure_installs_initial_about_blank_page_for_active_ta
     );
 
     assert!(
-        conn.start_initial_document_page_ensure_for_session_owner(None)
+        conn.start_initial_document_page_ensure_for_owner(&initial_document_owner)
             .expect("second target lifecycle ensure should succeed")
             .is_none(),
         "second ensure should be a no-op"
@@ -2374,8 +2375,9 @@ async fn stale_initial_document_page_build_does_not_overwrite_committed_page() {
         panic!("expected create target result");
     };
 
+    let initial_document_owner = CommandOwnerScope::capture(&conn, None);
     let pending = conn
-        .start_initial_document_page_ensure_for_session_owner(None)
+        .start_initial_document_page_ensure_for_owner(&initial_document_owner)
         .expect("target lifecycle ensure should start active initial page")
         .expect("fresh initial target should pend active initial document page build");
     let real_page_url = "data:text/html,<title>real-page</title>";
@@ -3163,7 +3165,7 @@ async fn devtools_create_target_can_activate_created_target() {
     assert_eq!(
         browser_context.active_target_id(),
         Some("TID-2"),
-        "activate=true should promote the created target instead of staging it"
+        "activate=true should activate the created target instead of staging it"
     );
     assert!(
         browser_context
@@ -3176,7 +3178,7 @@ async fn devtools_create_target_can_activate_created_target() {
             .background_targets()
             .find(|target| target.target_id() == "TID-1")
             .is_some_and(|target| target.has_loaded_page()),
-        "the previous active page should move into the demoted target slot"
+        "the previous target should retain its loaded page after deactivation"
     );
 
     let (first_realms_before_second_navigation, _) = conn
@@ -3190,7 +3192,7 @@ async fn devtools_create_target_can_activate_created_target() {
         .await
         .into_parts();
     first_realms_before_second_navigation
-        .expect("demoted first target realms should remain readable before second navigation");
+        .expect("deactivated first target realms should remain readable before second navigation");
     let (second_navigate, _, _, _) = conn
         .execute_devtools_command(DevToolsCommand::Navigate(DevToolsNavigateCommand {
             context: DevToolsCommandContext {
@@ -3216,7 +3218,7 @@ async fn devtools_create_target_can_activate_created_target() {
         .await
         .into_parts();
     let DevToolsCommandResult::Realms(first_realms) =
-        first_realms.expect("demoted first target realms should remain readable")
+        first_realms.expect("deactivated first target realms should remain readable")
     else {
         panic!("expected realms result");
     };
@@ -3224,7 +3226,7 @@ async fn devtools_create_target_can_activate_created_target() {
         first_realms.realms.iter().any(|realm| {
             realm.frame_id.as_ref().map(|frame_id| frame_id.as_str()) == Some("TID-1")
         }),
-        "demoted target should keep its window realm"
+        "deactivated target should keep its window realm"
     );
 
     let (all_realms, _) = conn
@@ -3248,7 +3250,7 @@ async fn devtools_create_target_can_activate_created_target() {
                 && realm.context_type.as_deref() == Some("default")
         })
         .and_then(|realm| realm.realm_id.as_ref())
-        .expect("all-context getRealms should include the demoted target default realm");
+        .expect("all-context getRealms should include the deactivated target default realm");
     let second_realm_id = all_realms
         .realms
         .iter()
@@ -7670,7 +7672,7 @@ async fn command_dispatch_completes_target_close_without_legacy_fallback() {
             .expect("browser context should remain loaded")
             .active_target_identity()
             .is_none(),
-        "closing the active target should leave the active slot empty"
+        "closing the selected target should leave the context without an active target"
     );
 }
 

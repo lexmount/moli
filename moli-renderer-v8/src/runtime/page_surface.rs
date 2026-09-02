@@ -2868,7 +2868,7 @@ pub(crate) struct RendererRuntimeCommandOutputSettlement {
 }
 
 impl RendererRuntimeCommandOutputSettlement {
-    fn command_reply(output: RendererRuntimeCommandOutput) -> Self {
+    fn adapter_reply(output: RendererRuntimeCommandOutput) -> Self {
         Self {
             output,
             session_response: None,
@@ -2900,10 +2900,10 @@ impl RendererRuntimeCommandOutputSettlement {
         self.output.set_v8_state_update(state);
     }
 
-    fn into_command_reply_output(self) -> RendererRuntimeCommandOutput {
+    fn into_adapter_reply_output(self) -> RendererRuntimeCommandOutput {
         assert!(
             self.session_response.is_none(),
-            "a DevTools session response cannot become a typed command reply"
+            "a session-sink response cannot become a typed adapter reply"
         );
         self.output
     }
@@ -3001,7 +3001,7 @@ impl RendererRuntimeCommandOutputRecorder {
 
     pub(crate) fn finish(self) -> RendererRuntimeCommandOutput {
         self.finish_settlement_with_response_override(None)
-            .into_command_reply_output()
+            .into_adapter_reply_output()
     }
 
     pub(crate) fn finish_for_page(self) -> RendererRuntimeCommandOutputSettlement {
@@ -3024,7 +3024,7 @@ impl RendererRuntimeCommandOutputRecorder {
         let response = state.response.take();
         drop(state);
         let Some((sender, message)) = response else {
-            return RendererRuntimeCommandOutputSettlement::command_reply(output);
+            return RendererRuntimeCommandOutputSettlement::adapter_reply(output);
         };
         let message = error_message.map_or(message, |message| {
             json!({
@@ -3083,7 +3083,7 @@ impl RendererRuntimeInspectorResponseChannel {
         let (tx, rx) = oneshot::channel();
         (
             Self {
-                delivery: moli_page_types::RendererInspectorResponseDelivery::CommandReply,
+                delivery: moli_page_types::RendererInspectorResponseDelivery::AdapterReply,
                 state: Arc::new(Mutex::new(RendererRuntimeInspectorResponseChannelState {
                     next_lease_id: 1,
                     active_lease_id: None,
@@ -3103,11 +3103,11 @@ impl RendererRuntimeInspectorResponseChannel {
         Option<oneshot::Receiver<RendererRuntimeInspectorAsyncCompletion>>,
     ) {
         match delivery {
-            moli_page_types::RendererInspectorResponseDelivery::CommandReply => {
+            moli_page_types::RendererInspectorResponseDelivery::AdapterReply => {
                 let (channel, receiver) = Self::new();
                 (channel, Some(receiver))
             }
-            moli_page_types::RendererInspectorResponseDelivery::DevToolsSession => (
+            moli_page_types::RendererInspectorResponseDelivery::SessionSink => (
                 Self {
                     delivery,
                     state: Arc::new(Mutex::new(RendererRuntimeInspectorResponseChannelState {
@@ -3151,10 +3151,10 @@ impl RendererRuntimeInspectorResponseChannel {
         };
         let lease = RendererRuntimeInspectorResponseLease::new(lease_id, self.clone());
         let destination = match self.delivery {
-            moli_page_types::RendererInspectorResponseDelivery::CommandReply => {
-                RendererRuntimeInspectorResponseDestination::CommandReply(lease)
+            moli_page_types::RendererInspectorResponseDelivery::AdapterReply => {
+                RendererRuntimeInspectorResponseDestination::AdapterReply(lease)
             }
-            moli_page_types::RendererInspectorResponseDelivery::DevToolsSession => {
+            moli_page_types::RendererInspectorResponseDelivery::SessionSink => {
                 RendererRuntimeInspectorResponseDestination::DevToolsSessionPending(lease)
             }
         };
@@ -3275,7 +3275,7 @@ impl RendererRuntimeInspectorResponseLease {
         }
     }
 
-    fn send_command_reply(
+    fn send_adapter_reply(
         self,
         completion: RendererRuntimeInspectorAsyncCompletion,
     ) -> Result<(), RendererRuntimeInspectorAsyncCompletion> {
@@ -3384,7 +3384,7 @@ impl RendererDevToolsSessionOutputHost {
 
 #[derive(Clone, Debug)]
 enum RendererRuntimeInspectorResponseDestination {
-    CommandReply(RendererRuntimeInspectorResponseLease),
+    AdapterReply(RendererRuntimeInspectorResponseLease),
     DevToolsSessionPending(RendererRuntimeInspectorResponseLease),
     DevToolsSession {
         lease: RendererRuntimeInspectorResponseLease,
@@ -3401,7 +3401,7 @@ impl RendererRuntimeInspectorResponseDestination {
         RendererRuntimeInspectorAsyncCompletion,
     > {
         match self {
-            Self::CommandReply(lease) => lease.send_command_reply(completion).map(|()| None),
+            Self::AdapterReply(lease) => lease.send_adapter_reply(completion).map(|()| None),
             Self::DevToolsSessionPending(_) => Err(completion),
             Self::DevToolsSession { lease, host } => {
                 let settlement_tx = match lease.claim_session() {
@@ -3447,7 +3447,7 @@ impl RendererRuntimeInspectorResponseDestination {
         &self,
     ) -> Option<oneshot::Receiver<RendererRuntimeInspectorSessionResponseSettlement>> {
         match self {
-            Self::CommandReply(_) => None,
+            Self::AdapterReply(_) => None,
             Self::DevToolsSessionPending(lease) | Self::DevToolsSession { lease, .. } => {
                 lease.take_session_response_settlement_receiver()
             }
@@ -3481,7 +3481,7 @@ impl std::fmt::Debug for RendererRuntimeInspectorResponseSender {
 impl RendererRuntimeInspectorResponseSender {
     pub fn new(call_id: i32, tx: oneshot::Sender<RendererRuntimeInspectorAsyncCompletion>) -> Self {
         let channel = RendererRuntimeInspectorResponseChannel {
-            delivery: moli_page_types::RendererInspectorResponseDelivery::CommandReply,
+            delivery: moli_page_types::RendererInspectorResponseDelivery::AdapterReply,
             state: Arc::new(Mutex::new(RendererRuntimeInspectorResponseChannelState {
                 next_lease_id: 2,
                 active_lease_id: Some(1),
@@ -3493,7 +3493,7 @@ impl RendererRuntimeInspectorResponseSender {
         Self {
             call_id,
             attachment_id: None,
-            destination: RendererRuntimeInspectorResponseDestination::CommandReply(
+            destination: RendererRuntimeInspectorResponseDestination::AdapterReply(
                 RendererRuntimeInspectorResponseLease::new(1, channel),
             ),
             publication_boundary: RendererRuntimeInspectorResponsePublicationBoundary::Immediate,
@@ -3506,12 +3506,12 @@ impl RendererRuntimeInspectorResponseSender {
 
     pub(crate) fn response_delivery(&self) -> moli_page_types::RendererInspectorResponseDelivery {
         match self.destination {
-            RendererRuntimeInspectorResponseDestination::CommandReply(_) => {
-                moli_page_types::RendererInspectorResponseDelivery::CommandReply
+            RendererRuntimeInspectorResponseDestination::AdapterReply(_) => {
+                moli_page_types::RendererInspectorResponseDelivery::AdapterReply
             }
             RendererRuntimeInspectorResponseDestination::DevToolsSessionPending(_)
             | RendererRuntimeInspectorResponseDestination::DevToolsSession { .. } => {
-                moli_page_types::RendererInspectorResponseDelivery::DevToolsSession
+                moli_page_types::RendererInspectorResponseDelivery::SessionSink
             }
         }
     }
@@ -3569,8 +3569,8 @@ impl RendererRuntimeInspectorResponseSender {
             RendererRuntimeInspectorResponseDestination::DevToolsSession { lease, host: _ } => {
                 RendererRuntimeInspectorResponseDestination::DevToolsSession { lease, host }
             }
-            RendererRuntimeInspectorResponseDestination::CommandReply(_) => {
-                panic!("a command-reply response cannot be rebound to DevTools session output")
+            RendererRuntimeInspectorResponseDestination::AdapterReply(_) => {
+                panic!("an adapter reply cannot be rebound to session output")
             }
         };
         self
@@ -3651,8 +3651,8 @@ impl RendererRuntimeInspectorResponseSender {
             publication_boundary: _,
         } = self;
         match destination {
-            RendererRuntimeInspectorResponseDestination::CommandReply(_) => {
-                RendererRuntimeCommandOutputSettlement::command_reply(output)
+            RendererRuntimeInspectorResponseDestination::AdapterReply(_) => {
+                RendererRuntimeCommandOutputSettlement::adapter_reply(output)
             }
             RendererRuntimeInspectorResponseDestination::DevToolsSessionPending(_) => panic!(
                 "a DevTools session response must bind its concrete output host before settlement"
@@ -3773,7 +3773,7 @@ mod renderer_runtime_inspector_response_channel_tests {
     async fn revoking_session_lease_leaves_terminal_settlement_to_protocol_owner() {
         let attachment = RendererAgentAttachmentId::allocate();
         let (channel, receiver) = RendererRuntimeInspectorResponseChannel::new_for_delivery(
-            moli_page_types::RendererInspectorResponseDelivery::DevToolsSession,
+            moli_page_types::RendererInspectorResponseDelivery::SessionSink,
         );
         assert!(receiver.is_none());
         let sender = channel.activate_sender(1, Some(attachment));
@@ -3939,11 +3939,11 @@ mod renderer_runtime_inspector_response_channel_tests {
         let (owner_wake_tx, mut owner_wake_rx) = tokio::sync::mpsc::unbounded_channel();
         let owner_wake = RendererOwnerWakeSender::new(owner_wake_tx, token);
         let (channel, response_rx) = RendererRuntimeInspectorResponseChannel::new_for_delivery(
-            moli_page_types::RendererInspectorResponseDelivery::DevToolsSession,
+            moli_page_types::RendererInspectorResponseDelivery::SessionSink,
         );
         assert!(
             response_rx.is_none(),
-            "session delivery must not allocate a legacy command-reply receiver"
+            "session delivery must not allocate an adapter-reply receiver"
         );
 
         channel
@@ -4033,7 +4033,7 @@ mod renderer_runtime_inspector_response_channel_tests {
 
         let attachment = RendererAgentAttachmentId::allocate();
         let (channel, receiver) = RendererRuntimeInspectorResponseChannel::new_for_delivery(
-            moli_page_types::RendererInspectorResponseDelivery::DevToolsSession,
+            moli_page_types::RendererInspectorResponseDelivery::SessionSink,
         );
         assert!(receiver.is_none());
         let sender = channel
@@ -4115,7 +4115,7 @@ mod renderer_runtime_inspector_response_channel_tests {
         let journal = RendererTurnOutputJournal::new_with_transport(stream, transport.clone());
         let attachment = RendererAgentAttachmentId::allocate();
         let (channel, receiver) = RendererRuntimeInspectorResponseChannel::new_for_delivery(
-            moli_page_types::RendererInspectorResponseDelivery::DevToolsSession,
+            moli_page_types::RendererInspectorResponseDelivery::SessionSink,
         );
         assert!(receiver.is_none());
         let sender = channel
@@ -4156,7 +4156,7 @@ mod renderer_runtime_inspector_response_channel_tests {
         let journal = RendererTurnOutputJournal::new(stream);
         let attachment = RendererAgentAttachmentId::allocate();
         let (channel, receiver) = RendererRuntimeInspectorResponseChannel::new_for_delivery(
-            moli_page_types::RendererInspectorResponseDelivery::DevToolsSession,
+            moli_page_types::RendererInspectorResponseDelivery::SessionSink,
         );
         assert!(receiver.is_none());
         let sender = channel
@@ -4208,7 +4208,7 @@ mod renderer_runtime_inspector_response_channel_tests {
         let old_attachment = RendererAgentAttachmentId::allocate();
         let new_attachment = RendererAgentAttachmentId::allocate();
         let (channel, receiver) = RendererRuntimeInspectorResponseChannel::new_for_delivery(
-            moli_page_types::RendererInspectorResponseDelivery::DevToolsSession,
+            moli_page_types::RendererInspectorResponseDelivery::SessionSink,
         );
         assert!(receiver.is_none());
         let old_sender = channel
@@ -4282,7 +4282,7 @@ mod renderer_runtime_inspector_response_channel_tests {
         ));
         let attachment = RendererAgentAttachmentId::allocate();
         let (channel, receiver) = RendererRuntimeInspectorResponseChannel::new_for_delivery(
-            moli_page_types::RendererInspectorResponseDelivery::DevToolsSession,
+            moli_page_types::RendererInspectorResponseDelivery::SessionSink,
         );
         assert!(receiver.is_none());
         let sender = channel
@@ -4354,7 +4354,7 @@ mod renderer_runtime_inspector_response_channel_tests {
         ));
         let attachment = RendererAgentAttachmentId::allocate();
         let (channel, receiver) = RendererRuntimeInspectorResponseChannel::new_for_delivery(
-            moli_page_types::RendererInspectorResponseDelivery::DevToolsSession,
+            moli_page_types::RendererInspectorResponseDelivery::SessionSink,
         );
         assert!(receiver.is_none());
         let sender = channel
@@ -4375,7 +4375,7 @@ mod renderer_runtime_inspector_response_channel_tests {
         );
         let mut accumulated = RendererRuntimeCommandOutputSettlement::default();
         accumulated.append(session_response);
-        accumulated.append(RendererRuntimeCommandOutputSettlement::command_reply(
+        accumulated.append(RendererRuntimeCommandOutputSettlement::adapter_reply(
             nonresponse_output,
         ));
         assert!(accumulated.has_session_response());
@@ -4415,7 +4415,7 @@ mod renderer_runtime_inspector_response_channel_tests {
             let (transport, _transport_rx) = crate::runtime::renderer_output_transport_channel();
             let attachment = RendererAgentAttachmentId::allocate();
             let (channel, receiver) = RendererRuntimeInspectorResponseChannel::new_for_delivery(
-                moli_page_types::RendererInspectorResponseDelivery::DevToolsSession,
+                moli_page_types::RendererInspectorResponseDelivery::SessionSink,
             );
             assert!(receiver.is_none());
             channel

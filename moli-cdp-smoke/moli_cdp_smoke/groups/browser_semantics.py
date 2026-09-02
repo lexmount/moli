@@ -187,11 +187,11 @@ def _semantic_scenarios() -> tuple[
         ),
         (
             "cdp_contract_multi_session_child_frame_realm_routing",
-            "Enabling Runtime on an auxiliary target session does not block another attached client from evaluating in a child-frame realm.",
+            "Enabling Runtime on an attached target session does not block another attached client from evaluating in a child-frame realm.",
             "Chromium multi-session Runtime and frame-realm behavior",
             [
                 "Target.attachToTarget through Playwright",
-                "Runtime.enable on auxiliary CDPSession",
+                "Runtime.enable on attached CDPSession",
                 "Page.navigate to iframe document",
                 "Runtime.evaluate in child frame through Playwright",
             ],

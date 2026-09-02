@@ -92,7 +92,7 @@ impl DevToolsCommandDispatchOutcome {
     /// an exact renderer response fence.
     ///
     /// This deliberately remains a checked, narrow operation. If the command
-    /// later starts producing auxiliary output, its owning call site fails
+    /// later starts producing additional output, its owning call site fails
     /// immediately instead of silently losing that output.
     #[track_caller]
     pub fn into_parts(

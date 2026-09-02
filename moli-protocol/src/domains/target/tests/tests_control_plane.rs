@@ -19,7 +19,7 @@ fn take_created_target_id(ctx: &mut TestContext, command_id: u64, description: &
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn activate_target_promotes_background_target_when_active_target_has_no_loaded_page() {
+async fn activate_target_activates_background_target_when_active_target_has_no_loaded_page() {
     let mut ctx = TestContext::new();
     load_bc_with_target(&mut ctx, "BID-9", "TID-000000000A");
     ctx.conn
@@ -111,7 +111,7 @@ async fn activate_target_handoffs_loaded_page_runtime_and_restores_it_when_switc
         bc.background_target("TID-000000000A")
             .and_then(|target| target.loaded_page())
             .is_some(),
-        "the previously active target should keep its loaded page runtime while backgrounded"
+        "the previously active target should keep its loaded page runtime in the background"
     );
 
     ctx.process_async(json!({
@@ -147,7 +147,7 @@ async fn activate_target_handoffs_loaded_page_runtime_and_restores_it_when_switc
         bc.background_target(&second_target_id)
             .and_then(|target| target.loaded_page())
             .is_some(),
-        "the demoted second target should now keep its loaded page runtime while backgrounded"
+        "the deactivated second target should now keep its loaded page runtime in the background"
     );
 
     ctx.process_async(json!({
@@ -479,13 +479,13 @@ async fn activate_target_chain_restores_multiple_loaded_page_runtimes_without_re
         bc.background_target("TID-000000000A")
             .and_then(|target| target.loaded_page())
             .is_some(),
-        "first target runtime should stay parked in the background",
+        "first target runtime should stay background in the background",
     );
     assert!(
         bc.background_target(&second_target_id)
             .and_then(|target| target.loaded_page())
             .is_some(),
-        "second target runtime should stay parked in the background",
+        "second target runtime should stay background in the background",
     );
 
     ctx.process_async(json!({
@@ -565,7 +565,7 @@ async fn activate_target_chain_restores_multiple_loaded_page_runtimes_without_re
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn activate_target_then_attach_can_navigate_on_promoted_target_without_loaded_page() {
+async fn activate_target_then_attach_can_navigate_on_activated_target_without_loaded_page() {
     let mut ctx = TestContext::new();
     load_bc_with_target(&mut ctx, "BID-9", "TID-000000000A");
     ctx.conn
@@ -597,7 +597,7 @@ async fn activate_target_then_attach_can_navigate_on_promoted_target_without_loa
     .await;
     let session_id = take_response_by_id(&mut ctx, 1807)["result"]["sessionId"]
         .as_str()
-        .expect("promoted target session id")
+        .expect("activated target session id")
         .to_owned();
     ctx.expect_event("Target.attachedToTarget", None);
 
@@ -723,6 +723,50 @@ async fn detach_from_target_error_restores_previously_active_context() {
         Some("BID-A"),
         "failing detachFromTarget for another context must restore the original active context"
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn detach_from_inactive_context_cleans_exact_session_without_activating_context() {
+    let mut ctx = TestContext::new();
+    load_bc_with_target(&mut ctx, "BID-A", "TID-A");
+    let mut inactive = BrowserContext::new_with_page_for_test("BID-B", "TID-B");
+    inactive.attach_active_session("SID-B");
+    ctx.conn.inactive_browser_contexts.push(inactive);
+    ctx.conn
+        .register_auto_attached_session_for_target("SID-B".to_owned(), None, Some("TID-B"));
+    ctx.conn
+        .set_service_worker_pause_on_start_owner(Some("SID-B"), true);
+    ctx.conn
+        .set_dedicated_worker_pause_on_start_owner(Some("SID-B"), true);
+
+    ctx.process_async(json!({
+        "id": 1503,
+        "method": "Target.detachFromTarget",
+        "params": { "sessionId": "SID-B" }
+    }))
+    .await;
+
+    ctx.expect_result(1503, json!({}), None);
+    ctx.expect_event(
+        "Target.detachedFromTarget",
+        Some(&json!({
+            "sessionId": "SID-B",
+            "targetId": "TID-B",
+        })),
+    );
+    assert_eq!(
+        ctx.conn.browser_context.as_ref().map(|bc| bc.id.as_str()),
+        Some("BID-A"),
+        "disposing another context's session must not change the active context"
+    );
+    assert!(
+        ctx.conn
+            .browser_context_by_id("BID-B")
+            .is_some_and(|context| !context.has_active_session()),
+        "the exact inactive-context binding must be disposed"
+    );
+    assert!(!ctx.conn.service_worker_pause_on_start_for_devtools());
+    assert!(!ctx.conn.dedicated_worker_pause_on_start_for_devtools());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -925,16 +969,16 @@ async fn same_context_targets_keep_paused_fetch_state_target_local_after_switchi
             !bc.active_page_target()
                 .fetch_owner
                 .has_pending_fetch_state_for_test(),
-            "promoted target should not see another target's pending fetch ids",
+            "activated target should not see another target's pending fetch ids",
         );
-        let parked = bc
+        let background = bc
             .background_target(&first_target_id)
             .expect("background target must exist")
             .fetch_owner
             .pending_state();
         assert!(
-            parked.has_pending_fetch_request_id_for_test(&request_id),
-            "first target pending fetch id should move with parked target state",
+            background.has_pending_fetch_request_id_for_test(&request_id),
+            "first target pending fetch id should move with background target state",
         );
     }
 
@@ -1141,8 +1185,8 @@ async fn set_auto_attach_true_attaches_existing_background_targets() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn set_auto_attach_promotes_existing_background_target_when_active_target_has_no_loaded_page()
-{
+async fn set_auto_attach_activates_existing_background_target_when_active_target_has_no_loaded_page()
+ {
     let mut ctx = TestContext::new();
     load_bc_with_target(&mut ctx, "BID-9", "TID-000000000E");
     ctx.conn
@@ -1191,7 +1235,7 @@ async fn set_auto_attach_promotes_existing_background_target_when_active_target_
         bc.background_target("TID-000000000E")
             .and_then(|target| target.session_id()),
         Some("SID-1"),
-        "the old active target should be demoted into the background with its newly attached session",
+        "the old active target should be deactivated into the background with its newly attached session",
     );
 
     ctx.process_async(json!({
@@ -1199,7 +1243,7 @@ async fn set_auto_attach_promotes_existing_background_target_when_active_target_
             "method": "Page.navigate",
             "sessionId": session_id,
             "params": {
-                "url": "data:text/html,<title>autoattach-sweep-promoted</title><div id='ok'>setAutoAttach sweep promoted target</div>"
+                "url": "data:text/html,<title>autoattach-sweep-activated</title><div id='ok'>setAutoAttach sweep activated target</div>"
             }
         })).await;
     consume_main_document_navigation_start(&mut ctx);
@@ -1221,15 +1265,15 @@ async fn set_auto_attach_promotes_existing_background_target_when_active_target_
         .expect("evaluation payload should be a string");
     let payload: serde_json::Value =
         serde_json::from_str(payload).expect("evaluation payload should be valid json");
-    assert_eq!(payload["title"], json!("autoattach-sweep-promoted"));
+    assert_eq!(payload["title"], json!("autoattach-sweep-activated"));
     assert_eq!(
         payload["text"],
-        json!("setAutoAttach sweep promoted target")
+        json!("setAutoAttach sweep activated target")
     );
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn set_auto_attach_sweep_chain_promotes_multiple_existing_background_targets_into_runtime() {
+async fn set_auto_attach_sweep_chain_activates_multiple_existing_background_targets_into_runtime() {
     let mut ctx = TestContext::new();
     load_bc_with_target(&mut ctx, "BID-9", "TID-000000000E");
     let bc = ctx.conn.browser_context.as_mut().unwrap();
@@ -1298,7 +1342,7 @@ async fn set_auto_attach_sweep_chain_promotes_multiple_existing_background_targe
             "method": "Page.navigate",
             "sessionId": second_session_id,
             "params": {
-                "url": "data:text/html,<title>sweep-second-promoted</title><div id='ok'>second sweep promoted target</div>"
+                "url": "data:text/html,<title>sweep-second-activated</title><div id='ok'>second sweep activated target</div>"
             }
         })).await;
     consume_main_document_navigation_start(&mut ctx);
@@ -1330,7 +1374,7 @@ async fn set_auto_attach_sweep_chain_promotes_multiple_existing_background_targe
             "method": "Page.navigate",
             "sessionId": third_session_id,
             "params": {
-                "url": "data:text/html,<title>sweep-third-promoted</title><div id='ok'>third sweep promoted target</div>"
+                "url": "data:text/html,<title>sweep-third-activated</title><div id='ok'>third sweep activated target</div>"
             }
         })).await;
     consume_main_document_navigation_start(&mut ctx);
@@ -1355,12 +1399,12 @@ async fn set_auto_attach_sweep_chain_promotes_multiple_existing_background_targe
         .expect("evaluation payload should be a string");
     let payload: serde_json::Value =
         serde_json::from_str(payload).expect("evaluation payload should be valid json");
-    assert_eq!(payload["title"], json!("sweep-third-promoted"));
-    assert_eq!(payload["text"], json!("third sweep promoted target"));
+    assert_eq!(payload["title"], json!("sweep-third-activated"));
+    assert_eq!(payload["text"], json!("third sweep activated target"));
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn set_auto_attach_prefers_existing_background_target_with_parked_loaded_runtime() {
+async fn set_auto_attach_prefers_existing_background_target_with_background_loaded_runtime() {
     let mut ctx = TestContext::new();
     load_bc_with_target(&mut ctx, "BID-9", "TID-000000000E");
     {
@@ -1378,12 +1422,12 @@ async fn set_auto_attach_prefers_existing_background_target_with_parked_loaded_r
         bc.stage_foreground_target(
             "TID-0000000010".into(),
             None,
-            "about:blank#parked".into(),
+            "about:blank#background".into(),
             Some("about:blank".into()),
         );
     }
     ctx.install_navigation_fixture_for_session_owner(
-        "data:text/html,<title>parked</title><div id='ok'>parked runtime</div>",
+        "data:text/html,<title>background</title><div id='ok'>background runtime</div>",
         None,
     )
     .await;
@@ -1395,7 +1439,7 @@ async fn set_auto_attach_prefers_existing_background_target_with_parked_loaded_r
             .select_page_target_async("TID-000000000E")
             .await
             .expect("restoring the original active target should succeed"),
-        "the original active target should remain parked during fixture setup"
+        "the original active target should remain background during fixture setup"
     );
 
     ctx.process_async(json!({
@@ -1421,21 +1465,21 @@ async fn set_auto_attach_prefers_existing_background_target_with_parked_loaded_r
         .as_str()
         .expect("metadata-only background session id")
         .to_owned();
-    let parked_attached = events
+    let background_attached = events
         .iter()
         .find(|event| {
             event["method"] == json!("Target.attachedToTarget")
                 && event["params"]["targetInfo"]["targetId"] == json!("TID-0000000010")
         })
-        .expect("background attached event for parked target");
-    let parked_session_id = parked_attached["params"]["sessionId"]
+        .expect("background attached event for background target");
+    let background_session_id = background_attached["params"]["sessionId"]
         .as_str()
-        .expect("parked background session id")
+        .expect("background target session id")
         .to_owned();
 
     let bc = ctx.conn.browser_context.as_ref().unwrap();
     assert_eq!(bc.active_target_id(), Some("TID-0000000010"));
-    assert_eq!(bc.active_session_id(), Some(parked_session_id.as_str()));
+    assert_eq!(bc.active_session_id(), Some(background_session_id.as_str()));
     assert_eq!(
         bc.background_target("TID-000000000F")
             .and_then(|target| target.session_id()),
@@ -1450,7 +1494,7 @@ async fn set_auto_attach_prefers_existing_background_target_with_parked_loaded_r
     ctx.process_async(json!({
             "id": 17024,
             "method": "Runtime.evaluate",
-            "sessionId": parked_session_id,
+            "sessionId": background_session_id,
             "params": {
                 "expression": "JSON.stringify({ title: document.title, text: document.getElementById('ok').textContent })"
             }
@@ -1461,12 +1505,12 @@ async fn set_auto_attach_prefers_existing_background_target_with_parked_loaded_r
         .expect("evaluation payload should be a string");
     let payload: serde_json::Value =
         serde_json::from_str(payload).expect("evaluation payload should be valid json");
-    assert_eq!(payload["title"], json!("parked"));
-    assert_eq!(payload["text"], json!("parked runtime"));
+    assert_eq!(payload["title"], json!("background"));
+    assert_eq!(payload["text"], json!("background runtime"));
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn activate_target_promotes_set_auto_attach_background_session_into_page_runtime() {
+async fn activate_target_activates_set_auto_attach_background_session_into_page_runtime() {
     let mut ctx = TestContext::new();
     load_bc_with_target(&mut ctx, "BID-9", "TID-000000000E");
     ctx.conn
@@ -1521,7 +1565,7 @@ async fn activate_target_promotes_set_auto_attach_background_session_into_page_r
             "method": "Page.navigate",
             "sessionId": session_id,
             "params": {
-                "url": "data:text/html,<title>autoattach-activated</title><div id='ok'>setAutoAttach promoted target</div>"
+                "url": "data:text/html,<title>autoattach-activated</title><div id='ok'>setAutoAttach activated target</div>"
             }
         })).await;
     consume_main_document_navigation_start(&mut ctx);
@@ -1544,7 +1588,7 @@ async fn activate_target_promotes_set_auto_attach_background_session_into_page_r
     let payload: serde_json::Value =
         serde_json::from_str(payload).expect("evaluation payload should be valid json");
     assert_eq!(payload["title"], json!("autoattach-activated"));
-    assert_eq!(payload["text"], json!("setAutoAttach promoted target"));
+    assert_eq!(payload["text"], json!("setAutoAttach activated target"));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1614,7 +1658,7 @@ async fn activate_target_chain_switches_between_multiple_attached_background_tar
             "method": "Page.navigate",
             "sessionId": "SID-third",
             "params": {
-                "url": "data:text/html,<title>activate-chain-promoted</title><div id='ok'>activate chain promoted target</div>"
+                "url": "data:text/html,<title>activate-chain-activated</title><div id='ok'>activate chain activated target</div>"
             }
         })).await;
     consume_main_document_navigation_start(&mut ctx);
@@ -1636,8 +1680,8 @@ async fn activate_target_chain_switches_between_multiple_attached_background_tar
         .expect("evaluation payload should be a string");
     let payload: serde_json::Value =
         serde_json::from_str(payload).expect("evaluation payload should be valid json");
-    assert_eq!(payload["title"], json!("activate-chain-promoted"));
-    assert_eq!(payload["text"], json!("activate chain promoted target"));
+    assert_eq!(payload["title"], json!("activate-chain-activated"));
+    assert_eq!(payload["text"], json!("activate chain activated target"));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1663,7 +1707,16 @@ async fn set_auto_attach_false_detaches_existing_background_targets() {
             ),
             crate::conn::TargetPageSlot::empty_for_test_fixture(),
         ));
-    ctx.conn.auto_attach = true;
+    ctx.conn.set_auto_attach_owner(
+        None,
+        true,
+        false,
+        crate::conn::CdpTargetFilter::default_auto_attach(),
+    );
+    ctx.conn
+        .register_auto_attached_session("SID-1".to_owned(), None);
+    ctx.conn
+        .register_auto_attached_session("SID-bg".to_owned(), None);
 
     ctx.process_async(json!({
         "id": 1702,

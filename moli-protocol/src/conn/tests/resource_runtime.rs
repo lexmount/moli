@@ -1395,7 +1395,7 @@ async fn session_scoped_process_message_async_restores_previously_active_context
 }
 
 #[tokio::test]
-async fn direct_network_enable_routes_to_inactive_active_owner_without_promoting_slot() {
+async fn direct_network_enable_routes_to_inactive_active_owner_without_activating_slot() {
     let mut conn = CdpConnection::new();
 
     let mut inactive = BrowserContext::new("BID-B".into());
@@ -1414,13 +1414,13 @@ async fn direct_network_enable_routes_to_inactive_active_owner_without_promoting
     );
     assert!(
         conn.browser_context.is_none(),
-        "direct Network.enable should not promote the inactive owner into the active slot"
+        "direct Network.enable should not select the inactive browser context"
     );
     let inactive = conn
         .inactive_browser_contexts
         .iter()
         .find(|bc| bc.id == "BID-B")
-        .expect("inactive owner must remain parked");
+        .expect("inactive owner must remain background");
     assert!(
         inactive
             .active_page_target()
@@ -1430,7 +1430,7 @@ async fn direct_network_enable_routes_to_inactive_active_owner_without_promoting
 }
 
 #[tokio::test]
-async fn direct_runtime_evaluate_routes_to_inactive_active_owner_without_promoting_slot() {
+async fn direct_runtime_evaluate_routes_to_inactive_active_owner_without_activating_slot() {
     let mut ctx = crate::testing::TestContext::new();
 
     let mut inactive = BrowserContext::new("BID-B".into());
@@ -1469,7 +1469,7 @@ async fn direct_runtime_evaluate_routes_to_inactive_active_owner_without_promoti
     assert_eq!(response["sessionId"], json!("SID-B"));
     assert!(
         ctx.conn.browser_context.is_none(),
-        "direct Runtime.evaluate should not promote the inactive owner into the active slot"
+        "direct Runtime.evaluate should not select the inactive browser context"
     );
 }
 
@@ -1833,7 +1833,7 @@ async fn direct_runtime_evaluate_same_document_navigation_updates_inactive_owner
         .inactive_browser_contexts
         .iter()
         .find(|bc| bc.id == "BID-same-document")
-        .expect("inactive owner should remain parked");
+        .expect("inactive owner should remain background");
     assert!(
         inactive.target_url().ends_with("#owner-fragment"),
         "same-document navigation should update the inactive owner target URL"
@@ -1917,7 +1917,7 @@ async fn direct_runtime_evaluate_javascript_dialog_uses_inactive_background_owne
                 && message["params"]["frameId"] == json!("TID-dialog-background")
                 && message["params"]["result"] == json!(true)
         }),
-        "Page.handleJavaScriptDialog should close the owner dialog without promotion: {response:?}"
+        "Page.handleJavaScriptDialog should close the owner dialog without activation: {response:?}"
     );
     assert!(
         response.iter().any(|message| {
@@ -1936,17 +1936,17 @@ async fn direct_runtime_evaluate_javascript_dialog_uses_inactive_background_owne
         .inactive_browser_contexts
         .iter()
         .find(|bc| bc.id == "BID-dialog-background")
-        .expect("inactive owner should remain parked");
+        .expect("inactive owner should remain background");
     assert!(
         inactive
             .background_target("TID-dialog-background")
             .filter(|target| target.has_non_default_session_state())
-            .expect("background page session state should remain parked")
+            .expect("background page session state should remain background")
             .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .javascript_dialog_state
             .is_empty(),
-        "handling the dialog should pop the parked session dialog queue"
+        "handling the dialog should pop the background session dialog queue"
     );
 }
 
@@ -2024,7 +2024,7 @@ async fn direct_runtime_evaluate_popup_creates_target_in_inactive_background_own
         .inactive_browser_contexts
         .iter()
         .find(|bc| bc.id == "BID-popup-background")
-        .expect("inactive owner should remain parked");
+        .expect("inactive owner should remain background");
     assert!(
         inactive
             .background_target(&popup_target_id)
@@ -2172,13 +2172,13 @@ async fn direct_runtime_evaluate_file_chooser_uses_inactive_background_owner() {
 }
 
 #[tokio::test]
-async fn direct_runtime_evaluate_routes_to_inactive_auxiliary_owner_without_promoting_slot() {
+async fn direct_runtime_evaluate_routes_to_inactive_attached_owner_without_activating_slot() {
     let mut ctx = crate::testing::TestContext::new();
 
     let mut inactive = BrowserContext::new("BID-B".into());
     inactive.set_active_target_id("TID-B".to_owned());
     inactive.attach_active_session("SID-primary");
-    assert!(inactive.assign_auxiliary_session_to_target("TID-B", "SID-aux".to_owned()));
+    assert!(inactive.assign_attached_session_to_target("TID-B", "SID-attached".to_owned()));
     inactive.active_page_target_mut().devtools_sessions
         [moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
@@ -2186,7 +2186,7 @@ async fn direct_runtime_evaluate_routes_to_inactive_auxiliary_owner_without_prom
     ctx.conn.inactive_browser_contexts.push(inactive);
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<!doctype html><title>runtime-direct-aux</title>",
-        Some("SID-aux"),
+        Some("SID-attached"),
     )
     .await;
 
@@ -2194,7 +2194,7 @@ async fn direct_runtime_evaluate_routes_to_inactive_auxiliary_owner_without_prom
     ctx.process_async(json!({
         "id": 1,
         "method": "Runtime.evaluate",
-        "sessionId": "SID-aux",
+        "sessionId": "SID-attached",
         "params": {"expression": "document.title", "returnByValue": true}
     }))
     .await;
@@ -2209,83 +2209,83 @@ async fn direct_runtime_evaluate_routes_to_inactive_auxiliary_owner_without_prom
         json!("runtime-direct-aux"),
         "{response:?}"
     );
-    assert_eq!(response["sessionId"], json!("SID-aux"));
+    assert_eq!(response["sessionId"], json!("SID-attached"));
     assert!(
         ctx.conn.browser_context.is_none(),
-        "direct auxiliary Runtime.evaluate should not promote the inactive owner"
+        "direct attached Runtime.evaluate should not activate the inactive owner"
     );
 }
 
 #[tokio::test]
-async fn direct_network_enable_disable_routes_to_inactive_auxiliary_owner_without_promoting_slot() {
+async fn direct_network_enable_disable_routes_to_inactive_attached_owner_without_activating_slot() {
     let mut conn = CdpConnection::new();
 
     let mut inactive = BrowserContext::new("BID-B".into());
     inactive.set_active_target_id("TID-B".to_owned());
     inactive.attach_active_session("SID-primary");
-    assert!(inactive.assign_auxiliary_session_to_target("TID-B", "SID-aux".to_owned()));
+    assert!(inactive.assign_attached_session_to_target("TID-B", "SID-attached".to_owned()));
     conn.inactive_browser_contexts.push(inactive);
 
     let response = conn
         .process_message_messages_only_for_test(
-            r#"{"id":1,"method":"Network.enable","sessionId":"SID-aux"}"#,
+            r#"{"id":1,"method":"Network.enable","sessionId":"SID-attached"}"#,
         )
         .await;
     assert_eq!(
         response,
-        vec![json!({"id": 1, "result": {}, "sessionId": "SID-aux"})]
+        vec![json!({"id": 1, "result": {}, "sessionId": "SID-attached"})]
     );
     assert!(
         conn.browser_context.is_none(),
-        "direct auxiliary Network.enable should not promote the inactive owner"
+        "direct attached Network.enable should not activate the inactive owner"
     );
     let inactive = conn
         .inactive_browser_contexts
         .iter()
         .find(|bc| bc.id == "BID-B")
-        .expect("inactive owner must remain parked");
+        .expect("inactive owner must remain background");
     assert!(
         !inactive
             .active_page_target()
             .runtime_slot
             .primary_network_events_enabled(),
-        "auxiliary Network.enable must not enable the target's primary listener"
+        "attached Network.enable must not enable the target's primary listener"
     );
     assert!(
         inactive
             .active_page_target()
             .runtime_slot
-            .has_auxiliary_network_events_for_session("SID-aux")
+            .has_attached_network_events_for_session("SID-attached")
     );
 
     let response = conn
         .process_message_messages_only_for_test(
-            r#"{"id":2,"method":"Network.disable","sessionId":"SID-aux"}"#,
+            r#"{"id":2,"method":"Network.disable","sessionId":"SID-attached"}"#,
         )
         .await;
     assert_eq!(
         response,
-        vec![json!({"id": 2, "result": {}, "sessionId": "SID-aux"})]
+        vec![json!({"id": 2, "result": {}, "sessionId": "SID-attached"})]
     );
     assert!(
         conn.browser_context.is_none(),
-        "direct auxiliary Network.disable should not promote the inactive owner"
+        "direct attached Network.disable should not activate the inactive owner"
     );
     let inactive = conn
         .inactive_browser_contexts
         .iter()
         .find(|bc| bc.id == "BID-B")
-        .expect("inactive owner must remain parked");
+        .expect("inactive owner must remain background");
     assert!(
         !inactive
             .active_page_target()
             .runtime_slot
-            .has_auxiliary_network_events_for_session("SID-aux")
+            .has_attached_network_events_for_session("SID-attached")
     );
 }
 
 #[tokio::test]
-async fn direct_page_preload_routes_to_inactive_active_owner_without_promoting_slot() {
+async fn direct_page_preload_routes_to_inactive_active_owner_without_activating_slot() {
     let mut conn = CdpConnection::new();
 
     let mut inactive = BrowserContext::new("BID-B".into());
@@ -2339,7 +2339,7 @@ async fn direct_page_preload_routes_to_inactive_active_owner_without_promoting_s
 }
 
 #[tokio::test]
-async fn direct_page_preload_routes_to_inactive_background_owner_without_promoting_slot() {
+async fn direct_page_preload_routes_to_inactive_background_owner_without_activating_slot() {
     let mut conn = CdpConnection::new();
 
     let mut inactive = BrowserContext::new("BID-B".into());
@@ -2395,7 +2395,7 @@ async fn direct_page_preload_routes_to_inactive_background_owner_without_promoti
 }
 
 #[tokio::test]
-async fn direct_network_enable_routes_to_inactive_background_owner_without_promoting_slot() {
+async fn direct_network_enable_routes_to_inactive_background_owner_without_activating_slot() {
     let mut conn = CdpConnection::new();
 
     let mut inactive = BrowserContext::new("BID-B".into());
@@ -2418,13 +2418,13 @@ async fn direct_network_enable_routes_to_inactive_background_owner_without_promo
     );
     assert!(
         conn.browser_context.is_none(),
-        "direct background Network.enable should not promote the inactive owner"
+        "direct background Network.enable should not activate the inactive owner"
     );
     let inactive = conn
         .inactive_browser_contexts
         .iter()
         .find(|bc| bc.id == "BID-B")
-        .expect("inactive owner must remain parked");
+        .expect("inactive owner must remain background");
     assert!(
         inactive
             .background_target("TID-background")
@@ -2436,7 +2436,7 @@ async fn direct_network_enable_routes_to_inactive_background_owner_without_promo
 }
 
 #[tokio::test]
-async fn direct_auxiliary_network_enable_for_background_target_does_not_enable_primary_listener() {
+async fn direct_attached_network_enable_for_background_target_does_not_enable_primary_listener() {
     let mut conn = CdpConnection::new();
 
     let mut inactive = BrowserContext::new("BID-B".into());
@@ -2447,36 +2447,38 @@ async fn direct_auxiliary_network_enable_for_background_target_does_not_enable_p
         TargetPageSlot::empty_for_test_fixture(),
     ));
     assert!(
-        inactive
-            .assign_auxiliary_session_to_target("TID-background", "SID-aux-background".to_owned())
+        inactive.assign_attached_session_to_target(
+            "TID-background",
+            "SID-attached-background".to_owned()
+        )
     );
     conn.inactive_browser_contexts.push(inactive);
 
     let response = conn
         .process_message_messages_only_for_test(
-            r#"{"id":1,"method":"Network.enable","sessionId":"SID-aux-background"}"#,
+            r#"{"id":1,"method":"Network.enable","sessionId":"SID-attached-background"}"#,
         )
         .await;
     assert_eq!(
         response,
-        vec![json!({"id": 1, "result": {}, "sessionId": "SID-aux-background"})]
+        vec![json!({"id": 1, "result": {}, "sessionId": "SID-attached-background"})]
     );
     let inactive = conn
         .inactive_browser_contexts
         .iter()
         .find(|bc| bc.id == "BID-B")
-        .expect("inactive owner must remain parked");
+        .expect("inactive owner must remain background");
     assert!(
         inactive
             .background_target("TID-background")
             .filter(|target| target.has_non_default_session_state())
             .is_none_or(|state| !state.runtime_slot.primary_network_events_enabled()),
-        "auxiliary background Network.enable must not enable the target's primary listener"
+        "attached background Network.enable must not enable the target's primary listener"
     );
 }
 
 #[tokio::test]
-async fn direct_network_enable_routes_to_active_background_owner_without_promoting_target() {
+async fn direct_network_enable_routes_to_active_background_owner_without_activating_target() {
     let mut conn = CdpConnection::new();
 
     let mut active = BrowserContext::new("BID-A".into());
@@ -2506,11 +2508,11 @@ async fn direct_network_enable_routes_to_active_background_owner_without_promoti
     assert_eq!(
         active.active_target_id(),
         Some("TID-active"),
-        "direct Network.enable should not promote the background target"
+        "direct Network.enable should not activate the background target"
     );
     assert!(
         active.background_target("TID-background").is_some(),
-        "background target should remain parked after direct session execution"
+        "background target should remain background after direct session execution"
     );
     assert!(
         active
@@ -2616,7 +2618,7 @@ async fn direct_network_enable_for_loaded_background_owner_starts_at_network_tai
         .inactive_browser_contexts
         .iter()
         .find(|bc| bc.id == "BID-B")
-        .expect("inactive owner must remain parked");
+        .expect("inactive owner must remain background");
     let runtime_slot = &inactive
         .background_target("TID-background")
         .expect("background network target should remain live")
@@ -2676,7 +2678,7 @@ async fn direct_background_command_does_not_emit_active_observable_output_under_
 }
 
 #[tokio::test]
-async fn direct_console_routes_to_inactive_active_owner_without_promoting_slot() {
+async fn direct_console_routes_to_inactive_active_owner_without_activating_slot() {
     let mut ctx = crate::testing::TestContext::new();
     let page_url = "data:text/html,<!doctype html><script>console.warn('boot warning')</script>";
     let mut inactive = BrowserContext::new("BID-B".into());
@@ -2714,14 +2716,14 @@ async fn direct_console_routes_to_inactive_active_owner_without_promoting_slot()
     );
     assert!(
         ctx.conn.browser_context.is_none(),
-        "direct Console.enable should not promote the inactive owner into the active slot"
+        "direct Console.enable should not select the inactive browser context"
     );
     let inactive = ctx
         .conn
         .inactive_browser_contexts
         .iter()
         .find(|bc| bc.id == "BID-B")
-        .expect("inactive owner must remain parked");
+        .expect("inactive owner must remain background");
     assert!(
         inactive.active_page_target().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
@@ -2751,7 +2753,7 @@ async fn direct_console_routes_to_inactive_active_owner_without_promoting_slot()
     );
     assert!(
         ctx.conn.browser_context.is_none(),
-        "direct Console.clearMessages should not promote the inactive owner"
+        "direct Console.clearMessages should not activate the inactive owner"
     );
 
     ctx.process_and_wait_for_response_async(json!({
@@ -2767,14 +2769,14 @@ async fn direct_console_routes_to_inactive_active_owner_without_promoting_slot()
     );
     assert!(
         ctx.conn.browser_context.is_none(),
-        "direct Console.disable should not promote the inactive owner"
+        "direct Console.disable should not activate the inactive owner"
     );
     let inactive = ctx
         .conn
         .inactive_browser_contexts
         .iter()
         .find(|bc| bc.id == "BID-B")
-        .expect("inactive owner must remain parked");
+        .expect("inactive owner must remain background");
     assert!(
         !inactive.active_page_target().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
@@ -2793,7 +2795,7 @@ async fn direct_console_routes_to_inactive_active_owner_without_promoting_slot()
 }
 
 #[tokio::test]
-async fn direct_console_routes_to_inactive_background_owner_without_promoting_slot() {
+async fn direct_console_routes_to_inactive_background_owner_without_activating_slot() {
     let mut conn = CdpConnection::new();
 
     let mut inactive = BrowserContext::new("BID-B".into());
@@ -2816,13 +2818,13 @@ async fn direct_console_routes_to_inactive_background_owner_without_promoting_sl
     );
     assert!(
         conn.browser_context.is_none(),
-        "direct background Console.enable should not promote the inactive owner"
+        "direct background Console.enable should not activate the inactive owner"
     );
     let inactive = conn
         .inactive_browser_contexts
         .iter()
         .find(|bc| bc.id == "BID-B")
-        .expect("inactive owner must remain parked");
+        .expect("inactive owner must remain background");
     assert!(
         inactive
             .background_target("TID-background")
@@ -2845,13 +2847,13 @@ async fn direct_console_routes_to_inactive_background_owner_without_promoting_sl
     );
     assert!(
         conn.browser_context.is_none(),
-        "direct background Console.clearMessages should not promote the inactive owner"
+        "direct background Console.clearMessages should not activate the inactive owner"
     );
     let inactive = conn
         .inactive_browser_contexts
         .iter()
         .find(|bc| bc.id == "BID-B")
-        .expect("inactive owner must remain parked");
+        .expect("inactive owner must remain background");
     assert!(
         inactive
             .background_target("TID-background")
@@ -2874,13 +2876,13 @@ async fn direct_console_routes_to_inactive_background_owner_without_promoting_sl
     );
     assert!(
         conn.browser_context.is_none(),
-        "direct background Console.disable should not promote the inactive owner"
+        "direct background Console.disable should not activate the inactive owner"
     );
     let inactive = conn
         .inactive_browser_contexts
         .iter()
         .find(|bc| bc.id == "BID-B")
-        .expect("inactive owner must remain parked");
+        .expect("inactive owner must remain background");
     assert!(
         inactive
             .background_target("TID-background")
@@ -2894,7 +2896,7 @@ async fn direct_console_routes_to_inactive_background_owner_without_promoting_sl
 }
 
 #[tokio::test]
-async fn direct_console_routes_to_loaded_background_owner_and_advances_parked_cursor() {
+async fn direct_console_routes_to_loaded_background_owner_and_advances_background_cursor() {
     let mut ctx = crate::testing::TestContext::new();
     let page_url =
         "data:text/html,<!doctype html><script>console.warn('background warning')</script>";
@@ -2942,7 +2944,7 @@ async fn direct_console_routes_to_loaded_background_owner_and_advances_parked_cu
         .inactive_browser_contexts
         .iter()
         .find(|bc| bc.id == "BID-B")
-        .expect("inactive owner must remain parked");
+        .expect("inactive owner must remain background");
     assert_eq!(
         inactive
             .background_target("TID-background")
@@ -2970,7 +2972,7 @@ async fn direct_console_routes_to_loaded_background_owner_and_advances_parked_cu
         .inactive_browser_contexts
         .iter()
         .find(|bc| bc.id == "BID-B")
-        .expect("inactive owner must remain parked");
+        .expect("inactive owner must remain background");
     assert_eq!(
         inactive
             .background_target("TID-background")
@@ -2984,7 +2986,7 @@ async fn direct_console_routes_to_loaded_background_owner_and_advances_parked_cu
 }
 
 #[tokio::test]
-async fn direct_log_enable_routes_to_inactive_active_owner_without_promoting_slot_or_replaying_console_api()
+async fn direct_log_enable_routes_to_inactive_active_owner_without_activating_slot_or_replaying_console_api()
  {
     let mut conn = CdpConnection::new();
 
@@ -3018,13 +3020,13 @@ async fn direct_log_enable_routes_to_inactive_active_owner_without_promoting_slo
     );
     assert!(
         conn.browser_context.is_none(),
-        "direct Log.enable should not promote the inactive owner into the active slot"
+        "direct Log.enable should not select the inactive browser context"
     );
     let inactive = conn
         .inactive_browser_contexts
         .iter()
         .find(|bc| bc.id == "BID-B")
-        .expect("inactive owner must remain parked");
+        .expect("inactive owner must remain background");
     assert!(
         inactive.active_page_target().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
@@ -3042,7 +3044,7 @@ async fn direct_log_enable_routes_to_inactive_active_owner_without_promoting_slo
 }
 
 #[tokio::test]
-async fn direct_log_enable_routes_to_inactive_background_owner_without_promoting_slot() {
+async fn direct_log_enable_routes_to_inactive_background_owner_without_activating_slot() {
     let mut conn = CdpConnection::new();
 
     let mut inactive = BrowserContext::new("BID-B".into());
@@ -3065,13 +3067,13 @@ async fn direct_log_enable_routes_to_inactive_background_owner_without_promoting
     );
     assert!(
         conn.browser_context.is_none(),
-        "direct background Log.enable should not promote the inactive owner"
+        "direct background Log.enable should not activate the inactive owner"
     );
     let inactive = conn
         .inactive_browser_contexts
         .iter()
         .find(|bc| bc.id == "BID-B")
-        .expect("inactive owner must remain parked");
+        .expect("inactive owner must remain background");
     assert!(
         inactive
             .background_target("TID-background")
@@ -3120,24 +3122,24 @@ async fn direct_log_enable_routes_to_loaded_background_owner_without_replaying_c
     assert_eq!(
         response,
         vec![json!({"id": 1, "result": {}, "sessionId": "SID-background"})],
-        "background Log.enable should not replay loaded parked target console API output"
+        "background Log.enable should not replay loaded background target console API output"
     );
 
     let inactive = conn
         .inactive_browser_contexts
         .iter()
         .find(|bc| bc.id == "BID-B")
-        .expect("inactive owner must remain parked");
+        .expect("inactive owner must remain background");
     assert_eq!(
         inactive
             .background_target("TID-background")
             .filter(|target| target.has_non_default_session_state())
-            .expect("parked session state")
+            .expect("background session state")
             .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .console_output_session_state
             .log_lifecycle_entries,
         0,
-        "console API output should not advance the parked session's Log cursor"
+        "console API output should not advance the background session's Log cursor"
     );
 
     let response = conn
@@ -3153,7 +3155,7 @@ async fn direct_log_enable_routes_to_loaded_background_owner_without_replaying_c
 }
 
 #[tokio::test]
-async fn direct_log_disable_routes_to_inactive_active_owner_without_promoting_slot() {
+async fn direct_log_disable_routes_to_inactive_active_owner_without_activating_slot() {
     let mut ctx = crate::testing::TestContext::new();
     let page_url = "data:text/html,<!doctype html><script>console.warn('boot warning')</script>";
     let mut inactive = BrowserContext::new("BID-B".into());
@@ -3181,14 +3183,14 @@ async fn direct_log_disable_routes_to_inactive_active_owner_without_promoting_sl
     );
     assert!(
         ctx.conn.browser_context.is_none(),
-        "direct Log.disable should not promote the inactive owner into the active slot"
+        "direct Log.disable should not select the inactive browser context"
     );
     let inactive = ctx
         .conn
         .inactive_browser_contexts
         .iter()
         .find(|bc| bc.id == "BID-B")
-        .expect("inactive owner must remain parked");
+        .expect("inactive owner must remain background");
     assert!(
         !inactive.active_page_target().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
@@ -3206,7 +3208,7 @@ async fn direct_log_disable_routes_to_inactive_active_owner_without_promoting_sl
 }
 
 #[tokio::test]
-async fn direct_log_disable_routes_to_inactive_background_owner_without_promoting_slot() {
+async fn direct_log_disable_routes_to_inactive_background_owner_without_activating_slot() {
     let mut conn = CdpConnection::new();
 
     let mut inactive = BrowserContext::new("BID-B".into());
@@ -3235,13 +3237,13 @@ async fn direct_log_disable_routes_to_inactive_background_owner_without_promotin
     );
     assert!(
         conn.browser_context.is_none(),
-        "direct background Log.disable should not promote the inactive owner"
+        "direct background Log.disable should not activate the inactive owner"
     );
     let inactive = conn
         .inactive_browser_contexts
         .iter()
         .find(|bc| bc.id == "BID-B")
-        .expect("inactive owner must remain parked");
+        .expect("inactive owner must remain background");
     assert!(
         inactive
             .background_target("TID-background")
@@ -3255,7 +3257,7 @@ async fn direct_log_disable_routes_to_inactive_background_owner_without_promotin
 }
 
 #[tokio::test]
-async fn direct_network_policy_routes_to_inactive_active_owner_without_promoting_slot() {
+async fn direct_network_policy_routes_to_inactive_active_owner_without_activating_slot() {
     let mut conn = CdpConnection::new();
 
     let mut inactive = BrowserContext::new("BID-B".into());
@@ -3284,7 +3286,7 @@ async fn direct_network_policy_routes_to_inactive_active_owner_without_promoting
         );
         assert!(
             conn.browser_context.is_none(),
-            "direct Network policy commands should not promote the inactive owner"
+            "direct Network policy commands should not activate the inactive owner"
         );
     }
 
@@ -3292,7 +3294,7 @@ async fn direct_network_policy_routes_to_inactive_active_owner_without_promoting
         .inactive_browser_contexts
         .iter()
         .find(|bc| bc.id == "BID-B")
-        .expect("inactive owner must remain parked");
+        .expect("inactive owner must remain background");
     assert!(
         inactive
             .active_page_target()
@@ -3364,7 +3366,7 @@ async fn direct_network_policy_routes_to_inactive_active_owner_without_promoting
 }
 
 #[tokio::test]
-async fn direct_network_policy_invalid_params_return_owner_plan_error_without_promoting_slot() {
+async fn direct_network_policy_invalid_params_return_owner_plan_error_without_activating_slot() {
     let mut conn = CdpConnection::new();
 
     let mut inactive = BrowserContext::new("BID-B".into());
@@ -3392,7 +3394,7 @@ async fn direct_network_policy_invalid_params_return_owner_plan_error_without_pr
         );
         assert!(
             conn.browser_context.is_none(),
-            "invalid direct Network policy commands should not promote the inactive owner"
+            "invalid direct Network policy commands should not activate the inactive owner"
         );
     }
 
@@ -3400,7 +3402,7 @@ async fn direct_network_policy_invalid_params_return_owner_plan_error_without_pr
         .inactive_browser_contexts
         .iter()
         .find(|bc| bc.id == "BID-B")
-        .expect("inactive owner must remain parked");
+        .expect("inactive owner must remain background");
     assert!(
         !inactive
             .active_page_target()
@@ -3418,7 +3420,7 @@ async fn direct_network_policy_invalid_params_return_owner_plan_error_without_pr
 }
 
 #[tokio::test]
-async fn direct_network_policy_routes_to_inactive_background_owner_without_promoting_slot() {
+async fn direct_network_policy_routes_to_inactive_background_owner_without_activating_slot() {
     let mut conn = CdpConnection::new();
 
     let mut inactive = BrowserContext::new("BID-B".into());
@@ -3451,7 +3453,7 @@ async fn direct_network_policy_routes_to_inactive_background_owner_without_promo
         );
         assert!(
             conn.browser_context.is_none(),
-            "direct background Network policy commands should not promote the inactive owner"
+            "direct background Network policy commands should not activate the inactive owner"
         );
     }
 
@@ -3459,7 +3461,7 @@ async fn direct_network_policy_routes_to_inactive_background_owner_without_promo
         .inactive_browser_contexts
         .iter()
         .find(|bc| bc.id == "BID-B")
-        .expect("inactive owner must remain parked");
+        .expect("inactive owner must remain background");
     let staged = inactive
         .background_target("TID-background")
         .filter(|target| target.has_non_default_session_state())

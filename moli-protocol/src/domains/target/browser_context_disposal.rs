@@ -282,14 +282,22 @@ async fn close_page_target(
     out.extend_background_events(
         conn.prepared_target_host_deltas_event_plan(target_detached_info_deltas),
     );
-    out.extend_background_events(conn.detach_target_closure_cleanup_event_plan(
-        closed.into_detach_cleanup_plan(Some(INSPECTOR_DETACHED_REASON)),
-        None,
-    ));
-    out.extend_background_events(conn.detach_closed_top_level_target_sessions_event_plan(
+    out.extend_background_events(
+        conn.dispose_target_closure_sessions_event_plan_async(
+            closed.into_detach_cleanup_plan(Some(INSPECTOR_DETACHED_REASON)),
+            None,
+        )
+        .await,
+    );
+    if let Some(tab_cleanup) = conn.take_closed_top_level_target_sessions_cleanup_plan(
         &target_id,
         Some(INSPECTOR_DETACHED_REASON),
-    ));
+    ) {
+        out.extend_background_events(
+            conn.dispose_target_closure_sessions_event_plan_async(tab_cleanup, None)
+                .await,
+        );
+    }
     out.extend_background_events(
         conn.prepared_target_host_deltas_event_plan(target_destroyed_deltas),
     );

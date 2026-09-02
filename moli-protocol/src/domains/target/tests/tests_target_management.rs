@@ -301,7 +301,7 @@ async fn close_target_emits_detached_events() {
     let session_id = "SID-000000000A".to_owned();
     let bc = ctx.conn.browser_context.as_mut().unwrap();
     bc.attach_active_session(session_id.clone());
-    assert!(bc.assign_auxiliary_session_to_target("TID-000000000A", "SID-aux".into()));
+    assert!(bc.assign_attached_session_to_target("TID-000000000A", "SID-attached".into()));
     bc.active_page_target_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .inspector_enabled = true;
@@ -318,11 +318,11 @@ async fn close_target_emits_detached_events() {
         primary_inspector["params"]["reason"],
         "Render process gone."
     );
-    let auxiliary_inspector = ctx.take_one();
-    assert_eq!(auxiliary_inspector["method"], "Inspector.detached");
-    assert_eq!(auxiliary_inspector["sessionId"], "SID-aux");
+    let attached_inspector = ctx.take_one();
+    assert_eq!(attached_inspector["method"], "Inspector.detached");
+    assert_eq!(attached_inspector["sessionId"], "SID-attached");
     assert_eq!(
-        auxiliary_inspector["params"]["reason"],
+        attached_inspector["params"]["reason"],
         "Render process gone."
     );
     ctx.expect_event(
@@ -336,11 +336,11 @@ async fn close_target_emits_detached_events() {
         "Target.detachedFromTarget",
         Some(&json!({
             "targetId": "TID-000000000A",
-            "sessionId": "SID-aux"
+            "sessionId": "SID-attached"
         })),
     );
     let bc = ctx.conn.browser_context.as_ref().unwrap();
-    assert!(bc.auxiliary_target_id_for_session("SID-aux").is_none());
+    assert!(bc.attached_target_id_for_session("SID-attached").is_none());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -521,7 +521,7 @@ async fn close_background_target_emits_detached_events_and_clears_attached_sessi
         Some("SID-bg"),
     );
     let bc = ctx.conn.browser_context.as_mut().unwrap();
-    assert!(bc.assign_auxiliary_session_to_target("TID-000000000B", "SID-aux".into()));
+    assert!(bc.assign_attached_session_to_target("TID-000000000B", "SID-attached".into()));
     bc.background_target_mut("TID-000000000B")
         .expect("background target must exist")
         .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary] =
@@ -556,13 +556,13 @@ async fn close_background_target_emits_detached_events_and_clears_attached_sessi
         "Target.detachedFromTarget",
         Some(&json!({
             "targetId": "TID-000000000B",
-            "sessionId": "SID-aux"
+            "sessionId": "SID-attached"
         })),
     );
 
     let bc = ctx.conn.browser_context.as_ref().unwrap();
     assert!(bc.background_target("TID-000000000B").is_none());
-    assert!(bc.auxiliary_target_id_for_session("SID-aux").is_none());
+    assert!(bc.attached_target_id_for_session("SID-attached").is_none());
     assert!(
         bc.background_target("TID-000000000B")
             .filter(|target| target.has_non_default_session_state())
@@ -1167,7 +1167,7 @@ async fn activate_target_returns_empty_result_for_known_target() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn activate_target_promotes_background_target_into_active_slot() {
+async fn activate_target_selects_background_target_as_active() {
     let mut ctx = TestContext::new();
     load_bc_with_target(&mut ctx, "BID-9", "TID-000000000A");
     push_background_target(&mut ctx, "TID-000000000B", "about:blank", None);

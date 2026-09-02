@@ -92,7 +92,7 @@ async fn runtime_discard_console_entries_is_page_target_local() {
             .expect("browser context should exist")
             .active_target_id(),
         Some("TID-active"),
-        "background Runtime.discardConsoleEntries must not promote the target"
+        "background Runtime.discardConsoleEntries must not activate the target"
     );
 
     ctx.sent.clear();
@@ -1408,7 +1408,7 @@ async fn runtime_exception_thrown_emits_timer_callback_warning() {
     .await;
 }
 #[tokio::test]
-async fn runtime_discard_console_entries_advances_background_owner_without_promotion() {
+async fn runtime_discard_console_entries_advances_background_owner_without_activation() {
     let mut ctx = TestContext::new();
     with_loaded_runtime_frontend_enabled_background_target_async(
         &mut ctx,
@@ -1460,7 +1460,7 @@ async fn runtime_discard_console_entries_advances_background_owner_without_promo
     assert_eq!(
         browser_context.active_target_id(),
         Some("TID-active"),
-        "background Runtime.discardConsoleEntries should not promote the target"
+        "background Runtime.discardConsoleEntries should not activate the target"
     );
     assert_eq!(
         browser_context
@@ -1474,7 +1474,7 @@ async fn runtime_discard_console_entries_advances_background_owner_without_promo
     );
 }
 #[tokio::test(flavor = "multi_thread")]
-async fn background_runtime_get_heap_usage_reads_owner_page_without_promotion() {
+async fn background_runtime_get_heap_usage_reads_owner_page_without_activation() {
     let mut ctx = TestContext::new();
     with_loaded_runtime_frontend_enabled_background_target_async(
         &mut ctx,
@@ -1515,6 +1515,6 @@ async fn background_runtime_get_heap_usage_reads_owner_page_without_promotion() 
             .as_ref()
             .and_then(|browser_context| browser_context.active_target_id()),
         Some("TID-active"),
-        "background Runtime.getHeapUsage should not promote the target"
+        "background Runtime.getHeapUsage should not activate the target"
     );
 }

@@ -813,7 +813,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn target_promotion_transfers_page_attachment_without_retargeting_prepared_output() {
+    async fn target_activation_preserves_page_attachment_ownership_without_retargeting_output() {
         let mut ctx = TestContext::new();
         let active_page = ctx
             .conn
@@ -822,13 +822,13 @@ mod tests {
             )
             .await
             .expect("active test page should load");
-        let promoted_page = ctx
+        let activated_page = ctx
             .conn
             .load_page_via_runtime_async(
-                "data:text/html,<!doctype html><script>console.warn('promoted owner')</script>",
+                "data:text/html,<!doctype html><script>console.warn('activated owner')</script>",
             )
             .await
-            .expect("promoted test page should load");
+            .expect("activated test page should load");
 
         let mut bc = BrowserContext::new("BID-1".into());
         bc.set_active_target_id("TID-active".to_owned());
@@ -840,32 +840,32 @@ mod tests {
             .console_output_session_state
             .console_enabled = true;
         bc.insert_page_target_host(PageTargetHost::new(
-            "TID-promoted".to_owned(),
-            Some("SID-promoted".to_owned()),
-            TargetIdentityState::with_url("data:text/html,promoted-owner".to_owned()),
-            TargetPageSlot::with_loaded_page_for_test(promoted_page),
+            "TID-activated".to_owned(),
+            Some("SID-activated".to_owned()),
+            TargetIdentityState::with_url("data:text/html,activated-owner".to_owned()),
+            TargetPageSlot::with_loaded_page_for_test(activated_page),
         ));
-        bc.background_target_mut("TID-promoted")
+        bc.background_target_mut("TID-activated")
             .expect("background target must exist")
             .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .console_output_session_state
             .console_enabled = true;
         ctx.conn.browser_context = Some(bc);
 
-        let (old_active_attachment, promoted_attachment) = {
+        let (old_active_attachment, activated_attachment) = {
             let bc = ctx.conn.browser_context.as_ref().expect("browser context");
             (
                 bc.active_page_target()
                     .runtime_slot
                     .page_attachment_id()
                     .expect("active Page attachment"),
-                bc.background_target("TID-promoted")
-                    .expect("promoted target")
+                bc.background_target("TID-activated")
+                    .expect("activated target")
                     .page_attachment_id()
-                    .expect("promoted Page attachment"),
+                    .expect("activated Page attachment"),
             )
         };
-        assert_ne!(old_active_attachment, promoted_attachment);
+        assert_ne!(old_active_attachment, activated_attachment);
 
         let mut old_active_prepared =
             observable_backlog_activity_outputs(&ctx.conn, None).into_prepared_slot();
@@ -876,25 +876,25 @@ mod tests {
                 .browser_context
                 .as_mut()
                 .expect("browser context")
-                .select_page_target_async("TID-promoted")
+                .select_page_target_async("TID-activated")
                 .await
-                .expect("target promotion should succeed")
+                .expect("target activation should succeed")
         );
 
         {
             let bc = ctx.conn.browser_context.as_ref().expect("browser context");
-            assert_eq!(bc.active_target_id(), Some("TID-promoted"));
+            assert_eq!(bc.active_target_id(), Some("TID-activated"));
             assert_eq!(
                 bc.active_page_target().runtime_slot.page_attachment_id(),
-                Some(promoted_attachment),
-                "promotion must transfer the installed Page attachment without reallocating it"
+                Some(activated_attachment),
+                "activation must preserve the selected target's Page attachment"
             );
             assert_eq!(
                 bc.background_target("TID-active")
-                    .expect("previous active target should be parked")
+                    .expect("previous active target should be background")
                     .page_attachment_id(),
                 Some(old_active_attachment),
-                "parking must transfer the previous active Page attachment with its target slot"
+                "deactivation must leave the Page attachment with its original target host"
             );
         }
 
@@ -907,7 +907,7 @@ mod tests {
             )
             .await
             .is_none(),
-            "prepared output from the old active owner must not materialize on the promoted target"
+            "prepared output from the old active owner must not materialize on the activated target"
         );
 
         let old_owner_plan = ObservableActivityEmissionPlan::prepare_async(
@@ -917,7 +917,7 @@ mod tests {
             Some(old_active_owner_prepared.outputs_mut_for_test()),
         )
         .await
-        .expect("prepared output must remain addressable through its parked owner");
+        .expect("prepared output must remain addressable through its background owner");
         let mut old_owner_out = Vec::new();
         old_owner_plan.emit(&mut ctx.conn, &mut old_owner_out, Some("SID-active"));
         assert!(old_owner_out.iter().any(|message| {
@@ -925,21 +925,21 @@ mod tests {
                 && message["params"]["message"]["text"] == json!("old active owner")
         }));
 
-        let mut promoted_prepared =
+        let mut activated_prepared =
             observable_backlog_activity_outputs(&ctx.conn, None).into_prepared_slot();
-        let promoted_plan = ObservableActivityEmissionPlan::prepare_async(
+        let activated_plan = ObservableActivityEmissionPlan::prepare_async(
             ObservableOutputProjectionStep::Console,
             &mut ctx.conn,
             None,
-            Some(promoted_prepared.outputs_mut_for_test()),
+            Some(activated_prepared.outputs_mut_for_test()),
         )
         .await
-        .expect("promoted target current Page output should remain visible");
-        let mut promoted_out = Vec::new();
-        promoted_plan.emit(&mut ctx.conn, &mut promoted_out, None);
-        assert!(promoted_out.iter().any(|message| {
+        .expect("activated target current Page output should remain visible");
+        let mut activated_out = Vec::new();
+        activated_plan.emit(&mut ctx.conn, &mut activated_out, None);
+        assert!(activated_out.iter().any(|message| {
             message["method"] == json!("Console.messageAdded")
-                && message["params"]["message"]["text"] == json!("promoted owner")
+                && message["params"]["message"]["text"] == json!("activated owner")
         }));
     }
 

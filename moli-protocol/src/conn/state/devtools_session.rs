@@ -95,6 +95,7 @@ impl DevToolsSessionRegistry {
         self.primary_session_id = Some(session_id);
     }
 
+    #[cfg(test)]
     pub(crate) fn detach_primary(&mut self) -> Option<String> {
         self.primary_session_id.take()
     }

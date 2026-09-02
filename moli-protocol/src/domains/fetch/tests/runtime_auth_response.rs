@@ -1530,10 +1530,10 @@ async fn multiple_fetch_sessions_chain_subresource_auth_required_pauses() {
             .browser_context
             .as_mut()
             .unwrap()
-            .assign_auxiliary_session_to_target("TID-1", "SID-aux".to_owned())
+            .assign_attached_session_to_target("TID-1", "SID-attached".to_owned())
     );
 
-    for (id, session_id) in [(35_970, "SID-1"), (35_971, "SID-aux")] {
+    for (id, session_id) in [(35_970, "SID-1"), (35_971, "SID-attached")] {
         ctx.process_async(json!({
             "id": id,
             "method": "Fetch.enable",
@@ -1596,21 +1596,20 @@ async fn multiple_fetch_sessions_chain_subresource_auth_required_pauses() {
 
     wait_until_message(
         &mut ctx,
-        "SID-aux",
-        "auxiliary request-stage pause",
+        "SID-attached",
+        "attached request-stage pause",
         |message| {
             message["method"] == json!("Fetch.requestPaused")
-                && message["sessionId"] == json!("SID-aux")
+                && message["sessionId"] == json!("SID-attached")
                 && message["params"]["request"]["url"] == json!(protected_url)
         },
     )
     .await;
-    let second_request_pause =
-        ctx.take_first_matching("auxiliary request-stage pause", |message| {
-            message["method"] == json!("Fetch.requestPaused")
-                && message["sessionId"] == json!("SID-aux")
-                && message["params"]["request"]["url"] == json!(protected_url)
-        });
+    let second_request_pause = ctx.take_first_matching("attached request-stage pause", |message| {
+        message["method"] == json!("Fetch.requestPaused")
+            && message["sessionId"] == json!("SID-attached")
+            && message["params"]["request"]["url"] == json!(protected_url)
+    });
     let second_request_id = second_request_pause["params"]["requestId"]
         .as_str()
         .expect("second request id")
@@ -1620,11 +1619,11 @@ async fn multiple_fetch_sessions_chain_subresource_auth_required_pauses() {
     ctx.process_async(json!({
         "id": 35_975,
         "method": "Fetch.continueRequest",
-        "sessionId": "SID-aux",
+        "sessionId": "SID-attached",
         "params": { "requestId": second_request_id }
     }))
     .await;
-    ctx.expect_result(35_975, json!({}), Some("SID-aux"));
+    ctx.expect_result(35_975, json!({}), Some("SID-attached"));
 
     wait_until_message(&mut ctx, "SID-1", "primary authRequired pause", |message| {
         message["method"] == json!("Fetch.authRequired")
@@ -1655,9 +1654,9 @@ async fn multiple_fetch_sessions_chain_subresource_auth_required_pauses() {
     .await;
     ctx.expect_result(35_976, json!({}), Some("SID-1"));
 
-    let second_auth = ctx.take_first_matching("auxiliary authRequired pause", |message| {
+    let second_auth = ctx.take_first_matching("attached authRequired pause", |message| {
         message["method"] == json!("Fetch.authRequired")
-            && message["sessionId"] == json!("SID-aux")
+            && message["sessionId"] == json!("SID-attached")
             && message["params"]["request"]["url"] == json!(protected_url)
     });
     let second_auth_request_id = second_auth["params"]["requestId"]
@@ -1673,7 +1672,7 @@ async fn multiple_fetch_sessions_chain_subresource_auth_required_pauses() {
     ctx.process_async(json!({
         "id": 35_977,
         "method": "Fetch.continueWithAuth",
-        "sessionId": "SID-aux",
+        "sessionId": "SID-attached",
         "params": {
             "requestId": second_auth_request_id,
             "authChallengeResponse": {
@@ -1684,7 +1683,7 @@ async fn multiple_fetch_sessions_chain_subresource_auth_required_pauses() {
         }
     }))
     .await;
-    ctx.expect_result(35_977, json!({}), Some("SID-aux"));
+    ctx.expect_result(35_977, json!({}), Some("SID-attached"));
 
     evaluate_until_value_async(
         &mut ctx,

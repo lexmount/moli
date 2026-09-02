@@ -525,7 +525,7 @@ async fn rust_cdp_playwright_cdp_session_runtime_error_and_detach_contracts() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn rust_cdp_playwright_auxiliary_session_network_event_contract() {
+async fn rust_cdp_playwright_attached_session_network_event_contract() {
     let fixture = SmokeFixtureServer::start().await;
     let mut ctx = TestContext::new();
     let attached = attached_smoke_session(&mut ctx, 86_000).await;
@@ -554,7 +554,7 @@ async fn rust_cdp_playwright_auxiliary_session_network_event_contract() {
     .await;
     let aux_session_id = take_response_by_id(&mut ctx, 86_006)["result"]["sessionId"]
         .as_str()
-        .expect("auxiliary session")
+        .expect("attached session")
         .to_owned();
     assert_ne!(aux_session_id, attached.session_id);
     ctx.expect_event("Target.attachedToTarget", None);
@@ -583,7 +583,7 @@ async fn rust_cdp_playwright_auxiliary_session_network_event_contract() {
                     .as_str()
                     .is_some_and(|url| url.ends_with("/plain?playwright-cdp-event"))
         }),
-        "auxiliary session should receive Network.requestWillBeSent: {:?}",
+        "attached session should receive Network.requestWillBeSent: {:?}",
         ctx.sent
     );
 }
@@ -878,13 +878,14 @@ async fn queued_popup_navigation_rechecks_a_late_debugger_barrier() {
     );
 
     let late_session_id = "SID-late-debugger".to_owned();
-    assert!(
-        ctx.conn
-            .prepare_auto_attached_page_session_binding(&popup_target_id, late_session_id.clone(),)
-    );
-    let prepared = ctx.conn.prepare_auto_attach_session_commit(
+    let route = ctx
+        .conn
+        .prepare_auto_attached_page_session_binding(&popup_target_id, late_session_id.clone())
+        .expect("popup target must remain addressable");
+    let prepared = crate::conn::TargetAttachSessionCommit::auto_attached(
         late_session_id,
         Some(opener.session_id.clone()),
+        route,
         true,
     );
     let target_info = ctx

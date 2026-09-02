@@ -2779,7 +2779,7 @@ async fn runtime_document_close_response_does_not_wait_for_replacement_lifecycle
                 let (output, session_response) = page_vm.take_runtime_command_settlement();
                 assert!(
                     session_response.is_none(),
-                    "CommandReply delivery must not park a DevTools session response"
+                    "AdapterReply delivery must not park a DevTools session response"
                 );
                 assert_eq!(
                     output

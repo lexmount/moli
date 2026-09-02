@@ -766,7 +766,7 @@ async fn storage_get_storage_key_for_frame_rejects_unknown_frame() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn storage_key_targets_loaded_background_owner_without_promotion() {
+async fn storage_key_targets_loaded_background_owner_without_activation() {
     let mut ctx = TestContext::new();
     let (page_url, server) =
         spawn_static_html_server(r#"<iframe srcdoc="<p>child</p>"></iframe>"#).await;
@@ -955,24 +955,26 @@ async fn storage_key_targets_inactive_owner_without_activation() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn storage_get_cookies_accepts_auxiliary_page_session_route() {
+async fn storage_get_cookies_accepts_attached_page_session_route() {
     let mut ctx = TestContext::new();
-    let mut browser_context = BrowserContext::new("BID-aux-storage".into());
-    browser_context.set_active_target_id("TID-aux-storage".to_owned());
-    assert!(
-        browser_context
-            .assign_auxiliary_session_to_target("TID-aux-storage", "SID-aux-storage".to_owned())
-    );
+    let mut browser_context = BrowserContext::new("BID-attached-storage".into());
+    browser_context.set_active_target_id("TID-attached-storage".to_owned());
+    assert!(browser_context.assign_attached_session_to_target(
+        "TID-attached-storage",
+        "SID-attached-storage".to_owned()
+    ));
     ctx.conn.browser_context = Some(browser_context);
+    ctx.conn
+        .register_bound_session_for_test("SID-attached-storage");
 
     ctx.process_async(json!({
         "id": 8,
         "method": "Storage.getCookies",
-        "sessionId": "SID-aux-storage"
+        "sessionId": "SID-attached-storage"
     }))
     .await;
 
-    ctx.expect_result(8, json!({ "cookies": [] }), Some("SID-aux-storage"));
+    ctx.expect_result(8, json!({ "cookies": [] }), Some("SID-attached-storage"));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -988,6 +990,8 @@ async fn storage_get_cookies_accepts_background_page_session_route() {
         None,
     );
     ctx.conn.browser_context = Some(browser_context);
+    ctx.conn
+        .register_bound_session_for_test("SID-background-storage");
 
     ctx.process_async(json!({
         "id": 9,

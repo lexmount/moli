@@ -847,7 +847,7 @@ async fn run_navigation_cdp_fetch_then_bidi_network_auth_required_terminal(
 
     let mut ctx = TestContext::new();
     let mut bc = attached_browser_context();
-    assert!(bc.assign_auxiliary_session_to_target("TID-1", "SID-fetch".to_owned()));
+    assert!(bc.assign_attached_session_to_target("TID-1", "SID-fetch".to_owned()));
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
@@ -956,7 +956,7 @@ async fn run_navigation_cdp_fetch_then_bidi_network_auth_required_terminal(
     }))
     .await;
 
-    let paused = ctx.take_first_matching("auxiliary navigation Fetch.requestPaused", |message| {
+    let paused = ctx.take_first_matching("attached navigation Fetch.requestPaused", |message| {
         message["method"] == json!("Fetch.requestPaused")
             && message["sessionId"] == json!("SID-fetch")
             && message["params"]["resourceType"] == json!("Document")

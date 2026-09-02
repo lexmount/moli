@@ -885,7 +885,7 @@ async fn background_websocket_synthetic_socket_injection_routes_to_session_owner
             .as_ref()
             .and_then(|browser_context| browser_context.active_target_id()),
         Some("TID-active"),
-        "background Fetch.dispatchWebSocketMessage should not promote the target"
+        "background Fetch.dispatchWebSocketMessage should not activate the target"
     );
 
     server.abort();

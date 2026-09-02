@@ -633,7 +633,7 @@ async def _target_local_session_events(
             await wait_until(
                 lambda index=index, token=token: token
                 in _console_values(collectors[index + len(pages)]),
-                f"auxiliary console event for target {index}",
+                f"attached console event for target {index}",
             )
         for index, token in enumerate(tokens):
             other_tokens = set(tokens) - {token}
@@ -651,7 +651,7 @@ async def _target_local_session_events(
             "Runtime.evaluate",
             {"expression": "21 * 2", "returnByValue": True},
         )
-        assert_equal(runtime_value(surviving), 42, "auxiliary after primary detach")
+        assert_equal(runtime_value(surviving), 42, "attached after primary detach")
         replacement = await context.new_cdp_session(pages[1])
         sessions.append(replacement)
         replacement_read = await _send_cdp(

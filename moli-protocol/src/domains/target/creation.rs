@@ -1,6 +1,8 @@
 use serde::Deserialize;
 
-use crate::conn::{PreparedTargetAttach, TargetActivationTransition, TargetAttachSessionCommit};
+use crate::conn::{
+    CdpSessionRoute, PreparedTargetAttach, TargetActivationTransition, TargetAttachSessionCommit,
+};
 use crate::devtools_runtime::{
     DevToolsBrowserContextId, DevToolsCreateTargetResult, DevToolsTargetId,
 };
@@ -279,6 +281,12 @@ pub(super) fn execute_devtools_create_target_command(
         return Err(error);
     }
     conn.ensure_browser_context_for_implicit_target_creation();
+    let browser_context_id = conn
+        .browser_context
+        .as_ref()
+        .expect("browser context must exist before target creation")
+        .id
+        .clone();
 
     let target_id = conn.gen_target_id();
     let default_target_id = conn.default_target_id();
@@ -367,15 +375,16 @@ pub(super) fn execute_devtools_create_target_command(
     for (owner_session_id, session_id) in &auto_attached_tab_sessions {
         let waiting_for_debugger =
             conn.auto_attach_owner_waits_for_debugger_on_start(owner_session_id.as_deref());
-        let assigned = conn.prepare_auto_attached_tab_session_binding(
+        let route = conn.prepare_auto_attached_tab_session_binding(
             &tab_target_id,
             session_id.clone(),
             owner_session_id.as_deref(),
         );
-        debug_assert!(assigned, "created tab target must remain addressable");
-        attached_tab_sessions.push(conn.prepare_auto_attach_session_commit(
+        let route = route.expect("created tab target must remain addressable");
+        attached_tab_sessions.push(TargetAttachSessionCommit::auto_attached(
             session_id.clone(),
             owner_session_id.clone(),
+            route,
             waiting_for_debugger,
         ));
     }
@@ -384,25 +393,22 @@ pub(super) fn execute_devtools_create_target_command(
     for (index, (owner_session_id, session_id)) in auto_attached_page_sessions.iter().enumerate() {
         let waiting_for_debugger =
             conn.auto_attach_owner_waits_for_debugger_on_start(owner_session_id.as_deref());
-        if creating_background_target && index == 0 {
-            attached_sessions.push(conn.prepare_auto_attach_session_commit(
-                session_id.clone(),
-                owner_session_id.clone(),
-                waiting_for_debugger,
-            ));
+        let route = if creating_background_target && index == 0 {
+            CdpSessionRoute::PageTarget {
+                browser_context_id: browser_context_id.clone(),
+                target_id: target_id.clone(),
+                session_key: moli_page_types::DevToolsSessionKey::Primary,
+            }
         } else {
-            let assigned =
-                conn.prepare_auto_attached_page_session_binding(&target_id, session_id.clone());
-            debug_assert!(
-                assigned,
-                "newly created target must remain addressable for auto attach"
-            );
-            attached_sessions.push(conn.prepare_auto_attach_session_commit(
-                session_id.clone(),
-                owner_session_id.clone(),
-                waiting_for_debugger,
-            ));
-        }
+            conn.prepare_auto_attached_page_session_binding(&target_id, session_id.clone())
+                .expect("newly created target must remain addressable for auto attach")
+        };
+        attached_sessions.push(TargetAttachSessionCommit::auto_attached(
+            session_id.clone(),
+            owner_session_id.clone(),
+            route,
+            waiting_for_debugger,
+        ));
     }
     if activating_created_target {
         conn.apply_active_engine_fetch_overrides();

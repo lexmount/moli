@@ -826,7 +826,7 @@ impl BrowserContext {
         let runtime_session_diagnostics = active_target
             .map(|target| {
                 let primary = target.devtools_sessions.primary();
-                let auxiliary_pending_inspector_await_count: usize = target
+                let attached_pending_inspector_await_count: usize = target
                     .devtools_sessions
                     .attached_states()
                     .map(DevToolsSessionState::pending_inspector_await_count)
@@ -837,10 +837,10 @@ impl BrowserContext {
                     "inspectorTargetCrashedDelivered": primary.runtime_session_state.inspector_target_crashed_delivered(),
                     "profilerCommandStateSource": "renderer-v8-inspector-agent",
                     "v8InspectorStateBytes": primary.inspector_session_state.v8_state.as_ref().map_or(0, |state| state.len()),
-                    "auxiliaryDevToolsSessionStateCount": target.devtools_sessions.attached_len(),
+                    "attachedDevToolsSessionStateCount": target.devtools_sessions.attached_len(),
                     "pendingInspectorAwaitCount": target.devtools_sessions.pending_inspector_await_count(),
                     "primaryPendingInspectorAwaitCount": primary.pending_inspector_await_count(),
-                    "auxiliaryPendingInspectorAwaitCount": auxiliary_pending_inspector_await_count,
+                    "attachedPendingInspectorAwaitCount": attached_pending_inspector_await_count,
                 })
             })
             .unwrap_or(Value::Null);
@@ -907,7 +907,7 @@ impl BrowserContext {
                 .iter()
                 .filter(|info| info.attached)
                 .count(),
-            "auxiliaryTargetSessionCount": self
+            "attachedTargetSessionCount": self
                 .page_targets
                 .iter()
                 .map(|target| target.devtools_sessions.attached_len())

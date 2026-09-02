@@ -1,6 +1,6 @@
 use super::{CdpConnection, CdpSessionRoute, CommandOwnerScope};
 
-/// Foreground activation for one already-created auxiliary target.
+/// Foreground selection for one already-created popup Page target.
 ///
 /// Target creation and navigation have separate lifetimes. In particular, a
 /// target waiting for `Runtime.runIfWaitingForDebugger` must still become the

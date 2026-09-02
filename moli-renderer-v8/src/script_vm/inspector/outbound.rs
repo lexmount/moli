@@ -146,7 +146,7 @@ impl InspectorOutbound {
         let mut messages = self.messages.borrow_mut();
         messages.messages.clear();
         if let Some(route) = self.session_route.borrow_mut().take() {
-            route.detach_session();
+            route.deactivate_session();
         }
     }
 
@@ -412,7 +412,7 @@ impl InspectorOutbound {
     /// Registers a real frontend command with its explicit terminal response
     /// destination. Internal Classic/BiDi adapter calls intentionally keep
     /// using `register_response_callback`, which always preserves their
-    /// private command reply capability.
+    /// private adapter-reply capability.
     pub(in crate::script_vm) fn register_frontend_response_callback(
         &self,
         callback: RendererRuntimeInspectorResponseSender,
@@ -437,8 +437,8 @@ impl InspectorOutbound {
         callback: RendererRuntimeInspectorResponseSender,
     ) -> RendererRuntimeInspectorResponseSender {
         match callback.response_delivery() {
-            RendererInspectorResponseDelivery::CommandReply => callback,
-            RendererInspectorResponseDelivery::DevToolsSession => {
+            RendererInspectorResponseDelivery::AdapterReply => callback,
+            RendererInspectorResponseDelivery::SessionSink => {
                 let host = self
                     .session
                     .clone()

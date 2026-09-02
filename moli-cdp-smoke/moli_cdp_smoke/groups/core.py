@@ -495,12 +495,12 @@ async def run_core_group(state: SmokeState) -> None:
             lambda: _network_request_finished_for_url(
                 popup_network_events, f"{fixture}/api?popup-cdp=1"
             ),
-            "popup auxiliary CDPSession Network events",
+            "popup attached CDPSession Network events",
         )
     finally:
         await popup_cdp.detach()
         await cdp_popup.close()
-    state.record("popup_auxiliary_cdp_session_network_events")
+    state.record("popup_attached_cdp_session_network_events")
 
     await page.goto(f"{fixture}/plain", wait_until="load", timeout=10_000)
     async with page.expect_popup(timeout=5_000) as precedence_popup_info:
@@ -593,8 +593,8 @@ async def run_core_group(state: SmokeState) -> None:
     assert_equal(await page.text_content("main"), "history b", "history goForward text")
     state.record("history_back_forward")
 
-    parked_page = await context.new_page()
-    await parked_page.goto(f"{fixture}/plain", wait_until="load", timeout=10_000)
+    background_page = await context.new_page()
+    await background_page.goto(f"{fixture}/plain", wait_until="load", timeout=10_000)
     await page.bring_to_front()
     back_after_switch = await page.go_back(wait_until="load", timeout=10_000)
     assert_equal(page.url, f"{fixture}/history-a", "history goBack URL after target switch")
@@ -602,7 +602,7 @@ async def run_core_group(state: SmokeState) -> None:
     forward_after_switch = await page.go_forward(wait_until="load", timeout=10_000)
     assert_equal(page.url, f"{fixture}/history-b", "history goForward URL after target switch")
     assert_equal(forward_after_switch.url if forward_after_switch else None, f"{fixture}/history-b", "history goForward response URL after target switch")
-    await parked_page.close()
+    await background_page.close()
     state.record("history_back_forward_after_target_switch")
 
     await page.goto(f"{fixture}/plain", wait_until="load", timeout=10_000)

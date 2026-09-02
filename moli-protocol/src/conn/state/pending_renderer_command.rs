@@ -92,7 +92,7 @@ impl RendererCommandDescriptor {
             // Internal Classic/BiDi adapters own their reply channel. A
             // method being eligible for frontend session output must never
             // redirect a synthesized adapter command implicitly.
-            response_delivery: RendererInspectorResponseDelivery::CommandReply,
+            response_delivery: RendererInspectorResponseDelivery::AdapterReply,
             frontend_payload,
         })
     }
@@ -239,14 +239,14 @@ pub(crate) struct PreparedRendererCallReplay {
 pub(crate) enum PreparedRendererCallTermination {
     /// Internal adapters await a private receiver, so navigation rotates the
     /// lease to a synthetic terminal completion owned by the replacement.
-    CommandReply {
+    AdapterReply {
         correlation: RendererCommandCorrelation,
         response_sender: RendererRuntimeInspectorResponseSender,
     },
     /// Frontend calls remain owned by their protocol session. Navigation only
     /// revokes the retired renderer lease; the session consumes this original
     /// correlation when it emits the terminal response directly.
-    DevToolsSession {
+    SessionSink {
         correlation: RendererCommandCorrelation,
     },
 }
@@ -255,7 +255,7 @@ impl PreparedRendererCallTermination {
     #[cfg(test)]
     pub(crate) const fn correlation(&self) -> RendererCommandCorrelation {
         match self {
-            Self::CommandReply { correlation, .. } | Self::DevToolsSession { correlation } => {
+            Self::AdapterReply { correlation, .. } | Self::SessionSink { correlation } => {
                 *correlation
             }
         }
@@ -481,7 +481,7 @@ impl<T> PendingRendererCommandRegistry<T> {
                 .descriptor
                 .response_delivery();
             match response_delivery {
-                RendererInspectorResponseDelivery::DevToolsSession => {
+                RendererInspectorResponseDelivery::SessionSink => {
                     let call = self
                         .renderer_calls_by_frontend
                         .get(&frontend_command_id)
@@ -489,7 +489,7 @@ impl<T> PendingRendererCommandRegistry<T> {
                     if !call.response_channel.try_revoke_active_lease() {
                         continue;
                     }
-                    terminations.push(PreparedRendererCallTermination::DevToolsSession {
+                    terminations.push(PreparedRendererCallTermination::SessionSink {
                         correlation: RendererCommandCorrelation {
                             frontend_command_id,
                             renderer_call_id: call.renderer_call_id,
@@ -498,7 +498,7 @@ impl<T> PendingRendererCommandRegistry<T> {
                     });
                     continue;
                 }
-                RendererInspectorResponseDelivery::CommandReply => {}
+                RendererInspectorResponseDelivery::AdapterReply => {}
             }
 
             let renderer_call_id = self.allocate_renderer_call_id()?;
@@ -529,7 +529,7 @@ impl<T> PendingRendererCommandRegistry<T> {
 
             call.renderer_call_id = renderer_call_id;
             call.dispatched_attachment_id = Some(terminal_attachment_id);
-            terminations.push(PreparedRendererCallTermination::CommandReply {
+            terminations.push(PreparedRendererCallTermination::AdapterReply {
                 correlation: RendererCommandCorrelation {
                     frontend_command_id,
                     renderer_call_id,
@@ -756,20 +756,20 @@ mod tests {
     fn same_frontend_id_is_independent_across_session_owned_registries() {
         let id = FrontendCommandId::new(9);
         let mut primary = PendingRendererCommandRegistry::default();
-        let mut auxiliary = PendingRendererCommandRegistry::default();
+        let mut attached = PendingRendererCommandRegistry::default();
 
         primary.try_insert(id, "primary").unwrap();
-        auxiliary.try_insert(id, "auxiliary").unwrap();
+        attached.try_insert(id, "attached").unwrap();
 
         assert_eq!(primary.remove(id), Some("primary"));
-        assert_eq!(auxiliary.remove(id), Some("auxiliary"));
+        assert_eq!(attached.remove(id), Some("attached"));
     }
 
     #[test]
     fn renderer_call_ids_are_internal_and_session_scoped() {
         let large_frontend_id = FrontendCommandId::new(i32::MAX as u64 + 41);
         let mut primary = PendingRendererCommandRegistry::<()>::default();
-        let mut auxiliary = PendingRendererCommandRegistry::<()>::default();
+        let mut attached = PendingRendererCommandRegistry::<()>::default();
 
         let primary_first = primary
             .try_register_renderer_call(
@@ -779,7 +779,7 @@ mod tests {
             )
             .unwrap()
             .correlation();
-        let auxiliary_first = auxiliary
+        let attached_first = attached
             .try_register_renderer_call(
                 large_frontend_id,
                 None,
@@ -797,15 +797,15 @@ mod tests {
             .correlation();
 
         assert_eq!(primary_first.renderer_call_id(), RendererCallId::new(1));
-        assert_eq!(auxiliary_first.renderer_call_id(), RendererCallId::new(1));
+        assert_eq!(attached_first.renderer_call_id(), RendererCallId::new(1));
         assert_eq!(primary_second.renderer_call_id(), RendererCallId::new(2));
         assert_eq!(
             primary.take_frontend_command_for_renderer(RendererCallId::new(1)),
             Some(primary_first)
         );
         assert_eq!(
-            auxiliary.take_renderer_call_for_frontend(large_frontend_id),
-            Some(auxiliary_first)
+            attached.take_renderer_call_for_frontend(large_frontend_id),
+            Some(attached_first)
         );
     }
 
@@ -930,7 +930,7 @@ mod tests {
         let descriptor = RendererCommandDescriptor::from_frontend_policy(
             normalized_payload.clone(),
             ingress.renderer_policy(),
-            RendererInspectorResponseDelivery::CommandReply,
+            RendererInspectorResponseDelivery::AdapterReply,
         );
 
         assert_eq!(descriptor.frontend_payload(), normalized_payload);
@@ -952,12 +952,12 @@ mod tests {
         let page_descriptor = RendererCommandDescriptor::from_frontend_policy(
             frontend.json().to_owned(),
             frontend.renderer_policy(),
-            RendererInspectorResponseDelivery::DevToolsSession,
+            RendererInspectorResponseDelivery::SessionSink,
         );
         let worker_descriptor = RendererCommandDescriptor::from_frontend_policy(
             frontend.json().to_owned(),
             frontend.renderer_policy(),
-            RendererInspectorResponseDelivery::DevToolsSession,
+            RendererInspectorResponseDelivery::SessionSink,
         );
         let adapter_descriptor =
             RendererCommandDescriptor::from_synthesized_payload(frontend.json().to_owned())
@@ -965,16 +965,16 @@ mod tests {
 
         assert_eq!(
             page_descriptor.response_delivery(),
-            RendererInspectorResponseDelivery::DevToolsSession
+            RendererInspectorResponseDelivery::SessionSink
         );
         assert_eq!(
             worker_descriptor.response_delivery(),
-            RendererInspectorResponseDelivery::DevToolsSession,
+            RendererInspectorResponseDelivery::SessionSink,
             "external Worker commands must publish through their DevTools session"
         );
         assert_eq!(
             adapter_descriptor.response_delivery(),
-            RendererInspectorResponseDelivery::CommandReply,
+            RendererInspectorResponseDelivery::AdapterReply,
             "method policy must not redirect an internal adapter reply to a frontend session"
         );
     }
@@ -988,7 +988,7 @@ mod tests {
         let performance_descriptor = RendererCommandDescriptor::performance_get_metrics(
             performance.json().to_owned(),
             performance.renderer_policy(),
-            RendererInspectorResponseDelivery::DevToolsSession,
+            RendererInspectorResponseDelivery::SessionSink,
         );
         assert_eq!(
             performance_descriptor.replay(),
@@ -996,7 +996,7 @@ mod tests {
         );
         assert_eq!(
             performance_descriptor.response_delivery(),
-            RendererInspectorResponseDelivery::DevToolsSession
+            RendererInspectorResponseDelivery::SessionSink
         );
 
         let emulation = ParsedCdpCommand::parse_str(
@@ -1007,7 +1007,7 @@ mod tests {
             emulation.json().to_owned(),
             emulation.renderer_policy(),
             true,
-            RendererInspectorResponseDelivery::DevToolsSession,
+            RendererInspectorResponseDelivery::SessionSink,
         );
         assert_eq!(
             emulation_descriptor.replay(),
@@ -1015,12 +1015,12 @@ mod tests {
         );
         assert_eq!(
             emulation_descriptor.response_delivery(),
-            RendererInspectorResponseDelivery::DevToolsSession
+            RendererInspectorResponseDelivery::SessionSink
         );
     }
 
     #[tokio::test]
-    async fn session_replay_rotates_renderer_id_and_lease_without_command_reply_receiver() {
+    async fn session_replay_rotates_renderer_id_and_lease_without_adapter_reply_receiver() {
         let frontend_id = FrontendCommandId::new(41);
         let old_attachment = RendererAgentAttachmentId::allocate();
         let new_attachment = RendererAgentAttachmentId::allocate();
@@ -1041,14 +1041,14 @@ mod tests {
                 RendererCommandDescriptor::from_frontend_policy(
                     frontend.json().to_owned(),
                     frontend.renderer_policy(),
-                    RendererInspectorResponseDelivery::DevToolsSession,
+                    RendererInspectorResponseDelivery::SessionSink,
                 ),
             )
             .unwrap();
         let (old_correlation, old_sender, response_receiver) = prepared.into_parts();
         assert!(
             response_receiver.is_none(),
-            "DevToolsSession delivery must not allocate a command-reply receiver"
+            "SessionSink delivery must not allocate an adapter-reply receiver"
         );
 
         let mut replays = registry
@@ -1071,7 +1071,7 @@ mod tests {
         assert_eq!(payload["id"], frontend_id.get());
         assert_eq!(
             replay.response_delivery(),
-            RendererInspectorResponseDelivery::DevToolsSession,
+            RendererInspectorResponseDelivery::SessionSink,
             "attachment replacement must preserve the frontend session output capability"
         );
 
@@ -1125,7 +1125,7 @@ mod tests {
             .unwrap();
         let (correlation, sender, response_receiver) = prepared.into_parts();
         let response_receiver = response_receiver
-            .expect("a synthesized CommandReply call must allocate a response receiver");
+            .expect("a synthesized AdapterReply call must allocate a response receiver");
         sender
             .send(serde_json::json!({
                 "id": correlation.renderer_call_id().get(),
@@ -1156,7 +1156,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn command_reply_termination_rotates_attachment_and_invalidates_old_response_lease() {
+    async fn adapter_reply_termination_rotates_attachment_and_invalidates_old_response_lease() {
         let frontend_id = FrontendCommandId::new(42);
         let old_attachment = RendererAgentAttachmentId::allocate();
         let new_attachment = RendererAgentAttachmentId::allocate();
@@ -1170,7 +1170,7 @@ mod tests {
             .unwrap();
         let (old_correlation, old_sender, response_receiver) = prepared.into_parts();
         let response_receiver = response_receiver
-            .expect("a synthesized CommandReply call must allocate a response receiver");
+            .expect("a synthesized AdapterReply call must allocate a response receiver");
 
         let mut terminations = registry
             .prepare_terminations_from_attachment(old_attachment, new_attachment)
@@ -1201,12 +1201,12 @@ mod tests {
             "replacement must invalidate an old renderer callback before Page teardown"
         );
 
-        let PreparedRendererCallTermination::CommandReply {
+        let PreparedRendererCallTermination::AdapterReply {
             correlation,
             response_sender,
         } = termination
         else {
-            panic!("a synthesized command must use CommandReply termination")
+            panic!("a synthesized command must use AdapterReply termination")
         };
         assert_eq!(correlation, terminal_correlation);
         response_sender
@@ -1260,7 +1260,7 @@ mod tests {
                 RendererCommandDescriptor::from_frontend_policy(
                     frontend.json().to_owned(),
                     frontend.renderer_policy(),
-                    RendererInspectorResponseDelivery::DevToolsSession,
+                    RendererInspectorResponseDelivery::SessionSink,
                 ),
             )
             .unwrap();
@@ -1277,7 +1277,7 @@ mod tests {
         assert_eq!(termination.correlation(), old_correlation);
         assert!(matches!(
             termination,
-            PreparedRendererCallTermination::DevToolsSession {
+            PreparedRendererCallTermination::SessionSink {
                 correlation
             } if correlation == old_correlation
         ));
@@ -1327,9 +1327,9 @@ mod tests {
         let (_, first_sender, first_receiver) = first.into_parts();
         let (_, second_sender, second_receiver) = second.into_parts();
         let first_receiver = first_receiver
-            .expect("a synthesized CommandReply call must allocate a response receiver");
+            .expect("a synthesized AdapterReply call must allocate a response receiver");
         let second_receiver = second_receiver
-            .expect("a synthesized CommandReply call must allocate a response receiver");
+            .expect("a synthesized AdapterReply call must allocate a response receiver");
 
         let terminated = registry.terminate_all_renderer_calls("Inspector detached");
 

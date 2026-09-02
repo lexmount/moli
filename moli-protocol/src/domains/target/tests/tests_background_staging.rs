@@ -80,7 +80,7 @@ async fn loaded_page_html_for_test(ctx: &mut TestContext) -> String {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn same_context_background_session_can_stage_its_own_pre_document_state_before_promotion() {
+async fn same_context_background_session_can_stage_its_own_pre_document_state_before_activation() {
     let mut ctx = TestContext::new();
     load_bc_with_titled_page_async(
         &mut ctx,
@@ -237,7 +237,7 @@ async fn same_context_background_session_can_stage_its_own_pre_document_state_be
         "method": "Page.navigate",
         "sessionId": second_session_id,
         "params": {
-            "url": "data:text/html,<title>promoted</title><div id='ok'>promoted target</div>"
+            "url": "data:text/html,<title>activated</title><div id='ok'>activated target</div>"
         }
     }))
     .await;
@@ -268,19 +268,19 @@ async fn same_context_background_session_can_stage_its_own_pre_document_state_be
                 "expression": "JSON.stringify({ binding: typeof globalThis.targetBPreDocumentBinding, preload: globalThis.targetBPreload, text: document.getElementById('ok').textContent })"
             }
         })).await;
-    let promoted_eval = take_response_by_id(&mut ctx, 104193);
-    let promoted_payload = promoted_eval["result"]["result"]["value"]
+    let activated_eval = take_response_by_id(&mut ctx, 104193);
+    let activated_payload = activated_eval["result"]["result"]["value"]
         .as_str()
-        .expect("promoted payload should be string");
-    let promoted_payload: serde_json::Value =
-        serde_json::from_str(promoted_payload).expect("promoted payload should be valid json");
-    assert_eq!(promoted_payload["binding"], json!("function"));
-    assert_eq!(promoted_payload["preload"], json!("from-target-b"));
-    assert_eq!(promoted_payload["text"], json!("promoted target"));
+        .expect("activated payload should be string");
+    let activated_payload: serde_json::Value =
+        serde_json::from_str(activated_payload).expect("activated payload should be valid json");
+    assert_eq!(activated_payload["binding"], json!("function"));
+    assert_eq!(activated_payload["preload"], json!("from-target-b"));
+    assert_eq!(activated_payload["text"], json!("activated target"));
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn same_context_background_session_can_stage_its_own_utility_pre_document_state_before_promotion()
+async fn same_context_background_session_can_stage_its_own_utility_pre_document_state_before_activation()
  {
     let mut ctx = TestContext::new();
     load_bc_with_titled_page_async(
@@ -467,7 +467,7 @@ async fn same_context_background_session_can_stage_its_own_utility_pre_document_
             "method": "Page.navigate",
             "sessionId": second_session_id,
             "params": {
-                "url": "data:text/html,<title>promoted</title><div id='ok'>promoted utility target</div>"
+                "url": "data:text/html,<title>activated</title><div id='ok'>activated utility target</div>"
             }
         })).await;
     consume_main_document_navigation_start(&mut ctx);
@@ -506,7 +506,7 @@ async fn same_context_background_session_can_stage_its_own_utility_pre_document_
                 })
                 .cloned()
         })
-        .expect("promoted target utility world should materialize its staged binding/preload");
+        .expect("activated target utility world should materialize its staged binding/preload");
     assert_eq!(
         binding_called["params"]["executionContextId"],
         json!(utility_context)
@@ -526,19 +526,19 @@ async fn same_context_background_session_can_stage_its_own_utility_pre_document_
                 "expression": "JSON.stringify({ binding: typeof globalThis.targetBUtilityPreDocumentBinding, preload: globalThis.targetBUtilityPreload, text: document.getElementById('ok').textContent })"
             }
         })).await;
-    let promoted_eval = take_response_by_id(&mut ctx, 104194129);
-    let promoted_payload = promoted_eval["result"]["result"]["value"]
+    let activated_eval = take_response_by_id(&mut ctx, 104194129);
+    let activated_payload = activated_eval["result"]["result"]["value"]
         .as_str()
-        .expect("promoted payload should be string");
-    let promoted_payload: serde_json::Value =
-        serde_json::from_str(promoted_payload).expect("promoted payload should be valid json");
-    assert_eq!(promoted_payload["binding"], json!("function"));
-    assert_eq!(promoted_payload["preload"], json!("from-target-b-utility"));
-    assert_eq!(promoted_payload["text"], json!("promoted utility target"));
+        .expect("activated payload should be string");
+    let activated_payload: serde_json::Value =
+        serde_json::from_str(activated_payload).expect("activated payload should be valid json");
+    assert_eq!(activated_payload["binding"], json!("function"));
+    assert_eq!(activated_payload["preload"], json!("from-target-b-utility"));
+    assert_eq!(activated_payload["text"], json!("activated utility target"));
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn same_context_background_session_can_remove_its_own_binding_before_promotion() {
+async fn same_context_background_session_can_remove_its_own_binding_before_activation() {
     let mut ctx = TestContext::new();
     load_bc_with_titled_page_async(
         &mut ctx,
@@ -633,7 +633,7 @@ async fn same_context_background_session_can_remove_its_own_binding_before_promo
             });
         assert!(
             staged_bindings_empty,
-            "removed binding should be cleared from parked DevTools session"
+            "removed binding should be cleared from background DevTools session"
         );
         assert_eq!(
             active
@@ -669,7 +669,7 @@ async fn same_context_background_session_can_remove_its_own_binding_before_promo
         "method": "Page.navigate",
         "sessionId": second_session_id,
         "params": {
-            "url": "data:text/html,<title>promoted</title><div id='ok'>promoted target</div>"
+            "url": "data:text/html,<title>activated</title><div id='ok'>activated target</div>"
         }
     }))
     .await;
@@ -681,7 +681,7 @@ async fn same_context_background_session_can_remove_its_own_binding_before_promo
         !ctx.sent
             .iter()
             .any(|message| message["method"] == json!("Runtime.bindingCalled")),
-        "removed binding should not replay into first promoted navigation: {:?}",
+        "removed binding should not replay into first activated navigation: {:?}",
         ctx.sent
     );
 
@@ -693,19 +693,19 @@ async fn same_context_background_session_can_remove_its_own_binding_before_promo
                 "expression": "JSON.stringify({ binding: typeof globalThis.targetBRemovedBinding, preload: globalThis.targetBRemovedBindingPreload, text: document.getElementById('ok').textContent })"
             }
         })).await;
-    let promoted_eval = take_response_by_id(&mut ctx, 104194107);
-    let promoted_payload = promoted_eval["result"]["result"]["value"]
+    let activated_eval = take_response_by_id(&mut ctx, 104194107);
+    let activated_payload = activated_eval["result"]["result"]["value"]
         .as_str()
-        .expect("promoted payload should be string");
-    let promoted_payload: serde_json::Value =
-        serde_json::from_str(promoted_payload).expect("promoted payload should be valid json");
-    assert_eq!(promoted_payload["binding"], json!("undefined"));
-    assert_eq!(promoted_payload["preload"], json!("undefined"));
-    assert_eq!(promoted_payload["text"], json!("promoted target"));
+        .expect("activated payload should be string");
+    let activated_payload: serde_json::Value =
+        serde_json::from_str(activated_payload).expect("activated payload should be valid json");
+    assert_eq!(activated_payload["binding"], json!("undefined"));
+    assert_eq!(activated_payload["preload"], json!("undefined"));
+    assert_eq!(activated_payload["text"], json!("activated target"));
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn same_context_background_session_can_remove_its_own_preload_before_promotion() {
+async fn same_context_background_session_can_remove_its_own_preload_before_activation() {
     let mut ctx = TestContext::new();
     load_bc_with_titled_page_async(
         &mut ctx,
@@ -821,7 +821,7 @@ async fn same_context_background_session_can_remove_its_own_preload_before_promo
         "method": "Page.navigate",
         "sessionId": second_session_id,
         "params": {
-            "url": "data:text/html,<title>promoted</title><div id='ok'>promoted target</div>"
+            "url": "data:text/html,<title>activated</title><div id='ok'>activated target</div>"
         }
     }))
     .await;
@@ -833,7 +833,7 @@ async fn same_context_background_session_can_remove_its_own_preload_before_promo
         !ctx.sent
             .iter()
             .any(|message| message["method"] == json!("Runtime.bindingCalled")),
-        "removed preload should not trigger binding call during first promoted navigation: {:?}",
+        "removed preload should not trigger binding call during first activated navigation: {:?}",
         ctx.sent
     );
 
@@ -845,19 +845,19 @@ async fn same_context_background_session_can_remove_its_own_preload_before_promo
                 "expression": "JSON.stringify({ binding: typeof globalThis.targetBRemainingBinding, preload: globalThis.targetBRemovedPreload ?? 'absent', text: document.getElementById('ok').textContent })"
             }
         })).await;
-    let promoted_eval = take_response_by_id(&mut ctx, 104194117);
-    let promoted_payload = promoted_eval["result"]["result"]["value"]
+    let activated_eval = take_response_by_id(&mut ctx, 104194117);
+    let activated_payload = activated_eval["result"]["result"]["value"]
         .as_str()
-        .expect("promoted payload should be string");
-    let promoted_payload: serde_json::Value =
-        serde_json::from_str(promoted_payload).expect("promoted payload should be valid json");
-    assert_eq!(promoted_payload["binding"], json!("function"));
-    assert_eq!(promoted_payload["preload"], json!("absent"));
-    assert_eq!(promoted_payload["text"], json!("promoted target"));
+        .expect("activated payload should be string");
+    let activated_payload: serde_json::Value =
+        serde_json::from_str(activated_payload).expect("activated payload should be valid json");
+    assert_eq!(activated_payload["binding"], json!("function"));
+    assert_eq!(activated_payload["preload"], json!("absent"));
+    assert_eq!(activated_payload["text"], json!("activated target"));
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn same_context_background_session_can_remove_its_own_utility_binding_before_promotion() {
+async fn same_context_background_session_can_remove_its_own_utility_binding_before_activation() {
     let mut ctx = TestContext::new();
     load_bc_with_titled_page_async(
         &mut ctx,
@@ -955,7 +955,7 @@ async fn same_context_background_session_can_remove_its_own_utility_binding_befo
             });
         assert!(
             staged_bindings_empty,
-            "removed utility binding should be cleared from parked DevTools session"
+            "removed utility binding should be cleared from background DevTools session"
         );
         assert_eq!(
             active
@@ -991,7 +991,7 @@ async fn same_context_background_session_can_remove_its_own_utility_binding_befo
             "method": "Page.navigate",
             "sessionId": second_session_id,
             "params": {
-                "url": "data:text/html,<title>promoted</title><div id='ok'>promoted utility target</div>"
+                "url": "data:text/html,<title>activated</title><div id='ok'>activated utility target</div>"
             }
         })).await;
     consume_main_document_navigation_start(&mut ctx);
@@ -1001,7 +1001,7 @@ async fn same_context_background_session_can_remove_its_own_utility_binding_befo
         !ctx.sent
             .iter()
             .any(|message| message["method"] == json!("Runtime.bindingCalled")),
-        "removed utility binding should not replay into first promoted utility world: {:?}",
+        "removed utility binding should not replay into first activated utility world: {:?}",
         ctx.sent
     );
     ctx.take_all();
@@ -1037,19 +1037,19 @@ async fn same_context_background_session_can_remove_its_own_utility_binding_befo
                 "expression": "JSON.stringify({ binding: typeof globalThis.targetBRemovedUtilityBinding, preload: globalThis.targetBRemovedUtilityBindingType, text: document.getElementById('ok').textContent })"
             }
         })).await;
-    let promoted_eval = take_response_by_id(&mut ctx, 104194138);
-    let promoted_payload = promoted_eval["result"]["result"]["value"]
+    let activated_eval = take_response_by_id(&mut ctx, 104194138);
+    let activated_payload = activated_eval["result"]["result"]["value"]
         .as_str()
-        .expect("promoted payload should be string");
-    let promoted_payload: serde_json::Value =
-        serde_json::from_str(promoted_payload).expect("promoted payload should be valid json");
-    assert_eq!(promoted_payload["binding"], json!("undefined"));
-    assert_eq!(promoted_payload["preload"], json!("undefined"));
-    assert_eq!(promoted_payload["text"], json!("promoted utility target"));
+        .expect("activated payload should be string");
+    let activated_payload: serde_json::Value =
+        serde_json::from_str(activated_payload).expect("activated payload should be valid json");
+    assert_eq!(activated_payload["binding"], json!("undefined"));
+    assert_eq!(activated_payload["preload"], json!("undefined"));
+    assert_eq!(activated_payload["text"], json!("activated utility target"));
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn same_context_background_session_can_remove_its_own_utility_preload_before_promotion() {
+async fn same_context_background_session_can_remove_its_own_utility_preload_before_activation() {
     let mut ctx = TestContext::new();
     load_bc_with_titled_page_async(
         &mut ctx,
@@ -1172,7 +1172,7 @@ async fn same_context_background_session_can_remove_its_own_utility_preload_befo
             "method": "Page.navigate",
             "sessionId": second_session_id,
             "params": {
-                "url": "data:text/html,<title>promoted</title><div id='ok'>promoted utility target</div>"
+                "url": "data:text/html,<title>activated</title><div id='ok'>activated utility target</div>"
             }
         })).await;
     consume_main_document_navigation_start(&mut ctx);
@@ -1182,7 +1182,7 @@ async fn same_context_background_session_can_remove_its_own_utility_preload_befo
         !ctx.sent
             .iter()
             .any(|message| message["method"] == json!("Runtime.bindingCalled")),
-        "removed utility preload should not trigger binding call during first promoted navigation: {:?}",
+        "removed utility preload should not trigger binding call during first activated navigation: {:?}",
         ctx.sent
     );
     ctx.take_all();
@@ -1218,19 +1218,19 @@ async fn same_context_background_session_can_remove_its_own_utility_preload_befo
                 "expression": "JSON.stringify({ binding: typeof globalThis.targetBRemainingUtilityBinding, preload: globalThis.targetBRemovedUtilityPreload ?? 'absent', text: document.getElementById('ok').textContent })"
             }
         })).await;
-    let promoted_eval = take_response_by_id(&mut ctx, 104194148);
-    let promoted_payload = promoted_eval["result"]["result"]["value"]
+    let activated_eval = take_response_by_id(&mut ctx, 104194148);
+    let activated_payload = activated_eval["result"]["result"]["value"]
         .as_str()
-        .expect("promoted payload should be string");
-    let promoted_payload: serde_json::Value =
-        serde_json::from_str(promoted_payload).expect("promoted payload should be valid json");
-    assert_eq!(promoted_payload["binding"], json!("function"));
-    assert_eq!(promoted_payload["preload"], json!("absent"));
-    assert_eq!(promoted_payload["text"], json!("promoted utility target"));
+        .expect("activated payload should be string");
+    let activated_payload: serde_json::Value =
+        serde_json::from_str(activated_payload).expect("activated payload should be valid json");
+    assert_eq!(activated_payload["binding"], json!("function"));
+    assert_eq!(activated_payload["preload"], json!("absent"));
+    assert_eq!(activated_payload["text"], json!("activated utility target"));
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn same_context_background_session_can_stage_its_own_emulated_media_before_promotion() {
+async fn same_context_background_session_can_stage_its_own_emulated_media_before_activation() {
     let mut ctx = TestContext::new();
     load_bc_with_titled_page_async(
         &mut ctx,
@@ -1329,7 +1329,7 @@ async fn same_context_background_session_can_stage_its_own_emulated_media_before
         let staged = active
             .background_target(&second_target_id)
             .filter(|target| target.has_non_default_session_state())
-            .expect("second target should have staged parked page session state");
+            .expect("second target should have staged background page session state");
         assert_eq!(staged.emulated_media.color_scheme.as_deref(), Some("light"));
     }
 
@@ -1369,7 +1369,7 @@ async fn same_context_background_session_can_stage_its_own_emulated_media_before
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn same_context_background_session_can_clear_its_own_emulated_media_before_promotion() {
+async fn same_context_background_session_can_clear_its_own_emulated_media_before_activation() {
     let mut ctx = TestContext::new();
     load_bc_with_titled_page_async(
         &mut ctx,
@@ -1470,7 +1470,7 @@ async fn same_context_background_session_can_clear_its_own_emulated_media_before
                 .background_target(&second_target_id)
                 .filter(|target| target.has_non_default_session_state())
                 .is_none(),
-            "clearing staged emulated media back to default should fold away the parked state entry",
+            "clearing staged emulated media back to default should fold away the background state entry",
         );
     }
 
@@ -1494,30 +1494,30 @@ async fn same_context_background_session_can_clear_its_own_emulated_media_before
     ctx.take_all();
 
     let html = loaded_page_html_for_test(&mut ctx).await;
-    let promoted_surface = html
+    let activated_surface = html
         .split("<body>")
         .nth(1)
         .and_then(|tail| tail.split("</body>").next())
-        .expect("promoted payload should be embedded in body");
-    let promoted_surface = serde_json::json!(
-        promoted_surface
+        .expect("activated payload should be embedded in body");
+    let activated_surface = serde_json::json!(
+        activated_surface
             .split('|')
             .map(str::to_owned)
             .collect::<Vec<_>>()
     );
     assert_eq!(
-        promoted_surface, default_surface,
-        "promoted target should observe default emulated media after clearing its staged override; got {html}"
+        activated_surface, default_surface,
+        "activated target should observe default emulated media after clearing its staged override; got {html}"
     );
     assert_ne!(
-        promoted_surface,
+        activated_surface,
         serde_json::json!(["true", "false"]),
-        "promoted target should not retain the staged dark override"
+        "activated target should not retain the staged dark override"
     );
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn same_context_background_session_can_stage_its_own_network_conditions_before_promotion() {
+async fn same_context_background_session_can_stage_its_own_network_conditions_before_activation() {
     let mut ctx = TestContext::new();
     load_bc_with_titled_page_async(
         &mut ctx,
@@ -1608,7 +1608,7 @@ async fn same_context_background_session_can_stage_its_own_network_conditions_be
         let staged = active
             .background_target(&second_target_id)
             .filter(|target| target.has_non_default_session_state())
-            .expect("second target should have staged parked page session state");
+            .expect("second target should have staged background page session state");
         assert!(staged.network_policy.network_offline());
         assert_eq!(staged.network_policy.emulated_network_latency(), 25.0);
         assert_eq!(staged.network_policy.emulated_download_throughput(), 1024.0);
@@ -1645,45 +1645,48 @@ async fn same_context_background_session_can_stage_its_own_network_conditions_be
     ctx.take_all();
 
     {
-        let promoted = ctx
+        let activated = ctx
             .conn
             .browser_context
             .as_ref()
-            .expect("promoted browser context");
-        assert_eq!(promoted.active_target_id(), Some(second_target_id.as_str()));
+            .expect("activated browser context");
         assert_eq!(
-            promoted.active_session_id(),
+            activated.active_target_id(),
+            Some(second_target_id.as_str())
+        );
+        assert_eq!(
+            activated.active_session_id(),
             Some(second_session_id.as_str())
         );
         assert!(
-            promoted
+            activated
                 .active_page_target()
                 .network_policy
                 .network_offline()
         );
         assert_eq!(
-            promoted
+            activated
                 .active_page_target()
                 .network_policy
                 .emulated_network_latency(),
             25.0
         );
         assert_eq!(
-            promoted
+            activated
                 .active_page_target()
                 .network_policy
                 .emulated_download_throughput(),
             1024.0
         );
         assert_eq!(
-            promoted
+            activated
                 .active_page_target()
                 .network_policy
                 .emulated_upload_throughput(),
             256.0
         );
         assert_eq!(
-            promoted
+            activated
                 .active_page_target()
                 .network_policy
                 .emulated_connection_type(),
@@ -1695,19 +1698,19 @@ async fn same_context_background_session_can_stage_its_own_network_conditions_be
         "id": 10419456,
         "method": "Page.navigate",
         "sessionId": second_session_id,
-        "params": { "url": "http://example.test/offline-promoted" }
+        "params": { "url": "http://example.test/offline-activated" }
     }))
     .await;
     consume_main_document_navigation_start(&mut ctx);
-    let promoted_navigation = take_response_by_id(&mut ctx, 10419456);
+    let activated_navigation = take_response_by_id(&mut ctx, 10419456);
     assert_eq!(
-        promoted_navigation["error"]["message"],
+        activated_navigation["error"]["message"],
         json!("Network emulation offline")
     );
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn same_context_background_session_can_stage_its_own_blocked_urls_before_promotion() {
+async fn same_context_background_session_can_stage_its_own_blocked_urls_before_activation() {
     let mut ctx = TestContext::new();
     load_bc_with_titled_page_async(
         &mut ctx,
@@ -1776,7 +1779,7 @@ async fn same_context_background_session_can_stage_its_own_blocked_urls_before_p
         let staged = active
             .background_target(&second_target_id)
             .filter(|target| target.has_non_default_session_state())
-            .expect("second target should have staged parked page session state");
+            .expect("second target should have staged background page session state");
         assert!(
             staged.effective_policy().blocked_url_patterns().is_empty(),
             "a disabled Network handler must not contribute to effective target policy"
@@ -1802,19 +1805,22 @@ async fn same_context_background_session_can_stage_its_own_blocked_urls_before_p
     ctx.take_all();
 
     {
-        let promoted = ctx
+        let activated = ctx
             .conn
             .browser_context
             .as_ref()
-            .expect("promoted browser context");
-        assert_eq!(promoted.active_target_id(), Some(second_target_id.as_str()));
+            .expect("activated browser context");
+        assert_eq!(
+            activated.active_target_id(),
+            Some(second_target_id.as_str())
+        );
         assert!(
-            promoted
+            activated
                 .active_page_target()
                 .effective_policy()
                 .blocked_url_patterns()
                 .is_empty(),
-            "promotion must not activate a disabled Network handler"
+            "activation must not activate a disabled Network handler"
         );
     }
 
@@ -1829,7 +1835,7 @@ async fn same_context_background_session_can_stage_its_own_blocked_urls_before_p
         ctx.conn
             .browser_context
             .as_ref()
-            .expect("promoted browser context")
+            .expect("activated browser context")
             .active_page_target()
             .effective_policy()
             .blocked_url_patterns(),
@@ -1849,15 +1855,15 @@ async fn same_context_background_session_can_stage_its_own_blocked_urls_before_p
     let failed = ctx.take_one();
     assert_eq!(failed["method"], "Network.loadingFailed");
     assert_eq!(failed["params"]["errorText"], "net::ERR_BLOCKED_BY_CLIENT");
-    let promoted_navigation = take_response_by_id(&mut ctx, 10419462);
+    let activated_navigation = take_response_by_id(&mut ctx, 10419462);
     assert_eq!(
-        promoted_navigation["error"]["message"],
+        activated_navigation["error"]["message"],
         json!("net::ERR_BLOCKED_BY_CLIENT")
     );
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn same_context_background_session_can_reset_its_own_network_conditions_before_promotion() {
+async fn same_context_background_session_can_reset_its_own_network_conditions_before_activation() {
     let mut ctx = TestContext::new();
     load_bc_with_titled_page_async(
         &mut ctx,
@@ -1944,7 +1950,7 @@ async fn same_context_background_session_can_reset_its_own_network_conditions_be
         let staged = active
             .background_target(&second_target_id)
             .filter(|target| target.has_non_default_session_state())
-            .expect("second target should have staged parked page session state");
+            .expect("second target should have staged background page session state");
         assert!(!staged.network_policy.network_offline());
         assert_eq!(staged.network_policy.emulated_network_latency(), 0.0);
         assert_eq!(staged.network_policy.emulated_download_throughput(), -1.0);
@@ -1968,54 +1974,57 @@ async fn same_context_background_session_can_reset_its_own_network_conditions_be
             "id": 104194506,
             "method": "Page.navigate",
             "sessionId": second_session_id,
-            "params": { "url": "data:text/html,<title>promoted-online</title><div id='ok'>promoted online</div>" }
+            "params": { "url": "data:text/html,<title>activated-online</title><div id='ok'>activated online</div>" }
         })).await;
-    let promoted_navigation = take_response_by_id(&mut ctx, 104194506);
+    let activated_navigation = take_response_by_id(&mut ctx, 104194506);
     assert_eq!(
-        promoted_navigation["result"]["frameId"],
+        activated_navigation["result"]["frameId"],
         json!(second_target_id)
     );
     assert!(
         ctx.sent
             .iter()
             .all(|message| message.get("error").is_none()),
-        "unexpected protocol error during promoted navigation: {:?}",
+        "unexpected protocol error during activated navigation: {:?}",
         ctx.sent
     );
     ctx.take_all();
 
     {
-        let promoted = ctx.conn.browser_context.as_ref().expect("browser context");
-        assert_eq!(promoted.active_target_id(), Some(second_target_id.as_str()));
+        let activated = ctx.conn.browser_context.as_ref().expect("browser context");
+        assert_eq!(
+            activated.active_target_id(),
+            Some(second_target_id.as_str())
+        );
         assert!(
-            !promoted
+            !activated
                 .active_page_target()
                 .network_policy
                 .network_offline()
         );
         assert_eq!(
-            promoted
+            activated
                 .active_page_target()
                 .network_policy
                 .emulated_network_latency(),
             0.0
         );
         assert_eq!(
-            promoted
+            activated
                 .active_page_target()
                 .network_policy
                 .emulated_download_throughput(),
             -1.0
         );
         assert_eq!(
-            promoted
+            activated
                 .active_page_target()
                 .network_policy
                 .emulated_upload_throughput(),
             -1.0
         );
         assert_eq!(
-            promoted
+            activated
                 .active_page_target()
                 .network_policy
                 .emulated_connection_type(),
@@ -2025,7 +2034,7 @@ async fn same_context_background_session_can_reset_its_own_network_conditions_be
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn same_context_background_session_can_stage_its_own_extra_headers_before_promotion() {
+async fn same_context_background_session_can_stage_its_own_extra_headers_before_activation() {
     async fn handler(
         State(seen): State<Arc<Mutex<Vec<(String, Option<String>)>>>>,
         headers: HeaderMap,
@@ -2161,7 +2170,7 @@ async fn same_context_background_session_can_stage_its_own_extra_headers_before_
         let staged = active
             .background_target(&second_target_id)
             .filter(|target| target.has_non_default_session_state())
-            .expect("second target should have staged parked page session state");
+            .expect("second target should have staged background page session state");
         assert_eq!(
             staged.effective_policy().extra_headers(),
             vec![("X-Target".into(), "B".into())]
@@ -2208,7 +2217,7 @@ async fn same_context_background_session_can_stage_its_own_extra_headers_before_
         ctx.sent
             .iter()
             .all(|message| message.get("error").is_none()),
-        "unexpected protocol error during promoted navigation: {:?}",
+        "unexpected protocol error during activated navigation: {:?}",
         ctx.sent
     );
 
@@ -2225,7 +2234,7 @@ async fn same_context_background_session_can_stage_its_own_extra_headers_before_
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn same_context_background_session_can_clear_its_own_extra_headers_before_promotion() {
+async fn same_context_background_session_can_clear_its_own_extra_headers_before_activation() {
     async fn handler(
         State(seen): State<Arc<Mutex<Vec<(String, Option<String>)>>>>,
         headers: HeaderMap,
@@ -2414,7 +2423,7 @@ async fn same_context_background_session_can_clear_its_own_extra_headers_before_
         ctx.sent
             .iter()
             .all(|message| message.get("error").is_none()),
-        "unexpected protocol error during promoted navigation: {:?}",
+        "unexpected protocol error during activated navigation: {:?}",
         ctx.sent
     );
 
@@ -2431,7 +2440,7 @@ async fn same_context_background_session_can_clear_its_own_extra_headers_before_
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn same_context_background_session_can_stage_its_own_user_agent_before_promotion() {
+async fn same_context_background_session_can_stage_its_own_user_agent_before_activation() {
     async fn handler(
         State(seen): State<Arc<Mutex<Vec<(String, Option<String>)>>>>,
         headers: HeaderMap,
@@ -2544,7 +2553,7 @@ async fn same_context_background_session_can_stage_its_own_user_agent_before_pro
         let staged = active
             .background_target(&second_target_id)
             .filter(|target| target.has_non_default_session_state())
-            .expect("second target should have staged parked page session state");
+            .expect("second target should have staged background page session state");
         assert_eq!(
             staged
                 .effective_policy()
@@ -2594,7 +2603,7 @@ async fn same_context_background_session_can_stage_its_own_user_agent_before_pro
         ctx.sent
             .iter()
             .all(|message| message.get("error").is_none()),
-        "unexpected protocol error during promoted navigation: {:?}",
+        "unexpected protocol error during activated navigation: {:?}",
         ctx.sent
     );
 
@@ -2605,9 +2614,9 @@ async fn same_context_background_session_can_stage_its_own_user_agent_before_pro
         "params": { "expression": "navigator.userAgent" }
     }))
     .await;
-    let promoted_eval = take_response_by_id(&mut ctx, 10419477);
+    let activated_eval = take_response_by_id(&mut ctx, 10419477);
     assert_eq!(
-        promoted_eval["result"]["result"]["value"],
+        activated_eval["result"]["result"]["value"],
         json!("Moli/Stage-B")
     );
 
@@ -2624,7 +2633,7 @@ async fn same_context_background_session_can_stage_its_own_user_agent_before_pro
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn same_context_background_session_can_clear_its_own_user_agent_before_promotion() {
+async fn same_context_background_session_can_clear_its_own_user_agent_before_activation() {
     async fn handler(
         State(seen): State<Arc<Mutex<Vec<(String, Option<String>)>>>>,
         headers: HeaderMap,
@@ -2755,7 +2764,7 @@ async fn same_context_background_session_can_clear_its_own_user_agent_before_pro
         let staged = active
             .background_target(&second_target_id)
             .filter(|target| target.has_non_default_session_state())
-            .expect("second target should have staged parked page session state");
+            .expect("second target should have staged background page session state");
         assert_eq!(
             staged
                 .effective_policy()
@@ -2787,7 +2796,7 @@ async fn same_context_background_session_can_clear_its_own_user_agent_before_pro
         ctx.sent
             .iter()
             .all(|message| message.get("error").is_none()),
-        "unexpected protocol error during promoted navigation: {:?}",
+        "unexpected protocol error during activated navigation: {:?}",
         ctx.sent
     );
 
@@ -2800,7 +2809,7 @@ async fn same_context_background_session_can_clear_its_own_user_agent_before_pro
     assert_ne!(
         seen[1].1.as_deref(),
         Some("Moli/Staged-B"),
-        "promoted target should not retain the staged user agent override",
+        "activated target should not retain the staged user agent override",
     );
 
     server.abort();
@@ -2944,7 +2953,7 @@ async fn same_context_background_session_stages_locale_without_changing_request_
         let staged = active
             .background_target(&second_target_id)
             .filter(|target| target.has_non_default_session_state())
-            .expect("second target should have staged parked page session state");
+            .expect("second target should have staged background page session state");
         assert_eq!(staged.effective_policy().locale_override(), Some("fr-FR"));
         assert_eq!(
             staged.effective_policy().timezone_override(),
@@ -3011,7 +3020,7 @@ async fn same_context_background_session_stages_locale_without_changing_request_
         ctx.sent
             .iter()
             .all(|message| message.get("error").is_none()),
-        "unexpected protocol error during promoted navigation: {:?}",
+        "unexpected protocol error during activated navigation: {:?}",
         ctx.sent
     );
 
@@ -3024,15 +3033,15 @@ async fn same_context_background_session_stages_locale_without_changing_request_
             }
         }))
     .await;
-    let promoted_eval = take_response_by_id(&mut ctx, 10419490);
-    let promoted_payload = promoted_eval["result"]["result"]["value"]
+    let activated_eval = take_response_by_id(&mut ctx, 10419490);
+    let activated_payload = activated_eval["result"]["result"]["value"]
         .as_str()
-        .expect("promoted payload should be string");
-    let promoted_payload: serde_json::Value =
-        serde_json::from_str(promoted_payload).expect("promoted payload should be valid json");
-    assert_eq!(promoted_payload["lang"], json!("en-US"));
-    assert_eq!(promoted_payload["locale"], json!("fr-FR"));
-    assert_eq!(promoted_payload["tz"], json!("Asia/Shanghai"));
+        .expect("activated payload should be string");
+    let activated_payload: serde_json::Value =
+        serde_json::from_str(activated_payload).expect("activated payload should be valid json");
+    assert_eq!(activated_payload["lang"], json!("en-US"));
+    assert_eq!(activated_payload["locale"], json!("fr-FR"));
+    assert_eq!(activated_payload["tz"], json!("Asia/Shanghai"));
 
     let seen = seen.lock().clone();
     assert_eq!(
@@ -3047,7 +3056,7 @@ async fn same_context_background_session_stages_locale_without_changing_request_
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn same_context_background_session_can_clear_its_own_locale_before_promotion() {
+async fn same_context_background_session_can_clear_its_own_locale_before_activation() {
     async fn handler(headers: HeaderMap) -> impl IntoResponse {
         let accept_language = headers
             .get(axum::http::header::ACCEPT_LANGUAGE)
@@ -3151,7 +3160,7 @@ async fn same_context_background_session_can_clear_its_own_locale_before_promoti
                 .background_target(&second_target_id)
                 .filter(|target| target.has_non_default_session_state())
                 .is_none(),
-            "clearing staged locale back to default should fold away the parked state entry",
+            "clearing staged locale back to default should fold away the background state entry",
         );
     }
 
@@ -3199,25 +3208,25 @@ async fn same_context_background_session_can_clear_its_own_locale_before_promoti
     let _ = take_response_by_id(&mut ctx, 104194807);
     ctx.take_all();
 
-    let promoted_html = loaded_page_html_for_test(&mut ctx).await;
-    let promoted_surface = promoted_html
+    let activated_html = loaded_page_html_for_test(&mut ctx).await;
+    let activated_surface = activated_html
         .split("<body")
         .nth(1)
         .and_then(|tail| tail.split('>').nth(1))
         .and_then(|tail| tail.split("</body>").next())
-        .expect("promoted payload should be embedded in body")
+        .expect("activated payload should be embedded in body")
         .to_owned();
 
     assert_eq!(
-        promoted_surface, active_surface,
-        "promoted target should observe default locale surface after clearing its staged override"
+        activated_surface, active_surface,
+        "activated target should observe default locale surface after clearing its staged override"
     );
 
     server.abort();
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn same_context_background_session_can_clear_its_own_timezone_before_promotion() {
+async fn same_context_background_session_can_clear_its_own_timezone_before_activation() {
     async fn handler() -> impl IntoResponse {
         "<!doctype html><html><body><script>document.body.textContent = Intl.DateTimeFormat().resolvedOptions().timeZone;</script></body></html>"
     }
@@ -3315,7 +3324,7 @@ async fn same_context_background_session_can_clear_its_own_timezone_before_promo
                 .background_target(&second_target_id)
                 .filter(|target| target.has_non_default_session_state())
                 .is_none(),
-            "clearing staged timezone back to default should fold away the parked state entry",
+            "clearing staged timezone back to default should fold away the background state entry",
         );
     }
 
@@ -3360,29 +3369,29 @@ async fn same_context_background_session_can_clear_its_own_timezone_before_promo
     let _ = take_response_by_id(&mut ctx, 104194814);
     ctx.take_all();
 
-    let promoted_html = loaded_page_html_for_test(&mut ctx).await;
-    let promoted_surface = promoted_html
+    let activated_html = loaded_page_html_for_test(&mut ctx).await;
+    let activated_surface = activated_html
         .split("<body")
         .nth(1)
         .and_then(|tail| tail.split('>').nth(1))
         .and_then(|tail| tail.split("</body>").next())
-        .expect("promoted payload should be embedded in body")
+        .expect("activated payload should be embedded in body")
         .to_owned();
 
     assert_eq!(
-        promoted_surface, active_surface,
-        "promoted target should observe default timezone surface after clearing its staged override"
+        activated_surface, active_surface,
+        "activated target should observe default timezone surface after clearing its staged override"
     );
     assert_ne!(
-        promoted_surface, "Asia/Shanghai",
-        "promoted target should not retain the staged timezone override"
+        activated_surface, "Asia/Shanghai",
+        "activated target should not retain the staged timezone override"
     );
 
     server.abort();
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn same_context_background_session_can_stage_its_own_emulation_overrides_before_promotion() {
+async fn same_context_background_session_can_stage_its_own_emulation_overrides_before_activation() {
     let mut ctx = TestContext::new();
     load_bc_with_titled_page_async(
         &mut ctx,
@@ -3520,7 +3529,7 @@ async fn same_context_background_session_can_stage_its_own_emulation_overrides_b
         let staged = active
             .background_target(&second_target_id)
             .filter(|target| target.has_non_default_session_state())
-            .expect("second target should have staged parked page session state");
+            .expect("second target should have staged background page session state");
         assert_eq!(
             staged.emulated_device_metrics.as_ref().map(|metrics| (
                 metrics.width,
@@ -3601,7 +3610,7 @@ async fn same_context_background_session_can_stage_its_own_emulation_overrides_b
         ctx.sent
             .iter()
             .all(|message| message.get("error").is_none()),
-        "unexpected protocol error during promoted navigation: {:?}",
+        "unexpected protocol error during activated navigation: {:?}",
         ctx.sent
     );
     ctx.take_all();
@@ -3614,25 +3623,25 @@ async fn same_context_background_session_can_stage_its_own_emulation_overrides_b
                 "expression": "JSON.stringify({ innerWidth: window.innerWidth, innerHeight: window.innerHeight, dpr: window.devicePixelRatio, screenWidth: screen.width, screenHeight: screen.height, maxTouchPoints: navigator.maxTouchPoints, hasFocus: document.hasFocus(), hidden: document.hidden, visibilityState: document.visibilityState })"
             }
         })).await;
-    let promoted_eval = take_response_by_id(&mut ctx, 104194913);
-    let promoted_payload = promoted_eval["result"]["result"]["value"]
+    let activated_eval = take_response_by_id(&mut ctx, 104194913);
+    let activated_payload = activated_eval["result"]["result"]["value"]
         .as_str()
-        .expect("promoted payload should be string");
-    let promoted_payload: serde_json::Value =
-        serde_json::from_str(promoted_payload).expect("promoted payload should be valid json");
-    assert_eq!(promoted_payload["innerWidth"], json!(640));
-    assert_eq!(promoted_payload["innerHeight"], json!(360));
-    assert_eq!(promoted_payload["dpr"], json!(1));
-    assert_eq!(promoted_payload["screenWidth"], json!(800));
-    assert_eq!(promoted_payload["screenHeight"], json!(600));
-    assert_eq!(promoted_payload["maxTouchPoints"], json!(0));
-    assert_eq!(promoted_payload["hasFocus"], json!(true));
-    assert_eq!(promoted_payload["hidden"], json!(false));
-    assert_eq!(promoted_payload["visibilityState"], json!("visible"));
+        .expect("activated payload should be string");
+    let activated_payload: serde_json::Value =
+        serde_json::from_str(activated_payload).expect("activated payload should be valid json");
+    assert_eq!(activated_payload["innerWidth"], json!(640));
+    assert_eq!(activated_payload["innerHeight"], json!(360));
+    assert_eq!(activated_payload["dpr"], json!(1));
+    assert_eq!(activated_payload["screenWidth"], json!(800));
+    assert_eq!(activated_payload["screenHeight"], json!(600));
+    assert_eq!(activated_payload["maxTouchPoints"], json!(0));
+    assert_eq!(activated_payload["hasFocus"], json!(true));
+    assert_eq!(activated_payload["hidden"], json!(false));
+    assert_eq!(activated_payload["visibilityState"], json!("visible"));
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn same_context_background_session_can_stage_its_own_page_settings_before_promotion() {
+async fn same_context_background_session_can_stage_its_own_page_settings_before_activation() {
     let mut ctx = TestContext::new();
     load_bc_with_titled_page_async(
         &mut ctx,
@@ -3754,7 +3763,7 @@ async fn same_context_background_session_can_stage_its_own_page_settings_before_
         .conn
         .browser_context
         .as_ref()
-        .expect("promoted browser context");
+        .expect("activated browser context");
     assert_eq!(active.active_target_id(), Some(second_target_id.as_str()));
     assert!(
         active.active_page_target().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
@@ -3783,7 +3792,7 @@ async fn same_context_background_session_can_stage_its_own_page_settings_before_
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn same_context_background_session_can_clear_its_own_device_metrics_before_promotion() {
+async fn same_context_background_session_can_clear_its_own_device_metrics_before_activation() {
     let mut ctx = TestContext::new();
     load_bc_with_titled_page_async(
         &mut ctx,
@@ -3869,7 +3878,7 @@ async fn same_context_background_session_can_clear_its_own_device_metrics_before
                 .background_target(&second_target_id)
                 .filter(|target| target.has_non_default_session_state())
                 .is_none(),
-            "clearing staged device metrics back to default should fold away the parked state entry",
+            "clearing staged device metrics back to default should fold away the background state entry",
         );
     }
 
@@ -3929,25 +3938,25 @@ async fn same_context_background_session_can_clear_its_own_device_metrics_before
                 "expression": "JSON.stringify({ innerWidth: window.innerWidth, innerHeight: window.innerHeight, dpr: window.devicePixelRatio, screenWidth: screen.width, screenHeight: screen.height })"
             }
         })).await;
-    let promoted_eval = take_response_by_id(&mut ctx, 1041949139);
-    let promoted_payload = promoted_eval["result"]["result"]["value"]
+    let activated_eval = take_response_by_id(&mut ctx, 1041949139);
+    let activated_payload = activated_eval["result"]["result"]["value"]
         .as_str()
-        .expect("promoted payload should be string");
-    let promoted_payload: serde_json::Value =
-        serde_json::from_str(promoted_payload).expect("promoted payload should be valid json");
+        .expect("activated payload should be string");
+    let activated_payload: serde_json::Value =
+        serde_json::from_str(activated_payload).expect("activated payload should be valid json");
 
     assert_eq!(
-        promoted_payload, active_payload,
-        "promoted target should observe default metrics after clearing its staged override"
+        activated_payload, active_payload,
+        "activated target should observe default metrics after clearing its staged override"
     );
-    assert_ne!(promoted_payload["innerWidth"], json!(640));
-    assert_ne!(promoted_payload["innerHeight"], json!(360));
-    assert_ne!(promoted_payload["screenWidth"], json!(800));
-    assert_ne!(promoted_payload["screenHeight"], json!(600));
+    assert_ne!(activated_payload["innerWidth"], json!(640));
+    assert_ne!(activated_payload["innerHeight"], json!(360));
+    assert_ne!(activated_payload["screenWidth"], json!(800));
+    assert_ne!(activated_payload["screenHeight"], json!(600));
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn same_context_background_session_can_clear_its_own_touch_and_focus_before_promotion() {
+async fn same_context_background_session_can_clear_its_own_touch_and_focus_before_activation() {
     let mut ctx = TestContext::new();
     load_bc_with_titled_page_async(
         &mut ctx,
@@ -4046,7 +4055,7 @@ async fn same_context_background_session_can_clear_its_own_touch_and_focus_befor
                 .background_target(&second_target_id)
                 .filter(|target| target.has_non_default_session_state())
                 .is_none(),
-            "clearing staged touch/focus back to defaults should fold away the parked state entry",
+            "clearing staged touch/focus back to defaults should fold away the background state entry",
         );
     }
 
@@ -4106,18 +4115,18 @@ async fn same_context_background_session_can_clear_its_own_touch_and_focus_befor
                 "expression": "JSON.stringify({ maxTouchPoints: navigator.maxTouchPoints, hasFocusType: typeof document.hasFocus, hasFocusValue: typeof document.hasFocus === 'function' ? document.hasFocus() : null, hidden: document.hidden, visibilityState: document.visibilityState })"
             }
         })).await;
-    let promoted_eval = take_response_by_id(&mut ctx, 1041949151);
-    let promoted_payload = promoted_eval["result"]["result"]["value"]
+    let activated_eval = take_response_by_id(&mut ctx, 1041949151);
+    let activated_payload = activated_eval["result"]["result"]["value"]
         .as_str()
-        .expect("promoted payload should be string");
-    let promoted_payload: serde_json::Value =
-        serde_json::from_str(promoted_payload).expect("promoted payload should be valid json");
+        .expect("activated payload should be string");
+    let activated_payload: serde_json::Value =
+        serde_json::from_str(activated_payload).expect("activated payload should be valid json");
 
     assert_eq!(
-        promoted_payload, active_payload,
-        "promoted target should observe default touch/focus surfaces after clearing staged overrides"
+        activated_payload, active_payload,
+        "activated target should observe default touch/focus surfaces after clearing staged overrides"
     );
-    assert_ne!(promoted_payload["maxTouchPoints"], json!(1));
+    assert_ne!(activated_payload["maxTouchPoints"], json!(1));
     assert_eq!(active_payload["hasFocusType"], json!("function"));
     assert_eq!(active_payload["hasFocusValue"], json!(true));
     assert_eq!(active_payload["hidden"], json!(false));
@@ -4125,7 +4134,7 @@ async fn same_context_background_session_can_clear_its_own_touch_and_focus_befor
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn same_context_background_session_can_stage_its_own_script_execution_disabled_before_promotion()
+async fn same_context_background_session_can_stage_its_own_script_execution_disabled_before_activation()
  {
     let mut ctx = TestContext::new();
     load_bc_with_titled_page_async(
@@ -4189,7 +4198,7 @@ async fn same_context_background_session_can_stage_its_own_script_execution_disa
         let staged = active
             .background_target(&second_target_id)
             .filter(|target| target.has_non_default_session_state())
-            .expect("second target should have staged parked page session state");
+            .expect("second target should have staged background page session state");
         assert!(staged.script_execution_disabled);
     }
 
@@ -4242,7 +4251,7 @@ async fn same_context_background_session_can_stage_its_own_script_execution_disa
             "method": "Page.navigate",
             "sessionId": second_session_id,
             "params": {
-                "url": "data:text/html,<body><script>document.body.dataset.inlineRan='yes'; globalThis.__inlineRan = true;</script>promoted</body>"
+                "url": "data:text/html,<body><script>document.body.dataset.inlineRan='yes'; globalThis.__inlineRan = true;</script>activated</body>"
             }
         })).await;
     let _ = take_response_by_id(&mut ctx, 104194926);
@@ -4250,18 +4259,18 @@ async fn same_context_background_session_can_stage_its_own_script_execution_disa
         ctx.sent
             .iter()
             .all(|message| message.get("error").is_none()),
-        "unexpected protocol error during promoted navigation: {:?}",
+        "unexpected protocol error during activated navigation: {:?}",
         ctx.sent
     );
     ctx.take_all();
 
     {
-        let promoted = ctx
+        let activated = ctx
             .conn
             .browser_context
             .as_ref()
-            .expect("promoted browser context");
-        assert!(promoted.active_page_target().script_execution_disabled);
+            .expect("activated browser context");
+        assert!(activated.active_page_target().script_execution_disabled);
     }
 
     ctx.process_async(json!({
@@ -4272,19 +4281,19 @@ async fn same_context_background_session_can_stage_its_own_script_execution_disa
                 "expression": "JSON.stringify({ inlineRan: !!globalThis.__inlineRan, dataset: document.body.dataset.inlineRan || null, runtimeEvalStillWorks: 1 + 1 })"
             }
         })).await;
-    let promoted_eval = take_response_by_id(&mut ctx, 104194927);
-    let promoted_payload = promoted_eval["result"]["result"]["value"]
+    let activated_eval = take_response_by_id(&mut ctx, 104194927);
+    let activated_payload = activated_eval["result"]["result"]["value"]
         .as_str()
-        .expect("promoted payload should be string");
-    let promoted_payload: serde_json::Value =
-        serde_json::from_str(promoted_payload).expect("promoted payload should be valid json");
-    assert_eq!(promoted_payload["inlineRan"], json!(false));
-    assert_eq!(promoted_payload["dataset"], serde_json::Value::Null);
-    assert_eq!(promoted_payload["runtimeEvalStillWorks"], json!(2));
+        .expect("activated payload should be string");
+    let activated_payload: serde_json::Value =
+        serde_json::from_str(activated_payload).expect("activated payload should be valid json");
+    assert_eq!(activated_payload["inlineRan"], json!(false));
+    assert_eq!(activated_payload["dataset"], serde_json::Value::Null);
+    assert_eq!(activated_payload["runtimeEvalStillWorks"], json!(2));
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn same_context_background_session_can_reenable_its_own_script_execution_before_promotion() {
+async fn same_context_background_session_can_reenable_its_own_script_execution_before_activation() {
     let mut ctx = TestContext::new();
     load_bc_with_titled_page_async(
         &mut ctx,
@@ -4354,14 +4363,14 @@ async fn same_context_background_session_can_reenable_its_own_script_execution_b
             .expect("active browser context");
         assert!(!active.active_page_target().script_execution_disabled);
         // A completed renderer call may retain its monotonic correlation
-        // allocator in the parked session; only the effective setting must
+        // allocator in the background session; only the effective setting must
         // collapse back to the default.
         assert!(
             active
                 .background_target(&second_target_id)
                 .filter(|target| target.has_non_default_session_state())
                 .is_none_or(|state| !state.script_execution_disabled),
-            "script execution re-enable should clear the staged parked setting: {:#?}",
+            "script execution re-enable should clear the staged background setting: {:#?}",
             active
                 .background_target(&second_target_id)
                 .filter(|target| target.has_non_default_session_state())
@@ -4417,7 +4426,7 @@ async fn same_context_background_session_can_reenable_its_own_script_execution_b
             "method": "Page.navigate",
             "sessionId": second_session_id,
             "params": {
-                "url": "data:text/html,<body><script>document.body.dataset.inlineRan='yes'; globalThis.__inlineRan = true;</script>promoted</body>"
+                "url": "data:text/html,<body><script>document.body.dataset.inlineRan='yes'; globalThis.__inlineRan = true;</script>activated</body>"
             }
         })).await;
     let _ = take_response_by_id(&mut ctx, 1041949277);
@@ -4425,18 +4434,18 @@ async fn same_context_background_session_can_reenable_its_own_script_execution_b
         ctx.sent
             .iter()
             .all(|message| message.get("error").is_none()),
-        "unexpected protocol error during promoted navigation: {:?}",
+        "unexpected protocol error during activated navigation: {:?}",
         ctx.sent
     );
     ctx.take_all();
 
     {
-        let promoted = ctx
+        let activated = ctx
             .conn
             .browser_context
             .as_ref()
-            .expect("promoted browser context");
-        assert!(!promoted.active_page_target().script_execution_disabled);
+            .expect("activated browser context");
+        assert!(!activated.active_page_target().script_execution_disabled);
     }
 
     ctx.process_async(json!({
@@ -4447,19 +4456,19 @@ async fn same_context_background_session_can_reenable_its_own_script_execution_b
                 "expression": "JSON.stringify({ inlineRan: !!globalThis.__inlineRan, dataset: document.body.dataset.inlineRan || null, runtimeEvalStillWorks: 1 + 1 })"
             }
         })).await;
-    let promoted_eval = take_response_by_id(&mut ctx, 1041949278);
-    let promoted_payload = promoted_eval["result"]["result"]["value"]
+    let activated_eval = take_response_by_id(&mut ctx, 1041949278);
+    let activated_payload = activated_eval["result"]["result"]["value"]
         .as_str()
-        .expect("promoted payload should be string");
-    let promoted_payload: serde_json::Value =
-        serde_json::from_str(promoted_payload).expect("promoted payload should be valid json");
-    assert_eq!(promoted_payload["inlineRan"], json!(true));
-    assert_eq!(promoted_payload["dataset"], json!("yes"));
-    assert_eq!(promoted_payload["runtimeEvalStillWorks"], json!(2));
+        .expect("activated payload should be string");
+    let activated_payload: serde_json::Value =
+        serde_json::from_str(activated_payload).expect("activated payload should be valid json");
+    assert_eq!(activated_payload["inlineRan"], json!(true));
+    assert_eq!(activated_payload["dataset"], json!("yes"));
+    assert_eq!(activated_payload["runtimeEvalStillWorks"], json!(2));
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn same_context_background_session_can_stage_its_own_lifecycle_events_before_promotion() {
+async fn same_context_background_session_can_stage_its_own_lifecycle_events_before_activation() {
     let mut ctx = TestContext::new();
     load_bc_with_titled_page_async(
         &mut ctx,
@@ -4535,7 +4544,7 @@ async fn same_context_background_session_can_stage_its_own_lifecycle_events_befo
         let staged = active
             .background_target(&second_target_id)
             .filter(|target| target.has_non_default_session_state())
-            .expect("second target should have staged parked page session state");
+            .expect("second target should have staged background page session state");
         assert!(
             staged.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
@@ -4565,7 +4574,7 @@ async fn same_context_background_session_can_stage_its_own_lifecycle_events_befo
             .iter()
             .any(|message| message["method"] == json!("Page.lifecycleEvent")
                 && message["sessionId"] == json!("SID-active")),
-        "active target should not emit lifecycle events before promotion: {:?}",
+        "active target should not emit lifecycle events before activation: {:?}",
         ctx.sent
     );
     ctx.take_all();
@@ -4591,7 +4600,7 @@ async fn same_context_background_session_can_stage_its_own_lifecycle_events_befo
     let _ = take_response_by_id(&mut ctx, 104194936);
     crate::testing::wait_until_scheduler_message(
         &mut ctx,
-        "promoted target networkIdle lifecycle event",
+        "activated target networkIdle lifecycle event",
         |message| {
             message["method"] == json!("Page.lifecycleEvent")
                 && message["sessionId"] == json!(second_session_id)
@@ -4604,7 +4613,7 @@ async fn same_context_background_session_can_stage_its_own_lifecycle_events_befo
         ctx.sent
             .iter()
             .all(|message| message.get("error").is_none()),
-        "unexpected protocol error during promoted navigation: {:?}",
+        "unexpected protocol error during activated navigation: {:?}",
         ctx.sent
     );
 
@@ -4636,7 +4645,7 @@ async fn same_context_background_session_can_stage_its_own_lifecycle_events_befo
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn same_context_background_session_can_disable_its_own_lifecycle_events_before_promotion() {
+async fn same_context_background_session_can_disable_its_own_lifecycle_events_before_activation() {
     let mut ctx = TestContext::new();
     load_bc_with_titled_page_async(
         &mut ctx,
@@ -4715,7 +4724,7 @@ async fn same_context_background_session_can_disable_its_own_lifecycle_events_be
                 .background_target(&second_target_id)
                 .filter(|target| target.has_non_default_session_state())
                 .is_none(),
-            "lifecycle disable should collapse staged parked state back to default"
+            "lifecycle disable should collapse staged background state back to default"
         );
     }
 
@@ -4741,7 +4750,7 @@ async fn same_context_background_session_can_disable_its_own_lifecycle_events_be
             .iter()
             .any(|message| message["method"] == json!("Page.lifecycleEvent")
                 && message["sessionId"] == json!("SID-active")),
-        "active target should not emit lifecycle events before promotion: {:?}",
+        "active target should not emit lifecycle events before activation: {:?}",
         ctx.sent
     );
     ctx.take_all();
@@ -4769,7 +4778,7 @@ async fn same_context_background_session_can_disable_its_own_lifecycle_events_be
         ctx.sent
             .iter()
             .all(|message| message.get("error").is_none()),
-        "unexpected protocol error during promoted navigation: {:?}",
+        "unexpected protocol error during activated navigation: {:?}",
         ctx.sent
     );
     assert!(
@@ -4778,13 +4787,13 @@ async fn same_context_background_session_can_disable_its_own_lifecycle_events_be
                 && message["sessionId"] == json!(second_session_id)
                 && message["params"]["frameId"] == json!(second_target_id)
         }),
-        "disabled lifecycle events should not emit on first promoted navigation: {:?}",
+        "disabled lifecycle events should not emit on first activated navigation: {:?}",
         ctx.sent
     );
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn same_context_background_session_can_stage_its_own_runtime_enable_before_promotion() {
+async fn same_context_background_session_can_stage_its_own_runtime_enable_before_activation() {
     let mut ctx = TestContext::new();
     load_bc_with_titled_page_async(
         &mut ctx,
@@ -4852,7 +4861,7 @@ async fn same_context_background_session_can_stage_its_own_runtime_enable_before
         let staged = active
             .background_target(&second_target_id)
             .filter(|target| target.has_non_default_session_state())
-            .expect("second target should have staged parked page session state");
+            .expect("second target should have staged background page session state");
         assert!(
             staged.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .runtime_session_state
@@ -4881,7 +4890,7 @@ async fn same_context_background_session_can_stage_its_own_runtime_enable_before
         !ctx.sent.iter().any(|message| {
             message["sessionId"] == json!("SID-active") && is_runtime_context_event(message)
         }),
-        "active target should not emit runtime context events before promotion: {:?}",
+        "active target should not emit runtime context events before activation: {:?}",
         ctx.sent
     );
     ctx.take_all();
@@ -4909,17 +4918,17 @@ async fn same_context_background_session_can_stage_its_own_runtime_enable_before
         ctx.sent
             .iter()
             .all(|message| message.get("error").is_none()),
-        "unexpected protocol error during promoted navigation: {:?}",
+        "unexpected protocol error during activated navigation: {:?}",
         ctx.sent
     );
 
     let runtime_events = vec![
-        ctx.wait_for_scheduler_message("promoted Runtime context reset", |message| {
+        ctx.wait_for_scheduler_message("activated Runtime context reset", |message| {
             message["sessionId"] == json!(second_session_id)
                 && message["method"] == json!("Runtime.executionContextsCleared")
         })
         .await,
-        ctx.wait_for_scheduler_message("promoted Runtime default context", |message| {
+        ctx.wait_for_scheduler_message("activated Runtime default context", |message| {
             message["sessionId"] == json!(second_session_id)
                 && message["method"] == json!("Runtime.executionContextCreated")
         })
@@ -4928,7 +4937,7 @@ async fn same_context_background_session_can_stage_its_own_runtime_enable_before
     assert_eq!(
         runtime_events.len(),
         2,
-        "staged Runtime.enable should use the owner-safe native path after promotion: {runtime_events:?}"
+        "staged Runtime.enable should use the owner-safe native path after activation: {runtime_events:?}"
     );
     assert_eq!(
         runtime_events[0]["method"],
@@ -4949,7 +4958,8 @@ async fn same_context_background_session_can_stage_its_own_runtime_enable_before
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn same_context_loaded_background_session_runtime_enable_replays_context_without_promotion() {
+async fn same_context_loaded_background_session_runtime_enable_replays_context_without_activation()
+{
     let mut ctx = TestContext::new();
     load_bc_with_titled_page_async(
         &mut ctx,
@@ -5028,7 +5038,7 @@ async fn same_context_loaded_background_session_runtime_enable_replays_context_w
         assert!(
             bc.background_target(&second_target_id)
                 .is_some_and(|target| target.has_loaded_page()),
-            "second target should be parked with a loaded page before Runtime.enable"
+            "second target should be background with a loaded page before Runtime.enable"
         );
     }
 
@@ -5069,7 +5079,7 @@ async fn same_context_loaded_background_session_runtime_enable_replays_context_w
         assert_eq!(
             bc.active_target_id(),
             Some("TID-000000000RDA"),
-            "direct Runtime.enable should not promote the loaded background target"
+            "direct Runtime.enable should not activate the loaded background target"
         );
         assert!(
             bc.background_target(&second_target_id)
@@ -5083,7 +5093,7 @@ async fn same_context_loaded_background_session_runtime_enable_replays_context_w
         assert!(
             bc.background_target(&second_target_id)
                 .is_some_and(|target| target.has_loaded_page()),
-            "direct Runtime.enable should leave the loaded page parked"
+            "direct Runtime.enable should leave the loaded page background"
         );
     }
 }
@@ -5184,7 +5194,7 @@ async fn load_same_context_loaded_background_runtime_owner_async(
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn same_context_loaded_background_session_runtime_evaluate_reads_owner_page_without_promotion()
+async fn same_context_loaded_background_session_runtime_evaluate_reads_owner_page_without_activation()
  {
     let mut ctx = TestContext::new();
     let owner = load_same_context_loaded_background_runtime_owner_async(
@@ -5228,17 +5238,17 @@ async fn same_context_loaded_background_session_runtime_evaluate_reads_owner_pag
     assert_eq!(
         bc.active_target_id(),
         Some("TID-000000000REA"),
-        "direct Runtime.evaluate should not promote the loaded background target"
+        "direct Runtime.evaluate should not activate the loaded background target"
     );
     assert!(
         bc.background_target(&owner.target_id)
             .is_some_and(|target| target.has_loaded_page()),
-        "direct Runtime.evaluate should leave the owner page parked"
+        "direct Runtime.evaluate should leave the owner page background"
     );
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn same_context_loaded_background_window_open_self_navigates_owner_without_promotion() {
+async fn same_context_loaded_background_window_open_self_navigates_owner_without_activation() {
     let mut ctx = TestContext::new();
     let owner = load_same_context_loaded_background_runtime_owner_async(
         &mut ctx,
@@ -5288,11 +5298,11 @@ async fn same_context_loaded_background_window_open_self_navigates_owner_without
         assert_eq!(
             browser_context.active_target_id(),
             Some("TID-000000000PSA"),
-            "background _self navigation must not promote the background target"
+            "background _self navigation must not activate the background target"
         );
         let background_target = browser_context
             .background_target(&owner.target_id)
-            .expect("background target should remain parked");
+            .expect("background target should remain background");
         assert_eq!(
             background_target.target_url(),
             "data:text/html,<title>self</title><main>self target</main>"
@@ -5317,7 +5327,7 @@ async fn same_context_loaded_background_window_open_self_navigates_owner_without
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn same_context_named_popup_reuse_navigates_and_promotes_loaded_owner() {
+async fn same_context_named_popup_reuse_navigates_and_activates_loaded_owner() {
     let mut ctx = TestContext::new();
     tokio::task::LocalSet::new()
         .run_until(async {
@@ -5396,7 +5406,7 @@ async fn same_context_named_popup_reuse_navigates_and_promotes_loaded_owner() {
         assert_eq!(
             browser_context.active_target_id(),
             Some(owner.target_id.as_str()),
-            "ordinary window.open should promote its reused named target"
+            "ordinary window.open should activate its reused named target"
         );
         assert_eq!(
             browser_context.target_url(),
@@ -5410,7 +5420,7 @@ async fn same_context_named_popup_reuse_navigates_and_promotes_loaded_owner() {
             browser_context
                 .background_target("TID-000000000NPA")
                 .is_some(),
-            "foreground named-target reuse should demote the previous active target"
+            "foreground named-target reuse should deactivate the previous active target"
         );
     }
 
@@ -5430,7 +5440,7 @@ async fn same_context_named_popup_reuse_navigates_and_promotes_loaded_owner() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn same_context_loaded_background_session_runtime_call_function_on_uses_owner_object_without_promotion()
+async fn same_context_loaded_background_session_runtime_call_function_on_uses_owner_object_without_activation()
  {
     let mut ctx = TestContext::new();
     let owner = load_same_context_loaded_background_runtime_owner_async(
@@ -5480,18 +5490,18 @@ async fn same_context_loaded_background_session_runtime_call_function_on_uses_ow
     assert_eq!(
         bc.active_target_id(),
         Some("TID-000000000RCA"),
-        "direct Runtime.callFunctionOn should not promote the loaded background target"
+        "direct Runtime.callFunctionOn should not activate the loaded background target"
     );
     assert!(
         bc.background_target(&owner.target_id)
             .is_some_and(|target| target.has_loaded_page()),
-        "direct Runtime.callFunctionOn should leave the owner page parked"
+        "direct Runtime.callFunctionOn should leave the owner page background"
     );
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn same_context_loaded_background_session_runtime_await_promise_uses_owner_without_promotion()
-{
+async fn same_context_loaded_background_session_runtime_await_promise_uses_owner_without_activation()
+ {
     let mut ctx = TestContext::new();
     let owner = load_same_context_loaded_background_runtime_owner_async(
         &mut ctx,
@@ -5556,12 +5566,12 @@ async fn same_context_loaded_background_session_runtime_await_promise_uses_owner
     assert_eq!(
         bc.active_target_id(),
         Some("TID-000000000RWA"),
-        "direct Runtime awaitPromise should not promote the loaded background target"
+        "direct Runtime awaitPromise should not activate the loaded background target"
     );
     assert!(
         bc.background_target(&owner.target_id)
             .is_some_and(|target| target.has_loaded_page()),
-        "direct Runtime awaitPromise should leave the owner page parked"
+        "direct Runtime awaitPromise should leave the owner page background"
     );
 }
 
@@ -5695,17 +5705,17 @@ async fn same_context_background_pending_await_survives_active_target_switch() {
     assert_eq!(
         bc.active_target_id(),
         Some("TID-000000000RAS"),
-        "pending background awaitPromise completion must not promote the owner target"
+        "pending background awaitPromise completion must not activate the owner target"
     );
     assert!(
         bc.background_target(&owner.target_id)
             .is_some_and(|target| target.has_loaded_page()),
-        "pending background awaitPromise completion should leave the owner page parked"
+        "pending background awaitPromise completion should leave the owner page background"
     );
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn same_context_background_session_can_disable_its_own_runtime_before_promotion() {
+async fn same_context_background_session_can_disable_its_own_runtime_before_activation() {
     let mut ctx = TestContext::new();
     load_bc_with_titled_page_async(
         &mut ctx,
@@ -5801,7 +5811,7 @@ async fn same_context_background_session_can_disable_its_own_runtime_before_prom
         !ctx.sent.iter().any(|message| {
             message["sessionId"] == json!("SID-active") && is_runtime_context_event(message)
         }),
-        "active target should not emit runtime context events before promotion: {:?}",
+        "active target should not emit runtime context events before activation: {:?}",
         ctx.sent
     );
     ctx.take_all();
@@ -5829,7 +5839,7 @@ async fn same_context_background_session_can_disable_its_own_runtime_before_prom
         ctx.sent
             .iter()
             .all(|message| message.get("error").is_none()),
-        "unexpected protocol error during promoted navigation: {:?}",
+        "unexpected protocol error during activated navigation: {:?}",
         ctx.sent
     );
     assert!(
@@ -5841,13 +5851,13 @@ async fn same_context_background_session_can_disable_its_own_runtime_before_prom
                         | Some("Runtime.executionContextCreated")
                 )
         }),
-        "disabled runtime should not emit execution context events on first promoted navigation: {:?}",
+        "disabled runtime should not emit execution context events on first activated navigation: {:?}",
         ctx.sent
     );
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn same_context_background_session_can_stage_its_own_inspector_enable_before_promotion() {
+async fn same_context_background_session_can_stage_its_own_inspector_enable_before_activation() {
     let mut ctx = TestContext::new();
     load_bc_with_titled_page_async(
         &mut ctx,
@@ -5929,7 +5939,7 @@ async fn same_context_background_session_can_stage_its_own_inspector_enable_befo
         let staged = active
             .background_target(&second_target_id)
             .filter(|target| target.has_non_default_session_state())
-            .expect("second target should have staged parked page session state");
+            .expect("second target should have staged background page session state");
         assert!(
             staged.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .runtime_session_state
@@ -5982,7 +5992,7 @@ async fn same_context_background_session_can_stage_its_own_inspector_enable_befo
             message["method"] == json!("Inspector.targetReloadedAfterCrash")
                 && message["sessionId"] == json!(second_session_id)
         }),
-        "promoted target should emit crash-reload event when staged inspector is enabled"
+        "activated target should emit crash-reload event when staged inspector is enabled"
     );
     assert!(
         !ctx.conn
@@ -5997,7 +6007,7 @@ async fn same_context_background_session_can_stage_its_own_inspector_enable_befo
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn same_context_background_session_can_disable_its_own_inspector_before_promotion() {
+async fn same_context_background_session_can_disable_its_own_inspector_before_activation() {
     let mut ctx = TestContext::new();
     load_bc_with_titled_page_async(
         &mut ctx,
@@ -6074,7 +6084,7 @@ async fn same_context_background_session_can_disable_its_own_inspector_before_pr
                 .background_target(&second_target_id)
                 .filter(|target| target.has_non_default_session_state())
                 .is_none(),
-            "inspector disable should collapse staged parked state back to default"
+            "inspector disable should collapse staged background state back to default"
         );
     }
 
@@ -6113,7 +6123,7 @@ async fn same_context_background_session_can_disable_its_own_inspector_before_pr
                 Some("Inspector.targetReloadedAfterCrash") | Some("Inspector.targetCrashed")
             ) && message["sessionId"] == json!(second_session_id)
         }),
-        "disabled inspector should not emit crash-related events on first promoted navigation"
+        "disabled inspector should not emit crash-related events on first activated navigation"
     );
     assert!(
         !ctx.conn
@@ -6129,7 +6139,7 @@ async fn same_context_background_session_can_disable_its_own_inspector_before_pr
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn same_context_background_session_can_stage_its_own_css_enable_before_promotion() {
+async fn same_context_background_session_can_stage_its_own_css_enable_before_activation() {
     let mut ctx = TestContext::new();
     load_bc_with_titled_page_async(
         &mut ctx,
@@ -6191,7 +6201,7 @@ async fn same_context_background_session_can_stage_its_own_css_enable_before_pro
         let staged = active
             .background_target(&second_target_id)
             .filter(|target| target.has_non_default_session_state())
-            .expect("second target should have staged parked page session state");
+            .expect("second target should have staged background page session state");
         assert!(staged.css_enabled);
     }
 
@@ -6208,7 +6218,7 @@ async fn same_context_background_session_can_stage_its_own_css_enable_before_pro
             .conn
             .browser_context
             .as_ref()
-            .expect("promoted browser context");
+            .expect("activated browser context");
         assert_eq!(active.active_target_id(), Some(second_target_id.as_str()));
         assert!(active.active_page_target().css_enabled);
     }
@@ -6226,7 +6236,7 @@ async fn same_context_background_session_can_stage_its_own_css_enable_before_pro
         ctx.sent
             .iter()
             .all(|message| message.get("error").is_none()),
-        "unexpected protocol error during promoted navigation: {:?}",
+        "unexpected protocol error during activated navigation: {:?}",
         ctx.sent
     );
     assert!(
@@ -6240,7 +6250,7 @@ async fn same_context_background_session_can_stage_its_own_css_enable_before_pro
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn same_context_background_session_can_disable_its_own_css_before_promotion() {
+async fn same_context_background_session_can_disable_its_own_css_before_activation() {
     let mut ctx = TestContext::new();
     load_bc_with_titled_page_async(
         &mut ctx,
@@ -6312,7 +6322,7 @@ async fn same_context_background_session_can_disable_its_own_css_before_promotio
                 .background_target(&second_target_id)
                 .filter(|target| target.has_non_default_session_state())
                 .is_none(),
-            "css disable should collapse staged parked state back to default"
+            "css disable should collapse staged background state back to default"
         );
     }
 
@@ -6329,7 +6339,7 @@ async fn same_context_background_session_can_disable_its_own_css_before_promotio
             .conn
             .browser_context
             .as_ref()
-            .expect("promoted browser context");
+            .expect("activated browser context");
         assert_eq!(active.active_target_id(), Some(second_target_id.as_str()));
         assert!(!active.active_page_target().css_enabled);
     }
@@ -6347,7 +6357,7 @@ async fn same_context_background_session_can_disable_its_own_css_before_promotio
         ctx.sent
             .iter()
             .all(|message| message.get("error").is_none()),
-        "unexpected protocol error during promoted navigation: {:?}",
+        "unexpected protocol error during activated navigation: {:?}",
         ctx.sent
     );
     assert!(
@@ -6361,7 +6371,7 @@ async fn same_context_background_session_can_disable_its_own_css_before_promotio
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn same_context_background_session_can_stage_its_own_fetch_enable_before_promotion() {
+async fn same_context_background_session_can_stage_its_own_fetch_enable_before_activation() {
     async fn page() -> impl axum::response::IntoResponse {
         (
             [(axum::http::header::CONTENT_TYPE.as_str(), "text/html")],
@@ -6458,7 +6468,7 @@ async fn same_context_background_session_can_stage_its_own_fetch_enable_before_p
         let staged = active
             .background_target(&second_target_id)
             .filter(|target| target.has_non_default_session_state())
-            .expect("second target should have staged parked page session state");
+            .expect("second target should have staged background page session state");
         assert!(staged.fetch_owner.config_snapshot().is_enabled());
         assert_eq!(staged.fetch_owner.config_snapshot().patterns().len(), 1);
         assert_eq!(
@@ -6537,7 +6547,7 @@ async fn same_context_background_session_can_stage_its_own_fetch_enable_before_p
         ctx.sent
             .iter()
             .all(|message| message.get("error").is_none()),
-        "unexpected protocol error during promoted navigation: {:?}",
+        "unexpected protocol error during activated navigation: {:?}",
         ctx.sent
     );
 
@@ -6545,11 +6555,11 @@ async fn same_context_background_session_can_stage_its_own_fetch_enable_before_p
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn same_context_background_fetch_continue_request_keeps_target_parked() {
+async fn same_context_background_fetch_continue_request_keeps_target_background() {
     async fn page() -> impl axum::response::IntoResponse {
         (
             [(axum::http::header::CONTENT_TYPE.as_str(), "text/html")],
-            "<!doctype html><html><body>fetch-continue-parked</body></html>",
+            "<!doctype html><html><body>fetch-continue-background</body></html>",
         )
     }
 
@@ -6653,7 +6663,7 @@ async fn same_context_background_fetch_continue_request_keeps_target_parked() {
                 .fetch_owner
                 .pending_state()
                 .has_pending_fetch_navigation(),
-            "background fetch pause should stay parked before continueRequest"
+            "background fetch pause should stay background before continueRequest"
         );
     }
 
@@ -6681,7 +6691,7 @@ async fn same_context_background_fetch_continue_request_keeps_target_parked() {
             active
                 .background_target(&second_target_id)
                 .is_some_and(|target| target.has_loaded_page()),
-            "continued background navigation should commit to parked owner"
+            "continued background navigation should commit to background owner"
         );
     }
 
@@ -6689,7 +6699,7 @@ async fn same_context_background_fetch_continue_request_keeps_target_parked() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn same_context_background_session_can_stage_its_own_fetch_auth_handling_before_promotion() {
+async fn same_context_background_session_can_stage_its_own_fetch_auth_handling_before_activation() {
     async fn page() -> impl axum::response::IntoResponse {
         (
             [(axum::http::header::CONTENT_TYPE.as_str(), "text/html")],
@@ -6796,7 +6806,7 @@ async fn same_context_background_session_can_stage_its_own_fetch_auth_handling_b
         let staged = active
             .background_target(&second_target_id)
             .filter(|target| target.has_non_default_session_state())
-            .expect("second target should have staged parked page session state");
+            .expect("second target should have staged background page session state");
         assert!(staged.fetch_owner.config_snapshot().is_enabled());
         assert!(staged.fetch_owner.config_snapshot().handle_auth_requests());
     }
@@ -6888,7 +6898,7 @@ async fn same_context_background_session_can_stage_its_own_fetch_auth_handling_b
         ctx.sent
             .iter()
             .all(|message| message.get("error").is_none()),
-        "unexpected protocol error during promoted auth navigation: {:?}",
+        "unexpected protocol error during activated auth navigation: {:?}",
         ctx.sent
     );
 
@@ -6896,7 +6906,7 @@ async fn same_context_background_session_can_stage_its_own_fetch_auth_handling_b
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn same_context_background_session_can_disable_its_own_fetch_before_promotion() {
+async fn same_context_background_session_can_disable_its_own_fetch_before_activation() {
     async fn page() -> impl axum::response::IntoResponse {
         (
             [(axum::http::header::CONTENT_TYPE.as_str(), "text/html")],
@@ -7003,7 +7013,7 @@ async fn same_context_background_session_can_disable_its_own_fetch_before_promot
                 .background_target(&second_target_id)
                 .filter(|target| target.has_non_default_session_state())
                 .is_none(),
-            "fetch disable should collapse staged parked state back to default"
+            "fetch disable should collapse staged background state back to default"
         );
     }
 
@@ -7052,14 +7062,14 @@ async fn same_context_background_session_can_disable_its_own_fetch_before_promot
         ctx.sent
             .iter()
             .all(|message| message.get("error").is_none()),
-        "unexpected protocol error during promoted navigation: {:?}",
+        "unexpected protocol error during activated navigation: {:?}",
         ctx.sent
     );
     assert!(
         !ctx.sent
             .iter()
             .any(|message| message["method"] == json!("Fetch.requestPaused")),
-        "disabled fetch should not pause first promoted navigation: {:?}",
+        "disabled fetch should not pause first activated navigation: {:?}",
         ctx.sent
     );
 
@@ -7067,7 +7077,7 @@ async fn same_context_background_session_can_disable_its_own_fetch_before_promot
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn same_context_background_session_can_stage_its_own_network_enable_before_promotion() {
+async fn same_context_background_session_can_stage_its_own_network_enable_before_activation() {
     async fn page() -> impl axum::response::IntoResponse {
         (
             [(axum::http::header::CONTENT_TYPE.as_str(), "text/html")],
@@ -7153,7 +7163,7 @@ async fn same_context_background_session_can_stage_its_own_network_enable_before
         let staged = active
             .background_target(&second_target_id)
             .filter(|target| target.has_non_default_session_state())
-            .expect("second target should have staged parked page session state");
+            .expect("second target should have staged background page session state");
         assert!(staged.runtime_slot.primary_network_events_enabled());
     }
 
@@ -7176,7 +7186,7 @@ async fn same_context_background_session_can_stage_its_own_network_enable_before
         !ctx.sent
             .iter()
             .any(|message| message["method"] == json!("Network.requestWillBeSent")),
-        "active target should not emit network events before promotion: {:?}",
+        "active target should not emit network events before activation: {:?}",
         ctx.sent
     );
     ctx.take_all();
@@ -7204,7 +7214,7 @@ async fn same_context_background_session_can_stage_its_own_network_enable_before
         ctx.sent
             .iter()
             .all(|message| message.get("error").is_none()),
-        "unexpected protocol error during promoted navigation: {:?}",
+        "unexpected protocol error during activated navigation: {:?}",
         ctx.sent
     );
 
@@ -7212,7 +7222,7 @@ async fn same_context_background_session_can_stage_its_own_network_enable_before
         &mut ctx,
         &second_session_id,
         &page_url,
-        "promoted session main-document network completion",
+        "activated session main-document network completion",
     )
     .await;
     let emitted = ctx.take_all();
@@ -7224,7 +7234,7 @@ async fn same_context_background_session_can_stage_its_own_network_enable_before
                 && message["params"]["request"]["url"] == json!(page_url)
         })
         .cloned()
-        .expect("promoted target should emit requestWillBeSent");
+        .expect("activated target should emit requestWillBeSent");
     let request_id = request["params"]["requestId"]
         .as_str()
         .expect("request id")
@@ -7239,7 +7249,7 @@ async fn same_context_background_session_can_stage_its_own_network_enable_before
                 && message["params"]["requestId"] == json!(request_id)
         })
         .cloned()
-        .expect("promoted target should emit responseReceived");
+        .expect("activated target should emit responseReceived");
     assert_eq!(response["params"]["response"]["url"], json!(page_url));
     assert_eq!(response["params"]["response"]["status"], json!(200));
 
@@ -7253,7 +7263,7 @@ async fn same_context_background_session_can_stage_its_own_network_enable_before
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn same_context_background_session_can_disable_its_own_network_before_promotion() {
+async fn same_context_background_session_can_disable_its_own_network_before_activation() {
     async fn page() -> impl axum::response::IntoResponse {
         (
             [(axum::http::header::CONTENT_TYPE.as_str(), "text/html")],
@@ -7349,7 +7359,7 @@ async fn same_context_background_session_can_disable_its_own_network_before_prom
                 .background_target(&second_target_id)
                 .filter(|target| target.has_non_default_session_state())
                 .is_none(),
-            "network disable should collapse staged parked state back to default"
+            "network disable should collapse staged background state back to default"
         );
         assert!(
             active
@@ -7357,7 +7367,7 @@ async fn same_context_background_session_can_disable_its_own_network_before_prom
                 .expect("background target")
                 .runtime_slot
                 .network_artifacts_are_default_for_test(),
-            "network disable should clear staged parked network artifacts"
+            "network disable should clear staged background network artifacts"
         );
     }
 
@@ -7385,7 +7395,7 @@ async fn same_context_background_session_can_disable_its_own_network_before_prom
                     | Some("Network.loadingFinished")
             )
         }),
-        "active target should not emit network events before promotion: {:?}",
+        "active target should not emit network events before activation: {:?}",
         ctx.sent
     );
     ctx.take_all();
@@ -7411,7 +7421,7 @@ async fn same_context_background_session_can_disable_its_own_network_before_prom
         ctx.sent
             .iter()
             .all(|message| message.get("error").is_none()),
-        "unexpected protocol error during promoted navigation: {:?}",
+        "unexpected protocol error during activated navigation: {:?}",
         ctx.sent
     );
     assert!(
@@ -7424,7 +7434,7 @@ async fn same_context_background_session_can_disable_its_own_network_before_prom
                         | Some("Network.loadingFinished")
                 )
         }),
-        "disabled network should not emit first-navigation network events after promotion: {:?}",
+        "disabled network should not emit first-navigation network events after activation: {:?}",
         ctx.sent
     );
 
@@ -7432,7 +7442,7 @@ async fn same_context_background_session_can_disable_its_own_network_before_prom
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn same_context_background_session_can_stage_its_own_cache_and_service_worker_policy_before_promotion()
+async fn same_context_background_session_can_stage_its_own_cache_and_service_worker_policy_before_activation()
  {
     async fn page() -> impl axum::response::IntoResponse {
         (
@@ -7556,7 +7566,7 @@ async fn same_context_background_session_can_stage_its_own_cache_and_service_wor
         let staged = active
             .background_target(&second_target_id)
             .filter(|target| target.has_non_default_session_state())
-            .expect("second target should have staged parked page session state");
+            .expect("second target should have staged background page session state");
         assert!(staged.runtime_slot.primary_network_events_enabled());
         assert!(staged.effective_policy().cache_disabled());
         assert!(staged.effective_policy().bypass_service_worker());
@@ -7581,7 +7591,7 @@ async fn same_context_background_session_can_stage_its_own_cache_and_service_wor
         !ctx.sent
             .iter()
             .any(|message| message["method"] == json!("Network.requestWillBeSent")),
-        "active target should not emit network events before promotion: {:?}",
+        "active target should not emit network events before activation: {:?}",
         ctx.sent
     );
     ctx.take_all();
@@ -7600,7 +7610,7 @@ async fn same_context_background_session_can_stage_its_own_cache_and_service_wor
             .conn
             .browser_context
             .as_ref()
-            .expect("promoted browser context");
+            .expect("activated browser context");
         assert_eq!(bc.active_target_id(), Some(second_target_id.as_str()));
         assert!(
             bc.active_page_target()
@@ -7629,7 +7639,7 @@ async fn same_context_background_session_can_stage_its_own_cache_and_service_wor
         ctx.sent
             .iter()
             .all(|message| message.get("error").is_none()),
-        "unexpected protocol error during promoted navigation: {:?}",
+        "unexpected protocol error during activated navigation: {:?}",
         ctx.sent
     );
 
@@ -7637,7 +7647,7 @@ async fn same_context_background_session_can_stage_its_own_cache_and_service_wor
         &mut ctx,
         &second_session_id,
         &page_url,
-        "promoted session main-document completion with staged network policy",
+        "activated session main-document completion with staged network policy",
     )
     .await;
     let emitted = ctx.take_all();
@@ -7649,7 +7659,7 @@ async fn same_context_background_session_can_stage_its_own_cache_and_service_wor
                 && message["params"]["request"]["url"] == json!(page_url)
         })
         .cloned()
-        .expect("promoted target should emit requestWillBeSent");
+        .expect("activated target should emit requestWillBeSent");
     let request_id = request["params"]["requestId"]
         .as_str()
         .expect("request id")
@@ -7670,7 +7680,7 @@ async fn same_context_background_session_can_stage_its_own_cache_and_service_wor
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn same_context_background_session_can_disable_its_own_cache_and_service_worker_policy_before_promotion()
+async fn same_context_background_session_can_disable_its_own_cache_and_service_worker_policy_before_activation()
  {
     async fn page() -> impl axum::response::IntoResponse {
         (
@@ -7812,7 +7822,7 @@ async fn same_context_background_session_can_disable_its_own_cache_and_service_w
         let staged = active
             .background_target(&second_target_id)
             .filter(|target| target.has_non_default_session_state())
-            .expect("second target should have staged parked page session state");
+            .expect("second target should have staged background page session state");
         assert!(staged.runtime_slot.primary_network_events_enabled());
         assert!(!staged.effective_policy().cache_disabled());
         assert!(!staged.effective_policy().bypass_service_worker());
@@ -7837,7 +7847,7 @@ async fn same_context_background_session_can_disable_its_own_cache_and_service_w
         !ctx.sent
             .iter()
             .any(|message| message["method"] == json!("Network.requestWillBeSent")),
-        "active target should not emit network events before promotion: {:?}",
+        "active target should not emit network events before activation: {:?}",
         ctx.sent
     );
     ctx.take_all();
@@ -7856,7 +7866,7 @@ async fn same_context_background_session_can_disable_its_own_cache_and_service_w
             .conn
             .browser_context
             .as_ref()
-            .expect("promoted browser context");
+            .expect("activated browser context");
         assert_eq!(bc.active_target_id(), Some(second_target_id.as_str()));
         assert!(
             bc.active_page_target()
@@ -7885,7 +7895,7 @@ async fn same_context_background_session_can_disable_its_own_cache_and_service_w
         ctx.sent
             .iter()
             .all(|message| message.get("error").is_none()),
-        "unexpected protocol error during promoted navigation: {:?}",
+        "unexpected protocol error during activated navigation: {:?}",
         ctx.sent
     );
 
@@ -7893,7 +7903,7 @@ async fn same_context_background_session_can_disable_its_own_cache_and_service_w
         &mut ctx,
         &second_session_id,
         &page_url,
-        "promoted session main-document completion after staged policy reset",
+        "activated session main-document completion after staged policy reset",
     )
     .await;
     let emitted = ctx.take_all();
@@ -7905,7 +7915,7 @@ async fn same_context_background_session_can_disable_its_own_cache_and_service_w
                 && message["params"]["request"]["url"] == json!(page_url)
         })
         .cloned()
-        .expect("promoted target should still emit requestWillBeSent");
+        .expect("activated target should still emit requestWillBeSent");
     let request_id = request["params"]["requestId"]
         .as_str()
         .expect("request id")

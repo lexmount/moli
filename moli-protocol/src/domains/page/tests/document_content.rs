@@ -185,7 +185,7 @@ async fn set_document_content_is_observable_from_another_attached_session() {
             .browser_context
             .as_mut()
             .expect("browser context")
-            .assign_auxiliary_session_to_target("TID-1", "SID-2".to_owned())
+            .assign_attached_session_to_target("TID-1", "SID-2".to_owned())
     );
 
     for (id, session_id, method, params) in [
@@ -273,7 +273,7 @@ async fn set_document_content_is_observable_from_another_attached_session() {
 
     wait_until_scheduler_message(
         &mut ctx,
-        "setDocumentContent load event on the auxiliary session",
+        "setDocumentContent load event on the attached session",
         |message| {
             message["method"] == json!("Page.loadEventFired")
                 && message["sessionId"] == json!("SID-2")
@@ -285,7 +285,7 @@ async fn set_document_content_is_observable_from_another_attached_session() {
             message["method"] == json!("Page.loadEventFired")
                 && message["sessionId"] == json!("SID-1")
         }),
-        "setDocumentContent lifecycle should fan out to the primary and auxiliary sessions: {:?}",
+        "setDocumentContent lifecycle should fan out to the primary and attached sessions: {:?}",
         ctx.sent
     );
     assert!(

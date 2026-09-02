@@ -1675,7 +1675,7 @@ async fn websocket_cdp_active_js_interrupt_preserves_main_and_io_lanes_across_se
     )
     .await;
 
-    let auxiliary_attach = send_cdp_command(
+    let attached_session_response = send_cdp_command(
         &mut socket,
         6,
         "Target.attachToTarget",
@@ -1683,16 +1683,16 @@ async fn websocket_cdp_active_js_interrupt_preserves_main_and_io_lanes_across_se
         json!({ "targetId": primary.target_id, "flatten": true }),
     )
     .await;
-    let auxiliary_session_id = auxiliary_attach
+    let attached_session_id = attached_session_response
         .iter()
         .find(|message| message["id"] == json!(6_u64))
         .and_then(|message| message["result"]["sessionId"].as_str())
-        .expect("auxiliary session id")
+        .expect("attached session id")
         .to_owned();
     for (id, method, session_id) in [
         (7, "Debugger.enable", primary.session_id.as_str()),
-        (8, "Runtime.enable", auxiliary_session_id.as_str()),
-        (9, "Debugger.enable", auxiliary_session_id.as_str()),
+        (8, "Runtime.enable", attached_session_id.as_str()),
+        (9, "Debugger.enable", attached_session_id.as_str()),
     ] {
         let enabled = send_cdp_command(&mut socket, id, method, Some(session_id), json!({})).await;
         assert!(
@@ -1745,7 +1745,7 @@ for (;;) {}"#;
         &mut socket,
         12,
         "Runtime.evaluate",
-        Some(&auxiliary_session_id),
+        Some(&attached_session_id),
         json!({
             "expression": "(globalThis.__moliMainLane ??= []).push('m1')",
             "returnByValue": true,
@@ -1756,7 +1756,7 @@ for (;;) {}"#;
         &mut socket,
         13,
         "Runtime.evaluate",
-        Some(&auxiliary_session_id),
+        Some(&attached_session_id),
         json!({
             "expression": "globalThis.__moliMainLane.push('m2')",
             "returnByValue": true,
@@ -1772,7 +1772,7 @@ for (;;) {}"#;
          {observed:#?}"
     );
 
-    // All three commands use the auxiliary session's IO lane. The two source
+    // All three commands use the attached session's IO lane. The two source
     // lookups prove FIFO before terminateExecution releases the Main owner.
     for (id, method, params) in [
         (
@@ -1787,7 +1787,7 @@ for (;;) {}"#;
         ),
         (16, "Runtime.terminateExecution", json!({})),
     ] {
-        send_cdp_command_without_wait(&mut socket, id, method, Some(&auxiliary_session_id), params)
+        send_cdp_command_without_wait(&mut socket, id, method, Some(&attached_session_id), params)
             .await;
     }
 
@@ -1826,7 +1826,7 @@ for (;;) {}"#;
         assert_eq!(
             response["result"]["scriptSource"],
             json!(busy_source),
-            "IO source lookup {id} must reach the live auxiliary Inspector session: \
+            "IO source lookup {id} must reach the live attached Inspector session: \
              {observed:#?}"
         );
     }
@@ -1842,7 +1842,7 @@ for (;;) {}"#;
     );
     assert!(
         position(16) < position(12) && position(12) < position(13),
-        "IO may overtake Main, but the auxiliary Main lane must remain FIFO: {observed:#?}"
+        "IO may overtake Main, but the attached Main lane must remain FIFO: {observed:#?}"
     );
     assert_eq!(
         observed
@@ -5485,7 +5485,7 @@ async fn websocket_cdp_debugger_step_out_responds_before_resumed_and_caller_paus
 }
 
 #[tokio::test]
-async fn websocket_cdp_debugger_pause_allows_auxiliary_main_thread_commands() {
+async fn websocket_cdp_debugger_pause_allows_attached_main_thread_commands() {
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
     let (mut socket, _) = connect_async(format!(
         "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
@@ -5516,7 +5516,7 @@ async fn websocket_cdp_debugger_pause_allows_auxiliary_main_thread_commands() {
         "Debugger.enable should complete before the pause witness: {enabled:#?}"
     );
 
-    let auxiliary_attach = send_cdp_command(
+    let attached_session_response = send_cdp_command(
         &mut socket,
         5,
         "Target.attachToTarget",
@@ -5524,31 +5524,31 @@ async fn websocket_cdp_debugger_pause_allows_auxiliary_main_thread_commands() {
         json!({ "targetId": session.target_id, "flatten": true }),
     )
     .await;
-    let auxiliary_session_id = auxiliary_attach
+    let attached_session_id = attached_session_response
         .iter()
         .find(|message| message["id"] == json!(5_u64))
         .and_then(|message| message["result"]["sessionId"].as_str())
-        .expect("auxiliary session id")
+        .expect("attached session id")
         .to_owned();
-    let auxiliary_enabled = send_cdp_command(
+    let attached_enabled = send_cdp_command(
         &mut socket,
         50,
         "Debugger.enable",
-        Some(&auxiliary_session_id),
+        Some(&attached_session_id),
         json!({}),
     )
     .await;
     assert!(
-        auxiliary_enabled
+        attached_enabled
             .iter()
             .any(|message| message["id"] == json!(50_u64) && message.get("error").is_none()),
-        "auxiliary Debugger.enable should create its V8 inspector session: {auxiliary_enabled:#?}"
+        "attached Debugger.enable should create its V8 inspector session: {attached_enabled:#?}"
     );
     let isolated_world = send_cdp_command(
         &mut socket,
         49,
         "Page.createIsolatedWorld",
-        Some(&auxiliary_session_id),
+        Some(&attached_session_id),
         json!({
             "frameId": session.target_id,
             "worldName": "nested-main-owner-boundary",
@@ -5589,78 +5589,78 @@ async fn websocket_cdp_debugger_pause_allows_auxiliary_main_thread_commands() {
         "Runtime.evaluate must remain pending while the renderer owner is paused: {observed:#?}"
     );
     if observed.iter().all(|message| {
-        message["sessionId"].as_str() != Some(auxiliary_session_id.as_str())
+        message["sessionId"].as_str() != Some(attached_session_id.as_str())
             || message["method"] != json!("Debugger.paused")
     }) {
         observed.extend(
             recv_until_match(&mut socket, |message| {
-                message["sessionId"].as_str() == Some(auxiliary_session_id.as_str())
+                message["sessionId"].as_str() == Some(attached_session_id.as_str())
                     && message["method"] == json!("Debugger.paused")
             })
             .await,
         );
     }
-    let auxiliary_call_frame_id = observed
+    let attached_call_frame_id = observed
         .iter()
         .find(|message| {
-            message["sessionId"].as_str() == Some(auxiliary_session_id.as_str())
+            message["sessionId"].as_str() == Some(attached_session_id.as_str())
                 && message["method"] == json!("Debugger.paused")
         })
         .and_then(|message| message["params"]["callFrames"][0]["callFrameId"].as_str())
-        .expect("auxiliary Debugger.paused callFrameId")
+        .expect("attached Debugger.paused callFrameId")
         .to_owned();
     // Chromium's normal debugger loop pumps its main-thread DevTools receiver.
-    // This command must therefore reach the auxiliary V8 session even though
+    // This command must therefore reach the attached V8 session even though
     // the ordinary Page owner turn that entered the pause has not returned.
-    let auxiliary_evaluate = tokio::time::timeout(
+    let attached_evaluate = tokio::time::timeout(
         Duration::from_secs(5),
         send_cdp_command(
             &mut socket,
             7,
             "Runtime.evaluate",
-            Some(&auxiliary_session_id),
+            Some(&attached_session_id),
             json!({ "expression": "21 * 2", "returnByValue": true }),
         ),
     )
     .await
-    .expect("auxiliary Main Runtime.evaluate must complete in the debugger loop");
+    .expect("attached Main Runtime.evaluate must complete in the debugger loop");
     assert!(
-        auxiliary_evaluate.iter().any(|message| {
+        attached_evaluate.iter().any(|message| {
             message["id"] == json!(7_u64)
-                && message["sessionId"] == json!(auxiliary_session_id)
+                && message["sessionId"] == json!(attached_session_id)
                 && message["result"]["result"]["value"] == json!(42)
         }),
-        "pause-loop Main Runtime.evaluate should complete before resume: {auxiliary_evaluate:#?}"
+        "pause-loop Main Runtime.evaluate should complete before resume: {attached_evaluate:#?}"
     );
 
-    let auxiliary_object = tokio::time::timeout(
+    let attached_object = tokio::time::timeout(
         Duration::from_secs(5),
         send_cdp_command(
             &mut socket,
             51,
             "Runtime.evaluate",
-            Some(&auxiliary_session_id),
+            Some(&attached_session_id),
             json!({ "expression": "({ answer: 42 })" }),
         ),
     )
     .await
     .expect("object-valued Main Runtime.evaluate must complete in the debugger loop");
     assert!(
-        auxiliary_object.iter().any(|message| {
+        attached_object.iter().any(|message| {
             message["id"] == json!(51_u64)
-                && message["sessionId"] == json!(auxiliary_session_id)
+                && message["sessionId"] == json!(attached_session_id)
                 && message["result"]["result"]["type"] == json!("object")
                 && message["result"]["result"]["objectId"]
                     .as_str()
                     .is_some_and(|object_id| !object_id.is_empty())
         }),
-        "pause-loop object response must remain owner-independent: {auxiliary_object:#?}"
+        "pause-loop object response must remain owner-independent: {attached_object:#?}"
     );
-    let auxiliary_object_id = auxiliary_object
+    let attached_object_id = attached_object
         .iter()
         .find(|message| message["id"] == json!(51_u64))
         .and_then(|message| message["result"]["result"]["objectId"].as_str())
-        .expect("auxiliary Runtime.evaluate objectId")
+        .expect("attached Runtime.evaluate objectId")
         .to_owned();
 
     let properties = timeout(
@@ -5669,8 +5669,8 @@ async fn websocket_cdp_debugger_pause_allows_auxiliary_main_thread_commands() {
             &mut socket,
             53,
             "Runtime.getProperties",
-            Some(&auxiliary_session_id),
-            json!({ "objectId": auxiliary_object_id, "ownProperties": true }),
+            Some(&attached_session_id),
+            json!({ "objectId": attached_object_id, "ownProperties": true }),
         ),
     )
     .await
@@ -5696,9 +5696,9 @@ async fn websocket_cdp_debugger_pause_allows_auxiliary_main_thread_commands() {
             &mut socket,
             54,
             "Runtime.callFunctionOn",
-            Some(&auxiliary_session_id),
+            Some(&attached_session_id),
             json!({
-                "objectId": auxiliary_object_id,
+                "objectId": attached_object_id,
                 "functionDeclaration": "function () { return this.answer + 1; }",
                 "returnByValue": true,
             }),
@@ -5719,9 +5719,9 @@ async fn websocket_cdp_debugger_pause_allows_auxiliary_main_thread_commands() {
             &mut socket,
             55,
             "Debugger.evaluateOnCallFrame",
-            Some(&auxiliary_session_id),
+            Some(&attached_session_id),
             json!({
-                "callFrameId": auxiliary_call_frame_id,
+                "callFrameId": attached_call_frame_id,
                 "expression": "40 + 2",
                 "returnByValue": true,
             }),
@@ -5733,7 +5733,7 @@ async fn websocket_cdp_debugger_pause_allows_auxiliary_main_thread_commands() {
         call_frame_evaluate.iter().any(|message| {
             message["id"] == json!(55_u64) && message["result"]["result"]["value"] == json!(42)
         }),
-        "nested Main must evaluate against the auxiliary paused call frame: \
+        "nested Main must evaluate against the attached paused call frame: \
          {call_frame_evaluate:#?}"
     );
 
@@ -5742,7 +5742,7 @@ async fn websocket_cdp_debugger_pause_allows_auxiliary_main_thread_commands() {
             json!({
                 "id": 52_u64,
                 "method": "Runtime.evaluate",
-                "sessionId": auxiliary_session_id,
+                "sessionId": attached_session_id,
                 "params": {
                     "expression": "Promise.resolve(43)",
                     "awaitPromise": true,
@@ -5761,7 +5761,7 @@ async fn websocket_cdp_debugger_pause_allows_auxiliary_main_thread_commands() {
             &mut socket,
             56,
             "Runtime.evaluate",
-            Some(&auxiliary_session_id),
+            Some(&attached_session_id),
             json!({
                 "contextId": isolated_context_id,
                 "expression": "globalThis.__nestedInspectorContext = 44",
@@ -5774,7 +5774,7 @@ async fn websocket_cdp_debugger_pause_allows_auxiliary_main_thread_commands() {
     assert!(
         explicit_context_evaluate.iter().any(|message| {
             message["id"] == json!(56_u64)
-                && message["sessionId"] == json!(auxiliary_session_id)
+                && message["sessionId"] == json!(attached_session_id)
                 && message["result"]["result"]["value"] == json!(44)
         }),
         "nested Main must dispatch an explicit native Inspector context without Page owner: \
@@ -5786,7 +5786,7 @@ async fn websocket_cdp_debugger_pause_allows_auxiliary_main_thread_commands() {
             &mut socket,
             8,
             "Debugger.resume",
-            Some(&auxiliary_session_id),
+            Some(&attached_session_id),
             json!({}),
         )
         .await,
@@ -5814,7 +5814,7 @@ async fn websocket_cdp_debugger_pause_allows_auxiliary_main_thread_commands() {
     assert!(
         observed.iter().any(|message| {
             message["id"] == json!(52_u64)
-                && message["sessionId"] == json!(auxiliary_session_id)
+                && message["sessionId"] == json!(attached_session_id)
                 && message["result"]["result"]["value"] == json!(43)
         }),
         "awaitPromise should settle after Debugger.resume without a deferred-reply deadlock: \
@@ -6912,7 +6912,7 @@ async fn websocket_cdp_runtime_self_navigation_gate_is_not_applied_to_next_comma
 }
 
 #[tokio::test]
-async fn websocket_cdp_window_open_self_navigation_reaches_auxiliary_page_session() {
+async fn websocket_cdp_window_open_self_navigation_reaches_attached_page_session() {
     async fn plain() -> impl IntoResponse {
         (
             [(axum::http::header::CONTENT_TYPE.as_str(), "text/html")],
@@ -6978,7 +6978,7 @@ async fn websocket_cdp_window_open_self_navigation_reaches_auxiliary_page_sessio
         .and_then(|message| message["result"]["sessionId"].as_str())
         .expect("browser session id")
         .to_owned();
-    let auxiliary_attach = send_cdp_command(
+    let attached_session_response = send_cdp_command(
         &mut socket,
         7,
         "Target.attachToTarget",
@@ -6986,13 +6986,13 @@ async fn websocket_cdp_window_open_self_navigation_reaches_auxiliary_page_sessio
         json!({ "targetId": target_id }),
     )
     .await;
-    let auxiliary_session_id = auxiliary_attach
+    let attached_session_id = attached_session_response
         .iter()
         .find(|message| message["id"] == json!(7_u64))
         .and_then(|message| message["result"]["sessionId"].as_str())
-        .expect("auxiliary session id")
+        .expect("attached session id")
         .to_owned();
-    assert_ne!(auxiliary_session_id, primary_session_id);
+    assert_ne!(attached_session_id, primary_session_id);
 
     for (id, method) in [
         (8_u64, "Page.enable"),
@@ -7003,7 +7003,7 @@ async fn websocket_cdp_window_open_self_navigation_reaches_auxiliary_page_sessio
             &mut socket,
             id,
             method,
-            Some(&auxiliary_session_id),
+            Some(&attached_session_id),
             json!({}),
         )
         .await;
@@ -7013,13 +7013,13 @@ async fn websocket_cdp_window_open_self_navigation_reaches_auxiliary_page_sessio
     let mut initial_navigation =
         cdp_navigate_and_wait_for_load(&mut socket, 11, &primary_session_id, &plain_url).await;
     if !initial_navigation.iter().any(|message| {
-        message["sessionId"].as_str() == Some(auxiliary_session_id.as_str())
+        message["sessionId"].as_str() == Some(attached_session_id.as_str())
             && message["method"] == json!("Page.frameNavigated")
             && message["params"]["frame"]["url"] == json!(plain_url)
     }) {
         initial_navigation.append(
             &mut recv_until_match(&mut socket, |message| {
-                message["sessionId"].as_str() == Some(auxiliary_session_id.as_str())
+                message["sessionId"].as_str() == Some(attached_session_id.as_str())
                     && message["method"] == json!("Page.frameNavigated")
                     && message["params"]["frame"]["url"] == json!(plain_url)
             })
@@ -7027,11 +7027,11 @@ async fn websocket_cdp_window_open_self_navigation_reaches_auxiliary_page_sessio
         );
     }
     if !initial_navigation.iter().any(|message| {
-        message["sessionId"].as_str() == Some(auxiliary_session_id.as_str())
+        message["sessionId"].as_str() == Some(attached_session_id.as_str())
             && message["method"] == json!("Page.loadEventFired")
     }) {
         let _ = recv_until_match(&mut socket, |message| {
-            message["sessionId"].as_str() == Some(auxiliary_session_id.as_str())
+            message["sessionId"].as_str() == Some(attached_session_id.as_str())
                 && message["method"] == json!("Page.loadEventFired")
         })
         .await;
@@ -7118,7 +7118,7 @@ async fn websocket_cdp_window_open_self_navigation_reaches_auxiliary_page_sessio
                 let routed_to_target = matches!(
                     message["sessionId"].as_str(),
                     Some(session_id)
-                        if session_id == primary_session_id || session_id == auxiliary_session_id
+                        if session_id == primary_session_id || session_id == attached_session_id
                 );
                 routed_to_target
                     && (message["method"] == json!("Runtime.executionContextsCleared")
@@ -7133,13 +7133,13 @@ async fn websocket_cdp_window_open_self_navigation_reaches_auxiliary_page_sessio
         "Runtime.callFunctionOn response must precede command-caused navigation output on every session attached to the target: {navigation_messages:#?}"
     );
     if !navigation_messages.iter().any(|message| {
-        message["sessionId"].as_str() == Some(auxiliary_session_id.as_str())
+        message["sessionId"].as_str() == Some(attached_session_id.as_str())
             && message["method"] == json!("Page.frameNavigated")
             && message["params"]["frame"]["url"] == json!(history_url)
     }) {
         navigation_messages.append(
             &mut recv_until_match(&mut socket, |message| {
-                message["sessionId"].as_str() == Some(auxiliary_session_id.as_str())
+                message["sessionId"].as_str() == Some(attached_session_id.as_str())
                     && message["method"] == json!("Page.frameNavigated")
                     && message["params"]["frame"]["url"] == json!(history_url)
             })
@@ -7147,12 +7147,12 @@ async fn websocket_cdp_window_open_self_navigation_reaches_auxiliary_page_sessio
         );
     }
     if !navigation_messages.iter().any(|message| {
-        message["sessionId"].as_str() == Some(auxiliary_session_id.as_str())
+        message["sessionId"].as_str() == Some(attached_session_id.as_str())
             && message["method"] == json!("Page.loadEventFired")
     }) {
         navigation_messages.append(
             &mut recv_until_match(&mut socket, |message| {
-                message["sessionId"].as_str() == Some(auxiliary_session_id.as_str())
+                message["sessionId"].as_str() == Some(attached_session_id.as_str())
                     && message["method"] == json!("Page.loadEventFired")
             })
             .await,
@@ -7162,40 +7162,40 @@ async fn websocket_cdp_window_open_self_navigation_reaches_auxiliary_page_sessio
     let started = navigation_messages
         .iter()
         .position(|message| {
-            message["sessionId"].as_str() == Some(auxiliary_session_id.as_str())
+            message["sessionId"].as_str() == Some(attached_session_id.as_str())
                 && message["method"] == json!("Page.frameStartedNavigating")
                 && message["params"]["url"] == json!(history_url)
         })
-        .expect("auxiliary session should receive Page.frameStartedNavigating for _self URL");
+        .expect("attached session should receive Page.frameStartedNavigating for _self URL");
     let navigated = navigation_messages
         .iter()
         .position(|message| {
-            message["sessionId"].as_str() == Some(auxiliary_session_id.as_str())
+            message["sessionId"].as_str() == Some(attached_session_id.as_str())
                 && message["method"] == json!("Page.frameNavigated")
                 && message["params"]["frame"]["url"] == json!(history_url)
         })
-        .expect("auxiliary session should receive Page.frameNavigated for _self URL");
+        .expect("attached session should receive Page.frameNavigated for _self URL");
     let loaded = navigation_messages
         .iter()
         .enumerate()
         .find_map(|(index, message)| {
             (index > navigated
-                && message["sessionId"].as_str() == Some(auxiliary_session_id.as_str())
+                && message["sessionId"].as_str() == Some(attached_session_id.as_str())
                 && message["method"] == json!("Page.loadEventFired"))
             .then_some(index)
         })
-        .expect("auxiliary session should receive Page.loadEventFired after _self frameNavigated");
+        .expect("attached session should receive Page.loadEventFired after _self frameNavigated");
     assert!(
         started < navigated && navigated < loaded,
-        "auxiliary Page event order should be started < navigated < load: {navigation_messages:#?}"
+        "attached Page event order should be started < navigated < load: {navigation_messages:#?}"
     );
     assert!(
         navigation_messages.iter().any(|message| {
-            message["sessionId"].as_str() == Some(auxiliary_session_id.as_str())
+            message["sessionId"].as_str() == Some(attached_session_id.as_str())
                 && message["method"] == json!("Network.requestWillBeSent")
                 && message["params"]["request"]["url"] == json!(history_url)
         }),
-        "auxiliary Network session should observe the _self document request: {navigation_messages:#?}"
+        "attached Network session should observe the _self document request: {navigation_messages:#?}"
     );
 
     navigation_messages.append(

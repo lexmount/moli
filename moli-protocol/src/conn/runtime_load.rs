@@ -1765,14 +1765,6 @@ impl CdpConnection {
         }))
     }
 
-    pub(crate) fn start_initial_document_page_ensure_for_session_owner(
-        &mut self,
-        session_id: Option<&str>,
-    ) -> Result<Option<PendingInitialDocumentPageBuild>, String> {
-        let owner = CommandOwnerScope::capture(self, session_id);
-        self.start_initial_document_page_ensure_for_owner(&owner)
-    }
-
     pub(crate) fn start_initial_document_page_ensure_for_owner(
         &mut self,
         owner: &CommandOwnerScope,

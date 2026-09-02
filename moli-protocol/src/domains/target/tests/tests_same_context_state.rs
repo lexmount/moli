@@ -1392,7 +1392,7 @@ async fn same_context_targets_restore_their_own_crash_state_after_session_scoped
         "method": "Page.navigate",
         "sessionId": second_session_id,
         "params": {
-            "url": "data:text/html,<title>second-after-session-promotion</title><div id='ok'>second target</div>"
+            "url": "data:text/html,<title>second-after-session-activation</title><div id='ok'>second target</div>"
         }
     })).await;
     let _ = take_response_by_id(&mut ctx, 1042027);
@@ -1598,7 +1598,7 @@ async fn same_context_targets_restore_their_own_domain_enablement_after_session_
             .conn
             .browser_context
             .as_ref()
-            .expect("active browser context after session-scoped promotion");
+            .expect("active browser context after session-scoped activation");
         assert_eq!(bc.active_target_id(), Some(second_target_id.as_str()));
         assert!(!bc.active_page_target().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary].page_session_state.page_lifecycle_events);
         assert!(bc.active_page_target().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary].runtime_session_state.runtime_frontend_enabled);

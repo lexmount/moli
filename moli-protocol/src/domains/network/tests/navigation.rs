@@ -1388,7 +1388,7 @@ async fn first_main_document_transport_failure_commits_error_document() {
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    assert!(bc.assign_auxiliary_session_to_target("TID-1", "SID-2".to_owned()));
+    assert!(bc.assign_attached_session_to_target("TID-1", "SID-2".to_owned()));
     ctx.conn.browser_context = Some(bc);
     ctx.enable_page_events_for_test(Some("SID-1"));
     ctx.enable_page_events_for_test(Some("SID-2"));
@@ -1571,9 +1571,9 @@ async fn first_main_document_transport_failure_commits_error_document() {
         }
     }))
     .await;
-    let auxiliary_evaluate = ctx.take_response_by_id(31);
+    let attached_evaluate = ctx.take_response_by_id(31);
     assert_eq!(
-        auxiliary_evaluate["result"]["result"]["value"],
+        attached_evaluate["result"]["result"]["value"],
         json!(format!("[\"{NETWORK_ERROR_PAGE_URL}\",\"complete\"]"))
     );
 

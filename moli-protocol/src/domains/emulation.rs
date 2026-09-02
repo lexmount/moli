@@ -46,7 +46,7 @@ pub(crate) struct CompletedEmulationCommandDispatch {
 
 enum PendingEmulationRendererDispatch {
     Pages(Vec<PendingEmulationPageCommand>),
-    IoCommandReply(PendingDevToolsIoCommandDispatch),
+    IoAdapterReply(PendingDevToolsIoCommandDispatch),
     IoSessionOutput {
         pending: PendingDevToolsIoCommandDispatch,
         correlation: RendererCommandCorrelation,
@@ -55,7 +55,7 @@ enum PendingEmulationRendererDispatch {
 
 enum CompletedEmulationRendererDispatch {
     Pages(Vec<CompletedEmulationPageCommand>),
-    IoCommandReply(Result<CompletedDevToolsIoCommandDispatch, String>),
+    IoAdapterReply(Result<CompletedDevToolsIoCommandDispatch, String>),
     IoSessionOutput {
         completed: Result<CompletedDevToolsIoCommandDispatch, String>,
         correlation: RendererCommandCorrelation,
@@ -155,8 +155,8 @@ impl PendingEmulationCommandDispatch {
                 }
                 CompletedEmulationRendererDispatch::Pages(completed)
             }
-            PendingEmulationRendererDispatch::IoCommandReply(pending) => {
-                CompletedEmulationRendererDispatch::IoCommandReply(
+            PendingEmulationRendererDispatch::IoAdapterReply(pending) => {
+                CompletedEmulationRendererDispatch::IoAdapterReply(
                     pending.wait().await.map_err(|error| error.to_string()),
                 )
             }
@@ -389,11 +389,9 @@ fn start_script_execution_disabled_command(
     };
     let renderer_inspector_session_id =
         conn.target_renderer_runtime_inspector_session_id_for_session(cmd.session_id);
-    let response_delivery = cmd.terminal_response_delivery(
-        moli_page_types::RendererInspectorResponseDelivery::DevToolsSession,
-    );
+    let response_delivery = cmd.terminal_response_delivery();
     if cmd.id.is_none()
-        || response_delivery == moli_page_types::RendererInspectorResponseDelivery::CommandReply
+        || response_delivery == moli_page_types::RendererInspectorResponseDelivery::AdapterReply
     {
         let page = loaded_page_mut_for_target_configuration(conn, cmd.session_id)
             .expect("the captured Emulation Page must remain loaded synchronously");
@@ -401,7 +399,7 @@ fn start_script_execution_disabled_command(
         return EmulationCommandTaskStep::Pending(PendingEmulationCommandDispatch {
             command_id: cmd.id,
             session_id: cmd.session_id.map(str::to_owned),
-            pending: PendingEmulationRendererDispatch::IoCommandReply(pending),
+            pending: PendingEmulationRendererDispatch::IoAdapterReply(pending),
         });
     }
     let command_id = cmd
@@ -427,7 +425,7 @@ fn start_script_execution_disabled_command(
     let (correlation, response, response_rx) = prepared.into_parts();
     debug_assert!(
         response_rx.is_none(),
-        "Emulation session output must not allocate a command-reply receiver",
+        "Emulation session output must not allocate an adapter-reply receiver",
     );
     let pending = loaded_page_mut_for_target_configuration(conn, cmd.session_id)
         .filter(|page| page.renderer_agent_attachment_id() == Some(attachment_id))
@@ -2445,7 +2443,7 @@ pub(crate) fn complete_pending_emulation_command(
     let session_id = completed.session_id.clone();
     let completed_pages = match completed.completed {
         CompletedEmulationRendererDispatch::Pages(completed_pages) => completed_pages,
-        CompletedEmulationRendererDispatch::IoCommandReply(completed) => {
+        CompletedEmulationRendererDispatch::IoAdapterReply(completed) => {
             return match completed {
                 Ok(CompletedDevToolsIoCommandDispatch::Dispatched) => {
                     CommandOutputPlan::result(json!({}))
@@ -2453,7 +2451,7 @@ pub(crate) fn complete_pending_emulation_command(
                 Ok(CompletedDevToolsIoCommandDispatch::SessionResponse { .. }) => {
                     CommandOutputPlan::error(
                         -32000,
-                        "command-reply Emulation dispatch used session output",
+                        "adapter-reply Emulation dispatch used session output",
                     )
                 }
                 Err(error) => CommandOutputPlan::error(-32000, error),
@@ -2581,36 +2579,62 @@ fn loaded_page_mut_for_target_configuration<'a>(
         .ok()
 }
 
-pub(crate) async fn clear_emulated_media_for_detached_session_async(
+pub(crate) async fn dispose_page_session_async(
     conn: &mut CdpConnection,
     session_id: &str,
 ) -> anyhow::Result<()> {
-    // Chromium's InspectorEmulationAgent::disable clears media overrides even
-    // though the resulting settings are observable by every session on the
-    // target. Match that contract when detach preserves the loaded page.
-    let overrides = crate::conn::EmulatedMediaOverrides::default();
-    let mut changed = false;
+    let mut first_error = conn
+        .clear_devtools_emulation_session_policy_async(session_id)
+        .await
+        .err();
+
+    // InspectorEmulationAgent::disable resets media and CPU throttling for
+    // every renderer session, even though both settings are target-visible.
+    // Keep that intentionally non-aggregated Chromium behavior here.
+    let media = crate::conn::EmulatedMediaOverrides::default();
+    let mut media_changed = false;
+    let mut cpu_changed = false;
     if !conn.mutate_emulation_session_state_for_session_owner(Some(session_id), |state| {
         if let Some(state) = state {
-            changed = *state.emulated_media != overrides;
-            *state.emulated_media = overrides.clone();
+            media_changed = *state.emulated_media != media;
+            cpu_changed = *state.cpu_throttling_rate != 1.0;
+            *state.emulated_media = media.clone();
+            *state.cpu_throttling_rate = 1.0;
         }
     }) {
-        return Ok(());
+        return match first_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        };
     }
-    if !changed {
-        return Ok(());
+    if !media_changed && !cpu_changed {
+        return match first_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        };
     }
 
-    let page_overrides: moli_core::page::EmulatedMediaOverrides = (&overrides).into();
+    let page_media: moli_core::page::EmulatedMediaOverrides = (&media).into();
     let Some(page) = loaded_page_mut_for_target_configuration(conn, Some(session_id)) else {
-        return Ok(());
+        return match first_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        };
     };
-    page.set_emulated_media_async(&page_overrides)
-        .await
-        .map_err(|error| {
+    if media_changed && let Err(error) = page.set_emulated_media_async(&page_media).await {
+        first_error.get_or_insert_with(|| {
             anyhow::anyhow!("failed to clear detached session emulated media: {error}")
-        })
+        });
+    }
+    if cpu_changed && let Err(error) = page.set_cpu_throttling_rate_async(1.0).await {
+        first_error.get_or_insert_with(|| {
+            anyhow::anyhow!("failed to clear detached session CPU throttling: {error}")
+        });
+    }
+    match first_error {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
 }
 
 fn single_pending_emulation_dispatch(

@@ -1016,7 +1016,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn capture_snapshot_targets_loaded_background_owner_without_promotion() {
+    async fn capture_snapshot_targets_loaded_background_owner_without_activation() {
         let mut ctx = TestContext::new();
         let page = ctx
             .conn

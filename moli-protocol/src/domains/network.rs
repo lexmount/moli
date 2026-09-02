@@ -49,6 +49,16 @@ pub(crate) mod settings;
 #[cfg(test)]
 mod tests;
 
+/// Removes one session's Network contributions, then applies the newly
+/// aggregated target policy before the session disappears.
+pub(in crate::domains) async fn dispose_session_policy_async(
+    conn: &mut CdpConnection,
+    session_id: &str,
+) -> anyhow::Result<()> {
+    conn.clear_devtools_network_session_policy_async(session_id)
+        .await
+}
+
 use super::actions::NetworkAction;
 use super::command_output::CommandOutputPlan;
 pub(crate) use activity::NetworkPreparedOutputSlot;

@@ -747,14 +747,14 @@ async fn dom_mutations_are_projected_from_each_sessions_requested_tree_depth() {
         "params": { "targetId": "TID-1" }
     }))
     .await;
-    let auxiliary_session_id = take_response_by_id(&mut ctx, 2)["result"]["sessionId"]
+    let attached_session_id = take_response_by_id(&mut ctx, 2)["result"]["sessionId"]
         .as_str()
-        .expect("auxiliary session id")
+        .expect("attached session id")
         .to_owned();
-    assert_ne!(auxiliary_session_id, "SID-primary");
+    assert_ne!(attached_session_id, "SID-primary");
     ctx.sent.clear();
 
-    for (id, session_id) in [(3, "SID-primary"), (4, auxiliary_session_id.as_str())] {
+    for (id, session_id) in [(3, "SID-primary"), (4, attached_session_id.as_str())] {
         ctx.process_async(json!({
             "id": id,
             "sessionId": session_id,
@@ -781,15 +781,15 @@ async fn dom_mutations_are_projected_from_each_sessions_requested_tree_depth() {
 
     ctx.process_async(json!({
         "id": 6,
-        "sessionId": auxiliary_session_id,
+        "sessionId": attached_session_id,
         "method": "DOM.getDocument",
         "params": { "depth": -1 }
     }))
     .await;
-    let auxiliary_root = take_response_by_id(&mut ctx, 6)["result"]["root"].clone();
-    let auxiliary_html_id = find_cdp_node_by_local_name(&auxiliary_root, "html")
+    let attached_root = take_response_by_id(&mut ctx, 6)["result"]["root"].clone();
+    let attached_html_id = find_cdp_node_by_local_name(&attached_root, "html")
         .and_then(|node| node["nodeId"].as_u64())
-        .expect("auxiliary html node id");
+        .expect("attached html node id");
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -811,9 +811,9 @@ async fn dom_mutations_are_projected_from_each_sessions_requested_tree_depth() {
             && message["params"]["childNodeCount"] == json!(3)
     }));
     assert!(messages.iter().any(|message| {
-        message["sessionId"] == json!(auxiliary_session_id)
+        message["sessionId"] == json!(attached_session_id)
             && message["method"] == json!("DOM.childNodeInserted")
-            && message["params"]["parentNodeId"] == json!(auxiliary_html_id)
+            && message["params"]["parentNodeId"] == json!(attached_html_id)
             && message["params"]["node"]["localName"] == json!("aside")
     }));
     assert!(!messages.iter().any(|message| {
@@ -823,7 +823,7 @@ async fn dom_mutations_are_projected_from_each_sessions_requested_tree_depth() {
 
     ctx.process_async(json!({
         "id": 8,
-        "sessionId": auxiliary_session_id,
+        "sessionId": attached_session_id,
         "method": "DOM.disable"
     }))
     .await;
@@ -848,7 +848,7 @@ async fn dom_mutations_are_projected_from_each_sessions_requested_tree_depth() {
     assert!(
         !messages
             .iter()
-            .any(|message| message["sessionId"] == json!(auxiliary_session_id))
+            .any(|message| message["sessionId"] == json!(attached_session_id))
     );
 }
 
@@ -2474,7 +2474,7 @@ async fn hidden_whitespace_nodes_keep_backend_identity_without_default_frontend_
     .await;
     let all_session_id = take_response_by_id(&mut ctx, 2)["result"]["sessionId"]
         .as_str()
-        .expect("auxiliary session id")
+        .expect("attached session id")
         .to_owned();
     ctx.sent.clear();
 

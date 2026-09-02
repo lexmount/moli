@@ -847,7 +847,7 @@ async def _screencast_visibility_follows_foreground(
             session_id=screencast_session_id,
         )
 
-        stage = "demote screencast Page by creating foreground target"
+        stage = "move screencast Page to background by creating foreground target"
         second, creation_seen = await _raw_command(
             client,
             "Target.createTarget",
@@ -866,7 +866,7 @@ async def _screencast_visibility_follows_foreground(
             session_id=screencast_session_id,
         )
 
-        stage = "close foreground target and promote screencast Page"
+        stage = "close foreground target and reselect screencast Page"
         _, close_seen = await _raw_command(
             client,
             "Target.closeTarget",

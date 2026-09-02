@@ -87,7 +87,7 @@ fn pending_subresource_fetch_auth(
 fn pending_subresource_auth_required_event_carries_typed_sidecar() {
     let pending = pending_subresource_fetch_auth(7, "SID-primary");
     let event = pending_subresource_auth_required_event(
-        Some("SID-aux"),
+        Some("SID-attached"),
         "FETCH-7",
         &pending,
         &[DevToolsNetworkInterceptId::from("intercept-auth")],
@@ -96,7 +96,7 @@ fn pending_subresource_auth_required_event_carries_typed_sidecar() {
     let (message, sidecar) = event.into_parts();
 
     assert_eq!(message["method"], "Fetch.authRequired");
-    assert_eq!(message["sessionId"], "SID-aux");
+    assert_eq!(message["sessionId"], "SID-attached");
     assert_eq!(message["params"]["requestId"], "FETCH-7");
     assert!(message["params"].get("networkId").is_none());
     assert_eq!(message["params"]["authChallenge"]["realm"], "private");
@@ -153,7 +153,7 @@ async fn enable_and_disable_are_session_local_for_same_target() {
     let mut bc = BrowserContext::new("BID-session-fetch".into());
     bc.set_active_target_id("TID-session-fetch".to_owned());
     bc.attach_active_session("SID-primary".to_owned());
-    assert!(bc.assign_auxiliary_session_to_target("TID-session-fetch", "SID-aux".to_owned()));
+    assert!(bc.assign_attached_session_to_target("TID-session-fetch", "SID-attached".to_owned()));
     ctx.conn.browser_context = Some(bc);
 
     ctx.process_async(json!({
@@ -171,13 +171,13 @@ async fn enable_and_disable_are_session_local_for_same_target() {
     ctx.process_async(json!({
         "id": 211,
         "method": "Fetch.enable",
-        "sessionId": "SID-aux",
+        "sessionId": "SID-attached",
         "params": {
             "patterns": [{ "urlPattern": "*aux*", "requestStage": "Response", "resourceType": "XHR" }]
         }
     }))
     .await;
-    ctx.expect_result(211, json!({}), Some("SID-aux"));
+    ctx.expect_result(211, json!({}), Some("SID-attached"));
 
     {
         let bc = ctx.conn.browser_context.as_ref().expect("browser context");
@@ -198,7 +198,7 @@ async fn enable_and_disable_are_session_local_for_same_target() {
         let aux = bc
             .active_page_target()
             .fetch_owner
-            .config_snapshot_for_session(Some("SID-aux"));
+            .config_snapshot_for_session(Some("SID-attached"));
         assert!(aux.is_enabled());
         assert!(!aux.handle_auth_requests());
         assert_eq!(aux.patterns().len(), 1);
@@ -228,7 +228,7 @@ async fn enable_and_disable_are_session_local_for_same_target() {
     assert!(
         bc.active_page_target()
             .fetch_owner
-            .config_snapshot_for_session(Some("SID-aux"))
+            .config_snapshot_for_session(Some("SID-attached"))
             .is_enabled()
     );
     assert_eq!(
@@ -245,7 +245,7 @@ async fn disable_drains_only_current_session_pending_subresource_fetches() {
     let mut bc = BrowserContext::new("BID-session-fetch-pending".into());
     bc.set_active_target_id("TID-session-fetch".to_owned());
     bc.attach_active_session("SID-primary".to_owned());
-    assert!(bc.assign_auxiliary_session_to_target("TID-session-fetch", "SID-aux".to_owned()));
+    assert!(bc.assign_attached_session_to_target("TID-session-fetch", "SID-attached".to_owned()));
     ctx.conn.browser_context = Some(bc);
 
     ctx.process_async(json!({
@@ -262,13 +262,13 @@ async fn disable_drains_only_current_session_pending_subresource_fetches() {
     ctx.process_async(json!({
         "id": 221,
         "method": "Fetch.enable",
-        "sessionId": "SID-aux",
+        "sessionId": "SID-attached",
         "params": {
             "patterns": [{ "urlPattern": "*aux*", "requestStage": "Request", "resourceType": "Fetch" }]
         }
     }))
     .await;
-    ctx.expect_result(221, json!({}), Some("SID-aux"));
+    ctx.expect_result(221, json!({}), Some("SID-attached"));
 
     {
         let fetch_owner = &mut ctx
@@ -284,7 +284,7 @@ async fn disable_drains_only_current_session_pending_subresource_fetches() {
         );
         fetch_owner.register_pending_subresource_fetch_request(
             "FETCH-aux".to_owned(),
-            pending_subresource_fetch(2201, "SID-aux"),
+            pending_subresource_fetch(2201, "SID-attached"),
         );
     }
 
@@ -307,9 +307,9 @@ async fn disable_drains_only_current_session_pending_subresource_fetches() {
     assert!(fetch_owner.has_pending_fetch_request_id_for_test("FETCH-aux"));
     assert!(
         fetch_owner
-            .take_pending_subresource_fetch_request("FETCH-aux", Some("SID-aux"))
+            .take_pending_subresource_fetch_request("FETCH-aux", Some("SID-attached"))
             .is_some(),
-        "Fetch.disable for primary must not clear auxiliary session pending requests"
+        "Fetch.disable for primary must not clear attached session pending requests"
     );
 }
 
@@ -396,7 +396,7 @@ async fn disable_drains_fetch_owned_pending_when_same_session_network_intercept_
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn enable_targets_loaded_background_owner_without_promotion() {
+async fn enable_targets_loaded_background_owner_without_activation() {
     let mut ctx = TestContext::new();
     let background = PageTargetHost::with_url(
         "TID-background".to_owned(),
@@ -515,7 +515,7 @@ async fn pending_fetch_enable_keeps_background_owner_route_across_completion() {
     let staged = bc
         .background_target("TID-fetch-background")
         .filter(|target| target.has_non_default_session_state())
-        .expect("background fetch config should stay parked");
+        .expect("background fetch config should stay background");
     assert!(staged.fetch_owner.config_snapshot().is_enabled());
     assert_eq!(staged.fetch_owner.config_snapshot().patterns().len(), 1);
     assert_eq!(
@@ -588,7 +588,7 @@ async fn enable_targets_inactive_owner_without_activation() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn disable_targets_loaded_background_owner_without_promotion() {
+async fn disable_targets_loaded_background_owner_without_activation() {
     let mut ctx = TestContext::new();
     let background = PageTargetHost::with_url(
         "TID-background".to_owned(),

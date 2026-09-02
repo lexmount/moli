@@ -148,7 +148,7 @@ async fn set_auto_attach_true_still_reports_transient_no_page_target_like_chromi
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn runtime_add_binding_on_auto_attached_background_target_session_routes_without_promotion_when_active_target_has_no_loaded_page()
+async fn runtime_add_binding_on_auto_attached_background_target_session_routes_without_activation_when_active_target_has_no_loaded_page()
  {
     let mut ctx = TestContext::new();
     load_bc_with_target(&mut ctx, "BID-9", "TID-000000000A");
@@ -157,7 +157,12 @@ async fn runtime_add_binding_on_auto_attached_background_target_session_routes_w
         .as_mut()
         .unwrap()
         .attach_active_session("SID-active");
-    ctx.conn.auto_attach = true;
+    ctx.conn.set_auto_attach_owner(
+        None,
+        true,
+        false,
+        crate::conn::CdpTargetFilter::default_auto_attach(),
+    );
 
     ctx.process_async(json!({
         "id": 1034,
@@ -208,7 +213,7 @@ async fn runtime_add_binding_on_auto_attached_background_target_session_routes_w
             .runtime_bindings
             .iter()
             .any(|binding| binding.name == "patchedBinding"),
-        "binding definition should persist on the background DevTools session without promotion"
+        "binding definition should persist on the background DevTools session without activation"
     );
 }
 
@@ -222,7 +227,12 @@ async fn runtime_add_binding_then_navigation_on_auto_attached_background_target_
         .as_mut()
         .unwrap()
         .attach_active_session("SID-active");
-    ctx.conn.auto_attach = true;
+    ctx.conn.set_auto_attach_owner(
+        None,
+        true,
+        false,
+        crate::conn::CdpTargetFilter::default_auto_attach(),
+    );
 
     ctx.process_async(json!({
         "id": 10351,
@@ -311,7 +321,12 @@ async fn runtime_add_binding_and_preload_on_auto_attached_background_target_sess
         .as_mut()
         .unwrap()
         .attach_active_session("SID-active");
-    ctx.conn.auto_attach = true;
+    ctx.conn.set_auto_attach_owner(
+        None,
+        true,
+        false,
+        crate::conn::CdpTargetFilter::default_auto_attach(),
+    );
 
     ctx.process_async(json!({
         "id": 10355,
@@ -423,7 +438,12 @@ async fn runtime_add_binding_and_utility_preload_on_auto_attached_background_tar
         .as_mut()
         .unwrap()
         .attach_active_session("SID-active");
-    ctx.conn.auto_attach = true;
+    ctx.conn.set_auto_attach_owner(
+        None,
+        true,
+        false,
+        crate::conn::CdpTargetFilter::default_auto_attach(),
+    );
 
     ctx.process_async(json!({
         "id": 10369,
@@ -572,7 +592,12 @@ async fn runtime_add_binding_and_utility_preload_then_remove_on_auto_attached_ba
         .as_mut()
         .unwrap()
         .attach_active_session("SID-active");
-    ctx.conn.auto_attach = true;
+    ctx.conn.set_auto_attach_owner(
+        None,
+        true,
+        false,
+        crate::conn::CdpTargetFilter::default_auto_attach(),
+    );
 
     ctx.process_async(json!({
         "id": 10375,

@@ -63,7 +63,7 @@ fn empty_pending_fetch_state() -> super::fetch_owner::SessionOwnerPendingFetchSt
 pub(crate) struct ClosedPageTarget {
     pub(crate) target_id: String,
     pub(crate) primary_session_id: Option<String>,
-    pub(crate) auxiliary_session_ids: Vec<String>,
+    pub(crate) attached_session_ids: Vec<String>,
 }
 
 impl ClosedPageTarget {
@@ -71,18 +71,18 @@ impl ClosedPageTarget {
         self.primary_session_id
             .as_deref()
             .into_iter()
-            .chain(self.auxiliary_session_ids.iter().map(String::as_str))
+            .chain(self.attached_session_ids.iter().map(String::as_str))
     }
 
     pub(crate) fn into_detach_cleanup_plan(
         self,
         reason: Option<&str>,
     ) -> crate::conn::TargetClosureCleanupPlan {
-        crate::conn::TargetClosureCleanupPlan::from_primary_and_auxiliary_sessions(
+        crate::conn::TargetClosureCleanupPlan::from_primary_and_attached_sessions(
             self.target_id,
             reason,
             self.primary_session_id,
-            self.auxiliary_session_ids,
+            self.attached_session_ids,
         )
     }
 }
@@ -1349,14 +1349,14 @@ impl CdpConnection {
         let (
             mut target,
             primary_session_id,
-            auxiliary_session_ids,
+            attached_session_ids,
             collected_network_data_artifacts,
         ) = {
             let browser_context = self.browser_context.as_mut()?;
             let target = browser_context.take_page_target_for_close(target_id)?;
             let collected_network_data_artifacts =
                 target.runtime_slot.collected_network_data_artifacts();
-            let auxiliary_session_ids = target
+            let attached_session_ids = target
                 .devtools_sessions
                 .attached_session_ids()
                 .map(str::to_owned)
@@ -1365,7 +1365,7 @@ impl CdpConnection {
             (
                 target,
                 primary_session_id,
-                auxiliary_session_ids,
+                attached_session_ids,
                 collected_network_data_artifacts,
             )
         };
@@ -1375,7 +1375,7 @@ impl CdpConnection {
         Some(ClosedPageTarget {
             target_id: target_id.to_owned(),
             primary_session_id,
-            auxiliary_session_ids,
+            attached_session_ids,
         })
     }
 
@@ -1850,7 +1850,7 @@ impl CdpConnection {
     /// source snapshot is being captured.
     ///
     /// The renderer uses `None` for the target's primary inspector session and
-    /// the concrete CDP session id for auxiliary sessions. Deferred protocol
+    /// the concrete CDP session id for attached sessions. Deferred protocol
     /// output must translate that renderer-local convention once, at capture
     /// time. Looking it up again during drain could route an old Page's
     /// response or notification through a replacement Page or an unrelated
@@ -1950,7 +1950,7 @@ impl CdpConnection {
 
     /// Resolves one concrete Page attachment for a target-owned event.
     ///
-    /// The primary Page session is preferred, followed by a stable auxiliary
+    /// The primary Page session is preferred, followed by a stable attached
     /// session. The implicit `None` attachment is valid only for the currently
     /// active browser context and target; an unattached background target has
     /// no protocol destination.
@@ -1971,7 +1971,7 @@ impl CdpConnection {
         let session_id = primary_session_id
             .or_else(|| {
                 browser_context
-                    .auxiliary_session_ids_for_target(target_id)
+                    .attached_session_ids_for_target(target_id)
                     .into_iter()
                     .next()
             })
@@ -2015,7 +2015,7 @@ impl CdpConnection {
         self.target_owner_identity_for_session(session_id)
     }
 
-    pub(crate) fn target_devtools_auxiliary_session_id_for_session(
+    pub(crate) fn target_devtools_attached_session_id_for_session(
         &self,
         session_id: Option<&str>,
     ) -> Option<Option<String>> {
@@ -2106,9 +2106,9 @@ impl CdpConnection {
         let primary_event_session_id =
             primary_session_id.or_else(|| owner.session_id().map(str::to_owned));
         session_ids.push(primary_event_session_id.clone());
-        for auxiliary_session_id in browser_context.auxiliary_session_ids_for_target(&target_id) {
-            if primary_event_session_id.as_deref() != Some(auxiliary_session_id.as_str()) {
-                session_ids.push(Some(auxiliary_session_id));
+        for attached_session_id in browser_context.attached_session_ids_for_target(&target_id) {
+            if primary_event_session_id.as_deref() != Some(attached_session_id.as_str()) {
+                session_ids.push(Some(attached_session_id));
             }
         }
         session_ids
@@ -2504,10 +2504,10 @@ mod tests {
         }
     }
 
-    fn parked_target_context() -> BrowserContext {
-        let mut context = BrowserContext::new("BID-parked".to_owned());
+    fn background_target_context() -> BrowserContext {
+        let mut context = BrowserContext::new("BID-background".to_owned());
         context.insert_page_target_host(crate::conn::PageTargetHost::with_url(
-            "TID-parked".to_owned(),
+            "TID-background".to_owned(),
             None,
             "about:blank".to_owned(),
         ));
@@ -2515,7 +2515,7 @@ mod tests {
     }
 
     #[test]
-    fn target_session_owner_mut_mutates_active_and_parked_owner_state() {
+    fn target_session_owner_mut_mutates_active_and_background_owner_state() {
         let mut active = BrowserContext::new_with_page_for_test("BID-active", "TID-active");
         {
             let mut owner = TargetSessionOwnerMut {
@@ -2536,11 +2536,11 @@ mod tests {
                 .is_crashed()
         );
 
-        let mut parked = parked_target_context();
+        let mut background = background_target_context();
         {
             let mut owner = TargetSessionOwnerMut {
-                browser_context: &mut parked,
-                target_id: "TID-parked".to_owned(),
+                browser_context: &mut background,
+                target_id: "TID-background".to_owned(),
                 command_session_id: None,
                 session_key: DevToolsSessionKey::Primary,
             };
@@ -2549,8 +2549,8 @@ mod tests {
             });
         }
         assert!(
-            parked
-                .background_target("TID-parked")
+            background
+                .background_target("TID-background")
                 .expect("background target must exist")
                 .owner_state
                 .target_crash_state
@@ -2580,14 +2580,12 @@ mod tests {
             .set_page_attachment_id_for_test(2);
         assert!(
             browser_context
-                .assign_auxiliary_session_to_target("TID-active", "SID-active-aux".to_owned(),)
+                .assign_attached_session_to_target("TID-active", "SID-active-attached".to_owned(),)
         );
-        assert!(
-            browser_context.assign_auxiliary_session_to_target(
-                "TID-background",
-                "SID-background-aux".to_owned(),
-            )
-        );
+        assert!(browser_context.assign_attached_session_to_target(
+            "TID-background",
+            "SID-background-attached".to_owned(),
+        ));
         conn.browser_context = Some(browser_context);
 
         assert_eq!(
@@ -2610,38 +2608,40 @@ mod tests {
             "primary background-target session uses the target's default renderer inspector session"
         );
         assert_eq!(
-            conn.target_renderer_runtime_inspector_session_id_for_session(Some("SID-active-aux")),
-            Some("SID-active-aux".to_owned()),
-            "auxiliary active-target session owns a distinct renderer inspector session"
+            conn.target_renderer_runtime_inspector_session_id_for_session(Some(
+                "SID-active-attached"
+            )),
+            Some("SID-active-attached".to_owned()),
+            "attached active-target session owns a distinct renderer inspector session"
         );
         assert_eq!(
             conn.target_renderer_runtime_inspector_session_id_for_session(Some(
-                "SID-background-aux"
+                "SID-background-attached"
             )),
-            Some("SID-background-aux".to_owned()),
-            "auxiliary background-target session owns a distinct renderer inspector session"
+            Some("SID-background-attached".to_owned()),
+            "attached background-target session owns a distinct renderer inspector session"
         );
 
         let default_route = conn
             .target_page_protocol_attachment_identity_for_renderer_inspector_owner(
-                &crate::conn::CommandOwnerScope::for_session("SID-active-aux"),
+                &crate::conn::CommandOwnerScope::for_session("SID-active-attached"),
                 None,
             )
             .expect("default inspector route should resolve through the target primary session");
         assert_eq!(default_route.session_id(), Some("SID-active-primary"));
 
-        let auxiliary_route = conn
+        let attached_route = conn
             .target_page_protocol_attachment_identity_for_renderer_inspector_owner(
                 &crate::conn::CommandOwnerScope::for_session("SID-active-primary"),
-                Some("SID-active-aux"),
+                Some("SID-active-attached"),
             )
-            .expect("auxiliary inspector route should retain its exact protocol attachment");
-        assert_eq!(auxiliary_route.session_id(), Some("SID-active-aux"));
+            .expect("attached inspector route should retain its exact protocol attachment");
+        assert_eq!(attached_route.session_id(), Some("SID-active-attached"));
 
         assert!(
             conn.target_page_protocol_attachment_identity_for_renderer_inspector_owner(
                 &crate::conn::CommandOwnerScope::for_session("SID-active-primary"),
-                Some("SID-background-aux"),
+                Some("SID-background-attached"),
             )
             .is_none(),
             "a renderer batch must not borrow an inspector session attached to another target"
@@ -2649,7 +2649,7 @@ mod tests {
     }
 
     #[test]
-    fn target_session_owner_mut_mutates_active_and_parked_fetch_state() {
+    fn target_session_owner_mut_mutates_active_and_background_fetch_state() {
         let mut active = BrowserContext::new_with_page_for_test("BID-active", "TID-active");
         {
             let mut owner = TargetSessionOwnerMut {
@@ -2670,31 +2670,31 @@ mod tests {
                 .has_pending_subresource_fetch_for_test("FETCH-active")
         );
 
-        let mut parked = parked_target_context();
+        let mut background = background_target_context();
         {
             let mut owner = TargetSessionOwnerMut {
-                browser_context: &mut parked,
-                target_id: "TID-parked".to_owned(),
+                browser_context: &mut background,
+                target_id: "TID-background".to_owned(),
                 command_session_id: None,
                 session_key: DevToolsSessionKey::Primary,
             };
             assert!(owner.register_pending_subresource_fetch_request(
-                "FETCH-parked".to_owned(),
+                "FETCH-background".to_owned(),
                 pending_subresource_fetch(2),
             ));
         }
         assert!(
-            parked
-                .background_target("TID-parked")
+            background
+                .background_target("TID-background")
                 .expect("background target must exist")
                 .fetch_owner
                 .pending_state()
-                .has_pending_subresource_fetch_for_test("FETCH-parked")
+                .has_pending_subresource_fetch_for_test("FETCH-background")
         );
     }
 
     #[test]
-    fn target_session_owner_mut_configures_and_resets_active_and_parked_fetch_state() {
+    fn target_session_owner_mut_configures_and_resets_active_and_background_fetch_state() {
         let patterns = vec![FetchInterceptionPattern {
             url_pattern: "*".to_owned(),
             resource_type_filter: None,
@@ -2737,37 +2737,37 @@ mod tests {
                 .has_pending_subresource_fetch_for_test("FETCH-active")
         );
 
-        let mut parked = parked_target_context();
+        let mut background = background_target_context();
         {
             let mut owner = TargetSessionOwnerMut {
-                browser_context: &mut parked,
-                target_id: "TID-parked".to_owned(),
+                browser_context: &mut background,
+                target_id: "TID-background".to_owned(),
                 command_session_id: None,
                 session_key: DevToolsSessionKey::Primary,
             };
             assert_eq!(
-                owner.configure_fetch(Some("SID-parked".to_owned()), true, patterns),
+                owner.configure_fetch(Some("SID-background".to_owned()), true, patterns),
                 (true, None)
             );
             assert!(owner.register_pending_subresource_fetch_request(
-                "FETCH-parked".to_owned(),
+                "FETCH-background".to_owned(),
                 pending_subresource_fetch(22),
             ));
-            let (pending, subresource_config, page_update_required) =
-                owner.reset_fetch_config_for_session_and_drain_pending_state(Some("SID-parked"));
+            let (pending, subresource_config, page_update_required) = owner
+                .reset_fetch_config_for_session_and_drain_pending_state(Some("SID-background"));
             assert_eq!(subresource_config, (false, None));
             assert!(page_update_required);
             assert_eq!(pending.3.len(), 1);
         }
         assert!(
-            parked
-                .background_target("TID-parked")
+            background
+                .background_target("TID-background")
                 .filter(|target| target.has_non_default_session_state())
                 .is_none_or(|state| !state.fetch_owner.is_enabled())
         );
         assert!(
-            parked
-                .background_target("TID-parked")
+            background
+                .background_target("TID-background")
                 .expect("background target must exist")
                 .fetch_owner
                 .pending_state()
@@ -2776,7 +2776,7 @@ mod tests {
     }
 
     #[test]
-    fn target_session_owner_mut_snapshots_active_and_parked_navigation_history() {
+    fn target_session_owner_mut_snapshots_active_and_background_navigation_history() {
         let mut active = BrowserContext::new_with_page_for_test("BID-active", "TID-active");
         active
             .active_page_target_mut()
@@ -2800,28 +2800,28 @@ mod tests {
             assert_eq!(entries[0].url, "https://active.example/");
         }
 
-        let mut parked = parked_target_context();
-        parked
-            .background_target_mut("TID-parked")
+        let mut background = background_target_context();
+        background
+            .background_target_mut("TID-background")
             .expect("background target must exist")
             .owner_state
             .record_loaded_page_navigation_history((
-                "https://parked.example/".to_owned(),
-                "parked".to_owned(),
+                "https://background.example/".to_owned(),
+                "background".to_owned(),
             ));
         {
             let mut owner = TargetSessionOwnerMut {
-                browser_context: &mut parked,
-                target_id: "TID-parked".to_owned(),
+                browser_context: &mut background,
+                target_id: "TID-background".to_owned(),
                 command_session_id: None,
                 session_key: DevToolsSessionKey::Primary,
             };
             let (current_index, entries) = owner
                 .navigation_history_snapshot()
-                .expect("parked history should snapshot");
+                .expect("background history should snapshot");
             assert_eq!(current_index, 0);
             assert_eq!(entries.len(), 1);
-            assert_eq!(entries[0].url, "https://parked.example/");
+            assert_eq!(entries[0].url, "https://background.example/");
         }
     }
 
@@ -2927,32 +2927,32 @@ mod tests {
 
     #[test]
     fn target_session_owner_mut_prepares_background_navigation_request_preflight() {
-        let mut parked = BrowserContext::new_with_page_for_test("BID-parked", "TID-active");
-        parked
+        let mut background = BrowserContext::new_with_page_for_test("BID-background", "TID-active");
+        background
             .active_page_target_mut()
             .set_base_locale_override(Some("zh-CN".to_owned()));
-        parked
+        background
             .active_page_target_mut()
             .network_policy
             .set_browser_identity_override(test_browser_identity("Active-Only-UA"));
-        parked.replace_default_browser_identity_override_for_test(test_browser_identity(
+        background.replace_default_browser_identity_override_for_test(test_browser_identity(
             "Browser-Context-Default-UA",
         ));
-        parked.insert_page_target_host(crate::conn::PageTargetHost::with_url(
-            "TID-parked".to_owned(),
-            Some("SID-parked".to_owned()),
+        background.insert_page_target_host(crate::conn::PageTargetHost::with_url(
+            "TID-background".to_owned(),
+            Some("SID-background".to_owned()),
             "about:blank".to_owned(),
         ));
         {
-            let state = parked
-                .background_target_mut("TID-parked")
+            let state = background
+                .background_target_mut("TID-background")
                 .expect("background target must exist");
             state.runtime_slot.enable_primary_network_events();
             state
                 .network_policy
-                .push_extra_header(("X-Owner".to_owned(), "parked".to_owned()));
+                .push_extra_header(("X-Owner".to_owned(), "background".to_owned()));
             state.fetch_owner.configure(
-                Some("SID-parked".to_owned()),
+                Some("SID-background".to_owned()),
                 false,
                 vec![FetchInterceptionPattern {
                     url_pattern: "*".to_owned(),
@@ -2961,27 +2961,27 @@ mod tests {
                 }],
             );
         }
-        parked
-            .background_target_mut("TID-parked")
+        background
+            .background_target_mut("TID-background")
             .expect("background target should exist")
             .runtime_slot
             .record_captured_response_body(
                 "REQ-old".to_owned(),
                 "old body".to_owned(),
-                vec![Some("SID-parked".to_owned())],
+                vec![Some("SID-background".to_owned())],
             );
         assert!(
-            parked
-                .background_target("TID-parked")
+            background
+                .background_target("TID-background")
                 .expect("background target should exist")
                 .runtime_slot()
                 .has_captured_response_body("REQ-old")
         );
 
         let mut owner = TargetSessionOwnerMut {
-            browser_context: &mut parked,
-            target_id: "TID-parked".to_owned(),
-            command_session_id: Some("SID-parked".to_owned()),
+            browser_context: &mut background,
+            target_id: "TID-background".to_owned(),
+            command_session_id: Some("SID-background".to_owned()),
             session_key: DevToolsSessionKey::Primary,
         };
         let mut network_request_id_allocator = ConnectionNetworkRequestIdAllocator::default();
@@ -2995,8 +2995,8 @@ mod tests {
             )
             .expect("background preflight should prepare");
 
-        assert_eq!(preflight.frame_id, "TID-parked");
-        assert_eq!(preflight.session_id.as_deref(), Some("SID-parked"));
+        assert_eq!(preflight.frame_id, "TID-background");
+        assert_eq!(preflight.session_id.as_deref(), Some("SID-background"));
         assert_eq!(
             preflight.document_fetch_request_stage,
             Some(FetchRequestStage::Response)
@@ -3010,8 +3010,8 @@ mod tests {
             Some("INT-1")
         );
         assert!(
-            !parked
-                .background_target("TID-parked")
+            !background
+                .background_target("TID-background")
                 .expect("background target should exist")
                 .runtime_slot()
                 .has_captured_response_body("REQ-old")
@@ -3019,7 +3019,7 @@ mod tests {
         assert!(
             preflight
                 .request_headers
-                .contains(&("X-Owner".to_owned(), "parked".to_owned()))
+                .contains(&("X-Owner".to_owned(), "background".to_owned()))
         );
         assert!(
             preflight
@@ -3047,21 +3047,21 @@ mod tests {
 
     #[test]
     fn target_session_owner_mut_observes_background_data_url_navigation_with_network_listener() {
-        let mut parked = BrowserContext::new("BID-parked".to_owned());
-        parked.insert_page_target_host(crate::conn::PageTargetHost::with_url(
-            "TID-parked".to_owned(),
-            Some("SID-parked".to_owned()),
+        let mut background = BrowserContext::new("BID-background".to_owned());
+        background.insert_page_target_host(crate::conn::PageTargetHost::with_url(
+            "TID-background".to_owned(),
+            Some("SID-background".to_owned()),
             "about:blank".to_owned(),
         ));
-        parked
-            .background_target_mut("TID-parked")
+        background
+            .background_target_mut("TID-background")
             .expect("background target must exist")
             .runtime_slot
             .enable_primary_network_events();
 
         let mut owner = TargetSessionOwnerMut {
-            browser_context: &mut parked,
-            target_id: "TID-parked".to_owned(),
+            browser_context: &mut background,
+            target_id: "TID-background".to_owned(),
             command_session_id: None,
             session_key: DevToolsSessionKey::Primary,
         };
@@ -3076,8 +3076,8 @@ mod tests {
             )
             .expect("background data URL preflight should prepare");
 
-        assert_eq!(preflight.frame_id, "TID-parked");
-        assert_eq!(preflight.session_id.as_deref(), Some("SID-parked"));
+        assert_eq!(preflight.frame_id, "TID-background");
+        assert_eq!(preflight.session_id.as_deref(), Some("SID-background"));
         assert_eq!(preflight.document_fetch_request_stage, None);
         assert_eq!(
             preflight.document_request_id.as_deref(),
@@ -3094,18 +3094,18 @@ mod tests {
 
     #[test]
     fn target_session_owner_ref_snapshots_background_navigation_load_inputs() {
-        let mut parked = BrowserContext::new_with_page_for_test("BID-parked", "TID-active");
-        parked
+        let mut background = BrowserContext::new_with_page_for_test("BID-background", "TID-active");
+        background
             .active_page_target_mut()
             .set_base_locale_override(Some("zh-CN".to_owned()));
-        parked.insert_page_target_host(crate::conn::PageTargetHost::with_url(
-            "TID-parked".to_owned(),
-            Some("SID-parked".to_owned()),
-            "https://parked.example/start".to_owned(),
+        background.insert_page_target_host(crate::conn::PageTargetHost::with_url(
+            "TID-background".to_owned(),
+            Some("SID-background".to_owned()),
+            "https://background.example/start".to_owned(),
         ));
         {
-            let state = parked
-                .background_target_mut("TID-parked")
+            let state = background
+                .background_target_mut("TID-background")
                 .expect("background target must exist");
             state.set_base_locale_override(Some("fr-FR".to_owned()));
             state.set_base_timezone_override(Some("Europe/Paris".to_owned()));
@@ -3122,10 +3122,10 @@ mod tests {
             network.blocked_url_patterns = vec!["*.blocked.test".to_owned()];
             state
                 .network_policy
-                .push_extra_header(("X-Owner".to_owned(), "parked".to_owned()));
+                .push_extra_header(("X-Owner".to_owned(), "background".to_owned()));
             state.emulated_media.media = Some("print".to_owned());
             state.fetch_owner.configure(
-                Some("SID-parked".to_owned()),
+                Some("SID-background".to_owned()),
                 false,
                 vec![FetchInterceptionPattern {
                     url_pattern: "*".to_owned(),
@@ -3134,8 +3134,8 @@ mod tests {
                 }],
             );
         }
-        parked
-            .background_target_mut("TID-parked")
+        background
+            .background_target_mut("TID-background")
             .expect("background target must exist")
             .owner_state
             .document_start_scripts
@@ -3144,58 +3144,58 @@ mod tests {
                 DocumentStartScript {
                     registry_key: None,
                     devtools_session: None,
-                    source: "globalThis.fromParkedPreload = true;".to_owned(),
+                    source: "globalThis.fromBackgroundPreload = true;".to_owned(),
                     world_name: Some("utility".to_owned()),
                     has_bidi_channel_argument: false,
                     bidi_channel_handoffs: Vec::new(),
                 },
             ));
-        parked
-            .background_target_mut("TID-parked")
+        background
+            .background_target_mut("TID-background")
             .expect("background target must exist")
             .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .upsert_runtime_binding_definition(
-                "fromParkedBinding".to_owned(),
+                "fromBackgroundBinding".to_owned(),
                 Some("utility".to_owned()),
             );
 
         let owner = TargetSessionOwnerRef {
-            browser_context: &parked,
-            target_id: "TID-parked".to_owned(),
+            browser_context: &background,
+            target_id: "TID-background".to_owned(),
             session_key: DevToolsSessionKey::Primary,
         };
         let inputs = owner.navigation_load_inputs();
 
-        assert_eq!(inputs.browser_context_id.as_deref(), Some("BID-parked"));
+        assert_eq!(inputs.browser_context_id.as_deref(), Some("BID-background"));
         assert!(
             inputs
                 .renderer_runtime
                 .runtime()
-                .shares_state_with(&parked.renderer_runtime()),
+                .shares_state_with(&background.renderer_runtime()),
             "background navigation must reuse the browser-context renderer runtime"
         );
         assert_eq!(
             inputs.navigation_initiator_url.as_ref().map(Url::as_str),
-            Some("https://parked.example/start")
+            Some("https://background.example/start")
         );
         assert!(
             inputs
                 .document_start_scripts
                 .iter()
-                .any(|script| script.source == "globalThis.fromParkedPreload = true;")
+                .any(|script| script.source == "globalThis.fromBackgroundPreload = true;")
         );
         assert_eq!(
             inputs.runtime_bindings,
             vec![RuntimeBindingDefinition {
                 devtools_session: Some(moli_page_types::DevToolsSessionKey::Primary),
-                name: "fromParkedBinding".to_owned(),
+                name: "fromBackgroundBinding".to_owned(),
                 execution_context_name: Some("utility".to_owned()),
             }]
         );
         assert!(
             inputs
                 .extra_http_headers
-                .contains(&("X-Owner".to_owned(), "parked".to_owned()))
+                .contains(&("X-Owner".to_owned(), "background".to_owned()))
         );
         assert!(
             inputs
@@ -3230,15 +3230,15 @@ mod tests {
 
     #[test]
     fn target_session_owner_mut_prepares_background_navigation_commit_state() {
-        let mut parked = BrowserContext::new("BID-parked".to_owned());
-        parked.insert_page_target_host(crate::conn::PageTargetHost::with_url(
-            "TID-parked".to_owned(),
-            Some("SID-parked".to_owned()),
+        let mut background = BrowserContext::new("BID-background".to_owned());
+        background.insert_page_target_host(crate::conn::PageTargetHost::with_url(
+            "TID-background".to_owned(),
+            Some("SID-background".to_owned()),
             "about:blank".to_owned(),
         ));
         {
-            let state = parked
-                .background_target_mut("TID-parked")
+            let state = background
+                .background_target_mut("TID-background")
                 .expect("background target must exist");
             state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
@@ -3247,7 +3247,7 @@ mod tests {
                 .runtime_session_state
                 .runtime_frontend_enabled = true;
             state.fetch_owner.configure(
-                Some("SID-parked".to_owned()),
+                Some("SID-background".to_owned()),
                 false,
                 vec![FetchInterceptionPattern {
                     url_pattern: "*".to_owned(),
@@ -3259,8 +3259,8 @@ mod tests {
 
         let commit_state = {
             let mut owner = TargetSessionOwnerMut {
-                browser_context: &mut parked,
-                target_id: "TID-parked".to_owned(),
+                browser_context: &mut background,
+                target_id: "TID-background".to_owned(),
                 command_session_id: None,
                 session_key: DevToolsSessionKey::Primary,
             };
@@ -3269,23 +3269,23 @@ mod tests {
                 .expect("background navigation commit state should prepare")
         };
 
-        assert_eq!(commit_state.browser_context_id, "BID-parked");
+        assert_eq!(commit_state.browser_context_id, "BID-background");
         assert!(commit_state.runtime_frontend_enabled);
         assert_eq!(
-            parked
-                .background_target("TID-parked")
+            background
+                .background_target("TID-background")
                 .expect("background target")
                 .target_url(),
             "about:blank",
             "preparing commit state should not mutate target identity"
         );
         let navigation_url = Url::parse("https://nav.example/path").unwrap();
-        parked
-            .background_target_mut("TID-parked")
+        background
+            .background_target_mut("TID-background")
             .expect("background target")
             .set_target_secure_context_type("InsecureScheme".to_owned());
         let main_document_commit = RendererMainDocumentCommit {
-            frame_id: "TID-parked".to_owned(),
+            frame_id: "TID-background".to_owned(),
             loader_id: "LOADER-nav".to_owned(),
             url: navigation_url.to_string(),
             unreachable_url: None,
@@ -3295,8 +3295,8 @@ mod tests {
         };
         {
             let mut owner = TargetSessionOwnerMut {
-                browser_context: &mut parked,
-                target_id: "TID-parked".to_owned(),
+                browser_context: &mut background,
+                target_id: "TID-background".to_owned(),
                 command_session_id: None,
                 session_key: DevToolsSessionKey::Primary,
             };
@@ -3305,15 +3305,15 @@ mod tests {
                 .expect("background navigation identity should commit")
         };
         assert_eq!(
-            parked
-                .background_target("TID-parked")
+            background
+                .background_target("TID-background")
                 .expect("background target")
                 .target_url(),
             "https://nav.example/path"
         );
         assert_eq!(
-            parked
-                .background_target("TID-parked")
+            background
+                .background_target("TID-background")
                 .expect("background target")
                 .target_identity()
                 .secure_context_type(),
@@ -3324,15 +3324,15 @@ mod tests {
 
     #[test]
     fn target_session_owner_mut_clears_background_navigation_history_update() {
-        let mut parked = BrowserContext::new("BID-parked".to_owned());
-        parked.insert_page_target_host(crate::conn::PageTargetHost::with_url(
-            "TID-parked".to_owned(),
-            Some("SID-parked".to_owned()),
+        let mut background = BrowserContext::new("BID-background".to_owned());
+        background.insert_page_target_host(crate::conn::PageTargetHost::with_url(
+            "TID-background".to_owned(),
+            Some("SID-background".to_owned()),
             "about:blank".to_owned(),
         ));
         {
-            let owner_state = &mut parked
-                .background_target_mut("TID-parked")
+            let owner_state = &mut background
+                .background_target_mut("TID-background")
                 .expect("background target must exist")
                 .owner_state;
             owner_state.record_loaded_page_navigation_history((
@@ -3343,8 +3343,8 @@ mod tests {
         }
         {
             let mut owner = TargetSessionOwnerMut {
-                browser_context: &mut parked,
-                target_id: "TID-parked".to_owned(),
+                browser_context: &mut background,
+                target_id: "TID-background".to_owned(),
                 command_session_id: None,
                 session_key: DevToolsSessionKey::Primary,
             };
@@ -3352,16 +3352,16 @@ mod tests {
                 .clear_pending_navigation_history_update()
                 .expect("background history update should clear");
         }
-        parked
-            .background_target_mut("TID-parked")
+        background
+            .background_target_mut("TID-background")
             .expect("background target must exist")
             .owner_state
             .record_loaded_page_navigation_history((
                 "https://new.example/".to_owned(),
                 "new".to_owned(),
             ));
-        let (_, entries) = parked
-            .background_target_mut("TID-parked")
+        let (_, entries) = background
+            .background_target_mut("TID-background")
             .expect("background target must exist")
             .owner_state
             .navigation_history_snapshot(None);
@@ -3383,21 +3383,21 @@ mod tests {
             .await
             .expect("page should load");
         let page_url = page.final_url().clone();
-        let mut parked = BrowserContext::new("BID-parked".to_owned());
-        parked.insert_page_target_host(crate::conn::PageTargetHost::with_url(
-            "TID-parked".to_owned(),
-            Some("SID-parked".to_owned()),
+        let mut background = BrowserContext::new("BID-background".to_owned());
+        background.insert_page_target_host(crate::conn::PageTargetHost::with_url(
+            "TID-background".to_owned(),
+            Some("SID-background".to_owned()),
             "about:blank".to_owned(),
         ));
-        let initial_attachment_id = parked
-            .background_target("TID-parked")
+        let initial_attachment_id = background
+            .background_target("TID-background")
             .expect("background target")
             .page_attachment_id();
 
         {
             let mut owner = TargetSessionOwnerMut {
-                browser_context: &mut parked,
-                target_id: "TID-parked".to_owned(),
+                browser_context: &mut background,
+                target_id: "TID-background".to_owned(),
                 command_session_id: None,
                 session_key: DevToolsSessionKey::Primary,
             };
@@ -3412,16 +3412,16 @@ mod tests {
                 .expect("background page Inspector binding should activate");
         }
 
-        let target = parked
-            .background_target("TID-parked")
+        let target = background
+            .background_target("TID-background")
             .expect("background target");
         assert!(target.has_loaded_page());
         assert!(
             target.page_attachment_id().is_some()
                 && target.page_attachment_id() != initial_attachment_id
         );
-        let (_, entries) = parked
-            .background_target_mut("TID-parked")
+        let (_, entries) = background
+            .background_target_mut("TID-background")
             .expect("background target must exist")
             .owner_state
             .navigation_history_snapshot(None);
@@ -3535,7 +3535,7 @@ mod tests {
     }
 
     #[test]
-    fn connection_target_owner_reference_reads_and_mutates_active_and_parked_state() {
+    fn connection_target_owner_reference_reads_and_mutates_active_and_background_state() {
         let mut conn = CdpConnection::default();
         let mut browser_context = BrowserContext::new("BID-1".to_owned());
         browser_context.set_active_target_id("TID-active".to_owned());
@@ -3598,15 +3598,17 @@ mod tests {
         browser_context.set_active_target_id("TID-page-events".to_owned());
         browser_context.attach_active_session("SID-primary".to_owned());
         assert!(
-            browser_context.assign_auxiliary_session_to_target(
+            browser_context.assign_attached_session_to_target(
                 "TID-page-events",
                 "SID-page-enabled".to_owned(),
             )
         );
-        assert!(browser_context.assign_auxiliary_session_to_target(
-            "TID-page-events",
-            "SID-lifecycle-only".to_owned(),
-        ));
+        assert!(
+            browser_context.assign_attached_session_to_target(
+                "TID-page-events",
+                "SID-lifecycle-only".to_owned(),
+            )
+        );
         conn.browser_context = Some(browser_context);
 
         for session_id in ["SID-primary", "SID-lifecycle-only"] {
@@ -3625,7 +3627,7 @@ mod tests {
             Some("SID-page-enabled"),
             |state| state.page_session_state.page_domain_enabled = true,
         )
-        .expect("Page-enabled auxiliary session should be mutable");
+        .expect("Page-enabled attached session should be mutable");
         assert_eq!(
             conn.subscribed_page_event_session_ids_for_session_owner(Some("SID-primary")),
             vec![Some("SID-page-enabled".to_owned())]
@@ -3652,12 +3654,12 @@ mod tests {
         browser_context.set_active_target_id("TID-runtime-events".to_owned());
         browser_context.attach_active_session("SID-runtime-a".to_owned());
         assert!(
-            browser_context.assign_auxiliary_session_to_target(
+            browser_context.assign_attached_session_to_target(
                 "TID-runtime-events",
                 "SID-runtime-b".to_owned(),
             )
         );
-        assert!(browser_context.assign_auxiliary_session_to_target(
+        assert!(browser_context.assign_attached_session_to_target(
             "TID-runtime-events",
             "SID-runtime-disabled".to_owned(),
         ));
@@ -3670,7 +3672,7 @@ mod tests {
         conn.with_target_devtools_session_state_for_session_mut(Some("SID-runtime-b"), |state| {
             state.runtime_session_state.runtime_frontend_enabled = true
         })
-        .expect("Runtime-enabled auxiliary session should be mutable");
+        .expect("Runtime-enabled attached session should be mutable");
         assert_eq!(
             conn.runtime_event_protocol_attachments_for_owner(
                 &crate::conn::CommandOwnerScope::for_session("SID-runtime-a")
@@ -3749,7 +3751,7 @@ mod tests {
     }
 
     #[test]
-    fn connection_runtime_slot_reference_reads_and_mutates_active_background_and_auxiliary_slots() {
+    fn connection_runtime_slot_reference_reads_and_mutates_active_background_and_attached_slots() {
         let mut conn = CdpConnection::default();
         let mut active = BrowserContext::new_with_page_for_test("BID-active", "TID-active");
         active.set_active_target_id("TID-active".to_owned());
@@ -3766,12 +3768,10 @@ mod tests {
             .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .log_enabled = true;
-        assert!(
-            active.assign_auxiliary_session_to_target(
-                "TID-background",
-                "SID-aux-background".to_owned()
-            )
-        );
+        assert!(active.assign_attached_session_to_target(
+            "TID-background",
+            "SID-attached-background".to_owned()
+        ));
 
         let mut inactive = BrowserContext::new("BID-inactive".to_owned());
         inactive.set_active_target_id("TID-inactive".to_owned());
@@ -3779,12 +3779,14 @@ mod tests {
         inactive
             .active_page_target_mut()
             .devtools_sessions
-            .ensure_attached("SID-aux-inactive")
+            .ensure_attached("SID-attached-inactive")
             .console_output_session_state
             .console_enabled = true;
         assert!(
-            inactive
-                .assign_auxiliary_session_to_target("TID-inactive", "SID-aux-inactive".to_owned())
+            inactive.assign_attached_session_to_target(
+                "TID-inactive",
+                "SID-attached-inactive".to_owned()
+            )
         );
 
         conn.browser_context = Some(active);
@@ -3796,8 +3798,8 @@ mod tests {
         conn.runtime_session_owner_slot_mut(Some("SID-background"))
             .expect("background runtime slot should be mutable")
             .set_page_attachment_id_for_test(22);
-        conn.runtime_session_owner_slot_mut(Some("SID-aux-inactive"))
-            .expect("inactive auxiliary runtime slot should be mutable")
+        conn.runtime_session_owner_slot_mut(Some("SID-attached-inactive"))
+            .expect("inactive attached runtime slot should be mutable")
             .set_page_attachment_id_for_test(33);
 
         assert_eq!(
@@ -3815,15 +3817,15 @@ mod tests {
             Some(22)
         );
         assert_eq!(
-            conn.runtime_session_owner_slot(Some("SID-aux-background"))
-                .expect("background auxiliary runtime slot should be readable")
+            conn.runtime_session_owner_slot(Some("SID-attached-background"))
+                .expect("background attached runtime slot should be readable")
                 .page_attachment_id()
                 .map(crate::conn::TargetPageAttachmentId::get),
             Some(22)
         );
         assert_eq!(
-            conn.runtime_session_owner_slot(Some("SID-aux-inactive"))
-                .expect("inactive auxiliary runtime slot should be readable")
+            conn.runtime_session_owner_slot(Some("SID-attached-inactive"))
+                .expect("inactive attached runtime slot should be readable")
                 .page_attachment_id()
                 .map(crate::conn::TargetPageAttachmentId::get),
             Some(33)
@@ -3839,7 +3841,7 @@ mod tests {
             Some("SID-background")
         );
         assert_eq!(
-            conn.runtime_session_owner_primary_session_id(Some("SID-aux-background"))
+            conn.runtime_session_owner_primary_session_id(Some("SID-attached-background"))
                 .as_deref(),
             Some("SID-background")
         );
@@ -3849,16 +3851,16 @@ mod tests {
             Some("https://background.example/")
         );
         assert_eq!(
-            conn.runtime_session_owner_target_url(Some("SID-aux-inactive"))
+            conn.runtime_session_owner_target_url(Some("SID-attached-inactive"))
                 .as_deref(),
             Some("https://inactive.example/")
         );
         assert_eq!(
-            conn.target_owner_identity_for_session(Some("SID-aux-background")),
+            conn.target_owner_identity_for_session(Some("SID-attached-background")),
             Some(("BID-active".to_owned(), Some("TID-background".to_owned())))
         );
         assert_eq!(
-            conn.target_owner_identity_for_session(Some("SID-aux-inactive")),
+            conn.target_owner_identity_for_session(Some("SID-attached-inactive")),
             Some(("BID-inactive".to_owned(), Some("TID-inactive".to_owned())))
         );
         assert!(
@@ -3867,8 +3869,8 @@ mod tests {
                 .log_enabled
         );
         assert!(
-            conn.target_devtools_session_state_for_session(Some("SID-aux-inactive"))
-                .expect("inactive auxiliary DevTools session state should be readable")
+            conn.target_devtools_session_state_for_session(Some("SID-attached-inactive"))
+                .expect("inactive attached DevTools session state should be readable")
                 .console_output_session_state
                 .console_enabled
         );
@@ -3893,7 +3895,7 @@ mod tests {
                 .background_target("TID-background-dialog")
                 .filter(|target| target.has_non_default_session_state())
                 .is_none(),
-            "a background target with default protocol settings should not allocate parked overrides"
+            "a background target with default protocol settings should not allocate background overrides"
         );
         conn.browser_context = Some(browser_context);
 

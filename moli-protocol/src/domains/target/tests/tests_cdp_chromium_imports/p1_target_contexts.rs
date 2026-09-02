@@ -259,7 +259,7 @@ async fn rust_cdp_chromium_target_dispose_inactive_context_preserves_active_cont
 // Chromium source:
 // third_party/blink/web_tests/http/tests/inspector-protocol/target/target-browser-context.js
 #[tokio::test(flavor = "multi_thread")]
-async fn rust_cdp_chromium_target_dispose_active_context_promotes_remaining_context() {
+async fn rust_cdp_chromium_target_dispose_active_context_activates_remaining_context() {
     let mut ctx = TestContext::new_with_target_discovery(false);
     let first_id = create_browser_context(&mut ctx, 261_013).await;
     let second_id = create_browser_context(&mut ctx, 261_014).await;
@@ -542,7 +542,7 @@ async fn rust_cdp_chromium_target_get_targets_lists_context_ids_for_multiple_con
 #[tokio::test(flavor = "multi_thread")]
 async fn rust_cdp_chromium_target_popup_target_keeps_opener_browser_context_id() {
     let mut ctx = TestContext::new_with_target_discovery(false);
-    // Chromium creates the auxiliary browsing context and returns from the
+    // Chromium creates the attached browsing context and returns from the
     // causing Runtime command before the popup's requested URL finishes
     // loading. Use the production scheduler boundary here: leaving this test
     // on TestContext's legacy inline-navigation mode makes an unrelated

@@ -1256,13 +1256,13 @@ impl CdpConnection {
             .await
     }
 
-    pub(crate) async fn process_message_with_command_reply_turn_outcome_async(
+    pub(crate) async fn process_nested_target_message_adapter_async(
         &mut self,
         raw: &str,
     ) -> CdpRendererOwnerTurnOutcome {
         self.process_message_with_terminal_response_delivery_async(
             raw,
-            Some(moli_page_types::RendererInspectorResponseDelivery::CommandReply),
+            Some(moli_page_types::RendererInspectorResponseDelivery::AdapterReply),
         )
         .await
     }

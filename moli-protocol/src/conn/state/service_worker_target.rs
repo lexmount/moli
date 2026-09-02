@@ -493,6 +493,16 @@ impl ServiceWorkerTargetState {
         state.clear_runtime_remote_object_tracking();
     }
 
+    pub(crate) fn take_runtime_remote_object_cleanup_plan(
+        &mut self,
+        session_id: &str,
+    ) -> (Vec<String>, Vec<String>) {
+        let Some(state) = self.session_state_mut(session_id) else {
+            return (Vec::new(), Vec::new());
+        };
+        state.take_runtime_remote_object_cleanup_plan()
+    }
+
     pub(crate) fn record_runtime_contexts_reported_to_frontend(&mut self, session_id: &str) {
         let Some(state) = self.session_state_mut(session_id) else {
             return;

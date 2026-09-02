@@ -56,7 +56,7 @@ async def run_geolocation_override_smoke(browser: Any, fixture: str, results: li
         page = await context.new_page()
         await page.goto(f"{fixture}/plain", wait_until="load", timeout=10_000)
         primary = await context.new_cdp_session(page)
-        auxiliary = await context.new_cdp_session(page)
+        attached = await context.new_cdp_session(page)
         try:
             await primary.send(
                 "Emulation.setGeolocationOverride",
@@ -80,14 +80,14 @@ async def run_geolocation_override_smoke(browser: Any, fixture: str, results: li
             assert_equal(unavailable.get("ok"), False, "CDP explicit unavailable result")
             assert_equal(unavailable.get("code"), 2, "CDP explicit unavailable error code")
 
-            await auxiliary.send(
+            await attached.send(
                 "Emulation.setGeolocationOverride",
                 {"latitude": 35, "longitude": 139, "accuracy": 3},
             )
             assert_equal(
                 await _read_geolocation(page),
                 {"ok": True, "latitude": 35, "longitude": 139, "accuracy": 3},
-                "CDP auxiliary session geolocation override",
+                "CDP attached session geolocation override",
             )
 
             await primary.send("Emulation.clearGeolocationOverride")
@@ -95,7 +95,7 @@ async def run_geolocation_override_smoke(browser: Any, fixture: str, results: li
             assert_equal(cleared.get("ok"), False, "CDP geolocation clear restores provider")
             record(results, "geolocation_override_set_unavailable_clear")
         finally:
-            await auxiliary.detach()
+            await attached.detach()
             await primary.detach()
     finally:
         await context.close()

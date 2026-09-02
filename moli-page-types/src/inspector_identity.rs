@@ -7,13 +7,15 @@ use std::{
 /// Destination that owns the terminal response of one renderer Inspector
 /// command.
 ///
-/// Frontend DevTools commands may publish directly through their concrete
-/// session capability. Internal protocol adapters retain a private command
-/// reply channel even when they synthesize the same CDP method.
+/// Every external Page or Worker command publishes through `SessionSink`.
+/// `AdapterReply` is reserved for commands synthesized by protocol adapters
+/// (Classic/WebDriver BiDi and the non-flat Target transport); its
+/// result is consumed internally and is never emitted as a frontend terminal
+/// response.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RendererInspectorResponseDelivery {
-    CommandReply,
-    DevToolsSession,
+    AdapterReply,
+    SessionSink,
 }
 
 static NEXT_RENDERER_DEVTOOLS_AGENT_TOKEN: AtomicU64 = AtomicU64::new(1);

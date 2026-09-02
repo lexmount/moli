@@ -543,7 +543,7 @@ async fn dom_storage_resolves_child_frame_storage_ids_without_collapsing_to_top_
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn dom_storage_mutations_fan_out_to_enabled_primary_and_auxiliary_sessions() {
+async fn dom_storage_mutations_fan_out_to_enabled_primary_and_attached_sessions() {
     let (mut ctx, _page_url, _origin, server) = loaded_dom_storage_context().await;
 
     ctx.process_async(json!({
@@ -562,16 +562,16 @@ async fn dom_storage_mutations_fan_out_to_enabled_primary_and_auxiliary_sessions
         "params": { "targetId": "TID-DOM-STORAGE" }
     }))
     .await;
-    let auxiliary_session_id = take_result_by_id(&mut ctx, 31)["sessionId"]
+    let attached_session_id = take_result_by_id(&mut ctx, 31)["sessionId"]
         .as_str()
-        .expect("auxiliary target session id")
+        .expect("attached target session id")
         .to_owned();
-    assert_ne!(primary_session_id, auxiliary_session_id);
+    assert_ne!(primary_session_id, attached_session_id);
     ctx.sent.clear();
 
     for (id, session_id) in [
         (32, primary_session_id.as_str()),
-        (33, auxiliary_session_id.as_str()),
+        (33, attached_session_id.as_str()),
     ] {
         ctx.process_async(json!({
             "id": id,
@@ -603,7 +603,7 @@ async fn dom_storage_mutations_fan_out_to_enabled_primary_and_auxiliary_sessions
         .filter_map(|message| message["sessionId"].as_str().map(str::to_owned))
         .collect::<Vec<_>>();
     event_session_ids.sort();
-    let mut expected_session_ids = vec![primary_session_id, auxiliary_session_id];
+    let mut expected_session_ids = vec![primary_session_id, attached_session_id];
     expected_session_ids.sort();
     assert_eq!(event_session_ids, expected_session_ids);
 

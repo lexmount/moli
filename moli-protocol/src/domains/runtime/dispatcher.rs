@@ -1029,7 +1029,7 @@ fn start_main_runtime_inspector_command_for_owner(
         cmd,
         &owner_scope,
         inspector_json,
-        cmd.terminal_response_delivery(RendererInspectorResponseDelivery::DevToolsSession),
+        cmd.terminal_response_delivery(),
     ) {
         Ok(pending) => pending,
         Err(message) => {
@@ -1089,7 +1089,7 @@ pub(crate) fn start_profiler_inspector_command_dispatch(
         cmd,
         &owner_scope,
         dispatch.into_inspector_json(),
-        cmd.terminal_response_delivery(RendererInspectorResponseDelivery::DevToolsSession),
+        cmd.terminal_response_delivery(),
     ) {
         Ok(pending) => pending,
         Err(message) => {
@@ -1178,7 +1178,7 @@ pub(crate) fn start_heap_profiler_inspector_command_dispatch(
         cmd,
         &owner_scope,
         cmd.json.to_owned(),
-        cmd.terminal_response_delivery(RendererInspectorResponseDelivery::DevToolsSession),
+        cmd.terminal_response_delivery(),
     ) {
         Ok(pending) => pending,
         Err(message) => {
@@ -1232,7 +1232,7 @@ pub(crate) fn start_debugger_inspector_command_dispatch(
                 cmd,
                 &owner_scope,
                 inspector_json,
-                cmd.terminal_response_delivery(RendererInspectorResponseDelivery::DevToolsSession),
+                cmd.terminal_response_delivery(),
             )
         }
         CdpRendererCommandAccess::Io => start_pending_runtime_io_inspector_dispatch(
@@ -1240,7 +1240,7 @@ pub(crate) fn start_debugger_inspector_command_dispatch(
             cmd,
             &owner_scope,
             inspector_json,
-            cmd.terminal_response_delivery(RendererInspectorResponseDelivery::DevToolsSession),
+            cmd.terminal_response_delivery(),
         ),
         CdpRendererCommandAccess::OwnerIndependent => Err(
             "an owner-independent command cannot enter the Debugger Inspector dispatcher"
@@ -1298,7 +1298,7 @@ fn start_heap_profiler_inspector_shared_worker_command_dispatch(
         conn,
         cmd,
         cmd.json.to_owned(),
-        cmd.terminal_response_delivery(RendererInspectorResponseDelivery::DevToolsSession),
+        cmd.terminal_response_delivery(),
     ) {
         Ok(pending) => pending,
         Err(message)
@@ -1396,7 +1396,7 @@ fn start_profiler_inspector_shared_worker_command_dispatch(
         conn,
         cmd,
         dispatch.into_inspector_json(),
-        cmd.terminal_response_delivery(RendererInspectorResponseDelivery::DevToolsSession),
+        cmd.terminal_response_delivery(),
     ) {
         Ok(pending) => pending,
         Err(message) => {
@@ -1454,7 +1454,7 @@ pub(crate) fn start_console_inspector_command_dispatch(
         cmd,
         &owner_scope,
         cmd.json.to_owned(),
-        cmd.terminal_response_delivery(RendererInspectorResponseDelivery::DevToolsSession),
+        cmd.terminal_response_delivery(),
     ) {
         Ok(pending) => pending,
         Err(message) => {
@@ -1523,7 +1523,7 @@ fn start_console_inspector_shared_worker_command_dispatch(
         conn,
         cmd,
         cmd.json.to_owned(),
-        cmd.terminal_response_delivery(RendererInspectorResponseDelivery::DevToolsSession),
+        cmd.terminal_response_delivery(),
     ) {
         Ok(pending) => pending,
         Err(message) if worker_runtime_is_unavailable(&message) => {
@@ -1586,7 +1586,7 @@ fn start_console_inspector_service_worker_command_dispatch(
         conn,
         cmd,
         cmd.json.to_owned(),
-        cmd.terminal_response_delivery(RendererInspectorResponseDelivery::DevToolsSession),
+        cmd.terminal_response_delivery(),
     ) {
         Ok(pending) => pending,
         Err(message) if message == "ServiceWorkerRuntimeUnavailable" => {
@@ -1793,8 +1793,7 @@ fn try_start_pending_runtime_binding_command(
         execution_context_id,
         inspector_json: Some(cmd.json.to_owned()),
         command_response: None,
-        response_delivery: cmd
-            .terminal_response_delivery(RendererInspectorResponseDelivery::DevToolsSession),
+        response_delivery: cmd.terminal_response_delivery(),
         session_response_predecessor: None,
         session_response_succeeded: None,
         should_persist,
@@ -2069,7 +2068,7 @@ fn start_cdp_devtools_script_runtime_command(
         command,
         inspector_json,
         await_promise,
-        cmd.terminal_response_delivery(RendererInspectorResponseDelivery::DevToolsSession),
+        cmd.terminal_response_delivery(),
     )
 }
 
@@ -4637,7 +4636,7 @@ async fn start_protocol_neutral_runtime_command(
                     command,
                     inspector_json,
                     runtime_command_awaits_promise(&cmd, RuntimeAction::Evaluate),
-                    RendererInspectorResponseDelivery::CommandReply,
+                    RendererInspectorResponseDelivery::AdapterReply,
                     owner.clone(),
                 ),
                 Err(message) => {
@@ -4694,7 +4693,7 @@ async fn start_protocol_neutral_runtime_command(
                             command,
                             inspector_json,
                             runtime_command_awaits_promise(&cmd, RuntimeAction::CallFunctionOn),
-                            RendererInspectorResponseDelivery::CommandReply,
+                            RendererInspectorResponseDelivery::AdapterReply,
                             owner.clone(),
                         ),
                         Err(message) => RuntimeCommandTaskStep::Complete(
@@ -4724,7 +4723,10 @@ async fn start_protocol_neutral_runtime_command(
                 }
             };
             let cmd = Cmd::from_parsed(&parsed)
-                .expect("synthesized Runtime command must contain a domain separator");
+                .expect("synthesized Runtime command must contain a domain separator")
+                .with_terminal_response_delivery_override(Some(
+                    RendererInspectorResponseDelivery::AdapterReply,
+                ));
             let MainRuntimeCommand::Inspector(command) =
                 MainRuntimeCommand::classify(RuntimeAction::TerminateExecution)
             else {
@@ -8296,13 +8298,13 @@ async fn complete_pending_runtime_inspector_command(
         renderer_response_rx.take();
         saw_current_response = true;
     }
-    if response_delivery == RendererInspectorResponseDelivery::DevToolsSession {
+    if response_delivery == RendererInspectorResponseDelivery::SessionSink {
         // The attachment-scoped renderer session stream owns the terminal
         // response. The typed Page completion remains internal state only and
         // must not join or await the legacy per-command receiver.
         renderer_response_rx.take();
     }
-    if response_delivery == RendererInspectorResponseDelivery::CommandReply
+    if response_delivery == RendererInspectorResponseDelivery::AdapterReply
         && !completed.wait_for_deferred_reply
         && let Some(renderer_response_rx) = renderer_response_rx.take()
     {
@@ -8324,7 +8326,7 @@ async fn complete_pending_runtime_inspector_command(
             saw_current_response,
         );
     }
-    if response_delivery == RendererInspectorResponseDelivery::CommandReply
+    if response_delivery == RendererInspectorResponseDelivery::AdapterReply
         && completed.wait_for_deferred_reply
         && (renderer_response_rx.is_some() || !saw_current_response)
         && completed.command_id.is_some()
@@ -8721,10 +8723,10 @@ async fn complete_pending_runtime_binding_inspector_command(
     if saw_current_response {
         renderer_response_rx.take();
     }
-    if response_delivery == RendererInspectorResponseDelivery::DevToolsSession {
+    if response_delivery == RendererInspectorResponseDelivery::SessionSink {
         renderer_response_rx.take();
     }
-    if response_delivery == RendererInspectorResponseDelivery::CommandReply
+    if response_delivery == RendererInspectorResponseDelivery::AdapterReply
         && let Some(renderer_response_rx) = renderer_response_rx
     {
         route_registered_runtime_response_receiver_into(
@@ -8736,7 +8738,7 @@ async fn complete_pending_runtime_binding_inspector_command(
         )
         .await;
     }
-    if response_delivery == RendererInspectorResponseDelivery::CommandReply {
+    if response_delivery == RendererInspectorResponseDelivery::AdapterReply {
         record_runtime_binding_command_response_from_routed_events(
             &mut task,
             routed_output.events(),
@@ -9236,8 +9238,7 @@ fn start_pending_shared_worker_runtime_inspector_command(
         action.label(),
     )
     .map_err(|error| error.to_string())?;
-    let response_delivery =
-        cmd.terminal_response_delivery(RendererInspectorResponseDelivery::DevToolsSession);
+    let response_delivery = cmd.terminal_response_delivery();
     let pending = match start_shared_worker_frontend_inspector_dispatch(
         conn,
         cmd,
@@ -9305,8 +9306,7 @@ fn start_pending_service_worker_runtime_inspector_command(
         action.label(),
     )
     .map_err(|error| error.to_string())?;
-    let response_delivery =
-        cmd.terminal_response_delivery(RendererInspectorResponseDelivery::DevToolsSession);
+    let response_delivery = cmd.terminal_response_delivery();
     let pending = match start_service_worker_frontend_inspector_dispatch(
         conn,
         cmd,
@@ -9474,7 +9474,7 @@ async fn complete_pending_shared_worker_runtime_inspector_command(
     ) = match completed_inspector {
         Ok(mut completed_protocol) => {
             let response_delivery = completed_protocol.response_delivery();
-            if response_delivery == RendererInspectorResponseDelivery::DevToolsSession
+            if response_delivery == RendererInspectorResponseDelivery::SessionSink
                 && !completed.await_promise
                 && let Err(message) = completed_protocol.wait_for_session_response().await
             {
@@ -9530,10 +9530,10 @@ async fn complete_pending_shared_worker_runtime_inspector_command(
     if saw_current_response {
         renderer_response_rx.take();
     }
-    if response_delivery == RendererInspectorResponseDelivery::DevToolsSession {
+    if response_delivery == RendererInspectorResponseDelivery::SessionSink {
         renderer_response_rx.take();
     }
-    if response_delivery == RendererInspectorResponseDelivery::CommandReply
+    if response_delivery == RendererInspectorResponseDelivery::AdapterReply
         && !completed.wait_for_deferred_reply
         && let Some(renderer_response_rx) = renderer_response_rx.take()
     {
@@ -9546,7 +9546,7 @@ async fn complete_pending_shared_worker_runtime_inspector_command(
         )
         .await;
     }
-    if response_delivery == RendererInspectorResponseDelivery::CommandReply
+    if response_delivery == RendererInspectorResponseDelivery::AdapterReply
         && completed.wait_for_deferred_reply
         && (renderer_response_rx.is_some() || !saw_current_response)
         && completed.command_id.is_some()
@@ -9558,7 +9558,7 @@ async fn complete_pending_shared_worker_runtime_inspector_command(
             renderer_response_rx,
         );
     }
-    if response_delivery == RendererInspectorResponseDelivery::DevToolsSession
+    if response_delivery == RendererInspectorResponseDelivery::SessionSink
         && completed.await_promise
         && session_response_succeeded.is_none()
     {
@@ -9663,7 +9663,7 @@ async fn complete_pending_service_worker_runtime_inspector_command(
     ) = match completed_inspector {
         Ok(mut completed_protocol) => {
             let response_delivery = completed_protocol.response_delivery();
-            if response_delivery == RendererInspectorResponseDelivery::DevToolsSession
+            if response_delivery == RendererInspectorResponseDelivery::SessionSink
                 && !completed.await_promise
                 && let Err(message) = completed_protocol.wait_for_session_response().await
             {
@@ -9719,10 +9719,10 @@ async fn complete_pending_service_worker_runtime_inspector_command(
     if saw_current_response {
         renderer_response_rx.take();
     }
-    if response_delivery == RendererInspectorResponseDelivery::DevToolsSession {
+    if response_delivery == RendererInspectorResponseDelivery::SessionSink {
         renderer_response_rx.take();
     }
-    if response_delivery == RendererInspectorResponseDelivery::CommandReply
+    if response_delivery == RendererInspectorResponseDelivery::AdapterReply
         && !completed.wait_for_deferred_reply
         && let Some(renderer_response_rx) = renderer_response_rx.take()
     {
@@ -9735,7 +9735,7 @@ async fn complete_pending_service_worker_runtime_inspector_command(
         )
         .await;
     }
-    if response_delivery == RendererInspectorResponseDelivery::CommandReply
+    if response_delivery == RendererInspectorResponseDelivery::AdapterReply
         && completed.wait_for_deferred_reply
         && (renderer_response_rx.is_some() || !saw_current_response)
         && completed.command_id.is_some()
@@ -9747,7 +9747,7 @@ async fn complete_pending_service_worker_runtime_inspector_command(
             renderer_response_rx,
         );
     }
-    if response_delivery == RendererInspectorResponseDelivery::DevToolsSession
+    if response_delivery == RendererInspectorResponseDelivery::SessionSink
         && completed.await_promise
         && session_response_succeeded.is_none()
     {
@@ -10375,8 +10375,7 @@ fn start_pending_runtime_disable_command(
     cmd: &Cmd<'_>,
 ) -> RuntimeCommandTaskStep {
     let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
-    let response_delivery =
-        cmd.terminal_response_delivery(RendererInspectorResponseDelivery::DevToolsSession);
+    let response_delivery = cmd.terminal_response_delivery();
     start_runtime_disable_command_for_owner(conn, cmd, owner_scope, response_delivery)
 }
 
@@ -10439,7 +10438,7 @@ pub(crate) async fn execute_runtime_listener_command_for_owner(
             conn,
             &cmd,
             owner,
-            RendererInspectorResponseDelivery::CommandReply,
+            RendererInspectorResponseDelivery::AdapterReply,
         )
     };
     loop {
@@ -10469,7 +10468,7 @@ fn start_runtime_run_if_waiting_for_debugger_command(
         cmd,
         &owner_scope,
         cmd.json.to_owned(),
-        cmd.terminal_response_delivery(RendererInspectorResponseDelivery::DevToolsSession),
+        cmd.terminal_response_delivery(),
     ) {
         Ok(pending) => pending,
         Err(message) if message == "NoDocumentLoaded" => {
@@ -10531,7 +10530,7 @@ fn start_runtime_discard_console_entries_command(
         cmd,
         &owner_scope,
         cmd.json.to_owned(),
-        cmd.terminal_response_delivery(RendererInspectorResponseDelivery::DevToolsSession),
+        cmd.terminal_response_delivery(),
     ) {
         Ok(pending) => pending,
         Err(message) => {
@@ -11525,7 +11524,7 @@ mod protocol_neutral_tests {
             DevToolsCommand::EvaluateScript(command),
             cmd.json.to_owned(),
             false,
-            RendererInspectorResponseDelivery::CommandReply,
+            RendererInspectorResponseDelivery::AdapterReply,
         );
 
         let RuntimeCommandTaskStep::Complete(plan) = step else {
@@ -11569,7 +11568,7 @@ mod protocol_neutral_tests {
             DevToolsCommand::EvaluateScript(command),
             cmd.json.to_owned(),
             true,
-            RendererInspectorResponseDelivery::CommandReply,
+            RendererInspectorResponseDelivery::AdapterReply,
         );
 
         let RuntimeCommandTaskStep::Complete(plan) = step else {

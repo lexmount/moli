@@ -33,12 +33,12 @@ async fn get_response_body_respects_recorded_session_visibility() {
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    assert!(bc.assign_auxiliary_session_to_target("TID-1", "SID-aux".to_owned()));
-    bc.enable_auxiliary_network_events("SID-aux");
+    assert!(bc.assign_attached_session_to_target("TID-1", "SID-attached".to_owned()));
+    bc.enable_attached_network_events("SID-attached");
     bc.record_captured_response_body(
         "REQ-aux-only".to_owned(),
         "aux-only body".to_owned(),
-        [Some("SID-aux".to_owned())],
+        [Some("SID-attached".to_owned())],
     );
     ctx.conn.browser_context = Some(bc);
 
@@ -54,14 +54,14 @@ async fn get_response_body_respects_recorded_session_visibility() {
     ctx.process_async(json!({
         "id": 7_281,
         "method": "Network.getResponseBody",
-        "sessionId": "SID-aux",
+        "sessionId": "SID-attached",
         "params": { "requestId": "REQ-aux-only" }
     }))
     .await;
     ctx.expect_result(
         7_281,
         json!({ "body": "aux-only body", "base64Encoded": false }),
-        Some("SID-aux"),
+        Some("SID-attached"),
     );
 }
 #[tokio::test(flavor = "multi_thread")]
@@ -73,18 +73,21 @@ async fn get_response_body_requires_calling_session_network_listener() {
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    assert!(bc.assign_auxiliary_session_to_target("TID-1", "SID-aux".to_owned()));
+    assert!(bc.assign_attached_session_to_target("TID-1", "SID-attached".to_owned()));
     bc.record_captured_response_body(
         "REQ-shared".to_owned(),
         "shared body".to_owned(),
-        [Some("SID-primary".to_owned()), Some("SID-aux".to_owned())],
+        [
+            Some("SID-primary".to_owned()),
+            Some("SID-attached".to_owned()),
+        ],
     );
     ctx.conn.browser_context = Some(bc);
 
     ctx.process_async(json!({
         "id": 7_282,
         "method": "Network.getResponseBody",
-        "sessionId": "SID-aux",
+        "sessionId": "SID-attached",
         "params": { "requestId": "REQ-shared" }
     }))
     .await;
@@ -93,23 +96,23 @@ async fn get_response_body_requires_calling_session_network_listener() {
     ctx.process_async(json!({
         "id": 7_283,
         "method": "Network.enable",
-        "sessionId": "SID-aux",
+        "sessionId": "SID-attached",
         "params": {}
     }))
     .await;
-    ctx.expect_result(7_283, json!({}), Some("SID-aux"));
+    ctx.expect_result(7_283, json!({}), Some("SID-attached"));
 
     ctx.process_async(json!({
         "id": 7_284,
         "method": "Network.getResponseBody",
-        "sessionId": "SID-aux",
+        "sessionId": "SID-attached",
         "params": { "requestId": "REQ-shared" }
     }))
     .await;
     ctx.expect_result(
         7_284,
         json!({ "body": "shared body", "base64Encoded": false }),
-        Some("SID-aux"),
+        Some("SID-attached"),
     );
 }
 #[tokio::test(flavor = "multi_thread")]
@@ -454,15 +457,15 @@ async fn get_request_post_data_respects_recorded_session_visibility() {
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    assert!(bc.assign_auxiliary_session_to_target("TID-1", "SID-aux".to_owned()));
-    bc.enable_auxiliary_network_events("SID-aux");
-    bc.record_pending_response_body("REQ-aux-only".to_owned(), [Some("SID-aux".to_owned())]);
+    assert!(bc.assign_attached_session_to_target("TID-1", "SID-attached".to_owned()));
+    bc.enable_attached_network_events("SID-attached");
+    bc.record_pending_response_body("REQ-aux-only".to_owned(), [Some("SID-attached".to_owned())]);
     bc.active_page_target_mut()
         .runtime_slot
         .record_captured_request_body_with_collector_scope(
             "REQ-aux-only".to_owned(),
             b"aux-only body".to_vec(),
-            [Some("SID-aux".to_owned())],
+            [Some("SID-attached".to_owned())],
             std::iter::empty::<String>(),
             false,
         );
@@ -480,14 +483,14 @@ async fn get_request_post_data_respects_recorded_session_visibility() {
     ctx.process_async(json!({
         "id": 7_289,
         "method": "Network.getRequestPostData",
-        "sessionId": "SID-aux",
+        "sessionId": "SID-attached",
         "params": { "requestId": "REQ-aux-only" }
     }))
     .await;
     ctx.expect_result(
         7_289,
         json!({ "postData": "aux-only body", "base64Encoded": false }),
-        Some("SID-aux"),
+        Some("SID-attached"),
     );
 }
 

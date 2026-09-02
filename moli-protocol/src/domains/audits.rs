@@ -228,7 +228,7 @@ mod tests {
                 .browser_context
                 .as_mut()
                 .expect("Audits fixture should retain its browser context")
-                .assign_auxiliary_session_to_target("TID-audits", "SID-audits-peer".to_owned())
+                .assign_attached_session_to_target("TID-audits", "SID-audits-peer".to_owned())
         );
 
         for (id, session_id) in [(1, "SID-audits"), (2, "SID-audits-peer")] {

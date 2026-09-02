@@ -1,6 +1,8 @@
 //! Stable page-target registry behavior and foreground target selection.
 
-use super::super::state::{TargetPageAbsenceReason, TargetSessionStorageNamespace};
+use super::super::state::{
+    EffectiveTargetPolicy, TargetPageAbsenceReason, TargetSessionStorageNamespace,
+};
 use super::super::{
     BrowserContext, DedicatedWorkerTargetState, PageTargetHost, ServiceWorkerTargetState,
     SharedWorkerTargetState, TargetIdentityState, TargetInitialEmptyDocumentCreator,
@@ -262,7 +264,7 @@ impl BrowserContext {
         true
     }
 
-    pub(crate) fn assign_auxiliary_session_to_target(
+    pub(crate) fn assign_attached_session_to_target(
         &mut self,
         target_id: &str,
         session_id: String,
@@ -274,14 +276,15 @@ impl BrowserContext {
         true
     }
 
-    pub(crate) fn auxiliary_target_id_for_session(&self, session_id: &str) -> Option<&str> {
+    #[cfg(test)]
+    pub(crate) fn attached_target_id_for_session(&self, session_id: &str) -> Option<&str> {
         self.page_targets
             .iter()
             .find(|target| target.devtools_sessions.attached(session_id).is_some())
             .map(PageTargetHost::target_id)
     }
 
-    pub(crate) fn auxiliary_session_ids_for_target(&self, target_id: &str) -> Vec<String> {
+    pub(crate) fn attached_session_ids_for_target(&self, target_id: &str) -> Vec<String> {
         let mut session_ids = self
             .page_target(target_id)
             .into_iter()
@@ -302,53 +305,86 @@ impl BrowserContext {
         } else {
             Vec::new()
         };
-        session_ids.extend(self.auxiliary_session_ids_for_target(target_id));
+        session_ids.extend(self.attached_session_ids_for_target(target_id));
         session_ids.sort();
         session_ids.dedup();
         session_ids
     }
 
-    pub(crate) fn remove_auxiliary_session(&mut self, session_id: &str) -> Option<String> {
-        let target_id = self.auxiliary_target_id_for_session(session_id)?.to_owned();
-        if let Some(target) = self.page_target_mut(&target_id) {
-            target
-                .runtime_slot
-                .remove_auxiliary_network_session(session_id);
-            target.fetch_owner.remove_fetch_session(Some(session_id));
-            target
-                .runtime_slot
-                .remove_network_session_observation_cursor(Some(session_id));
-            let disposed = target.devtools_sessions.dispose(
-                session_id,
-                &moli_page_types::DevToolsSessionKey::Attached(session_id.to_owned()),
-            );
-            debug_assert!(
-                disposed.is_some(),
-                "attached session must remain registered until disposal"
-            );
-        }
-        Some(target_id)
+    /// Commits removal of a Page session after all domain handlers have run.
+    ///
+    /// This deliberately has no renderer or domain side effects. Disposal
+    /// keeps the registry entry live while handlers resolve their exact Page,
+    /// then reaches this single irreversible step.
+    pub(crate) fn remove_page_session_binding(
+        &mut self,
+        target_id: &str,
+        session_id: &str,
+        session_key: &moli_page_types::DevToolsSessionKey,
+    ) -> bool {
+        self.page_target_mut(target_id)
+            .and_then(|target| target.devtools_sessions.dispose(session_id, session_key))
+            .is_some()
     }
 
-    pub(crate) async fn clear_target_session_overrides_async(
+    pub(crate) async fn clear_devtools_network_session_policy_async(
         &mut self,
-        session_id: &str,
-    ) -> anyhow::Result<bool> {
-        let Some((target_id, session_key)) = self.page_targets.iter().find_map(|target| {
-            target
-                .devtools_sessions
-                .key_for_wire_session_id(session_id)
-                .map(|session_key| (target.target_id().to_owned(), session_key))
-        }) else {
-            return Ok(false);
+        target_id: &str,
+        session_key: &moli_page_types::DevToolsSessionKey,
+    ) -> anyhow::Result<()> {
+        let Some(target) = self.page_target_mut(target_id) else {
+            return Ok(());
         };
+        let previous = target.effective_policy();
+        let listener_session_id = session_key.wire_session_id().map(str::to_owned);
+        match session_key {
+            moli_page_types::DevToolsSessionKey::Primary => {
+                target.runtime_slot.disable_primary_network_events();
+            }
+            moli_page_types::DevToolsSessionKey::Attached(attached_session_id) => {
+                target
+                    .runtime_slot
+                    .remove_attached_network_session(attached_session_id);
+            }
+        }
+        target
+            .runtime_slot
+            .remove_network_session_observation_cursor(listener_session_id.as_deref());
+        target
+            .runtime_slot
+            .remove_captured_response_body_visibility_for_session(listener_session_id.as_deref());
+        if !target.runtime_slot.has_network_event_listeners() {
+            target.runtime_slot.clear_captured_response_bodies();
+            target.runtime_slot.clear_websocket_request_ids();
+        }
+        target.clear_devtools_network_state(session_key);
+        self.apply_effective_devtools_policy_delta_async(target_id, previous)
+            .await?;
+        Ok(())
+    }
 
-        let Some(target) = self.page_target_mut(&target_id) else {
+    pub(crate) async fn clear_devtools_emulation_session_policy_async(
+        &mut self,
+        target_id: &str,
+        session_key: &moli_page_types::DevToolsSessionKey,
+    ) -> anyhow::Result<bool> {
+        let Some(target) = self.page_target_mut(target_id) else {
             return Ok(false);
         };
         let previous = target.effective_policy();
-        target.clear_devtools_network_state(&session_key);
-        target.clear_devtools_emulation_state(&session_key);
+        target.clear_devtools_emulation_state(session_key);
+        self.apply_effective_devtools_policy_delta_async(target_id, previous)
+            .await
+    }
+
+    async fn apply_effective_devtools_policy_delta_async(
+        &mut self,
+        target_id: &str,
+        previous: EffectiveTargetPolicy,
+    ) -> anyhow::Result<bool> {
+        let Some(target) = self.page_target(target_id) else {
+            return Ok(false);
+        };
         let effective = target.effective_policy();
         let delta = previous.delta(&effective);
         let browser_identity_changed = delta.browser_identity_changed();
@@ -368,7 +404,7 @@ impl BrowserContext {
             .map(str::to_owned)
             .or_else(|| self.default_timezone_override.clone());
         let page = self
-            .page_target_mut(&target_id)
+            .page_target_mut(target_id)
             .and_then(|target| target.runtime_slot.loaded_page_mut());
         let Some(page) = page else {
             return Ok(browser_identity_changed);
@@ -404,7 +440,7 @@ impl BrowserContext {
         Ok(browser_identity_changed)
     }
 
-    pub(crate) async fn dispose_primary_page_session_async(
+    pub(crate) async fn reset_primary_page_session_target_state_async(
         &mut self,
         target_id: &str,
         session_id: &str,
@@ -416,7 +452,7 @@ impl BrowserContext {
         if !target.is_session(session_id) {
             return Ok(false);
         }
-        target.clear_primary_session_scoped_state_fields();
+        target.reset_primary_session_target_state_fields();
 
         let effective_headers = self.effective_extra_headers_for_target(target_id);
         let target = self
@@ -436,67 +472,73 @@ impl BrowserContext {
         } else {
             self.generated_surface_override_script_for_background_target(target_id)
         };
-        let cleared_emulated_media = moli_core::page::EmulatedMediaOverrides::default();
-
         if let Some(page) = self
             .page_target_mut(target_id)
             .and_then(|target| target.runtime_slot.loaded_page_mut())
         {
-            page.set_network_request_policy_async(
-                &effective_headers,
-                effective_policy.bypass_service_worker(),
-                effective_policy.cache_disabled(),
-                effective_policy.blocked_url_patterns(),
-            )
-            .await
-            .map_err(|error| {
-                anyhow::anyhow!("failed to clear page network request policy: {error}")
-            })?;
-            page.set_network_offline_async(false)
+            let mut first_error = None;
+            if let Err(error) = page
+                .set_network_request_policy_async(
+                    &effective_headers,
+                    effective_policy.bypass_service_worker(),
+                    effective_policy.cache_disabled(),
+                    effective_policy.blocked_url_patterns(),
+                )
                 .await
-                .map_err(|error| anyhow::anyhow!("failed to clear page offline state: {error}"))?;
-            page.set_script_execution_disabled_async(false)
-                .await
-                .map_err(|error| {
+            {
+                first_error = Some(anyhow::anyhow!(
+                    "failed to clear page network request policy: {error}"
+                ));
+            }
+            if let Err(error) = page.set_network_offline_async(false).await {
+                first_error.get_or_insert_with(|| {
+                    anyhow::anyhow!("failed to clear page offline state: {error}")
+                });
+            }
+            if let Err(error) = page.set_script_execution_disabled_async(false).await {
+                first_error.get_or_insert_with(|| {
                     anyhow::anyhow!("failed to clear page script execution disabled state: {error}")
-                })?;
-            page.set_cpu_throttling_rate_async(1.0)
+                });
+            }
+            if let Err(error) = page
+                .set_locale_override_async(effective_locale.as_deref())
                 .await
-                .map_err(|error| {
-                    anyhow::anyhow!("failed to clear page CPU throttling rate: {error}")
-                })?;
-            page.set_emulated_media_async(&cleared_emulated_media)
+            {
+                first_error.get_or_insert_with(|| {
+                    anyhow::anyhow!("failed to restore page locale: {error}")
+                });
+            }
+            if let Err(error) = page
+                .set_timezone_override_async(effective_timezone.as_deref())
                 .await
-                .map_err(|error| anyhow::anyhow!("failed to clear page emulated media: {error}"))?;
-            page.set_locale_override_async(effective_locale.as_deref())
-                .await
-                .map_err(|error| anyhow::anyhow!("failed to restore page locale: {error}"))?;
-            page.set_timezone_override_async(effective_timezone.as_deref())
-                .await
-                .map_err(|error| anyhow::anyhow!("failed to restore page timezone: {error}"))?;
-            if let Some(surface_script) = surface_script {
-                page.run_page_surface_override_script_async(&surface_script.source)
+            {
+                first_error.get_or_insert_with(|| {
+                    anyhow::anyhow!("failed to restore page timezone: {error}")
+                });
+            }
+            if let Some(surface_script) = surface_script
+                && let Err(error) = page
+                    .run_page_surface_override_script_async(&surface_script.source)
                     .await
-                    .map_err(|error| {
-                        anyhow::anyhow!("failed to restore page surface overrides: {error}")
-                    })?;
+            {
+                first_error.get_or_insert_with(|| {
+                    anyhow::anyhow!("failed to restore page surface overrides: {error}")
+                });
+            }
+            if let Some(error) = first_error {
+                return Err(error);
             }
         }
 
-        let disposed = self
-            .page_target_mut(target_id)
-            .expect("disposing page target must remain registered")
-            .devtools_sessions
-            .dispose(session_id, &moli_page_types::DevToolsSessionKey::Primary);
-        Ok(disposed.is_some())
+        Ok(true)
     }
 
     #[cfg(test)]
-    pub(crate) fn enable_auxiliary_network_events(&mut self, session_id: &str) {
-        if self.auxiliary_target_id_for_session(session_id).is_some() {
+    pub(crate) fn enable_attached_network_events(&mut self, session_id: &str) {
+        if self.attached_target_id_for_session(session_id).is_some() {
             self.active_page_target_mut()
                 .runtime_slot
-                .enable_auxiliary_network_events(session_id);
+                .enable_attached_network_events(session_id);
         }
     }
 
@@ -547,9 +589,10 @@ impl BrowserContext {
         else {
             return false;
         };
-        target.runtime_slot.disable_primary_network_events();
-        target.detach_session();
-        true
+        target
+            .devtools_sessions
+            .dispose(session_id, &moli_page_types::DevToolsSessionKey::Primary)
+            .is_some()
     }
 
     #[cfg(test)]
@@ -710,8 +753,8 @@ impl BrowserContext {
 
     pub(crate) fn devtools_target_info(&self, target_id: &str) -> Option<DevToolsTargetInfo> {
         if let Some(target) = self.page_target(target_id) {
-            let attached = target.has_session()
-                || !self.auxiliary_session_ids_for_target(target_id).is_empty();
+            let attached =
+                target.has_session() || !self.attached_session_ids_for_target(target_id).is_empty();
             return Some(DevToolsTargetInfo {
                 target_id: Some(DevToolsTargetId::from(target_id)),
                 kind: DevToolsTargetKind::Page,
@@ -805,13 +848,6 @@ impl BrowserContext {
             .find(|target| target.target_id == target_id)
     }
 
-    pub(crate) fn shared_worker_target_id_for_session(&self, session_id: &str) -> Option<&str> {
-        self.shared_worker_targets
-            .values()
-            .find(|target| target.is_session(session_id))
-            .map(|target| target.target_id.as_str())
-    }
-
     pub(crate) fn has_shared_worker_target(&self, target_id: &str) -> bool {
         self.shared_worker_target(target_id).is_some()
     }
@@ -887,13 +923,6 @@ impl BrowserContext {
         self.dedicated_worker_targets
             .values_mut()
             .find(|target| target.target_id == target_id)
-    }
-
-    pub(crate) fn dedicated_worker_target_id_for_session(&self, session_id: &str) -> Option<&str> {
-        self.dedicated_worker_targets
-            .values()
-            .find(|target| target.is_session(session_id))
-            .map(|target| target.target_id.as_str())
     }
 
     pub(crate) fn has_dedicated_worker_target(&self, target_id: &str) -> bool {
@@ -1008,13 +1037,6 @@ impl BrowserContext {
         self.service_worker_targets
             .values_mut()
             .find(|target| target.target_id == target_id)
-    }
-
-    pub(crate) fn service_worker_target_id_for_session(&self, session_id: &str) -> Option<&str> {
-        self.service_worker_targets
-            .values()
-            .find(|target| target.is_session(session_id))
-            .map(|target| target.target_id.as_str())
     }
 
     pub(crate) fn has_service_worker_target(&self, target_id: &str) -> bool {
@@ -1219,8 +1241,8 @@ mod tests {
     use super::*;
     use crate::conn::state::{PerformanceTimeDomain, TargetPerformanceSessionState};
     use crate::conn::{
-        DevToolsSessionState, DocumentStartScript, FetchInterceptionPattern, FetchRequestStage,
-        TargetPageSessionState, TargetRuntimeSessionState,
+        DevToolsSessionState, DocumentStartScript, TargetPageSessionState,
+        TargetRuntimeSessionState,
     };
     use crate::testing::TestContext;
     use serde_json::json;
@@ -1327,7 +1349,7 @@ mod tests {
 
     #[test]
     fn changing_foreground_selection_retains_each_session_storage_namespace() {
-        let mut context = BrowserContext::new("BC-demoted-storage".to_owned());
+        let mut context = BrowserContext::new("BC-deactivated-storage".to_owned());
         context.set_active_target_id("TID-first");
         let first_session_storage = context.page_storage_handles().session_storage_store.clone();
         assert!(
@@ -1446,59 +1468,18 @@ mod tests {
         assert_eq!(host.owner_state.next_document_start_script_id, 7);
     }
 
-    #[test]
-    fn remove_auxiliary_session_drops_session_local_fetch_config() {
-        let mut context = BrowserContext::new("BC-1".to_owned());
-        context.set_active_target_id("TID-active".to_owned());
-        context.attach_active_session("SID-active".to_owned());
-        assert!(
-            context.assign_auxiliary_session_to_target("TID-active", "SID-aux".to_owned()),
-            "auxiliary session should attach to active target"
-        );
-        context.active_page_target_mut().fetch_owner.configure(
-            Some("SID-aux".to_owned()),
-            false,
-            vec![FetchInterceptionPattern {
-                url_pattern: "*".to_owned(),
-                resource_type_filter: None,
-                request_stage: FetchRequestStage::Request,
-            }],
-        );
-        assert!(
-            context
-                .active_page_target()
-                .fetch_owner
-                .config_snapshot()
-                .is_enabled()
-        );
-
-        assert_eq!(
-            context.remove_auxiliary_session("SID-aux").as_deref(),
-            Some("TID-active")
-        );
-
-        assert!(
-            !context
-                .active_page_target()
-                .fetch_owner
-                .config_snapshot()
-                .is_enabled(),
-            "detaching the auxiliary target session must remove its Fetch.enable config"
-        );
-    }
-
     #[tokio::test(flavor = "multi_thread")]
     async fn selecting_another_foreground_target_preserves_page_session_and_owner_state() {
         let mut ctx = TestContext::new();
         let active_page = ctx
             .conn
-            .load_page_via_runtime_async("data:text/html,<title>demote-active</title>")
+            .load_page_via_runtime_async("data:text/html,<title>deactivate-active</title>")
             .await
             .expect("active page should load");
 
-        let mut context = BrowserContext::new("BC-demote".to_owned());
-        context.set_active_target_id("TID-demote".to_owned());
-        context.attach_active_session("SID-demote".to_owned());
+        let mut context = BrowserContext::new("BC-deactivate".to_owned());
+        context.set_active_target_id("TID-deactivate".to_owned());
+        context.attach_active_session("SID-deactivate".to_owned());
         context.set_target_url(active_page.final_url().as_str().to_owned());
         context.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
@@ -1548,11 +1529,11 @@ mod tests {
             .owner_state
             .document_start_scripts
             .push((
-                "script-demote".to_owned(),
+                "script-deactivate".to_owned(),
                 DocumentStartScript {
                     registry_key: None,
                     devtools_session: None,
-                    source: "globalThis.demoted = true".to_owned(),
+                    source: "globalThis.deactivated = true".to_owned(),
                     world_name: None,
                     has_bidi_channel_argument: false,
                     bidi_channel_handoffs: Vec::new(),
@@ -1591,17 +1572,17 @@ mod tests {
         assert_eq!(context.active_target_id(), Some("TID-selected"));
         assert!(
             context
-                .page_target("TID-demote")
+                .page_target("TID-deactivate")
                 .is_some_and(|host| host.has_loaded_page()),
             "changing foreground selection must retain the loaded page in its stable host"
         );
         assert_eq!(context.background_target_count(), 1);
         let background_target = &context.background_target_at(0).unwrap();
-        assert_eq!(background_target.target_id(), "TID-demote");
-        assert_eq!(background_target.session_id(), Some("SID-demote"));
+        assert_eq!(background_target.target_id(), "TID-deactivate");
+        assert_eq!(background_target.session_id(), Some("SID-deactivate"));
         assert_eq!(
             background_target.target_url(),
-            "data:text/html,<title>demote-active</title>"
+            "data:text/html,<title>deactivate-active</title>"
         );
         assert!(
             background_target.has_loaded_page(),
@@ -1630,7 +1611,7 @@ mod tests {
         );
         assert!(
             context
-                .background_target("TID-demote")
+                .background_target("TID-deactivate")
                 .filter(|target| target.has_non_default_session_state())
                 .is_some_and(|state| state.devtools_sessions
                     [moli_page_types::DevToolsSessionKey::Primary]
@@ -1639,7 +1620,7 @@ mod tests {
             "session-scoped Runtime.enable state must remain owned by the target"
         );
         let background_state = context
-            .background_target("TID-demote")
+            .background_target("TID-deactivate")
             .filter(|target| target.has_non_default_session_state())
             .expect("background target should retain page session state");
         assert!(
@@ -1701,7 +1682,7 @@ mod tests {
         );
         assert_eq!(
             context
-                .background_target("TID-demote")
+                .background_target("TID-deactivate")
                 .expect("previous target must remain registered")
                 .owner_state
                 .next_document_start_script_id,
@@ -1710,7 +1691,7 @@ mod tests {
         );
         assert_eq!(
             context
-                .background_target("TID-demote")
+                .background_target("TID-deactivate")
                 .expect("background target should retain owner state")
                 .owner_state
                 .document_start_scripts
@@ -1719,7 +1700,7 @@ mod tests {
             "document-start scripts must remain target-owned"
         );
         let background_runtime = &context
-            .background_target("TID-demote")
+            .background_target("TID-deactivate")
             .expect("background target should retain network state")
             .runtime_slot;
         assert_eq!(background_runtime.next_fetch_request_id_for_test(), 77);
@@ -1736,7 +1717,7 @@ mod tests {
 
     #[test]
     fn staging_background_target_in_empty_context_leaves_foreground_empty() {
-        let mut context = BrowserContext::new("BC-demote-empty".to_owned());
+        let mut context = BrowserContext::new("BC-deactivate-empty".to_owned());
         context.stage_background_target(
             "TID-existing-bg".to_owned(),
             Some("SID-existing-bg".to_owned()),
@@ -1759,7 +1740,7 @@ mod tests {
 
     #[test]
     fn selecting_new_target_preserves_previous_pending_initial_document_reason() {
-        let mut context = BrowserContext::new("BC-demote-pending".to_owned());
+        let mut context = BrowserContext::new("BC-deactivate-pending".to_owned());
         context.set_active_target_id("TID-old-active");
         context.set_target_url("about:blank#old".to_owned());
         context.begin_active_target_initial_empty_document("about:blank#old".to_owned());
@@ -1791,8 +1772,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn background_target_promote_without_page_preserves_pending_initial_document_reason() {
-        let mut context = BrowserContext::new("BC-promote-pending".to_owned());
+    async fn background_target_activate_without_page_preserves_pending_initial_document_reason() {
+        let mut context = BrowserContext::new("BC-activate-pending".to_owned());
         context.stage_background_target(
             "TID-pending-bg".to_owned(),
             Some("SID-pending-bg".to_owned()),
@@ -1832,7 +1813,7 @@ mod tests {
             .await
             .expect("second loaded page should load");
 
-        let mut context = BrowserContext::new("BC-promote-first".to_owned());
+        let mut context = BrowserContext::new("BC-activate-first".to_owned());
         context.stage_background_target(
             "TID-empty".to_owned(),
             Some("SID-empty".to_owned()),
@@ -1908,7 +1889,7 @@ mod tests {
                 .and_then(|target| target.runtime_slot().current_renderer_attachment())
                 .map(|attachment| attachment.id()),
             Some(second_attachment.id()),
-            "promoting one target must not replace another background target's route lease"
+            "activating one target must not replace another background target's route lease"
         );
     }
 
@@ -1976,7 +1957,7 @@ mod tests {
 
     #[tokio::test]
     async fn background_target_selection_preserves_nested_page_session_state() {
-        let mut context = BrowserContext::new("BC-promote".to_owned());
+        let mut context = BrowserContext::new("BC-activate".to_owned());
         context.stage_background_target(
             "TID-bg".to_owned(),
             Some("SID-bg".to_owned()),

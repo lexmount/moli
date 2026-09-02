@@ -1,34 +1,14 @@
 use crate::conn::{AutoAttachOwnerPolicy, CdpConnection, CdpTargetFilter};
 
 impl CdpConnection {
-    fn sync_auto_attach_flags_from_owners(&mut self) {
-        self.auto_attach = !self.auto_attach_owner_sessions.is_empty();
-        self.auto_attach_wait_for_debugger_on_start = self
-            .auto_attach_owner_sessions
-            .values()
-            .any(|policy| policy.wait_for_debugger_on_start);
-    }
-
-    pub(crate) fn has_auto_attach_owner(&self, session_id: Option<&str>) -> bool {
-        self.auto_attach_owner_sessions
-            .contains_key(&session_id.map(str::to_owned))
-    }
-
-    pub(crate) fn auto_attach_owner_count(&self) -> usize {
-        self.auto_attach_owner_sessions.len()
+    pub(crate) fn auto_attach_enabled(&self) -> bool {
+        !self.auto_attach_owner_sessions.is_empty()
     }
 
     pub(crate) fn auto_attach_owner_sessions_for_target_type(
         &self,
         target_type: &str,
     ) -> Vec<Option<String>> {
-        if self.auto_attach_owner_sessions.is_empty() && self.auto_attach {
-            return CdpTargetFilter::default_auto_attach()
-                .matches(target_type)
-                .then_some(None)
-                .into_iter()
-                .collect();
-        }
         self.auto_attach_owner_sessions
             .iter()
             .filter(|(_, policy)| policy.target_filter.matches(target_type))
@@ -44,18 +24,12 @@ impl CdpConnection {
         self.auto_attach_owner_sessions
             .get(&session_id.map(str::to_owned))
             .is_some_and(|policy| policy.target_filter.matches(target_type))
-            || (self.auto_attach_owner_sessions.is_empty()
-                && self.auto_attach
-                && CdpTargetFilter::default_auto_attach().matches(target_type))
     }
 
     pub(crate) fn auto_attach_owner_waits_for_debugger_on_start(
         &self,
         session_id: Option<&str>,
     ) -> bool {
-        if self.auto_attach_owner_sessions.is_empty() && self.auto_attach {
-            return self.auto_attach_wait_for_debugger_on_start;
-        }
         self.auto_attach_owner_sessions
             .get(&session_id.map(str::to_owned))
             .is_some_and(|policy| policy.wait_for_debugger_on_start)
@@ -82,14 +56,12 @@ impl CdpConnection {
         } else {
             self.auto_attach_owner_sessions.shift_remove(&key);
         }
-        self.sync_auto_attach_flags_from_owners();
     }
 
     pub(crate) fn clear_auto_attach_owner(&mut self, session_id: Option<&str>) {
         self.clear_service_worker_auto_attach_related_owner(session_id);
         let key = session_id.map(str::to_owned);
         self.auto_attach_owner_sessions.shift_remove(&key);
-        self.sync_auto_attach_flags_from_owners();
     }
 }
 

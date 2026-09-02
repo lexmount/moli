@@ -113,7 +113,7 @@ mod tests {
         msg: serde_json::Value,
         id: u64,
     ) -> serde_json::Value {
-        ctx.process_async(msg).await;
+        ctx.process_and_wait_for_response_async(msg).await;
         let pos = ctx
             .sent
             .iter()
@@ -565,12 +565,10 @@ mod tests {
         {
             let browser_context = ctx.conn.browser_context.as_mut().expect("browser context");
             browser_context.attach_active_session("SID-profiler-primary");
-            assert!(
-                browser_context.assign_auxiliary_session_to_target(
-                    "TID-profiler",
-                    "SID-profiler-aux".to_owned()
-                )
-            );
+            assert!(browser_context.assign_attached_session_to_target(
+                "TID-profiler",
+                "SID-profiler-attached".to_owned()
+            ));
         }
 
         let primary_enable = process_and_take_response(
@@ -593,7 +591,7 @@ mod tests {
             &mut ctx,
             json!({
                 "id": 38,
-                "sessionId": "SID-profiler-aux",
+                "sessionId": "SID-profiler-attached",
                 "method": "Profiler.start"
             }),
             38,
@@ -604,14 +602,14 @@ mod tests {
             aux_start_without_enable["error"]["message"]
                 .as_str()
                 .is_some_and(|message| message.contains("Profiler is not enabled")),
-            "auxiliary session should not see primary enable state: {aux_start_without_enable:?}"
+            "attached session should not see primary enable state: {aux_start_without_enable:?}"
         );
 
         let aux_enable = process_and_take_response(
             &mut ctx,
             json!({
                 "id": 39,
-                "sessionId": "SID-profiler-aux",
+                "sessionId": "SID-profiler-attached",
                 "method": "Profiler.enable"
             }),
             39,
@@ -622,7 +620,7 @@ mod tests {
             &mut ctx,
             json!({
                 "id": 40,
-                "sessionId": "SID-profiler-aux",
+                "sessionId": "SID-profiler-attached",
                 "method": "Profiler.start"
             }),
             40,
@@ -648,14 +646,14 @@ mod tests {
             primary_stop_without_recording["error"]["message"]
                 .as_str()
                 .is_some_and(|message| message.contains("No recording profiles found")),
-            "primary stop should not stop auxiliary profile: {primary_stop_without_recording:?}"
+            "primary stop should not stop attached profile: {primary_stop_without_recording:?}"
         );
 
         let aux_stop = process_and_take_response(
             &mut ctx,
             json!({
                 "id": 49,
-                "sessionId": "SID-profiler-aux",
+                "sessionId": "SID-profiler-attached",
                 "method": "Profiler.stop"
             }),
             49,
@@ -665,7 +663,7 @@ mod tests {
             aux_stop["result"]["profile"]["nodes"]
                 .as_array()
                 .is_some_and(|nodes| !nodes.is_empty()),
-            "auxiliary session should return its own CPU profile: {aux_stop:?}"
+            "attached session should return its own CPU profile: {aux_stop:?}"
         );
     }
 
@@ -676,12 +674,10 @@ mod tests {
         {
             let browser_context = ctx.conn.browser_context.as_mut().expect("browser context");
             browser_context.attach_active_session("SID-profiler-primary");
-            assert!(
-                browser_context.assign_auxiliary_session_to_target(
-                    "TID-profiler",
-                    "SID-profiler-aux".to_owned()
-                )
-            );
+            assert!(browser_context.assign_attached_session_to_target(
+                "TID-profiler",
+                "SID-profiler-attached".to_owned()
+            ));
         }
 
         let primary_enable = process_and_take_response(
@@ -731,7 +727,7 @@ mod tests {
             &mut ctx,
             json!({
                 "id": 133,
-                "sessionId": "SID-profiler-aux",
+                "sessionId": "SID-profiler-attached",
                 "method": "Profiler.enable"
             }),
             133,
@@ -742,7 +738,7 @@ mod tests {
             &mut ctx,
             json!({
                 "id": 134,
-                "sessionId": "SID-profiler-aux",
+                "sessionId": "SID-profiler-attached",
                 "method": "Profiler.setSamplingInterval",
                 "params": {"interval": 111}
             }),
@@ -754,7 +750,7 @@ mod tests {
             &mut ctx,
             json!({
                 "id": 135,
-                "sessionId": "SID-profiler-aux",
+                "sessionId": "SID-profiler-attached",
                 "method": "Profiler.startPreciseCoverage",
                 "params": {
                     "callCount": false,
@@ -767,14 +763,14 @@ mod tests {
         .await;
         assert!(
             aux_coverage["result"]["timestamp"].is_number(),
-            "auxiliary startPreciseCoverage should return timestamp: {aux_coverage:?}"
+            "attached startPreciseCoverage should return timestamp: {aux_coverage:?}"
         );
 
         let aux_stop_coverage = process_and_take_response(
             &mut ctx,
             json!({
                 "id": 136,
-                "sessionId": "SID-profiler-aux",
+                "sessionId": "SID-profiler-attached",
                 "method": "Profiler.stopPreciseCoverage"
             }),
             136,
@@ -793,7 +789,7 @@ mod tests {
         .await;
         assert!(
             primary_take_after_aux_stop["result"]["timestamp"].is_number(),
-            "stopping auxiliary coverage must not clear primary coverage: {primary_take_after_aux_stop:?}"
+            "stopping attached coverage must not clear primary coverage: {primary_take_after_aux_stop:?}"
         );
 
         let primary_stop_coverage = process_and_take_response(
@@ -816,9 +812,9 @@ mod tests {
         {
             let browser_context = ctx.conn.browser_context.as_mut().expect("browser context");
             browser_context.attach_active_session("SID-profiler-old");
-            assert!(browser_context.assign_auxiliary_session_to_target(
+            assert!(browser_context.assign_attached_session_to_target(
                 "TID-profiler",
-                "SID-profiler-aux-old".to_owned()
+                "SID-profiler-attached-old".to_owned()
             ));
         }
 
@@ -849,7 +845,7 @@ mod tests {
             &mut ctx,
             json!({
                 "id": 52,
-                "sessionId": "SID-profiler-aux-old",
+                "sessionId": "SID-profiler-attached-old",
                 "method": "Profiler.enable"
             }),
             52,
@@ -879,9 +875,9 @@ mod tests {
                 browser_context
                     .active_page_target()
                     .devtools_sessions
-                    .attached("SID-profiler-aux-old")
+                    .attached("SID-profiler-attached-old")
                     .is_some(),
-                "detaching the primary target session must preserve independent auxiliary sessions"
+                "detaching the primary target session must preserve independent attached sessions"
             );
         }
 
@@ -1663,18 +1659,16 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn auxiliary_profiler_recording_survives_page_navigation() {
+    async fn attached_profiler_recording_survives_page_navigation() {
         let mut ctx = TestContext::new();
         with_loaded_document_async(&mut ctx, "<!doctype html><body>before</body>").await;
         {
             let browser_context = ctx.conn.browser_context.as_mut().expect("browser context");
             browser_context.attach_active_session("SID-profiler-primary");
-            assert!(
-                browser_context.assign_auxiliary_session_to_target(
-                    "TID-profiler",
-                    "SID-profiler-aux".to_owned()
-                )
-            );
+            assert!(browser_context.assign_attached_session_to_target(
+                "TID-profiler",
+                "SID-profiler-attached".to_owned()
+            ));
         }
 
         assert_eq!(
@@ -1682,7 +1676,7 @@ mod tests {
                 &mut ctx,
                 json!({
                     "id": 220,
-                    "sessionId": "SID-profiler-aux",
+                    "sessionId": "SID-profiler-attached",
                     "method": "Profiler.enable"
                 }),
                 220
@@ -1695,7 +1689,7 @@ mod tests {
                 &mut ctx,
                 json!({
                     "id": 221,
-                    "sessionId": "SID-profiler-aux",
+                    "sessionId": "SID-profiler-attached",
                     "method": "Profiler.setSamplingInterval",
                     "params": {"interval": 100}
                 }),
@@ -1709,7 +1703,7 @@ mod tests {
                 &mut ctx,
                 json!({
                     "id": 222,
-                    "sessionId": "SID-profiler-aux",
+                    "sessionId": "SID-profiler-attached",
                     "method": "Profiler.start"
                 }),
                 222
@@ -1722,7 +1716,7 @@ mod tests {
             &mut ctx,
             json!({
                 "id": 223,
-                "sessionId": "SID-profiler-aux",
+                "sessionId": "SID-profiler-attached",
                 "method": "Runtime.evaluate",
                 "params": {
                     "expression": "(() => { function moliAuxProfilerBeforeNavigation() { let x = 0; for (let i = 0; i < 500000; ++i) x += Math.sqrt(i); return x > 0; } return moliAuxProfilerBeforeNavigation(); })()\n//# sourceURL=moli-aux-profiler-before-navigation.js",
@@ -1738,7 +1732,7 @@ mod tests {
             &mut ctx,
             json!({
                 "id": 224,
-                "sessionId": "SID-profiler-aux",
+                "sessionId": "SID-profiler-attached",
                 "method": "Page.navigate",
                 "params": {
                     "url": "data:text/html,<!doctype html><body>after</body>"
@@ -1749,14 +1743,14 @@ mod tests {
         .await;
         assert!(
             navigate["result"]["frameId"].is_string(),
-            "auxiliary Page.navigate should commit before Profiler.stop: {navigate:?}"
+            "attached Page.navigate should commit before Profiler.stop: {navigate:?}"
         );
 
         let after = process_and_take_response(
             &mut ctx,
             json!({
                 "id": 225,
-                "sessionId": "SID-profiler-aux",
+                "sessionId": "SID-profiler-attached",
                 "method": "Runtime.evaluate",
                 "params": {
                     "expression": "(() => { if (!document.body.textContent.includes('after')) return false; function moliAuxProfilerAfterNavigation() { let x = 0; for (let i = 0; i < 500000; ++i) x += Math.sqrt(i + 1); return x > 0; } return moliAuxProfilerAfterNavigation(); })()\n//# sourceURL=moli-aux-profiler-after-navigation.js",
@@ -1771,7 +1765,7 @@ mod tests {
             &mut ctx,
             json!({
                 "id": 226,
-                "sessionId": "SID-profiler-aux",
+                "sessionId": "SID-profiler-attached",
                 "method": "Profiler.stop"
             }),
             226,
@@ -1779,21 +1773,21 @@ mod tests {
         .await;
         assert!(
             stop.get("error").is_none(),
-            "auxiliary Profiler.stop after navigation should not fail: {stop:?}"
+            "attached Profiler.stop after navigation should not fail: {stop:?}"
         );
         let profile = &stop["result"]["profile"];
         assert!(
             !profile_contains_script_url(profile, "moli-aux-profiler-before-navigation.js"),
-            "auxiliary restore should not migrate old-isolate samples: {stop:?}"
+            "attached restore should not migrate old-isolate samples: {stop:?}"
         );
         assert!(
             profile_contains_script_url(profile, "moli-aux-profiler-after-navigation.js"),
-            "auxiliary profile should include work from the replacement Profiler agent: {stop:?}"
+            "attached profile should include work from the replacement Profiler agent: {stop:?}"
         );
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn inactive_context_auxiliary_profiler_recording_survives_page_navigation() {
+    async fn inactive_context_attached_profiler_recording_survives_page_navigation() {
         let mut ctx = TestContext::new();
 
         let default_context = process_and_take_response(
@@ -1936,7 +1930,7 @@ mod tests {
         .await;
         assert!(
             navigate["result"]["frameId"].is_string(),
-            "inactive auxiliary Page.navigate should commit before Profiler.stop: {navigate:?}"
+            "inactive attached Page.navigate should commit before Profiler.stop: {navigate:?}"
         );
 
         let after = process_and_take_response(
@@ -1967,7 +1961,7 @@ mod tests {
         .await;
         assert!(
             stop.get("error").is_none(),
-            "inactive auxiliary Profiler.stop after navigation should not fail: {stop:?}"
+            "inactive attached Profiler.stop after navigation should not fail: {stop:?}"
         );
         let profile = &stop["result"]["profile"];
         assert!(
@@ -1975,11 +1969,11 @@ mod tests {
                 profile,
                 "moli-inactive-aux-profiler-before-navigation.js"
             ),
-            "inactive auxiliary restore should not migrate old-isolate samples: {stop:?}"
+            "inactive attached restore should not migrate old-isolate samples: {stop:?}"
         );
         assert!(
             profile_contains_script_url(profile, "moli-inactive-aux-profiler-after-navigation.js"),
-            "inactive auxiliary profile should include work from the replacement Profiler agent: {stop:?}"
+            "inactive attached profile should include work from the replacement Profiler agent: {stop:?}"
         );
     }
 
@@ -2516,16 +2510,16 @@ mod tests {
         {
             let browser_context = ctx.conn.browser_context.as_mut().expect("browser context");
             browser_context.attach_active_session("SID-page-console-profile-primary");
-            assert!(browser_context.assign_auxiliary_session_to_target(
+            assert!(browser_context.assign_attached_session_to_target(
                 "TID-page-console-profile-fanout",
-                "SID-page-console-profile-aux".to_owned(),
+                "SID-page-console-profile-attached".to_owned(),
             ));
         }
         ctx.sent.clear();
 
         for (command_id, session_id) in [
             (91_101, "SID-page-console-profile-primary"),
-            (91_102, "SID-page-console-profile-aux"),
+            (91_102, "SID-page-console-profile-attached"),
         ] {
             let enable = process_and_take_response(
                 &mut ctx,
@@ -2589,11 +2583,11 @@ mod tests {
                         "Profiler.consoleProfileFinished",
                     ),
                     (
-                        "SID-page-console-profile-aux",
+                        "SID-page-console-profile-attached",
                         "Profiler.consoleProfileStarted",
                     ),
                     (
-                        "SID-page-console-profile-aux",
+                        "SID-page-console-profile-attached",
                         "Profiler.consoleProfileFinished",
                     ),
                 ]
@@ -2610,7 +2604,7 @@ mod tests {
 
         for session_id in [
             "SID-page-console-profile-primary",
-            "SID-page-console-profile-aux",
+            "SID-page-console-profile-attached",
         ] {
             let started =
                 ctx.take_first_matching("page Profiler.consoleProfileStarted event", |message| {
@@ -2661,16 +2655,16 @@ mod tests {
         {
             let browser_context = ctx.conn.browser_context.as_mut().expect("browser context");
             browser_context.attach_active_session("SID-page-console-profile-detach-primary");
-            assert!(browser_context.assign_auxiliary_session_to_target(
+            assert!(browser_context.assign_attached_session_to_target(
                 "TID-page-console-profile-detach",
-                "SID-page-console-profile-detach-aux".to_owned(),
+                "SID-page-console-profile-detach-attached".to_owned(),
             ));
         }
         ctx.sent.clear();
 
         for (command_id, session_id) in [
             (91_201, "SID-page-console-profile-detach-primary"),
-            (91_202, "SID-page-console-profile-detach-aux"),
+            (91_202, "SID-page-console-profile-detach-attached"),
         ] {
             let enable = process_and_take_response(
                 &mut ctx,
@@ -2719,7 +2713,7 @@ mod tests {
             |messages| {
                 [
                     "SID-page-console-profile-detach-primary",
-                    "SID-page-console-profile-detach-aux",
+                    "SID-page-console-profile-detach-attached",
                 ]
                 .into_iter()
                 .all(|session_id| {
@@ -2737,13 +2731,11 @@ mod tests {
                 message["sessionId"] == json!("SID-page-console-profile-detach-primary")
                     && message["method"] == json!("Profiler.consoleProfileStarted")
             });
-        let aux_started = ctx.take_first_matching(
-            "auxiliary Profiler.consoleProfileStarted event",
-            |message| {
-                message["sessionId"] == json!("SID-page-console-profile-detach-aux")
+        let aux_started =
+            ctx.take_first_matching("attached Profiler.consoleProfileStarted event", |message| {
+                message["sessionId"] == json!("SID-page-console-profile-detach-attached")
                     && message["method"] == json!("Profiler.consoleProfileStarted")
-            },
-        );
+            });
         assert_eq!(
             primary_started["params"]["title"],
             json!("page-console-profile-detach")
@@ -2759,7 +2751,7 @@ mod tests {
             "method": "Target.detachFromTarget",
             "params": {
                 "targetId": "TID-page-console-profile-detach",
-                "sessionId": "SID-page-console-profile-detach-aux"
+                "sessionId": "SID-page-console-profile-detach-attached"
             }
         }))
         .await;
@@ -2768,7 +2760,7 @@ mod tests {
             "Target.detachedFromTarget",
             Some(&json!({
                 "targetId": "TID-page-console-profile-detach",
-                "sessionId": "SID-page-console-profile-detach-aux"
+                "sessionId": "SID-page-console-profile-detach-attached"
             })),
         );
         ctx.sent.clear();
@@ -2807,7 +2799,7 @@ mod tests {
         wait_until_messages(
             &mut ctx,
             Some("SID-page-console-profile-detach-primary"),
-            "primary page console profile finish after auxiliary detach",
+            "primary page console profile finish after attached detach",
             |messages| {
                 messages.iter().any(|message| {
                     message["sessionId"] == json!("SID-page-console-profile-detach-primary")
@@ -2835,11 +2827,11 @@ mod tests {
                 &primary_finished["params"]["profile"],
                 "moliDetachedPageConsoleProfileWork",
             ),
-            "remaining attached session should keep sampling after auxiliary detach: {primary_finished:?}"
+            "remaining attached session should keep sampling after attached detach: {primary_finished:?}"
         );
         assert!(
             ctx.sent.iter().all(|message| {
-                !(message["sessionId"] == json!("SID-page-console-profile-detach-aux")
+                !(message["sessionId"] == json!("SID-page-console-profile-detach-attached")
                     && message["method"] == json!("Profiler.consoleProfileFinished"))
             }),
             "detached session must not receive a stale consoleProfileFinished event: {:?}",

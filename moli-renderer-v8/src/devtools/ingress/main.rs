@@ -9,8 +9,8 @@ use parking_lot::Mutex;
 use crate::{
     devtools::{
         ingress::lane::{
-            RendererDevToolsIngressCommand, RendererDevToolsLaneEnqueueError,
-            RendererDevToolsSessionLaneKey, RendererDevToolsSessionLanes,
+            RendererDevToolsIngressCommand, RendererDevToolsSessionLaneKey,
+            RendererDevToolsSessionLanes,
         },
         pause::RendererInspectorPauseLoopWake,
         route::RendererInspectorSessionExecutorRouteId,
@@ -534,16 +534,9 @@ impl RendererInspectorMainIngress {
             owner_reply_tx: Some(owner_reply_tx),
             claimed_by: None,
         };
-        if let Err(rejected) = state.lanes.enqueue(lane_key, command) {
+        if let Err(command) = state.lanes.enqueue(lane_key, command) {
             drop(state);
-            match rejected {
-                RendererDevToolsLaneEnqueueError::TargetClosed(command) => {
-                    fail_main_command(command, "Inspector Main target is closed");
-                }
-                RendererDevToolsLaneEnqueueError::SessionDetached(command) => {
-                    fail_main_command(command, "Inspector Main session was detached");
-                }
-            }
+            fail_main_command(command, "Inspector Main target is closed");
         } else {
             drop(state);
             self.notify_execution_opportunities();
@@ -677,15 +670,37 @@ impl RendererInspectorMainIngress {
         }
     }
 
-    pub(crate) fn detach_session(
+    pub(crate) fn begin_session_detach(
         &self,
         agent_token: RendererDevToolsAgentToken,
         session: &DevToolsSessionKey,
     ) {
         let lane_key = RendererDevToolsSessionLaneKey::new(agent_token, session.clone());
-        let commands = self.shared.state.lock().lanes.detach_session(&lane_key);
+        let commands = self
+            .shared
+            .state
+            .lock()
+            .lanes
+            .begin_session_detach(&lane_key);
         for command in commands {
             fail_main_command(command, "Inspector Main session was detached");
+        }
+    }
+
+    pub(crate) fn finish_session_detach(
+        &self,
+        agent_token: RendererDevToolsAgentToken,
+        session: &DevToolsSessionKey,
+    ) {
+        let lane_key = RendererDevToolsSessionLaneKey::new(agent_token, session.clone());
+        let has_ready = self
+            .shared
+            .state
+            .lock()
+            .lanes
+            .finish_session_detach(&lane_key);
+        if has_ready {
+            self.notify_execution_opportunities();
         }
     }
 
@@ -895,19 +910,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn detach_rejects_late_main_work_until_active_first_dispatch_retires() {
+    async fn overlapping_primary_detaches_hold_main_ingress_until_all_complete() {
         let ingress = ingress();
         let agent = RendererDevToolsAgentToken::allocate();
         let _active_route = enqueue(
             &ingress,
             agent,
-            Some("session-detaching"),
+            None,
             r#"{"id":1,"method":"Runtime.getProperties","params":{"objectId":"active"}}"#,
         );
         let queued_route = enqueue(
             &ingress,
             agent,
-            Some("session-detaching"),
+            None,
             r#"{"id":2,"method":"Runtime.getProperties","params":{"objectId":"queued"}}"#,
         );
         let mut active = ingress
@@ -915,42 +930,52 @@ mod tests {
             .expect("the session head should become active");
         let mut first_dispatch = ingress.first_dispatch_guard(&mut active);
 
-        ingress.detach_session(
-            agent,
-            &DevToolsSessionKey::Attached("session-detaching".to_owned()),
-        );
+        ingress.begin_session_detach(agent, &DevToolsSessionKey::Primary);
         assert!(matches!(
             queued_route.wait_for_completion().await,
             Ok(RendererRuntimeInspectorMainCommandCompletion::Canceled(_))
         ));
 
-        let late_route = enqueue(
+        let replacement_route = enqueue(
             &ingress,
             agent,
-            Some("session-detaching"),
-            r#"{"id":3,"method":"Runtime.getProperties","params":{"objectId":"late"}}"#,
+            None,
+            r#"{"id":3,"method":"Runtime.getProperties","params":{"objectId":"replacement"}}"#,
         );
+        ingress.begin_session_detach(agent, &DevToolsSessionKey::Primary);
         assert!(matches!(
-            late_route.wait_for_completion().await,
+            replacement_route.wait_for_completion().await,
             Ok(RendererRuntimeInspectorMainCommandCompletion::Canceled(_))
         ));
 
-        first_dispatch.release();
-        assert!(
-            ingress.shared.state.lock().lanes.session_count() == 0,
-            "the detached lane must retire after its active first dispatch releases"
-        );
-
-        let _reattached_route = enqueue(
+        let post_detach_route = enqueue(
             &ingress,
             agent,
-            Some("session-detaching"),
-            r#"{"id":4,"method":"Runtime.getProperties","params":{"objectId":"reattached"}}"#,
+            None,
+            r#"{"id":4,"method":"Runtime.getProperties","params":{"objectId":"post-detach"}}"#,
         );
         assert!(
-            ingress.claim_for_owner().is_some(),
-            "a later attachment may create a fresh lane for the same wire session id"
+            ingress.claim_for_owner().is_none(),
+            "the next generation must wait for its own owner-side cleanup"
         );
+
+        first_dispatch.release();
+        assert!(
+            ingress.claim_for_owner().is_none(),
+            "releasing an old first dispatch must not bypass the detach barrier"
+        );
+
+        ingress.finish_session_detach(agent, &DevToolsSessionKey::Primary);
+        assert!(
+            ingress.claim_for_owner().is_none(),
+            "the first cleanup must not bypass the second detach barrier"
+        );
+
+        ingress.finish_session_detach(agent, &DevToolsSessionKey::Primary);
+        let replacement = ingress
+            .claim_for_owner()
+            .expect("replacement work should run after every owner cleanup");
+        assert_eq!(replacement.command_id(), post_detach_route.command_id);
     }
 
     #[tokio::test]
@@ -997,7 +1022,7 @@ mod tests {
         let attachment = moli_page_types::RendererAgentAttachmentId::allocate();
         let session = DevToolsSessionKey::Attached("session-replay".to_owned());
         let (channel, response_rx) = RendererRuntimeInspectorResponseChannel::new_for_delivery(
-            moli_page_types::RendererInspectorResponseDelivery::DevToolsSession,
+            moli_page_types::RendererInspectorResponseDelivery::SessionSink,
         );
         assert!(response_rx.is_none());
         let old_response = channel.activate_sender(1, Some(attachment));
@@ -1060,7 +1085,7 @@ mod tests {
         let attachment = moli_page_types::RendererAgentAttachmentId::allocate();
         let session = DevToolsSessionKey::Attached("session-direct-error".to_owned());
         let (channel, response_rx) = RendererRuntimeInspectorResponseChannel::new_for_delivery(
-            moli_page_types::RendererInspectorResponseDelivery::DevToolsSession,
+            moli_page_types::RendererInspectorResponseDelivery::SessionSink,
         );
         assert!(response_rx.is_none());
         let stream = RendererOutputStreamIdentity::new_page_for_protocol_test(

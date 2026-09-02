@@ -410,7 +410,7 @@ fn renderer_backed_ax_node_id(node: &Value) -> String {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn accessibility_loaded_page_methods_target_background_owner_without_promotion() {
+async fn accessibility_loaded_page_methods_target_background_owner_without_activation() {
     let mut ctx = TestContext::new();
     let background = PageTargetHost::with_url(
         "TID-background".to_owned(),

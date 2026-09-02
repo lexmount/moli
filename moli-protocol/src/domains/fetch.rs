@@ -19,7 +19,7 @@ use crate::devtools_runtime::{
 };
 use crate::domains::actions::FetchAction;
 use crate::domains::command_output::{CommandOutputPlan, devtools_error_from_cdp_error_parts};
-use crate::domains::{activity, network};
+use crate::domains::{activity, network, page};
 use serde_json::json;
 
 #[cfg(test)]
@@ -53,6 +53,86 @@ pub(crate) use subresource::{
     emit_subresource_fetch_pause_outputs,
     subresource_fetch_pause_prepared_outputs_for_renderer_record_async,
 };
+
+/// Disables the Fetch handler owned by one DevTools session and drains every
+/// request that was paused by that handler before its binding is removed.
+pub(in crate::domains) async fn dispose_session_async(
+    conn: &mut CdpConnection,
+    out: &mut Vec<BackgroundProtocolEvent>,
+    session_id: &str,
+) -> anyhow::Result<Option<moli_core::RendererOutputFence>> {
+    dispose_owner_async(conn, out, Some(session_id)).await
+}
+
+pub(in crate::domains) async fn dispose_owner_async(
+    conn: &mut CdpConnection,
+    out: &mut Vec<BackgroundProtocolEvent>,
+    session_id: Option<&str>,
+) -> anyhow::Result<Option<moli_core::RendererOutputFence>> {
+    let Some((pending_fetch_state, pending_page_command)) = conn
+        .start_disable_fetch_for_session_owner(session_id)
+        .map_err(anyhow::Error::msg)?
+    else {
+        return Ok(None);
+    };
+
+    let mut renderer_cleanup_error = None;
+    if let Some(pending_page_command) = pending_page_command {
+        match pending_page_command.wait().await {
+            Ok(completion) => match conn.loaded_page_mut_for_protocol_access(session_id) {
+                Ok(page) => {
+                    if let Err(error) = page.finish_set_fetch_subresource_interception(completion) {
+                        renderer_cleanup_error = Some(error.context(
+                            "failed to finish Fetch interception disable while disposing session",
+                        ));
+                    }
+                }
+                Err(message) if message == "NoDocumentLoaded" => {}
+                Err(message) => {
+                    renderer_cleanup_error = Some(anyhow::anyhow!(
+                        "failed to find Page while disposing Fetch handler: {message}"
+                    ));
+                }
+            },
+            Err(error) => {
+                renderer_cleanup_error =
+                    Some(error.context(
+                        "renderer failed Fetch interception disable while disposing session",
+                    ));
+            }
+        }
+    }
+
+    let (
+        pending_navigations,
+        pending_auth_navigations,
+        pending_response_navigations,
+        pending_subresource_fetches,
+        pending_subresource_auths,
+        pending_subresource_responses,
+    ) = pending_fetch_state;
+    // Session teardown has no command response to fence. The concrete
+    // renderer publication remains ordered on its own stream and will reach
+    // protocol ingress independently.
+    let predecessor = page::fail_pending_fetch_state_background_events_async(
+        conn,
+        out,
+        session_id,
+        "Target detached",
+        "Target detached",
+        pending_navigations,
+        pending_auth_navigations,
+        pending_response_navigations,
+        pending_subresource_fetches,
+        pending_subresource_auths,
+        pending_subresource_responses,
+    )
+    .await;
+    if let Some(error) = renderer_cleanup_error {
+        return Err(error);
+    }
+    Ok(predecessor)
+}
 
 pub(crate) struct PendingFetchCommandDispatch {
     command_id: Option<u64>,

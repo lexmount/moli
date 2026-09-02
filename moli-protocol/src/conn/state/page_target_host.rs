@@ -162,6 +162,7 @@ impl PageTargetHost {
         self.devtools_sessions.attach_primary(session_id);
     }
 
+    #[cfg(test)]
     pub(crate) fn detach_session(&mut self) -> Option<String> {
         self.devtools_sessions.detach_primary()
     }

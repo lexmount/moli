@@ -24,16 +24,14 @@ impl RendererDevToolsSessionLaneKey {
     }
 }
 
-pub(crate) enum RendererDevToolsLaneEnqueueError<C> {
-    TargetClosed(C),
-    SessionDetached(C),
-}
-
 struct RendererDevToolsSessionLane<C> {
     active_command_id: Option<u64>,
     queued: VecDeque<C>,
     ready: bool,
-    detached: bool,
+    // Distinct frontend owners may share the Primary lane and detach while an
+    // earlier owner cleanup is still queued. Each one-shot guard contributes
+    // one arm, so a count is sufficient regardless of completion order.
+    pending_detaches: usize,
 }
 
 impl<C> Default for RendererDevToolsSessionLane<C> {
@@ -42,7 +40,7 @@ impl<C> Default for RendererDevToolsSessionLane<C> {
             active_command_id: None,
             queued: VecDeque::new(),
             ready: false,
-            detached: false,
+            pending_detaches: 0,
         }
     }
 }
@@ -74,16 +72,13 @@ impl<C: RendererDevToolsIngressCommand> RendererDevToolsSessionLanes<C> {
         &mut self,
         lane_key: RendererDevToolsSessionLaneKey,
         command: C,
-    ) -> Result<(), RendererDevToolsLaneEnqueueError<C>> {
+    ) -> Result<(), C> {
         if self.closed {
-            return Err(RendererDevToolsLaneEnqueueError::TargetClosed(command));
+            return Err(command);
         }
         let lane = self.sessions.entry(lane_key.clone()).or_default();
-        if lane.detached {
-            return Err(RendererDevToolsLaneEnqueueError::SessionDetached(command));
-        }
         lane.queued.push_back(command);
-        if lane.active_command_id.is_none() && !lane.ready {
+        if lane.pending_detaches == 0 && lane.active_command_id.is_none() && !lane.ready {
             lane.ready = true;
             self.ready_sessions.push_back(lane_key);
         }
@@ -155,11 +150,16 @@ impl<C: RendererDevToolsIngressCommand> RendererDevToolsSessionLanes<C> {
                 .get_mut(&lane_key)
                 .expect("an active DevTools session lane must still exist");
             assert_eq!(lane.active_command_id.take(), Some(command_id), "{message}");
-            let make_ready = !lane.detached && !lane.queued.is_empty() && !lane.ready;
+            let make_ready = lane.pending_detaches == 0 && !lane.queued.is_empty() && !lane.ready;
             if make_ready {
                 lane.ready = true;
             }
-            (make_ready, lane.queued.is_empty())
+            (
+                make_ready,
+                lane.pending_detaches == 0
+                    && lane.queued.is_empty()
+                    && lane.active_command_id.is_none(),
+            )
         };
         if make_ready {
             self.ready_sessions.push_back(lane_key.clone());
@@ -187,7 +187,8 @@ impl<C: RendererDevToolsIngressCommand> RendererDevToolsSessionLanes<C> {
             .position(|command| command.ingress_command_id() == command_id)
             .expect("a located DevTools command must remain queued");
         let command = lane.queued.remove(position);
-        if lane.queued.is_empty() && lane.active_command_id.is_none() {
+        if lane.pending_detaches == 0 && lane.queued.is_empty() && lane.active_command_id.is_none()
+        {
             lane.ready = false;
             self.ready_sessions.retain(|ready| ready != &lane_key);
             self.sessions.remove(&lane_key);
@@ -195,18 +196,53 @@ impl<C: RendererDevToolsIngressCommand> RendererDevToolsSessionLanes<C> {
         command
     }
 
-    pub(crate) fn detach_session(&mut self, lane_key: &RendererDevToolsSessionLaneKey) -> Vec<C> {
-        self.ready_sessions.retain(|ready| ready != lane_key);
-        let Some(lane) = self.sessions.get_mut(lane_key) else {
+    pub(crate) fn begin_session_detach(
+        &mut self,
+        lane_key: &RendererDevToolsSessionLaneKey,
+    ) -> Vec<C> {
+        if self.closed {
             return Vec::new();
-        };
+        }
+        self.ready_sessions.retain(|ready| ready != lane_key);
+        let lane = self.sessions.entry(lane_key.clone()).or_default();
         lane.ready = false;
-        lane.detached = true;
-        let commands = lane.queued.drain(..).collect();
-        if lane.active_command_id.is_none() {
+        lane.pending_detaches = lane
+            .pending_detaches
+            .checked_add(1)
+            .expect("renderer DevTools session pending-detach count overflow");
+        lane.queued.drain(..).collect()
+    }
+
+    /// Releases replacement frontend commands only after every detach queued
+    /// ahead of them has destroyed its renderer-side session on the owner
+    /// thread.
+    pub(crate) fn finish_session_detach(
+        &mut self,
+        lane_key: &RendererDevToolsSessionLaneKey,
+    ) -> bool {
+        let Some(lane) = self.sessions.get_mut(lane_key) else {
+            return self.has_ready();
+        };
+        if lane.pending_detaches == 0 {
+            debug_assert!(
+                self.closed,
+                "only a closed target may finish an unarmed detach"
+            );
+            return self.has_ready();
+        }
+        lane.pending_detaches -= 1;
+        if lane.pending_detaches != 0 {
+            return self.has_ready();
+        }
+        let make_ready = lane.active_command_id.is_none() && !lane.queued.is_empty() && !lane.ready;
+        if make_ready {
+            lane.ready = true;
+            self.ready_sessions.push_back(lane_key.clone());
+        }
+        if lane.active_command_id.is_none() && lane.queued.is_empty() {
             self.sessions.remove(lane_key);
         }
-        commands
+        self.has_ready()
     }
 
     pub(crate) fn close_and_drain(&mut self) -> Vec<C> {

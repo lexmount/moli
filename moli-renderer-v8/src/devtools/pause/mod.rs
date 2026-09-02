@@ -598,11 +598,10 @@ impl RendererInspectorSessionOutboundRoute {
         );
     }
 
-    pub(crate) fn detach_session(&self) {
+    pub(crate) fn deactivate_session(&self) {
         self.target
             .pause_ref()
             .detach_session(self.agent_token, &self.session);
-        self.target.detach_session(self.agent_token, &self.session);
     }
 
     pub(crate) fn stage_pause_preface(

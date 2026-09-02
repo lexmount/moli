@@ -794,7 +794,7 @@ impl Page {
         if self.renderer_devtools_command_session_id.as_deref() == inspector_session_id {
             // `runtime_session_owner_slot_mut` stamps the current frontend
             // session onto the Page before command construction. Do not leave
-            // a detached auxiliary session as the fallback provenance for a
+            // a detached child session as the fallback provenance for a
             // later owner-side observation that is not itself entered through
             // a CDP session lookup.
             self.renderer_devtools_command_session_id = None;

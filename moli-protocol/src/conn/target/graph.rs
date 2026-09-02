@@ -38,23 +38,23 @@ impl TargetHostDelta {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct TargetSessionSet {
     primary_session_id: Option<String>,
-    auxiliary_session_ids: HashSet<String>,
+    attached_session_ids: HashSet<String>,
 }
 
 impl TargetSessionSet {
     pub(crate) fn has_session(&self) -> bool {
-        self.primary_session_id.is_some() || !self.auxiliary_session_ids.is_empty()
+        self.primary_session_id.is_some() || !self.attached_session_ids.is_empty()
     }
 
     fn primary_session_id(&self) -> Option<&str> {
         self.primary_session_id.as_deref()
     }
 
-    fn insert_session(&mut self, session_id: String, auxiliary: bool) {
-        if !auxiliary && self.primary_session_id.is_none() {
+    fn insert_session(&mut self, session_id: String, is_attached_session: bool) {
+        if !is_attached_session && self.primary_session_id.is_none() {
             self.primary_session_id = Some(session_id);
         } else {
-            self.auxiliary_session_ids.insert(session_id);
+            self.attached_session_ids.insert(session_id);
         }
     }
 
@@ -63,14 +63,14 @@ impl TargetSessionSet {
             self.primary_session_id = None;
             return true;
         }
-        self.auxiliary_session_ids.remove(session_id)
+        self.attached_session_ids.remove(session_id)
     }
 
     fn session_ids(&self) -> Vec<String> {
         self.primary_session_id
             .iter()
             .cloned()
-            .chain(self.auxiliary_session_ids.iter().cloned())
+            .chain(self.attached_session_ids.iter().cloned())
             .collect()
     }
 }
@@ -213,7 +213,7 @@ impl TargetGraph {
         &mut self,
         tab_target_id: &str,
         session_id: String,
-        auxiliary: bool,
+        is_attached_session: bool,
     ) -> bool {
         self.remove_tab_session(&session_id);
         let Some(target) = self.tabs.get_mut(tab_target_id) else {
@@ -221,7 +221,7 @@ impl TargetGraph {
         };
         target
             .sessions
-            .insert_session(session_id.clone(), auxiliary);
+            .insert_session(session_id.clone(), is_attached_session);
         self.tab_session_to_tab
             .insert(session_id, tab_target_id.to_owned());
         true

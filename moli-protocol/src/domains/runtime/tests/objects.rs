@@ -79,7 +79,7 @@ async fn release_object_rejects_cross_owner_and_drops_owner_registry_on_success(
             .as_ref()
             .and_then(|browser_context| browser_context.active_target_id()),
         Some("TID-active"),
-        "background Runtime.evaluate should not promote the target"
+        "background Runtime.evaluate should not activate the target"
     );
     assert!(
         ctx.conn
@@ -124,7 +124,7 @@ async fn release_object_rejects_cross_owner_and_drops_owner_registry_on_success(
             .as_ref()
             .and_then(|browser_context| browser_context.active_target_id()),
         Some("TID-active"),
-        "background Runtime.releaseObject should not promote the target"
+        "background Runtime.releaseObject should not activate the target"
     );
     assert!(
         ctx.conn
@@ -201,7 +201,7 @@ async fn release_object_group_drops_owner_registry_on_success() {
             .as_ref()
             .and_then(|browser_context| browser_context.active_target_id()),
         Some("TID-active"),
-        "background Runtime.releaseObjectGroup should not promote the target"
+        "background Runtime.releaseObjectGroup should not activate the target"
     );
     assert!(
         ctx.conn
@@ -300,7 +300,7 @@ async fn release_object_group_drops_await_promise_inherited_result_handle() {
     );
 }
 #[tokio::test]
-async fn await_promise_routes_to_loaded_background_owner_without_promotion() {
+async fn await_promise_routes_to_loaded_background_owner_without_activation() {
     let mut ctx = TestContext::new();
     with_loaded_runtime_frontend_enabled_background_target_async(
         &mut ctx,
@@ -359,7 +359,7 @@ async fn await_promise_routes_to_loaded_background_owner_without_promotion() {
             .as_ref()
             .and_then(|browser_context| browser_context.active_target_id()),
         Some("TID-active"),
-        "background Runtime.awaitPromise should not promote the target"
+        "background Runtime.awaitPromise should not activate the target"
     );
     assert!(
         ctx.conn
@@ -426,7 +426,7 @@ async fn await_promise_rejects_promise_object_id_known_to_different_target_owner
     );
 }
 #[tokio::test]
-async fn loaded_background_runtime_binding_routes_to_owner_without_promotion() {
+async fn loaded_background_runtime_binding_routes_to_owner_without_activation() {
     let mut ctx = TestContext::new();
     with_loaded_runtime_frontend_enabled_background_target_async(
         &mut ctx,
@@ -463,7 +463,7 @@ async fn loaded_background_runtime_binding_routes_to_owner_without_promotion() {
             .as_ref()
             .and_then(|browser_context| browser_context.active_target_id()),
         Some("TID-active"),
-        "background Runtime.addBinding should not promote the target"
+        "background Runtime.addBinding should not activate the target"
     );
     assert!(
         ctx.conn
@@ -517,7 +517,7 @@ async fn loaded_background_runtime_binding_routes_to_owner_without_promotion() {
             .as_ref()
             .and_then(|browser_context| browser_context.active_target_id()),
         Some("TID-active"),
-        "background Runtime.removeBinding should not promote the target"
+        "background Runtime.removeBinding should not activate the target"
     );
     assert!(
         ctx.conn
@@ -551,7 +551,7 @@ async fn loaded_background_runtime_binding_routes_to_owner_without_promotion() {
     );
 }
 #[tokio::test]
-async fn runtime_disable_advances_background_owner_observable_cursor_without_promotion() {
+async fn runtime_disable_advances_background_owner_observable_cursor_without_activation() {
     let mut ctx = TestContext::new();
     with_loaded_runtime_frontend_enabled_background_target_async(
         &mut ctx,
@@ -603,7 +603,7 @@ async fn runtime_disable_advances_background_owner_observable_cursor_without_pro
     assert_eq!(
         browser_context.active_target_id(),
         Some("TID-active"),
-        "background Runtime.disable should not promote the target"
+        "background Runtime.disable should not activate the target"
     );
     assert_eq!(
         browser_context
@@ -617,8 +617,8 @@ async fn runtime_disable_advances_background_owner_observable_cursor_without_pro
     );
 }
 #[tokio::test]
-async fn runtime_disable_clears_background_child_default_context_emission_cursor_without_promotion()
-{
+async fn runtime_disable_clears_background_child_default_context_emission_cursor_without_activation()
+ {
     let mut ctx = TestContext::new();
     let html = "<iframe srcdoc=\"<body>background child</body>\"></iframe>";
     let background_target = crate::conn::PageTargetHost::with_url(
@@ -726,6 +726,6 @@ async fn runtime_disable_clears_background_child_default_context_emission_cursor
             .expect("browser context")
             .active_target_id(),
         Some("TID-active"),
-        "background Runtime.disable/enable must not promote the target"
+        "background Runtime.disable/enable must not activate the target"
     );
 }

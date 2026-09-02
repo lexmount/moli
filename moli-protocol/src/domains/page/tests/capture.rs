@@ -485,7 +485,7 @@ async fn capture_screenshot_uses_emulated_device_metrics() {
     assert_png_dimensions(&screenshot_png_bytes(&response), 1600, 1200);
 }
 #[tokio::test(flavor = "multi_thread")]
-async fn capture_screenshot_targets_loaded_background_owner_without_promotion() {
+async fn capture_screenshot_targets_loaded_background_owner_without_activation() {
     let mut ctx = TestContext::new();
     let background = PageTargetHost::with_url(
         "TID-background".to_owned(),
@@ -537,7 +537,7 @@ async fn capture_screenshot_targets_loaded_background_owner_without_promotion() 
             .as_ref()
             .and_then(|browser_context| browser_context.active_target_id()),
         Some("TID-active"),
-        "background Page.captureScreenshot should not promote the target"
+        "background Page.captureScreenshot should not activate the target"
     );
 }
 #[tokio::test(flavor = "multi_thread")]
@@ -945,7 +945,7 @@ async fn get_layout_metrics_queries_live_renderer_for_loaded_pages() {
     );
 }
 #[tokio::test(flavor = "multi_thread")]
-async fn get_layout_metrics_targets_loaded_background_owner_without_promotion() {
+async fn get_layout_metrics_targets_loaded_background_owner_without_activation() {
     let mut ctx = TestContext::new();
     let page_url = "data:text/html,<html style='width:2300px;height:1700px'><body style='margin:0;width:2300px;height:1700px'><div style='width:2300px;height:1700px'></div></body></html>";
     let background = PageTargetHost::with_url(
@@ -1000,7 +1000,7 @@ async fn get_layout_metrics_targets_loaded_background_owner_without_promotion() 
             .as_ref()
             .and_then(|browser_context| browser_context.active_target_id()),
         Some("TID-active"),
-        "background Page.getLayoutMetrics should not promote the target"
+        "background Page.getLayoutMetrics should not activate the target"
     );
 }
 #[tokio::test(flavor = "multi_thread")]

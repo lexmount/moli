@@ -160,21 +160,21 @@ mod tests {
     }
 
     #[test]
-    fn explicit_target_preserves_matching_auxiliary_session_authority() {
+    fn explicit_target_preserves_matching_attached_session_authority() {
         let mut conn = CdpConnection::default();
         let mut browser_context = BrowserContext::new_with_page_for_test("BID-owner", "TID-owner");
         browser_context.attach_active_session("SID-primary");
         assert!(
             browser_context
-                .assign_auxiliary_session_to_target("TID-owner", "SID-auxiliary".to_owned(),)
+                .assign_attached_session_to_target("TID-owner", "SID-attached".to_owned(),)
         );
         conn.browser_context = Some(browser_context);
 
         let owner = conn
-            .command_owner_scope_for_devtools_context(&page_context("SID-auxiliary", "TID-owner"))
-            .expect("matching auxiliary attachment should own the command");
+            .command_owner_scope_for_devtools_context(&page_context("SID-attached", "TID-owner"))
+            .expect("matching attached attachment should own the command");
 
-        assert_eq!(owner.session_id(), Some("SID-auxiliary"));
+        assert_eq!(owner.session_id(), Some("SID-attached"));
         assert!(owner.explicit_route().is_none());
     }
 

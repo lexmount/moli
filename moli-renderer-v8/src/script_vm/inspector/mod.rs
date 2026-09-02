@@ -150,7 +150,7 @@ impl DocumentInspectorBinding {
         inspector_session_id: Option<&str>,
         response: RendererRuntimeInspectorResponseSender,
     ) -> Result<RendererRuntimeInspectorResponseSender> {
-        if response.response_delivery() == RendererInspectorResponseDelivery::CommandReply {
+        if response.response_delivery() == RendererInspectorResponseDelivery::AdapterReply {
             return Ok(response);
         }
         let session_key = inspector_session_key(inspector_session_id);

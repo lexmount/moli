@@ -22,9 +22,9 @@ pub(crate) use session::{
     CommittedAttachSession, DetachedTargetSession, PreparedAttachSession, TargetSessionRegistry,
 };
 pub(crate) use transaction::{
-    PreparedTargetAttach, PreparedTargetHostClosure, PreparedTargetHostDelta,
-    TargetAttachRollbackPlan, TargetAttachSessionCommit, TargetAutoAttachedSessionDetachPlan,
-    TargetBindingCleanupAction, TargetBindingCleanupPlan, TargetClosureCleanupPlan,
-    TargetEventPlan, TargetSessionDetachCleanupPlan,
+    PreparedTargetAttach, PreparedTargetHostClosure, PreparedTargetHostDelta, SessionDisposalPlan,
+    SessionDisposalTarget, TargetAttachRollbackPlan, TargetAttachSessionCommit,
+    TargetAutoAttachedSessionDetachPlan, TargetClosureCleanupPlan, TargetEventPlan,
+    TargetSessionDetachCleanupPlan,
 };
 pub(crate) use worker_session::TargetWorkerProtocolAttachmentIdentity;

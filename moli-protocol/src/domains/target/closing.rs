@@ -85,7 +85,7 @@ pub(super) async fn execute_devtools_close_target_command_async(
         crate::DEFAULT_CDP_PAGE_TARGET_ID | crate::DEFAULT_CDP_TAB_TARGET_ID
     );
     let target_id = command.target_id.into_string();
-    if let Some(plan) = conn.close_default_target_placeholder(&target_id) {
+    if let Some(plan) = conn.close_default_target_placeholder(&target_id).await {
         out.extend_background_events(plan.into_background_events());
         return Ok(DevToolsCloseTargetResult { success: true });
     }

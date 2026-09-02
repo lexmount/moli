@@ -551,7 +551,7 @@ async fn pending_get_frame_tree_after_page_unload_returns_empty_target_tree() {
     );
 }
 #[tokio::test(flavor = "multi_thread")]
-async fn get_frame_tree_targets_loaded_background_owner_without_promotion() {
+async fn get_frame_tree_targets_loaded_background_owner_without_activation() {
     let mut ctx = TestContext::new();
     let page_url = "data:text/html,<iframe name='background-child'></iframe>";
     let background = PageTargetHost::with_url(
@@ -595,7 +595,7 @@ async fn get_frame_tree_targets_loaded_background_owner_without_promotion() {
             .as_ref()
             .and_then(|browser_context| browser_context.active_target_id()),
         Some("TID-active"),
-        "background Page.getFrameTree should not promote the target"
+        "background Page.getFrameTree should not activate the target"
     );
 }
 #[tokio::test(flavor = "multi_thread")]

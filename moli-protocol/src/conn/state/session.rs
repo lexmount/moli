@@ -199,26 +199,26 @@ impl PageTargetHost {
             || self.fetch_owner.config_snapshot() != super::fetch::TargetFetchConfig::default()
     }
 
-    pub(crate) fn clear_primary_session_scoped_state_fields(&mut self) {
-        *self.devtools_sessions.primary_mut() = Default::default();
-        self.runtime_slot.disable_primary_network_events();
+    /// Clears target-level state owned by the primary DevTools handlers.
+    ///
+    /// Per-session handler state, Fetch state, and Network observation state
+    /// have their own disposal steps. Keeping them out of this helper makes
+    /// the final session-registry removal a pure commit operation.
+    pub(crate) fn reset_primary_session_target_state_fields(&mut self) {
         self.network_policy.clear_session_scoped_state();
         self.http_proxy_override = None;
         self.http_no_proxy_override = None;
         self.tls_verify_host_override = None;
         self.network_conditions = None;
         self.geolocation_override = None;
-        self.emulated_media = EmulatedMediaOverrides::default();
         self.emulated_device_metrics = None;
-        self.cpu_throttling_rate = 1.0;
+        self.input_intercept_drags_enabled = false;
+        self.input_drag_intercepted = false;
         self.touch_emulation_enabled = false;
         self.emit_touch_events_for_mouse = false;
         self.focus_emulation_enabled = false;
         self.script_execution_disabled = false;
         self.css_enabled = false;
-        self.fetch_owner.remove_fetch_session(None);
-        self.runtime_slot
-            .remove_network_session_observation_cursor(None);
     }
 }
 

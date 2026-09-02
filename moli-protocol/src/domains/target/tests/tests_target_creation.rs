@@ -627,6 +627,19 @@ async fn detached_browser_target_session_stops_receiving_discovery_events() {
     }))
     .await;
     ctx.expect_result(10059, json!({}), Some(&browser_session_id));
+    ctx.conn.set_auto_attach_owner(
+        Some(&browser_session_id),
+        true,
+        true,
+        crate::conn::CdpTargetFilter::default_auto_attach(),
+    );
+    ctx.conn
+        .download_behavior
+        .set_browser_events_enabled_for_session(Some(&browser_session_id), true);
+    ctx.conn
+        .set_service_worker_pause_on_start_owner(Some(&browser_session_id), true);
+    ctx.conn
+        .set_dedicated_worker_pause_on_start_owner(Some(&browser_session_id), true);
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -636,6 +649,20 @@ async fn detached_browser_target_session_stops_receiving_discovery_events() {
     }))
     .await;
     ctx.expect_result(10060, json!({}), None);
+    assert_eq!(ctx.conn.session_route(Some(&browser_session_id)), None);
+    assert!(
+        !ctx.conn
+            .auto_attach_owner_sessions_for_target_type("page")
+            .contains(&Some(browser_session_id.clone()))
+    );
+    assert!(
+        !ctx.conn
+            .download_behavior
+            .browser_event_session_ids()
+            .contains(&Some(browser_session_id.clone()))
+    );
+    assert!(!ctx.conn.service_worker_pause_on_start_for_devtools());
+    assert!(!ctx.conn.dedicated_worker_pause_on_start_for_devtools());
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -1020,7 +1047,7 @@ async fn window_open_hands_off_session_storage_snapshot_and_initial_storage_key(
         // The opener's lightweight WindowProxy facade starts its mirrored
         // load before the concrete popup action can reach protocol. Let that
         // renderer-local request finish; gate the second request, which is the
-        // real auxiliary target navigation whose lifetime this test covers.
+        // real attached target navigation whose lifetime this test covers.
         let request_index = request_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         if request_index == 0 {
             return opener().await;
@@ -2077,7 +2104,7 @@ fn popup_target_id_for_url(messages: &[serde_json::Value], url: &str) -> String 
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn anchor_left_click_promotes_blank_target_to_foreground() {
+async fn anchor_left_click_activates_blank_target_to_foreground() {
     const POPUP_HREF: &str = "data:text/html,%3Cmain%3Eforeground-popup%3C/main%3E";
     const POPUP_URL: &str = "data:text/html,<main>foreground-popup</main>";
     let mut ctx = TestContext::new();
@@ -2111,7 +2138,7 @@ async fn anchor_left_click_promotes_blank_target_to_foreground() {
                 browser_context
                     .background_target("TID-anchor-foreground-opener")
                     .is_some(),
-                "foreground popup should demote its opener"
+                "foreground popup should deactivate its opener"
             );
         })
         .await;
@@ -3051,7 +3078,7 @@ async fn incomplete_popup_rollback_clears_tab_page_sessions_and_target_graph() {
         );
         assert!(browser_context.assign_auto_attached_session_to_target(
             page_target_id,
-            "SID-popup-page-aux".to_owned()
+            "SID-popup-page-attached".to_owned()
         ));
         browser_context.remember_target_window_name("popupName", page_target_id);
         browser_context.remember_target_popup_id(Some(42), page_target_id);
@@ -3066,7 +3093,7 @@ async fn incomplete_popup_rollback_clears_tab_page_sessions_and_target_graph() {
     ctx.conn
         .register_auto_attached_session("SID-popup-page-primary".to_owned(), None);
     ctx.conn
-        .register_auto_attached_session("SID-popup-page-aux".to_owned(), None);
+        .register_auto_attached_session("SID-popup-page-attached".to_owned(), None);
 
     assert!(ctx.conn.session_route(Some("SID-popup-tab")).is_some());
     assert!(
@@ -3074,7 +3101,11 @@ async fn incomplete_popup_rollback_clears_tab_page_sessions_and_target_graph() {
             .session_route(Some("SID-popup-page-primary"))
             .is_some()
     );
-    assert!(ctx.conn.session_route(Some("SID-popup-page-aux")).is_some());
+    assert!(
+        ctx.conn
+            .session_route(Some("SID-popup-page-attached"))
+            .is_some()
+    );
     assert_eq!(ctx.conn.tab_target_count(), 1);
 
     popup::rollback_incomplete_popup_target_async(
@@ -3086,7 +3117,10 @@ async fn incomplete_popup_rollback_clears_tab_page_sessions_and_target_graph() {
 
     assert_eq!(ctx.conn.session_route(Some("SID-popup-tab")), None);
     assert_eq!(ctx.conn.session_route(Some("SID-popup-page-primary")), None);
-    assert_eq!(ctx.conn.session_route(Some("SID-popup-page-aux")), None);
+    assert_eq!(
+        ctx.conn.session_route(Some("SID-popup-page-attached")),
+        None
+    );
     assert!(ctx.conn.auto_attached_sessions_for_owner(None).is_empty());
     assert_eq!(ctx.conn.tab_target_count(), 0);
     assert!(
@@ -3119,7 +3153,7 @@ async fn incomplete_active_popup_rollback_clears_active_slot_sessions_and_target
         browser_context.attach_active_session("SID-active-popup-page-primary");
         assert!(browser_context.assign_auto_attached_session_to_target(
             page_target_id,
-            "SID-active-popup-page-aux".to_owned()
+            "SID-active-popup-page-attached".to_owned()
         ));
     }
     assert!(ctx.conn.assign_session_to_tab_target(
@@ -3132,7 +3166,7 @@ async fn incomplete_active_popup_rollback_clears_active_slot_sessions_and_target
     ctx.conn
         .register_auto_attached_session("SID-active-popup-page-primary".to_owned(), None);
     ctx.conn
-        .register_auto_attached_session("SID-active-popup-page-aux".to_owned(), None);
+        .register_auto_attached_session("SID-active-popup-page-attached".to_owned(), None);
 
     assert!(
         ctx.conn
@@ -3146,7 +3180,7 @@ async fn incomplete_active_popup_rollback_clears_active_slot_sessions_and_target
     );
     assert!(
         ctx.conn
-            .session_route(Some("SID-active-popup-page-aux"))
+            .session_route(Some("SID-active-popup-page-attached"))
             .is_some()
     );
     assert_eq!(ctx.conn.tab_target_count(), 1);
@@ -3165,7 +3199,8 @@ async fn incomplete_active_popup_rollback_clears_active_slot_sessions_and_target
         None
     );
     assert_eq!(
-        ctx.conn.session_route(Some("SID-active-popup-page-aux")),
+        ctx.conn
+            .session_route(Some("SID-active-popup-page-attached")),
         None
     );
     assert!(ctx.conn.auto_attached_sessions_for_owner(None).is_empty());
@@ -3208,9 +3243,14 @@ async fn unannounced_page_session_cleanup_clears_route_and_auto_attached_owner_i
         vec!["SID-page-cleanup".to_owned()]
     );
 
-    let prepared = ctx.conn.prepare_auto_attach_session_commit(
+    let prepared = crate::conn::TargetAttachSessionCommit::auto_attached(
         "SID-page-cleanup",
         Some("SID-tab-owner".to_owned()),
+        crate::conn::CdpSessionRoute::PageTarget {
+            browser_context_id: "BID-page-session-cleanup".to_owned(),
+            target_id: "TID-page-cleanup".to_owned(),
+            session_key: moli_page_types::DevToolsSessionKey::Primary,
+        },
         false,
     );
     let rollback_plan = ctx

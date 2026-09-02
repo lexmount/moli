@@ -3435,7 +3435,7 @@ onconnect = event => {
     let CdpCommandTaskStep::Complete(outcome) =
         ctx.conn.complete_pending_command_dispatch(completed).await
     else {
-        panic!("a Worker session response must not enter the CommandReply deferred-reply lane");
+        panic!("a Worker session response must not enter the AdapterReply deferred-reply lane");
     };
     assert!(
         outcome.into_parts().0.is_empty(),

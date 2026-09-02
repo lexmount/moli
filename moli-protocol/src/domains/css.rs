@@ -1008,7 +1008,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn css_loaded_page_methods_target_background_owner_without_promotion() {
+    async fn css_loaded_page_methods_target_background_owner_without_activation() {
         let mut ctx = TestContext::new();
         let background = PageTargetHost::with_url(
             "TID-background".to_owned(),

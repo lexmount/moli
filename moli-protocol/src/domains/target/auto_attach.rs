@@ -1,6 +1,9 @@
 use serde::Deserialize;
 
-use crate::conn::{CdpTargetFilter, CdpTargetFilterEntry, PreparedTargetAttach};
+use crate::conn::{
+    CdpSessionRoute, CdpTargetFilter, CdpTargetFilterEntry, CommandOwnerScope,
+    PreparedTargetAttach, TargetAttachSessionCommit,
+};
 
 use super::*;
 
@@ -84,9 +87,13 @@ pub(super) fn auto_attach_related(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> Co
         let event_plan = conn.commit_prepared_attach_event_plan(PreparedTargetAttach::new(
             &target.target_id,
             target_info,
-            [conn.prepare_auto_attach_session_commit(
+            [TargetAttachSessionCommit::auto_attached(
                 session_id,
                 cmd.session_id.map(str::to_owned),
+                CdpSessionRoute::ServiceWorkerTarget {
+                    browser_context_id: target.browser_context_id.clone(),
+                    target_id: target.target_id.clone(),
+                },
                 false,
             )],
         ));
@@ -318,11 +325,6 @@ pub(super) fn start_set_auto_attach_command(
             "Filter should not simultaneously allow \"tab\" and \"page\", page targets are attached via tab targets",
         );
     }
-    let owner_was_enabled = conn.has_auto_attach_owner(cmd.session_id);
-    let legacy_disable_all = !params.auto_attach
-        && !owner_was_enabled
-        && conn.auto_attach_owner_count() == 0
-        && conn.auto_attach;
     if params.auto_attach {
         conn.install_default_browser_target_for_auto_attach_if_enabled();
     }
@@ -348,20 +350,13 @@ pub(super) fn start_set_auto_attach_command(
         cmd.session_id,
         pause_dedicated_workers_on_start,
     );
-    pending_set_auto_attach_command(
-        cmd.id,
-        cmd.session_id,
-        params.auto_attach,
-        cmd.session_id,
-        legacy_disable_all,
-    )
+    pending_set_auto_attach_command(cmd.id, cmd.session_id, params.auto_attach, cmd.session_id)
 }
 
 pub(super) async fn complete_set_auto_attach_command_async(
     conn: &mut CdpConnection,
     auto_attach: bool,
     owner_session_id: Option<&str>,
-    legacy_disable_all: bool,
     command_context: &mut crate::conn::CommandDispatchContext,
 ) -> CommandOutputPlan {
     let mut side_effects = events::TargetProtocolSideEffects::default();
@@ -371,7 +366,6 @@ pub(super) async fn complete_set_auto_attach_command_async(
         &mut side_effects,
         auto_attach,
         owner_session_id,
-        legacy_disable_all,
         command_context,
     )
     .await;
@@ -390,10 +384,9 @@ async fn set_auto_attach_inner_async(
     out: &mut events::TargetProtocolSideEffects,
     auto_attach: bool,
     owner_session_id: Option<&str>,
-    legacy_disable_all: bool,
     command_context: &mut crate::conn::CommandDispatchContext,
 ) {
-    if !auto_attach && !legacy_disable_all {
+    if !auto_attach {
         detach_auto_attached_sessions_for_owner_async(conn, out, owner_session_id, command_context)
             .await;
         return;
@@ -605,51 +598,72 @@ async fn set_auto_attach_inner_async(
                         })
                 }
             };
-            {
-                for (target_id, session_id) in &attached_targets {
-                    let assigned = conn
-                        .prepare_auto_attached_page_session_binding(target_id, session_id.clone());
-                    debug_assert!(assigned, "attached target must remain addressable");
-                }
-                for (target_id, session_id) in &attached_shared_worker_targets {
-                    let assigned = conn.prepare_auto_attached_shared_worker_session_binding(
-                        target_id,
+            let attached_targets = attached_targets
+                .into_iter()
+                .filter_map(|(target_id, session_id)| {
+                    let route = conn
+                        .prepare_auto_attached_page_session_binding(&target_id, session_id.clone());
+                    debug_assert!(route.is_some(), "attached target must remain addressable");
+                    route.map(|route| (target_id, session_id, route))
+                })
+                .collect::<Vec<_>>();
+            let attached_shared_worker_targets = attached_shared_worker_targets
+                .into_iter()
+                .filter_map(|(target_id, session_id)| {
+                    let route = conn.prepare_auto_attached_shared_worker_session_binding(
+                        &target_id,
                         session_id.clone(),
                     );
                     debug_assert!(
-                        assigned,
+                        route.is_some(),
                         "attached shared worker target must remain addressable"
                     );
-                }
-                for (target_id, session_id) in &attached_dedicated_worker_targets {
-                    let assigned = conn.prepare_auto_attached_dedicated_worker_session_binding(
-                        target_id,
+                    route.map(|route| (target_id, session_id, route))
+                })
+                .collect::<Vec<_>>();
+            let attached_dedicated_worker_targets = attached_dedicated_worker_targets
+                .into_iter()
+                .filter_map(|(target_id, session_id)| {
+                    let route = conn.prepare_auto_attached_dedicated_worker_session_binding(
+                        &target_id,
                         session_id.clone(),
                     );
                     debug_assert!(
-                        assigned,
+                        route.is_some(),
                         "attached dedicated worker target must remain addressable"
                     );
-                }
-                for (target_id, session_id) in &attached_service_worker_targets {
-                    let assigned = conn.prepare_auto_attached_service_worker_session_binding(
-                        target_id,
+                    route.map(|route| (target_id, session_id, route))
+                })
+                .collect::<Vec<_>>();
+            let attached_service_worker_targets = attached_service_worker_targets
+                .into_iter()
+                .filter_map(|(target_id, session_id)| {
+                    let route = conn.prepare_auto_attached_service_worker_session_binding(
+                        &target_id,
                         session_id.clone(),
                     );
                     debug_assert!(
-                        assigned,
+                        route.is_some(),
                         "attached service worker target must remain addressable"
                     );
-                }
-            }
-            for (target_id, session_id) in &attached_tab_targets {
-                let assigned = conn.prepare_auto_attached_tab_session_binding(
-                    target_id,
-                    session_id.clone(),
-                    owner_session_id,
-                );
-                debug_assert!(assigned, "attached tab target must remain addressable");
-            }
+                    route.map(|route| (target_id, session_id, route))
+                })
+                .collect::<Vec<_>>();
+            let attached_tab_targets = attached_tab_targets
+                .into_iter()
+                .filter_map(|(target_id, session_id)| {
+                    let route = conn.prepare_auto_attached_tab_session_binding(
+                        &target_id,
+                        session_id.clone(),
+                        owner_session_id,
+                    );
+                    debug_assert!(
+                        route.is_some(),
+                        "attached tab target must remain addressable"
+                    );
+                    route.map(|route| (target_id, session_id, route))
+                })
+                .collect::<Vec<_>>();
             if let Some(foreground_target_id) = foreground_target_id {
                 match conn
                     .select_page_target_for_connection_async(&foreground_target_id)
@@ -667,9 +681,11 @@ async fn set_auto_attach_inner_async(
                 }
             }
             ensure_initial_document_for_attached_page_targets_async(conn, &attached_targets).await;
-            for (target_id, session_id) in &attached_targets {
+            for (target_id, session_id, route) in &attached_targets {
                 if let Err(message) = conn
-                    .apply_runtime_binding_state_for_session_owner_async(Some(session_id))
+                    .apply_runtime_binding_state_for_owner_async(&CommandOwnerScope::for_route(
+                        route.clone(),
+                    ))
                     .await
                     && message != "NoDocumentLoaded"
                 {
@@ -681,22 +697,23 @@ async fn set_auto_attach_inner_async(
                     );
                 }
             }
-            for (target_id, session_id) in attached_tab_targets {
+            for (target_id, session_id, route) in attached_tab_targets {
                 let ti = conn
                     .tab_target_info(&target_id)
                     .expect("attached tab target must remain addressable");
                 let event_plan = conn.commit_prepared_attach_event_plan(PreparedTargetAttach::new(
                     &target_id,
                     ti,
-                    [conn.prepare_auto_attach_session_commit(
+                    [TargetAttachSessionCommit::auto_attached(
                         session_id,
                         owner_session_id.map(str::to_owned),
+                        route,
                         waiting_for_debugger,
                     )],
                 ));
                 out.extend_background_events(event_plan);
             }
-            for (target_id, session_id) in attached_targets {
+            for (target_id, session_id, route) in attached_targets {
                 let ti = {
                     let bc = conn
                         .browser_context
@@ -717,15 +734,16 @@ async fn set_auto_attach_inner_async(
                 let event_plan = conn.commit_prepared_attach_event_plan(PreparedTargetAttach::new(
                     &target_id,
                     ti,
-                    [conn.prepare_auto_attach_session_commit(
+                    [TargetAttachSessionCommit::auto_attached(
                         session_id,
                         owner_session_id.map(str::to_owned),
+                        route,
                         waiting_for_debugger,
                     )],
                 ));
                 out.extend_background_events(event_plan);
             }
-            for (target_id, session_id) in attached_shared_worker_targets {
+            for (target_id, session_id, route) in attached_shared_worker_targets {
                 let ti = {
                     let bc = conn
                         .browser_context
@@ -737,15 +755,16 @@ async fn set_auto_attach_inner_async(
                 let event_plan = conn.commit_prepared_attach_event_plan(PreparedTargetAttach::new(
                     &target_id,
                     ti,
-                    [conn.prepare_auto_attach_session_commit(
+                    [TargetAttachSessionCommit::auto_attached(
                         session_id,
                         owner_session_id.map(str::to_owned),
+                        route,
                         waiting_for_debugger,
                     )],
                 ));
                 out.extend_background_events(event_plan);
             }
-            for (target_id, session_id) in attached_dedicated_worker_targets {
+            for (target_id, session_id, route) in attached_dedicated_worker_targets {
                 let ti = {
                     let bc = conn
                         .browser_context
@@ -757,15 +776,16 @@ async fn set_auto_attach_inner_async(
                 let event_plan = conn.commit_prepared_attach_event_plan(PreparedTargetAttach::new(
                     &target_id,
                     ti,
-                    [conn.prepare_auto_attach_session_commit(
+                    [TargetAttachSessionCommit::auto_attached(
                         session_id,
                         owner_session_id.map(str::to_owned),
+                        route,
                         waiting_for_debugger,
                     )],
                 ));
                 out.extend_background_events(event_plan);
             }
-            for (target_id, session_id) in attached_service_worker_targets {
+            for (target_id, session_id, route) in attached_service_worker_targets {
                 let ti = {
                     let bc = conn
                         .browser_context
@@ -777,9 +797,10 @@ async fn set_auto_attach_inner_async(
                 let event_plan = conn.commit_prepared_attach_event_plan(PreparedTargetAttach::new(
                     &target_id,
                     ti,
-                    [conn.prepare_auto_attach_session_commit(
+                    [TargetAttachSessionCommit::auto_attached(
                         session_id,
                         owner_session_id.map(str::to_owned),
+                        route,
                         waiting_for_debugger,
                     )],
                 ));
@@ -838,14 +859,25 @@ async fn set_auto_attach_inner_async(
                 out.background_events_mut(),
                 command_context.protocol_events_mut(),
                 crate::conn::TargetSessionDetachCleanupPlan::new(
-                    target_id,
+                    &target_id,
                     &session_id,
                     None,
                     None,
                 ),
             )
-            .await
-            .expect("target session cleanup during auto-attach reset should succeed");
+            .await;
+            let outcome = match outcome {
+                Ok(outcome) => outcome,
+                Err(error) => {
+                    tracing::warn!(
+                        target_id,
+                        session_id,
+                        %error,
+                        "failed to dispose target session during auto-attach reset"
+                    );
+                    continue;
+                }
+            };
             let (event_plan, predecessor) = outcome.into_parts();
             if let Some(predecessor) = predecessor {
                 command_context.set_renderer_output_predecessor(predecessor);
@@ -899,18 +931,18 @@ async fn auto_attach_child_page_for_tab_session_async(
         return;
     }
     let session_id = conn.gen_session_id();
-    let assigned =
-        conn.prepare_auto_attached_page_session_binding(&page_target_id, session_id.clone());
-    if !assigned {
+    let Some(route) =
+        conn.prepare_auto_attached_page_session_binding(&page_target_id, session_id.clone())
+    else {
         return;
-    }
+    };
     ensure_initial_document_for_attached_page_targets_async(
         conn,
-        &[(page_target_id.clone(), session_id.clone())],
+        &[(page_target_id.clone(), session_id.clone(), route.clone())],
     )
     .await;
     if let Err(message) = conn
-        .apply_runtime_binding_state_for_session_owner_async(Some(&session_id))
+        .apply_runtime_binding_state_for_owner_async(&CommandOwnerScope::for_route(route.clone()))
         .await
         && message != "NoDocumentLoaded"
     {
@@ -921,9 +953,10 @@ async fn auto_attach_child_page_for_tab_session_async(
             "failed to apply renderer binding state during tab child page auto-attach"
         );
     }
-    let prepared_session = conn.prepare_auto_attach_session_commit(
+    let prepared_session = TargetAttachSessionCommit::auto_attached(
         session_id.clone(),
         Some(tab_session_id.to_owned()),
+        route,
         false,
     );
     let Some(target_info) = conn
@@ -989,8 +1022,8 @@ pub(super) async fn release_attached_sessions_for_root_frontend_async(
     for session_id in session_ids {
         let detach_plan = conn.auto_attached_session_detach_plan(&session_id);
         let preserves_other_frontends = matches!(
-            detach_plan.cleanup_plan().map(|plan| plan.action()),
-            Some(crate::conn::TargetBindingCleanupAction::PageTarget {
+            detach_plan.cleanup_plan().map(|plan| plan.target()),
+            Some(crate::conn::SessionDisposalTarget::PageTarget {
                 session_key: moli_page_types::DevToolsSessionKey::Primary,
                 ..
             })
@@ -1000,40 +1033,27 @@ pub(super) async fn release_attached_sessions_for_root_frontend_async(
             continue;
         }
 
-        let Some(browser_context_id) = detach_plan.browser_context_id().map(str::to_owned) else {
-            conn.rollback_auto_attached_session_detach_plan_without_event(&detach_plan);
-            continue;
-        };
-        if !conn
-            .activate_browser_context_by_id_async(&browser_context_id)
+        let predecessor =
+            match super::session_disposal::dispose_primary_page_session_preserving_frontend_async(
+                conn,
+                out.background_events_mut(),
+                command_context.protocol_events_mut(),
+                &session_id,
+            )
             .await
-        {
-            conn.rollback_auto_attached_session_detach_plan_without_event(&detach_plan);
-            continue;
-        }
-        let predecessor = match super::session_disposal::dispose_page_session_runtime_state_async(
-            conn,
-            out.background_events_mut(),
-            command_context.protocol_events_mut(),
-            &session_id,
-        )
-        .await
-        {
-            Ok(predecessor) => predecessor,
-            Err(error) => {
-                tracing::warn!(
-                session_id,
-                %error,
-                    "failed to dispose root-owned page session runtime state"
-                );
-                continue;
-            }
-        };
+            {
+                Ok(predecessor) => predecessor,
+                Err(error) => {
+                    tracing::warn!(
+                    session_id,
+                    %error,
+                        "failed to dispose root-owned page session runtime state"
+                    );
+                    continue;
+                }
+            };
         if let Some(predecessor) = predecessor {
             command_context.set_renderer_output_predecessor(predecessor);
-        }
-        if !conn.release_primary_target_session_binding_without_event(&session_id) {
-            conn.rollback_auto_attached_session_detach_plan_without_event(&detach_plan);
         }
     }
 }
@@ -1045,43 +1065,27 @@ async fn detach_attached_session_for_owner_async(
     command_context: &mut crate::conn::CommandDispatchContext,
 ) {
     if conn.is_browser_session_id(Some(session_id)) {
-        conn.cancel_tracing_for_session_owner_async(Some(session_id))
-            .await;
-        let detached = conn.detach_browser_session_owner_without_event(session_id);
-        debug_assert!(detached.is_some());
+        if let Err(error) =
+            super::session_disposal::dispose_browser_session_without_event_async(conn, session_id)
+                .await
+        {
+            tracing::warn!(
+                session_id,
+                %error,
+                "failed to dispose auto-attached browser session"
+            );
+        }
         return;
     }
     let detach_plan = conn.auto_attached_session_detach_plan(session_id);
-    let Some(browser_context_id) = detach_plan.browser_context_id().map(str::to_owned) else {
-        conn.rollback_auto_attached_session_detach_plan_without_event(&detach_plan);
-        return;
-    };
-    if !conn
-        .activate_browser_context_by_id_async(&browser_context_id)
-        .await
-    {
-        conn.rollback_auto_attached_session_detach_plan_without_event(&detach_plan);
-        return;
-    }
-
     let Some(cleanup_plan) = detach_plan.cleanup_plan() else {
         conn.rollback_auto_attached_session_detach_plan_without_event(&detach_plan);
         return;
     };
-    let target_id = match cleanup_plan.action() {
-        crate::conn::TargetBindingCleanupAction::PageTarget { target_id, .. }
-        | crate::conn::TargetBindingCleanupAction::SharedWorkerTarget { target_id }
-        | crate::conn::TargetBindingCleanupAction::DedicatedWorkerTarget { target_id }
-        | crate::conn::TargetBindingCleanupAction::ServiceWorkerTarget { target_id } => {
-            target_id.clone()
-        }
-        crate::conn::TargetBindingCleanupAction::TabTarget { tab_target_id } => {
-            tab_target_id.clone()
-        }
-        crate::conn::TargetBindingCleanupAction::None => {
-            conn.rollback_auto_attached_session_detach_plan_without_event(&detach_plan);
-            return;
-        }
+    let Some(target_id) = cleanup_plan.target_id().map(str::to_owned) else {
+        debug_assert!(false, "browser sessions use the browser disposal path");
+        conn.rollback_auto_attached_session_detach_plan_without_event(&detach_plan);
+        return;
     };
     match super::session_disposal::dispose_target_session_async(
         conn,
@@ -1110,18 +1114,15 @@ async fn detach_attached_session_for_owner_async(
 
 async fn ensure_initial_document_for_attached_page_targets_async(
     conn: &mut CdpConnection,
-    attached_targets: &[(String, String)],
+    attached_targets: &[(String, String, CdpSessionRoute)],
 ) {
-    for (target_id, _session_id) in attached_targets {
+    for (target_id, _session_id, route) in attached_targets {
         if !conn.browser_contexts().any(|browser_context| {
             browser_context.target_has_pending_initial_document_page_build(target_id)
         }) {
             continue;
         }
-        let Some(route) = conn.target_session_route_for_target_id(target_id) else {
-            continue;
-        };
-        let owner = crate::conn::CommandOwnerScope::for_route(route);
+        let owner = CommandOwnerScope::for_route(route.clone());
         let pending = match conn.start_initial_document_page_ensure_for_owner(&owner) {
             Ok(pending) => pending,
             Err(message) => {

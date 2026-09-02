@@ -252,7 +252,7 @@ async fn set_blocked_urls_runtime_fetch_emits_loading_failed() {
     );
 }
 #[tokio::test(flavor = "multi_thread")]
-async fn background_set_blocked_urls_updates_loaded_owner_page_without_promotion() {
+async fn background_set_blocked_urls_updates_loaded_owner_page_without_activation() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
@@ -396,7 +396,7 @@ async fn background_set_blocked_urls_updates_loaded_owner_page_without_promotion
     );
     assert!(
         ctx.conn.browser_context.is_none(),
-        "direct background Network policy should not promote the owner"
+        "direct background Network policy should not activate the owner"
     );
 
     server.abort();

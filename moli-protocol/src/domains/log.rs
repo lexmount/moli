@@ -485,7 +485,7 @@ mod tests {
             .browser_context
             .as_mut()
             .expect("browser context should be loaded");
-        assert!(browser_context.assign_auxiliary_session_to_target("TID-1", "SID-2".to_owned()));
+        assert!(browser_context.assign_attached_session_to_target("TID-1", "SID-2".to_owned()));
         ctx.process_async(json!({"id": 1, "method": "Log.enable", "sessionId": "SID-1"}))
             .await;
         ctx.expect_result(1, json!({}), Some("SID-1"));
@@ -691,7 +691,7 @@ mod tests {
                 .browser_context
                 .as_mut()
                 .expect("browser context")
-                .assign_auxiliary_session_to_target("TID-1", "SID-2".to_owned())
+                .assign_attached_session_to_target("TID-1", "SID-2".to_owned())
         );
 
         ctx.process_async(json!({"id": 1, "method": "Log.enable", "sessionId": "SID-1"}))
@@ -747,8 +747,8 @@ mod tests {
             .browser_context
             .as_mut()
             .expect("browser context should be loaded");
-        assert!(browser_context.assign_auxiliary_session_to_target("TID-1", "SID-2".to_owned()));
-        assert!(browser_context.assign_auxiliary_session_to_target("TID-1", "SID-3".to_owned()));
+        assert!(browser_context.assign_attached_session_to_target("TID-1", "SID-2".to_owned()));
+        assert!(browser_context.assign_attached_session_to_target("TID-1", "SID-3".to_owned()));
 
         ctx.process_async(json!({"id": 1, "method": "Log.enable", "sessionId": "SID-1"}))
             .await;

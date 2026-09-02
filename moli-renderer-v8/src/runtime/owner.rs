@@ -250,8 +250,9 @@ pub enum RendererOwnerCommand {
         command: RendererPageCommand,
     },
     /// Renderer-side cleanup after the browser/protocol owner has already
-    /// disconnected a DevTools session and closed both of its ingress lanes.
-    /// This is lifecycle work, not another frontend Inspector command.
+    /// disconnected a DevTools session and suspended both of its ingress lanes.
+    /// Replacement frontend work remains queued behind this lifecycle task so
+    /// it cannot reuse the V8 session before destruction completes.
     FinalizeRuntimeInspectorSessionDetach {
         token: RendererPageToken,
         inspector_session_id: Option<String>,
@@ -2521,7 +2522,7 @@ impl RendererOwnerHandle {
             RendererOwnerCommand::FinalizeRuntimeInspectorSessionDetach {
                 token,
                 inspector_session_id,
-                pause_guard: _pause_guard,
+                mut pause_guard,
             } => {
                 let mut entry = match checkout_entry_for_owner_turn_on_bound_owner_local_store(
                     token,
@@ -2530,6 +2531,7 @@ impl RendererOwnerHandle {
                     Err(
                         LivePageEntryCheckoutError::Retired | LivePageEntryCheckoutError::Missing,
                     ) => {
+                        pause_guard.complete();
                         return Ok(RendererOwnerReply::RuntimeInspectorSessionDetachFinalized(
                             false,
                         ))
@@ -2547,6 +2549,7 @@ impl RendererOwnerHandle {
                     .page_vm_mut()
                     .detach_runtime_inspector_session(inspector_session_id.as_deref());
                 restore_entry_after_command_on_bound_owner_local_store(token, entry);
+                pause_guard.complete();
                 Ok(RendererOwnerReply::RuntimeInspectorSessionDetachFinalized(
                     detached,
                 ))

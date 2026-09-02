@@ -275,7 +275,7 @@ async fn repeated_runtime_enable_does_not_replay_child_default_context_twice() {
     );
 }
 #[tokio::test(flavor = "multi_thread")]
-async fn runtime_enable_replays_child_default_context_per_auxiliary_session() {
+async fn runtime_enable_replays_child_default_context_per_attached_session() {
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
     ctx.enable_page_events_for_test(Some("SID-1"));
@@ -289,7 +289,7 @@ async fn runtime_enable_replays_child_default_context_per_auxiliary_session() {
             .browser_context
             .as_mut()
             .expect("browser context")
-            .assign_auxiliary_session_to_target("TID-1", "SID-aux".to_owned())
+            .assign_attached_session_to_target("TID-1", "SID-attached".to_owned())
     );
 
     let child_frame_id = child_frame_id_for_single_iframe(&mut ctx, 40715).await;
@@ -323,24 +323,24 @@ async fn runtime_enable_replays_child_default_context_per_auxiliary_session() {
     ctx.process_async(json!({
         "id": 40717,
         "method": "Runtime.enable",
-        "sessionId": "SID-aux"
+        "sessionId": "SID-attached"
     }))
     .await;
-    let auxiliary_response = take_response_by_id(&mut ctx, 40717);
-    assert_eq!(auxiliary_response["result"], json!({}));
-    let auxiliary_child_default_count = ctx
+    let attached_response = take_response_by_id(&mut ctx, 40717);
+    assert_eq!(attached_response["result"], json!({}));
+    let attached_child_default_count = ctx
         .sent
         .iter()
         .filter(|message| {
             message["method"] == json!("Runtime.executionContextCreated")
-                && message["sessionId"] == json!("SID-aux")
+                && message["sessionId"] == json!("SID-attached")
                 && message["params"]["context"]["auxData"]["isDefault"] == json!(true)
                 && message["params"]["context"]["auxData"]["frameId"] == json!(child_frame_id)
         })
         .count();
     assert_eq!(
-        auxiliary_child_default_count, 1,
-        "auxiliary Runtime.enable should have its own child default replay cursor"
+        attached_child_default_count, 1,
+        "attached Runtime.enable should have its own child default replay cursor"
     );
     ctx.sent.clear();
 
@@ -357,24 +357,24 @@ async fn runtime_enable_replays_child_default_context_per_auxiliary_session() {
     ctx.process_async(json!({
         "id": 40719,
         "method": "Runtime.enable",
-        "sessionId": "SID-aux"
+        "sessionId": "SID-attached"
     }))
     .await;
-    let auxiliary_enable_again = take_response_by_id(&mut ctx, 40719);
-    assert_eq!(auxiliary_enable_again["result"], json!({}));
-    let repeated_auxiliary_child_default_count = ctx
+    let attached_enable_again = take_response_by_id(&mut ctx, 40719);
+    assert_eq!(attached_enable_again["result"], json!({}));
+    let repeated_attached_child_default_count = ctx
         .sent
         .iter()
         .filter(|message| {
             message["method"] == json!("Runtime.executionContextCreated")
-                && message["sessionId"] == json!("SID-aux")
+                && message["sessionId"] == json!("SID-attached")
                 && message["params"]["context"]["auxData"]["isDefault"] == json!(true)
                 && message["params"]["context"]["auxData"]["frameId"] == json!(child_frame_id)
         })
         .count();
     assert_eq!(
-        repeated_auxiliary_child_default_count, 0,
-        "disabling primary Runtime must not clear auxiliary child default replay cursor"
+        repeated_attached_child_default_count, 0,
+        "disabling primary Runtime must not clear attached child default replay cursor"
     );
 }
 #[tokio::test(flavor = "multi_thread")]

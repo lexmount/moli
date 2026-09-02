@@ -74,7 +74,7 @@ impl CdpConnection {
         {
             let removed = self.browser_context.take();
             if self.browser_context.is_none() && !self.inactive_browser_contexts.is_empty() {
-                self.promote_inactive_browser_context_index_to_active(0);
+                self.select_inactive_browser_context_as_active(0);
             }
             self.invalidate_resource_runtime_async().await;
             self.restore_preferred_browser_context_async(
@@ -108,7 +108,7 @@ impl CdpConnection {
         self.invalidate_resource_runtime_async().await;
     }
 
-    fn promote_inactive_browser_context_index_to_active(&mut self, index: usize) {
+    fn select_inactive_browser_context_as_active(&mut self, index: usize) {
         self.browser_context = Some(self.inactive_browser_contexts.swap_remove(index));
     }
 

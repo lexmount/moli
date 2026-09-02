@@ -133,13 +133,22 @@ impl RendererDevToolsTargetHandle {
             .outbound_route(self.clone(), agent_token, session)
     }
 
-    pub(crate) fn detach_session(
+    pub(crate) fn begin_session_detach(
         &self,
         agent_token: RendererDevToolsAgentToken,
         session: &DevToolsSessionKey,
     ) {
-        self.main.detach_session(agent_token, session);
-        self.io.detach_session(agent_token, session);
+        self.main.begin_session_detach(agent_token, session);
+        self.io.begin_session_detach(agent_token, session);
+    }
+
+    pub(crate) fn finish_session_detach(
+        &self,
+        agent_token: RendererDevToolsAgentToken,
+        session: &DevToolsSessionKey,
+    ) {
+        self.main.finish_session_detach(agent_token, session);
+        self.io.finish_session_detach(agent_token, session);
     }
 
     pub(crate) fn close(&self, message: &str) -> bool {

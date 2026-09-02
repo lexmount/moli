@@ -486,8 +486,10 @@ impl RendererBrowserContextRuntime {
         raw_json: String,
         response: RendererRuntimeInspectorResponseSender,
     ) -> Result<crate::runtime::CompletedWorkerRuntimeInspectorCommandDispatch, String> {
-        self.inner
-            .shared_worker_runtime
+        let Some(runtime) = self.shared_worker_runtime_if_initialized() else {
+            return Err("SharedWorkerRuntimeUnavailable".to_owned());
+        };
+        runtime
             .dispatch_runtime_protocol_message_with_devtools_session_response(
                 instance_id,
                 inspector_session_id,

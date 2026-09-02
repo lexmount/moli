@@ -200,9 +200,17 @@ fn load_bc_with_service_worker_target(ctx: &mut TestContext) {
     ctx.conn.browser_context = Some(bc);
 }
 async fn ensure_initial_document_for_session(ctx: &mut TestContext, session_id: Option<&str>) {
+    let owner = match session_id {
+        Some(session_id) => crate::conn::CommandOwnerScope::for_route(
+            ctx.conn
+                .bound_session_route_for_test(session_id, None)
+                .expect("test session must own a concrete target route"),
+        ),
+        None => crate::conn::CommandOwnerScope::capture(&ctx.conn, None),
+    };
     let pending = ctx
         .conn
-        .start_initial_document_page_ensure_for_session_owner(session_id)
+        .start_initial_document_page_ensure_for_owner(&owner)
         .expect("target lifecycle initial document ensure should start")
         .expect("metadata-only initial target should need an initial document page build");
     let completed = pending

@@ -421,8 +421,10 @@ impl RendererBrowserContextRuntime {
         raw_json: String,
         response: RendererRuntimeInspectorResponseSender,
     ) -> Result<crate::runtime::CompletedWorkerRuntimeInspectorCommandDispatch, String> {
-        self.inner
-            .service_worker_runtime
+        let Some(runtime) = self.service_worker_runtime_for_existing_registration() else {
+            return Err("ServiceWorkerRuntimeUnavailable".to_owned());
+        };
+        runtime
             .dispatch_runtime_protocol_message_with_devtools_session_response(
                 ServiceWorkerVersionId::from_u64_for_binding(version_id),
                 inspector_session_id,

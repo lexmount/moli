@@ -16,7 +16,7 @@ class InspectorRoutingPage:
     browser_context_id: str
     target_id: str
     primary_session_id: str
-    auxiliary_session_id: str
+    attached_session_id: str
 
 
 async def run_inspector_routing_group(
@@ -258,7 +258,7 @@ for (;;) {}"""
             })()""",
             "returnByValue": True,
         },
-        session_id=page.auxiliary_session_id,
+        session_id=page.attached_session_id,
     )
     main_two_id = await client.send(
         "Runtime.evaluate",
@@ -266,7 +266,7 @@ for (;;) {}"""
             "expression": "globalThis.__inspectorRoutingMainOrder.push('m2')",
             "returnByValue": True,
         },
-        session_id=page.auxiliary_session_id,
+        session_id=page.attached_session_id,
     )
     observed = await _recv_for(client, 0.2)
     blocked_ids = {run_id, main_one_id, main_two_id}
@@ -280,16 +280,16 @@ for (;;) {}"""
     source_one_id = await client.send(
         "Debugger.getScriptSource",
         {"scriptId": script_id},
-        session_id=page.auxiliary_session_id,
+        session_id=page.attached_session_id,
     )
     source_two_id = await client.send(
         "Debugger.getScriptSource",
         {"scriptId": script_id},
-        session_id=page.auxiliary_session_id,
+        session_id=page.attached_session_id,
     )
     terminate_id = await client.send(
         "Runtime.terminateExecution",
-        session_id=page.auxiliary_session_id,
+        session_id=page.attached_session_id,
     )
     expected_ids = {
         run_id,
@@ -373,7 +373,7 @@ for (;;) {}"""
         results,
         "raw_cdp_active_javascript_main_io_lane_matrix",
         contract=(
-            "An auxiliary IO lane interrupts non-yielding JavaScript owned by another "
+            "An attached IO lane interrupts non-yielding JavaScript owned by another "
             "session; IO and Main remain FIFO within their own lanes, each command responds "
             "once, and the isolate recovers."
         ),
@@ -716,7 +716,7 @@ inspectorRoutingHotLoop();"""
     await _wait_for_witness(fixture, expected_count=1)
     pause_id = await client.send(
         "Debugger.pause",
-        session_id=page.auxiliary_session_id,
+        session_id=page.attached_session_id,
     )
 
     pause_response: dict[str, Any] | None = None
@@ -725,7 +725,7 @@ inspectorRoutingHotLoop();"""
     deadline = asyncio.get_running_loop().time() + 5.0
     while pause_response is None or paused_events.keys() != {
         page.primary_session_id,
-        page.auxiliary_session_id,
+        page.attached_session_id,
     }:
         remaining = deadline - asyncio.get_running_loop().time()
         if remaining <= 0:
@@ -745,14 +745,14 @@ inspectorRoutingHotLoop();"""
             pause_response = message
         session_id = message.get("sessionId")
         if (
-            session_id in {page.primary_session_id, page.auxiliary_session_id}
+            session_id in {page.primary_session_id, page.attached_session_id}
             and message.get("method") == "Debugger.paused"
         ):
             paused_events[session_id] = message
     if "error" in pause_response:
         raise SmokeError(f"Debugger.pause failed during active JS: {pause_response}")
 
-    call_frames = paused_events[page.auxiliary_session_id].get("params", {}).get(
+    call_frames = paused_events[page.attached_session_id].get("params", {}).get(
         "callFrames"
     )
     if not isinstance(call_frames, list) or not call_frames:
@@ -798,7 +798,7 @@ inspectorRoutingHotLoop();"""
         ("Debugger.setBreakpointsActive", {"active": True}),
     ]
     catalog_ids = [
-        await client.send(method, params, session_id=page.auxiliary_session_id)
+        await client.send(method, params, session_id=page.attached_session_id)
         for method, params in catalog
     ]
     catalog_responses, catalog_seen = await _recv_responses(
@@ -835,7 +835,7 @@ inspectorRoutingHotLoop();"""
         await client.send(
             "Debugger.getScriptSource",
             {"scriptId": script_id},
-            session_id=page.auxiliary_session_id,
+            session_id=page.attached_session_id,
         )
         for _ in range(32)
     ]
@@ -872,7 +872,7 @@ inspectorRoutingHotLoop();"""
         await client.send(
             "Debugger.removeBreakpoint",
             {"breakpointId": breakpoint_id},
-            session_id=page.auxiliary_session_id,
+            session_id=page.attached_session_id,
         )
         for breakpoint_id in breakpoint_ids
     ]
@@ -887,7 +887,7 @@ inspectorRoutingHotLoop();"""
 
     resume_id = await client.send(
         "Debugger.resume",
-        session_id=page.auxiliary_session_id,
+        session_id=page.attached_session_id,
     )
     resume_response, resume_seen = await client.recv_until_id(resume_id, timeout=5)
     if "error" in resume_response:
@@ -902,7 +902,7 @@ inspectorRoutingHotLoop();"""
         for message in resume_seen
         if message.get("method") == "Debugger.resumed"
     }
-    for session_id in (page.primary_session_id, page.auxiliary_session_id):
+    for session_id in (page.primary_session_id, page.attached_session_id):
         if session_id not in resumed_sessions:
             resume_seen.append(
                 await _recv_until_session_event(
@@ -917,7 +917,7 @@ inspectorRoutingHotLoop();"""
     follower_id = await client.send(
         "Runtime.evaluate",
         {"expression": "21 * 2", "returnByValue": True},
-        session_id=page.auxiliary_session_id,
+        session_id=page.attached_session_id,
     )
     early_after_resume = await _recv_for(client, 0.1)
     if any(message.get("id") in {run_id, follower_id} for message in early_after_resume):
@@ -928,7 +928,7 @@ inspectorRoutingHotLoop();"""
 
     terminate_id = await client.send(
         "Runtime.terminateExecution",
-        session_id=page.auxiliary_session_id,
+        session_id=page.attached_session_id,
     )
     final_responses, final_seen = await _recv_responses(
         client,
@@ -982,12 +982,12 @@ async def _nested_v8_main_receiver_matrix(
 ) -> None:
     dom_enable_id = await client.send(
         "DOM.enable",
-        session_id=page.auxiliary_session_id,
+        session_id=page.attached_session_id,
     )
     await client.recv_until_id(dom_enable_id, timeout=5)
     frame_tree_id = await client.send(
         "Page.getFrameTree",
-        session_id=page.auxiliary_session_id,
+        session_id=page.attached_session_id,
     )
     frame_tree, _ = await client.recv_until_id(frame_tree_id, timeout=5)
     frame_id = (
@@ -1001,7 +1001,7 @@ async def _nested_v8_main_receiver_matrix(
     isolated_id = await client.send(
         "Page.createIsolatedWorld",
         {"frameId": frame_id, "worldName": "inspector-routing-nested-main"},
-        session_id=page.auxiliary_session_id,
+        session_id=page.attached_session_id,
     )
     isolated, _ = await client.recv_until_id(isolated_id, timeout=5)
     isolated_context_id = isolated.get("result", {}).get("executionContextId")
@@ -1018,7 +1018,7 @@ async def _nested_v8_main_receiver_matrix(
     deadline = asyncio.get_running_loop().time() + 5.0
     while paused_events.keys() != {
         page.primary_session_id,
-        page.auxiliary_session_id,
+        page.attached_session_id,
     }:
         remaining = deadline - asyncio.get_running_loop().time()
         if remaining <= 0:
@@ -1032,32 +1032,32 @@ async def _nested_v8_main_receiver_matrix(
             raise SmokeError("debugger evaluation completed before Debugger.paused")
         session_id = message.get("sessionId")
         if (
-            session_id in {page.primary_session_id, page.auxiliary_session_id}
+            session_id in {page.primary_session_id, page.attached_session_id}
             and message.get("method") == "Debugger.paused"
         ):
             paused_events[session_id] = message
 
-    call_frames = paused_events[page.auxiliary_session_id].get("params", {}).get(
+    call_frames = paused_events[page.attached_session_id].get("params", {}).get(
         "callFrames"
     )
     if not isinstance(call_frames, list) or not call_frames:
         raise SmokeError(
-            "auxiliary Debugger.paused event has no call frame: "
-            f"{paused_events[page.auxiliary_session_id]}"
+            "attached Debugger.paused event has no call frame: "
+            f"{paused_events[page.attached_session_id]}"
         )
     call_frame_id = call_frames[0].get("callFrameId")
     if not isinstance(call_frame_id, str) or not call_frame_id:
-        raise SmokeError(f"auxiliary pause has no callFrameId: {call_frames[0]}")
+        raise SmokeError(f"attached pause has no callFrameId: {call_frames[0]}")
 
     cross_session_ids: dict[str, list[int]] = {
         page.primary_session_id: [],
-        page.auxiliary_session_id: [],
+        page.attached_session_id: [],
     }
     cross_session_expected_values: dict[int, int] = {}
     for index in range(32):
         for session_id, base in (
             (page.primary_session_id, 1000),
-            (page.auxiliary_session_id, 2000),
+            (page.attached_session_id, 2000),
         ):
             message_id = await client.send(
                 "Runtime.evaluate",
@@ -1109,7 +1109,7 @@ async def _nested_v8_main_receiver_matrix(
                 ),
                 "returnByValue": True,
             },
-            session_id=page.auxiliary_session_id,
+            session_id=page.attached_session_id,
         )
         for index in range(1, 4)
     ]
@@ -1131,7 +1131,7 @@ async def _nested_v8_main_receiver_matrix(
     object_id = await client.send(
         "Runtime.evaluate",
         {"expression": "({answer: 42})"},
-        session_id=page.auxiliary_session_id,
+        session_id=page.attached_session_id,
     )
     object_response, _ = await client.recv_until_id(object_id, timeout=5)
     remote_object_id = (
@@ -1144,7 +1144,7 @@ async def _nested_v8_main_receiver_matrix(
         await client.send(
             "Runtime.getProperties",
             {"objectId": remote_object_id, "ownProperties": True},
-            session_id=page.auxiliary_session_id,
+            session_id=page.attached_session_id,
         )
         for _ in range(256)
     ]
@@ -1183,7 +1183,7 @@ async def _nested_v8_main_receiver_matrix(
                 ),
                 "ownProperties": True,
             },
-            session_id=page.auxiliary_session_id,
+            session_id=page.attached_session_id,
         )
         mixed_property_ids.append(message_id)
         mixed_property_should_succeed[message_id] = should_succeed
@@ -1223,7 +1223,7 @@ async def _nested_v8_main_receiver_matrix(
             "functionDeclaration": "function () { return this.answer + 1; }",
             "returnByValue": True,
         },
-        session_id=page.auxiliary_session_id,
+        session_id=page.attached_session_id,
     )
     called, _ = await client.recv_until_id(call_id, timeout=5)
     assert_equal(
@@ -1240,7 +1240,7 @@ async def _nested_v8_main_receiver_matrix(
                 "expression": "40 + 2",
                 "returnByValue": True,
             },
-            session_id=page.auxiliary_session_id,
+            session_id=page.attached_session_id,
         )
         for _ in range(64)
     ]
@@ -1274,7 +1274,7 @@ async def _nested_v8_main_receiver_matrix(
             "expression": "globalThis.__nestedExplicitContext = 44",
             "returnByValue": True,
         },
-        session_id=page.auxiliary_session_id,
+        session_id=page.attached_session_id,
     )
     context_evaluate, _ = await client.recv_until_id(context_evaluate_id, timeout=5)
     assert_equal(
@@ -1285,7 +1285,7 @@ async def _nested_v8_main_receiver_matrix(
 
     resume_id = await client.send(
         "Debugger.resume",
-        session_id=page.auxiliary_session_id,
+        session_id=page.attached_session_id,
     )
     responses, resume_seen = await _recv_responses(
         client,
@@ -1293,14 +1293,14 @@ async def _nested_v8_main_receiver_matrix(
         timeout=5,
     )
     if "error" in responses[resume_id]:
-        raise SmokeError(f"auxiliary Debugger.resume failed: {responses[resume_id]}")
+        raise SmokeError(f"attached Debugger.resume failed: {responses[resume_id]}")
     assert_equal(
         responses[paused_evaluate_id]
         .get("result", {})
         .get("result", {})
         .get("value"),
         42,
-        "nested Main original evaluation after auxiliary resume",
+        "nested Main original evaluation after attached resume",
     )
     resumed_sessions = {
         message.get("sessionId")
@@ -1323,7 +1323,7 @@ async def _nested_v8_main_receiver_matrix(
         contract=(
             "A normal debugger pause pumps V8-backed commands from the Main DevTools "
             "receiver for every attached session, including explicit-context Runtime and "
-            "call-frame/object commands; an auxiliary IO resume releases the original "
+            "call-frame/object commands; an attached IO resume releases the original "
             "JavaScript stack."
         ),
         source="Chromium nested main-thread RunLoop executable probe",
@@ -1359,12 +1359,12 @@ async def _nested_non_v8_main_receiver_matrix(
 ) -> None:
     dom_enable_id = await client.send(
         "DOM.enable",
-        session_id=page.auxiliary_session_id,
+        session_id=page.attached_session_id,
     )
     await client.recv_until_id(dom_enable_id, timeout=5)
     initial_tree_id = await client.send(
         "Page.getFrameTree",
-        session_id=page.auxiliary_session_id,
+        session_id=page.attached_session_id,
     )
     initial_tree, _ = await client.recv_until_id(initial_tree_id, timeout=5)
     frame_id = (
@@ -1412,7 +1412,7 @@ async def _nested_non_v8_main_receiver_matrix(
         ("DOM.getDocument", {"depth": 0}),
     ]
     command_ids = [
-        await client.send(method, params, session_id=page.auxiliary_session_id)
+        await client.send(method, params, session_id=page.attached_session_id)
         for method, params in commands
     ]
     seen = await _recv_for(client, 1.0)
@@ -1429,7 +1429,7 @@ async def _nested_non_v8_main_receiver_matrix(
 
     resume_id = await client.send(
         "Debugger.resume",
-        session_id=page.auxiliary_session_id,
+        session_id=page.attached_session_id,
     )
     after_resume, resume_seen = await _recv_responses(
         client,
@@ -1520,7 +1520,7 @@ async def _performance_io_during_active_javascript(
 ) -> None:
     performance_enable_id = await client.send(
         "Performance.enable",
-        session_id=page.auxiliary_session_id,
+        session_id=page.attached_session_id,
     )
     await client.recv_until_id(performance_enable_id, timeout=5)
     await _reset_witness(fixture)
@@ -1542,11 +1542,11 @@ async def _performance_io_during_active_javascript(
     follower_id = await client.send(
         "Runtime.evaluate",
         {"expression": "6 * 7", "returnByValue": True},
-        session_id=page.auxiliary_session_id,
+        session_id=page.attached_session_id,
     )
     metrics_id = await client.send(
         "Performance.getMetrics",
-        session_id=page.auxiliary_session_id,
+        session_id=page.attached_session_id,
     )
     metrics, before_terminate = await client.recv_until_id(metrics_id, timeout=5)
     if any(message.get("id") in {busy_id, follower_id} for message in before_terminate):
@@ -1582,7 +1582,7 @@ async def _performance_io_during_active_javascript(
 
     terminate_id = await client.send(
         "Runtime.terminateExecution",
-        session_id=page.auxiliary_session_id,
+        session_id=page.attached_session_id,
     )
     responses, after_terminate = await _recv_responses(
         client,
@@ -1596,7 +1596,7 @@ async def _performance_io_during_active_javascript(
     )
     performance_disable_id = await client.send(
         "Performance.disable",
-        session_id=page.auxiliary_session_id,
+        session_id=page.attached_session_id,
     )
     await client.recv_until_id(performance_disable_id, timeout=5)
     record_contract(
@@ -1637,7 +1637,7 @@ async def _mixed_io_agent_response_order(
             "sourceURL": "inspector-routing-mixed-io.js",
             "persistScript": True,
         },
-        session_id=page.auxiliary_session_id,
+        session_id=page.attached_session_id,
     )
     compile_response, _ = await client.recv_until_id(compile_id, timeout=5)
     script_id = compile_response.get("result", {}).get("scriptId")
@@ -1648,7 +1648,7 @@ async def _mixed_io_agent_response_order(
 
     performance_enable_id = await client.send(
         "Performance.enable",
-        session_id=page.auxiliary_session_id,
+        session_id=page.attached_session_id,
     )
     await client.recv_until_id(performance_enable_id, timeout=5)
 
@@ -1658,7 +1658,7 @@ async def _mixed_io_agent_response_order(
             (
                 await client.send(
                     "Performance.getMetrics",
-                    session_id=page.auxiliary_session_id,
+                    session_id=page.attached_session_id,
                 ),
                 "Performance.getMetrics",
             )
@@ -1668,7 +1668,7 @@ async def _mixed_io_agent_response_order(
                 await client.send(
                     "Debugger.getScriptSource",
                     {"scriptId": script_id},
-                    session_id=page.auxiliary_session_id,
+                    session_id=page.attached_session_id,
                 ),
                 "Debugger.getScriptSource",
             )
@@ -1678,7 +1678,7 @@ async def _mixed_io_agent_response_order(
                 await client.send(
                     "Emulation.setScriptExecutionDisabled",
                     {"value": False},
-                    session_id=page.auxiliary_session_id,
+                    session_id=page.attached_session_id,
                 ),
                 "Emulation.setScriptExecutionDisabled",
             )
@@ -1688,7 +1688,7 @@ async def _mixed_io_agent_response_order(
                 await client.send(
                     "Debugger.getScriptSource",
                     {"scriptId": script_id},
-                    session_id=page.auxiliary_session_id,
+                    session_id=page.attached_session_id,
                 ),
                 "Debugger.getScriptSource",
             )
@@ -1729,7 +1729,7 @@ async def _mixed_io_agent_response_order(
 
     performance_disable_id = await client.send(
         "Performance.disable",
-        session_id=page.auxiliary_session_id,
+        session_id=page.attached_session_id,
     )
     await client.recv_until_id(performance_disable_id, timeout=5)
     record_contract(
@@ -1775,13 +1775,13 @@ async def _script_execution_disabled_io_during_active_javascript(
     follower_id = await client.send(
         "Runtime.evaluate",
         {"expression": "40 + 2", "returnByValue": True},
-        session_id=page.auxiliary_session_id,
+        session_id=page.attached_session_id,
     )
 
     disable_id = await client.send(
         "Emulation.setScriptExecutionDisabled",
         {"value": True},
-        session_id=page.auxiliary_session_id,
+        session_id=page.attached_session_id,
     )
     disable_response, disable_seen = await client.recv_until_id(disable_id, timeout=5)
     if "error" in disable_response:
@@ -1798,7 +1798,7 @@ async def _script_execution_disabled_io_during_active_javascript(
     enable_id = await client.send(
         "Emulation.setScriptExecutionDisabled",
         {"value": False},
-        session_id=page.auxiliary_session_id,
+        session_id=page.attached_session_id,
     )
     enable_response, enable_seen = await client.recv_until_id(enable_id, timeout=5)
     if "error" in enable_response:
@@ -1814,7 +1814,7 @@ async def _script_execution_disabled_io_during_active_javascript(
 
     terminate_id = await client.send(
         "Runtime.terminateExecution",
-        session_id=page.auxiliary_session_id,
+        session_id=page.attached_session_id,
     )
     responses, termination_seen = await _recv_responses(
         client,
@@ -1860,7 +1860,7 @@ async def _instrumentation_pause_io_only_receiver(
     breakpoint_id = await client.send(
         "Debugger.setInstrumentationBreakpoint",
         {"instrumentation": "beforeScriptExecution"},
-        session_id=page.auxiliary_session_id,
+        session_id=page.attached_session_id,
     )
     breakpoint_response, _ = await client.recv_until_id(breakpoint_id, timeout=5)
     instrumentation_breakpoint_id = breakpoint_response.get("result", {}).get(
@@ -1875,16 +1875,16 @@ async def _instrumentation_pause_io_only_receiver(
     run_id = await client.send(
         "Runtime.evaluate",
         {"expression": source, "returnByValue": True},
-        session_id=page.auxiliary_session_id,
+        session_id=page.attached_session_id,
     )
     paused_events = await _recv_paused_for_both_sessions(client, page, run_id)
-    auxiliary_pause = paused_events[page.auxiliary_session_id]
+    attached_pause = paused_events[page.attached_session_id]
     assert_equal(
-        auxiliary_pause.get("params", {}).get("reason"),
+        attached_pause.get("params", {}).get("reason"),
         "instrumentation",
         "instrumentation pause reason",
     )
-    call_frames = auxiliary_pause.get("params", {}).get("callFrames")
+    call_frames = attached_pause.get("params", {}).get("callFrames")
     script_id = (
         call_frames[0].get("location", {}).get("scriptId")
         if isinstance(call_frames, list)
@@ -1894,7 +1894,7 @@ async def _instrumentation_pause_io_only_receiver(
     )
     if not isinstance(script_id, str) or not script_id:
         raise SmokeError(
-            f"instrumentation pause returned no script id: {auxiliary_pause}"
+            f"instrumentation pause returned no script id: {attached_pause}"
         )
 
     main_follower_id = await client.send(
@@ -1912,12 +1912,12 @@ async def _instrumentation_pause_io_only_receiver(
     source_id = await client.send(
         "Debugger.getScriptSource",
         {"scriptId": script_id},
-        session_id=page.auxiliary_session_id,
+        session_id=page.attached_session_id,
     )
     remove_id = await client.send(
         "Debugger.removeBreakpoint",
         {"breakpointId": instrumentation_breakpoint_id},
-        session_id=page.auxiliary_session_id,
+        session_id=page.attached_session_id,
     )
     io_responses, io_seen = await _recv_responses(
         client,
@@ -1937,7 +1937,7 @@ async def _instrumentation_pause_io_only_receiver(
 
     resume_id = await client.send(
         "Debugger.resume",
-        session_id=page.auxiliary_session_id,
+        session_id=page.attached_session_id,
     )
     pending_after_resume = {run_id, main_follower_id}.difference(
         early_command_responses
@@ -1987,7 +1987,7 @@ async def _instrumentation_pause_io_only_receiver(
             "Debugger.resume",
         ],
         observed={
-            "pauseReason": auxiliary_pause.get("params", {}).get("reason"),
+            "pauseReason": attached_pause.get("params", {}).get("reason"),
             "messagesWhileMainBlocked": len(blocked),
             "ioMessages": len(io_seen),
             "resumeMessages": len(resume_seen),
@@ -2046,16 +2046,16 @@ async def _navigation_replacement_during_active_javascript(
     navigate_id = await client.send(
         "Page.navigate",
         {"url": destination},
-        session_id=page.auxiliary_session_id,
+        session_id=page.attached_session_id,
     )
     source_id = await client.send(
         "Debugger.getScriptSource",
         {"scriptId": script_id},
-        session_id=page.auxiliary_session_id,
+        session_id=page.attached_session_id,
     )
     terminate_id = await client.send(
         "Runtime.terminateExecution",
-        session_id=page.auxiliary_session_id,
+        session_id=page.attached_session_id,
     )
 
     expected_ids = {busy_id, navigate_id, source_id, terminate_id}
@@ -2199,13 +2199,13 @@ for (;;) {}"""
         await client.send(
             "Debugger.getScriptSource",
             {"scriptId": script_id},
-            session_id=page.auxiliary_session_id,
+            session_id=page.attached_session_id,
         )
         for _ in range(32)
     ]
     detach_id = await client.send(
         "Target.detachFromTarget",
-        {"sessionId": page.auxiliary_session_id},
+        {"sessionId": page.attached_session_id},
     )
     detach_completed = False
     try:
@@ -2236,7 +2236,7 @@ for (;;) {}"""
         )
         if "error" in completed[terminate_id]:
             raise SmokeError(
-                "primary session could not terminate JavaScript after auxiliary detach: "
+                "primary session could not terminate JavaScript after attached detach: "
                 f"{completed[terminate_id]}"
             )
         termination_confirmed = True
@@ -2345,7 +2345,7 @@ for (;;) {}"""
         await client.send(
             "Debugger.getScriptSource",
             {"scriptId": script_id},
-            session_id=page.auxiliary_session_id,
+            session_id=page.attached_session_id,
         )
         for _ in range(64)
     ]
@@ -2392,7 +2392,7 @@ for (;;) {}"""
     stale_session_id = await client.send(
         "Runtime.evaluate",
         {"expression": "1"},
-        session_id=page.auxiliary_session_id,
+        session_id=page.attached_session_id,
     )
     stale_responses, stale_seen = await _recv_responses(
         client,
@@ -2512,7 +2512,7 @@ async def _page_crash_io_during_active_javascript(
         await _wait_for_witness(fixture, expected_count=1)
         crash_id = await client.send(
             "Page.crash",
-            session_id=crash_page.auxiliary_session_id,
+            session_id=crash_page.attached_session_id,
         )
 
         seen: list[dict[str, Any]] = []
@@ -2630,15 +2630,15 @@ async def _create_page(client: RawCdpClient, url: str) -> InspectorRoutingPage:
         ):
             saw_load = True
 
-    auxiliary_session_id = await _attach(client, target_id)
+    attached_session_id = await _attach(client, target_id)
     for method in ("Runtime.enable", "Debugger.enable"):
-        message_id = await client.send(method, session_id=auxiliary_session_id)
+        message_id = await client.send(method, session_id=attached_session_id)
         await client.recv_until_id(message_id, timeout=5)
     return InspectorRoutingPage(
         browser_context_id=browser_context_id,
         target_id=target_id,
         primary_session_id=primary_session_id,
-        auxiliary_session_id=auxiliary_session_id,
+        attached_session_id=attached_session_id,
     )
 
 
@@ -2661,7 +2661,7 @@ async def _recv_paused_for_both_sessions(
 ) -> dict[str, dict[str, Any]]:
     paused_events: dict[str, dict[str, Any]] = {}
     seen: list[dict[str, Any]] = []
-    expected_sessions = {page.primary_session_id, page.auxiliary_session_id}
+    expected_sessions = {page.primary_session_id, page.attached_session_id}
     deadline = asyncio.get_running_loop().time() + 5.0
     while paused_events.keys() != expected_sessions:
         remaining = deadline - asyncio.get_running_loop().time()

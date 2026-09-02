@@ -46,10 +46,10 @@ impl TargetControlPlane {
         &mut self,
         tab_target_id: &str,
         session_id: String,
-        auxiliary: bool,
+        is_attached_session: bool,
     ) -> bool {
         self.graph
-            .assign_session_to_tab_target(tab_target_id, session_id, auxiliary)
+            .assign_session_to_tab_target(tab_target_id, session_id, is_attached_session)
     }
 
     pub(crate) fn remove_tab_session(&mut self, session_id: &str) -> Option<String> {
@@ -770,7 +770,7 @@ mod tests {
     #[test]
     fn target_closure_cleanup_event_plan_detaches_declared_sessions() {
         let mut control = TargetControlPlane::default();
-        for session_id in ["SID-primary", "SID-aux"] {
+        for session_id in ["SID-primary", "SID-attached"] {
             control.commit_attached_session_event(
                 session_id.to_owned(),
                 None,
@@ -790,7 +790,7 @@ mod tests {
             crate::conn::TargetClosureCleanupPlan::new(
                 "TID-page",
                 Some("Render process gone."),
-                ["SID-primary".to_owned(), "SID-aux".to_owned()],
+                ["SID-primary".to_owned(), "SID-attached".to_owned()],
             ),
             None,
         );
@@ -801,7 +801,7 @@ mod tests {
                 .iter()
                 .map(|session| (session.target_id(), session.session_id()))
                 .collect::<Vec<_>>(),
-            vec![("TID-page", "SID-primary"), ("TID-page", "SID-aux")]
+            vec![("TID-page", "SID-primary"), ("TID-page", "SID-attached")]
         );
         assert_eq!(plan.into_background_events().len(), 2);
     }

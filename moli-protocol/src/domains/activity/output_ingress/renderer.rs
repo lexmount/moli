@@ -185,7 +185,7 @@ async fn project_renderer_output_records_for_owner(
         match item {
             RendererOutputItem::OwnerAction(action) => {
                 // A Page stream can remain bound to its implicit primary owner while a
-                // Runtime command arrives through an auxiliary DevTools session. Owner
+                // Runtime command arrives through an attached DevTools session. Owner
                 // actions caused by that command (notably modal dialogs) belong to the
                 // exact inspector attachment, not merely to the stream's base route.
                 // Asynchronous actions have no command cause; an unbound stream then
@@ -265,7 +265,7 @@ mod tests {
         let mut browser_context = BrowserContext::new("BID-owner-action".to_owned());
         browser_context.set_active_target_id("TID-owner-action".to_owned());
         assert!(
-            browser_context.assign_auxiliary_session_to_target(
+            browser_context.assign_attached_session_to_target(
                 "TID-owner-action",
                 "SID-owner-action".to_owned(),
             )

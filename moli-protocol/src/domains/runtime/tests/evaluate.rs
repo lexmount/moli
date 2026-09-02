@@ -1849,7 +1849,7 @@ async fn evaluate_started_before_pending_navigation_can_complete() {
 }
 
 #[tokio::test]
-async fn evaluate_rejects_auxiliary_session_while_main_document_navigation_is_pending() {
+async fn evaluate_rejects_attached_session_while_main_document_navigation_is_pending() {
     let mut ctx = TestContext::new();
     with_loaded_document_async(
         &mut ctx,
@@ -1864,8 +1864,8 @@ async fn evaluate_rejects_auxiliary_session_while_main_document_navigation_is_pe
     browser_context.set_active_target_id("TID-1");
     browser_context.attach_active_session("SID-1");
     assert!(
-        browser_context.assign_auxiliary_session_to_target("TID-1", "SID-aux".to_owned()),
-        "auxiliary session should attach to the active target"
+        browser_context.assign_attached_session_to_target("TID-1", "SID-attached".to_owned()),
+        "attached session should attach to the active target"
     );
     browser_context.set_target_url("data:text/html,previous".to_owned());
     browser_context
@@ -1873,15 +1873,15 @@ async fn evaluate_rejects_auxiliary_session_while_main_document_navigation_is_pe
         .expect("active navigation should start");
     assert!(
         ctx.conn
-            .has_pending_document_navigation_for_session_owner(Some("SID-aux")),
-        "auxiliary session should inherit the active target document gate"
+            .has_pending_document_navigation_for_session_owner(Some("SID-attached")),
+        "attached session should inherit the active target document gate"
     );
     ctx.sent.clear();
 
     ctx.process_async(json!({
         "id": 4,
         "method": "Runtime.evaluate",
-        "sessionId": "SID-aux",
+        "sessionId": "SID-attached",
         "params": {
             "expression": "document.title",
             "returnByValue": true
@@ -2878,7 +2878,7 @@ async fn runtime_await_promise_releases_dispatch_before_session_response() {
     let CdpCommandTaskStep::Complete(outcome) =
         ctx.conn.complete_pending_command_dispatch(completed).await
     else {
-        panic!("a Page session response must not enter the CommandReply deferred-reply lane");
+        panic!("a Page session response must not enter the AdapterReply deferred-reply lane");
     };
     drop(outcome);
     assert!(
@@ -2899,7 +2899,7 @@ async fn runtime_await_promise_releases_dispatch_before_session_response() {
     assert!(
         !ctx.conn
             .has_claimed_pending_inspector_awaits_for_session_owner(None),
-        "the CommandReply claimed-await index must remain unused"
+        "the AdapterReply claimed-await index must remain unused"
     );
 
     ctx.process_async(json!({
@@ -7230,7 +7230,7 @@ async fn release_object_group_drops_inherited_get_properties_and_call_function_h
     );
 }
 #[tokio::test]
-async fn background_runtime_evaluate_emits_runtime_observable_from_background_owner_without_promotion()
+async fn background_runtime_evaluate_emits_runtime_observable_from_background_owner_without_activation()
  {
     let mut ctx = TestContext::new();
     with_loaded_runtime_frontend_enabled_background_target_async(
@@ -7285,12 +7285,12 @@ async fn background_runtime_evaluate_emits_runtime_observable_from_background_ow
             .as_ref()
             .and_then(|browser_context| browser_context.active_target_id()),
         Some("TID-active"),
-        "background Runtime.evaluate observable drain should not promote the target"
+        "background Runtime.evaluate observable drain should not activate the target"
     );
 }
 
 #[tokio::test]
-async fn call_function_on_loaded_background_owner_without_promotion() {
+async fn call_function_on_loaded_background_owner_without_activation() {
     let mut ctx = TestContext::new();
     with_loaded_runtime_frontend_enabled_background_target_async(
         &mut ctx,
@@ -7351,7 +7351,7 @@ async fn call_function_on_loaded_background_owner_without_promotion() {
             .as_ref()
             .and_then(|browser_context| browser_context.active_target_id()),
         Some("TID-active"),
-        "background Runtime.callFunctionOn should not promote the target"
+        "background Runtime.callFunctionOn should not activate the target"
     );
 
     ctx.process_async(json!({
@@ -8117,7 +8117,7 @@ fn replay_policy_command_rotates_lease_and_completes_on_replacement_attachment()
             .expect("register replay command");
         let (old_correlation, old_sender, response_receiver) = prepared.into_parts();
         let response_receiver = response_receiver
-            .expect("a synthesized CommandReply call must allocate a response receiver");
+            .expect("a synthesized AdapterReply call must allocate a response receiver");
 
         ctx.process_async(json!({
             "id": 9_022,

@@ -576,11 +576,11 @@ mod tests {
         bc.set_active_target_id("TID-runtime-lifecycle".to_owned());
         bc.set_target_url("https://example.test/runtime-lifecycle".to_owned());
         bc.attach_active_session("SID-runtime-a".to_owned());
-        assert!(bc.assign_auxiliary_session_to_target(
+        assert!(bc.assign_attached_session_to_target(
             "TID-runtime-lifecycle",
             "SID-runtime-b".to_owned(),
         ));
-        assert!(bc.assign_auxiliary_session_to_target(
+        assert!(bc.assign_attached_session_to_target(
             "TID-runtime-lifecycle",
             "SID-runtime-disabled".to_owned(),
         ));

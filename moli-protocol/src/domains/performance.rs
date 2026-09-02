@@ -41,7 +41,7 @@ pub(crate) struct CompletedPerformanceCommandDispatch {
 
 enum PendingPerformanceRendererCommand {
     Main(PendingPageCommand),
-    IoCommandReply {
+    IoAdapterReply {
         pending: PendingDevToolsIoCommandDispatch,
         snapshot: RendererPerformanceMetricSnapshot,
     },
@@ -53,7 +53,7 @@ enum PendingPerformanceRendererCommand {
 
 enum CompletedPerformanceRendererCommand {
     Main(CompletedPageCommand),
-    IoCommandReply(RendererPerformanceMetricSnapshot),
+    IoAdapterReply(RendererPerformanceMetricSnapshot),
     IoSessionOutput {
         completed: Result<CompletedDevToolsIoCommandDispatch, String>,
         correlation: RendererCommandCorrelation,
@@ -72,13 +72,13 @@ impl PendingPerformanceCommandDispatch {
                 .wait()
                 .await
                 .map(CompletedPerformanceRendererCommand::Main),
-            PendingPerformanceRendererCommand::IoCommandReply { pending, snapshot } => {
+            PendingPerformanceRendererCommand::IoAdapterReply { pending, snapshot } => {
                 match pending.wait().await {
                     Ok(CompletedDevToolsIoCommandDispatch::Dispatched) => Ok(
-                        CompletedPerformanceRendererCommand::IoCommandReply(snapshot),
+                        CompletedPerformanceRendererCommand::IoAdapterReply(snapshot),
                     ),
                     Ok(CompletedDevToolsIoCommandDispatch::SessionResponse { .. }) => Err(
-                        anyhow::anyhow!("command-reply Performance dispatch used session output"),
+                        anyhow::anyhow!("adapter-reply Performance dispatch used session output"),
                     ),
                     Err(error) => Err(error),
                 }
@@ -250,11 +250,9 @@ pub(crate) fn try_start_performance_command_dispatch(
                 page.cached_performance_metric_snapshot(),
             )
         };
-        let response_delivery = cmd.terminal_response_delivery(
-            moli_page_types::RendererInspectorResponseDelivery::DevToolsSession,
-        );
+        let response_delivery = cmd.terminal_response_delivery();
         if cmd.id.is_none()
-            || response_delivery == moli_page_types::RendererInspectorResponseDelivery::CommandReply
+            || response_delivery == moli_page_types::RendererInspectorResponseDelivery::AdapterReply
         {
             let page = loaded_page_mut_for_renderer_access(conn, renderer_access, &owner_scope)
                 .expect("the captured Performance Page must remain loaded synchronously");
@@ -264,7 +262,7 @@ pub(crate) fn try_start_performance_command_dispatch(
                 owner_scope,
                 renderer_access,
                 renderer_page,
-                pending: Box::new(PendingPerformanceRendererCommand::IoCommandReply {
+                pending: Box::new(PendingPerformanceRendererCommand::IoAdapterReply {
                     pending,
                     snapshot,
                 }),
@@ -300,7 +298,7 @@ pub(crate) fn try_start_performance_command_dispatch(
         let (correlation, response, response_rx) = prepared.into_parts();
         debug_assert!(
             response_rx.is_none(),
-            "Performance session output must not allocate a command-reply receiver",
+            "Performance session output must not allocate an adapter-reply receiver",
         );
         let pending = loaded_page_mut_for_renderer_access(conn, renderer_access, &owner_scope)
             .ok()
@@ -402,7 +400,7 @@ pub(crate) async fn complete_pending_performance_command(
                 .and_then(|page| page.finish_performance_metric_snapshot(completed_page).ok())
                 .unwrap_or_default()
         }
-        Ok(CompletedPerformanceRendererCommand::IoCommandReply(snapshot)) => {
+        Ok(CompletedPerformanceRendererCommand::IoAdapterReply(snapshot)) => {
             let remains_current =
                 loaded_page_mut_for_renderer_access(conn, renderer_access, &owner_scope)
                     .ok()
@@ -813,12 +811,17 @@ mod tests {
                 .browser_context
                 .as_mut()
                 .expect("browser context")
-                .assign_auxiliary_session_to_target("TID-1", "SID-aux".to_owned())
+                .assign_attached_session_to_target("TID-1", "SID-attached".to_owned())
+        );
+        let owner = crate::conn::CommandOwnerScope::for_route(
+            ctx.conn
+                .bound_session_route_for_test("SID-attached", Some("TID-1"))
+                .expect("attached test session must own its Page route"),
         );
         ctx.conn
-            .apply_runtime_binding_state_for_session_owner_async(Some("SID-aux"))
+            .apply_runtime_binding_state_for_owner_async(&owner)
             .await
-            .expect("target attachment should establish the auxiliary renderer session");
+            .expect("target attachment should establish the attached renderer session");
 
         ctx.process_async(json!({
             "id": 4_100,
@@ -830,7 +833,7 @@ mod tests {
         ctx.process_async(json!({
             "id": 4_101,
             "method": "Performance.getMetrics",
-            "sessionId": "SID-aux"
+            "sessionId": "SID-attached"
         }))
         .await;
         assert!(metric_map(&ctx.take_response_by_id(4_101)).is_empty());
@@ -838,11 +841,11 @@ mod tests {
         ctx.process_async(json!({
             "id": 4_102,
             "method": "Performance.enable",
-            "sessionId": "SID-aux",
+            "sessionId": "SID-attached",
             "params": { "timeDomain": "threadTicks" }
         }))
         .await;
-        ctx.expect_result(4_102, json!({}), Some("SID-aux"));
+        ctx.expect_result(4_102, json!({}), Some("SID-attached"));
 
         ctx.process_async(json!({
             "id": 4_103,
@@ -854,7 +857,7 @@ mod tests {
         ctx.process_async(json!({
             "id": 4_104,
             "method": "Performance.getMetrics",
-            "sessionId": "SID-aux"
+            "sessionId": "SID-attached"
         }))
         .await;
         assert!(!metric_map(&ctx.take_response_by_id(4_104)).is_empty());
@@ -867,15 +870,15 @@ mod tests {
                 .performance
                 .enabled()
         );
-        let auxiliary = browser_context
+        let attached = browser_context
             .active_page_target()
             .devtools_sessions
-            .attached("SID-aux")
-            .expect("auxiliary session state")
+            .attached("SID-attached")
+            .expect("attached session state")
             .page_session_state
             .performance;
-        assert!(auxiliary.enabled());
-        assert_eq!(auxiliary.time_domain(), PerformanceTimeDomain::ThreadTicks);
+        assert!(attached.enabled());
+        assert_eq!(attached.time_domain(), PerformanceTimeDomain::ThreadTicks);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1022,7 +1025,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn performance_get_metrics_targets_loaded_background_owner_without_promotion() {
+    async fn performance_get_metrics_targets_loaded_background_owner_without_activation() {
         let mut ctx = TestContext::new();
         let background_url = "data:text/html,<!doctype html><body><main><section></section><section></section></main></body>";
         let mut bc = BrowserContext::new("BID-1".into());
@@ -1065,12 +1068,12 @@ mod tests {
             browser_context
                 .background_target("TID-background")
                 .is_some_and(|target| target.has_loaded_page()),
-            "Performance.getMetrics should not promote the loaded background owner"
+            "Performance.getMetrics should not activate the loaded background owner"
         );
     }
 
     #[tokio::test]
-    async fn performance_get_metrics_on_unloaded_background_owner_does_not_promote() {
+    async fn performance_get_metrics_on_unloaded_background_owner_does_not_activate() {
         let mut ctx = TestContext::new();
         let mut bc = BrowserContext::new("BID-1".into());
         bc.set_active_target_id("TID-active".to_owned());
@@ -1116,7 +1119,7 @@ mod tests {
             browser_context
                 .background_target("TID-background")
                 .is_some_and(|target| !target.has_loaded_page()),
-            "unloaded Performance owner fallback should not promote the background target"
+            "unloaded Performance owner fallback should not activate the background target"
         );
     }
 

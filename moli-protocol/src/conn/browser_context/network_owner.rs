@@ -72,7 +72,7 @@ impl TargetNetworkListenerOwnerMut<'_> {
             DevToolsSessionKey::Attached(session_id) => self
                 .target
                 .runtime_slot()
-                .auxiliary_network_events_enabled_for_session(session_id),
+                .attached_network_events_enabled_for_session(session_id),
         }
     }
 
@@ -121,7 +121,7 @@ impl TargetNetworkListenerOwnerMut<'_> {
         if self.is_attached_session() {
             if let Some(session_id) = listener_session_id.as_deref() {
                 self.runtime_slot_mut()
-                    .enable_auxiliary_network_events(session_id);
+                    .enable_attached_network_events(session_id);
             }
         } else {
             self.set_primary_network_enabled(true);
@@ -139,7 +139,7 @@ impl TargetNetworkListenerOwnerMut<'_> {
         if self.is_attached_session() {
             if let Some(session_id) = listener_session_id.as_deref() {
                 self.runtime_slot_mut()
-                    .disable_auxiliary_network_events(session_id);
+                    .disable_attached_network_events(session_id);
             }
         } else {
             self.set_primary_network_enabled(false);
@@ -875,7 +875,7 @@ mod tests {
         }
     }
 
-    fn parked_session_state_mut(state: &mut PageTargetHost) -> TargetSessionStateMut<'_> {
+    fn background_session_state_mut(state: &mut PageTargetHost) -> TargetSessionStateMut<'_> {
         TargetSessionStateMut {
             devtools_session_state: &mut state.devtools_sessions
                 [moli_page_types::DevToolsSessionKey::Primary],
@@ -884,7 +884,7 @@ mod tests {
         }
     }
 
-    fn connection_with_background_auxiliary_session() -> CdpConnection {
+    fn connection_with_background_attached_session() -> CdpConnection {
         let mut conn = CdpConnection::default();
         let mut browser_context = BrowserContext::new("BID-background".to_owned());
         browser_context.insert_page_target_host(PageTargetHost::with_url(
@@ -894,7 +894,7 @@ mod tests {
         ));
         assert!(
             browser_context
-                .assign_auxiliary_session_to_target("TID-background", "SID-aux".to_owned())
+                .assign_attached_session_to_target("TID-background", "SID-attached".to_owned())
         );
         conn.browser_context = Some(browser_context);
         conn
@@ -944,7 +944,7 @@ mod tests {
     }
 
     #[test]
-    fn target_session_state_mut_applies_active_and_parked_network_fields() {
+    fn target_session_state_mut_applies_active_and_background_network_fields() {
         let mut active = BrowserContext::new_with_page_for_test("BID-active", "TID-active");
         {
             let network = &mut active
@@ -1023,47 +1023,57 @@ mod tests {
             Some("cellular3g")
         );
 
-        let mut parked = PageTargetHost::empty("TID-network-owner-test".to_owned());
+        let mut background = PageTargetHost::empty("TID-network-owner-test".to_owned());
         {
-            let network = &mut parked.devtools_sessions.primary_mut().network_session_state;
+            let network = &mut background
+                .devtools_sessions
+                .primary_mut()
+                .network_session_state;
             network.network_enabled = true;
             network.cache_disabled = true;
             network.bypass_service_worker = true;
-            network.blocked_url_patterns = vec!["*://parked-blocked.test/*".to_owned()];
-            network.extra_headers = vec![("X-Test".to_owned(), "parked".to_owned())];
+            network.blocked_url_patterns = vec!["*://background-blocked.test/*".to_owned()];
+            network.extra_headers = vec![("X-Test".to_owned(), "background".to_owned())];
         }
-        let parked_offline = parked_session_state_mut(&mut parked).set_emulated_network_conditions(
-            true,
-            50.0,
-            2048.0,
-            512.0,
-            Some("cellular4g".to_owned()),
-        );
+        let background_offline = background_session_state_mut(&mut background)
+            .set_emulated_network_conditions(
+                true,
+                50.0,
+                2048.0,
+                512.0,
+                Some("cellular4g".to_owned()),
+            );
 
-        assert!(parked.effective_policy().cache_disabled());
-        assert!(parked.effective_policy().bypass_service_worker());
+        assert!(background.effective_policy().cache_disabled());
+        assert!(background.effective_policy().bypass_service_worker());
         assert_eq!(
-            parked.effective_policy().blocked_url_patterns(),
-            vec!["*://parked-blocked.test/*"]
+            background.effective_policy().blocked_url_patterns(),
+            vec!["*://background-blocked.test/*"]
         );
         assert_eq!(
-            parked.effective_policy().extra_headers(),
-            vec![("X-Test".to_owned(), "parked".to_owned())]
+            background.effective_policy().extra_headers(),
+            vec![("X-Test".to_owned(), "background".to_owned())]
         );
-        assert!(parked_offline);
-        assert!(parked.network_policy.network_offline());
-        assert_eq!(parked.network_policy.emulated_network_latency(), 50.0);
-        assert_eq!(parked.network_policy.emulated_download_throughput(), 2048.0);
-        assert_eq!(parked.network_policy.emulated_upload_throughput(), 512.0);
+        assert!(background_offline);
+        assert!(background.network_policy.network_offline());
+        assert_eq!(background.network_policy.emulated_network_latency(), 50.0);
         assert_eq!(
-            parked.network_policy.emulated_connection_type(),
+            background.network_policy.emulated_download_throughput(),
+            2048.0
+        );
+        assert_eq!(
+            background.network_policy.emulated_upload_throughput(),
+            512.0
+        );
+        assert_eq!(
+            background.network_policy.emulated_connection_type(),
             Some("cellular4g")
         );
     }
 
     #[test]
     fn repeated_background_primary_network_enable_preserves_observation_cursor() {
-        let mut conn = connection_with_background_auxiliary_session();
+        let mut conn = connection_with_background_attached_session();
 
         assert!(conn.enable_network_listener_for_session_owner(Some("SID-background")));
         conn.runtime_session_owner_slot_mut(Some("SID-background"))
@@ -1082,36 +1092,36 @@ mod tests {
     }
 
     #[test]
-    fn repeated_background_auxiliary_network_enable_preserves_observation_cursor() {
-        let mut conn = connection_with_background_auxiliary_session();
+    fn repeated_background_attached_network_enable_preserves_observation_cursor() {
+        let mut conn = connection_with_background_attached_session();
 
-        assert!(conn.enable_network_listener_for_session_owner(Some("SID-aux")));
-        conn.runtime_session_owner_slot_mut(Some("SID-aux"))
-            .expect("background auxiliary runtime slot")
-            .set_session_observation_cursor_at_counts_for_test(Some("SID-aux"), 7, 0);
+        assert!(conn.enable_network_listener_for_session_owner(Some("SID-attached")));
+        conn.runtime_session_owner_slot_mut(Some("SID-attached"))
+            .expect("background attached runtime slot")
+            .set_session_observation_cursor_at_counts_for_test(Some("SID-attached"), 7, 0);
 
-        assert!(conn.enable_network_listener_for_session_owner(Some("SID-aux")));
+        assert!(conn.enable_network_listener_for_session_owner(Some("SID-attached")));
 
         assert_eq!(
-            conn.runtime_session_owner_slot(Some("SID-aux"))
-                .expect("background auxiliary runtime slot")
-                .emitted_subresource_record_count_for_session_for_test(Some("SID-aux")),
+            conn.runtime_session_owner_slot(Some("SID-attached"))
+                .expect("background attached runtime slot")
+                .emitted_subresource_record_count_for_session_for_test(Some("SID-attached")),
             7,
-            "idempotent Network.enable must not rewind the background auxiliary cursor"
+            "idempotent Network.enable must not rewind the background attached cursor"
         );
     }
 
     #[test]
-    fn background_primary_network_disable_preserves_auxiliary_listener_artifacts() {
-        let mut conn = connection_with_background_auxiliary_session();
+    fn background_primary_network_disable_preserves_attached_listener_artifacts() {
+        let mut conn = connection_with_background_attached_session();
         assert!(conn.enable_network_listener_for_session_owner(Some("SID-background")));
-        assert!(conn.enable_network_listener_for_session_owner(Some("SID-aux")));
+        assert!(conn.enable_network_listener_for_session_owner(Some("SID-attached")));
         conn.runtime_session_owner_slot_mut(Some("SID-background"))
             .expect("background runtime slot")
             .record_captured_response_body(
                 "REQ-shared".to_owned(),
                 "shared body".to_owned(),
-                [None::<String>, Some("SID-aux".to_owned())],
+                [None::<String>, Some("SID-attached".to_owned())],
             );
         conn.runtime_session_owner_slot_mut(Some("SID-background"))
             .expect("background runtime slot")
@@ -1127,12 +1137,12 @@ mod tests {
             .runtime_session_owner_slot(Some("SID-background"))
             .expect("background runtime slot");
         assert!(!slot.primary_network_events_enabled());
-        assert!(slot.auxiliary_network_events_enabled_for_session("SID-aux"));
+        assert!(slot.attached_network_events_enabled_for_session("SID-attached"));
         let shared = slot
             .captured_response_body("REQ-shared")
-            .expect("shared body should remain while auxiliary can observe it");
+            .expect("shared body should remain while attached can observe it");
         assert!(!shared.is_visible_to_session(None));
-        assert!(shared.is_visible_to_session(Some("SID-aux")));
+        assert!(shared.is_visible_to_session(Some("SID-attached")));
         assert!(
             slot.captured_response_body("REQ-primary-only").is_none(),
             "primary-only body should be dropped when primary Network is disabled"
@@ -1140,40 +1150,40 @@ mod tests {
     }
 
     #[test]
-    fn background_auxiliary_network_disable_preserves_primary_listener_artifacts() {
-        let mut conn = connection_with_background_auxiliary_session();
+    fn background_attached_network_disable_preserves_primary_listener_artifacts() {
+        let mut conn = connection_with_background_attached_session();
         assert!(conn.enable_network_listener_for_session_owner(Some("SID-background")));
-        assert!(conn.enable_network_listener_for_session_owner(Some("SID-aux")));
+        assert!(conn.enable_network_listener_for_session_owner(Some("SID-attached")));
         conn.runtime_session_owner_slot_mut(Some("SID-background"))
             .expect("background runtime slot")
             .record_captured_response_body(
                 "REQ-shared".to_owned(),
                 "shared body".to_owned(),
-                [None::<String>, Some("SID-aux".to_owned())],
+                [None::<String>, Some("SID-attached".to_owned())],
             );
         conn.runtime_session_owner_slot_mut(Some("SID-background"))
             .expect("background runtime slot")
             .record_captured_response_body(
                 "REQ-aux-only".to_owned(),
                 "aux body".to_owned(),
-                [Some("SID-aux".to_owned())],
+                [Some("SID-attached".to_owned())],
             );
 
-        assert!(conn.disable_network_listener_for_session_owner(Some("SID-aux")));
+        assert!(conn.disable_network_listener_for_session_owner(Some("SID-attached")));
 
         let slot = conn
             .runtime_session_owner_slot(Some("SID-background"))
             .expect("background runtime slot");
         assert!(slot.primary_network_events_enabled());
-        assert!(!slot.auxiliary_network_events_enabled_for_session("SID-aux"));
+        assert!(!slot.attached_network_events_enabled_for_session("SID-attached"));
         let shared = slot
             .captured_response_body("REQ-shared")
             .expect("shared body should remain while primary can observe it");
         assert!(shared.is_visible_to_session(None));
-        assert!(!shared.is_visible_to_session(Some("SID-aux")));
+        assert!(!shared.is_visible_to_session(Some("SID-attached")));
         assert!(
             slot.captured_response_body("REQ-aux-only").is_none(),
-            "auxiliary-only body should be dropped when auxiliary Network is disabled"
+            "attached-only body should be dropped when attached Network is disabled"
         );
     }
 

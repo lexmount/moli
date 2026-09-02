@@ -807,7 +807,7 @@ mod tests {
                 crate::conn::RendererCommandDescriptor::from_frontend_policy(
                     frontend.json().to_owned(),
                     frontend.renderer_policy(),
-                    RendererInspectorResponseDelivery::DevToolsSession,
+                    RendererInspectorResponseDelivery::SessionSink,
                 ),
             )
             .expect("retired renderer call correlation");
@@ -1121,12 +1121,12 @@ mod tests {
                 .browser_context
                 .as_mut()
                 .expect("browser context")
-                .assign_auxiliary_session_to_target("TID-1", "SID-aux".to_owned())
+                .assign_attached_session_to_target("TID-1", "SID-attached".to_owned())
         );
         let outputs = renderer_inspector_outputs(
             &mut ctx.conn,
             Some("SID-1"),
-            Some("SID-aux"),
+            Some("SID-attached"),
             vec![json!({
                 "method": "Debugger.scriptParsed",
                 "params": { "scriptId": "attached-session" }
@@ -1142,7 +1142,7 @@ mod tests {
         assert_eq!(events[0]["method"], json!("Debugger.scriptParsed"));
         assert_eq!(
             events[0]["sessionId"],
-            json!("SID-aux"),
+            json!("SID-attached"),
             "an attached renderer inspector batch must retain its own session instead of following the source or drain session"
         );
     }

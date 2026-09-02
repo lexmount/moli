@@ -1246,7 +1246,7 @@ async fn tab_websocket_stays_bound_to_its_page_when_a_popup_becomes_active() {
         response_by_id(&restored_opener, 10)["result"]["result"]["value"],
         json!(&opener_url)
     );
-    let parked_popup = send_cdp_command(
+    let background_popup = send_cdp_command(
         &mut popup_tab,
         4,
         "Runtime.evaluate",
@@ -1255,14 +1255,14 @@ async fn tab_websocket_stays_bound_to_its_page_when_a_popup_becomes_active() {
     )
     .await;
     assert_eq!(
-        response_by_id(&parked_popup, 4)["result"]["result"]["value"],
+        response_by_id(&background_popup, 4)["result"]["result"]["value"],
         json!(popup_final_url)
     );
 
     let restored_opener_surface = evaluate_page_surface(&mut opener, 11).await;
     assert_page_surface_active(&restored_opener_surface, true);
-    let demoted_popup = evaluate_page_surface(&mut popup, 12).await;
-    assert_page_surface_active(&demoted_popup, false);
+    let background_popup_surface = evaluate_page_surface(&mut popup, 12).await;
+    assert_page_surface_active(&background_popup_surface, false);
 
     abort_test_cdp_server(server).await;
 }
@@ -2609,9 +2609,9 @@ async fn websocket_cdp_puppeteer_reconnect_recreates_session_owned_runtime_conte
         .expect("created target id")
         .to_owned();
     assert_ne!(created_target_id, DEFAULT_TARGET_ID);
-    // Materializing a second Page parks the old default Page. Puppeteer's
-    // first Page command promotes that existing target back to the active
-    // slot, which is the reconnect lifecycle that regressed.
+    // Materializing a second Page leaves the old default Page in the
+    // background. Puppeteer's first Page command selects that existing target
+    // again, which is the reconnect lifecycle that regressed.
     let target_id = DEFAULT_TARGET_ID.to_owned();
 
     let (mut browser, _) =

@@ -1000,18 +1000,18 @@ async fn set_lifecycle_events_enabled_replays_only_protocol_visible_load_state()
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn set_lifecycle_events_enabled_is_session_local_for_active_auxiliary_session() {
+async fn set_lifecycle_events_enabled_is_session_local_for_active_attached_session() {
     let mut ctx = TestContext::new();
     load_bc_with_session(
         &mut ctx,
-        "BID-aux-lifecycle",
+        "BID-attached-lifecycle",
         "TID-active",
         "SID-primary",
         "about:blank",
     );
     let mut navigation = ctx
         .conn
-        .load_navigation_via_runtime_async("data:text/html,<body>active auxiliary lifecycle</body>")
+        .load_navigation_via_runtime_async("data:text/html,<body>active attached lifecycle</body>")
         .await
         .expect("page should load");
     let navigation_engine = navigation.take_navigation_engine_replacement();
@@ -1021,9 +1021,11 @@ async fn set_lifecycle_events_enabled_is_session_local_for_active_auxiliary_sess
         .active_page_target_mut()
         .runtime_slot
         .set_loaded_page_for_test(navigation.page);
-    assert!(browser_context.assign_auxiliary_session_to_target("TID-active", "SID-aux".to_owned()));
+    assert!(
+        browser_context.assign_attached_session_to_target("TID-active", "SID-attached".to_owned())
+    );
     let (binding, initial_events) = ctx.conn.bind_renderer_document_lifecycle_for_owner(
-        &crate::conn::CommandOwnerScope::for_session("SID-aux"),
+        &crate::conn::CommandOwnerScope::for_session("SID-attached"),
         artifacts,
         None,
         "TID-active".to_owned(),
@@ -1033,17 +1035,17 @@ async fn set_lifecycle_events_enabled_is_session_local_for_active_auxiliary_sess
     assert_eq!(initial_events.len(), 2);
     if let Some(navigation_engine) = navigation_engine {
         ctx.conn.adopt_loaded_navigation_engine_for_owner(
-            &crate::conn::CommandOwnerScope::for_session("SID-aux"),
+            &crate::conn::CommandOwnerScope::for_session("SID-attached"),
             navigation_engine,
         );
     }
-    let _ = wait_for_visible_renderer_load(&mut ctx, "SID-aux").await;
+    let _ = wait_for_visible_renderer_load(&mut ctx, "SID-attached").await;
     ctx.sent.clear();
 
     ctx.process_async(json!({
         "id": 20,
         "method": "Page.setLifecycleEventsEnabled",
-        "sessionId": "SID-aux",
+        "sessionId": "SID-attached",
         "params": { "enabled": true }
     }))
     .await;
@@ -1055,7 +1057,7 @@ async fn set_lifecycle_events_enabled_is_session_local_for_active_auxiliary_sess
         .collect::<Vec<_>>();
     assert_eq!(lifecycle_events.len(), 2);
     assert!(lifecycle_events.iter().all(|message| {
-        message["sessionId"] == json!("SID-aux")
+        message["sessionId"] == json!("SID-attached")
             && message["params"]["frameId"] == json!("TID-active")
     }));
     assert_eq!(
@@ -1065,7 +1067,7 @@ async fn set_lifecycle_events_enabled_is_session_local_for_active_auxiliary_sess
             .collect::<Vec<_>>(),
         vec!["DOMContentLoaded", "load"]
     );
-    ctx.expect_result(20, json!({}), Some("SID-aux"));
+    ctx.expect_result(20, json!({}), Some("SID-attached"));
 
     let browser_context = ctx.conn.browser_context.as_ref().unwrap();
     assert!(
@@ -1077,15 +1079,15 @@ async fn set_lifecycle_events_enabled_is_session_local_for_active_auxiliary_sess
     );
     assert!(
         ctx.conn
-            .target_page_session_state_for_session(Some("SID-aux"))
-            .expect("auxiliary page session state")
+            .target_page_session_state_for_session(Some("SID-attached"))
+            .expect("attached page session state")
             .page_lifecycle_events,
-        "auxiliary page session should own lifecycle enable"
+        "attached page session should own lifecycle enable"
     );
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn set_lifecycle_events_enabled_is_session_local_for_background_auxiliary_session() {
+async fn set_lifecycle_events_enabled_is_session_local_for_background_attached_session() {
     let mut ctx = TestContext::new();
     let background = PageTargetHost::with_url(
         "TID-background".to_owned(),
@@ -1093,27 +1095,29 @@ async fn set_lifecycle_events_enabled_is_session_local_for_background_auxiliary_
         "about:blank".to_owned(),
     );
 
-    let mut browser_context = BrowserContext::new("BID-background-aux-lifecycle".to_owned());
+    let mut browser_context = BrowserContext::new("BID-background-attached-lifecycle".to_owned());
     browser_context.set_active_target_id("TID-active".to_owned());
     browser_context.attach_active_session("SID-active".to_owned());
     browser_context.insert_page_target_host(background);
     assert!(
-        browser_context
-            .assign_auxiliary_session_to_target("TID-background", "SID-background-aux".to_owned())
+        browser_context.assign_attached_session_to_target(
+            "TID-background",
+            "SID-background-attached".to_owned()
+        )
     );
     ctx.conn.browser_context = Some(browser_context);
     ctx.install_navigation_fixture_for_session_owner(
-        "data:text/html,<body>background auxiliary lifecycle</body>",
-        Some("SID-background-aux"),
+        "data:text/html,<body>background attached lifecycle</body>",
+        Some("SID-background-attached"),
     )
     .await;
-    let _ = wait_for_visible_renderer_load(&mut ctx, "SID-background-aux").await;
+    let _ = wait_for_visible_renderer_load(&mut ctx, "SID-background-attached").await;
     ctx.sent.clear();
 
     ctx.process_async(json!({
         "id": 21,
         "method": "Page.setLifecycleEventsEnabled",
-        "sessionId": "SID-background-aux",
+        "sessionId": "SID-background-attached",
         "params": { "enabled": true }
     }))
     .await;
@@ -1125,7 +1129,7 @@ async fn set_lifecycle_events_enabled_is_session_local_for_background_auxiliary_
         .collect::<Vec<_>>();
     assert_eq!(lifecycle_events.len(), 2);
     assert!(lifecycle_events.iter().all(|message| {
-        message["sessionId"] == json!("SID-background-aux")
+        message["sessionId"] == json!("SID-background-attached")
             && message["params"]["frameId"] == json!("TID-background")
     }));
     assert_eq!(
@@ -1135,34 +1139,34 @@ async fn set_lifecycle_events_enabled_is_session_local_for_background_auxiliary_
             .collect::<Vec<_>>(),
         vec!["DOMContentLoaded", "load"]
     );
-    ctx.expect_result(21, json!({}), Some("SID-background-aux"));
+    ctx.expect_result(21, json!({}), Some("SID-background-attached"));
 
     let browser_context = ctx.conn.browser_context.as_ref().unwrap();
-    let parked = browser_context
+    let background = browser_context
         .background_target("TID-background")
         .filter(|target| target.has_non_default_session_state())
-        .expect("background target should retain parked page session state");
+        .expect("background target should retain background page session state");
     assert!(
-        !parked.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+        !background.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_lifecycle_events,
         "background primary page session should stay disabled"
     );
     assert!(
         ctx.conn
-            .target_page_session_state_for_session(Some("SID-background-aux"))
-            .expect("background auxiliary page session state")
+            .target_page_session_state_for_session(Some("SID-background-attached"))
+            .expect("background attached page session state")
             .page_lifecycle_events,
-        "background auxiliary page session should own lifecycle enable"
+        "background attached page session should own lifecycle enable"
     );
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn page_disable_clears_page_handler_state_for_active_auxiliary_session() {
+async fn page_disable_clears_page_handler_state_for_active_attached_session() {
     let mut ctx = TestContext::new();
     load_bc_with_session(
         &mut ctx,
-        "BID-aux-page-disable",
+        "BID-attached-page-disable",
         "TID-active",
         "SID-primary",
         "about:blank",
@@ -1173,22 +1177,24 @@ async fn page_disable_clears_page_handler_state_for_active_auxiliary_session() {
             [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state,
     );
-    assert!(browser_context.assign_auxiliary_session_to_target("TID-active", "SID-aux".to_owned()));
+    assert!(
+        browser_context.assign_attached_session_to_target("TID-active", "SID-attached".to_owned())
+    );
 
-    enable_page_domain_for_session(&mut ctx.conn, "SID-aux");
+    enable_page_domain_for_session(&mut ctx.conn, "SID-attached");
     assert_page_domain_enabled(
         ctx.conn
-            .target_page_session_state_for_session(Some("SID-aux"))
-            .expect("active auxiliary page session state"),
+            .target_page_session_state_for_session(Some("SID-attached"))
+            .expect("active attached page session state"),
     );
 
     ctx.process_async(json!({
         "id": 22,
         "method": "Page.disable",
-        "sessionId": "SID-aux"
+        "sessionId": "SID-attached"
     }))
     .await;
-    ctx.expect_result(22, json!({}), Some("SID-aux"));
+    ctx.expect_result(22, json!({}), Some("SID-attached"));
 
     let browser_context = ctx.conn.browser_context.as_ref().unwrap();
     assert_page_domain_enabled(
@@ -1198,13 +1204,13 @@ async fn page_disable_clears_page_handler_state_for_active_auxiliary_session() {
     );
     assert_page_domain_disabled(
         ctx.conn
-            .target_page_session_state_for_session(Some("SID-aux"))
-            .expect("active auxiliary page session state"),
+            .target_page_session_state_for_session(Some("SID-attached"))
+            .expect("active attached page session state"),
     );
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn page_disable_clears_page_handler_state_for_background_auxiliary_session() {
+async fn page_disable_clears_page_handler_state_for_background_attached_session() {
     let mut ctx = TestContext::new();
     let background = PageTargetHost::with_url(
         "TID-background".to_owned(),
@@ -1216,8 +1222,10 @@ async fn page_disable_clears_page_handler_state_for_background_auxiliary_session
     browser_context.attach_active_session("SID-active".to_owned());
     browser_context.insert_page_target_host(background);
     assert!(
-        browser_context
-            .assign_auxiliary_session_to_target("TID-background", "SID-background-aux".to_owned())
+        browser_context.assign_attached_session_to_target(
+            "TID-background",
+            "SID-background-attached".to_owned()
+        )
     );
     {
         let state = browser_context
@@ -1230,33 +1238,34 @@ async fn page_disable_clears_page_handler_state_for_background_auxiliary_session
     }
     ctx.conn.browser_context = Some(browser_context);
 
-    enable_page_domain_for_session(&mut ctx.conn, "SID-background-aux");
+    enable_page_domain_for_session(&mut ctx.conn, "SID-background-attached");
     assert_page_domain_enabled(
         ctx.conn
-            .target_page_session_state_for_session(Some("SID-background-aux"))
-            .expect("background auxiliary page session state"),
+            .target_page_session_state_for_session(Some("SID-background-attached"))
+            .expect("background attached page session state"),
     );
 
     ctx.process_async(json!({
         "id": 23,
         "method": "Page.disable",
-        "sessionId": "SID-background-aux"
+        "sessionId": "SID-background-attached"
     }))
     .await;
-    ctx.expect_result(23, json!({}), Some("SID-background-aux"));
+    ctx.expect_result(23, json!({}), Some("SID-background-attached"));
 
     let browser_context = ctx.conn.browser_context.as_ref().unwrap();
-    let parked = browser_context
+    let background = browser_context
         .background_target("TID-background")
         .filter(|target| target.has_non_default_session_state())
-        .expect("background target should retain parked page session state");
+        .expect("background target should retain background page session state");
     assert_page_domain_enabled(
-        &parked.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary].page_session_state,
+        &background.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+            .page_session_state,
     );
     assert_page_domain_disabled(
         ctx.conn
-            .target_page_session_state_for_session(Some("SID-background-aux"))
-            .expect("background auxiliary page session state"),
+            .target_page_session_state_for_session(Some("SID-background-attached"))
+            .expect("background attached page session state"),
     );
 }
 
@@ -1652,7 +1661,7 @@ async fn runtime_document_close_releases_lifecycle_at_response_flush() {
             .browser_context
             .as_mut()
             .unwrap()
-            .assign_auxiliary_session_to_target("TID-1", "SID-aux".to_owned())
+            .assign_attached_session_to_target("TID-1", "SID-attached".to_owned())
     );
 
     ctx.process_async(json!({
@@ -1665,7 +1674,7 @@ async fn runtime_document_close_releases_lifecycle_at_response_flush() {
     ctx.process_async(json!({
         "id": 31,
         "method": "Page.setLifecycleEventsEnabled",
-        "sessionId": "SID-aux",
+        "sessionId": "SID-attached",
         "params": { "enabled": true }
     }))
     .await;
@@ -1678,7 +1687,7 @@ async fn runtime_document_close_releases_lifecycle_at_response_flush() {
     ctx.process_async(json!({
         "id": 33,
         "method": "Runtime.enable",
-        "sessionId": "SID-aux"
+        "sessionId": "SID-attached"
     }))
     .await;
     ctx.sent.clear();
@@ -1717,7 +1726,7 @@ async fn runtime_document_close_releases_lifecycle_at_response_flush() {
     assert!(
         init_messages
             .iter()
-            .any(|(_, message)| message["sessionId"] == json!("SID-aux"))
+            .any(|(_, message)| message["sessionId"] == json!("SID-attached"))
     );
     let response_index = immediate
         .iter()
@@ -1770,7 +1779,7 @@ async fn runtime_document_close_releases_lifecycle_at_response_flush() {
         .map(|message| message["sessionId"].clone())
         .collect::<Vec<_>>();
     assert!(module_sessions.contains(&json!("SID-1")));
-    assert!(module_sessions.contains(&json!("SID-aux")));
+    assert!(module_sessions.contains(&json!("SID-attached")));
 }
 
 /// Chromium starts a parser-owned module before DOMContentLoaded, but a
@@ -2233,7 +2242,8 @@ async fn add_script_run_immediately_installs_matching_bindings_into_new_top_leve
     );
 }
 #[tokio::test(flavor = "multi_thread")]
-async fn document_start_script_run_immediately_targets_loaded_background_owner_without_promotion() {
+async fn document_start_script_run_immediately_targets_loaded_background_owner_without_activation()
+{
     let mut ctx = TestContext::new();
     let background = PageTargetHost::with_url(
         "TID-background".to_owned(),
@@ -2288,7 +2298,7 @@ async fn document_start_script_run_immediately_targets_loaded_background_owner_w
             .as_ref()
             .and_then(|browser_context| browser_context.active_target_id()),
         Some("TID-active"),
-        "background Page.addScriptToEvaluateOnNewDocument should not promote the target"
+        "background Page.addScriptToEvaluateOnNewDocument should not activate the target"
     );
 
     ctx.process_async(json!({
@@ -2569,7 +2579,7 @@ async fn crash_notifies_all_attached_sessions_and_marks_browser_context_crashed(
         .await
         .expect("page should load");
     let bc = ctx.conn.browser_context.as_mut().unwrap();
-    assert!(bc.assign_auxiliary_session_to_target("TID-1", "SID-aux".into()));
+    assert!(bc.assign_attached_session_to_target("TID-1", "SID-attached".into()));
     let _ = bc
         .active_page_target_mut()
         .runtime_slot
@@ -2593,9 +2603,9 @@ async fn crash_notifies_all_attached_sessions_and_marks_browser_context_crashed(
     let inspector = ctx.take_one();
     assert_eq!(inspector["method"], "Inspector.targetCrashed");
     assert_eq!(inspector["sessionId"], "SID-1");
-    let auxiliary_inspector = ctx.take_one();
-    assert_eq!(auxiliary_inspector["method"], "Inspector.targetCrashed");
-    assert_eq!(auxiliary_inspector["sessionId"], "SID-aux");
+    let attached_inspector = ctx.take_one();
+    assert_eq!(attached_inspector["method"], "Inspector.targetCrashed");
+    assert_eq!(attached_inspector["sessionId"], "SID-attached");
 
     let bc = ctx.conn.browser_context.as_ref().unwrap();
     assert!(
@@ -2612,7 +2622,7 @@ async fn crash_notifies_all_attached_sessions_and_marks_browser_context_crashed(
     assert!(
         bc.active_page_target()
             .devtools_sessions
-            .attached("SID-aux")
+            .attached("SID-attached")
             .is_some_and(|state| state
                 .runtime_session_state
                 .inspector_target_crashed_delivered())
@@ -2636,7 +2646,7 @@ async fn crash_notifies_all_attached_sessions_and_marks_browser_context_crashed(
     .await;
     let _ = take_response_by_id(&mut ctx, 2471);
     let recovery_events = ctx.take_all();
-    for session_id in ["SID-1", "SID-aux"] {
+    for session_id in ["SID-1", "SID-attached"] {
         assert!(
             recovery_events.iter().any(|message| {
                 message["method"] == json!("Inspector.targetReloadedAfterCrash")
@@ -2657,7 +2667,7 @@ async fn crash_notifies_all_attached_sessions_and_marks_browser_context_crashed(
     );
 }
 #[tokio::test(flavor = "multi_thread")]
-async fn crash_targets_background_owner_without_promotion() {
+async fn crash_targets_background_owner_without_activation() {
     let mut ctx = TestContext::new();
     let background_page = ctx
         .conn
@@ -2712,11 +2722,11 @@ async fn crash_targets_background_owner_without_promotion() {
     assert_eq!(
         bc.active_target_id(),
         Some("TID-active"),
-        "background Page.crash should not promote the target"
+        "background Page.crash should not activate the target"
     );
     let background = bc
         .background_target("TID-background")
-        .expect("background target should remain parked");
+        .expect("background target should remain background");
     assert!(!background.has_loaded_page());
     assert!(
         !bc.accepts_document_body_completion_event(&background_document_token),
@@ -2785,7 +2795,7 @@ async fn crash_aborts_paused_request_stage_navigation() {
     assert_eq!(inspector["sessionId"], "SID-1");
 }
 #[tokio::test(flavor = "multi_thread")]
-async fn crash_aborts_background_paused_navigation_without_promotion() {
+async fn crash_aborts_background_paused_navigation_without_activation() {
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-active", "SID-active", "about:blank");
     ctx.conn
@@ -2853,7 +2863,7 @@ async fn crash_aborts_background_paused_navigation_without_promotion() {
     assert_eq!(
         bc.active_target_id(),
         Some("TID-active"),
-        "background Page.crash should not promote the target"
+        "background Page.crash should not activate the target"
     );
     assert!(
         bc.background_target("TID-background")
@@ -3020,7 +3030,7 @@ async fn close_clears_loaded_page_state_and_emits_detached_events() {
     bc.active_page_target_mut()
         .runtime_slot
         .set_next_subresource_fetch_request_id_for_test(5);
-    assert!(bc.assign_auxiliary_session_to_target("TID-1", "SID-aux".into()));
+    assert!(bc.assign_attached_session_to_target("TID-1", "SID-attached".into()));
     bc.remember_target_window_name("close-me", "TID-1");
     bc.target_opener_ids
         .insert("TID-popup-after-close".into(), "TID-1".into());
@@ -3042,18 +3052,18 @@ async fn close_clears_loaded_page_state_and_emits_detached_events() {
     assert_eq!(detached[0]["method"], "Inspector.detached");
     assert_eq!(detached[0]["sessionId"], "SID-1");
     assert_eq!(detached[1]["method"], "Inspector.detached");
-    assert_eq!(detached[1]["sessionId"], "SID-aux");
+    assert_eq!(detached[1]["sessionId"], "SID-attached");
     assert_eq!(detached[2]["method"], "Target.detachedFromTarget");
     assert_eq!(detached[2]["params"]["targetId"], "TID-1");
     assert_eq!(detached[2]["params"]["sessionId"], "SID-1");
     assert_eq!(detached[3]["method"], "Target.detachedFromTarget");
     assert_eq!(detached[3]["params"]["targetId"], "TID-1");
-    assert_eq!(detached[3]["params"]["sessionId"], "SID-aux");
+    assert_eq!(detached[3]["params"]["sessionId"], "SID-attached");
 
     let bc = ctx.conn.browser_context.as_ref().unwrap();
     assert!(!bc.has_active_target());
     assert!(!bc.has_active_session());
-    assert!(bc.auxiliary_target_id_for_session("SID-aux").is_none());
+    assert!(bc.attached_target_id_for_session("SID-attached").is_none());
     assert!(bc.target_id_for_window_name("close-me").is_none());
     assert!(!bc.target_opener_ids.contains_key("TID-popup-after-close"));
     assert!(
@@ -3154,7 +3164,7 @@ async fn close_aborts_paused_request_stage_navigation_and_clears_state() {
     assert!(bc.page_target("TID-1").is_none());
 }
 #[tokio::test(flavor = "multi_thread")]
-async fn close_aborts_background_paused_navigation_without_promotion() {
+async fn close_aborts_background_paused_navigation_without_activation() {
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-active", "SID-active", "about:blank");
     let bc = ctx.conn.browser_context.as_mut().unwrap();
@@ -3163,7 +3173,7 @@ async fn close_aborts_background_paused_navigation_without_promotion() {
         Some("SID-background".to_owned()),
         "about:blank#background".to_owned(),
     ));
-    assert!(bc.assign_auxiliary_session_to_target("TID-background", "SID-aux".to_owned()));
+    assert!(bc.assign_attached_session_to_target("TID-background", "SID-attached".to_owned()));
     bc.background_target_mut("TID-background")
         .expect("background target must exist")
         .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary] =
@@ -3232,28 +3242,28 @@ async fn close_aborts_background_paused_navigation_without_promotion() {
     assert_eq!(inspector["method"], "Inspector.detached");
     assert_eq!(inspector["sessionId"], "SID-background");
 
-    let auxiliary_inspector = ctx.take_one();
-    assert_eq!(auxiliary_inspector["method"], "Inspector.detached");
-    assert_eq!(auxiliary_inspector["sessionId"], "SID-aux");
+    let attached_inspector = ctx.take_one();
+    assert_eq!(attached_inspector["method"], "Inspector.detached");
+    assert_eq!(attached_inspector["sessionId"], "SID-attached");
 
     let primary_detached = ctx.take_one();
     assert_eq!(primary_detached["method"], "Target.detachedFromTarget");
     assert_eq!(primary_detached["params"]["targetId"], "TID-background");
     assert_eq!(primary_detached["params"]["sessionId"], "SID-background");
 
-    let auxiliary_detached = ctx.take_one();
-    assert_eq!(auxiliary_detached["method"], "Target.detachedFromTarget");
-    assert_eq!(auxiliary_detached["params"]["targetId"], "TID-background");
-    assert_eq!(auxiliary_detached["params"]["sessionId"], "SID-aux");
+    let attached_detached = ctx.take_one();
+    assert_eq!(attached_detached["method"], "Target.detachedFromTarget");
+    assert_eq!(attached_detached["params"]["targetId"], "TID-background");
+    assert_eq!(attached_detached["params"]["sessionId"], "SID-attached");
 
     let bc = ctx.conn.browser_context.as_ref().unwrap();
     assert_eq!(
         bc.active_target_id(),
         Some("TID-active"),
-        "background Page.close should not promote the target"
+        "background Page.close should not activate the target"
     );
     assert!(bc.background_target("TID-background").is_none());
-    assert!(bc.auxiliary_target_id_for_session("SID-aux").is_none());
+    assert!(bc.attached_target_id_for_session("SID-attached").is_none());
 }
 #[tokio::test(flavor = "multi_thread")]
 async fn close_without_target_loaded_errors() {
@@ -3869,9 +3879,9 @@ async fn screencast_visual_state_is_independent_for_two_sessions_on_one_page() {
             .browser_context
             .as_mut()
             .expect("browser context")
-            .assign_auxiliary_session_to_target(
+            .assign_attached_session_to_target(
                 "TID-screencast-two-sessions",
-                "SID-screencast-aux".to_owned(),
+                "SID-screencast-attached".to_owned(),
             )
     );
     ensure_initial_document_for_session(&mut ctx, Some("SID-screencast-primary")).await;
@@ -3896,18 +3906,18 @@ async fn screencast_visual_state_is_independent_for_two_sessions_on_one_page() {
         registration
     };
     let primary = start(&mut ctx.conn, "SID-screencast-primary", 552);
-    let auxiliary = start(&mut ctx.conn, "SID-screencast-aux", 553);
+    let attached = start(&mut ctx.conn, "SID-screencast-attached", 553);
 
     let PageScreencastCaptureStart::Pending(primary_capture) =
         ctx.conn.start_page_screencast_frame_capture(&primary, None)
     else {
         panic!("primary session must start its first frame");
     };
-    let PageScreencastCaptureStart::Pending(auxiliary_capture) = ctx
+    let PageScreencastCaptureStart::Pending(attached_capture) = ctx
         .conn
-        .start_page_screencast_frame_capture(&auxiliary, None)
+        .start_page_screencast_frame_capture(&attached, None)
     else {
-        panic!("auxiliary session must start its first frame independently");
+        panic!("attached session must start its first frame independently");
     };
     let PageScreencastCaptureCompletion::Frame {
         event: primary_event,
@@ -3919,21 +3929,21 @@ async fn screencast_visual_state_is_independent_for_two_sessions_on_one_page() {
         panic!("primary first capture must emit a frame");
     };
     let PageScreencastCaptureCompletion::Frame {
-        event: auxiliary_event,
-        visual_state: auxiliary_state,
+        event: attached_event,
+        visual_state: attached_state,
     } = ctx
         .conn
-        .complete_page_screencast_frame_capture(auxiliary_capture.wait().await)
+        .complete_page_screencast_frame_capture(attached_capture.wait().await)
     else {
-        panic!("auxiliary first capture must emit a frame");
+        panic!("attached first capture must emit a frame");
     };
     assert_eq!(
         primary_event.into_parts().0["sessionId"],
         json!("SID-screencast-primary")
     );
     assert_eq!(
-        auxiliary_event.into_parts().0["sessionId"],
-        json!("SID-screencast-aux")
+        attached_event.into_parts().0["sessionId"],
+        json!("SID-screencast-attached")
     );
     assert_eq!(
         ctx.conn
@@ -3946,8 +3956,8 @@ async fn screencast_visual_state_is_independent_for_two_sessions_on_one_page() {
     assert_eq!(
         ctx.conn
             .acknowledge_page_screencast_frame_for_session_owner(
-                Some("SID-screencast-aux"),
-                auxiliary.generation(),
+                Some("SID-screencast-attached"),
+                attached.generation(),
             ),
         Some(true)
     );
@@ -3983,34 +3993,34 @@ async fn screencast_visual_state_is_independent_for_two_sessions_on_one_page() {
         Some(true)
     );
 
-    let PageScreencastCaptureStart::Pending(auxiliary_refresh) = ctx
+    let PageScreencastCaptureStart::Pending(attached_refresh) = ctx
         .conn
-        .start_page_screencast_frame_capture(&auxiliary, Some(auxiliary_state))
+        .start_page_screencast_frame_capture(&attached, Some(attached_state))
     else {
-        panic!("auxiliary session must retain its own pre-mutation state");
+        panic!("attached session must retain its own pre-mutation state");
     };
     let PageScreencastCaptureCompletion::Frame { event, .. } = ctx
         .conn
-        .complete_page_screencast_frame_capture(auxiliary_refresh.wait().await)
+        .complete_page_screencast_frame_capture(attached_refresh.wait().await)
     else {
-        panic!("auxiliary session must receive the mutation after the primary session did");
+        panic!("attached session must receive the mutation after the primary session did");
     };
     assert_eq!(
         event.into_parts().0["sessionId"],
-        json!("SID-screencast-aux")
+        json!("SID-screencast-attached")
     );
     assert_eq!(
         ctx.conn
             .acknowledge_page_screencast_frame_for_session_owner(
-                Some("SID-screencast-aux"),
-                auxiliary.generation(),
+                Some("SID-screencast-attached"),
+                attached.generation(),
             ),
         Some(true)
     );
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn start_screencast_is_session_local_for_active_auxiliary_session() {
+async fn start_screencast_is_session_local_for_active_attached_session() {
     let mut ctx = TestContext::new();
     load_bc_with_session(
         &mut ctx,
@@ -4020,20 +4030,22 @@ async fn start_screencast_is_session_local_for_active_auxiliary_session() {
         "about:blank",
     );
     let browser_context = ctx.conn.browser_context.as_mut().unwrap();
-    assert!(browser_context.assign_auxiliary_session_to_target("TID-active", "SID-aux".to_owned()));
+    assert!(
+        browser_context.assign_attached_session_to_target("TID-active", "SID-attached".to_owned())
+    );
 
     ctx.process_async(json!({
         "id": 56,
         "method": "Page.startScreencast",
-        "sessionId": "SID-aux",
+        "sessionId": "SID-attached",
         "params": {}
     }))
     .await;
-    let visibility = ctx.take_first_matching("active auxiliary screencast visibility", |message| {
+    let visibility = ctx.take_first_matching("active attached screencast visibility", |message| {
         message["method"] == json!("Page.screencastVisibilityChanged")
     });
-    assert_eq!(visibility["sessionId"], "SID-aux");
-    ctx.expect_result(56, json!({}), Some("SID-aux"));
+    assert_eq!(visibility["sessionId"], "SID-attached");
+    ctx.expect_result(56, json!({}), Some("SID-attached"));
 
     let browser_context = ctx.conn.browser_context.as_ref().unwrap();
     assert!(
@@ -4044,16 +4056,16 @@ async fn start_screencast_is_session_local_for_active_auxiliary_session() {
             .is_active(),
         "primary page session should stay stopped"
     );
-    let auxiliary = ctx
+    let attached = ctx
         .conn
-        .target_page_session_state_for_session(Some("SID-aux"))
-        .expect("active auxiliary page session state");
-    assert!(auxiliary.page_screencast.is_active());
-    assert_eq!(auxiliary.page_screencast.generation(), 1);
+        .target_page_session_state_for_session(Some("SID-attached"))
+        .expect("active attached page session state");
+    assert!(attached.page_screencast.is_active());
+    assert_eq!(attached.page_screencast.generation(), 1);
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn start_screencast_is_session_local_for_background_auxiliary_session() {
+async fn start_screencast_is_session_local_for_background_attached_session() {
     let mut ctx = TestContext::new();
     let background = PageTargetHost::with_url(
         "TID-background".to_owned(),
@@ -4065,43 +4077,45 @@ async fn start_screencast_is_session_local_for_background_auxiliary_session() {
     browser_context.attach_active_session("SID-active".to_owned());
     browser_context.insert_page_target_host(background);
     assert!(
-        browser_context
-            .assign_auxiliary_session_to_target("TID-background", "SID-background-aux".to_owned())
+        browser_context.assign_attached_session_to_target(
+            "TID-background",
+            "SID-background-attached".to_owned()
+        )
     );
     ctx.conn.browser_context = Some(browser_context);
 
     ctx.process_async(json!({
         "id": 57,
         "method": "Page.startScreencast",
-        "sessionId": "SID-background-aux",
+        "sessionId": "SID-background-attached",
         "params": {}
     }))
     .await;
     let visibility = ctx
-        .take_first_matching("background auxiliary screencast visibility", |message| {
+        .take_first_matching("background attached screencast visibility", |message| {
             message["method"] == json!("Page.screencastVisibilityChanged")
         });
-    assert_eq!(visibility["sessionId"], "SID-background-aux");
-    ctx.expect_result(57, json!({}), Some("SID-background-aux"));
+    assert_eq!(visibility["sessionId"], "SID-background-attached");
+    ctx.expect_result(57, json!({}), Some("SID-background-attached"));
 
     let browser_context = ctx.conn.browser_context.as_ref().unwrap();
-    let parked = browser_context
+    let background = browser_context
         .background_target("TID-background")
         .filter(|target| target.has_non_default_session_state())
-        .expect("background target should retain parked page session state");
+        .expect("background target should retain background page session state");
     assert!(
-        !parked.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+        !background.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_screencast
             .is_active(),
         "background primary page session should stay stopped"
     );
-    let auxiliary = ctx
+    let attached = ctx
         .conn
-        .target_page_session_state_for_session(Some("SID-background-aux"))
-        .expect("background auxiliary page session state");
-    assert!(auxiliary.page_screencast.is_active());
-    assert_eq!(auxiliary.page_screencast.generation(), 1);
+        .target_page_session_state_for_session(Some("SID-background-attached"))
+        .expect("background attached page session state");
+    assert!(attached.page_screencast.is_active());
+    assert_eq!(attached.page_screencast.generation(), 1);
 }
 
 #[tokio::test(flavor = "multi_thread")]

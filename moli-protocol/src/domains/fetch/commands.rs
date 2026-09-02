@@ -2036,7 +2036,8 @@ mod protocol_neutral_tests {
         browser_context.set_active_target_id("TID-chain".to_owned());
         browser_context.attach_active_session("SID-primary".to_owned());
         assert!(
-            browser_context.assign_auxiliary_session_to_target("TID-chain", "SID-aux".to_owned())
+            browser_context
+                .assign_attached_session_to_target("TID-chain", "SID-attached".to_owned())
         );
         browser_context
             .active_page_target_mut()
@@ -2066,7 +2067,7 @@ mod protocol_neutral_tests {
                 body: None,
                 request_cookie_report: None,
                 remaining_sessions: vec![PendingSubresourceFetchRequestStage {
-                    session_id: Some("SID-aux".to_owned()),
+                    session_id: Some("SID-attached".to_owned()),
                     owner_kind: PendingSubresourceFetchOwnerKind::Fetch,
                     request_id: "FETCH-aux".to_owned(),
                     blocked_intercepts: Vec::new(),
@@ -2136,7 +2137,7 @@ mod protocol_neutral_tests {
         assert_eq!(out[0]["sessionId"], json!("SID-primary"));
         assert_eq!(out[1]["method"], json!("Fetch.requestPaused"));
         assert_eq!(paused_message, out[1]);
-        assert_eq!(out[1]["sessionId"], json!("SID-aux"));
+        assert_eq!(out[1]["sessionId"], json!("SID-attached"));
         assert_eq!(out[1]["params"]["requestId"], json!("FETCH-aux"));
         assert_eq!(out[1]["params"]["networkId"], json!("NETWORK-77"));
         assert_eq!(
@@ -2156,7 +2157,10 @@ mod protocol_neutral_tests {
             "old owner must not be able to consume the chained request"
         );
         let chained = conn
-            .take_pending_subresource_fetch_request_for_session_owner(Some("SID-aux"), "FETCH-aux")
+            .take_pending_subresource_fetch_request_for_session_owner(
+                Some("SID-attached"),
+                "FETCH-aux",
+            )
             .expect("next Fetch session should own the chained request");
         let (url, method, body, headers) =
             chained.accumulated_request_stage_continue_modifications();
@@ -2177,7 +2181,7 @@ mod protocol_neutral_tests {
         browser_context.attach_active_session("SID-primary".to_owned());
         assert!(
             browser_context
-                .assign_auxiliary_session_to_target("TID-response-chain", "SID-aux".to_owned())
+                .assign_attached_session_to_target("TID-response-chain", "SID-attached".to_owned())
         );
         browser_context
             .active_page_target_mut()
@@ -2212,7 +2216,7 @@ mod protocol_neutral_tests {
             response_body: CapturedBody::from_bytes(br#"{"ok":true}"#.to_vec()),
             response_stage_chain: Some(Box::new(PendingSubresourceFetchResponseStageChain {
                 remaining_sessions: vec![PendingSubresourceFetchResponseStage {
-                    session_id: Some("SID-aux".to_owned()),
+                    session_id: Some("SID-attached".to_owned()),
                     owner_kind: PendingSubresourceFetchOwnerKind::Fetch,
                     request_id: "FETCH-response-aux".to_owned(),
                     blocked_intercepts: Vec::new(),
@@ -2279,7 +2283,7 @@ mod protocol_neutral_tests {
         assert_eq!(out[0]["sessionId"], json!("SID-primary"));
         assert_eq!(out[1]["method"], json!("Fetch.requestPaused"));
         assert_eq!(paused_message, out[1]);
-        assert_eq!(out[1]["sessionId"], json!("SID-aux"));
+        assert_eq!(out[1]["sessionId"], json!("SID-attached"));
         assert_eq!(out[1]["params"]["requestId"], json!("FETCH-response-aux"));
         assert_eq!(out[1]["params"]["networkId"], json!("NETWORK-79"));
         assert_eq!(out[1]["params"]["responseStatusCode"], json!(200));
@@ -2299,13 +2303,13 @@ mod protocol_neutral_tests {
         );
         let chained = conn
             .take_pending_subresource_fetch_response_request_for_owner(
-                &crate::conn::CommandOwnerScope::for_session("SID-aux"),
-                Some("SID-aux"),
+                &crate::conn::CommandOwnerScope::for_session("SID-attached"),
+                Some("SID-attached"),
                 "FETCH-response-aux",
             )
             .expect("next Fetch session should own the chained response");
-        assert_eq!(chained.owner_session_id.as_deref(), Some("SID-aux"));
-        assert_eq!(chained.action_session_id.as_deref(), Some("SID-aux"));
+        assert_eq!(chained.owner_session_id.as_deref(), Some("SID-attached"));
+        assert_eq!(chained.action_session_id.as_deref(), Some("SID-attached"));
         assert_eq!(chained.response_status, 200);
     }
 

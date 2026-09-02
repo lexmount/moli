@@ -115,7 +115,7 @@ fn retiring_page_scope_and_clearing_dialog_state_dismisses_installed_dialog() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn pending_javascript_dialogs_are_preserved_per_parked_target() {
+async fn pending_javascript_dialogs_are_preserved_per_background_target() {
     fn dialog(target_id: &str, message: &str) -> crate::conn::TargetJavaScriptDialog {
         target_dialog_for_test(
             crate::conn::TargetPageResidenceIdentity::new_for_test(
@@ -546,23 +546,24 @@ async fn handle_javascript_dialog_rejects_when_no_dialog_is_showing() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn javascript_dialog_pending_state_is_session_local_for_active_auxiliary_session() {
+async fn javascript_dialog_pending_state_is_session_local_for_active_attached_session() {
     let mut ctx = TestContext::new();
     load_bc_with_session(
         &mut ctx,
-        "BID-dialog-aux",
-        "TID-dialog-aux",
+        "BID-dialog-attached",
+        "TID-dialog-attached",
         "SID-primary",
         "about:blank",
     );
     let browser_context = ctx.conn.browser_context.as_mut().unwrap();
     assert!(
-        browser_context.assign_auxiliary_session_to_target("TID-dialog-aux", "SID-aux".to_owned())
+        browser_context
+            .assign_attached_session_to_target("TID-dialog-attached", "SID-attached".to_owned())
     );
     push_dialog_for_session(
         &mut ctx,
-        Some("SID-aux"),
-        dialog_for_test(Some("TID-dialog-aux"), "alert", "aux dialog"),
+        Some("SID-attached"),
+        dialog_for_test(Some("TID-dialog-attached"), "alert", "aux dialog"),
     );
     assert!(
         ctx.conn
@@ -570,7 +571,7 @@ async fn javascript_dialog_pending_state_is_session_local_for_active_auxiliary_s
             .expect("primary page session state")
             .javascript_dialog_state
             .is_empty(),
-        "primary session must not see auxiliary pending dialog"
+        "primary session must not see attached pending dialog"
     );
 
     ctx.process_async(json!({
@@ -588,7 +589,7 @@ async fn javascript_dialog_pending_state_is_session_local_for_active_auxiliary_s
     ctx.process_async(json!({
         "id": 37,
         "method": "Page.handleJavaScriptDialog",
-        "sessionId": "SID-aux",
+        "sessionId": "SID-attached",
         "params": { "accept": true }
     }))
     .await;
@@ -596,20 +597,20 @@ async fn javascript_dialog_pending_state_is_session_local_for_active_auxiliary_s
         .sent
         .iter()
         .find(|message| message["method"] == json!("Page.javascriptDialogClosed"))
-        .expect("auxiliary handle should emit closed event");
-    assert_eq!(closed["sessionId"], json!("SID-aux"));
-    assert_eq!(closed["params"]["frameId"], json!("TID-dialog-aux"));
+        .expect("attached handle should emit closed event");
+    assert_eq!(closed["sessionId"], json!("SID-attached"));
+    assert_eq!(closed["params"]["frameId"], json!("TID-dialog-attached"));
     assert_eq!(closed["params"]["result"], json!(true));
-    let auxiliary = take_response_by_id(&mut ctx, 37);
-    assert_eq!(auxiliary["sessionId"], json!("SID-aux"));
-    assert_eq!(auxiliary["result"], json!({}));
+    let attached = take_response_by_id(&mut ctx, 37);
+    assert_eq!(attached["sessionId"], json!("SID-attached"));
+    assert_eq!(attached["result"], json!({}));
     assert!(
         ctx.conn
-            .target_page_session_state_for_session(Some("SID-aux"))
-            .expect("auxiliary page session state")
+            .target_page_session_state_for_session(Some("SID-attached"))
+            .expect("attached page session state")
             .javascript_dialog_state
             .is_empty(),
-        "auxiliary handle should consume only its own dialog"
+        "attached handle should consume only its own dialog"
     );
 }
 

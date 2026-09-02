@@ -182,7 +182,7 @@ impl PreparedTargetHostClosure {
 pub(crate) struct TargetAttachSessionCommit {
     session_id: String,
     owner_session_id: Option<String>,
-    route: Option<CdpSessionRoute>,
+    route: CdpSessionRoute,
     auto_attached: bool,
     waiting_for_debugger: bool,
 }
@@ -191,13 +191,14 @@ impl TargetAttachSessionCommit {
     pub(crate) fn new(
         session_id: impl Into<String>,
         owner_session_id: Option<String>,
+        route: CdpSessionRoute,
         auto_attached: bool,
         waiting_for_debugger: bool,
     ) -> Self {
         Self {
             session_id: session_id.into(),
             owner_session_id,
-            route: None,
+            route,
             auto_attached,
             waiting_for_debugger,
         }
@@ -206,30 +207,39 @@ impl TargetAttachSessionCommit {
     pub(crate) fn auto_attached(
         session_id: impl Into<String>,
         owner_session_id: Option<String>,
+        route: CdpSessionRoute,
         waiting_for_debugger: bool,
     ) -> Self {
-        Self::new(session_id, owner_session_id, true, waiting_for_debugger)
+        Self::new(
+            session_id,
+            owner_session_id,
+            route,
+            true,
+            waiting_for_debugger,
+        )
     }
 
     pub(crate) fn direct(
         session_id: impl Into<String>,
         owner_session_id: Option<String>,
+        route: CdpSessionRoute,
         waiting_for_debugger: bool,
     ) -> Self {
-        Self::new(session_id, owner_session_id, false, waiting_for_debugger)
-    }
-
-    pub(crate) fn with_route(mut self, route: Option<CdpSessionRoute>) -> Self {
-        self.route = route;
-        self
+        Self::new(
+            session_id,
+            owner_session_id,
+            route,
+            false,
+            waiting_for_debugger,
+        )
     }
 
     pub(crate) fn session_id(&self) -> &str {
         &self.session_id
     }
 
-    pub(crate) fn route(&self) -> Option<&CdpSessionRoute> {
-        self.route.as_ref()
+    pub(crate) fn route(&self) -> &CdpSessionRoute {
+        &self.route
     }
 
     #[cfg(test)]
@@ -237,9 +247,7 @@ impl TargetAttachSessionCommit {
         self.waiting_for_debugger
     }
 
-    pub(crate) fn into_parts(
-        self,
-    ) -> (String, Option<String>, Option<CdpSessionRoute>, bool, bool) {
+    pub(crate) fn into_parts(self) -> (String, Option<String>, CdpSessionRoute, bool, bool) {
         (
             self.session_id,
             self.owner_session_id,
@@ -294,75 +302,142 @@ impl PreparedTargetAttach {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct TargetBindingCleanupPlan {
+pub(crate) struct SessionDisposalPlan {
     session_id: String,
-    action: TargetBindingCleanupAction,
+    target: SessionDisposalTarget,
 }
 
-impl TargetBindingCleanupPlan {
-    pub(crate) fn from_route(session_id: &str, route: &CdpSessionRoute) -> Self {
-        Self {
+impl SessionDisposalPlan {
+    /// Freezes the exact binding that must remain alive while every domain
+    /// handler disables its session-owned state.
+    ///
+    /// Callers must execute the domain cleanup phase before committing this
+    /// plan's binding removal. Keeping both phases tied to one value prevents
+    /// detach paths from resolving the session again after asynchronous work.
+    pub(crate) fn for_session_route(session_id: &str, route: &CdpSessionRoute) -> Option<Self> {
+        Some(Self {
             session_id: session_id.to_owned(),
-            action: TargetBindingCleanupAction::from_route(route),
-        }
+            target: SessionDisposalTarget::from_route(route)?,
+        })
     }
 
     pub(crate) fn session_id(&self) -> &str {
         &self.session_id
     }
 
-    pub(crate) fn action(&self) -> &TargetBindingCleanupAction {
-        &self.action
+    pub(crate) fn browser_context_id(&self) -> Option<&str> {
+        self.target.browser_context_id()
+    }
+
+    pub(crate) fn target(&self) -> &SessionDisposalTarget {
+        &self.target
+    }
+
+    pub(crate) fn target_id(&self) -> Option<&str> {
+        self.target.target_id()
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum TargetBindingCleanupAction {
-    None,
+pub(crate) enum SessionDisposalTarget {
+    Browser,
     PageTarget {
+        browser_context_id: String,
         target_id: String,
         session_key: DevToolsSessionKey,
     },
     TabTarget {
+        browser_context_id: String,
         tab_target_id: String,
     },
     SharedWorkerTarget {
+        browser_context_id: String,
         target_id: String,
     },
     DedicatedWorkerTarget {
+        browser_context_id: String,
         target_id: String,
     },
     ServiceWorkerTarget {
+        browser_context_id: String,
         target_id: String,
     },
 }
 
-impl TargetBindingCleanupAction {
-    fn from_route(route: &CdpSessionRoute) -> Self {
-        match route {
+impl SessionDisposalTarget {
+    fn from_route(route: &CdpSessionRoute) -> Option<Self> {
+        Some(match route {
             CdpSessionRoute::PageTarget {
+                browser_context_id,
                 target_id,
                 session_key,
-                ..
             } => Self::PageTarget {
+                browser_context_id: browser_context_id.clone(),
                 target_id: target_id.clone(),
                 session_key: session_key.clone(),
             },
-            CdpSessionRoute::TabTarget { tab_target_id, .. } => Self::TabTarget {
+            CdpSessionRoute::TabTarget {
+                browser_context_id,
+                tab_target_id,
+            } => Self::TabTarget {
+                browser_context_id: browser_context_id.clone(),
                 tab_target_id: tab_target_id.clone(),
             },
-            CdpSessionRoute::SharedWorkerTarget { target_id, .. } => Self::SharedWorkerTarget {
+            CdpSessionRoute::SharedWorkerTarget {
+                browser_context_id,
+                target_id,
+            } => Self::SharedWorkerTarget {
+                browser_context_id: browser_context_id.clone(),
                 target_id: target_id.clone(),
             },
-            CdpSessionRoute::DedicatedWorkerTarget { target_id, .. } => {
-                Self::DedicatedWorkerTarget {
-                    target_id: target_id.clone(),
-                }
+            CdpSessionRoute::DedicatedWorkerTarget {
+                browser_context_id,
+                target_id,
+            } => Self::DedicatedWorkerTarget {
+                browser_context_id: browser_context_id.clone(),
+                target_id: target_id.clone(),
+            },
+            CdpSessionRoute::ServiceWorkerTarget {
+                browser_context_id,
+                target_id,
+            } => Self::ServiceWorkerTarget {
+                browser_context_id: browser_context_id.clone(),
+                target_id: target_id.clone(),
+            },
+            CdpSessionRoute::Browser => Self::Browser,
+            CdpSessionRoute::BrowserContext { .. } => return None,
+        })
+    }
+
+    pub(crate) fn browser_context_id(&self) -> Option<&str> {
+        match self {
+            Self::Browser => None,
+            Self::PageTarget {
+                browser_context_id, ..
             }
-            CdpSessionRoute::ServiceWorkerTarget { target_id, .. } => Self::ServiceWorkerTarget {
-                target_id: target_id.clone(),
-            },
-            CdpSessionRoute::Browser | CdpSessionRoute::BrowserContext { .. } => Self::None,
+            | Self::TabTarget {
+                browser_context_id, ..
+            }
+            | Self::SharedWorkerTarget {
+                browser_context_id, ..
+            }
+            | Self::DedicatedWorkerTarget {
+                browser_context_id, ..
+            }
+            | Self::ServiceWorkerTarget {
+                browser_context_id, ..
+            } => Some(browser_context_id),
+        }
+    }
+
+    pub(crate) fn target_id(&self) -> Option<&str> {
+        match self {
+            Self::PageTarget { target_id, .. }
+            | Self::SharedWorkerTarget { target_id, .. }
+            | Self::DedicatedWorkerTarget { target_id, .. }
+            | Self::ServiceWorkerTarget { target_id, .. } => Some(target_id),
+            Self::TabTarget { tab_target_id, .. } => Some(tab_target_id),
+            Self::Browser => None,
         }
     }
 }
@@ -370,13 +445,12 @@ impl TargetBindingCleanupAction {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct TargetAttachRollbackPlan {
     session_id: String,
-    route: Option<CdpSessionRoute>,
-    cleanup_plan: Option<TargetBindingCleanupPlan>,
+    cleanup_plan: Option<SessionDisposalPlan>,
 }
 
 impl TargetAttachRollbackPlan {
     pub(crate) fn from_prepared_attach_session(prepared: &TargetAttachSessionCommit) -> Self {
-        Self::from_session_route(prepared.session_id(), prepared.route().cloned())
+        Self::from_session_route(prepared.session_id(), Some(prepared.route().clone()))
     }
 
     pub(crate) fn from_session_route(
@@ -386,10 +460,9 @@ impl TargetAttachRollbackPlan {
         let session_id = session_id.into();
         let cleanup_plan = route
             .as_ref()
-            .map(|route| TargetBindingCleanupPlan::from_route(&session_id, route));
+            .and_then(|route| SessionDisposalPlan::for_session_route(&session_id, route));
         Self {
             session_id,
-            route,
             cleanup_plan,
         }
     }
@@ -398,26 +471,15 @@ impl TargetAttachRollbackPlan {
         &self.session_id
     }
 
-    pub(crate) fn browser_context_id(&self) -> Option<&str> {
-        self.route
-            .as_ref()
-            .and_then(CdpSessionRoute::browser_context_id)
-    }
-
-    pub(crate) fn cleanup_plan(&self) -> Option<&TargetBindingCleanupPlan> {
+    pub(crate) fn cleanup_plan(&self) -> Option<&SessionDisposalPlan> {
         self.cleanup_plan.as_ref()
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum TargetAutoAttachedSessionDetachPlan {
-    Rollback {
-        session_id: String,
-    },
-    Detach {
-        browser_context_id: String,
-        cleanup_plan: TargetBindingCleanupPlan,
-    },
+    Rollback { session_id: String },
+    Detach { cleanup_plan: SessionDisposalPlan },
 }
 
 impl TargetAutoAttachedSessionDetachPlan {
@@ -429,36 +491,26 @@ impl TargetAutoAttachedSessionDetachPlan {
         let Some(route) = route else {
             return Self::Rollback { session_id };
         };
-        let Some(browser_context_id) = route.browser_context_id().map(str::to_owned) else {
+        if matches!(route, CdpSessionRoute::Browser) {
             return Self::Rollback { session_id };
-        };
-        let cleanup_plan = TargetBindingCleanupPlan::from_route(&session_id, &route);
-        Self::Detach {
-            browser_context_id,
-            cleanup_plan,
+        }
+        match SessionDisposalPlan::for_session_route(&session_id, &route) {
+            Some(cleanup_plan) => Self::Detach { cleanup_plan },
+            None => Self::Rollback { session_id },
         }
     }
 
     pub(crate) fn session_id(&self) -> &str {
         match self {
             Self::Rollback { session_id } => session_id,
-            Self::Detach { cleanup_plan, .. } => cleanup_plan.session_id(),
+            Self::Detach { cleanup_plan } => cleanup_plan.session_id(),
         }
     }
 
-    pub(crate) fn browser_context_id(&self) -> Option<&str> {
+    pub(crate) fn cleanup_plan(&self) -> Option<&SessionDisposalPlan> {
         match self {
             Self::Rollback { .. } => None,
-            Self::Detach {
-                browser_context_id, ..
-            } => Some(browser_context_id),
-        }
-    }
-
-    pub(crate) fn cleanup_plan(&self) -> Option<&TargetBindingCleanupPlan> {
-        match self {
-            Self::Rollback { .. } => None,
-            Self::Detach { cleanup_plan, .. } => Some(cleanup_plan),
+            Self::Detach { cleanup_plan } => Some(cleanup_plan),
         }
     }
 }
@@ -483,16 +535,16 @@ impl TargetClosureCleanupPlan {
         }
     }
 
-    pub(crate) fn from_primary_and_auxiliary_sessions(
+    pub(crate) fn from_primary_and_attached_sessions(
         target_id: impl Into<String>,
         reason: Option<&str>,
         primary_session_id: Option<String>,
-        auxiliary_session_ids: Vec<String>,
+        attached_session_ids: Vec<String>,
     ) -> Self {
         Self::new(
             target_id,
             reason,
-            primary_session_id.into_iter().chain(auxiliary_session_ids),
+            primary_session_id.into_iter().chain(attached_session_ids),
         )
     }
 
@@ -556,10 +608,9 @@ impl TargetSessionDetachCleanupPlan {
 #[cfg(test)]
 mod tests {
     use super::{
-        PreparedTargetAttach, PreparedTargetHostDelta, TargetAttachRollbackPlan,
-        TargetAttachSessionCommit, TargetAutoAttachedSessionDetachPlan, TargetBindingCleanupAction,
-        TargetBindingCleanupPlan, TargetClosureCleanupPlan, TargetEventPlan,
-        TargetSessionDetachCleanupPlan,
+        PreparedTargetAttach, PreparedTargetHostDelta, SessionDisposalPlan, SessionDisposalTarget,
+        TargetAttachRollbackPlan, TargetAttachSessionCommit, TargetAutoAttachedSessionDetachPlan,
+        TargetClosureCleanupPlan, TargetEventPlan, TargetSessionDetachCleanupPlan,
     };
     use crate::conn::CdpSessionRoute;
     use crate::devtools_runtime::{DevToolsTargetId, DevToolsTargetInfo, DevToolsTargetKind};
@@ -567,8 +618,15 @@ mod tests {
 
     #[test]
     fn target_binding_cleanup_plan_maps_route_to_cleanup_action() {
+        let browser =
+            SessionDisposalPlan::for_session_route("SID-browser", &CdpSessionRoute::Browser)
+                .expect("Browser sessions require domain cleanup");
+        assert_eq!(browser.target(), &SessionDisposalTarget::Browser);
+        assert_eq!(browser.browser_context_id(), None);
+        assert_eq!(browser.target_id(), None);
+
         assert_eq!(
-            TargetBindingCleanupPlan::from_route(
+            SessionDisposalPlan::for_session_route(
                 "SID-active",
                 &CdpSessionRoute::PageTarget {
                     browser_context_id: "BID-1".to_owned(),
@@ -576,15 +634,17 @@ mod tests {
                     session_key: DevToolsSessionKey::Primary,
                 },
             )
-            .action(),
-            &TargetBindingCleanupAction::PageTarget {
+            .expect("Page routes require binding cleanup")
+            .target(),
+            &SessionDisposalTarget::PageTarget {
+                browser_context_id: "BID-1".to_owned(),
                 target_id: "TID-active".to_owned(),
                 session_key: DevToolsSessionKey::Primary,
             },
         );
 
         assert_eq!(
-            TargetBindingCleanupPlan::from_route(
+            SessionDisposalPlan::for_session_route(
                 "SID-bg",
                 &CdpSessionRoute::PageTarget {
                     browser_context_id: "BID-1".to_owned(),
@@ -592,23 +652,27 @@ mod tests {
                     session_key: DevToolsSessionKey::Primary,
                 },
             )
-            .action(),
-            &TargetBindingCleanupAction::PageTarget {
+            .expect("Page routes require binding cleanup")
+            .target(),
+            &SessionDisposalTarget::PageTarget {
+                browser_context_id: "BID-1".to_owned(),
                 target_id: "TID-bg".to_owned(),
                 session_key: DevToolsSessionKey::Primary,
             },
         );
 
         assert_eq!(
-            TargetBindingCleanupPlan::from_route(
+            SessionDisposalPlan::for_session_route(
                 "SID-tab",
                 &CdpSessionRoute::TabTarget {
                     browser_context_id: "BID-1".to_owned(),
                     tab_target_id: "TAB-TID-page".to_owned(),
                 },
             )
-            .action(),
-            &TargetBindingCleanupAction::TabTarget {
+            .expect("Tab routes require binding cleanup")
+            .target(),
+            &SessionDisposalTarget::TabTarget {
+                browser_context_id: "BID-1".to_owned(),
                 tab_target_id: "TAB-TID-page".to_owned()
             },
         );
@@ -616,22 +680,22 @@ mod tests {
 
     #[test]
     fn target_closure_cleanup_plan_preserves_target_reason_and_sessions() {
-        let plan = TargetClosureCleanupPlan::from_primary_and_auxiliary_sessions(
+        let plan = TargetClosureCleanupPlan::from_primary_and_attached_sessions(
             "TID-page",
             Some("Render process gone."),
             Some("SID-primary".to_owned()),
-            vec!["SID-aux".to_owned()],
+            vec!["SID-attached".to_owned()],
         );
 
         assert_eq!(plan.target_id(), "TID-page");
         assert_eq!(plan.reason(), Some("Render process gone."));
         assert_eq!(
             plan.session_ids().collect::<Vec<_>>(),
-            vec!["SID-primary", "SID-aux"]
+            vec!["SID-primary", "SID-attached"]
         );
         assert_eq!(
             plan.into_session_ids(),
-            vec!["SID-primary".to_owned(), "SID-aux".to_owned()]
+            vec!["SID-primary".to_owned(), "SID-attached".to_owned()]
         );
     }
 
@@ -668,16 +732,16 @@ mod tests {
         let commit = TargetAttachSessionCommit::auto_attached(
             "SID-child",
             Some("SID-owner".to_owned()),
+            CdpSessionRoute::Browser,
             true,
-        )
-        .with_route(Some(CdpSessionRoute::Browser));
+        );
 
         assert_eq!(
             commit.into_parts(),
             (
                 "SID-child".to_owned(),
                 Some("SID-owner".to_owned()),
-                Some(CdpSessionRoute::Browser),
+                CdpSessionRoute::Browser,
                 true,
                 true
             )
@@ -702,10 +766,11 @@ mod tests {
             "TID-page",
             target_info.clone(),
             [
-                TargetAttachSessionCommit::direct("SID-1", None, false),
+                TargetAttachSessionCommit::direct("SID-1", None, CdpSessionRoute::Browser, false),
                 TargetAttachSessionCommit::auto_attached(
                     "SID-2",
                     Some("SID-owner".to_owned()),
+                    CdpSessionRoute::Browser,
                     true,
                 ),
             ],
@@ -721,7 +786,7 @@ mod tests {
             (
                 "SID-2".to_owned(),
                 Some("SID-owner".to_owned()),
-                None,
+                CdpSessionRoute::Browser,
                 true,
                 true
             )
@@ -733,24 +798,25 @@ mod tests {
         let prepared = TargetAttachSessionCommit::auto_attached(
             "SID-worker",
             Some("SID-owner".to_owned()),
+            CdpSessionRoute::SharedWorkerTarget {
+                browser_context_id: "BID-1".to_owned(),
+                target_id: "TID-worker".to_owned(),
+            },
             false,
-        )
-        .with_route(Some(CdpSessionRoute::SharedWorkerTarget {
-            browser_context_id: "BID-1".to_owned(),
-            target_id: "TID-worker".to_owned(),
-        }));
+        );
 
         let rollback = TargetAttachRollbackPlan::from_prepared_attach_session(&prepared);
 
         assert_eq!(rollback.session_id(), "SID-worker");
-        assert_eq!(rollback.browser_context_id(), Some("BID-1"));
         let cleanup = rollback
             .cleanup_plan()
             .expect("route-backed rollback should include binding cleanup");
         assert_eq!(cleanup.session_id(), "SID-worker");
+        assert_eq!(cleanup.browser_context_id(), Some("BID-1"));
         assert_eq!(
-            cleanup.action(),
-            &TargetBindingCleanupAction::SharedWorkerTarget {
+            cleanup.target(),
+            &SessionDisposalTarget::SharedWorkerTarget {
+                browser_context_id: "BID-1".to_owned(),
                 target_id: "TID-worker".to_owned()
             }
         );
@@ -767,14 +833,15 @@ mod tests {
         );
 
         assert_eq!(plan.session_id(), "SID-worker");
-        assert_eq!(plan.browser_context_id(), Some("BID-1"));
         let cleanup = plan
             .cleanup_plan()
             .expect("auto-attached worker detach should include binding cleanup");
         assert_eq!(cleanup.session_id(), "SID-worker");
+        assert_eq!(cleanup.browser_context_id(), Some("BID-1"));
         assert_eq!(
-            cleanup.action(),
-            &TargetBindingCleanupAction::SharedWorkerTarget {
+            cleanup.target(),
+            &SessionDisposalTarget::SharedWorkerTarget {
+                browser_context_id: "BID-1".to_owned(),
                 target_id: "TID-worker".to_owned()
             }
         );
@@ -786,7 +853,6 @@ mod tests {
             let plan =
                 TargetAutoAttachedSessionDetachPlan::from_session_route("SID-browser", route);
             assert_eq!(plan.session_id(), "SID-browser");
-            assert_eq!(plan.browser_context_id(), None);
             assert!(plan.cleanup_plan().is_none());
         }
     }

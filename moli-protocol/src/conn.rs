@@ -585,9 +585,9 @@ pub(crate) use state::{
     TargetPageSlot, TargetRuntimeSessionState,
 };
 pub(crate) use target::{
-    PreparedTargetAttach, PreparedTargetHostClosure, PreparedTargetHostDelta,
-    TargetAttachSessionCommit, TargetBindingCleanupAction, TargetBindingCleanupPlan,
-    TargetClosureCleanupPlan, TargetEventPlan, TargetSessionDetachCleanupPlan,
+    PreparedTargetAttach, PreparedTargetHostClosure, PreparedTargetHostDelta, SessionDisposalPlan,
+    SessionDisposalTarget, TargetAttachSessionCommit, TargetClosureCleanupPlan, TargetEventPlan,
+    TargetSessionDetachCleanupPlan,
 };
 use target::{
     TargetClosurePlan, TargetControlPlane, TargetHostDelta, target_destroyed_automation_events,
@@ -1147,8 +1147,6 @@ pub struct CdpConnection {
     // Browser/session routing state.
     pub browser_context: Option<BrowserContext>,
     pub inactive_browser_contexts: Vec<BrowserContext>,
-    /// When true, every newly-created target is immediately auto-attached.
-    pub auto_attach: bool,
     /// Root/browser owner Target discovery mirror for diagnostics and
     /// cross-crate schedulers. Event routing uses `target_handlers`.
     pub(crate) target_discovery_enabled: bool,
@@ -1159,13 +1157,17 @@ pub struct CdpConnection {
     pub(crate) target_discovery_filter: Option<Vec<DevToolsTargetFilterEntry>>,
     /// Chromium/Playwright auto-attach can ask new targets to wait until
     /// Runtime.runIfWaitingForDebugger before their initial document proceeds.
-    pub auto_attach_wait_for_debugger_on_start: bool,
     // Insertion order is protocol state: the first matching owner supplies
-    // the primary auto-attached Page session, while later owners attach as
-    // auxiliary sessions. A randomized HashMap iteration order made that
+    // the primary auto-attached Page session, while later owners contribute
+    // additional attached sessions. A randomized HashMap iteration order made that
     // choice vary between otherwise identical processes.
     auto_attach_owner_sessions: IndexMap<Option<String>, AutoAttachOwnerPolicy>,
     target_control: TargetControlPlane,
+    /// Allows old unit-test fixtures that install only the target-side half of
+    /// a session binding to remain usable while production routing is checked
+    /// separately against the committed control-plane registry.
+    #[cfg(test)]
+    allow_incomplete_session_fixture_routes: bool,
     default_target_lifecycle: DefaultTargetLifecycle,
     service_worker_auto_attach_related_owners: Vec<ServiceWorkerAutoAttachRelatedOwner>,
     service_worker_pause_on_start_owner_sessions: HashSet<Option<String>>,
@@ -1469,13 +1471,13 @@ impl CdpConnection {
         Self {
             browser_context: None,
             inactive_browser_contexts: Vec::new(),
-            auto_attach: false,
             target_discovery_enabled: false,
             target_info_change_events_enabled: false,
             target_discovery_filter: None,
-            auto_attach_wait_for_debugger_on_start: false,
             auto_attach_owner_sessions: IndexMap::new(),
             target_control: TargetControlPlane::default(),
+            #[cfg(test)]
+            allow_incomplete_session_fixture_routes: true,
             default_target_lifecycle: DefaultTargetLifecycle::default(),
             service_worker_auto_attach_related_owners: Vec::new(),
             service_worker_pause_on_start_owner_sessions: HashSet::new(),
@@ -3094,7 +3096,7 @@ impl CdpConnection {
                 "permissionOverrideCount": self.permission_overrides.len(),
                 "pageNavigationEngineCount": page_navigation_engine_count,
                 "pageNavigationEngineKeys": page_engine_keys,
-                "autoAttach": self.auto_attach,
+                "autoAttach": self.auto_attach_enabled(),
                 "targetDiscoveryEnabled": self.target_discovery_enabled,
                 "targetInfoChangeEventsEnabled": self.target_info_change_events_enabled,
                 "activeNavigationEngine": {
@@ -3399,7 +3401,7 @@ impl CdpConnection {
             })
     }
 
-    pub(crate) fn close_default_target_placeholder(
+    pub(crate) async fn close_default_target_placeholder(
         &mut self,
         target_id: &str,
     ) -> Option<TargetEventPlan> {
@@ -3413,10 +3415,15 @@ impl CdpConnection {
         let target_host_closure = self.prepare_target_host_closure(DEFAULT_CDP_PAGE_TARGET_ID);
         let (detached_info_deltas, destroyed_deltas) = target_host_closure.into_parts();
         let mut plan = self.prepared_target_host_deltas_event_plan(detached_info_deltas);
-        plan.extend(self.detach_closed_top_level_target_sessions_event_plan(
+        if let Some(tab_cleanup) = self.take_closed_top_level_target_sessions_cleanup_plan(
             DEFAULT_CDP_PAGE_TARGET_ID,
             Some("Render process gone."),
-        ));
+        ) {
+            plan.extend(
+                self.dispose_target_closure_sessions_event_plan_async(tab_cleanup, None)
+                    .await,
+            );
+        }
         let closed = self.default_target_lifecycle.close_placeholder(target_id);
         debug_assert!(closed, "validated default placeholder must close");
         plan.extend(self.prepared_target_host_deltas_event_plan(destroyed_deltas));
@@ -3468,10 +3475,13 @@ impl CdpConnection {
         &mut self,
         tab_target_id: &str,
         session_id: String,
-        auxiliary: bool,
+        is_attached_session: bool,
     ) -> bool {
-        self.target_control
-            .assign_session_to_tab_target(tab_target_id, session_id, auxiliary)
+        self.target_control.assign_session_to_tab_target(
+            tab_target_id,
+            session_id,
+            is_attached_session,
+        )
     }
 
     pub(crate) fn remove_tab_session(&mut self, session_id: &str) -> Option<String> {
@@ -3493,14 +3503,12 @@ impl CdpConnection {
         Some(closure_plan)
     }
 
-    pub(crate) fn detach_closed_top_level_target_sessions_event_plan(
+    pub(crate) fn take_closed_top_level_target_sessions_cleanup_plan(
         &mut self,
         page_target_id: &str,
         reason: Option<&str>,
-    ) -> TargetEventPlan {
-        let Some(closure_plan) = self.remove_tab_for_page_target(page_target_id) else {
-            return TargetEventPlan::default();
-        };
+    ) -> Option<TargetClosureCleanupPlan> {
+        let closure_plan = self.remove_tab_for_page_target(page_target_id)?;
         debug_assert!(
             closure_plan
                 .destroyed_target_ids()
@@ -3509,10 +3517,11 @@ impl CdpConnection {
         let target = closure_plan.tab_target();
         let tab_target_id = target.id().to_owned();
         let tab_session_ids = target.session_ids();
-        self.detach_target_closure_cleanup_event_plan(
-            TargetClosureCleanupPlan::new(tab_target_id, reason, tab_session_ids),
-            None,
-        )
+        Some(TargetClosureCleanupPlan::new(
+            tab_target_id,
+            reason,
+            tab_session_ids,
+        ))
     }
 
     pub(crate) fn rollback_top_level_target_tab_sessions_without_event(

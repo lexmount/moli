@@ -186,14 +186,14 @@ async fn node_creation_stack_capture_is_session_local() {
         "params": { "targetId": "TID-1" }
     }))
     .await;
-    let auxiliary_session_id = take_response_by_id(&mut ctx, 21)["result"]["sessionId"]
+    let attached_session_id = take_response_by_id(&mut ctx, 21)["result"]["sessionId"]
         .as_str()
-        .expect("auxiliary session id")
+        .expect("attached session id")
         .to_owned();
 
     for (id, session_id) in [
         (22, "SID-stack-primary"),
-        (23, auxiliary_session_id.as_str()),
+        (23, attached_session_id.as_str()),
     ] {
         ctx.process_async(json!({
             "id": id,
@@ -204,7 +204,7 @@ async fn node_creation_stack_capture_is_session_local() {
         let _ = take_response_by_id(&mut ctx, id);
     }
     let primary_root = document_root_node_id(&mut ctx, 24, Some("SID-stack-primary")).await;
-    let auxiliary_root = document_root_node_id(&mut ctx, 25, Some(&auxiliary_session_id)).await;
+    let attached_root = document_root_node_id(&mut ctx, 25, Some(&attached_session_id)).await;
 
     set_capture(&mut ctx, 26, Some("SID-stack-primary"), true).await;
     ctx.process_async(json!({
@@ -227,11 +227,11 @@ async fn node_creation_stack_capture_is_session_local() {
         "#primary-only",
     )
     .await;
-    let auxiliary_node = query_node_id(
+    let attached_node = query_node_id(
         &mut ctx,
         29,
-        Some(&auxiliary_session_id),
-        auxiliary_root,
+        Some(&attached_session_id),
+        attached_root,
         "#primary-only",
     )
     .await;
@@ -247,7 +247,7 @@ async fn node_creation_stack_capture_is_session_local() {
             .is_some_and(|frames| !frames.is_empty())
     );
     assert_eq!(
-        creation_stack(&mut ctx, 31, Some(&auxiliary_session_id), auxiliary_node).await,
+        creation_stack(&mut ctx, 31, Some(&attached_session_id), attached_node).await,
         json!({}),
         "a peer session must not inherit another session's capture switch"
     );

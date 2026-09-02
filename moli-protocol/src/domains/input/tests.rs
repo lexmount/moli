@@ -856,19 +856,19 @@ async fn ignore_input_events_is_target_aggregated_and_does_not_block_insert_text
     .await;
     let browser_context = ctx.conn.browser_context.as_mut().expect("browser context");
     browser_context.attach_active_session("SID-primary");
-    assert!(browser_context.assign_auxiliary_session_to_target("TID-1", "SID-aux".to_owned()));
+    assert!(browser_context.assign_attached_session_to_target("TID-1", "SID-attached".to_owned()));
 
     ctx.process_async(json!({
         "id": 30,
         "method": "Input.setIgnoreInputEvents",
-        "sessionId": "SID-aux",
+        "sessionId": "SID-attached",
         "params": { "ignore": true }
     }))
     .await;
-    ctx.expect_result(30, json!({}), Some("SID-aux"));
+    ctx.expect_result(30, json!({}), Some("SID-attached"));
     assert!(
         ctx.conn
-            .target_page_session_state_for_session(Some("SID-aux"))
+            .target_page_session_state_for_session(Some("SID-attached"))
             .is_some_and(|state| state.input_events_ignored)
     );
     assert!(
@@ -950,11 +950,11 @@ async fn ignore_input_events_is_target_aggregated_and_does_not_block_insert_text
     ctx.process_async(json!({
         "id": 36,
         "method": "Input.setIgnoreInputEvents",
-        "sessionId": "SID-aux",
+        "sessionId": "SID-attached",
         "params": { "ignore": false }
     }))
     .await;
-    ctx.expect_result(36, json!({}), Some("SID-aux"));
+    ctx.expect_result(36, json!({}), Some("SID-attached"));
     ctx.process_async(json!({
         "id": 37,
         "method": "Input.dispatchKeyEvent",
@@ -968,18 +968,21 @@ async fn ignore_input_events_is_target_aggregated_and_does_not_block_insert_text
     ctx.process_async(json!({
         "id": 38,
         "method": "Input.setIgnoreInputEvents",
-        "sessionId": "SID-aux",
+        "sessionId": "SID-attached",
         "params": { "ignore": true }
     }))
     .await;
-    ctx.expect_result(38, json!({}), Some("SID-aux"));
-    assert_eq!(
+    ctx.expect_result(38, json!({}), Some("SID-attached"));
+    assert!(
         ctx.conn
             .browser_context
             .as_mut()
             .expect("browser context")
-            .remove_auxiliary_session("SID-aux"),
-        Some("TID-1".to_owned())
+            .remove_page_session_binding(
+                "TID-1",
+                "SID-attached",
+                &moli_page_types::DevToolsSessionKey::Attached("SID-attached".to_owned()),
+            )
     );
     ctx.process_async(json!({
         "id": 39,

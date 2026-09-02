@@ -1013,7 +1013,7 @@ mod tests {
         }
     }
 
-    fn parked_session_state_mut(state: &mut PageTargetHost) -> TargetSessionStateMut<'_> {
+    fn background_session_state_mut(state: &mut PageTargetHost) -> TargetSessionStateMut<'_> {
         TargetSessionStateMut {
             devtools_session_state: &mut state.devtools_sessions
                 [moli_page_types::DevToolsSessionKey::Primary],
@@ -1023,7 +1023,7 @@ mod tests {
     }
 
     #[test]
-    fn page_session_state_mut_applies_same_flags_to_active_and_parked_state() {
+    fn page_session_state_mut_applies_same_flags_to_active_and_background_state() {
         let mut font_families = serde_json::Map::new();
         font_families.insert("standard".to_owned(), serde_json::json!("Inter"));
 
@@ -1084,51 +1084,53 @@ mod tests {
                 .enabled()
         );
 
-        let mut parked = PageTargetHost::empty("TID-page-owner-test".to_owned());
-        parked_session_state_mut(&mut parked).set_console_enabled(true);
-        parked_session_state_mut(&mut parked).set_log_enabled(true);
-        parked_session_state_mut(&mut parked).set_page_file_chooser_opened_event_enabled(true);
-        parked_session_state_mut(&mut parked).set_page_bypass_csp_enabled(true);
-        parked_session_state_mut(&mut parked).set_page_font_families(font_families.clone());
-        parked_session_state_mut(&mut parked).set_page_intercept_file_chooser_dialog_enabled(true);
+        let mut background = PageTargetHost::empty("TID-page-owner-test".to_owned());
+        background_session_state_mut(&mut background).set_console_enabled(true);
+        background_session_state_mut(&mut background).set_log_enabled(true);
+        background_session_state_mut(&mut background)
+            .set_page_file_chooser_opened_event_enabled(true);
+        background_session_state_mut(&mut background).set_page_bypass_csp_enabled(true);
+        background_session_state_mut(&mut background).set_page_font_families(font_families.clone());
+        background_session_state_mut(&mut background)
+            .set_page_intercept_file_chooser_dialog_enabled(true);
         assert!(
-            parked_session_state_mut(&mut parked)
+            background_session_state_mut(&mut background)
                 .enable_performance(PerformanceTimeDomain::TimeTicks)
         );
 
         assert!(
-            parked.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+            background.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .console_output_session_state
                 .console_enabled
         );
         assert!(
-            parked.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+            background.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .log_enabled
         );
         assert!(
-            parked.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+            background.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .page_file_chooser_opened_event_enabled
         );
         assert!(
-            parked.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+            background.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .page_bypass_csp_enabled
         );
         assert_eq!(
-            parked.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+            background.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .page_font_families,
             font_families
         );
         assert!(
-            parked.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+            background.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .page_intercept_file_chooser_dialog_enabled
         );
         assert!(
-            parked.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+            background.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
                 .performance
                 .enabled()
@@ -1147,11 +1149,11 @@ mod tests {
         inactive.set_active_target_id("TID-inactive".to_owned());
         assert!(
             inactive
-                .assign_auxiliary_session_to_target("TID-inactive", "SID-inactive-a".to_owned(),)
+                .assign_attached_session_to_target("TID-inactive", "SID-inactive-a".to_owned(),)
         );
         assert!(
             inactive
-                .assign_auxiliary_session_to_target("TID-inactive", "SID-inactive-b".to_owned(),)
+                .assign_attached_session_to_target("TID-inactive", "SID-inactive-b".to_owned(),)
         );
         let inactive_runtime = inactive.renderer_runtime();
 

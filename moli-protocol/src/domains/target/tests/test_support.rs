@@ -27,21 +27,26 @@ pub(super) fn push_background_target(
     url: &str,
     session_id: Option<&str>,
 ) {
-    let bc = ctx
-        .conn
-        .browser_context
-        .as_mut()
-        .expect("browser context must exist before adding background target");
-    bc.insert_page_target_host(crate::conn::PageTargetHost::new(
-        target_id.to_owned(),
-        session_id.map(str::to_owned),
-        crate::conn::TargetIdentityState::new(
-            url.to_owned(),
-            crate::conn::URL_BASE.into(),
-            "Secure".into(),
-        ),
-        crate::conn::TargetPageSlot::empty_for_test_fixture(),
-    ));
+    {
+        let bc = ctx
+            .conn
+            .browser_context
+            .as_mut()
+            .expect("browser context must exist before adding background target");
+        bc.insert_page_target_host(crate::conn::PageTargetHost::new(
+            target_id.to_owned(),
+            session_id.map(str::to_owned),
+            crate::conn::TargetIdentityState::new(
+                url.to_owned(),
+                crate::conn::URL_BASE.into(),
+                "Secure".into(),
+            ),
+            crate::conn::TargetPageSlot::empty_for_test_fixture(),
+        ));
+    }
+    if let Some(session_id) = session_id {
+        ctx.conn.register_bound_session_for_test(session_id);
+    }
 }
 
 pub(super) fn loaded_page_for_target<'a>(
@@ -65,23 +70,28 @@ pub(super) fn push_shared_worker_target(
     name: &str,
     session_id: Option<&str>,
 ) {
-    let bc = ctx
-        .conn
-        .browser_context
-        .as_mut()
-        .expect("browser context must exist before adding shared worker target");
-    let mut target = crate::conn::SharedWorkerTargetState::new(
-        moli_core::RendererOwnerLocalHostId::new_for_testing(1),
-        renderer_instance_id,
-        target_id.to_owned(),
-        None,
-        url.to_owned(),
-        name.to_owned(),
-    );
-    if let Some(session_id) = session_id {
-        target.attach_session(session_id.to_owned());
+    {
+        let bc = ctx
+            .conn
+            .browser_context
+            .as_mut()
+            .expect("browser context must exist before adding shared worker target");
+        let mut target = crate::conn::SharedWorkerTargetState::new(
+            moli_core::RendererOwnerLocalHostId::new_for_testing(1),
+            renderer_instance_id,
+            target_id.to_owned(),
+            None,
+            url.to_owned(),
+            name.to_owned(),
+        );
+        if let Some(session_id) = session_id {
+            target.attach_session(session_id.to_owned());
+        }
+        bc.insert_shared_worker_target(target);
     }
-    bc.insert_shared_worker_target(target);
+    if let Some(session_id) = session_id {
+        ctx.conn.register_bound_session_for_test(session_id);
+    }
 }
 
 pub(super) fn push_service_worker_target(
@@ -92,23 +102,28 @@ pub(super) fn push_service_worker_target(
     scope_url: &str,
     session_id: Option<&str>,
 ) {
-    let bc = ctx
-        .conn
-        .browser_context
-        .as_mut()
-        .expect("browser context must exist before adding service worker target");
-    let target = crate::conn::ServiceWorkerTargetState::new(
-        1,
-        renderer_version_id,
-        target_id.to_owned(),
-        script_url.to_owned(),
-        scope_url.to_owned(),
-        RendererServiceWorkerVersionStatus::Activated,
-        None,
-    );
-    bc.insert_service_worker_target(target);
+    {
+        let bc = ctx
+            .conn
+            .browser_context
+            .as_mut()
+            .expect("browser context must exist before adding service worker target");
+        let target = crate::conn::ServiceWorkerTargetState::new(
+            1,
+            renderer_version_id,
+            target_id.to_owned(),
+            script_url.to_owned(),
+            scope_url.to_owned(),
+            RendererServiceWorkerVersionStatus::Activated,
+            None,
+        );
+        bc.insert_service_worker_target(target);
+        if let Some(session_id) = session_id {
+            assert!(bc.assign_session_to_service_worker_target(target_id, session_id.to_owned()));
+        }
+    }
     if let Some(session_id) = session_id {
-        assert!(bc.assign_session_to_service_worker_target(target_id, session_id.to_owned()));
+        ctx.conn.register_bound_session_for_test(session_id);
     }
 }
 

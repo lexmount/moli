@@ -31,10 +31,11 @@ use crate::devtools_runtime::{
 };
 use crate::{
     conn::{
-        BackgroundProtocolEvent, CdpConnection, CommandOwnerScope, PreparedTargetAttach,
-        PreparedTargetHostDelta, RendererPageResidenceIdentity,
+        BackgroundProtocolEvent, CdpConnection, CdpSessionRoute, CommandOwnerScope,
+        PreparedTargetAttach, PreparedTargetHostDelta, RendererPageResidenceIdentity,
         ServiceWorkerRuntimeExceptionSnapshot, ServiceWorkerTargetState, SharedWorkerTargetState,
-        TargetPageResidenceIdentity, TargetServiceWorkerProtocolAttachmentIdentity,
+        TargetAttachSessionCommit, TargetPageResidenceIdentity,
+        TargetServiceWorkerProtocolAttachmentIdentity,
         TargetServiceWorkerProtocolAttachmentRetirement, TargetServiceWorkerRunIdentity,
         TargetServiceWorkerRunRetirement, TargetServiceWorkerRuntimeAttachmentIdentity,
         TargetServiceWorkerVersionIdentity, TargetServiceWorkerVersionRetirement,
@@ -847,9 +848,13 @@ fn record_dedicated_worker_main_script(
         else {
             continue;
         };
-        let prepared_session = conn.prepare_auto_attach_session_commit(
+        let prepared_session = TargetAttachSessionCommit::auto_attached(
             session_id.clone(),
             owner_session_id,
+            CdpSessionRoute::DedicatedWorkerTarget {
+                browser_context_id: browser_context_id.to_owned(),
+                target_id: target_id.clone(),
+            },
             waiting_for_debugger,
         );
         if waiting_for_debugger
@@ -1241,13 +1246,22 @@ async fn commit_dedicated_worker_retirement_output_async(
                     conn.prepared_target_info_changed_event_plan_for_discovery_owners(target_delta),
                 );
             }
-            events.extend(
-                conn.detach_dedicated_worker_session_with_binding_cleanup_event_plan_async(
-                    cleanup_plan,
-                )
-                .await
-                .expect("retired dedicated-worker session cleanup should succeed"),
+            let mut response_events = Vec::new();
+            let outcome = super::session_disposal::dispose_dedicated_worker_session_after_prepared_state_delta_async(
+                conn,
+                &mut events,
+                &mut response_events,
+                cleanup_plan,
+            )
+            .await
+            .expect("retired dedicated-worker session cleanup should succeed");
+            let (event_plan, predecessor) = outcome.into_parts();
+            debug_assert!(
+                predecessor.is_none(),
+                "DedicatedWorker disposal cannot publish a Page renderer fence"
             );
+            events.extend(response_events);
+            events.extend(event_plan);
         }
         WorkerTargetLifecycleOutput::DedicatedWorkerDestroyed {
             browser_context_id,
@@ -1332,7 +1346,8 @@ fn commit_failed_dedicated_worker_retirement_sync(
                     );
                 }
                 events.extend(
-                    conn.detach_dedicated_worker_session_after_target_removal_event_plan(
+                    super::session_disposal::dispose_removed_dedicated_worker_session_after_failed_retirement(
+                        conn,
                         cleanup_plan,
                     ),
                 );
@@ -1560,20 +1575,28 @@ fn register_shared_worker_target(
             )
         {
             let attachment = conn
-                .shared_worker_protocol_attachment_identity_for_session(Some(&session_id))
+                .browser_context_by_id(browser_context_id)
+                .and_then(|context| context.shared_worker_target(&target_id))
+                .and_then(|target| {
+                    target.protocol_attachment_identity(browser_context_id, &session_id)
+                })
                 .expect("new shared-worker session must expose its exact attachment identity");
-            let prepared_session = conn.prepare_auto_attach_session_commit(
+            let prepared_session = TargetAttachSessionCommit::auto_attached(
                 session_id,
                 owner_session_id,
+                CdpSessionRoute::SharedWorkerTarget {
+                    browser_context_id: browser_context_id.to_owned(),
+                    target_id: target_id.clone(),
+                },
                 waiting_for_debugger,
             );
             assert!(
                 matches!(
                     prepared_session.route(),
-                    Some(crate::conn::CdpSessionRoute::SharedWorkerTarget {
+                    CdpSessionRoute::SharedWorkerTarget {
                         browser_context_id: route_browser_context_id,
                         target_id: route_target_id,
-                    }) if route_browser_context_id == browser_context_id
+                    } if route_browser_context_id == browser_context_id
                         && route_target_id == &target_id
                 ),
                 "shared-worker auto-attach must freeze its exact target route at capture"
@@ -1687,9 +1710,13 @@ fn register_service_worker_target_with_active_run(
                 session_id.clone(),
             )
         {
-            let prepared_session = conn.prepare_auto_attach_session_commit(
+            let prepared_session = TargetAttachSessionCommit::auto_attached(
                 session_id.clone(),
                 owner_session_id,
+                CdpSessionRoute::ServiceWorkerTarget {
+                    browser_context_id: browser_context_id.to_owned(),
+                    target_id: target_id.clone(),
+                },
                 waiting_for_debugger,
             );
             let prepared_attach =
@@ -2953,10 +2980,12 @@ async fn emit_target_lifecycle_events(
                     retirement.identity().session_id(),
                     "shared-worker detach plan must retain its exact attachment"
                 );
-                let event_plan = conn
-                    .detach_session_with_binding_cleanup_event_plan_async(cleanup_plan)
-                    .await
-                    .expect("retired shared-worker session cleanup should succeed");
+                let event_plan = super::session_disposal::dispose_removed_worker_session_async(
+                    conn,
+                    cleanup_plan,
+                )
+                .await
+                .expect("retired shared-worker session cleanup should succeed");
                 side_effects.extend_background_events(event_plan);
                 retirement.retire();
             }
@@ -2977,10 +3006,12 @@ async fn emit_target_lifecycle_events(
                     retirement.identity().session_id(),
                     "service-worker detach plan must retain its exact attachment"
                 );
-                let event_plan = conn
-                    .detach_session_with_binding_cleanup_event_plan_async(cleanup_plan)
-                    .await
-                    .expect("retired service-worker session cleanup should succeed");
+                let event_plan = super::session_disposal::dispose_removed_worker_session_async(
+                    conn,
+                    cleanup_plan,
+                )
+                .await
+                .expect("retired service-worker session cleanup should succeed");
                 side_effects.extend_background_events(event_plan);
                 retirement.retire();
             }
@@ -3732,7 +3763,8 @@ mod tests {
         assert!(conn.prepare_auto_attached_page_session_binding(
             "TID-page",
             "SID-page-base".to_owned(),
-        ));
+        ).is_some());
+        conn.register_bound_session_for_test("SID-page-base");
         conn.set_auto_attach_owner(
             Some("SID-page-base"),
             true,
@@ -3980,7 +4012,7 @@ mod tests {
         assert!(conn.prepare_auto_attached_page_session_binding(
             "TID-page",
             "SID-page-base".to_owned(),
-        ));
+        ).is_some());
         conn.browser_context
             .as_mut()
             .unwrap()
@@ -3989,6 +4021,8 @@ mod tests {
                 Some("SID-other-page".to_owned()),
                 "about:blank".to_owned(),
             ));
+        conn.register_bound_session_for_test("SID-page-base");
+        conn.register_bound_session_for_test("SID-other-page");
         for owner in [None, Some("SID-page-base"), Some("SID-other-page")] {
             conn.set_auto_attach_owner(owner, true, false, CdpTargetFilter::default_auto_attach());
         }
@@ -4417,7 +4451,8 @@ mod tests {
         assert!(conn.prepare_auto_attached_page_session_binding(
             "TID-page",
             "SID-page-base".to_owned(),
-        ));
+        ).is_some());
+        conn.register_bound_session_for_test("SID-page-base");
         conn.set_target_discovery_for_owner(
             Some("SID-page-base"),
             CdpTargetFilter::default_target_discovery(),
@@ -4890,6 +4925,7 @@ mod tests {
     #[test]
     fn service_worker_target_registration_auto_attaches_when_enabled() {
         let mut conn = CdpConnection::default();
+        conn.require_committed_session_routes_for_test();
         conn.set_root_target_discovery_enabled(true);
         conn.set_auto_attach_owner(None, true, true, CdpTargetFilter::default_auto_attach());
         conn.browser_context = Some(BrowserContext::new("BID-1".to_owned()));
@@ -4914,12 +4950,13 @@ mod tests {
                 .is_some_and(crate::conn::TargetAttachSessionCommit::waiting_for_debugger),
             "service worker autoAttach output should preserve waitForDebuggerOnStart"
         );
+        assert_eq!(conn.session_route(Some(session_id)), None);
         assert_eq!(
-            conn.session_route(Some(session_id)),
-            Some(crate::conn::CdpSessionRoute::ServiceWorkerTarget {
+            prepared_attach.sessions()[0].route(),
+            &crate::conn::CdpSessionRoute::ServiceWorkerTarget {
                 browser_context_id: "BID-1".to_owned(),
                 target_id: target_id.clone(),
-            })
+            }
         );
     }
 
@@ -5080,6 +5117,7 @@ mod tests {
     #[test]
     fn service_worker_target_registration_auto_attaches_related_newer_version() {
         let mut conn = CdpConnection::default();
+        conn.require_committed_session_routes_for_test();
         conn.browser_context = Some(BrowserContext::new("BID-1".to_owned()));
         assert!(
             register_service_worker_target(&mut conn, "BID-1", service_worker_info(7)).is_empty()
@@ -5123,12 +5161,13 @@ mod tests {
                 .is_some_and(crate::conn::TargetAttachSessionCommit::waiting_for_debugger),
             "related autoAttach output should preserve waitForDebuggerOnStart"
         );
+        assert_eq!(conn.session_route(Some(session_id)), None);
         assert!(matches!(
-            conn.session_route(Some(session_id)),
-            Some(crate::conn::CdpSessionRoute::ServiceWorkerTarget {
+            prepared_attach.sessions()[0].route(),
+            crate::conn::CdpSessionRoute::ServiceWorkerTarget {
                 browser_context_id,
                 target_id: attached_target_id,
-            }) if browser_context_id == "BID-1" && attached_target_id == target_id
+            } if browser_context_id == "BID-1" && attached_target_id == &target_id
         ));
     }
 
@@ -5412,7 +5451,12 @@ mod tests {
     #[test]
     fn service_worker_target_destruction_detaches_session_before_destroyed() {
         let mut conn = CdpConnection::default();
-        conn.auto_attach = true;
+        conn.set_auto_attach_owner(
+            None,
+            true,
+            false,
+            crate::conn::CdpTargetFilter::default_auto_attach(),
+        );
         conn.set_root_target_discovery_enabled(true);
         conn.browser_context = Some(BrowserContext::new("BID-1".to_owned()));
 
@@ -5459,7 +5503,12 @@ mod tests {
     #[test]
     fn service_worker_target_stopped_retains_target_and_clears_runtime_sessions() {
         let mut conn = CdpConnection::default();
-        conn.auto_attach = true;
+        conn.set_auto_attach_owner(
+            None,
+            true,
+            false,
+            crate::conn::CdpTargetFilter::default_auto_attach(),
+        );
         conn.set_root_target_discovery_enabled(true);
         conn.browser_context = Some(BrowserContext::new("BID-1".to_owned()));
 
@@ -5556,7 +5605,12 @@ mod tests {
     #[test]
     fn service_worker_target_started_reloads_after_crash_once() {
         let mut conn = CdpConnection::default();
-        conn.auto_attach = true;
+        conn.set_auto_attach_owner(
+            None,
+            true,
+            false,
+            crate::conn::CdpTargetFilter::default_auto_attach(),
+        );
         conn.set_root_target_discovery_enabled(true);
         conn.browser_context = Some(BrowserContext::new("BID-1".to_owned()));
 
@@ -5604,7 +5658,12 @@ mod tests {
     #[tokio::test]
     async fn service_worker_restart_emits_reload_before_new_runtime_context() {
         let mut conn = CdpConnection::default();
-        conn.auto_attach = true;
+        conn.set_auto_attach_owner(
+            None,
+            true,
+            false,
+            crate::conn::CdpTargetFilter::default_auto_attach(),
+        );
         conn.set_root_target_discovery_enabled(true);
         conn.browser_context = Some(BrowserContext::new("BID-1".to_owned()));
 
@@ -5949,7 +6008,13 @@ mod tests {
     #[test]
     fn shared_worker_target_registration_auto_attaches_when_enabled() {
         let mut conn = CdpConnection::default();
-        conn.auto_attach = true;
+        conn.require_committed_session_routes_for_test();
+        conn.set_auto_attach_owner(
+            None,
+            true,
+            false,
+            crate::conn::CdpTargetFilter::default_auto_attach(),
+        );
         conn.browser_context = Some(BrowserContext::new("BID-1".to_owned()));
 
         let outputs =
@@ -5963,9 +6028,10 @@ mod tests {
             attachment.target_id(),
             target_info_id(prepared_attach.target_info())
         );
+        assert_eq!(conn.session_route(Some(attachment.session_id())), None);
         assert!(matches!(
-            conn.session_route(Some(attachment.session_id())),
-            Some(crate::conn::CdpSessionRoute::SharedWorkerTarget { .. })
+            prepared_attach.sessions()[0].route(),
+            crate::conn::CdpSessionRoute::SharedWorkerTarget { .. }
         ));
         assert!(attachment.is_current());
     }
@@ -5975,7 +6041,9 @@ mod tests {
         let (mut conn, owner_page, owner_renderer_page) = dedicated_worker_fixture();
         assert!(
             conn.prepare_auto_attached_page_session_binding("TID-page", "SID-page".to_owned(),)
+                .is_some()
         );
+        conn.register_bound_session_for_test("SID-page");
         conn.register_browser_session("SID-browser-1".to_owned());
         conn.register_browser_session("SID-browser-2".to_owned());
 
@@ -5990,10 +6058,14 @@ mod tests {
                 "https://example.test/worker.js".to_owned(),
                 Vec::new(),
             ));
-        assert!(conn.prepare_auto_attached_dedicated_worker_session_binding(
-            "TID-dedicated-worker",
-            "SID-dedicated-worker".to_owned(),
-        ));
+        assert!(
+            conn.prepare_auto_attached_dedicated_worker_session_binding(
+                "TID-dedicated-worker",
+                "SID-dedicated-worker".to_owned(),
+            )
+            .is_some()
+        );
+        conn.register_bound_session_for_test("SID-dedicated-worker");
 
         let mut owner_shared_worker = SharedWorkerTargetState::new(
             moli_core::RendererOwnerLocalHostId::new_for_testing(2),
@@ -6008,6 +6080,7 @@ mod tests {
             .as_mut()
             .expect("browser context")
             .insert_shared_worker_target(owner_shared_worker);
+        conn.register_bound_session_for_test("SID-shared-worker");
 
         for (owner, wait_for_debugger_on_start) in [
             (None, false),
@@ -6621,7 +6694,12 @@ mod tests {
     #[test]
     fn shared_worker_target_destruction_detaches_session_before_destroyed() {
         let mut conn = CdpConnection::default();
-        conn.auto_attach = true;
+        conn.set_auto_attach_owner(
+            None,
+            true,
+            false,
+            crate::conn::CdpTargetFilter::default_auto_attach(),
+        );
         conn.set_root_target_discovery_enabled(true);
         conn.browser_context = Some(BrowserContext::new("BID-1".to_owned()));
 
@@ -6666,7 +6744,12 @@ mod tests {
     #[tokio::test]
     async fn shared_worker_target_destruction_terminates_all_renderer_calls() {
         let mut conn = CdpConnection::default();
-        conn.auto_attach = true;
+        conn.set_auto_attach_owner(
+            None,
+            true,
+            false,
+            crate::conn::CdpTargetFilter::default_auto_attach(),
+        );
         conn.set_root_target_discovery_enabled(true);
         conn.browser_context = Some(BrowserContext::new("BID-1".to_owned()));
 
@@ -6712,7 +6795,7 @@ mod tests {
             .expect("non-await renderer call should register");
         let (correlation, old_sender, terminal_receiver) = prepared.into_parts();
         let terminal_receiver = terminal_receiver
-            .expect("a synthesized CommandReply call must allocate a response receiver");
+            .expect("a synthesized AdapterReply call must allocate a response receiver");
 
         let outputs =
             remove_shared_worker_target(&mut conn, "BID-1", SharedWorkerInstanceId::from_u64(15))
@@ -6783,7 +6866,12 @@ mod tests {
     #[test]
     fn late_shared_worker_messages_after_destroy_are_dropped_without_page_fallback() {
         let mut conn = CdpConnection::default();
-        conn.auto_attach = true;
+        conn.set_auto_attach_owner(
+            None,
+            true,
+            false,
+            crate::conn::CdpTargetFilter::default_auto_attach(),
+        );
         conn.set_root_target_discovery_enabled(true);
         let mut browser_context = BrowserContext::new("BID-1".to_owned());
         browser_context.set_active_target_id("TID-page");

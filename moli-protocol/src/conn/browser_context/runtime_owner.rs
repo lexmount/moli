@@ -172,7 +172,7 @@ impl CdpConnection {
             let session_id =
                 self.ensure_service_worker_runtime_listener_session_for_route(&route)?;
             return Some(
-                self.process_message_with_turn_outcome_async(
+                self.process_nested_target_message_adapter_async(
                     &json!({
                         "id": 0_u64,
                         "sessionId": session_id,
@@ -192,7 +192,7 @@ impl CdpConnection {
             let session_id =
                 self.ensure_shared_worker_runtime_listener_session_for_route(&route)?;
             return Some(
-                self.process_message_with_turn_outcome_async(
+                self.process_nested_target_message_adapter_async(
                     &json!({
                         "id": 0_u64,
                         "sessionId": session_id,
@@ -219,7 +219,7 @@ impl CdpConnection {
         if matches!(route, CdpSessionRoute::ServiceWorkerTarget { .. }) {
             let session_id = self.service_worker_runtime_listener_session_for_route(&route)?;
             return Some(
-                self.process_message_with_turn_outcome_async(
+                self.process_nested_target_message_adapter_async(
                     &json!({
                         "id": 0_u64,
                         "sessionId": session_id,
@@ -238,7 +238,7 @@ impl CdpConnection {
         ) {
             let session_id = self.shared_worker_runtime_listener_session_for_route(&route)?;
             return Some(
-                self.process_message_with_turn_outcome_async(
+                self.process_nested_target_message_adapter_async(
                     &json!({
                         "id": 0_u64,
                         "sessionId": session_id,
@@ -311,20 +311,24 @@ impl CdpConnection {
         &mut self,
         route: &CdpSessionRoute,
     ) -> Option<String> {
-        if let Some(session_id) = self.service_worker_runtime_listener_session_for_route(route) {
-            return Some(session_id);
-        }
-        let CdpSessionRoute::ServiceWorkerTarget {
-            browser_context_id,
-            target_id,
-        } = route
-        else {
-            return None;
+        let session_id = match self.service_worker_runtime_listener_session_for_route(route) {
+            Some(session_id) => session_id,
+            None => {
+                let CdpSessionRoute::ServiceWorkerTarget {
+                    browser_context_id,
+                    target_id,
+                } = route
+                else {
+                    return None;
+                };
+                let session_id = service_worker_runtime_listener_session_id(target_id);
+                self.browser_context_by_id_mut(browser_context_id)?
+                    .assign_session_to_service_worker_target(target_id, session_id.clone())
+                    .then_some(session_id)?
+            }
         };
-        let session_id = service_worker_runtime_listener_session_id(target_id);
-        self.browser_context_by_id_mut(browser_context_id)?
-            .assign_session_to_service_worker_target(target_id, session_id.clone())
-            .then_some(session_id)
+        self.commit_worker_runtime_listener_session_route(&session_id, route)?;
+        Some(session_id)
     }
 
     fn shared_worker_runtime_listener_session_for_route(
@@ -360,30 +364,57 @@ impl CdpConnection {
         &mut self,
         route: &CdpSessionRoute,
     ) -> Option<String> {
-        if let Some(session_id) = self.shared_worker_runtime_listener_session_for_route(route) {
-            return Some(session_id);
+        let session_id = match self.shared_worker_runtime_listener_session_for_route(route) {
+            Some(session_id) => session_id,
+            None => match route {
+                CdpSessionRoute::SharedWorkerTarget {
+                    browser_context_id,
+                    target_id,
+                } => {
+                    let session_id = shared_worker_runtime_listener_session_id(target_id);
+                    self.browser_context_by_id_mut(browser_context_id)?
+                        .assign_session_to_shared_worker_target(target_id, session_id.clone())
+                        .then_some(session_id)?
+                }
+                CdpSessionRoute::DedicatedWorkerTarget {
+                    browser_context_id,
+                    target_id,
+                } => {
+                    let session_id = dedicated_worker_runtime_listener_session_id(target_id);
+                    self.browser_context_by_id_mut(browser_context_id)?
+                        .assign_session_to_dedicated_worker_target(target_id, session_id.clone())
+                        .then_some(session_id)?
+                }
+                _ => return None,
+            },
+        };
+        self.commit_worker_runtime_listener_session_route(&session_id, route)?;
+        Some(session_id)
+    }
+
+    fn commit_worker_runtime_listener_session_route(
+        &mut self,
+        session_id: &str,
+        route: &CdpSessionRoute,
+    ) -> Option<()> {
+        if self.target_control.attached_session_route(session_id) == Some(route) {
+            return Some(());
         }
-        match route {
-            CdpSessionRoute::SharedWorkerTarget {
-                browser_context_id,
-                target_id,
-            } => {
-                let session_id = shared_worker_runtime_listener_session_id(target_id);
-                self.browser_context_by_id_mut(browser_context_id)?
-                    .assign_session_to_shared_worker_target(target_id, session_id.clone())
-                    .then_some(session_id)
-            }
-            CdpSessionRoute::DedicatedWorkerTarget {
-                browser_context_id,
-                target_id,
-            } => {
-                let session_id = dedicated_worker_runtime_listener_session_id(target_id);
-                self.browser_context_by_id_mut(browser_context_id)?
-                    .assign_session_to_dedicated_worker_target(target_id, session_id.clone())
-                    .then_some(session_id)
-            }
-            _ => None,
-        }
+        let target_id = match route {
+            CdpSessionRoute::SharedWorkerTarget { target_id, .. }
+            | CdpSessionRoute::DedicatedWorkerTarget { target_id, .. }
+            | CdpSessionRoute::ServiceWorkerTarget { target_id, .. } => target_id.clone(),
+            _ => return None,
+        };
+        self.target_control.commit_attached_session(
+            session_id.to_owned(),
+            None,
+            &target_id,
+            Some(route.clone()),
+            false,
+            false,
+        );
+        Some(())
     }
 }
 
@@ -405,7 +436,7 @@ mod tests {
     use moli_shared_worker::SharedWorkerInstanceId;
     use serde_json::json;
 
-    use crate::conn::{BrowserContext, CdpConnection, SharedWorkerTargetState};
+    use crate::conn::{BrowserContext, CdpConnection, CdpSessionRoute, SharedWorkerTargetState};
 
     #[test]
     fn runtime_listener_session_ids_are_worker_type_scoped() {
@@ -426,6 +457,7 @@ mod tests {
     #[tokio::test]
     async fn runtime_listener_enable_uses_shared_worker_target_session() {
         let mut conn = CdpConnection::new();
+        conn.require_committed_session_routes_for_test();
         let mut browser_context = BrowserContext::new("BID-shared".to_owned());
         browser_context.insert_shared_worker_target(SharedWorkerTargetState::new(
             RendererOwnerLocalHostId::new_for_testing(1),
@@ -450,6 +482,16 @@ mod tests {
             ))
             .is_some(),
             "Runtime listener should attach a target-local SharedWorker session"
+        );
+        assert_eq!(
+            conn.session_route(Some(
+                "SID-bidi-runtime-listener-shared-worker-TID-shared-worker"
+            )),
+            Some(CdpSessionRoute::SharedWorkerTarget {
+                browser_context_id: "BID-shared".to_owned(),
+                target_id: "TID-shared-worker".to_owned(),
+            }),
+            "Runtime listener should commit its exact route before dispatch"
         );
         assert!(
             messages.iter().any(|message| {

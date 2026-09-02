@@ -315,7 +315,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_observable_auxiliary_session_uses_own_browser_context() {
+    fn runtime_observable_attached_session_uses_own_browser_context() {
         let mut conn = crate::conn::CdpConnection::default();
         conn.browser_context = Some(BrowserContext::new("BID-active".to_owned()));
 
@@ -324,36 +324,38 @@ mod tests {
         inactive
             .active_page_target_mut()
             .devtools_sessions
-            .ensure_attached("SID-aux")
+            .ensure_attached("SID-attached")
             .runtime_session_state
             .runtime_frontend_enabled = true;
-        assert!(inactive.assign_auxiliary_session_to_target("TID-inactive", "SID-aux".to_owned()));
+        assert!(
+            inactive.assign_attached_session_to_target("TID-inactive", "SID-attached".to_owned())
+        );
         conn.inactive_browser_contexts.push(inactive);
 
         assert!(
             retain_unemitted_runtime_observable_prepared_source_for_session_owner(
                 &conn,
-                Some("SID-aux"),
+                Some("SID-attached"),
                 prepared_source(),
             )
             .is_some(),
-            "auxiliary runtime observable presence should read the inactive owner context"
+            "attached runtime observable presence should read the inactive owner context"
         );
 
         mark_runtime_observable_activity_emitted_for_session_owner(
             &mut conn,
-            Some("SID-aux"),
+            Some("SID-attached"),
             HashMap::from([(7, 1)]),
             1,
         );
         assert!(
             retain_unemitted_runtime_observable_prepared_source_for_session_owner(
                 &conn,
-                Some("SID-aux"),
+                Some("SID-attached"),
                 prepared_source(),
             )
             .is_none(),
-            "auxiliary runtime observable mark should write the inactive owner context"
+            "attached runtime observable mark should write the inactive owner context"
         );
     }
 }

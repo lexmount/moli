@@ -1,6 +1,6 @@
 use crate::conn::{
-    CommandOwnerScope, PopupTargetActivationAction, PopupTargetNavigationKind,
-    PopupTargetNavigationOwnerAction, PreparedTargetAttach,
+    CdpSessionRoute, CommandOwnerScope, PopupTargetActivationAction, PopupTargetNavigationKind,
+    PopupTargetNavigationOwnerAction, PreparedTargetAttach, TargetAttachSessionCommit,
 };
 
 use super::creation::{
@@ -148,7 +148,7 @@ pub(crate) async fn create_popup_target_from_renderer_output_background_events_a
 
     // The renderer has already accepted an auxiliary-context action. Even when
     // noopener blocks script access, Chromium preserves the creator target and
-    // frame as DevTools attribution for the new auxiliary target.
+    // frame as DevTools attribution for the new popup Page target.
     let opener = opener.filter(|opener| {
         conn.browser_context_by_id(&browser_context_id)
             .and_then(|browser_context| browser_context.devtools_target_info(&opener.target_id))
@@ -205,27 +205,39 @@ pub(crate) async fn create_popup_target_from_renderer_output_background_events_a
     }
 
     let tab_target_id = conn.register_top_level_page_target(&target_id);
-    for (owner_session_id, session_id) in &auto_attached_tab_sessions {
-        let assigned = conn.prepare_auto_attached_tab_session_binding(
-            &tab_target_id,
-            session_id.clone(),
-            owner_session_id.as_deref(),
-        );
-        assert!(assigned, "created popup tab target must remain addressable");
-    }
-    for (index, (_, session_id)) in auto_attached_page_sessions.iter().enumerate() {
-        if index != 0 || auto_attached_background_session_id.is_none() {
-            let assigned = conn.prepare_auto_attached_page_session_binding_in_browser_context(
-                &browser_context_id,
-                &target_id,
+    let auto_attached_tab_sessions = auto_attached_tab_sessions
+        .into_iter()
+        .map(|(owner_session_id, session_id)| {
+            let route = conn.prepare_auto_attached_tab_session_binding(
+                &tab_target_id,
                 session_id.clone(),
+                owner_session_id.as_deref(),
             );
-            assert!(
-                assigned,
-                "newly created popup target must remain addressable"
-            );
-        }
-    }
+            let route = route.expect("created popup tab target must remain addressable");
+            (owner_session_id, session_id, route)
+        })
+        .collect::<Vec<_>>();
+    let auto_attached_page_sessions = auto_attached_page_sessions
+        .into_iter()
+        .enumerate()
+        .map(|(index, (owner_session_id, session_id))| {
+            let route = if index == 0 && auto_attached_background_session_id.is_some() {
+                CdpSessionRoute::PageTarget {
+                    browser_context_id: browser_context_id.clone(),
+                    target_id: target_id.clone(),
+                    session_key: moli_page_types::DevToolsSessionKey::Primary,
+                }
+            } else {
+                conn.prepare_auto_attached_page_session_binding_in_browser_context(
+                    &browser_context_id,
+                    &target_id,
+                    session_id.clone(),
+                )
+                .expect("newly created popup target must remain addressable")
+            };
+            (owner_session_id, session_id, route)
+        })
+        .collect::<Vec<_>>();
 
     if !ensure_popup_initial_document_page_async(conn, &target_id).await {
         rollback_incomplete_popup_target_async(conn, Some(&browser_context_id), &target_id).await;
@@ -358,16 +370,17 @@ async fn ensure_popup_initial_document_page_async(
 fn push_committed_auto_attached_session_events(
     conn: &mut CdpConnection,
     out: &mut impl events::CdpTargetAutomationEventSink,
-    sessions: &[(Option<String>, String)],
+    sessions: &[(Option<String>, String, CdpSessionRoute)],
     target_id: &str,
     target_info: DevToolsTargetInfo,
 ) {
     let sessions = sessions
         .iter()
-        .map(|(owner_session_id, session_id)| {
-            conn.prepare_auto_attach_session_commit(
+        .map(|(owner_session_id, session_id, route)| {
+            TargetAttachSessionCommit::auto_attached(
                 session_id.clone(),
                 owner_session_id.clone(),
+                route.clone(),
                 conn.auto_attach_owner_waits_for_debugger_on_start(owner_session_id.as_deref()),
             )
         })

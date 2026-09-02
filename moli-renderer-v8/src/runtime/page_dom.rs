@@ -786,7 +786,7 @@ impl PageVm {
             let call_id = deferred_response.call_id();
             if let Some(message) = messages.into_iter().next() {
                 if deferred_response.response_delivery()
-                    == moli_page_types::RendererInspectorResponseDelivery::DevToolsSession
+                    == moli_page_types::RendererInspectorResponseDelivery::SessionSink
                 {
                     let deferred_response = self.vm().route_frontend_runtime_inspector_response(
                         inspector_session_id,
@@ -3909,7 +3909,7 @@ impl PageVm {
         // Target attachment applies binding state before exposing the session
         // to frontend commands. Even an empty state must establish the
         // concrete renderer DevTools session/output capability: otherwise an
-        // auxiliary session whose first command is a non-V8 IO agent has no
+        // attached session whose first command is a non-V8 IO agent has no
         // session host through which to publish its terminal response.
         self.vm_mut()
             .ensure_runtime_inspector_session(inspector_session_id);

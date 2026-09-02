@@ -12,7 +12,7 @@ fn context_with_page_sessions() -> TestContext {
     browser_context.set_target_url("https://example.test/page#fragment".to_owned());
     browser_context.attach_active_session("SID-owner".to_owned());
     assert!(
-        browser_context.assign_auxiliary_session_to_target("TID-tracing", "SID-peer".to_owned(),)
+        browser_context.assign_attached_session_to_target("TID-tracing", "SID-peer".to_owned(),)
     );
     ctx.conn.browser_context = Some(browser_context);
     ctx
@@ -282,11 +282,19 @@ async fn owner_cleanup_cancels_trace_without_emitting_completion() {
     ctx.expect_result(30, json!({}), Some("SID-peer"));
     ctx.sent.clear();
 
-    assert!(
-        ctx.conn
-            .execute_target_binding_cleanup_for_session_without_event_async("SID-peer")
-            .await
-            .unwrap()
+    ctx.process_async(json!({
+        "id": 30_001,
+        "method": "Target.detachFromTarget",
+        "params": { "sessionId": "SID-peer" },
+    }))
+    .await;
+    ctx.expect_result(30_001, json!({}), None);
+    ctx.expect_event(
+        "Target.detachedFromTarget",
+        Some(&json!({
+            "sessionId": "SID-peer",
+            "targetId": "TID-tracing",
+        })),
     );
     assert!(!ctx.conn.tracing_state.is_active());
     assert!(
@@ -353,18 +361,38 @@ async fn owner_cleanup_waits_for_cpu_trace_release_before_replacement_start() {
         })]
     );
 
-    let (cleaned, stop_tasks) = tokio::time::timeout(
+    let detach = ctx.conn.start_command_dispatch(
+        &json!({
+            "id": 32_001,
+            "method": "Target.detachFromTarget",
+            "params": { "sessionId": "SID-peer" },
+        })
+        .to_string(),
+    );
+    let pending_detach = match detach {
+        CdpCommandTaskStep::Pending(pending) => pending,
+        CdpCommandTaskStep::Complete(plan) => {
+            panic!("CPU trace owner detach should wait for isolate cleanup: {plan:?}")
+        }
+    };
+    let completed_detach = pending_detach.wait().await;
+    let (detach_step, stop_tasks) = tokio::time::timeout(
         std::time::Duration::from_secs(2),
         drive_owner_tasks_until(
             &mut owner_task_rx,
-            ctx.conn
-                .execute_target_binding_cleanup_for_session_without_event_async("SID-peer"),
+            ctx.conn.complete_pending_command_dispatch(completed_detach),
         ),
     )
     .await
     .expect("owner detach should wait for CPU trace cancellation");
-    assert!(cleaned.unwrap());
     assert!(stop_tasks > 0);
+    assert!(
+        detach_step
+            .into_parts()
+            .0
+            .iter()
+            .any(|message| { message["id"] == json!(32_001) && message["result"] == json!({}) })
+    );
     assert!(!ctx.conn.tracing_state.is_active());
 
     let replacement_start = ctx.conn.start_command_dispatch(
