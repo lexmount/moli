@@ -2540,6 +2540,89 @@ fn url_like_href_resolution_does_not_legacy_encode_fragment_question_mark() {
         "https://href-fragment-gbk.test/search#frag?q=%E5%AE%B6%E5%B1%85"
     );
 }
+
+#[test]
+fn form_submission_returns_while_constructing_entry_list() {
+    let mut vm = new_storage_test_vm("https://form-entry-list-reentrant.test/page.html");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const parent = document.body || document.documentElement || document;
+  const form = document.createElement('form');
+  form.action = '/submitted';
+  form.innerHTML = '<input name=n value=v>';
+  parent.appendChild(form);
+
+  const outcomes = [];
+  let submitEvents = 0;
+  form.addEventListener('submit', event => {
+    submitEvents++;
+    event.preventDefault();
+  });
+  form.addEventListener('formdata', () => {
+    for (const submit of [
+      () => form.submit(),
+      () => form.requestSubmit()
+    ]) {
+      try {
+        submit();
+        outcomes.push('returned');
+      } catch (error) {
+        outcomes.push(`threw:${error.name}`);
+      }
+    }
+  });
+
+  form.submit();
+  return JSON.stringify({ outcomes, submitEvents });
+})()
+"#,
+        )
+        .expect("form submission entry-list reentrancy probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"outcomes":["returned","returned"],"submitEvents":0}"#
+    );
+    assert_eq!(
+        vm.take_pending_location_navigation_with_seed()
+            .expect("outer form submission should still queue navigation")
+            .url
+            .as_str(),
+        "https://form-entry-list-reentrant.test/submitted?n=v"
+    );
+}
+
+#[test]
+fn form_submission_aborts_when_formdata_listener_disconnects_form() {
+    let mut vm = new_storage_test_vm("https://form-disconnected-after-entry-list.test/page.html");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const parent = document.body || document.documentElement || document;
+  const form = document.createElement('form');
+  form.action = '/submitted';
+  form.innerHTML = '<input name=n value=v>';
+  parent.appendChild(form);
+  form.addEventListener('formdata', () => form.remove());
+  form.submit();
+  return String(form.isConnected);
+})()
+"#,
+        )
+        .expect("formdata disconnect submission probe should evaluate");
+
+    assert_eq!(result, "false");
+    assert!(
+        vm.take_pending_location_navigation_with_seed().is_none(),
+        "a form disconnected while constructing its entry list must not navigate"
+    );
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn formdata_event_appended_entries_are_submitted_to_named_iframe() {
     let server = StaticHttpServer::spawn(1).await;
