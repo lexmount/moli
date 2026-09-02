@@ -13305,6 +13305,37 @@ fn css_style_declaration_serializes_animation_shorthand_from_longhands() {
 }
 
 #[test]
+fn css_style_declaration_serializes_white_space_shorthand() {
+    let mut vm = new_storage_test_vm("https://css-style-white-space-shorthand.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const element = document.createElement('div');
+  const values = ['normal', 'pre', 'nowrap', 'pre-wrap', 'pre-line', 'inherit'];
+  const attributeValues = values.map(value => {
+    element.setAttribute('style', `white-space: ${value}`);
+    return [element.style.whiteSpace, element.style.getPropertyValue('white-space')].join('|');
+  });
+  const propertyValues = values.map(value => {
+    element.style.cssText = '';
+    element.style.whiteSpace = value;
+    return [element.style.whiteSpace, element.style.getPropertyValue('white-space')].join('|');
+  });
+  return [attributeValues.join(','), propertyValues.join(',')].join('/');
+})()
+"#,
+        )
+        .expect("white-space shorthand serialization should evaluate");
+
+    assert_eq!(
+        result,
+        "normal|normal,pre|pre,nowrap|nowrap,pre-wrap|pre-wrap,pre-line|pre-line,inherit|inherit/normal|normal,pre|pre,nowrap|nowrap,pre-wrap|pre-wrap,pre-line|pre-line,inherit|inherit"
+    );
+}
+
+#[test]
 fn css_style_declaration_shorthand_common_serialization_checks() {
     let mut vm = new_storage_test_vm("https://css-style-shorthand-common.test/");
 

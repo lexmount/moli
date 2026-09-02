@@ -1998,6 +1998,7 @@ fn cssom_style_shorthand_query_uses_pdb(name: &str) -> bool {
             | "text-decoration"
             | "text-emphasis"
             | "transition"
+            | "white-space"
             | "font"
             | "font-variant"
             | "-webkit-text-stroke"
