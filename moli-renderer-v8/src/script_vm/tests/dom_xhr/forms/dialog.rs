@@ -150,6 +150,83 @@ fn inert_modal_dialog_clears_focus_outside_its_subtree() {
     assert_eq!(result, r#"{"focusedBody":true,"dialogOpen":true}"#);
 }
 
+#[test]
+fn closing_dialog_restores_its_previously_focused_element() {
+    let mut vm = new_storage_test_vm("https://dialog-focus-restoration.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const root = document.documentElement || document.appendChild(document.createElement('html'));
+  const body = document.body || root.appendChild(document.createElement('body'));
+  const before = document.createElement('button');
+  const outside = document.createElement('button');
+  const dialog = document.createElement('dialog');
+  const shadowHost = document.createElement('div');
+  const shadow = shadowHost.attachShadow({mode: 'open'});
+  const shadowButton = document.createElement('button');
+  shadow.appendChild(shadowButton);
+  dialog.appendChild(shadowHost);
+  body.append(before, outside, dialog);
+
+  before.focus();
+  dialog.show();
+  shadowButton.focus();
+  dialog.close();
+  const shadowRestore = document.activeElement === before;
+
+  before.focus();
+  dialog.show();
+  outside.focus();
+  dialog.close();
+  const outsidePreserved = document.activeElement === outside;
+
+  const slotHost = document.createElement('div');
+  const slotShadow = slotHost.attachShadow({mode: 'open'});
+  slotShadow.innerHTML = '<dialog><slot></slot></dialog>';
+  const slottedButton = document.createElement('button');
+  slotHost.appendChild(slottedButton);
+  body.appendChild(slotHost);
+  const slotDialog = slotShadow.querySelector('dialog');
+  before.focus();
+  slotDialog.show();
+  slottedButton.focus();
+  slotDialog.close();
+  const slottedRestore = document.activeElement === before;
+
+  const modal = document.createElement('dialog');
+  body.appendChild(modal);
+  before.focus();
+  modal.showModal();
+  modal.blur();
+  const blurredToBody = document.activeElement === body;
+  modal.close();
+  const modalRestore = document.activeElement === before;
+
+  outside.focus();
+  modal.show();
+  const dialogFocused = document.activeElement === modal;
+  modal.close();
+  const dialogRestore = document.activeElement === outside;
+
+  return [
+    shadowRestore,
+    outsidePreserved,
+    slottedRestore,
+    blurredToBody,
+    modalRestore,
+    dialogFocused,
+    dialogRestore
+  ].join('|');
+})()
+"#,
+        )
+        .expect("dialog focus restoration probe should evaluate");
+
+    assert_eq!(result, "true|true|true|true|true|true|true");
+}
+
 #[tokio::test]
 async fn dialog_toggle_events_cancel_opening_and_coalesce_state_changes() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
