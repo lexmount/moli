@@ -21,18 +21,32 @@ fn detached_domparser_parses_noscript_with_scripting_disabled() {
   created.body.innerHTML =
     "<noscript><span id='created-fallback'></span></noscript>";
 
+  const raw = doc.createElement("noscript");
+  raw.textContent = "<em>fallback&</em>";
+
   return [
     doc.getElementById("fallback") !== null,
     doc.querySelector("noscript")?.children.length,
     doc.getElementById("fragment-fallback") !== null,
-    created.getElementById("created-fallback") !== null
+    created.getElementById("created-fallback") !== null,
+    raw.innerHTML,
+    raw.getHTML(),
+    raw.outerHTML
   ].join("|");
 })()
 "#,
         )
         .expect("detached DOMParser noscript probe should evaluate");
 
-    assert_eq!(result, "true|1|true|true");
+    assert_eq!(
+        result,
+        concat!(
+            "true|1|true|true|",
+            "&lt;em&gt;fallback&amp;&lt;/em&gt;|",
+            "&lt;em&gt;fallback&amp;&lt;/em&gt;|",
+            "<noscript>&lt;em&gt;fallback&amp;&lt;/em&gt;</noscript>"
+        )
+    );
 }
 
 #[test]

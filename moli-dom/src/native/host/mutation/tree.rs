@@ -548,6 +548,15 @@ impl DomHost {
         self.dom.inner_html(handle)
     }
 
+    pub fn inner_html_with_scripting_enabled(
+        &self,
+        handle: DomHandle,
+        scripting_enabled: bool,
+    ) -> Option<String> {
+        self.dom
+            .inner_html_with_scripting_enabled(handle, scripting_enabled)
+    }
+
     pub fn node_metadata(&self, handle: DomHandle) -> Option<LiveDomNodeMetadata> {
         self.dom.node_metadata(handle)
     }

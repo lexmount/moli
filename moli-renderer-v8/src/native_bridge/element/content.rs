@@ -833,7 +833,9 @@ fn node_inner_text(
 }
 
 fn node_inner_html(runtime: &JsContextHost, handle: DomHandle) -> Option<String> {
-    runtime.dom_host().inner_html(handle)
+    runtime
+        .dom_host()
+        .inner_html_with_scripting_enabled(handle, runtime.node_document_scripting_enabled(handle))
 }
 
 fn is_element_or_shadow_root_receiver(runtime: &JsContextHost, handle: DomHandle) -> bool {
@@ -898,7 +900,7 @@ pub(in crate::native_bridge) fn node_outer_html_getter_function<'s>(
     let value = runtime
         .dom_host()
         .dom()
-        .outer_html(handle)
+        .outer_html_with_scripting_enabled(handle, runtime.node_document_scripting_enabled(handle))
         .unwrap_or_default();
     let Some(value) = v8_string(scope, &value) else {
         rv.set_null();
@@ -1055,6 +1057,7 @@ pub(in crate::native_bridge) fn node_get_html_callback<'s>(
         .dom_host()
         .get_html_with_shadow_root_registry_attribute_policy(
             handle,
+            runtime.node_document_scripting_enabled(handle),
             serializable_shadow_roots,
             &explicit_shadow_roots,
             Some(&should_serialize_registry_attribute),

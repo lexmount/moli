@@ -736,6 +736,17 @@ impl JsContextHost {
             .unwrap_or(false)
     }
 
+    pub(crate) fn node_document_scripting_enabled(&self, handle: DomHandle) -> bool {
+        let Some(document_handle) = self
+            .dom_host()
+            .document_identity_handle(handle)
+            .and_then(|identity| self.dom_host().owner_document_handle(identity))
+        else {
+            return false;
+        };
+        self.document_scripting_enabled(document_handle)
+    }
+
     pub(crate) fn owner_scripting_enabled(&self, owner: OwnerDispatchScope) -> bool {
         match owner {
             OwnerDispatchScope::Top => {

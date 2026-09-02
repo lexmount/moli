@@ -66,9 +66,12 @@ impl JsContextHost {
                 .then_some(binding.root)
             })
             .collect::<Vec<_>>();
-        let markup = self
-            .dom_host()
-            .get_html(document_handle, false, &explicit_shadow_roots)?;
+        let markup = self.dom_host().get_html(
+            document_handle,
+            self.child_browsing_context_scripting_enabled(handle),
+            false,
+            &explicit_shadow_roots,
+        )?;
         Some(ChildBrowsingContextDocumentSnapshot {
             url: url.as_str().to_owned(),
             markup,

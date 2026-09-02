@@ -9,10 +9,6 @@ use std::num::NonZeroU32;
 
 use super::NativeDom;
 use super::element::Element;
-use super::serialize::{
-    HtmlSerializationSink, escape_html_attribute, escape_html_text, is_void_html_element,
-    serialize_cdata_section,
-};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct NativeNodeId(NonZeroU32);
@@ -598,47 +594,6 @@ impl Node {
         }
     }
 
-    pub fn serialize_into(&self, dom: &NativeDom, out: &mut String, raw_text_parent: bool) {
-        self.serialize_into_sink(dom, out, raw_text_parent);
-    }
-
-    pub(super) fn serialize_with_limit(
-        &self,
-        dom: &NativeDom,
-        raw_text_parent: bool,
-        max_bytes: usize,
-    ) -> Result<String, super::serialize::HtmlSerializationLimitExceeded> {
-        let mut out = BoundedHtmlSerialization::new(max_bytes);
-        self.serialize_into_sink(dom, &mut out, raw_text_parent);
-        out.finish()
-    }
-
-    fn serialize_into_sink<'a, S>(&'a self, dom: &'a NativeDom, out: &mut S, raw_text_parent: bool)
-    where
-        S: HtmlSerializationSink,
-    {
-        let mut stack = vec![HtmlSerializationFrame::Node {
-            node_id: self.id(),
-            raw_text_parent,
-        }];
-        while !out.limit_exceeded() {
-            let Some(frame) = stack.pop() else {
-                break;
-            };
-            match frame {
-                HtmlSerializationFrame::Node {
-                    node_id,
-                    raw_text_parent,
-                } => serialize_html_node_frame(dom, node_id, out, raw_text_parent, &mut stack),
-                HtmlSerializationFrame::CloseElement(local_name) => {
-                    out.push_str("</");
-                    out.push_str(local_name);
-                    out.push('>');
-                }
-            }
-        }
-    }
-
     pub fn set_first_child(&mut self, first_child: Option<NativeNodeId>) {
         self.first_child = first_child;
     }
@@ -719,185 +674,6 @@ impl Node {
     }
 }
 
-struct BoundedHtmlSerialization {
-    output: String,
-    max_bytes: usize,
-    exceeded: bool,
-}
-
-impl BoundedHtmlSerialization {
-    fn new(max_bytes: usize) -> Self {
-        Self {
-            output: String::new(),
-            max_bytes,
-            exceeded: false,
-        }
-    }
-
-    fn finish(self) -> Result<String, super::serialize::HtmlSerializationLimitExceeded> {
-        if self.exceeded {
-            Err(super::serialize::HtmlSerializationLimitExceeded {
-                max_bytes: self.max_bytes,
-            })
-        } else {
-            Ok(self.output)
-        }
-    }
-}
-
-impl HtmlSerializationSink for BoundedHtmlSerialization {
-    fn push_str(&mut self, value: &str) {
-        if self.exceeded {
-            return;
-        }
-        if self
-            .output
-            .len()
-            .checked_add(value.len())
-            .is_none_or(|length| length > self.max_bytes)
-        {
-            self.exceeded = true;
-            return;
-        }
-        self.output.push_str(value);
-    }
-
-    fn push(&mut self, value: char) {
-        if self.exceeded {
-            return;
-        }
-        if self
-            .output
-            .len()
-            .checked_add(value.len_utf8())
-            .is_none_or(|length| length > self.max_bytes)
-        {
-            self.exceeded = true;
-            return;
-        }
-        self.output.push(value);
-    }
-
-    fn limit_exceeded(&self) -> bool {
-        self.exceeded
-    }
-}
-
-enum HtmlSerializationFrame<'a> {
-    Node {
-        node_id: NativeNodeId,
-        raw_text_parent: bool,
-    },
-    CloseElement(&'a str),
-}
-
-fn serialize_html_node_frame<'a, S>(
-    dom: &'a NativeDom,
-    node_id: NativeNodeId,
-    out: &mut S,
-    raw_text_parent: bool,
-    stack: &mut Vec<HtmlSerializationFrame<'a>>,
-) where
-    S: HtmlSerializationSink,
-{
-    let Some(node) = dom.node(node_id) else {
-        return;
-    };
-    match node.data() {
-        NodeData::Document(_) => {
-            push_child_html_serialization_frames(dom, node_id, false, stack);
-        }
-        NodeData::DocumentType(document_type) => {
-            out.push_str("<!DOCTYPE ");
-            out.push_str(document_type.name());
-            if !document_type.public_id().is_empty() || !document_type.system_id().is_empty() {
-                out.push_str(" PUBLIC \"");
-                out.push_str(document_type.public_id());
-                out.push_str("\" \"");
-                out.push_str(document_type.system_id());
-                out.push('"');
-            }
-            out.push('>');
-        }
-        NodeData::Element(element) => {
-            out.push('<');
-            out.push_str(element.local_name());
-            if let Some(is_name) = element.custom_element_is_name()
-                && !element.has_attribute("is")
-            {
-                out.push_str(" is=\"");
-                escape_html_attribute(is_name, out);
-                out.push('"');
-            }
-            for attribute in element.attributes() {
-                if out.limit_exceeded() {
-                    return;
-                }
-                out.push(' ');
-                attribute.push_html_serialized_name(|part| out.push_str(part));
-                out.push_str("=\"");
-                escape_html_attribute(attribute.value(), out);
-                out.push('"');
-            }
-            out.push('>');
-
-            let raw_text_child = is_raw_text_element(element.namespace(), element.local_name());
-            let children_root = element.template_contents().unwrap_or(node_id);
-            if !is_void_html_element(element.namespace(), element.local_name()) {
-                stack.push(HtmlSerializationFrame::CloseElement(element.local_name()));
-                push_child_html_serialization_frames(dom, children_root, raw_text_child, stack);
-            }
-        }
-        NodeData::Text(text) => {
-            if raw_text_parent {
-                out.push_str(text.data());
-            } else {
-                escape_html_text(text.data(), out);
-            }
-        }
-        NodeData::CDataSection(cdata) => {
-            serialize_cdata_section(
-                cdata.data(),
-                out,
-                raw_text_parent,
-                dom.node_document_is_html_document(node_id).unwrap_or(false),
-            );
-        }
-        NodeData::Comment(comment) => {
-            out.push_str("<!--");
-            out.push_str(comment.data());
-            out.push_str("-->");
-        }
-        NodeData::ProcessingInstruction(processing_instruction) => {
-            out.push_str("<?");
-            out.push_str(processing_instruction.target());
-            if !processing_instruction.data().is_empty() {
-                out.push(' ');
-                out.push_str(processing_instruction.data());
-            }
-            out.push_str("?>");
-        }
-        NodeData::DocumentFragment(_) => {
-            push_child_html_serialization_frames(dom, node_id, raw_text_parent, stack);
-        }
-    }
-}
-
-fn push_child_html_serialization_frames<'a>(
-    dom: &NativeDom,
-    parent: NativeNodeId,
-    raw_text_parent: bool,
-    stack: &mut Vec<HtmlSerializationFrame<'a>>,
-) {
-    stack.extend(
-        dom.child_ids_reversed(parent)
-            .map(|node_id| HtmlSerializationFrame::Node {
-                node_id,
-                raw_text_parent,
-            }),
-    );
-}
-
 fn node_data_is_equal(left: &Node, right: &Node) -> bool {
     if left.node_type() != right.node_type() {
         return false;
@@ -976,9 +752,4 @@ fn sibling_document_order(dom: &NativeDom, left: NativeNodeId, right: NativeNode
         }
     }
     0
-}
-
-fn is_raw_text_element(namespace: &str, local_name: &str) -> bool {
-    namespace == "http://www.w3.org/1999/xhtml"
-        && matches!(local_name, "script" | "style" | "noscript")
 }

@@ -1,6 +1,7 @@
 use super::*;
 use crate::native::serialize::{
-    escape_html_attribute, escape_html_text, is_void_html_element, serialize_cdata_section,
+    HtmlSerializationOptions, HtmlSerializationTarget, HtmlSerializedShadowRoot,
+    escape_html_attribute, serialize_html_into_sink,
 };
 
 pub type ShadowRootRegistryAttributePolicy<'a> =
@@ -26,44 +27,22 @@ impl ShadowRootInclusion<'_> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum HtmlSerializationTarget {
-    IncludeNode,
-    ChildrenOnly,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ShadowRootMarkupProfile {
     WebApi,
     Inspector,
-}
-
-enum HostHtmlSerializationFrame<'a> {
-    Node {
-        handle: DomHandle,
-        raw_text_parent: bool,
-    },
-    Children {
-        handle: DomHandle,
-        raw_text_parent: bool,
-    },
-    ShadowRootTemplate {
-        host: DomHandle,
-        shadow_root: DomHandle,
-        init: ShadowRootInit,
-    },
-    CloseElement(&'a str),
-    CloseShadowRootTemplate,
 }
 
 impl DomHost {
     pub fn get_html(
         &self,
         handle: DomHandle,
+        scripting_enabled: bool,
         serializable_shadow_roots: bool,
         explicit_shadow_roots: &[DomHandle],
     ) -> Option<String> {
         self.get_html_with_shadow_root_registry_attribute_policy(
             handle,
+            scripting_enabled,
             serializable_shadow_roots,
             explicit_shadow_roots,
             None,
@@ -73,6 +52,7 @@ impl DomHost {
     pub fn get_html_with_shadow_root_registry_attribute_policy(
         &self,
         handle: DomHandle,
+        scripting_enabled: bool,
         serializable_shadow_roots: bool,
         explicit_shadow_roots: &[DomHandle],
         registry_attribute_policy: Option<&ShadowRootRegistryAttributePolicy<'_>>,
@@ -80,6 +60,7 @@ impl DomHost {
         self.serialize_html_with_shadow_roots(
             handle,
             HtmlSerializationTarget::ChildrenOnly,
+            scripting_enabled,
             ShadowRootInclusion::SerializableOrExplicit {
                 serializable: serializable_shadow_roots,
                 explicit: explicit_shadow_roots,
@@ -91,12 +72,14 @@ impl DomHost {
     pub fn outer_html_with_shadow_roots(
         &self,
         handle: DomHandle,
+        scripting_enabled: bool,
         shadow_root_inclusion: ShadowRootInclusion<'_>,
         registry_attribute_policy: Option<&ShadowRootRegistryAttributePolicy<'_>>,
     ) -> Option<String> {
         self.serialize_html_with_shadow_roots(
             handle,
             HtmlSerializationTarget::IncludeNode,
+            scripting_enabled,
             shadow_root_inclusion,
             registry_attribute_policy,
         )
@@ -106,231 +89,28 @@ impl DomHost {
         &self,
         handle: DomHandle,
         target: HtmlSerializationTarget,
+        scripting_enabled: bool,
         shadow_root_inclusion: ShadowRootInclusion<'_>,
         registry_attribute_policy: Option<&ShadowRootRegistryAttributePolicy<'_>>,
     ) -> Option<String> {
-        let node = self.node(handle)?;
+        let shadow_root_provider = |host| {
+            let (shadow_root, init) =
+                self.serialized_shadow_root_for_host(host, shadow_root_inclusion)?;
+            let mut template_start = String::new();
+            self.write_shadow_root_template_start(
+                host,
+                shadow_root,
+                &init,
+                shadow_root_inclusion.markup_profile(),
+                &mut template_start,
+                registry_attribute_policy,
+            );
+            Some(HtmlSerializedShadowRoot::new(shadow_root, template_start))
+        };
+        let options = HtmlSerializationOptions::new(target, scripting_enabled)
+            .with_shadow_root_provider(&shadow_root_provider);
         let mut html = String::new();
-        let stack = match target {
-            HtmlSerializationTarget::IncludeNode => vec![HostHtmlSerializationFrame::Node {
-                handle,
-                raw_text_parent: false,
-            }],
-            HtmlSerializationTarget::ChildrenOnly => {
-                if node.as_element().is_some_and(|element| {
-                    is_void_html_element(element.namespace(), element.local_name())
-                }) {
-                    return Some(String::new());
-                }
-                let mut stack = vec![HostHtmlSerializationFrame::Children {
-                    handle,
-                    raw_text_parent: false,
-                }];
-                if node.as_element().is_some()
-                    && let Some((shadow_root, init)) =
-                        self.serialized_shadow_root_for_host(handle, shadow_root_inclusion)
-                {
-                    stack.push(HostHtmlSerializationFrame::ShadowRootTemplate {
-                        host: handle,
-                        shadow_root,
-                        init,
-                    });
-                }
-                stack
-            }
-        };
-        self.serialize_html_frames(
-            &mut html,
-            stack,
-            shadow_root_inclusion,
-            registry_attribute_policy,
-        );
-        Some(html)
-    }
-
-    fn serialize_html_frames<'a>(
-        &'a self,
-        out: &mut String,
-        mut stack: Vec<HostHtmlSerializationFrame<'a>>,
-        shadow_root_inclusion: ShadowRootInclusion<'_>,
-        registry_attribute_policy: Option<&ShadowRootRegistryAttributePolicy<'_>>,
-    ) {
-        while let Some(frame) = stack.pop() {
-            match frame {
-                HostHtmlSerializationFrame::Node {
-                    handle,
-                    raw_text_parent,
-                } => self.serialize_html_node_frame(
-                    handle,
-                    out,
-                    raw_text_parent,
-                    shadow_root_inclusion,
-                    &mut stack,
-                ),
-                HostHtmlSerializationFrame::Children {
-                    handle,
-                    raw_text_parent,
-                } => self.push_html_child_frames(handle, raw_text_parent, &mut stack),
-                HostHtmlSerializationFrame::ShadowRootTemplate {
-                    host,
-                    shadow_root,
-                    init,
-                } => {
-                    self.write_shadow_root_template_start(
-                        host,
-                        shadow_root,
-                        &init,
-                        shadow_root_inclusion.markup_profile(),
-                        out,
-                        registry_attribute_policy,
-                    );
-                    stack.push(HostHtmlSerializationFrame::CloseShadowRootTemplate);
-                    stack.push(HostHtmlSerializationFrame::Children {
-                        handle: shadow_root,
-                        raw_text_parent: false,
-                    });
-                }
-                HostHtmlSerializationFrame::CloseElement(local_name) => {
-                    out.push_str("</");
-                    out.push_str(local_name);
-                    out.push('>');
-                }
-                HostHtmlSerializationFrame::CloseShadowRootTemplate => {
-                    out.push_str("</template>");
-                }
-            }
-        }
-    }
-
-    fn push_html_child_frames<'a>(
-        &self,
-        handle: DomHandle,
-        raw_text_parent: bool,
-        stack: &mut Vec<HostHtmlSerializationFrame<'a>>,
-    ) {
-        let Some(node) = self.node(handle) else {
-            return;
-        };
-        if let Some(template_contents) = node
-            .as_element()
-            .and_then(|element| element.template_contents())
-        {
-            let raw_text_child = node.as_element().is_some_and(|element| {
-                is_raw_text_element(element.namespace(), element.local_name())
-            });
-            stack.push(HostHtmlSerializationFrame::Children {
-                handle: template_contents,
-                raw_text_parent: raw_text_child,
-            });
-            return;
-        }
-        stack.extend(self.child_handles_reversed(handle).map(|handle| {
-            HostHtmlSerializationFrame::Node {
-                handle,
-                raw_text_parent,
-            }
-        }));
-    }
-
-    fn serialize_html_node_frame<'a>(
-        &'a self,
-        handle: DomHandle,
-        out: &mut String,
-        raw_text_parent: bool,
-        shadow_root_inclusion: ShadowRootInclusion<'_>,
-        stack: &mut Vec<HostHtmlSerializationFrame<'a>>,
-    ) {
-        let Some(node) = self.node(handle) else {
-            return;
-        };
-        match node.data() {
-            NodeData::Document(_) | NodeData::DocumentFragment(_) => {
-                stack.push(HostHtmlSerializationFrame::Children {
-                    handle,
-                    raw_text_parent,
-                });
-            }
-            NodeData::DocumentType(document_type) => {
-                out.push_str("<!DOCTYPE ");
-                out.push_str(document_type.name());
-                if !document_type.public_id().is_empty() || !document_type.system_id().is_empty() {
-                    out.push_str(" PUBLIC \"");
-                    out.push_str(document_type.public_id());
-                    out.push_str("\" \"");
-                    out.push_str(document_type.system_id());
-                    out.push('"');
-                }
-                out.push('>');
-            }
-            NodeData::Element(element) => {
-                out.push('<');
-                out.push_str(element.local_name());
-                if let Some(is_name) = element.custom_element_is_name()
-                    && !element.has_attribute("is")
-                {
-                    out.push_str(" is=\"");
-                    escape_html_attribute(is_name, out);
-                    out.push('"');
-                }
-                for attribute in element.attributes() {
-                    out.push(' ');
-                    attribute.push_html_serialized_name(|part| out.push_str(part));
-                    out.push_str("=\"");
-                    escape_html_attribute(attribute.value(), out);
-                    out.push('"');
-                }
-                out.push('>');
-
-                let raw_text_child = is_raw_text_element(element.namespace(), element.local_name());
-                if !is_void_html_element(element.namespace(), element.local_name()) {
-                    stack.push(HostHtmlSerializationFrame::CloseElement(
-                        element.local_name(),
-                    ));
-                    stack.push(HostHtmlSerializationFrame::Children {
-                        handle,
-                        raw_text_parent: raw_text_child,
-                    });
-                    if let Some((shadow_root, init)) =
-                        self.serialized_shadow_root_for_host(handle, shadow_root_inclusion)
-                    {
-                        stack.push(HostHtmlSerializationFrame::ShadowRootTemplate {
-                            host: handle,
-                            shadow_root,
-                            init,
-                        });
-                    }
-                }
-            }
-            NodeData::Text(text) => {
-                if raw_text_parent {
-                    out.push_str(text.data());
-                } else {
-                    escape_html_text(text.data(), out);
-                }
-            }
-            NodeData::CDataSection(cdata) => {
-                serialize_cdata_section(
-                    cdata.data(),
-                    out,
-                    raw_text_parent,
-                    self.node_document_is_html_document(handle).unwrap_or(false),
-                );
-            }
-            NodeData::Comment(comment) => {
-                out.push_str("<!--");
-                out.push_str(comment.data());
-                out.push_str("-->");
-            }
-            NodeData::ProcessingInstruction(processing_instruction) => {
-                out.push_str("<?");
-                out.push_str(processing_instruction.target());
-                if !processing_instruction.data().is_empty() {
-                    out.push(' ');
-                    out.push_str(processing_instruction.data());
-                }
-                out.push_str("?>");
-            }
-        }
+        serialize_html_into_sink(&self.dom, handle, options, &mut html).then_some(html)
     }
 
     fn serialized_shadow_root_for_host(
@@ -406,11 +186,6 @@ impl DomHost {
     }
 }
 
-fn is_raw_text_element(namespace: &str, local_name: &str) -> bool {
-    namespace == "http://www.w3.org/1999/xhtml"
-        && matches!(local_name, "script" | "style" | "textarea" | "title")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -444,7 +219,7 @@ mod tests {
         assert!(host.append_child(element, light_text));
 
         assert_eq!(
-            host.outer_html_with_shadow_roots(element, ShadowRootInclusion::None, None)
+            host.outer_html_with_shadow_roots(element, true, ShadowRootInclusion::None, None)
                 .as_deref(),
             Some("<section id=\"host\">light &amp; more</section>")
         );
@@ -453,6 +228,7 @@ mod tests {
         assert_eq!(
             host.outer_html_with_shadow_roots(
                 element,
+                true,
                 ShadowRootInclusion::AllAuthorForInspector,
                 Some(&include_registry),
             )
@@ -468,6 +244,7 @@ mod tests {
         assert_eq!(
             host.get_html_with_shadow_root_registry_attribute_policy(
                 element,
+                true,
                 false,
                 &[shadow_root],
                 Some(&include_registry),
@@ -507,13 +284,14 @@ mod tests {
         assert!(host.append_child(outer_host, outer_light));
 
         assert_eq!(
-            host.outer_html_with_shadow_roots(outer_host, ShadowRootInclusion::None, None)
+            host.outer_html_with_shadow_roots(outer_host, true, ShadowRootInclusion::None, None)
                 .as_deref(),
             Some("<x-outer>outer-light</x-outer>")
         );
         assert_eq!(
             host.outer_html_with_shadow_roots(
                 outer_host,
+                true,
                 ShadowRootInclusion::SerializableOrExplicit {
                     serializable: false,
                     explicit: &[outer_root],
@@ -534,6 +312,7 @@ mod tests {
         assert_eq!(
             host.outer_html_with_shadow_roots(
                 outer_host,
+                true,
                 ShadowRootInclusion::AllAuthorForInspector,
                 None,
             )
@@ -543,6 +322,7 @@ mod tests {
         assert_eq!(
             host.outer_html_with_shadow_roots(
                 host.document_node_id(),
+                true,
                 ShadowRootInclusion::AllAuthorForInspector,
                 None,
             )
@@ -552,6 +332,7 @@ mod tests {
         assert_eq!(
             host.outer_html_with_shadow_roots(
                 outer_root,
+                true,
                 ShadowRootInclusion::AllAuthorForInspector,
                 None,
             )
@@ -584,12 +365,17 @@ mod tests {
         assert!(host.append_child(shadow_host, leaf));
 
         assert_eq!(
-            host.outer_html_with_shadow_roots(root, ShadowRootInclusion::None, None)
+            host.outer_html_with_shadow_roots(root, true, ShadowRootInclusion::None, None)
                 .as_deref(),
             Some("<div></div>")
         );
         let html = host
-            .outer_html_with_shadow_roots(root, ShadowRootInclusion::AllAuthorForInspector, None)
+            .outer_html_with_shadow_roots(
+                root,
+                true,
+                ShadowRootInclusion::AllAuthorForInspector,
+                None,
+            )
             .expect("deep inspector outer HTML");
         assert_eq!(html.matches("<template shadowrootmode=").count(), DEPTH);
         assert!(html.starts_with("<div><template shadowrootmode=\"open\"><div>"));
@@ -656,7 +442,7 @@ mod tests {
             fragment_child,
         ] {
             assert_eq!(
-                host.outer_html_with_shadow_roots(handle, ShadowRootInclusion::None, None),
+                host.outer_html_with_shadow_roots(handle, true, ShadowRootInclusion::None, None),
                 host.dom().outer_html(handle),
                 "shadow-excluding host serializer diverged for {handle:?}"
             );

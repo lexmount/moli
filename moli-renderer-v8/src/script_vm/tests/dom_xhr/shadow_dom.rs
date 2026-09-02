@@ -3376,6 +3376,7 @@ fn get_html_serializes_shadow_roots_when_requested() {
     explicitHost.getHTML({ shadowRoots: [explicitRoot] }),
     nestedHost.getHTML({ shadowRoots: [nestedOuter] }),
     nestedHost.getHTML({ serializableShadowRoots: true, shadowRoots: [nestedOuter] }),
+    rawWrapper.getHTML() === rawWrapper.innerHTML,
     rawWrapper.getHTML()
   ].join('|');
 })()
@@ -3398,8 +3399,8 @@ fn get_html_serializes_shadow_roots_when_requested() {
             "<template shadowrootmode=\"open\"><section id=\"inner-host\">",
             "<template shadowrootmode=\"open\" shadowrootserializable=\"\"><i>nested</i>",
             "</template></section></template>|",
-            "<title><title&></title><textarea><textarea&></textarea>",
-            "<noscript>&lt;p&gt;noscript&amp;&lt;/p&gt;</noscript>"
+            "true|<title>&lt;title&amp;&gt;</title><textarea>&lt;textarea&amp;&gt;</textarea>",
+            "<noscript><p>noscript&</p></noscript>"
         )
     );
 }

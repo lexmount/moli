@@ -1333,6 +1333,7 @@ impl ScriptVm {
             };
         host.dom_host().outer_html_with_shadow_roots(
             handle,
+            host.node_document_scripting_enabled(handle),
             shadow_root_inclusion,
             Some(&should_serialize_registry_attribute),
         )
