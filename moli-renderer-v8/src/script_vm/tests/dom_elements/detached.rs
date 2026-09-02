@@ -6966,6 +6966,48 @@ fn detached_specialized_url_resource_properties_use_owner_prototypes() {
 }
 
 #[test]
+fn hyperlink_protocol_is_colon_when_href_cannot_be_parsed() {
+    let mut vm = new_storage_test_vm("https://hyperlink-invalid-url.test/page.html");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const base = document.createElement("base");
+  base.href = "about:blank";
+  (document.head || document.documentElement || document).appendChild(base);
+  const inputs = [
+    "",
+    "javascript://:443",
+    "javascript://test:test",
+    "javascript://[:1]",
+    "mailto://:443",
+    "mailto://test:test",
+    "mailto://[:1]"
+  ];
+
+  for (const tag of ["a", "area"]) {
+    const element = document.createElement(tag);
+    for (const input of inputs) {
+      element.setAttribute("href", input);
+      if (element.href !== input) {
+        throw new Error(`${tag} should preserve the unparsable href ${input}`);
+      }
+      if (element.protocol !== ":") {
+        throw new Error(`${tag} should expose ':' for the unparsable href ${input}`);
+      }
+    }
+  }
+  return "ok";
+})()
+"#,
+        )
+        .expect("unparsable hyperlink protocol probe should evaluate");
+
+    assert_eq!(result, "ok");
+}
+
+#[test]
 fn hyperlink_stringifiers_use_native_href_and_enforce_owner_brand() {
     let mut vm = new_storage_test_vm("https://hyperlink-stringifier.test/base/page.html");
 
