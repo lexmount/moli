@@ -1122,6 +1122,10 @@ impl Element {
         self.control_state().dialog_modal()
     }
 
+    pub fn dialog_previously_focused_element(&self) -> Option<NativeNodeId> {
+        self.control_state().dialog_previously_focused_element()
+    }
+
     pub fn dialog_return_value(&self) -> &str {
         self.control_state().dialog_return_value()
     }
@@ -1146,6 +1150,14 @@ impl Element {
             return false;
         }
         self.control_state_mut().set_dialog_modal(modal)
+    }
+
+    pub fn set_dialog_previously_focused_element(&mut self, element: Option<NativeNodeId>) -> bool {
+        if !self.is_html_element("dialog") {
+            return false;
+        }
+        self.control_state_mut()
+            .set_dialog_previously_focused_element(element)
     }
 
     pub fn set_dialog_return_value(&mut self, value: &str) -> bool {
