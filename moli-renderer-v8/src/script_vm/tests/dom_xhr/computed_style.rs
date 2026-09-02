@@ -331,6 +331,39 @@ fn popover_user_agent_display_tracks_open_state() {
 }
 
 #[test]
+fn modal_dialog_user_agent_visibility_overrides_inheritance() {
+    let mut vm = new_parsed_test_vm(
+        "https://modal-dialog-user-agent-visibility.test/",
+        r#"<!doctype html>
+<div style="visibility: hidden"><dialog id="target">Dialog</dialog></div>"#,
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const dialog = document.getElementById('target');
+  dialog.show();
+  const values = [getComputedStyle(dialog).visibility];
+  dialog.close();
+
+  dialog.showModal();
+  values.push(getComputedStyle(dialog).visibility);
+  dialog.close();
+
+  dialog.style.visibility = 'hidden';
+  dialog.showModal();
+  values.push(getComputedStyle(dialog).visibility);
+  return values.join('|');
+})()
+"#,
+        )
+        .expect("modal dialog user-agent visibility should evaluate");
+
+    assert_eq!(result, "hidden|visible|hidden");
+}
+
+#[test]
 fn semantic_text_decoration_uses_user_agent_defaults() {
     let mut vm = new_parsed_test_vm(
         "https://semantic-text-decoration.test/",

@@ -528,6 +528,10 @@ dialog[open], [popover]:popover-open {
   display: block;
 }
 
+dialog:modal {
+  visibility: visible;
+}
+
 u, ins {
   text-decoration: underline;
 }
