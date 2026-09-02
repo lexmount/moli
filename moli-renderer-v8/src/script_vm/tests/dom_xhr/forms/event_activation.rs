@@ -73,6 +73,131 @@ fn command_interfaces_apply_reflection_and_webidl_conversion() {
 }
 
 #[test]
+fn button_commands_validate_targets_and_apply_popover_actions_once() {
+    let mut vm = new_storage_test_vm("https://button-command-activation.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const host = document.body || document.documentElement || document;
+  const container = document.createElement('div');
+  const popover = document.createElement('div');
+  popover.id = 'command-popover';
+  popover.setAttribute('popover', '');
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.setAttribute('commandfor', popover.id);
+  container.append(popover, button);
+  host.appendChild(container);
+
+  const states = [];
+  button.command = 'toggle-popover';
+  button.click();
+  states.push(popover.matches(':popover-open'));
+  button.click();
+  states.push(popover.matches(':popover-open'));
+
+  button.command = 'show-popover';
+  button.click();
+  states.push(popover.matches(':popover-open'));
+  button.click();
+  states.push(popover.matches(':popover-open'));
+  popover.hidePopover();
+
+  popover.addEventListener('command', event => event.preventDefault(), { once: true });
+  button.click();
+  states.push(popover.matches(':popover-open'));
+
+  popover.addEventListener('command', () => {
+    button.command = 'hide-popover';
+  }, { once: true });
+  button.command = 'show-popover';
+  button.click();
+  states.push(popover.matches(':popover-open'));
+
+  popover.addEventListener('command', event => event.preventDefault(), { once: true });
+  button.command = 'hide-popover';
+  button.click();
+  states.push(popover.matches(':popover-open'));
+  button.click();
+  states.push(popover.matches(':popover-open'));
+
+  let invalidEvents = 0;
+  const recordInvalidEvent = () => invalidEvents++;
+  popover.addEventListener('command', recordInvalidEvent);
+  button.setAttribute('command', 'not-a-command');
+  button.click();
+  const invalidCommandIgnored = invalidEvents === 0;
+  popover.removeEventListener('command', recordInvalidEvent);
+
+  const plainTarget = document.createElement('div');
+  plainTarget.id = 'plain-command-target';
+  container.appendChild(plainTarget);
+  let plainEvent = null;
+  plainTarget.addEventListener('command', event => plainEvent = event);
+  button.setAttribute('commandfor', plainTarget.id);
+  button.command = 'show-popover';
+  button.click();
+
+  const svgTarget = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svgTarget.id = 'svg-command-target';
+  container.appendChild(svgTarget);
+  const svgCommands = [];
+  svgTarget.addEventListener('command', event => svgCommands.push(event.command));
+  button.setAttribute('commandfor', svgTarget.id);
+  button.command = '--MiXeD';
+  button.click();
+  button.command = 'show-popover';
+  button.click();
+
+  button.setAttribute('commandfor', popover.id);
+  button.command = 'show-popover';
+  let disconnectedSafe = true;
+  popover.addEventListener('command', () => popover.remove(), { once: true });
+  try {
+    button.click();
+  } catch {
+    disconnectedSafe = false;
+  }
+
+  const targetActionPopover = document.createElement('div');
+  targetActionPopover.id = 'target-action-popover';
+  targetActionPopover.setAttribute('popover', '');
+  const targetActionButton = document.createElement('button');
+  targetActionButton.setAttribute('popovertarget', targetActionPopover.id);
+  targetActionButton.setAttribute('popovertargetaction', 'show');
+  container.append(targetActionPopover, targetActionButton);
+  targetActionButton.click();
+  const targetActionStates = [targetActionPopover.matches(':popover-open')];
+  targetActionButton.click();
+  targetActionStates.push(targetActionPopover.matches(':popover-open'));
+  targetActionButton.setAttribute('popovertargetaction', 'hide');
+  targetActionButton.click();
+  targetActionStates.push(targetActionPopover.matches(':popover-open'));
+
+  return JSON.stringify({
+    states,
+    invalidCommandIgnored,
+    plainEvent: [plainEvent instanceof CommandEvent, plainEvent.command,
+                 plainEvent.source === button],
+    svgCommands,
+    disconnectedSafe,
+    disconnectedOpen: popover.matches(':popover-open'),
+    targetActionStates,
+  });
+})()
+"#,
+        )
+        .expect("button command activation probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"states":[true,false,true,true,false,true,true,false],"invalidCommandIgnored":true,"plainEvent":[true,"show-popover",true],"svgCommands":["--MiXeD"],"disconnectedSafe":true,"disconnectedOpen":false,"targetActionStates":[true,true,false]}"#
+    );
+}
+
+#[test]
 fn button_auto_type_state_tracks_commands_form_owner_and_select_parent() {
     let mut vm = new_storage_test_vm("https://button-auto-type-state.test/");
 

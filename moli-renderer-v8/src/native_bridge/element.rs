@@ -567,11 +567,13 @@ use pointer_capture::{
     node_has_pointer_capture_callback, node_release_pointer_capture_callback,
     node_set_pointer_capture_callback,
 };
+pub(super) use popover::{
+    dispatch_popover_hide_events, dispatch_popover_show_events, dispatch_popover_toggle_events,
+};
 pub(crate) use popover::{
     dispatch_popover_removal_events, handle_popover_attribute_change,
     perform_popover_invoker_default_action,
 };
-pub(super) use popover::{dispatch_popover_show_events, dispatch_popover_toggle_events};
 pub(super) use popover::{
     node_hide_popover_callback, node_popover_getter_function, node_popover_setter_function,
     node_show_popover_callback, node_toggle_popover_callback,
