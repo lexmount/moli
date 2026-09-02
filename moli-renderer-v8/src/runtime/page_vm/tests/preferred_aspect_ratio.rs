@@ -122,6 +122,77 @@ document.body.innerHTML = `
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn screenshot_recomputes_flex_ratio_cross_size_from_the_final_main_size() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/flex-final-main-ratio-cross-size.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0}
+.row{display:flex;width:100px}
+.column{display:flex;flex-direction:column;align-items:flex-start;height:100px}
+.grow{flex:1;aspect-ratio:1/1}
+#ordinary{width:50px;min-width:0}
+#replaced{width:50px;min-height:0}
+#column{height:50px;min-height:0}
+#explicit-cross{width:50px;height:30px}
+#content-box{box-sizing:content-box;width:50px;min-width:0;padding:10px}
+#content-box-host{width:120px}
+#limited-cross{width:50px;min-width:0;max-height:80px}
+</style>`;
+const source = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyMCIgaGVpZ2h0PSI1MCI+PC9zdmc+";
+document.body.innerHTML = `
+<div class=row><div class=grow id=ordinary></div></div>
+<div class=row><img class=grow id=replaced src="${source}"></div>
+<div class=column><div class=grow id=column></div></div>
+<div class=row><div class=grow id=explicit-cross></div></div>
+<div class=row id=content-box-host><div class=grow id=content-box></div></div>
+<div class=row><div class=grow id=limited-cross></div></div>`;
+'installed'
+"#,
+        )?;
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                "const image=document.getElementById('replaced');[image.complete,image.naturalWidth,image.naturalHeight].join(',')",
+            )?,
+            "true,20,50",
+            "the replaced fixture must expose its natural size before layout",
+        );
+        page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(640, 640, 1.0))?
+            .expect("flex final-main ratio fixture must retain a layout root");
+
+        let geometry = page_vm.vm_mut().eval(
+            r#"JSON.stringify(Object.fromEntries([...document.querySelectorAll('[id]:not(#content-box-host)')].map(element=>{const rect=element.getBoundingClientRect();return [element.id,[rect.width,rect.height]]})))"#,
+        )?;
+        let geometry: serde_json::Value = serde_json::from_str(&geometry)?;
+        assert_eq!(
+            geometry,
+            serde_json::json!({
+                "ordinary": [100, 100],
+                "replaced": [100, 100],
+                "column": [100, 100],
+                "explicit-cross": [100, 30],
+                "content-box": [120, 120],
+                "limited-cross": [100, 80],
+            }),
+            "only a direct cross size may outrank the ratio transferred from the final flexed main size",
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("flex final-main ratio fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn screenshot_preserves_parent_resolved_grid_sizes_across_ratio_constraints() {
     run_page_vm_async_test(async move {
         let loader =
