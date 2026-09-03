@@ -403,6 +403,8 @@ html,body{margin:0}
 #maximum{width:200px;max-width:max-content;height:25px;aspect-ratio:4/1}
 #maximum>div{width:150px}
 #clamped-opposite{width:min-content;height:300px;max-height:25px;aspect-ratio:4/1}
+#intrinsic-transferred-maximum{width:max-content;max-height:100px;aspect-ratio:1/1}
+#intrinsic-transferred-maximum>div{width:200px}
 #content-box{box-sizing:content-box;width:min-content;height:100px;padding:10px;aspect-ratio:1/1}
 </style>`;
 document.body.innerHTML = `
@@ -410,6 +412,7 @@ document.body.innerHTML = `
 <div class="item" id="minimum"><div></div></div>
 <div class="item" id="maximum"><div></div></div>
 <div class="item" id="clamped-opposite"></div>
+<div class="item" id="intrinsic-transferred-maximum"><div></div></div>
 <div class="item" id="content-box"></div>
 <div class="host flex"><div class="item ratio-preferred" id="flex"></div></div>
 <div class="host grid"><div class="item ratio-preferred" id="grid"></div></div>
@@ -432,6 +435,7 @@ document.body.innerHTML = `
             ("minimum", [100, 25]),
             ("maximum", [100, 25]),
             ("clamped-opposite", [100, 25]),
+            ("intrinsic-transferred-maximum", [100, 100]),
             ("content-box", [120, 120]),
             ("flex", [100, 100]),
             ("grid", [100, 100]),
