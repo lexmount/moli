@@ -3566,6 +3566,7 @@ impl ScriptVm {
                     format!("native root module entry {root_entry:?} is not compiled"),
                 )
             })?;
+        let mut caught_error_constructor = None;
         self.renderer_document_isolate
             .with_entered_renderer_document_isolate(|isolate| {
                 let scope = pin!(v8::HandleScope::new(isolate));
@@ -3573,7 +3574,7 @@ impl ScriptVm {
                 let context = unsafe { v8::Local::new(scope, &*context_ptr) };
                 let scope = &mut v8::ContextScope::new(scope, context);
                 let try_catch = pin!(v8::TryCatch::new(scope));
-                let scope = try_catch.init();
+                let mut scope = try_catch.init();
 
                 let root_module = v8::Local::new(&scope, &root_module);
                 let _resolver_scope = ResolverScopeGuard::new(document_modulator);
@@ -3585,11 +3586,17 @@ impl ScriptVm {
                     Some(true) => Ok(()),
                     Some(false) => Err(anyhow::anyhow!("v8 reported module instantiate failure")),
                     None => {
-                        let exception = scope
-                            .exception()
-                            .and_then(|exception| exception.to_string(&scope))
-                            .map(|message| message.to_rust_string_lossy(&scope))
-                            .unwrap_or_else(|| "unknown instantiate exception".to_owned());
+                        let exception = match scope.exception() {
+                            Some(exception) => {
+                                caught_error_constructor =
+                                    script_error_constructor_kind_from_value(&mut scope, exception);
+                                exception
+                                    .to_string(&scope)
+                                    .map(|message| message.to_rust_string_lossy(&scope))
+                                    .unwrap_or_else(|| "unknown instantiate exception".to_owned())
+                            }
+                            None => "unknown instantiate exception".to_owned(),
+                        };
                         Err(anyhow::anyhow!(
                             "{}",
                             canonical_native_module_instantiate_error(&exception, &graph_urls)
@@ -3598,19 +3605,11 @@ impl ScriptVm {
                 }
             })
             .map_err(|error| {
-                let message = error.to_string();
-                let load_error =
-                    ModuleLoadError::new(ModuleLoadStage::Instantiate, message.clone());
-                if message.contains("does not provide an export named")
-                    || message.contains("does not export")
-                {
-                    load_error.with_error_constructor(ScriptErrorConstructorKind::SyntaxError)
-                } else if has_wasm_entry {
-                    load_error
-                        .with_error_constructor(ScriptErrorConstructorKind::WebAssemblyLinkError)
-                } else {
-                    load_error
-                }
+                native_module_instantiate_load_error(
+                    error.to_string(),
+                    caught_error_constructor,
+                    has_wasm_entry,
+                )
             })?;
         self.document_runtime
             .mark_native_module_instantiated(root_entry);
@@ -4812,6 +4811,20 @@ fn canonical_native_module_instantiate_error(exception: &str, graph_urls: &[Url]
     format!("v8 failed to instantiate native module graph: {exception}")
 }
 
+fn native_module_instantiate_load_error(
+    message: String,
+    caught_error_constructor: Option<ScriptErrorConstructorKind>,
+    has_wasm_entry: bool,
+) -> ModuleLoadError {
+    let fallback_constructor = if has_wasm_entry {
+        ScriptErrorConstructorKind::WebAssemblyLinkError
+    } else {
+        ScriptErrorConstructorKind::SyntaxError
+    };
+    ModuleLoadError::new(ModuleLoadStage::Instantiate, message)
+        .with_error_constructor(caught_error_constructor.unwrap_or(fallback_constructor))
+}
+
 fn canonical_missing_export_link_error(exception: &str, graph_urls: &[Url]) -> Option<String> {
     let module = quoted_value_after(exception, "The requested module ")?;
     let export = quoted_value_after(exception, "does not provide an export named ")?;
@@ -5084,6 +5097,7 @@ mod tests {
     use crate::script_vm::{ScriptVm, ScriptVmDefaultWorldBootstrap, StandaloneScriptVmHarness};
     use crate::types::{
         ModuleGraphFetchCompletion, ModuleGraphFetchOrdering, ModuleGraphFetchRequester,
+        ScriptErrorConstructorKind,
     };
     use crate::util::v8str;
     use moli_fetch::FetchConfig;
@@ -5392,6 +5406,41 @@ mod tests {
             native_child_module_script_reaction_data(scope, child_data.into()),
             Some((document_owner, FrameRealmId(realm_id), reaction_id)),
             "callback data must preserve the exact child Document and realm without Number coercion"
+        );
+    }
+
+    #[test]
+    fn native_module_instantiate_errors_use_stage_appropriate_constructors() {
+        let javascript_error = super::native_module_instantiate_load_error(
+            "javascript link failed".to_owned(),
+            None,
+            false,
+        );
+        assert_eq!(javascript_error.stage(), ModuleLoadStage::Instantiate);
+        assert_eq!(
+            javascript_error.error_constructor(),
+            Some(ScriptErrorConstructorKind::SyntaxError)
+        );
+
+        let wasm_error = super::native_module_instantiate_load_error(
+            "WebAssembly link failed".to_owned(),
+            None,
+            true,
+        );
+        assert_eq!(
+            wasm_error.error_constructor(),
+            Some(ScriptErrorConstructorKind::WebAssemblyLinkError)
+        );
+
+        let caught_syntax_error = super::native_module_instantiate_load_error(
+            "mixed graph failed".to_owned(),
+            Some(ScriptErrorConstructorKind::SyntaxError),
+            true,
+        );
+        assert_eq!(
+            caught_syntax_error.error_constructor(),
+            Some(ScriptErrorConstructorKind::SyntaxError),
+            "an exact V8 exception constructor must win over the module-kind fallback"
         );
     }
 

@@ -1330,6 +1330,7 @@ impl<O: NativeModuleTreeDocumentOwnerAdapter> module_tree::ModuleScriptTreeHost
                         "failed to resolve module specifier `{specifier}` from `{base_url}`: {error}"
                     ),
                 )
+                .with_error_constructor(module_tree::ModuleErrorConstructorKind::TypeError)
             })?;
         let attributes = local_attributes(attributes);
         let local_key = ModuleMapKey::from_url_and_attributes(&resolved_url, &attributes).map_err(
@@ -2580,6 +2581,7 @@ where
                         request.base_url()
                     ),
                 )
+                .with_error_constructor(ScriptErrorConstructorKind::TypeError)
             })?,
     };
     let integrity = owner.resolve_module_integrity(&source_url);
@@ -3349,6 +3351,44 @@ import "./c.mjs";
     }
 
     #[test]
+    fn static_bare_specifier_resolve_failure_is_a_type_error() {
+        let mut vm = new_test_vm("https://app.example.test/page");
+        let root_url = url("https://app.example.test/root.mjs");
+        let job = parser_owned_external_module_script_graph_job(
+            &mut vm,
+            &root_url,
+            &url("https://app.example.test/page"),
+            &ScriptFetchMetadata::default(),
+        );
+
+        let root_fetch = expect_single_fetch(
+            advance_module_script_graph(&mut vm, job)
+                .expect("external parser graph should request root"),
+            "bare-specifier root",
+        );
+        let error = match root_fetch.finish_source_for_test(
+            &mut vm,
+            Ok(ModuleSource::text(
+                r#"import "unmapped-bare-specifier";"#.to_owned(),
+            )),
+        ) {
+            Ok(_) => panic!("an unmapped bare specifier should fail during graph resolution"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.stage(), ModuleLoadStage::Resolve);
+        assert_eq!(
+            error.error_constructor(),
+            Some(ScriptErrorConstructorKind::TypeError)
+        );
+        assert!(
+            error.message().contains("unmapped-bare-specifier"),
+            "{}",
+            error.message()
+        );
+    }
+
+    #[test]
     fn static_import_with_invalid_attribute_key_fails_before_dependency_fetch() {
         let mut vm = new_test_vm("https://app.example.test/page");
         let root_url = url("https://app.example.test/root.mjs");
@@ -3453,6 +3493,10 @@ import "./c.mjs";
 
         assert!(!job.has_chromium_tree_for_test());
         assert_eq!(error.stage(), ModuleLoadStage::Resolve);
+        assert_eq!(
+            error.error_constructor(),
+            Some(ScriptErrorConstructorKind::TypeError)
+        );
         assert!(
             error.message().contains(
                 "module type `text` is not a valid module type for module `https://example.test/app/dep.txt`"
