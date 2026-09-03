@@ -2,6 +2,7 @@ FileAPI/url/sandboxed-iframe.html
 html/browsers/browsing-the-web/history-traversal/persisted-user-state-restoration/resume-timer-on-history-back.html
 html/browsers/browsing-the-web/history-traversal/persisted-user-state-restoration/scroll-restoration-fragment-scrolling-cross-origin.html
 html/browsers/browsing-the-web/unloading-documents/prompt-and-unload-script-closeable.html
+html/browsers/history/the-location-interface/scripted_form_submit_assign_during_load.html
 html/browsers/origin/cross-origin-objects/cross-origin-objects-on-new-window.html
 html/browsers/origin/cross-origin-objects/cross-origin-objects.html
 html/browsers/the-window-object/open-close/open-features-is-popup-condition.html?combination
