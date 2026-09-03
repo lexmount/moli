@@ -1,3 +1,4 @@
+css/css-typed-om/the-stylepropertymap/properties/counter-increment.html
 infrastructure/expected-fail/user-prompt.html?type=alert
 infrastructure/expected-fail/user-prompt.html?type=alert&wait
 infrastructure/expected-fail/user-prompt.html?type=confirm

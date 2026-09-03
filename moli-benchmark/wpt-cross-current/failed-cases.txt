@@ -17,7 +17,6 @@ content-security-policy/inheritance/document-write-iframe.html
 content-security-policy/inheritance/location-reload.html
 content-security-policy/inside-worker/dedicatedworker-report-only.html
 content-security-policy/inside-worker/serviceworker-report-only.https.sub.html
-content-security-policy/navigation/javascript-url-navigation-evaluated-to-string-inherits-csp.html
 content-security-policy/resource-hints/prefetch-allowed-by-default.html
 content-security-policy/resource-hints/prefetch-allowed-no-default.html
 content-security-policy/resource-hints/prefetch-allowed-with-conflicting-permissive-policies.html
@@ -514,10 +513,9 @@ css/css-grid/abspos/positioned-grid-descendants-001.html
 css/css-grid/abspos/positioned-grid-descendants-002.html
 css/css-grid/abspos/positioned-grid-descendants-004.html
 css/css-grid/abspos/positioned-grid-descendants-007.html
+css/css-grid/abspos/positioned-grid-descendants-008.html
 css/css-grid/abspos/positioned-grid-descendants-009.html
 css/css-grid/abspos/positioned-grid-descendants-010.html
-css/css-grid/abspos/positioned-grid-descendants-011.html
-css/css-grid/abspos/positioned-grid-descendants-015.html
 css/css-grid/abspos/positioned-grid-items-020.html
 css/css-grid/abspos/positioned-grid-items-021.html
 css/css-grid/abspos/positioned-grid-items-024.html
@@ -673,6 +671,7 @@ css/css-grid/alignment/grid-justify-baseline-002.html
 css/css-grid/alignment/grid-justify-baseline-003.html
 css/css-grid/alignment/grid-justify-baseline-004.html
 css/css-grid/alignment/grid-justify-baseline-005.html
+css/css-grid/alignment/grid-place-content-001.html
 css/css-grid/alignment/grid-row-axis-alignment-positioned-items-001.html
 css/css-grid/alignment/grid-row-axis-alignment-positioned-items-002.html
 css/css-grid/alignment/grid-row-axis-alignment-positioned-items-003.html
@@ -2085,7 +2084,6 @@ css/css-typed-om/the-stylepropertymap/properties/contain.html
 css/css-typed-om/the-stylepropertymap/properties/container-name.html
 css/css-typed-om/the-stylepropertymap/properties/container-type.html
 css/css-typed-om/the-stylepropertymap/properties/coordinate.html
-css/css-typed-om/the-stylepropertymap/properties/counter-increment.html
 css/css-typed-om/the-stylepropertymap/properties/counter-reset.html
 css/css-typed-om/the-stylepropertymap/properties/counter-set.html
 css/css-typed-om/the-stylepropertymap/properties/cursor.html
@@ -2961,6 +2959,7 @@ html/semantics/embedded-content/the-img-element/current-pixel-density/error.html
 html/semantics/embedded-content/the-img-element/currentSrc-blob-cache.html
 html/semantics/embedded-content/the-img-element/decode/image-decode-image-document.html
 html/semantics/embedded-content/the-img-element/decode/image-decode-with-quick-attach.html
+html/semantics/embedded-content/the-img-element/disconnected-image-loading-lazy.html
 html/semantics/embedded-content/the-img-element/image-loading-lazy-base-url-2.html
 html/semantics/embedded-content/the-img-element/image-loading-lazy-base-url.html
 html/semantics/embedded-content/the-img-element/image-loading-lazy-below-viewport-dynamic.html
@@ -2979,6 +2978,7 @@ html/semantics/embedded-content/the-img-element/relevant-mutations-lazy.html
 html/semantics/embedded-content/the-img-element/relevant-mutations.html
 html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-display-none.html
 html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-quirks-mode.html
+html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-standards-mode.html
 html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-width-1000px.html
 html/semantics/embedded-content/the-img-element/svg-img-density-vs-zoom.html
 html/semantics/embedded-content/the-img-element/update-src-complete.html
@@ -3006,7 +3006,6 @@ html/semantics/interactive-elements/the-dialog-element/dialog-showModal.html
 html/semantics/interactive-elements/the-dialog-element/modal-dialog-scroll-height.html
 html/semantics/interactive-elements/the-dialog-element/multiple-centered-dialogs.html
 html/semantics/interactive-elements/the-dialog-element/non-modal-dialog-layout.html
-html/semantics/links/links-created-by-a-and-area-elements/rel-attribute-clearing.html
 html/semantics/links/links-created-by-a-and-area-elements/target_blank_implicit_noopener.html
 html/semantics/menu/tentative/button-invoke-menulist.html
 html/semantics/menu/tentative/checkable.html
@@ -3027,6 +3026,7 @@ html/semantics/popovers/popover-types-with-hints.html
 html/semantics/scripting-1/the-script-element/css-module/cors-crossorigin-requests.html
 html/semantics/scripting-1/the-script-element/execution-timing/083.html
 html/semantics/scripting-1/the-script-element/execution-timing/085.html
+html/semantics/scripting-1/the-script-element/execution-timing/102.html
 html/semantics/scripting-1/the-script-element/execution-timing/128.html
 html/semantics/scripting-1/the-script-element/execution-timing/137.html
 html/semantics/scripting-1/the-script-element/json-module/cors-crossorigin-requests.html
@@ -3080,6 +3080,7 @@ html/webappapis/dynamic-markup-insertion/document-write/module-tla-promise.html
 html/webappapis/dynamic-markup-insertion/document-write/module.html
 html/webappapis/dynamic-markup-insertion/document-write/mutation-observer.html
 html/webappapis/dynamic-markup-insertion/document-write/write-active-document.html
+html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe-url-base-pushstate.html
 html/webappapis/scripting/event-loops/microtask_before_prepare_the_script_element-01.html
 html/webappapis/scripting/events/event-handler-processing-algorithm-error/frameset-element-synthetic-errorevent.html
 html/webappapis/scripting/processing-model-2/compile-error-cross-origin.html
