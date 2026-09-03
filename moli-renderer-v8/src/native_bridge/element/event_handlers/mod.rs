@@ -28,10 +28,24 @@ fn is_body_or_frameset_element(
     })
 }
 
+pub(super) fn body_or_frameset_window_owner(
+    runtime: &super::super::JsContextHost,
+    handle: crate::document_runtime::DomHandle,
+) -> Option<crate::native_bridge::OwnerDispatchScope> {
+    if !is_body_or_frameset_element(runtime, handle) {
+        return None;
+    }
+    match runtime.owner_dispatch_scope_for_node(handle)? {
+        owner @ (crate::native_bridge::OwnerDispatchScope::Top
+        | crate::native_bridge::OwnerDispatchScope::Child(_)) => Some(owner),
+        crate::native_bridge::OwnerDispatchScope::LightweightPopup(_) => None,
+    }
+}
+
 pub(crate) fn body_or_frameset_uses_runtime_window(
     runtime: &super::super::JsContextHost,
     handle: crate::document_runtime::DomHandle,
 ) -> bool {
-    is_body_or_frameset_element(runtime, handle)
-        && runtime.dom_host().owner_document_handle(handle) == Some(runtime.document_handle())
+    body_or_frameset_window_owner(runtime, handle)
+        == Some(crate::native_bridge::OwnerDispatchScope::Top)
 }
