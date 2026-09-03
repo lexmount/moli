@@ -2922,7 +2922,6 @@ html/semantics/embedded-content/the-embed-element/embed-in-object-fallback-2.htm
 html/semantics/embedded-content/the-embed-element/embed-in-object-fallback.html
 html/semantics/embedded-content/the-embed-element/embed-represent-nothing-04.html
 html/semantics/embedded-content/the-embed-element/embed-svg-navigation-resets-size.html
-html/semantics/embedded-content/the-iframe-element/iframe-append-to-child-document.html
 html/semantics/embedded-content/the-iframe-element/iframe-loading-lazy-adopt-lazy-iframe-from-script-disabled-document.html
 html/semantics/embedded-content/the-iframe-element/iframe-loading-lazy-base-url-2.html
 html/semantics/embedded-content/the-iframe-element/iframe-loading-lazy-base-url-3.html
@@ -2937,7 +2936,6 @@ html/semantics/embedded-content/the-iframe-element/iframe-loading-lazy-multiple-
 html/semantics/embedded-content/the-iframe-element/iframe-loading-lazy-to-eager-srcdoc.html
 html/semantics/embedded-content/the-iframe-element/iframe-loading-lazy-to-eager.html
 html/semantics/embedded-content/the-iframe-element/iframe-src-encoding.html
-html/semantics/embedded-content/the-iframe-element/iframe-synchronously-discard.html
 html/semantics/embedded-content/the-iframe-element/iframe_javascript_url_form_submission.html
 html/semantics/embedded-content/the-iframe-element/iframe_sandbox_allow_top_navigation-1.html
 html/semantics/embedded-content/the-iframe-element/iframe_sandbox_allow_top_navigation-3.html
