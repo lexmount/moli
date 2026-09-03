@@ -4,6 +4,12 @@
 # [target.'cfg(all(target_os = "linux", target_env = "gnu"))']
 # rustflags = ["-C", "link-arg=-Wl,-z,pack-relative-relocs"]
 
+# Avoid the large runtime relocation table emitted by the default PIE link.
+# This gives up main-executable ASLR and applies to all Cargo profiles because
+# target rustflags cannot be scoped to release builds.
+[target.'cfg(all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"))']
+rustflags = ["-C", "link-arg=-Wl,--no-pie"]
+
 # Most local tests spin up direct in-process HTTP servers and assert on
 # exact request/response behavior. In this environment, inheriting the
 # shell proxy settings would route those test requests through the host
