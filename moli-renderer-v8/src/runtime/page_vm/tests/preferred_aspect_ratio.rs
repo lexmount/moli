@@ -36,6 +36,50 @@ document.body.innerHTML = `<div id=target style="height:100px;aspect-ratio:1/2;p
     .expect("absolute ratio automatic-minimum fixture should run");
 }
 
+/// Regression for WPT css/css-sizing/aspect-ratio/flex-aspect-ratio-026.html.
+#[tokio::test(flavor = "current_thread")]
+async fn screenshot_uses_item_contributions_for_column_flex_intrinsic_width() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/column-flex-intrinsic-width.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0}
+.column{display:flex;flex-direction:column;float:left;height:1px}
+.item{box-sizing:border-box;min-width:25px;padding-left:15px;padding-top:10px}
+.item>div{height:190px}
+</style>`;
+document.body.innerHTML = `
+<div class=column><div id=border-box class=item style="aspect-ratio:1/1"><div></div></div></div>
+<div class=column><div id=auto-ratio class=item style="aspect-ratio:auto 1/1"><div></div></div></div>`;
+'installed'
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(320, 240, 1.0))?
+            .expect("column flex intrinsic-width fixture must retain a layout root");
+
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                r#"JSON.stringify([...document.querySelectorAll('.column,.item')].map(element=>{const rect=element.getBoundingClientRect();return [rect.width,rect.height]}))"#,
+            )?,
+            "[[25,1],[25,200],[25,1],[25,200]]",
+            "a content-derived main size must not become the column container's intrinsic inline contribution",
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("column flex intrinsic-width fixture should run");
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn screenshot_resolves_preferred_ratios_at_layout_boundaries() {
     run_page_vm_async_test(async move {
