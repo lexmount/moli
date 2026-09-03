@@ -2,6 +2,7 @@ use super::{
     JsContextHost, OwnerDispatchScope, child_frame_runtime::WINDOW_EVENT_HANDLER_PROPERTIES,
 };
 use crate::{
+    context_bootstrap::{EventHandlerType, apply_event_handler_return_value, event_is_error_event},
     document_runtime::DomHandle,
     document_runtime::EventTargetHandle,
     exception_reporting::invoke_event_handler,
@@ -14,7 +15,7 @@ use crate::{
         ACTIVE_CHILD_WINDOW_HANDLE_SLOT, EventCallbackId, PreparedEventCallback,
         element::EventAttributeHandlerScope, element::compile_event_attribute_handler_for_owner,
     },
-    util::{get_private_value, object_bool_property, set_private_value, v8_string, v8str},
+    util::{get_private_value, set_private_value, v8_string, v8str},
 };
 use std::{collections::HashSet, convert::TryFrom};
 
@@ -762,6 +763,7 @@ fn child_window_event_callback_arguments<'s>(
 ) -> Vec<v8::Local<'s, v8::Value>> {
     if registration_kind == ChildWindowEventRegistrationKind::EventHandlerProperty
         && event_type == "error"
+        && event_is_error_event(scope, event)
     {
         vec![
             event
@@ -785,28 +787,22 @@ fn child_window_event_callback_arguments<'s>(
     }
 }
 
-fn apply_child_window_event_handler_return(
-    scope: &mut v8::PinScope<'_, '_>,
+fn apply_child_window_event_handler_return<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     event_type: &str,
-    event: v8::Local<'_, v8::Object>,
+    event: v8::Local<'s, v8::Object>,
     returned: Option<v8::Global<v8::Value>>,
 ) {
     let Some(returned) = returned else {
         return;
     };
     let returned = v8::Local::new(scope, returned);
-    let should_cancel = if event_type == "error" {
-        returned.is_boolean() && returned.boolean_value(scope)
+    let handler_type = if event_type == "error" && event_is_error_event(scope, event) {
+        EventHandlerType::OnErrorEventHandler
     } else {
-        returned.is_boolean() && !returned.boolean_value(scope)
+        EventHandlerType::EventHandler
     };
-    if should_cancel && object_bool_property(scope, event, "cancelable").unwrap_or(false) {
-        let _ = event.set(
-            scope,
-            v8str(scope, "defaultPrevented").into(),
-            v8::Boolean::new(scope, true).into(),
-        );
-    }
+    apply_event_handler_return_value(scope, event, returned, handler_type);
 }
 
 fn install_child_body_load_attribute_handler_if_needed<'s>(
