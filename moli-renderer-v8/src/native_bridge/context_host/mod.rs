@@ -1263,6 +1263,15 @@ impl fmt::Debug for JsContextHost {
 
 #[cfg(test)]
 impl JsContextHost {
+    pub(crate) fn child_browsing_context_attribute_bootstrap_for_test(
+        &self,
+        handle: crate::document_runtime::DomHandle,
+    ) -> Option<ChildBrowsingContextBootstrap> {
+        self.child_browsing_contexts
+            .get(&handle)
+            .map(|entry| entry.attribute_bootstrap().clone())
+    }
+
     pub(crate) fn child_browsing_context_pending_live_navigation_for_test(
         &self,
         handle: crate::document_runtime::DomHandle,
