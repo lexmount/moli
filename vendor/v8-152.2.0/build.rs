@@ -406,6 +406,13 @@ fn build_moli_v8_ext(sources: &[PathBuf]) {
     .include("v8/include")
     .std("c++20")
     .flag_if_supported("-w");
+  if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+    // V8's Windows build and public headers require Clang intrinsics such as
+    // `__builtin_frame_address`. clang-cl preserves the MSVC ABI used by the
+    // prebuilt archive while compiling Moli's local extension translation
+    // units with the same compiler family as upstream V8.
+    build.prefer_clang_cl_over_msvc(true);
+  }
   // These definitions change V8's public header ABI and must match the
   // prebuilt archive (or the GN configuration used for a source build).
   if env::var("CARGO_FEATURE_V8_ENABLE_POINTER_COMPRESSION").is_ok() {

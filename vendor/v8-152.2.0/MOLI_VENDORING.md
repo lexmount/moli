@@ -19,6 +19,9 @@ Moli extensions:
 - `build.rs` compiles Moli's small V8 C++ shims through
   `build_moli_v8_ext()`. Keep new Moli-owned C++ shims in separate
   `src/*_ext.cc` files instead of editing upstream `src/binding.cc` directly.
+- Windows shims use `clang-cl`, matching V8's supported Windows compiler and
+  the MSVC ABI of the prebuilt archive. V8's public headers use Clang builtins
+  and cannot be compiled as C++ translation units by `cl.exe`.
 - `src/object_template_ext.cc`, `src/object_ext.cc`, and
   `src/function_template_ext.cc` expose embedder APIs required by Moli's DOM
   and Web IDL bindings.
