@@ -181,9 +181,11 @@ impl JsContextHost {
     }
 
     fn populate_initial_empty_child_html_document(&mut self, document_handle: DomHandle) {
-        let doctype =
-            self.dom_host_mut()
-                .create_document_type_for_document(document_handle, "html", "", "");
+        self.dom_host_mut()
+            .set_html_quirks_mode_for_parser_document(
+                document_handle,
+                html5ever::tree_builder::QuirksMode::Quirks,
+            );
         let html = self
             .dom_host_mut()
             .create_parser_element_without_attributes_for_document(
@@ -208,7 +210,6 @@ impl JsContextHost {
                 "http://www.w3.org/1999/xhtml".to_owned(),
                 None,
             );
-        assert!(self.dom_host_mut().append_child(document_handle, doctype));
         assert!(self.dom_host_mut().append_child(document_handle, html));
         assert!(self.dom_host_mut().append_child(html, head));
         assert!(self.dom_host_mut().append_child(html, body));
