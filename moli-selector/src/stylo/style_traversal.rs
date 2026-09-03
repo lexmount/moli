@@ -23,12 +23,17 @@ use style::{
     data::{ElementDataMut, ElementDataRef, ElementDataWrapper},
     dom::{LayoutIterator, NodeInfo, OpaqueNode, TDocument, TElement, TNode, TShadowRoot},
     invalidation::{element::restyle_hints::RestyleHint, stylesheets::StylesheetInvalidationSet},
-    properties::{PropertyDeclarationBlock, longhands::display::computed_value::T as Display},
+    properties::{
+        ComputedValues, PropertyDeclarationBlock,
+        longhands::{
+            box_sizing::computed_value::T as BoxSizing, display::computed_value::T as Display,
+        },
+    },
     selector_parser::{AttrValue as SelectorAttrValue, Lang, PseudoElement, SelectorImpl},
     servo_arc::{Arc, ArcBorrow},
     shared_lock::{Locked, SharedRwLock},
     stylist::CascadeData,
-    values::AtomIdent,
+    values::{AtomIdent, computed::NonNegativeLengthPercentage, generics::length::GenericSize},
 };
 
 use crate::{
@@ -2130,7 +2135,10 @@ impl<'a> TElement for StyleElement<'a> {
     }
 
     fn query_container_size(&self, _: &Display) -> Size2D<Option<Au>> {
-        inline_container_size(self.host(), self.handle())
+        match computed_container_size(self) {
+            Some(size) => size,
+            None => inline_container_size(self.host(), self.handle()),
+        }
     }
 
     fn has_selector_flags(&self, flags: ElementSelectorFlags) -> bool {
@@ -2172,6 +2180,65 @@ fn inline_container_size(host: &DomHost, handle: NodeId) -> Size2D<Option<Au>> {
         }
     }
     Size2D::new(width, height)
+}
+
+/// Resolves a container element's own content-box size from its already
+/// cascaded computed style. Returns `None` when the element has no computed
+/// style published yet, in which case callers should fall back to another
+/// size source. Layout-dependent sizes (auto, percentages, intrinsic keywords,
+/// min/max-constrained widths) come back as `None` for the affected axis.
+fn computed_container_size(element: &StyleElement<'_>) -> Option<Size2D<Option<Au>>> {
+    let data = element.borrow_data()?;
+    let style = data.styles.get_primary()?.clone();
+    let width = computed_axis_content_size(&style, ContainerAxis::Horizontal);
+    let height = computed_axis_content_size(&style, ContainerAxis::Vertical);
+    Some(Size2D::new(width, height))
+}
+
+#[derive(Clone, Copy)]
+enum ContainerAxis {
+    Horizontal,
+    Vertical,
+}
+
+/// Returns the content-box extent along `axis` when it is a definite absolute
+/// length in the element's computed style.
+fn computed_axis_content_size(style: &ComputedValues, axis: ContainerAxis) -> Option<Au> {
+    let size = match axis {
+        ContainerAxis::Horizontal => style.clone_width(),
+        ContainerAxis::Vertical => style.clone_height(),
+    };
+    // Only a definite `<length>` (no auto/percentage/intrinsic keyword and no
+    // calc that keeps a percentage) can be reported without running layout.
+    let GenericSize::LengthPercentage(length_percentage) = size else {
+        return None;
+    };
+    let mut au = Au::from(length_percentage.0.to_length()?);
+    if style.clone_box_sizing() == BoxSizing::BorderBox {
+        let (leading_padding, trailing_padding, leading_border, trailing_border) = match axis {
+            ContainerAxis::Horizontal => (
+                style.clone_padding_left(),
+                style.clone_padding_right(),
+                style.clone_border_left_width(),
+                style.clone_border_right_width(),
+            ),
+            ContainerAxis::Vertical => (
+                style.clone_padding_top(),
+                style.clone_padding_bottom(),
+                style.clone_border_top_width(),
+                style.clone_border_bottom_width(),
+            ),
+        };
+        let leading_padding = definite_length_au(leading_padding)?;
+        let trailing_padding = definite_length_au(trailing_padding)?;
+        au = (au - leading_padding - trailing_padding - leading_border.0 - trailing_border.0)
+            .max(Au(0));
+    }
+    Some(au)
+}
+
+fn definite_length_au(length_percentage: NonNegativeLengthPercentage) -> Option<Au> {
+    length_percentage.0.to_length().map(Au::from)
 }
 
 impl SelectorsElement for StyleElement<'_> {

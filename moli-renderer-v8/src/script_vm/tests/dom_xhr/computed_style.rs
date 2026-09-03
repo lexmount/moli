@@ -2257,6 +2257,42 @@ fn container_style_queries_resolve_direct_typed_attr_values() {
 }
 
 #[test]
+fn container_size_queries_activate_from_stylesheet_container_dimensions() {
+    let mut vm = new_storage_test_vm("https://container-stylesheet-size-query.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const root = document.documentElement || document.appendChild(document.createElement('html'));
+  const head = document.head || root.appendChild(document.createElement('head'));
+  const body = document.body || root.appendChild(document.createElement('body'));
+  const style = document.createElement('style');
+  style.textContent = `
+    #cqbox { container-type: inline-size; width: 300px; }
+    .inner { color: blue; }
+    @container (min-width: 200px) { .inner { color: red; } }
+    .widen { color: purple; }
+    @container (min-width: 400px) { .widen { color: green; } }
+  `;
+  head.appendChild(style);
+  const box = document.createElement('div');
+  box.id = 'cqbox';
+  box.innerHTML = '<div class="inner" id="cqinner">t</div><div class="widen" id="wideinner">w</div>';
+  body.appendChild(box);
+  return [
+    getComputedStyle(document.getElementById('cqinner')).color,
+    getComputedStyle(document.getElementById('wideinner')).color
+  ].join('|');
+})()
+"#,
+        )
+        .expect("stylesheet container size query should activate");
+
+    assert_eq!(result, "rgb(255, 0, 0)|rgb(128, 0, 128)");
+}
+
+#[test]
 fn implicit_scope_root_for_owner_stylesheet_matches_parent_element() {
     let mut vm = new_storage_test_vm("https://implicit-scope-root.test/");
 
