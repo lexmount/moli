@@ -130,8 +130,8 @@ fn mutate_history_object<'s>(
         &current_href
     };
     let url = match parsed.url {
-        Some(target) => resolve_history_state_url(resolve_base_href, &target),
-        None => Some(current_url.clone()),
+        Some(target) if !target.is_empty() => resolve_history_state_url(resolve_base_href, &target),
+        _ => Some(current_url.clone()),
     };
     let Some(url) = url else {
         throw_history_security_error(
