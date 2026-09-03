@@ -863,6 +863,7 @@ impl ScriptVm {
                     format!("native root module entry {root_entry:?} is not compiled"),
                 )
             })?;
+        let mut caught_error_constructor = None;
         self.renderer_document_isolate
             .with_entered_renderer_document_isolate(|isolate| {
                 let scope = pin!(v8::HandleScope::new(isolate));
@@ -870,7 +871,7 @@ impl ScriptVm {
                 let context = unsafe { v8::Local::new(scope, &*context_ptr) };
                 let scope = &mut v8::ContextScope::new(scope, context);
                 let try_catch = pin!(v8::TryCatch::new(scope));
-                let scope = try_catch.init();
+                let mut scope = try_catch.init();
 
                 let root_module = v8::Local::new(&scope, &root_module);
                 let _resolver_scope = ResolverScopeGuard::new(document_modulator_ptr);
@@ -882,11 +883,17 @@ impl ScriptVm {
                     Some(true) => Ok(()),
                     Some(false) => Err(anyhow::anyhow!("v8 reported module instantiate failure")),
                     None => {
-                        let exception = scope
-                            .exception()
-                            .and_then(|exception| exception.to_string(&scope))
-                            .map(|message| message.to_rust_string_lossy(&scope))
-                            .unwrap_or_else(|| "unknown instantiate exception".to_owned());
+                        let exception = match scope.exception() {
+                            Some(exception) => {
+                                caught_error_constructor =
+                                    script_error_constructor_kind_from_value(&mut scope, exception);
+                                exception
+                                    .to_string(&scope)
+                                    .map(|message| message.to_rust_string_lossy(&scope))
+                                    .unwrap_or_else(|| "unknown instantiate exception".to_owned())
+                            }
+                            None => "unknown instantiate exception".to_owned(),
+                        };
                         Err(anyhow::anyhow!(
                             "{}",
                             canonical_native_module_instantiate_error(&exception, &graph_urls)
@@ -895,19 +902,11 @@ impl ScriptVm {
                 }
             })
             .map_err(|error| {
-                let message = error.to_string();
-                let load_error =
-                    ModuleLoadError::new(ModuleLoadStage::Instantiate, message.clone());
-                if message.contains("does not provide an export named")
-                    || message.contains("does not export")
-                {
-                    load_error.with_error_constructor(ScriptErrorConstructorKind::SyntaxError)
-                } else if has_wasm_entry {
-                    load_error
-                        .with_error_constructor(ScriptErrorConstructorKind::WebAssemblyLinkError)
-                } else {
-                    load_error
-                }
+                native_module_instantiate_load_error(
+                    error.to_string(),
+                    caught_error_constructor,
+                    has_wasm_entry,
+                )
             })?;
         document_modulator.mark_instantiated(root_entry);
         Ok(())
