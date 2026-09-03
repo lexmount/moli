@@ -176,6 +176,10 @@ impl ImageResourceStore {
         }
         slot.scanned_preload = None;
         slot.state = ImageResourceState::DecodeQueued(descriptor);
+        // Layout can use probed image dimensions before pixel/vector decode
+        // completes. Publish that size transition independently from the
+        // later paint-resource transition.
+        self.visual_generation.bump();
         true
     }
 
@@ -307,10 +311,14 @@ impl ImageResourceStore {
 
     pub(super) fn sizing(&self, element: DomHandle) -> Option<ImageResourceSizing> {
         let slot = self.slots.get(&element)?;
-        let ImageResourceState::Ready(resource) = &slot.state else {
-            return None;
-        };
-        Some(resource_sizing(resource))
+        match &slot.state {
+            ImageResourceState::DecodeQueued(descriptor) => Some(descriptor_sizing(
+                *descriptor,
+                slot.identity.request_key.density(),
+            )),
+            ImageResourceState::Ready(resource) => Some(resource_sizing(resource)),
+            ImageResourceState::Pending | ImageResourceState::Failed => None,
+        }
     }
 
     pub(super) fn retire_element(&mut self, element: DomHandle) -> bool {
@@ -349,18 +357,18 @@ impl ImageResourceStore {
 }
 
 pub(super) fn resource_sizing(resource: &ReadyImageResource) -> ImageResourceSizing {
-    let density = if resource.density > 0.0 {
-        resource.density as f32
-    } else {
-        1.0
-    };
+    descriptor_sizing(resource.descriptor, resource.density)
+}
+
+fn descriptor_sizing(descriptor: ImageResponseDescriptor, density: f64) -> ImageResourceSizing {
+    let density = if density > 0.0 { density as f32 } else { 1.0 };
     // `ImageResponseDescriptor::{width,height}` deliberately stores integer
     // dimensions for the HTMLImageElement naturalWidth/naturalHeight surface.
     // SVG layout cannot reuse those rounded values: a viewBox-only 96:12 SVG
     // has a 300x37.5 concrete object size even though the DOM reports 300x38.
     // Preserve the metadata's fractional concrete size until the DOM getter's
     // explicit integer conversion boundary.
-    match resource.descriptor.decode_metadata {
+    match descriptor.decode_metadata {
         super::ImageDecodeMetadata::Raster(metadata) => {
             let natural_width = metadata.width as f32 / density;
             let natural_height = metadata.height as f32 / density;

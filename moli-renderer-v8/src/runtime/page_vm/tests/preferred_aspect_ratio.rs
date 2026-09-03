@@ -360,6 +360,70 @@ document.body.innerHTML = `
     .expect("flex final-main ratio fixture should run");
 }
 
+/// Regression for WPT css/css-flexbox/flex-aspect-ratio-img-column-017.html.
+#[tokio::test(flavor = "current_thread")]
+async fn screenshot_uses_svg_metadata_before_decode_in_a_flex_automatic_minimum() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        loader.set_image_fetch_enabled(true);
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/flex-default-svg-automatic-minimum.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>html,body{margin:0}</style>`;
+document.body.innerHTML = `<div style="display:flex;flex-direction:column;height:0;width:150px">
+  <img id=target src='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" />' style="height:200px;background:green">
+</div>`;
+'installed'
+"#,
+        )?;
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                "const image=document.getElementById('target');[image.complete,image.naturalWidth,image.naturalHeight].join(',')",
+            )?,
+            "true,300,150",
+            "probed SVG dimensions must be observable before paint content is committed",
+        );
+        let image = page_vm
+            .vm()
+            .document_runtime
+            .get_element_by_id("target")
+            .expect("metadata-ready SVG image");
+        let context_host = page_vm
+            .vm()
+            .context_host_weak_for_test()
+            .upgrade()
+            .expect("page context host");
+        assert!(
+            context_host
+                .borrow()
+                .ready_image_for_layout(image)
+                .is_none(),
+            "metadata availability must not masquerade as decoded paint content",
+        );
+        page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(320, 240, 1.0))?
+            .expect("default SVG flex fixture must retain a layout root");
+
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                "const rect=document.getElementById('target').getBoundingClientRect();JSON.stringify([rect.width,rect.height])",
+            )?,
+            "[150,150]",
+            "the replaced content-size suggestion must preserve the 150px flex automatic minimum",
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("default SVG flex automatic-minimum fixture should run");
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn screenshot_preserves_parent_resolved_grid_sizes_across_ratio_constraints() {
     run_page_vm_async_test(async move {
