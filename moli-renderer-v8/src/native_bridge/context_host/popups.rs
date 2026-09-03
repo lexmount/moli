@@ -161,6 +161,18 @@ struct LightweightPopupWindowMethodsDeclaration {
     close: (),
 }
 
+#[derive(Default, WebApiObject)]
+#[webapi(interface = "Object")]
+struct LightweightPopupWindowNameDeclaration {
+    #[webapi(
+        accessor_property,
+        enumerable,
+        getter = lightweight_popup_window_name_getter,
+        setter = lightweight_popup_window_name_setter
+    )]
+    name: (),
+}
+
 #[derive(WebApiObject)]
 #[webapi(interface = "Object")]
 struct LightweightPopupComputedStyleMethodDeclaration<'scope> {
@@ -617,6 +629,17 @@ impl JsContextHost {
         true
     }
 
+    fn set_lightweight_popup_window_name(&mut self, popup_id: u64, next: &str) {
+        self.lightweight_popup_window_names
+            .retain(|_, candidate| *candidate != popup_id);
+        if !self.lightweight_popup_is_open(popup_id) {
+            return;
+        }
+        if let Some(name) = trackable_lightweight_popup_window_name(next) {
+            self.lightweight_popup_window_names.insert(name, popup_id);
+        }
+    }
+
     pub(crate) fn open_lightweight_popup_window<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
@@ -730,6 +753,13 @@ impl JsContextHost {
             LIGHTWEIGHT_POPUP_ID_SLOT,
             popup_id_private_value.into(),
         );
+        let initial_window_name =
+            trackable_lightweight_popup_window_name(target_name).unwrap_or_default();
+        let initial_window_name = v8_string(scope, &initial_window_name)?;
+        set_object_slot(scope, window, WINDOW_NAME_SLOT, initial_window_name.into());
+        LightweightPopupWindowNameDeclaration::default()
+            .initialize(scope, window)
+            .ok()?;
         install_window_location_history_navigation_runtime_state(
             scope,
             window,
@@ -753,12 +783,6 @@ impl JsContextHost {
         set_object_slot(scope, window, "parent", window.into());
         set_object_slot(scope, window, "top", window.into());
         set_object_slot(scope, window, "frames", window.into());
-        if let Some(name) = trackable_lightweight_popup_window_name(target_name).as_deref()
-            && let Some(value) = v8_string(scope, name)
-        {
-            set_object_slot(scope, window, WINDOW_NAME_SLOT, value.into());
-            set_object_slot(scope, window, "name", value.into());
-        }
         if let Some(opener) = opener {
             set_object_slot(scope, window, "opener", opener.into());
             install_lightweight_popup_viewport_surface_from_opener(scope, opener, window);
@@ -4190,6 +4214,43 @@ fn install_lightweight_popup_viewport_surface_from_opener<'s>(
         if value.is_number() {
             set_object_slot(scope, window, property, value);
         }
+    }
+}
+
+fn lightweight_popup_window_name_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let window = args.this();
+    if lightweight_popup_id_from_window(scope, window).is_none() {
+        throw_type_error(scope, "Window.name getter called on incompatible receiver.");
+        return;
+    }
+    let value = window
+        .get(scope, v8str(scope, WINDOW_NAME_SLOT).into())
+        .filter(|value| value.is_string())
+        .unwrap_or_else(|| v8::String::empty(scope).into());
+    rv.set(value);
+}
+
+fn lightweight_popup_window_name_setter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let window = args.this();
+    let Some(popup_id) = lightweight_popup_id_from_window(scope, window) else {
+        throw_type_error(scope, "Window.name setter called on incompatible receiver.");
+        return;
+    };
+    let Some(next) = args.get(0).to_string(scope) else {
+        return;
+    };
+    let next_string = next.to_rust_string_lossy(scope);
+    set_object_slot(scope, window, WINDOW_NAME_SLOT, next.into());
+    if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
+        unsafe { &mut *host_ptr }.set_lightweight_popup_window_name(popup_id, &next_string);
     }
 }
 

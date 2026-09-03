@@ -24897,6 +24897,51 @@ fn window_open_about_blank_returns_lightweight_popup_window() {
 }
 
 #[test]
+fn window_open_blank_targets_expose_mutable_empty_browsing_context_names() {
+    let mut vm = new_storage_test_vm("https://example.com/");
+
+    let result = vm
+        .eval(
+            r##"
+            (() => {
+              const implicit = open("about:blank#implicit");
+              const empty = open("about:blank#empty", "");
+              const blank = open("about:blank#blank", "_blank");
+              const mixedBlank = open("about:blank#mixed", "_BlAnK");
+              const initialNames = [implicit, empty, blank, mixedBlank]
+                .map(popup => popup.name);
+              const initialTypes = [implicit, empty, blank, mixedBlank]
+                .map(popup => typeof popup.name);
+              let conversions = 0;
+              empty.name = {
+                toString() {
+                  conversions++;
+                  return "renamed-popup";
+                }
+              };
+              blank.name = 42;
+              const reused = open("about:blank#reused", "renamed-popup");
+              return JSON.stringify({
+                initialNames,
+                initialTypes,
+                conversions,
+                emptyName: empty.name,
+                blankName: blank.name,
+                reused: reused === empty,
+                reusedName: reused.name
+              });
+            })()
+            "##,
+        )
+        .expect("blank-target popup Window.name probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"initialNames":["","","",""],"initialTypes":["string","string","string","string"],"conversions":1,"emptyName":"renamed-popup","blankName":"42","reused":true,"reusedName":"renamed-popup"}"#
+    );
+}
+
+#[test]
 fn window_open_existing_context_special_targets_never_enter_the_popup_carrier() {
     for target in ["_self", "_parent", "_top", "_SeLf", "_PaReNt", "_TOP"] {
         let mut vm = new_storage_test_vm("https://example.com/source");
