@@ -59,7 +59,7 @@ pub(super) fn trace_retained_style_system_change(
         document_stylesheet_input_count = inputs.document_stylesheet_sources.len(),
         shadow_stylesheet_input_count = inputs.shadow_stylesheet_sources.len(),
         retained_shadow_cascade_count = retained.shadow_cascade_data.len(),
-        retained_source_cascade_data_count = retained.source_cascade_data.len(),
+        retained_source_cascade_data_count = retained.source_cascade_projections.len(),
         document_context_documents = ?document_context_documents,
         source_set_generation,
         source_dirty_ids = ?source_dirty_scope.source_ids_vec(),

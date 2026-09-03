@@ -13,17 +13,12 @@ use super::{
     shadow_scopes::ShadowScopeStyles,
     source::store::{StyloStylesheetSource, stylesheet_sources_cache_key},
     source_id::{StyleScopeId, StyleSourceId},
-    source_key::StyleSourceSetKey,
     source_record::RetainedStylesheetSourceRecord,
-    state::RetainedStyleSystem,
+    state::{RetainedStyleSystem, SourceCascadeProjection},
 };
 
-type SourceCascadeMaps = (
-    HashMap<StyleSourceId, ServoArc<CascadeData>>,
-    HashMap<StyleSourceId, StyleSourceSetKey>,
-);
-
 type InstalledSourceGroup = (Vec<StyloStylesheetSource>, Vec<DocumentStyleSheet>);
+type SourceCascadeProjections = HashMap<StyleSourceId, SourceCascadeProjection>;
 
 #[cfg(test)]
 thread_local! {
@@ -42,110 +37,165 @@ pub(crate) fn source_cascade_rebuild_count_for_test() -> usize {
     SOURCE_CASCADE_REBUILD_COUNT.with(std::cell::Cell::get)
 }
 
-/// Builds the per-source cascade projection used by CSSOM target queries.
+/// Reconciles the source-local cascade projections that have already been
+/// materialized.
 ///
 /// The document and shadow collections remain the canonical installed-sheet
-/// state. Source records are included only when CSSOM still owns a detached or
-/// otherwise inactive sheet that must remain queryable.
-pub(super) fn build_source_cascade_data(
+/// state. A source gets its own `CascadeData` only after an invalidation query
+/// actually targets it; full-world reconciliation must not eagerly project
+/// every installed source again.
+pub(super) fn reconcile_materialized_source_cascade_data(
+    retained: &mut RetainedStyleSystem,
+    shared_lock: &SharedRwLock,
+    retained_source_records: &[RetainedStylesheetSourceRecord<'_>],
+    mut install: impl FnMut(&StyloStylesheetSource) -> ActiveStylesheet,
+) {
+    let source_ids = retained
+        .source_cascade_projections
+        .keys()
+        .cloned()
+        .collect::<HashSet<_>>();
+    if source_ids.is_empty() {
+        return;
+    }
+
+    let previous = std::mem::take(&mut retained.source_cascade_projections);
+    retained.source_cascade_projections = build_source_cascade_data_for_source_ids(
+        &mut retained.stylist,
+        shared_lock,
+        &retained.document_stylesheets,
+        &retained.shadow_scopes,
+        retained_source_records,
+        &source_ids,
+        Some(&previous),
+        &mut install,
+    );
+}
+
+pub(super) fn materialized_source_cascade_ids(
+    retained: &RetainedStyleSystem,
+) -> HashSet<StyleSourceId> {
+    retained
+        .source_cascade_projections
+        .keys()
+        .cloned()
+        .collect()
+}
+
+pub(super) fn materialized_source_cascade_ids_affected_by_update(
+    retained: &RetainedStyleSystem,
+    dirty_source_ids: &HashSet<StyleSourceId>,
+    dirty_scopes: &HashSet<StyleScopeId>,
+    device_changed: bool,
+) -> HashSet<StyleSourceId> {
+    retained
+        .source_cascade_projections
+        .keys()
+        .filter(|source_id| {
+            device_changed
+                || dirty_source_ids.contains(*source_id)
+                || dirty_scopes.contains(&source_id.scope_id)
+        })
+        .cloned()
+        .collect()
+}
+
+/// Materializes only source-local cascade projections requested by an
+/// invalidation batch.
+pub(super) fn ensure_source_cascade_data_for_source_ids<'a>(
+    retained: &mut RetainedStyleSystem,
+    shared_lock: &SharedRwLock,
+    retained_source_records: &[RetainedStylesheetSourceRecord<'_>],
+    source_ids: impl IntoIterator<Item = &'a StyleSourceId>,
+    mut install: impl FnMut(&StyloStylesheetSource) -> ActiveStylesheet,
+) {
+    let missing_source_ids = source_ids
+        .into_iter()
+        .filter(|source_id| !retained.source_cascade_projections.contains_key(*source_id))
+        .cloned()
+        .collect::<HashSet<_>>();
+    if missing_source_ids.is_empty() {
+        return;
+    }
+
+    let projections = build_source_cascade_data_for_source_ids(
+        &mut retained.stylist,
+        shared_lock,
+        &retained.document_stylesheets,
+        &retained.shadow_scopes,
+        retained_source_records,
+        &missing_source_ids,
+        None,
+        &mut install,
+    );
+    retained.source_cascade_projections.extend(projections);
+}
+
+fn build_source_cascade_data_for_source_ids(
     stylist: &mut Stylist,
     shared_lock: &SharedRwLock,
     document_stylesheets: &ActiveStylesheetCollection,
     shadow_scopes: &[ShadowScopeStyles],
     retained_source_records: &[RetainedStylesheetSourceRecord<'_>],
-    previous: Option<(&SourceCascadeData, &SourceCascadeKeys)>,
-    mut install: impl FnMut(&StyloStylesheetSource) -> ActiveStylesheet,
-) -> SourceCascadeMaps {
+    source_ids: &HashSet<StyleSourceId>,
+    previous: Option<&SourceCascadeProjections>,
+    install: &mut impl FnMut(&StyloStylesheetSource) -> ActiveStylesheet,
+) -> SourceCascadeProjections {
     let mut sources_by_id =
-        installed_sources_by_id(document_stylesheets, shadow_scopes, None, None);
+        installed_sources_by_id(document_stylesheets, shadow_scopes, source_ids);
     add_retained_source_records(
         &mut sources_by_id,
         retained_source_records,
-        None,
-        None,
-        &mut install,
+        source_ids,
+        install,
     );
 
-    let mut cascade_data = HashMap::with_capacity(sources_by_id.len());
-    let mut cascade_keys = HashMap::with_capacity(sources_by_id.len());
+    let mut projections = HashMap::with_capacity(sources_by_id.len());
     for (source_id, (sources, stylesheets)) in sources_by_id {
         let key = stylesheet_sources_cache_key(&sources);
-        let retained_data = previous.and_then(|(previous_data, previous_keys)| {
-            (previous_keys.get(&source_id) == Some(&key))
-                .then(|| previous_data.get(&source_id).cloned())
-                .flatten()
+        let retained_data = previous.and_then(|previous| {
+            previous
+                .get(&source_id)
+                .filter(|projection| projection.key == key)
+                .map(|projection| projection.data.clone())
                 .filter(|data| {
                     source_cascade_matches_device(data, &stylesheets, stylist, shared_lock)
                 })
         });
         let data = retained_data
             .unwrap_or_else(|| build_author_cascade_data(stylist, shared_lock, &stylesheets));
-        cascade_keys.insert(source_id.clone(), key);
-        cascade_data.insert(source_id, data);
+        projections.insert(source_id, SourceCascadeProjection { data, key });
     }
-    (cascade_data, cascade_keys)
+    projections
 }
 
-/// Reprojects only sources owned by dirty TreeScopes. Entries belonging to a
-/// clean scope retain both their key and `CascadeData` allocation.
-pub(super) fn update_source_cascade_data_for_scopes(
+/// Reprojects the requested materialized entries. Every other entry retains
+/// both its key and `CascadeData` allocation.
+pub(super) fn update_materialized_source_cascade_data(
     retained: &mut RetainedStyleSystem,
     shared_lock: &SharedRwLock,
     retained_source_records: &[RetainedStylesheetSourceRecord<'_>],
-    dirty_source_ids: &HashSet<StyleSourceId>,
-    dirty_scopes: &HashSet<StyleScopeId>,
-    device_changed: bool,
+    source_ids: &HashSet<StyleSourceId>,
     mut install: impl FnMut(&StyloStylesheetSource) -> ActiveStylesheet,
 ) {
-    if dirty_source_ids.is_empty() && dirty_scopes.is_empty() && !device_changed {
+    if source_ids.is_empty() {
         return;
     }
 
-    let previous_data = std::mem::take(&mut retained.source_cascade_data);
-    let previous_keys = std::mem::take(&mut retained.source_cascade_keys);
-    let mut next_data = if device_changed {
-        HashMap::new()
-    } else {
-        retain_clean_entries(&previous_data, dirty_source_ids, dirty_scopes)
-    };
-    let mut next_keys = if device_changed {
-        HashMap::new()
-    } else {
-        retain_clean_entries(&previous_keys, dirty_source_ids, dirty_scopes)
-    };
-    let source_filter = (!device_changed).then_some((dirty_source_ids, dirty_scopes));
-
-    let mut sources_by_id = installed_sources_by_id(
+    let mut previous = std::mem::take(&mut retained.source_cascade_projections);
+    let updated = build_source_cascade_data_for_source_ids(
+        &mut retained.stylist,
+        shared_lock,
         &retained.document_stylesheets,
         &retained.shadow_scopes,
-        source_filter.map(|(source_ids, _)| source_ids),
-        source_filter.map(|(_, scopes)| scopes),
-    );
-    add_retained_source_records(
-        &mut sources_by_id,
         retained_source_records,
-        source_filter.map(|(source_ids, _)| source_ids),
-        source_filter.map(|(_, scopes)| scopes),
+        source_ids,
+        Some(&previous),
         &mut install,
     );
-
-    for (source_id, (sources, stylesheets)) in sources_by_id {
-        let key = stylesheet_sources_cache_key(&sources);
-        let data = if previous_keys.get(&source_id) == Some(&key) {
-            previous_data.get(&source_id).cloned().filter(|data| {
-                source_cascade_matches_device(data, &stylesheets, &retained.stylist, shared_lock)
-            })
-        } else {
-            None
-        }
-        .unwrap_or_else(|| {
-            build_author_cascade_data(&mut retained.stylist, shared_lock, &stylesheets)
-        });
-        next_keys.insert(source_id.clone(), key);
-        next_data.insert(source_id, data);
-    }
-    retained.source_cascade_data = next_data;
-    retained.source_cascade_keys = next_keys;
+    previous.retain(|source_id, _| !source_ids.contains(source_id));
+    previous.extend(updated);
+    retained.source_cascade_projections = previous;
 }
 
 fn source_cascade_matches_device(
@@ -165,14 +215,10 @@ fn source_cascade_matches_device(
     })
 }
 
-type SourceCascadeData = HashMap<StyleSourceId, ServoArc<CascadeData>>;
-type SourceCascadeKeys = HashMap<StyleSourceId, StyleSourceSetKey>;
-
 fn installed_sources_by_id(
     document_stylesheets: &ActiveStylesheetCollection,
     shadow_scopes: &[ShadowScopeStyles],
-    dirty_source_ids: Option<&HashSet<StyleSourceId>>,
-    dirty_scopes: Option<&HashSet<StyleScopeId>>,
+    source_ids: &HashSet<StyleSourceId>,
 ) -> HashMap<StyleSourceId, InstalledSourceGroup> {
     let mut sources_by_id = HashMap::<StyleSourceId, InstalledSourceGroup>::new();
     for entry in document_stylesheets.entries().iter().chain(
@@ -183,7 +229,7 @@ fn installed_sources_by_id(
         let Some(source_id) = entry.source().source_id().cloned() else {
             continue;
         };
-        if !source_needs_projection(&source_id, dirty_source_ids, dirty_scopes) {
+        if !source_ids.contains(&source_id) {
             continue;
         }
         let (sources, stylesheets) = sources_by_id.entry(source_id).or_default();
@@ -203,14 +249,11 @@ fn installed_sources_by_id(
 fn add_retained_source_records(
     sources_by_id: &mut HashMap<StyleSourceId, InstalledSourceGroup>,
     records: &[RetainedStylesheetSourceRecord<'_>],
-    dirty_source_ids: Option<&HashSet<StyleSourceId>>,
-    dirty_scopes: Option<&HashSet<StyleScopeId>>,
+    source_ids: &HashSet<StyleSourceId>,
     install: &mut impl FnMut(&StyloStylesheetSource) -> ActiveStylesheet,
 ) {
     for record in records {
-        if !source_needs_projection(record.id(), dirty_source_ids, dirty_scopes)
-            || sources_by_id.contains_key(record.id())
-        {
+        if !source_ids.contains(record.id()) || sources_by_id.contains_key(record.id()) {
             continue;
         }
         let source = record.to_stylo_source();
@@ -219,34 +262,6 @@ fn add_retained_source_records(
             record.id().clone(),
             (vec![source], vec![installed.stylesheet().clone()]),
         );
-    }
-}
-
-fn retain_clean_entries<T: Clone>(
-    previous: &HashMap<StyleSourceId, T>,
-    dirty_source_ids: &HashSet<StyleSourceId>,
-    dirty_scopes: &HashSet<StyleScopeId>,
-) -> HashMap<StyleSourceId, T> {
-    previous
-        .iter()
-        .filter(|(source_id, _)| {
-            !dirty_source_ids.contains(*source_id) && !dirty_scopes.contains(&source_id.scope_id)
-        })
-        .map(|(source_id, value)| (source_id.clone(), value.clone()))
-        .collect()
-}
-
-fn source_needs_projection(
-    source_id: &StyleSourceId,
-    dirty_source_ids: Option<&HashSet<StyleSourceId>>,
-    dirty_scopes: Option<&HashSet<StyleScopeId>>,
-) -> bool {
-    match (dirty_source_ids, dirty_scopes) {
-        (None, None) => true,
-        (dirty_source_ids, dirty_scopes) => {
-            dirty_source_ids.is_some_and(|ids| ids.contains(source_id))
-                || dirty_scopes.is_some_and(|scopes| scopes.contains(&source_id.scope_id))
-        }
     }
 }
 
