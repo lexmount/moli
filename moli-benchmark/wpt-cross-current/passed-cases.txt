@@ -6113,6 +6113,7 @@ html/semantics/popovers/popover-removal-2.html
 html/semantics/popovers/popover-removal.html
 html/semantics/popovers/popover-remove-attribute-during-focusing-steps.html
 html/semantics/popovers/popover-shadowhost-focus.html
+html/semantics/popovers/popover-target-element-disabled.html
 html/semantics/popovers/popover-toggle-source.html
 html/semantics/popovers/popover-types.html
 html/semantics/popovers/popovertarget-disabled-fieldset.html

@@ -3015,7 +3015,6 @@ html/semantics/popovers/popover-nested-in-button.html
 html/semantics/popovers/popover-overlay.html
 html/semantics/popovers/popover-shadow-dom.html
 html/semantics/popovers/popover-stacking.html
-html/semantics/popovers/popover-target-element-disabled.html
 html/semantics/popovers/popover-types-with-hints.html
 html/semantics/scripting-1/the-script-element/css-module/cors-crossorigin-requests.html
 html/semantics/scripting-1/the-script-element/execution-timing/083.html
