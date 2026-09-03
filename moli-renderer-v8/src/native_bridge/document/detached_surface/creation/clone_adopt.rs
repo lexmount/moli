@@ -2,7 +2,6 @@ use super::super::*;
 use crate::native_bridge::document::{
     parse_import_node_options, validate_registry_association_for_document,
 };
-use crate::native_bridge::node_runtime_and_handle_from_object_or_detached;
 use crate::native_bridge::set_wrapped_handle_or_null_for_receiver;
 use crate::util::context_host_ptr_from_global_bridge;
 
@@ -74,6 +73,7 @@ fn clone_detached_document_shell<'s>(
     };
     let cloned = call_global_bridge_method(scope, helper, &[])
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?;
+    inherit_detached_document_origin(scope, cloned, document);
     if html_shell {
         for child in detached_child_node_objects(scope, cloned) {
             detached_detach_from_parent(scope, child);
