@@ -216,19 +216,15 @@ fn retained_stylo_invalidator_refreshes_nth_child_of_custom_state_with_structura
             .structural_boundary_cleanup_roots_for_test()
             .contains(&unrelated)
     );
-    let application = engine
-        .with_retained_style_system_for_document_for_test(document, |retained| {
-            retained_source_invalidation_outcome_for_document_for_test(
-                &engine,
-                &host,
-                document,
-                StyleSourceDocumentContext::for_root_document(document),
-                Some(retained),
-                &target_queries,
-                false,
-            )
-        })
-        .finalize(&host);
+    let application = prepared_retained_source_invalidation_outcome_for_document_for_test(
+        &engine,
+        &host,
+        document,
+        StyleSourceDocumentContext::for_root_document(document),
+        &target_queries,
+        false,
+    )
+    .finalize(&host);
     assert_eq!(
         application.cleanup_target_kind(),
         StyleInvalidationCleanupTargetKind::MixedSubtreeRoots
@@ -377,19 +373,15 @@ fn retained_stylo_invalidator_custom_state_snapshot_avoids_source_fallback() {
             &source_scope,
         )
     };
-    let application = engine
-        .with_retained_style_system_for_document_for_test(document, |retained| {
-            retained_source_invalidation_outcome_for_document_for_test(
-                &engine,
-                &host,
-                document,
-                StyleSourceDocumentContext::for_root_document(document),
-                Some(retained),
-                &target_queries,
-                false,
-            )
-        })
-        .finalize(&host);
+    let application = prepared_retained_source_invalidation_outcome_for_document_for_test(
+        &engine,
+        &host,
+        document,
+        StyleSourceDocumentContext::for_root_document(document),
+        &target_queries,
+        false,
+    )
+    .finalize(&host);
     assert_eq!(
         application.cleanup_target_kind(),
         StyleInvalidationCleanupTargetKind::ExactAffectedSubtreeRoots

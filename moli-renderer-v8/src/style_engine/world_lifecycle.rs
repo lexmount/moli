@@ -14,6 +14,9 @@ use super::{
         retained_style_system_matches_full_snapshot, update_retained_style_system,
         update_retained_style_system_incrementally,
     },
+    source_cascade::{
+        materialized_source_cascade_ids, materialized_source_cascade_ids_affected_by_update,
+    },
     source_document::DocumentStyleSourceStores,
     source_lifecycle::StyleSourceDocumentContext,
     state::StyleDocumentState,
@@ -108,10 +111,8 @@ pub(super) fn ensure_retained_style_system(
     let key_mismatch_trace =
         document_state.try_with_retained_style_system(|retained| retained.key.mismatch_trace(key));
     let trace_documents = trace_enabled.then(|| vec![retained_document]);
-
-    let source_lifecycle = source_stores.source_lifecycle_report(host, document_context);
-    let retained_source_records =
-        source_stores.retained_source_records_for_lifecycle(host, &source_lifecycle);
+    let trace_source_lifecycle =
+        trace_enabled.then(|| source_stores.source_lifecycle_report(host, document_context));
     let shared_lock = dom_adapter.shared_lock().clone();
     let custom_property_history_is_append_only = document_state
         .try_with_retained_style_system(|retained| {
@@ -127,6 +128,19 @@ pub(super) fn ensure_retained_style_system(
         .is_some_and(|trace| !trace.requires_style_system_replacement())
         && custom_property_history_is_append_only;
     if can_update_in_place {
+        let materialized_source_ids = document_state
+            .try_with_retained_style_system(materialized_source_cascade_ids)
+            .unwrap_or_default();
+        let retained_source_records = if materialized_source_ids.is_empty() {
+            Vec::new()
+        } else {
+            let source_lifecycle = source_stores.source_lifecycle_report_for_source_ids(
+                host,
+                document_context,
+                materialized_source_ids,
+            );
+            source_stores.retained_source_records_for_lifecycle(host, &source_lifecycle)
+        };
         let invalidations = document_state.update_retained_style_system_with_result(|retained| {
             update_retained_style_system(
                 retained,
@@ -149,7 +163,9 @@ pub(super) fn ensure_retained_style_system(
             document_state.with_retained_style_system(|retained| {
                 trace_retained_style_system_change(
                     inputs,
-                    &source_lifecycle,
+                    trace_source_lifecycle
+                        .as_ref()
+                        .expect("style invalidation tracing requires source lifecycle data"),
                     &source_dirty_scope,
                     document_state.source_set_generation(),
                     retained,
@@ -174,13 +190,14 @@ pub(super) fn ensure_retained_style_system(
         key.clone(),
         inputs,
         &shared_lock,
-        &retained_source_records,
         author_styles_disabled,
     );
     if trace_enabled {
         trace_retained_style_system_change(
             inputs,
-            &source_lifecycle,
+            trace_source_lifecycle
+                .as_ref()
+                .expect("style invalidation tracing requires source lifecycle data"),
             &source_dirty_scope,
             document_state.source_set_generation(),
             &retained,
@@ -234,17 +251,26 @@ pub(super) fn ensure_retained_style_system_incrementally(
         .full_source_projection_scope_ids()
         .into_iter()
         .collect::<std::collections::HashSet<_>>();
-    let source_lifecycle = if device_changed || !full_source_projection_scopes.is_empty() {
-        source_stores.source_lifecycle_report(host, document_context)
+    let source_record_ids = document_state
+        .try_with_retained_style_system(|retained| {
+            materialized_source_cascade_ids_affected_by_update(
+                retained,
+                &dirty_source_ids,
+                &full_source_projection_scopes,
+                device_changed,
+            )
+        })
+        .unwrap_or_default();
+    let retained_source_records = if source_record_ids.is_empty() {
+        Vec::new()
     } else {
-        source_stores.source_lifecycle_report_for_source_ids(
+        let source_lifecycle = source_stores.source_lifecycle_report_for_source_ids(
             host,
             document_context,
-            dirty_source_ids.iter().cloned(),
-        )
+            source_record_ids,
+        );
+        source_stores.retained_source_records_for_lifecycle(host, &source_lifecycle)
     };
-    let retained_source_records =
-        source_stores.retained_source_records_for_lifecycle(host, &source_lifecycle);
     let shared_lock = dom_adapter.shared_lock().clone();
     let invalidations = document_state.update_retained_style_system_with_result(|retained| {
         update_retained_style_system_incrementally(

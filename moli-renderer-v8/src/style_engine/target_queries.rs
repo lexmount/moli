@@ -718,9 +718,10 @@ impl<'a> PendingRetainedSourceStyleInvalidationInput<'a> {
         retained: Option<&'a RetainedStyleSystem>,
     ) -> StyloRetainedSourceStyleInvalidation<'a> {
         let cascade_data = retained.and_then(|retained| match self.target {
-            StyleInvalidationSourceTarget::Stylesheet(source_id) => {
-                retained.source_cascade_data.get(source_id)
-            }
+            StyleInvalidationSourceTarget::Stylesheet(source_id) => retained
+                .source_cascade_projections
+                .get(source_id)
+                .map(|projection| &projection.data),
             StyleInvalidationSourceTarget::UserAgent { .. } => {
                 Some(&retained.user_agent_cascade_data)
             }

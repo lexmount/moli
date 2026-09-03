@@ -10,5 +10,7 @@ mod relative_selectors;
 mod selector_dependencies;
 #[path = "invalidator/shadow_dependencies.rs"]
 mod shadow_dependencies;
+#[path = "invalidator/source_cascade.rs"]
+mod source_cascade;
 #[path = "invalidator/state_changes.rs"]
 mod state_changes;

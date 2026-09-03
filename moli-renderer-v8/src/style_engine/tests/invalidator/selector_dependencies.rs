@@ -259,19 +259,15 @@ fn retained_stylo_invalidator_accepts_empty_scope_sibling_result() {
             &source_scope,
         )
     };
-    let application = engine
-        .with_retained_style_system_for_document_for_test(document, |retained| {
-            retained_source_invalidation_outcome_for_document_for_test(
-                &engine,
-                &host,
-                document,
-                StyleSourceDocumentContext::for_root_document(document),
-                Some(retained),
-                &target_queries,
-                false,
-            )
-        })
-        .finalize(&host);
+    let application = prepared_retained_source_invalidation_outcome_for_document_for_test(
+        &engine,
+        &host,
+        document,
+        StyleSourceDocumentContext::for_root_document(document),
+        &target_queries,
+        false,
+    )
+    .finalize(&host);
     assert_eq!(
         application.cleanup_target_kind(),
         StyleInvalidationCleanupTargetKind::Noop
@@ -380,19 +376,15 @@ fn retained_stylo_invalidator_narrows_at_scope_dependency_to_affected_target() {
         StyloRetainedSourceStyleInvalidationKind::RetainedQueries,
         "{target_queries:#?}"
     );
-    let application = engine
-        .with_retained_style_system_for_document_for_test(document, |retained| {
-            retained_source_invalidation_outcome_for_document_for_test(
-                &engine,
-                &host,
-                document,
-                StyleSourceDocumentContext::for_root_document(document),
-                Some(retained),
-                &target_queries,
-                false,
-            )
-        })
-        .finalize(&host);
+    let application = prepared_retained_source_invalidation_outcome_for_document_for_test(
+        &engine,
+        &host,
+        document,
+        StyleSourceDocumentContext::for_root_document(document),
+        &target_queries,
+        false,
+    )
+    .finalize(&host);
     assert_eq!(
         application.cleanup_target_kind(),
         StyleInvalidationCleanupTargetKind::ExactAffectedSubtreeRoots
@@ -529,19 +521,15 @@ fn retained_stylo_invalidator_accepts_exact_empty_at_scope_dependency_result() {
         StyloRetainedSourceStyleInvalidationKind::RetainedQueries,
         "{target_queries:#?}"
     );
-    let application = engine
-        .with_retained_style_system_for_document_for_test(document, |retained| {
-            retained_source_invalidation_outcome_for_document_for_test(
-                &engine,
-                &host,
-                document,
-                StyleSourceDocumentContext::for_root_document(document),
-                Some(retained),
-                &target_queries,
-                false,
-            )
-        })
-        .finalize(&host);
+    let application = prepared_retained_source_invalidation_outcome_for_document_for_test(
+        &engine,
+        &host,
+        document,
+        StyleSourceDocumentContext::for_root_document(document),
+        &target_queries,
+        false,
+    )
+    .finalize(&host);
     assert_eq!(
         application.cleanup_target_kind(),
         StyleInvalidationCleanupTargetKind::Noop
@@ -1686,19 +1674,15 @@ fn retained_stylo_invalidator_accepts_empty_snapshot_relative_result_for_has_cla
             &source_scope,
         )
     };
-    let application = engine
-        .with_retained_style_system_for_document_for_test(document, |retained| {
-            retained_source_invalidation_outcome_for_document_for_test(
-                &engine,
-                &host,
-                document,
-                StyleSourceDocumentContext::for_root_document(document),
-                Some(retained),
-                &target_queries,
-                false,
-            )
-        })
-        .finalize(&host);
+    let application = prepared_retained_source_invalidation_outcome_for_document_for_test(
+        &engine,
+        &host,
+        document,
+        StyleSourceDocumentContext::for_root_document(document),
+        &target_queries,
+        false,
+    )
+    .finalize(&host);
     assert_eq!(
         application.cleanup_target_kind(),
         StyleInvalidationCleanupTargetKind::Noop
