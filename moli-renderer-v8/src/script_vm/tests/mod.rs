@@ -8868,7 +8868,9 @@ async fn child_inline_parser_module_executes_from_registered_pending_script() {
   frame.srcdoc = `
     <script>parent.__childInlineParserModuleEvents.push("before");<\/script>
     <script type="module">
-      parent.__childInlineParserModuleEvents.push("module:" + (globalThis === self));
+      parent.__childInlineParserModuleEvents.push(
+        "module:" + (globalThis === self) + ":" + import.meta.url + ":" + import.meta.resolve("./x")
+      );
       globalThis.__childInlineParserModuleValue = 42;
     <\/script>
     <script>parent.__childInlineParserModuleEvents.push("after:" + String(globalThis.__childInlineParserModuleValue));<\/script>
@@ -8947,7 +8949,7 @@ async fn child_inline_parser_module_executes_from_registered_pending_script() {
     assert_eq!(
         vm.eval("__childInlineParserModuleEvents.join('|')")
             .expect("child inline parser module events should evaluate"),
-        "before|after:undefined|module:true"
+        "before|after:undefined|module:true:http://child-inline-module.test/:http://child-inline-module.test/x"
     );
 }
 

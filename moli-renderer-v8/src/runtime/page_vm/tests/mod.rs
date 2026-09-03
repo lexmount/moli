@@ -11878,15 +11878,19 @@ async fn stream_declared_controller_and_writer_surface_ignores_reflection_and_sp
 async fn parser_inline_module_runs_from_parser_after_parsing_order() {
     run_page_vm_async_test(async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let document_url = Url::parse(
+            "https://example.com/page.html?case=inline-module#document-fragment",
+        )
+        .expect("document URL");
         let mut page_vm = test_page_vm_with_loader_and_document_url(
             &loader,
             Vec::new(),
-            Url::parse("https://example.com/page.html").expect("document URL"),
+            document_url.clone(),
         );
         let script = prepared_inline_module_for_page_vm_test(
             &page_vm,
             9002,
-            "globalThis.__inlineParserModuleExecuted = (globalThis.__inlineParserModuleExecuted ?? 0) + 1; export const value = 1;",
+            "globalThis.__inlineParserModuleExecuted = (globalThis.__inlineParserModuleExecuted ?? 0) + 1; globalThis.__inlineParserModuleUrl = import.meta.url; export const value = 1;",
         );
 
         let parser_module_work = install_parser_module_defer_work(&mut page_vm, script);
@@ -11921,6 +11925,14 @@ async fn parser_inline_module_runs_from_parser_after_parsing_order() {
                 .expect("read module side effect after page task"),
             "1",
             "parser after-parsing release should evaluate the prewarmed inline graph once"
+        );
+        assert_eq!(
+            page_vm
+                .vm_mut()
+                .eval("globalThis.__inlineParserModuleUrl")
+                .expect("read inline module URL after page task"),
+            document_url.as_str(),
+            "an inline module must expose its document base URL, not its internal module-map key"
         );
     })
     .await;

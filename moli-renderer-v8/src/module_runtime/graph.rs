@@ -2307,7 +2307,7 @@ fn module_script_inline_tree_job_for_owner(
     let (record, identity) = match vm.compile_native_module_record(
         key.clone(),
         &source,
-        &root.source_url,
+        &root.base_url,
         &root.fetch_metadata,
     ) {
         Ok(result) => result,
