@@ -5267,6 +5267,7 @@ html/browsers/history/the-history-interface/history_go_no_argument.html
 html/browsers/history/the-history-interface/history_go_plus.html
 html/browsers/history/the-history-interface/history_go_to_uri.html
 html/browsers/history/the-history-interface/history_go_zero.html
+html/browsers/history/the-history-interface/history_properties_only_fully_active.html
 html/browsers/history/the-history-interface/history_pushstate.html
 html/browsers/history/the-history-interface/history_pushstate_err.html
 html/browsers/history/the-history-interface/history_pushstate_nooptionalparam.html
