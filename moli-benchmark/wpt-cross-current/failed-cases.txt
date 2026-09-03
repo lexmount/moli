@@ -2806,7 +2806,6 @@ html/browsers/the-window-object/garbage-collection-and-browsing-contexts/discard
 html/browsers/the-window-object/named-access-on-the-window-object/window-named-properties.html
 html/browsers/the-window-object/open-close/close_script_defer.html
 html/browsers/the-window-object/open-close/closed-after-close.html
-html/browsers/the-window-object/open-close/creating_browsing_context_test_01.html
 html/browsers/the-window-object/open-close/script-closable.html
 html/browsers/the-window-object/window-indexed-properties-delete-no-cache.html
 html/browsers/the-window-object/window-indexed-properties-strict.html
@@ -2814,7 +2813,6 @@ html/browsers/the-window-object/window-indexed-properties.html
 html/browsers/the-window-object/window-open-noreferrer.html
 html/browsers/the-windowproxy-exotic-object/windowproxy-prototype-setting-same-origin.html
 html/browsers/windows/browsing-context-names/choose-_self-001.html
-html/browsers/windows/browsing-context-names/choose-default-001.html
 html/browsers/windows/document-domain-removed-iframe.html
 html/browsers/windows/embedded-opener-remove-frame.html
 html/browsers/windows/embedded-opener.html

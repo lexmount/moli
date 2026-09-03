@@ -5350,6 +5350,7 @@ html/browsers/the-window-object/named-access-on-the-window-object/removing.html
 html/browsers/the-window-object/named-access-on-the-window-object/strict-mode-redefine-readonly-property.html
 html/browsers/the-window-object/named-access-on-the-window-object/window-null-names.html
 html/browsers/the-window-object/navigate-to-about-blank-while-initial-load-pending.html
+html/browsers/the-window-object/open-close/creating_browsing_context_test_01.html
 html/browsers/the-window-object/open-close/open-features-tokenization-noopener.html
 html/browsers/the-window-object/open-close/open-features-tokenization-noreferrer.html
 html/browsers/the-window-object/proxy-getOwnPropertyDescriptor.html
@@ -5369,6 +5370,7 @@ html/browsers/windows/browsing-context-names/choose-_parent-002.html
 html/browsers/windows/browsing-context-names/choose-_parent-003.html
 html/browsers/windows/browsing-context-names/choose-_parent-004.html
 html/browsers/windows/browsing-context-names/choose-_self-002.html
+html/browsers/windows/browsing-context-names/choose-default-001.html
 html/browsers/windows/browsing-context-names/choose-default-002.html
 html/browsers/windows/browsing-context-names/choose-existing-001.html
 html/browsers/windows/browsing-context-window.html
