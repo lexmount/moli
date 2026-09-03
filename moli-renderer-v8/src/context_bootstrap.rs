@@ -1246,4 +1246,4 @@ pub(crate) fn set_event_private_bool<'s>(
     );
 }
 
-pub(crate) use self::events::{event_trusted, set_event_default_prevented};
+pub(crate) use self::events::event_trusted;

@@ -3,6 +3,7 @@ use crate::{
         set_window_body_onerror_handler_compiled, set_window_onerror_handler_value,
         window_body_onerror_handler_is_compiled,
     },
+    native_bridge::OwnerDispatchScope,
     util::{get_private_value, set_private_value, v8_string, v8str},
 };
 
@@ -137,6 +138,17 @@ fn body_window_event_handler_getter<'s>(
         return;
     }
 
+    if handler_name == "onerror"
+        && let Some(OwnerDispatchScope::Child(child)) =
+            runtime.owner_dispatch_scope_for_node(handle)
+    {
+        match runtime.child_window_event_handler_property_value(scope, child, handler_name) {
+            Some(value) => rv.set(value),
+            None => rv.set_null(),
+        }
+        return;
+    }
+
     if let Some(value) = body_window_event_handler(scope, handler_name)
         && value.is_function()
     {
@@ -205,6 +217,29 @@ fn body_window_event_handler_setter<'s>(
     mut rv: v8::ReturnValue<'_, v8::Value>,
     handler_name: &'static str,
 ) {
+    if handler_name == "onerror"
+        && let Ok((runtime_ptr, handle)) =
+            node_runtime_and_handle_from_object_or_detached(scope, args.this())
+    {
+        let runtime = unsafe { &mut *runtime_ptr };
+        if let Some(OwnerDispatchScope::Child(child)) =
+            runtime.owner_dispatch_scope_for_node(handle)
+        {
+            let handler = v8::Local::<v8::Function>::try_from(args.get(0)).ok();
+            let relevant_context = handler
+                .and_then(|handler| handler.get_creation_context(scope))
+                .unwrap_or_else(|| scope.get_current_context());
+            runtime.set_child_window_event_handler_property(
+                scope,
+                child,
+                handler_name,
+                handler,
+                relevant_context,
+            );
+            rv.set_undefined();
+            return;
+        }
+    }
     let _ = set_body_window_event_handler_compiled(scope, handler_name, true);
     let value = args.get(0);
     if value.is_function() {

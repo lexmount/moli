@@ -6,7 +6,7 @@ pub(crate) enum EventHandlerType {
     OnErrorEventHandler,
 }
 
-pub(crate) fn set_event_default_prevented(
+pub(in crate::context_bootstrap) fn set_event_default_prevented(
     scope: &mut v8::PinScope<'_, '_>,
     event: v8::Local<'_, v8::Object>,
 ) {

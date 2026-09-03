@@ -1,5 +1,32 @@
 use super::*;
 
+#[test]
+fn document_visibility_handler_is_native_and_can_be_cleared() {
+    let mut vm = new_storage_html_test_vm("https://visibility-handler.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+    const descriptor = Object.getOwnPropertyDescriptor(Document.prototype, "onvisibilitychange");
+    const isAccessor = typeof descriptor?.get === "function" && typeof descriptor?.set === "function";
+    const initiallyNull = document.onvisibilitychange === null;
+    const calls = [];
+    let listeners = 0;
+    document.addEventListener("visibilitychange", () => ++listeners);
+    document.onvisibilitychange = function (event) {
+        calls.push(this === document && event.currentTarget === document);
+    };
+    document.dispatchEvent(new Event("visibilitychange"));
+    document.onvisibilitychange = null;
+    document.dispatchEvent(new Event("visibilitychange"));
+    return JSON.stringify([isAccessor, initiallyNull, calls, listeners, document.onvisibilitychange === null]);
+})()
+"#,
+        )
+        .unwrap();
+    assert_eq!(result, r#"[true,true,[true],2,true]"#);
+}
+
 mod popup;
 
 #[test]
@@ -351,28 +378,75 @@ fn child_window_onerror_return_values_use_native_cancellation() {
 }
 
 #[test]
-fn document_visibility_handler_is_native_and_can_be_cleared() {
-    let mut vm = new_storage_html_test_vm("https://visibility-handler.test/");
+fn child_frameset_event_handler_property_reflects_on_its_window() {
+    let mut vm = new_parsed_test_vm(
+        "https://child-frameset-window-handler.test/",
+        "<!doctype html><iframe id='child'></iframe>",
+    );
+
     let result = vm
         .eval(
             r#"
 (() => {
-    const descriptor = Object.getOwnPropertyDescriptor(Document.prototype, "onvisibilitychange");
-    const isAccessor = typeof descriptor?.get === "function" && typeof descriptor?.set === "function";
-    const initiallyNull = document.onvisibilitychange === null;
-    const calls = [];
-    let listeners = 0;
-    document.addEventListener("visibilitychange", () => ++listeners);
-    document.onvisibilitychange = function (event) {
-        calls.push(this === document && event.currentTarget === document);
-    };
-    document.dispatchEvent(new Event("visibilitychange"));
-    document.onvisibilitychange = null;
-    document.dispatchEvent(new Event("visibilitychange"));
-    return JSON.stringify([isAccessor, initiallyNull, calls, listeners, document.onvisibilitychange === null]);
+  const frame = document.getElementById("child");
+  const childWindow = frame.contentWindow;
+  const childDocument = frame.contentDocument;
+  const frameset = childDocument.createElement("frameset");
+  childDocument.documentElement.replaceChild(frameset, childDocument.body);
+  const errorCalls = [];
+  const errorHandler = function (...args) {
+    errorCalls.push([
+      args.length,
+      this === childWindow,
+      args[0],
+      args[1],
+      args[2],
+      args[3],
+      args[4]
+    ]);
+    return true;
+  };
+  frameset.onerror = errorHandler;
+  const reflectedErrorHandler =
+    frameset.onerror === errorHandler && childWindow.onerror === errorHandler;
+  const error = new ErrorEvent("error", {
+    bubbles: true,
+    cancelable: true,
+    message: "message",
+    filename: "source",
+    lineno: 3,
+    colno: 4,
+    error: "reason"
+  });
+  frameset.dispatchEvent(error);
+
+  const ordinaryCalls = [];
+  const ordinaryHandler = function (...args) {
+    ordinaryCalls.push([args.length, this === childWindow, args[0].type]);
+    return true;
+  };
+  frameset.onerror = ordinaryHandler;
+  const reflectedOrdinaryHandler =
+    frameset.onerror === ordinaryHandler && childWindow.onerror === ordinaryHandler;
+  const ordinary = new Event("error", { bubbles: true, cancelable: true });
+  frameset.dispatchEvent(ordinary);
+
+  return JSON.stringify({
+    reflectedErrorHandler,
+    reflectedOrdinaryHandler,
+    mainWindowUntouched: window.onerror === null,
+    errorCalls,
+    errorDefaultPrevented: error.defaultPrevented,
+    ordinaryCalls,
+    ordinaryDefaultPrevented: ordinary.defaultPrevented
+  });
 })()
 "#,
         )
-        .unwrap();
-    assert_eq!(result, r#"[true,true,[true],2,true]"#);
+        .expect("child frameset Window event handler probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"reflectedErrorHandler":true,"reflectedOrdinaryHandler":true,"mainWindowUntouched":true,"errorCalls":[[5,true,"message","source",3,4,"reason"]],"errorDefaultPrevented":true,"ordinaryCalls":[[1,true,"error"]],"ordinaryDefaultPrevented":false}"#,
+    );
 }

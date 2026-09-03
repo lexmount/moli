@@ -255,7 +255,7 @@ pub(in crate::context_bootstrap) use init::{EventInit, parse_event_dictionary};
 pub(super) use kind::EventSubclassKind;
 pub(crate) use methods::{
     EventHandlerType, apply_before_unload_event_handler_return_value,
-    apply_event_handler_return_value, set_event_default_prevented,
+    apply_event_handler_return_value,
 };
 pub(super) use methods::{
     event_cancel_bubble_getter_function, event_cancel_bubble_setter_function,
