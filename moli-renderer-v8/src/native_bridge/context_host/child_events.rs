@@ -1,5 +1,6 @@
 use super::{OwnerDispatchScope, PageScriptHost};
 use crate::{
+    context_bootstrap::{EventHandlerType, apply_event_handler_return_value},
     context_bootstrap::{error_event_handler_arguments, event_is_error_event},
     document_runtime::DomHandle,
     document_runtime::EventTargetHandle,
@@ -914,18 +915,12 @@ fn apply_child_window_event_handler_return<'s>(
         return;
     };
     let returned = v8::Local::new(scope, returned);
-    let should_cancel = if event_type == "error" && event_is_error_event(scope, event) {
-        returned.is_boolean() && returned.boolean_value(scope)
+    let handler_type = if event_type == "error" && event_is_error_event(scope, event) {
+        EventHandlerType::OnErrorEventHandler
     } else {
-        returned.is_boolean() && !returned.boolean_value(scope)
+        EventHandlerType::EventHandler
     };
-    if should_cancel && crate::context_bootstrap::event_bool_attribute(scope, event, "cancelable") {
-        let _ = crate::context_bootstrap::event_backing(scope, event).set(
-            scope,
-            v8str(scope, "defaultPrevented").into(),
-            v8::Boolean::new(scope, true).into(),
-        );
-    }
+    apply_event_handler_return_value(scope, event, returned, handler_type);
 }
 
 fn enter_child_window_event_dispatch<'s>(
