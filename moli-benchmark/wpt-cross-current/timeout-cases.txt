@@ -59,7 +59,6 @@ dom/events/webkit-animation-end-event.html
 dom/events/webkit-animation-iteration-event.html
 dom/events/webkit-animation-start-event.html
 dom/events/webkit-transition-end-event.html
-dom/ranges/Range-surroundContents.html
 encrypted-media/media-element-event-handler-attributes.html
 fetch/api/abort/serviceworker-intercepted.https.html
 fetch/api/policies/referrer-no-referrer-service-worker.https.html
@@ -118,6 +117,7 @@ html/browsers/history/the-location-interface/location_replace_session_history.ht
 html/browsers/history/the-location-interface/reload_document_open_write.html
 html/browsers/history/the-location-interface/scripted_click_assign_during_load.html
 html/browsers/history/the-location-interface/scripted_click_location_assign_during_load.html
+html/browsers/history/the-location-interface/scripted_form_submit_assign_during_load.html
 html/browsers/history/the-session-history-of-browsing-contexts/navigation-in-onload.html
 html/browsers/sandboxing/sandbox-document-open.html
 html/browsers/sandboxing/sandbox-window-open-srcdoc.html
