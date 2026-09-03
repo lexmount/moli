@@ -6165,6 +6165,7 @@ html/semantics/embedded-content/the-iframe-element/historical.html
 html/semantics/embedded-content/the-iframe-element/hittest-detached-iframe-crash.html
 html/semantics/embedded-content/the-iframe-element/iframe-allow.html
 html/semantics/embedded-content/the-iframe-element/iframe-allowfullscreen.html
+html/semantics/embedded-content/the-iframe-element/iframe-append-to-child-document.html
 html/semantics/embedded-content/the-iframe-element/iframe-display-none-with-object.html
 html/semantics/embedded-content/the-iframe-element/iframe-document-move-crash.html
 html/semantics/embedded-content/the-iframe-element/iframe-first-load-canceled-second-load-blank.html
@@ -6192,6 +6193,7 @@ html/semantics/embedded-content/the-iframe-element/iframe-loading-lazy-reload-lo
 html/semantics/embedded-content/the-iframe-element/iframe-loading-lazy-reload-navigation-reload.html
 html/semantics/embedded-content/the-iframe-element/iframe-loading-lazy-simple-crash.html
 html/semantics/embedded-content/the-iframe-element/iframe-nosrc.html
+html/semantics/embedded-content/the-iframe-element/iframe-synchronously-discard.html
 html/semantics/embedded-content/the-iframe-element/iframe_javascript_url_01.htm
 html/semantics/embedded-content/the-iframe-element/iframe_javascript_url_initial_insertion.html
 html/semantics/embedded-content/the-iframe-element/iframe_javascript_url_not_about_blank.html
