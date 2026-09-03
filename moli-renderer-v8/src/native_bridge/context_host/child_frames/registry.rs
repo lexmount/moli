@@ -18,15 +18,9 @@ impl JsContextHost {
         if let Some(entry) = self.child_browsing_contexts.get_mut(&handle) {
             entry.clear_current_document_loader_id();
         }
-        let retired_owner = self
-            .frame_owner_store
-            .current_child_document_task_owner(handle);
-        self.remove_child_browsing_context_current_document_storage(handle);
         let transition = self.frame_owner_store.detach_current_child_document(handle);
-        debug_assert_eq!(
-            transition.and_then(|item| item.retired_owner()),
-            retired_owner
-        );
+        let retired_owner = transition.and_then(|item| item.retired_owner());
+        self.remove_child_browsing_context_current_document_storage(handle, retired_owner);
         transition
     }
 
@@ -69,14 +63,12 @@ impl JsContextHost {
     fn remove_child_browsing_context_current_document_storage(
         &mut self,
         handle: DomHandle,
+        retired_owner: Option<crate::frame_owner_model::FrameDocumentTaskOwner>,
     ) -> Option<DomHandle> {
         let document_handle = self
             .child_browsing_context_document_handles
             .remove(&handle)?;
-        if let Some(owner) = self
-            .frame_owner_store
-            .current_child_document_task_owner(handle)
-        {
+        if let Some(owner) = retired_owner {
             self.retire_child_document_external_state(handle, owner, document_handle);
             return Some(document_handle);
         }

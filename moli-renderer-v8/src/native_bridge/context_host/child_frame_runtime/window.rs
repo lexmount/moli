@@ -2677,11 +2677,25 @@ fn cross_origin_window_closed_getter_callback<'s>(
     cross_origin_window_stored_value_getter(scope, args, rv, CROSS_ORIGIN_WINDOW_CLOSED_SLOT);
 }
 
+fn cross_origin_window_has_discarded_child_browsing_context<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    window: v8::Local<'s, v8::Object>,
+) -> bool {
+    child_handle_from_object(scope, window).is_some_and(|handle| {
+        context_host_ptr_from_global_bridge(scope)
+            .is_none_or(|host_ptr| !unsafe { &*host_ptr }.child_browsing_context_is_live(handle))
+    })
+}
+
 fn cross_origin_window_top_getter_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
-    rv: v8::ReturnValue<'_, v8::Value>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if cross_origin_window_has_discarded_child_browsing_context(scope, args.this()) {
+        rv.set_null();
+        return;
+    }
     cross_origin_window_stored_value_getter(scope, args, rv, CROSS_ORIGIN_WINDOW_TOP_SLOT);
 }
 
@@ -2696,8 +2710,12 @@ fn cross_origin_window_opener_getter_callback<'s>(
 fn cross_origin_window_parent_getter_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
-    rv: v8::ReturnValue<'_, v8::Value>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if cross_origin_window_has_discarded_child_browsing_context(scope, args.this()) {
+        rv.set_null();
+        return;
+    }
     cross_origin_window_stored_value_getter(scope, args, rv, CROSS_ORIGIN_WINDOW_PARENT_SLOT);
 }
 

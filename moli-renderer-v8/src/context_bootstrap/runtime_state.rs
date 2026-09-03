@@ -747,6 +747,10 @@ fn legacy_unforgeable_parent_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
+    if super::window_accessors::window_has_discarded_child_browsing_context(scope, args.this()) {
+        rv.set_null();
+        return;
+    }
     if let Some(value) =
         legacy_unforgeable_window_slot_value(scope, args.this(), WINDOW_PARENT_SLOT)
     {
@@ -767,6 +771,10 @@ fn legacy_unforgeable_top_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
+    if super::window_accessors::window_has_discarded_child_browsing_context(scope, args.this()) {
+        rv.set_null();
+        return;
+    }
     if let Some(value) = legacy_unforgeable_window_slot_value(scope, args.this(), WINDOW_TOP_SLOT) {
         rv.set(value);
     }
@@ -1215,6 +1223,10 @@ fn legacy_unforgeable_document_getter<'s>(
         return;
     };
     if let Some(child_handle) = child_context_handle_from_owner(scope, receiver) {
+        if let Some(document) = get_private_value(scope, receiver, WINDOW_DOCUMENT_SLOT) {
+            rv.set(document);
+            return;
+        }
         match unsafe { &mut *host_ptr }.child_browsing_context_document_wrapper(scope, child_handle)
         {
             Some(document) => rv.set(document.into()),

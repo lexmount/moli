@@ -1,5 +1,6 @@
 use super::super::JsContextHost;
 use super::document_slots::sync_child_document_window_slots;
+use crate::context_bootstrap::WINDOW_DOCUMENT_SLOT;
 use crate::document_runtime::DomHandle;
 use crate::document_script_scheduler::FrameDocumentClassicScriptSchedulerWork;
 use crate::dom::native::Node;
@@ -104,6 +105,7 @@ impl JsContextHost {
                     "document",
                     document.into(),
                 );
+                set_private_value(scope, window, WINDOW_DOCUMENT_SLOT, document.into());
             }
             ready_work.extend(
                 self.sync_child_browsing_context_subtree_into_ready_work(scope, document_handle),

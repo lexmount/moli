@@ -392,7 +392,7 @@ pub(in crate::context_bootstrap) use self::shared::*;
 pub(crate) use self::shared::{
     CHILD_BROWSING_CONTEXT_HANDLE_SLOT, DOCUMENT_SELECTION_CHANGE_LISTENER_SLOT,
     READABLE_STREAM_CHILD_REALM_HANDLED_REJECTION_SLOT, WINDOW_CUSTOM_ELEMENTS_SLOT,
-    WINDOW_NAME_SLOT,
+    WINDOW_DOCUMENT_SLOT, WINDOW_NAME_SLOT,
 };
 pub(crate) use self::shared::{
     RuntimeMessageSourceSecurity, current_runtime_message_agent_cluster,

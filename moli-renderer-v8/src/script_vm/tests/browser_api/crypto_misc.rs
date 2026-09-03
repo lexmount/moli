@@ -797,18 +797,19 @@ fn child_initial_about_blank_executes_dynamic_inline_script_from_parent_document
 
               const script = document.createElement("script");
               script.textContent = `
-                top.__childDynamicScriptEvents.push(
+                const ownerWindow = top;
+                ownerWindow.__childDynamicScriptEvents.push(
                   "start:" + String(crypto.subtle instanceof SubtleCrypto)
                 );
                 const algorithm = { name: "SHA-256" };
                 Object.defineProperty(algorithm, "name", {
                   get() {
-                    top.__closeChildDynamicScriptFrame(frameElement);
+                    ownerWindow.__closeChildDynamicScriptFrame(frameElement);
                     return "SHA-256";
                   }
                 });
                 crypto.subtle.digest(algorithm, new Uint8Array());
-                top.__childDynamicScriptEvents.push("after-call");
+                ownerWindow.__childDynamicScriptEvents.push("after-call");
               `;
               frame.contentDocument.body.appendChild(script);
               return [

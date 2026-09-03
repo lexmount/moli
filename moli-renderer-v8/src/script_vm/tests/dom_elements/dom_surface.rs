@@ -10233,6 +10233,102 @@ const after = [
 }
 
 #[test]
+fn removing_iframe_discards_retained_window_relations_synchronously() {
+    let mut vm = new_storage_test_vm("https://iframe-discard-window-relations.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const child = document.createElement("iframe");
+  (document.body || document.documentElement || document).appendChild(child);
+  const childWindow = child.contentWindow;
+  const childDocument = childWindow.document;
+
+  const grandchild = childDocument.createElement("iframe");
+  childDocument.body.appendChild(grandchild);
+  const grandchildWindow = grandchild.contentWindow;
+  const grandchildDocument = grandchildWindow.document;
+
+  const before = {
+    childContentWindowIsStable: child.contentWindow === childWindow,
+    childParentIsTop: childWindow.parent === window,
+    childTopIsTop: childWindow.top === window,
+    childFrameElementIsOwner: childWindow.frameElement === child,
+    grandchildContentWindowIsStable: grandchild.contentWindow === grandchildWindow,
+    grandchildParentIsChild: grandchildWindow.parent === childWindow,
+    grandchildTopIsTop: grandchildWindow.top === window,
+    grandchildFrameElementIsOwner: grandchildWindow.frameElement === grandchild
+  };
+
+  child.parentNode.removeChild(child);
+  const after = {
+    childContentWindowIsNull: child.contentWindow === null,
+    childParentIsNull: childWindow.parent === null,
+    childTopIsNull: childWindow.top === null,
+    childFrameElementIsNull: childWindow.frameElement === null,
+    childDocumentIsRetained: childWindow.document === childDocument,
+    grandchildContentWindowIsNull: grandchild.contentWindow === null,
+    grandchildParentIsNull: grandchildWindow.parent === null,
+    grandchildTopIsNull: grandchildWindow.top === null,
+    grandchildFrameElementIsNull: grandchildWindow.frameElement === null,
+    grandchildDocumentIsRetained: grandchildWindow.document === grandchildDocument
+  };
+  return JSON.stringify({ before, after });
+})()
+"#,
+        )
+        .expect("iframe discard relation probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"before":{"childContentWindowIsStable":true,"childParentIsTop":true,"childTopIsTop":true,"childFrameElementIsOwner":true,"grandchildContentWindowIsStable":true,"grandchildParentIsChild":true,"grandchildTopIsTop":true,"grandchildFrameElementIsOwner":true},"after":{"childContentWindowIsNull":true,"childParentIsNull":true,"childTopIsNull":true,"childFrameElementIsNull":true,"childDocumentIsRetained":true,"grandchildContentWindowIsNull":true,"grandchildParentIsNull":true,"grandchildTopIsNull":true,"grandchildFrameElementIsNull":true,"grandchildDocumentIsRetained":true}}"#
+    );
+}
+
+#[test]
+fn moving_iframe_into_own_child_document_discards_retained_window_relations() {
+    let mut vm = new_storage_test_vm("https://iframe-own-child-document.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const iframe = document.createElement("iframe");
+  (document.body || document.documentElement || document).appendChild(iframe);
+  const childWindow = iframe.contentWindow;
+  const childDocument = childWindow.document;
+
+  const before = {
+    parentIsTop: childWindow.parent === window,
+    topIsTop: childWindow.top === window,
+    frameElementIsOwner: childWindow.frameElement === iframe,
+    contentWindowIsStable: iframe.contentWindow === childWindow
+  };
+
+  childDocument.body.appendChild(iframe);
+  const after = {
+    parentIsNull: childWindow.parent === null,
+    topIsNull: childWindow.top === null,
+    frameElementIsNull: childWindow.frameElement === null,
+    contentWindowIsNull: iframe.contentWindow === null,
+    documentIsRetained: childWindow.document === childDocument,
+    movedIntoChildDocument: iframe.ownerDocument === childDocument,
+    remainsInserted: childDocument.body.firstChild === iframe
+  };
+  return JSON.stringify({ before, after });
+})()
+"#,
+        )
+        .expect("self-descendant iframe move probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"before":{"parentIsTop":true,"topIsTop":true,"frameElementIsOwner":true,"contentWindowIsStable":true},"after":{"parentIsNull":true,"topIsNull":true,"frameElementIsNull":true,"contentWindowIsNull":true,"documentIsRetained":true,"movedIntoChildDocument":true,"remainsInserted":true}}"#
+    );
+}
+
+#[test]
 fn navigation_runtime_state_ignores_proto_pollution_slots() {
     let mut vm = new_storage_test_vm("https://navigation-slot-pollution.test/page.html");
 
