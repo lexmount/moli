@@ -28,6 +28,7 @@ use crate::network::ResourceRequestClient;
 use crate::script_vm::{ScriptVm, ScriptVmDefaultWorldBootstrap, StandaloneScriptVmHarness};
 use crate::types::{
     ModuleGraphFetchCompletion, ModuleGraphFetchOrdering, ModuleGraphFetchRequester,
+    ScriptErrorConstructorKind,
 };
 use crate::util::v8str;
 use moli_fetch::FetchConfig;
@@ -335,6 +336,41 @@ fn reaction_data_slots_preserve_u64_values_above_js_safe_integer() {
         native_child_module_script_reaction_data(scope, child_data.into()),
         Some((document_owner, FrameRealmId(realm_id), reaction_id)),
         "callback data must preserve the exact child Document and realm without Number coercion"
+    );
+}
+
+#[test]
+fn native_module_instantiate_errors_use_stage_appropriate_constructors() {
+    let javascript_error = super::native_module_instantiate_load_error(
+        "javascript link failed".to_owned(),
+        None,
+        false,
+    );
+    assert_eq!(javascript_error.stage(), ModuleLoadStage::Instantiate);
+    assert_eq!(
+        javascript_error.error_constructor(),
+        Some(ScriptErrorConstructorKind::SyntaxError)
+    );
+
+    let wasm_error = super::native_module_instantiate_load_error(
+        "WebAssembly link failed".to_owned(),
+        None,
+        true,
+    );
+    assert_eq!(
+        wasm_error.error_constructor(),
+        Some(ScriptErrorConstructorKind::WebAssemblyLinkError)
+    );
+
+    let caught_syntax_error = super::native_module_instantiate_load_error(
+        "mixed graph failed".to_owned(),
+        Some(ScriptErrorConstructorKind::SyntaxError),
+        true,
+    );
+    assert_eq!(
+        caught_syntax_error.error_constructor(),
+        Some(ScriptErrorConstructorKind::SyntaxError),
+        "an exact V8 exception constructor must win over the module-kind fallback"
     );
 }
 
