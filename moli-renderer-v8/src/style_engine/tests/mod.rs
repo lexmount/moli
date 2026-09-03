@@ -343,6 +343,57 @@ fn source_lifecycle_report_for_document_for_test(
     let source_stores = world.borrow_source_stores();
     source_stores.source_lifecycle_report(host, document_context)
 }
+
+fn materialize_source_cascade_data_for_document_for_test(
+    engine: &MoliStyleEngine,
+    host: &DomHost,
+    document: DomHandle,
+    document_context: StyleSourceDocumentContext<'_>,
+    source_ids: impl IntoIterator<Item = StyleSourceId>,
+) {
+    let source_ids = source_ids.into_iter().collect::<indexmap::IndexSet<_>>();
+    let world = engine.world_for_document(document);
+    let source_stores = world.borrow_source_stores();
+    super::drain::materialize_missing_source_cascade_data(
+        &engine.dom_adapter,
+        &world.document_state,
+        host,
+        &source_stores,
+        document_context,
+        &source_ids,
+    );
+}
+
+fn prepared_retained_source_invalidation_outcome_for_document_for_test(
+    engine: &MoliStyleEngine,
+    host: &DomHost,
+    document: DomHandle,
+    document_context: StyleSourceDocumentContext<'_>,
+    target_queries: &[PendingStyleInvalidationTargetQueries],
+    clear_shadow_cascade_data_for_cleanup_target: bool,
+) -> StyleInvalidationOutcome {
+    materialize_source_cascade_data_for_document_for_test(
+        engine,
+        host,
+        document,
+        document_context,
+        target_queries
+            .iter()
+            .filter_map(|target_query| target_query.target().stylesheet_source_id().cloned()),
+    );
+    engine.with_retained_style_system_for_document_for_test(document, |retained| {
+        retained_source_invalidation_outcome_for_document_for_test(
+            engine,
+            host,
+            document,
+            document_context,
+            Some(retained),
+            target_queries,
+            clear_shadow_cascade_data_for_cleanup_target,
+        )
+    })
+}
+
 fn retained_source_invalidation_outcome_for_document_for_test(
     engine: &MoliStyleEngine,
     host: &DomHost,
@@ -429,13 +480,37 @@ fn collect_source_invalidation_roots_for_test(
     root: DomHandle,
     query: StyloStyleInvalidationQuery<'_>,
 ) -> (Vec<DomHandle>, bool) {
+    let source_ids = engine.with_retained_style_system_for_document_for_test(
+        host.document_handle(),
+        |retained| {
+            retained
+                .document_stylesheets
+                .entries()
+                .iter()
+                .chain(
+                    retained
+                        .shadow_scopes
+                        .iter()
+                        .flat_map(|scope| scope.active_stylesheets().entries()),
+                )
+                .filter_map(|entry| entry.source().source_id().cloned())
+                .collect::<Vec<_>>()
+        },
+    );
+    materialize_source_cascade_data_for_document_for_test(
+        engine,
+        host,
+        host.document_handle(),
+        StyleSourceDocumentContext::for_root_document(host.document_handle()),
+        source_ids,
+    );
     let mut roots = Vec::new();
     let mut requires_fallback = false;
     engine.with_retained_style_system_for_document_for_test(host.document_handle(), |retained| {
         engine.dom_adapter.with_bound_host(host, |adapter| {
             let retained_query = retained_style_invalidation_query_for_test(root, query);
-            for cascade_data in retained.source_cascade_data.values() {
-                let summary = StyloSourceDependencySummary::from_cascade_data(cascade_data);
+            for projection in retained.source_cascade_projections.values() {
+                let summary = StyloSourceDependencySummary::from_cascade_data(&projection.data);
                 let requests = [StyloSourceDependencyInvalidationRequest::new(
                     &retained_query,
                     None,
@@ -468,7 +543,7 @@ fn collect_source_invalidation_roots_for_test(
                             stylo_retained_source_style_invalidation_from_parts(
                                 StyloRetainedSourceStyleInvalidationKind::RetainedQueries,
                                 planned.fallback_kind,
-                                Some(cascade_data),
+                                Some(&projection.data),
                                 None,
                                 Some(
                                     planned

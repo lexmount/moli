@@ -6817,6 +6817,8 @@ fn device_changes_keep_media_sheets_installed_and_flush_only_affected_tree_scope
 
     let engine = MoliStyleEngine::new();
     let document_url = url::Url::parse("https://example.test/shadow-media.html").unwrap();
+    let first_source_id = StyleSourceId::shadow_root_adopted_style_sheet(first_root, 71);
+    let second_source_id = StyleSourceId::shadow_root_adopted_style_sheet(second_root, 72);
     let mut inputs = FullStyleWorldSnapshot::default();
     inputs.document_stylesheet_sources.push(
         StyloStylesheetSource::new(
@@ -6832,9 +6834,7 @@ fn device_changes_keep_media_sheets_installed_and_flush_only_affected_tree_scope
                 ".first-target { color: rgb(1, 2, 3); }".into(),
                 document_url.clone(),
             )
-            .with_source_id(Some(StyleSourceId::shadow_root_adopted_style_sheet(
-                first_root, 71,
-            )))
+            .with_source_id(Some(first_source_id.clone()))
             .with_owner_media_text("(max-width: 600px)"),
         ],
     ));
@@ -6845,10 +6845,7 @@ fn device_changes_keep_media_sheets_installed_and_flush_only_affected_tree_scope
                 ".second-target { color: rgb(4, 5, 6); }".into(),
                 document_url.clone(),
             )
-            .with_source_id(Some(StyleSourceId::shadow_root_adopted_style_sheet(
-                second_root,
-                72,
-            )))
+            .with_source_id(Some(second_source_id.clone()))
             .with_owner_media_text("(min-width: 100px)"),
         ],
     ));
@@ -6929,6 +6926,13 @@ fn device_changes_keep_media_sheets_installed_and_flush_only_affected_tree_scope
             "a non-matching owner MediaList must not remove its sheet from the TreeScope",
         );
     });
+    materialize_source_cascade_data_for_document_for_test(
+        &engine,
+        &host,
+        document,
+        StyleSourceDocumentContext::for_root_document(document),
+        [first_source_id, second_source_id],
+    );
     let document_flushes = engine.retained_stylist_flush_count_for_document_for_test(document);
     let first_flushes = engine
         .retained_shadow_scope_flush_count_for_document_for_test(document, first_root)

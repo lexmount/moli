@@ -620,7 +620,7 @@ fn retained_sources_are_scoped_to_document_worlds() {
     );
     engine.with_retained_style_system_for_document_for_test(host.document_handle(), |retained| {
         assert!(
-            retained.source_cascade_data.is_empty(),
+            retained.source_cascade_projections.is_empty(),
             "disconnected active-document owners should stay trackable without retained source data"
         );
     });
@@ -657,7 +657,7 @@ fn retained_sources_are_scoped_to_document_worlds() {
     );
     engine.with_retained_style_system_for_document_for_test(host.document_handle(), |retained| {
         assert!(
-            retained.source_cascade_data.is_empty(),
+            retained.source_cascade_projections.is_empty(),
             "active document retained source data should not include detached document sources"
         );
     });
@@ -669,15 +669,30 @@ fn retained_sources_are_scoped_to_document_worlds() {
         &inputs,
     );
     engine.with_retained_style_system_for_document_for_test(detached_document, |retained| {
-        assert_eq!(retained.source_cascade_data.len(), 2);
+        assert!(
+            retained.source_cascade_projections.is_empty(),
+            "detached-document source projections should also remain lazy"
+        );
+    });
+    materialize_source_cascade_data_for_document_for_test(
+        &engine,
+        &host,
+        detached_document,
+        StyleSourceDocumentContext::for_root_document(detached_document),
+        [detached_style_id.clone(), detached_link_id.clone()],
+    );
+    engine.with_retained_style_system_for_document_for_test(detached_document, |retained| {
+        assert_eq!(retained.source_cascade_projections.len(), 2);
         assert!(
             retained
-                .source_cascade_data
+                .source_cascade_projections
                 .contains_key(&detached_style_id),
             "detached document owner stylesheet should stay local to detached retained data"
         );
         assert!(
-            retained.source_cascade_data.contains_key(&detached_link_id),
+            retained
+                .source_cascade_projections
+                .contains_key(&detached_link_id),
             "detached linked stylesheet should stay local to detached retained data"
         );
     });
@@ -2327,7 +2342,7 @@ fn missing_document_adopted_sources_remain_trackable_without_retained_source() {
     );
     engine.with_retained_style_system_for_document_for_test(host.document_handle(), |retained| {
         assert!(
-            !retained.source_cascade_data.contains_key(&source_id),
+            !retained.source_cascade_projections.contains_key(&source_id),
             "missing document adopted sources should not produce retained cascade data"
         );
     });

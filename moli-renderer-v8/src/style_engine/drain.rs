@@ -9,9 +9,12 @@ use super::{
     invalidation::StyleInvalidationCleanupEffects,
     outcome::{StyleInvalidationOutcome, retained_source_invalidation_outcome},
     pending_invalidation::{PendingStyleInvalidationBatch, PendingStyleInvalidationWork},
+    source_cascade::ensure_source_cascade_data_for_source_ids,
     source_document::DocumentStyleSourceStores,
-    source_lifecycle::{StyleSourceDocumentContext, StyleSourceLifecycleReport},
+    source_id::StyleSourceId,
+    source_lifecycle::StyleSourceDocumentContext,
     state::StyleDocumentState,
+    stylesheet::install_active_stylesheet,
     target_queries::PendingStyleInvalidationTargetTraceCountsSink,
 };
 
@@ -253,13 +256,26 @@ pub(super) fn drain_style_invalidations(
             &pending.work_items,
         )
     });
-    let mut outcome = StyleInvalidationOutcome::default();
-    let diagnostic_source_lifecycle = diagnostic_source_lifecycle_report_for_invalidation_drain(
-        source_stores,
+    let source_ids = pending.stylesheet_source_ids();
+    materialize_missing_source_cascade_data(
+        dom_adapter,
+        document_state,
         host,
+        source_stores,
         document_context,
-        &pending,
+        &source_ids,
     );
+    let retain_diagnostic_source_lifecycle =
+        retain_diagnostic_source_lifecycle_report_in_invalidation_drain();
+    let diagnostic_source_lifecycle =
+        (!source_ids.is_empty() && retain_diagnostic_source_lifecycle).then(|| {
+            source_stores.source_lifecycle_report_for_source_ids(
+                host,
+                document_context,
+                source_ids.iter().cloned(),
+            )
+        });
+    let mut outcome = StyleInvalidationOutcome::default();
     for work_item in pending.work_items {
         let PendingStyleInvalidationWork { target_queries, .. } = work_item;
         let cleanup_effects =
@@ -294,23 +310,45 @@ pub(super) fn drain_style_invalidations(
     invalidation_cleanup.apply_finalized_result(host, finalized_result);
 }
 
-fn diagnostic_source_lifecycle_report_for_invalidation_drain(
-    source_stores: &DocumentStyleSourceStores<'_>,
+pub(super) fn materialize_missing_source_cascade_data(
+    dom_adapter: &StyloDomStyleAdapter,
+    document_state: &StyleDocumentState,
     host: &DomHost,
+    source_stores: &DocumentStyleSourceStores<'_>,
     document_context: StyleSourceDocumentContext<'_>,
-    pending: &PendingStyleInvalidationBatch,
-) -> Option<StyleSourceLifecycleReport> {
-    if !retain_diagnostic_source_lifecycle_report_in_invalidation_drain() {
-        return None;
+    source_ids: &IndexSet<StyleSourceId>,
+) {
+    let missing_source_ids = document_state
+        .try_with_retained_style_system(|retained| {
+            source_ids
+                .iter()
+                .filter(|source_id| !retained.source_cascade_projections.contains_key(*source_id))
+                .cloned()
+                .collect::<IndexSet<_>>()
+        })
+        .unwrap_or_default();
+    if missing_source_ids.is_empty() {
+        return;
     }
-    let lifecycle_source_ids = pending.stylesheet_source_ids();
-    (!lifecycle_source_ids.is_empty()).then(|| {
-        source_stores.source_lifecycle_report_for_source_ids(
-            host,
-            document_context,
-            lifecycle_source_ids,
-        )
-    })
+
+    let source_lifecycle = source_stores.source_lifecycle_report_for_source_ids(
+        host,
+        document_context,
+        missing_source_ids.iter().cloned(),
+    );
+    let retained_source_records =
+        source_stores.retained_source_records_for_lifecycle(host, &source_lifecycle);
+    let shared_lock = dom_adapter.shared_lock().clone();
+    document_state.try_with_retained_style_system_cache_mut(|retained| {
+        let quirks_mode = retained.key.quirks_mode;
+        ensure_source_cascade_data_for_source_ids(
+            retained,
+            &shared_lock,
+            &retained_source_records,
+            missing_source_ids.iter(),
+            |source| install_active_stylesheet(host, &shared_lock, source, quirks_mode),
+        );
+    });
 }
 
 #[cfg(test)]

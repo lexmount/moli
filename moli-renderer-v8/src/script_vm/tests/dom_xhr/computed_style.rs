@@ -702,6 +702,18 @@ fn document_stylesheet_mutation_reprojects_only_the_dirty_source() {
         .expect("both stylesheet sources should initialize"),
         r#"["rgb(1, 2, 3)","rgb(4, 5, 6)"]"#
     );
+    vm.eval(
+        r#"
+for (const [id, className] of [['target-a', 'a'], ['target-b', 'b']]) {
+  const target = document.getElementById(id);
+  target.className = '';
+  getComputedStyle(target).color;
+  target.className = className;
+  getComputedStyle(target).color;
+}
+"#,
+    )
+    .expect("targeted invalidations should materialize both source cascades");
     crate::style_engine::reset_source_cascade_rebuild_count_for_test();
 
     assert_eq!(

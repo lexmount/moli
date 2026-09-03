@@ -764,19 +764,15 @@ fn document_part_rule_styles_after_part_lang_and_invalidates() {
             &source_scope,
         )
     };
-    let application = engine
-        .with_retained_style_system_for_document_for_test(document, |retained| {
-            retained_source_invalidation_outcome_for_document_for_test(
-                &engine,
-                &host,
-                document,
-                StyleSourceDocumentContext::for_root_document(document),
-                Some(retained),
-                &target_queries,
-                false,
-            )
-        })
-        .finalize(&host);
+    let application = prepared_retained_source_invalidation_outcome_for_document_for_test(
+        &engine,
+        &host,
+        document,
+        StyleSourceDocumentContext::for_root_document(document),
+        &target_queries,
+        false,
+    )
+    .finalize(&host);
     assert_eq!(
         application.cleanup_target_kind(),
         StyleInvalidationCleanupTargetKind::ExactAffectedSubtreeRoots
@@ -879,19 +875,15 @@ fn document_part_rule_styles_after_part_dir_and_invalidates() {
             &source_scope,
         )
     };
-    let application = engine
-        .with_retained_style_system_for_document_for_test(document, |retained| {
-            retained_source_invalidation_outcome_for_document_for_test(
-                &engine,
-                &host,
-                document,
-                StyleSourceDocumentContext::for_root_document(document),
-                Some(retained),
-                &target_queries,
-                false,
-            )
-        })
-        .finalize(&host);
+    let application = prepared_retained_source_invalidation_outcome_for_document_for_test(
+        &engine,
+        &host,
+        document,
+        StyleSourceDocumentContext::for_root_document(document),
+        &target_queries,
+        false,
+    )
+    .finalize(&host);
     assert_eq!(
         application.cleanup_target_kind(),
         StyleInvalidationCleanupTargetKind::ExactAffectedSubtreeRoots

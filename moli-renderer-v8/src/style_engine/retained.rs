@@ -16,7 +16,10 @@ use super::{
     active_stylesheets::{notify_document_stylesheet_rule_changes, update_document_stylesheet_set},
     shadow_scopes::{ShadowScopeStyles, reconcile_dirty_shadow_scopes, reconcile_shadow_scopes},
     source::store::StyloStylesheetSource,
-    source_cascade::{build_source_cascade_data, update_source_cascade_data_for_scopes},
+    source_cascade::{
+        materialized_source_cascade_ids_affected_by_update,
+        reconcile_materialized_source_cascade_data, update_materialized_source_cascade_data,
+    },
     source_id::{StyleScopeId, StyleSourceId},
     source_record::RetainedStylesheetSourceRecord,
     state::RetainedStyleSystem,
@@ -87,7 +90,6 @@ pub(super) fn build_retained_style_system(
     key: StyleWorldKey,
     inputs: &FullStyleWorldSnapshot,
     shared_lock: &SharedRwLock,
-    retained_source_records: &[RetainedStylesheetSourceRecord<'_>],
     author_styles_disabled: bool,
 ) -> RetainedStyleSystem {
     let mut stylist = new_stylist_with_viewport_bits(
@@ -145,15 +147,6 @@ pub(super) fn build_retained_style_system(
             author_styles,
         ));
     }
-    let (source_cascade_data, source_cascade_keys) = build_source_cascade_data(
-        &mut stylist,
-        shared_lock,
-        &document_stylesheets,
-        &shadow_scopes,
-        retained_source_records,
-        None,
-        |source| install_active_stylesheet(host, shared_lock, source, key.quirks_mode),
-    );
     let guard = shared_lock.read();
     stylist.flush(&StylesheetGuards::same(&guard));
     let user_agent_cascade_data = ServoArc::new(
@@ -180,8 +173,7 @@ pub(super) fn build_retained_style_system(
         stylesheet_resource_revision: 0,
         user_agent_cascade_data,
         shadow_cascade_data,
-        source_cascade_data,
-        source_cascade_keys,
+        source_cascade_projections: Default::default(),
         script_custom_property_registrations: inputs.script_custom_property_registrations.clone(),
     }
 }
@@ -225,19 +217,12 @@ pub(super) fn update_retained_style_system(
     invalidations.shadow_scope_fallbacks = shadow_reconciliation.scope_fallbacks;
     invalidations.removed_shadow_scopes = shadow_reconciliation.removed_roots;
 
-    let previous_source_cascade_data = std::mem::take(&mut retained.source_cascade_data);
-    let previous_source_cascade_keys = std::mem::take(&mut retained.source_cascade_keys);
-    let (source_cascade_data, source_cascade_keys) = build_source_cascade_data(
-        &mut retained.stylist,
+    reconcile_materialized_source_cascade_data(
+        retained,
         shared_lock,
-        &retained.document_stylesheets,
-        &retained.shadow_scopes,
         retained_source_records,
-        Some((&previous_source_cascade_data, &previous_source_cascade_keys)),
         |source| install_active_stylesheet(host, shared_lock, source, key.quirks_mode),
     );
-    retained.source_cascade_data = source_cascade_data;
-    retained.source_cascade_keys = source_cascade_keys;
     refresh_retained_derived_state(
         retained,
         document_update.device_changed,
@@ -308,13 +293,17 @@ pub(super) fn update_retained_style_system_incrementally(
             .copied()
             .map(StyleScopeId::ShadowRoot),
     );
-    update_source_cascade_data_for_scopes(
+    let source_cascade_ids_to_update = materialized_source_cascade_ids_affected_by_update(
+        retained,
+        dirty_source_ids,
+        &dirty_source_scopes,
+        false,
+    );
+    update_materialized_source_cascade_data(
         retained,
         shared_lock,
         retained_source_records,
-        dirty_source_ids,
-        &dirty_source_scopes,
-        document_update.device_changed,
+        &source_cascade_ids_to_update,
         |source| install_active_stylesheet(host, shared_lock, source, key.quirks_mode),
     );
     refresh_retained_derived_state(

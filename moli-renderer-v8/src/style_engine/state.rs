@@ -37,9 +37,13 @@ pub(super) struct RetainedStyleSystem {
     pub(super) stylesheet_resource_revision: u64,
     pub(super) user_agent_cascade_data: ServoArc<CascadeData>,
     pub(super) shadow_cascade_data: Vec<(DomHandle, ServoArc<CascadeData>)>,
-    pub(super) source_cascade_data: HashMap<StyleSourceId, ServoArc<CascadeData>>,
-    pub(super) source_cascade_keys: HashMap<StyleSourceId, StyleSourceSetKey>,
+    pub(super) source_cascade_projections: HashMap<StyleSourceId, SourceCascadeProjection>,
     pub(super) script_custom_property_registrations: Vec<CssCustomPropertyRegistrationRecord>,
+}
+
+pub(super) struct SourceCascadeProjection {
+    pub(super) data: ServoArc<CascadeData>,
+    pub(super) key: StyleSourceSetKey,
 }
 
 /// Style inputs that are allowed to change a completed Document observation.
@@ -403,6 +407,16 @@ impl StyleDocumentState {
     ) -> Option<R> {
         let retained = self.retained_style_system.borrow();
         retained.as_ref().map(callback)
+    }
+
+    /// Updates derived caches without advancing the observable style-world
+    /// generation or the incremental-update counters.
+    pub(super) fn try_with_retained_style_system_cache_mut<R>(
+        &self,
+        callback: impl FnOnce(&mut RetainedStyleSystem) -> R,
+    ) -> Option<R> {
+        let mut retained = self.retained_style_system.borrow_mut();
+        retained.as_mut().map(callback)
     }
 
     pub(super) fn with_retained_style_system<R>(

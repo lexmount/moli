@@ -1550,19 +1550,15 @@ fn source_dependency_request_translation_combines_exact_and_nth_structural_roots
     let key = StyleWorldKey::new(&inputs, None);
     engine.ensure_retained_style_system_for_document(&host, document, key, &inputs);
 
-    let application = engine
-        .with_retained_style_system_for_document_for_test(document, |retained| {
-            retained_source_invalidation_outcome_for_document_for_test(
-                &engine,
-                &host,
-                document,
-                StyleSourceDocumentContext::for_root_document(document),
-                Some(retained),
-                target_queries,
-                false,
-            )
-        })
-        .finalize(&host);
+    let application = prepared_retained_source_invalidation_outcome_for_document_for_test(
+        &engine,
+        &host,
+        document,
+        StyleSourceDocumentContext::for_root_document(document),
+        target_queries,
+        false,
+    )
+    .finalize(&host);
     assert_eq!(application.diagnostic_target_results().len(), 1);
     assert_eq!(
         application.diagnostic_target_results()[0].kind(),
@@ -3005,14 +3001,27 @@ fn cache_key_source_matching_skips_inactive_owner_sources() {
     );
     engine.with_retained_style_system_for_document_for_test(host.document_handle(), |retained| {
         assert!(
+            retained.source_cascade_projections.is_empty(),
+            "source-local cascade data should remain lazy after building the style world"
+        );
+    });
+    materialize_source_cascade_data_for_document_for_test(
+        &engine,
+        &host,
+        document,
+        StyleSourceDocumentContext::for_root_document(document),
+        [connected_style_id.clone(), disconnected_style_id.clone()],
+    );
+    engine.with_retained_style_system_for_document_for_test(host.document_handle(), |retained| {
+        assert!(
             retained
-                .source_cascade_data
+                .source_cascade_projections
                 .contains_key(&connected_style_id),
             "connected source should match the cache-key input source"
         );
         assert!(
             !retained
-                .source_cascade_data
+                .source_cascade_projections
                 .contains_key(&disconnected_style_id),
             "disconnected active-document source must not match by cache key"
         );
