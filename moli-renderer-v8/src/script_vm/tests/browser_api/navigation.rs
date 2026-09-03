@@ -1634,6 +1634,50 @@ fn history_mutation_empty_url_preserves_current_document_url() {
 }
 
 #[test]
+fn history_operations_reject_a_removed_child_document() {
+    let mut vm = new_storage_test_vm("https://example.com/page.html");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const root = document.documentElement ||
+                document.appendChild(document.createElement("html"));
+              const body = document.body || root.appendChild(document.createElement("body"));
+              const frame = document.createElement("iframe");
+              body.appendChild(frame);
+              const childHistory = frame.contentWindow.history;
+              const ChildDOMException = frame.contentWindow.DOMException;
+              frame.remove();
+
+              const probe = callback => {
+                try {
+                  callback();
+                  return "no throw";
+                } catch (error) {
+                  return `${error.name}:${error instanceof ChildDOMException}`;
+                }
+              };
+              return [
+                probe(() => childHistory.length),
+                probe(() => childHistory.scrollRestoration),
+                probe(() => childHistory.state),
+                probe(() => { childHistory.scrollRestoration = "manual"; }),
+                probe(() => childHistory.go(0)),
+                probe(() => childHistory.back()),
+                probe(() => childHistory.forward()),
+                probe(() => childHistory.pushState(1, "", "?x=1")),
+                probe(() => childHistory.replaceState(2, "", "?x=2"))
+              ].join("|");
+            })()
+            "#,
+        )
+        .expect("removed child History operations should be rejected");
+
+    assert_eq!(result, ["SecurityError:true"; 9].join("|"));
+}
+
+#[test]
 fn history_state_preserves_structured_clone_values_not_representable_as_json() {
     let mut vm = new_storage_test_vm("https://example.com/base");
 

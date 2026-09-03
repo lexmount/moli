@@ -23,7 +23,7 @@ use super::navigation_result::{
 };
 use super::navigation_serialize::sync_child_navigation_entry_seed_from_owner;
 use super::navigation_window::{
-    runtime_window_is_global, runtime_window_owner, window_location_for_holder,
+    history_owner_if_fully_active, runtime_window_is_global, window_location_for_holder,
     window_navigation_for_holder,
 };
 use super::*;
@@ -104,11 +104,13 @@ fn mutate_history_object<'s>(
         return;
     };
     let _ = &parsed.unused;
+    let Some(owner) = history_owner_if_fully_active(scope, history) else {
+        return;
+    };
     let Some(state) = structured_clone_value_for_storage(scope, parsed.state) else {
         return;
     };
     let state_json = stringify_history_state(scope, state);
-    let owner = runtime_window_owner(scope, history);
     let Some(location) = window_location_for_holder(scope, owner) else {
         return;
     };

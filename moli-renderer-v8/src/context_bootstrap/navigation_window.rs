@@ -147,6 +147,30 @@ pub(super) fn navigation_document_is_active<'s>(
     navigation_document_is_live(scope, owner)
 }
 
+pub(super) fn history_owner_if_fully_active<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    history: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let owner = runtime_window_owner(scope, history);
+    let is_fully_active = if let Some(popup_id) =
+        crate::native_bridge::lightweight_popup_id_from_window(scope, owner)
+    {
+        context_host_ptr_from_global_bridge(scope)
+            .is_some_and(|host_ptr| unsafe { &*host_ptr }.lightweight_popup_is_open(popup_id))
+    } else {
+        navigation_document_is_active(scope, owner)
+    };
+    if is_fully_active {
+        return Some(owner);
+    }
+    crate::context_bootstrap::throw_dom_exception_value(
+        scope,
+        "The associated Document is not fully active.",
+        "SecurityError",
+    );
+    None
+}
+
 pub(super) fn navigation_document_can_update_current_entry<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
