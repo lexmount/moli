@@ -2801,7 +2801,6 @@ html/browsers/history/the-location-interface/replace-with-nested-iframe.html
 html/browsers/history/the-location-interface/same-hash.html
 html/browsers/origin/cross-origin-objects/cross-origin-due-to-document-domain-only.html
 html/browsers/origin/cross-origin-objects/window-location-and-location-href-cross-realm-set.html
-html/browsers/origin/relaxing-the-same-origin-restriction/document_domain.html
 html/browsers/origin/relaxing-the-same-origin-restriction/document_domain_setter.html
 html/browsers/the-window-object/accessing-other-browsing-contexts/indexed-browsing-contexts-02.html
 html/browsers/the-window-object/garbage-collection-and-browsing-contexts/discard_iframe_history_1.html

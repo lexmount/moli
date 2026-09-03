@@ -5312,6 +5312,7 @@ html/browsers/origin/inheritance/about-blank-window.html
 html/browsers/origin/inheritance/about-srcdoc.html
 html/browsers/origin/inheritance/javascript-url.html
 html/browsers/origin/origin-of-data-document.html
+html/browsers/origin/relaxing-the-same-origin-restriction/document_domain.html
 html/browsers/origin/relaxing-the-same-origin-restriction/document_domain_setter_srcdoc.html
 html/browsers/origin/relaxing-the-same-origin-restriction/sandboxed-document_domain.html
 html/browsers/sandboxing/sandbox-allow-same-origin.html
