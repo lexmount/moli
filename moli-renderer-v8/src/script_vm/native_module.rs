@@ -1043,6 +1043,20 @@ fn canonical_native_module_instantiate_error(exception: &str, graph_urls: &[Url]
     format!("v8 failed to instantiate native module graph: {exception}")
 }
 
+fn native_module_instantiate_load_error(
+    message: String,
+    caught_error_constructor: Option<ScriptErrorConstructorKind>,
+    has_wasm_entry: bool,
+) -> ModuleLoadError {
+    let fallback_constructor = if has_wasm_entry {
+        ScriptErrorConstructorKind::WebAssemblyLinkError
+    } else {
+        ScriptErrorConstructorKind::SyntaxError
+    };
+    ModuleLoadError::new(ModuleLoadStage::Instantiate, message)
+        .with_error_constructor(caught_error_constructor.unwrap_or(fallback_constructor))
+}
+
 fn canonical_missing_export_link_error(exception: &str, graph_urls: &[Url]) -> Option<String> {
     let module = quoted_value_after(exception, "The requested module ")?;
     let export = quoted_value_after(exception, "does not provide an export named ")?;
