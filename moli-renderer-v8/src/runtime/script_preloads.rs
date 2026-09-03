@@ -864,6 +864,7 @@ pub(super) fn admit_stylesheet_preloads(
     let timing_started = moli_trace::cdp_nav_timing_enabled().then(std::time::Instant::now);
     let discovered_count = requests.len();
     let mut admitted_count = 0_usize;
+    let mut page_policy_suppressed_count = 0_usize;
     let mut fetch_interception_count = 0_usize;
     let mut media_mismatch_count = 0_usize;
     let mut content_security_policy_count = 0_usize;
@@ -876,6 +877,9 @@ pub(super) fn admit_stylesheet_preloads(
             request.link_preload,
         ) {
             ScannedStylesheetAdmission::Admitted => admitted_count += 1,
+            ScannedStylesheetAdmission::SuppressedByPagePolicy => {
+                page_policy_suppressed_count += 1;
+            }
             ScannedStylesheetAdmission::DeferredToParser(
                 ScannedStylesheetDeferral::FetchInterception,
             ) => fetch_interception_count += 1,
@@ -894,6 +898,7 @@ pub(super) fn admit_stylesheet_preloads(
             target: "moli_cdp_nav_timing",
             discovered_count,
             admitted_count,
+            page_policy_suppressed_count,
             fetch_interception_count,
             media_mismatch_count,
             content_security_policy_count,

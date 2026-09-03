@@ -1224,6 +1224,9 @@ impl JsContextHost {
         &self,
         owner: DomHandle,
     ) -> Option<std::sync::Arc<[crate::style_engine::StylesheetFontFaceDescriptor]>> {
+        if self.author_styles_disabled() {
+            return None;
+        }
         let dom_host = self.dom_host();
         let element = dom_host.node(owner).and_then(Node::as_element)?;
         if !dom_host.is_connected(owner)
@@ -1366,18 +1369,20 @@ impl JsContextHost {
     ) -> Option<String> {
         let document_context = self.style_source_document_context_for_read_document(read_document);
         let inputs = inputs.independent_style_engine_projection();
-        crate::style_engine::MoliStyleEngine::new()
-            .computed_style_property_value_with_document_context(
-                self.dom_host(),
-                &self.document_url_for_handle(read_document),
-                handle,
-                property,
-                None,
-                &inputs,
-                document_context.as_ref(),
-                read_document,
-                viewport,
-            )
+        crate::style_engine::MoliStyleEngine::new_with_author_styles_disabled(
+            self.style_engine.author_styles_disabled(),
+        )
+        .computed_style_property_value_with_document_context(
+            self.dom_host(),
+            &self.document_url_for_handle(read_document),
+            handle,
+            property,
+            None,
+            &inputs,
+            document_context.as_ref(),
+            read_document,
+            viewport,
+        )
     }
 
     fn style_source_document_context(&self) -> OwnedStyleSourceDocumentContext {

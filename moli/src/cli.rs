@@ -83,6 +83,12 @@ pub struct FetchArgs {
     )]
     pub disable_js: bool,
 
+    /// Disable page-authored CSS before the Document starts parsing. External
+    /// stylesheets and `@import` resources are not fetched; style/link nodes
+    /// and style attributes remain in the DOM.
+    #[arg(long)]
+    pub disable_css: bool,
+
     #[arg(long)]
     pub with_base: bool,
 

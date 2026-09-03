@@ -1222,6 +1222,7 @@ fn ensure_retained_style_system_for_computed_read(
         engine.invalidation_cleanup_for_world(world),
         key,
         inputs,
+        engine.author_styles_disabled(),
     );
 }
 

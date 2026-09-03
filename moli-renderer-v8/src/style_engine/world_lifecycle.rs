@@ -90,6 +90,7 @@ pub(super) fn ensure_retained_style_system(
     invalidation_cleanup: StyleInvalidationCleanup<'_>,
     key: &StyleWorldKey,
     inputs: &FullStyleWorldSnapshot,
+    author_styles_disabled: bool,
 ) {
     let source_dirty_scope = document_state.source_dirty_scope_snapshot();
     if document_state
@@ -174,6 +175,7 @@ pub(super) fn ensure_retained_style_system(
         inputs,
         &shared_lock,
         &retained_source_records,
+        author_styles_disabled,
     );
     if trace_enabled {
         trace_retained_style_system_change(

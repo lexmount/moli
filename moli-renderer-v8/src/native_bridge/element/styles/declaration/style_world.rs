@@ -235,6 +235,9 @@ fn document_stylesheet_sources(
     context: StyleComputationContext,
 ) -> Vec<StyloStylesheetSource> {
     let mut sources = Vec::new();
+    if runtime.author_styles_disabled() {
+        return sources;
+    }
     let Some(document) = source_document else {
         return sources;
     };
@@ -268,6 +271,9 @@ fn shadow_stylesheet_sources(
     root: DomHandle,
     context: StyleComputationContext,
 ) -> Vec<StyloStylesheetSource> {
+    if runtime.author_styles_disabled() {
+        return Vec::new();
+    }
     #[cfg(test)]
     runtime.note_style_world_shadow_scope_materialization_for_test();
     let mut sources = active_stylesheet_handles(runtime, root, context.read_document.is_some())
@@ -295,6 +301,9 @@ pub(super) fn active_stylesheet_handles(
     root: DomHandle,
     include_detached: bool,
 ) -> Vec<DomHandle> {
+    if runtime.author_styles_disabled() {
+        return Vec::new();
+    }
     let mut handles = runtime
         .dom_host()
         .stylesheet_candidate_handles_for_tree_scope(root)

@@ -758,6 +758,7 @@ pub(super) struct DocumentRuntime {
     document: HostDocumentState,
     design_mode_documents: HashSet<DomHandle>,
     script_execution_control: crate::script_execution_control::RendererScriptExecutionControl,
+    author_styles_disabled: bool,
     bypass_content_security_policy: bool,
     policy_container: DocumentPolicyContainer,
     delivered_meta_content_security_policies: RefCell<HashMap<DomHandle, Vec<String>>>,

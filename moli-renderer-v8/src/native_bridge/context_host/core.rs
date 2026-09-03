@@ -344,7 +344,9 @@ impl JsContextHost {
             child_meta_refresh_navigations: HashMap::new(),
             disconnected_shadow_roots: HashSet::new(),
             live_stylesheets: crate::live_stylesheet::LiveStylesheetRegistry::default(),
-            style_engine: MoliStyleEngine::new(),
+            style_engine: MoliStyleEngine::new_with_author_styles_disabled(
+                runtime.author_styles_disabled(),
+            ),
             inline_style_declarations: HashMap::new(),
             css_module_texts_by_url: HashMap::new(),
             css_module_failed_urls: HashSet::new(),

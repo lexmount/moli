@@ -17,6 +17,7 @@ use crate::types::SubresourceResourceType;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum OwnerlessStylesheetAdmissionError {
+    AuthorStylesDisabled,
     ContentSecurityPolicy,
 }
 
@@ -43,6 +44,9 @@ impl DocumentRuntime {
         request_resource_type: moli_fetch::RequestResourceType,
         link_preload: bool,
     ) -> Result<StylesheetFetch, OwnerlessStylesheetAdmissionError> {
+        if self.author_styles_disabled() {
+            return Err(OwnerlessStylesheetAdmissionError::AuthorStylesDisabled);
+        }
         let (_, enforced_violation) = self
             .response_style_element_request_csp_check(
                 &request_url,
@@ -142,6 +146,9 @@ impl DocumentRuntime {
         document_url: &url::Url,
         inputs: impl IntoIterator<Item = DocumentOwnedBlockingStylesheetDiscoveryInput>,
     ) -> Vec<DocumentOwnedBlockingStylesheetDiscoveryInput> {
+        if self.author_styles_disabled() {
+            return Vec::new();
+        }
         let inputs = inputs
             .into_iter()
             .filter(|input| {

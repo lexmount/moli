@@ -162,6 +162,7 @@ pub(crate) use world_update::{
 pub(crate) struct MoliStyleEngine {
     dom_adapter: StyloDomStyleAdapter,
     document_worlds: DocumentStyleWorlds,
+    author_styles_disabled: bool,
     owner_stylesheet_source_documents: RefCell<HashMap<DomHandle, DomHandle>>,
     linked_stylesheet_owner_documents: RefCell<HashMap<DomHandle, DomHandle>>,
     inline_style_metadata_documents: RefCell<HashMap<DomHandle, DomHandle>>,
@@ -175,14 +176,23 @@ impl Default for MoliStyleEngine {
 
 impl MoliStyleEngine {
     pub(crate) fn new() -> Self {
+        Self::new_with_author_styles_disabled(false)
+    }
+
+    pub(crate) fn new_with_author_styles_disabled(author_styles_disabled: bool) -> Self {
         ensure_stylo_browser_compat_prefs();
         Self {
             dom_adapter: StyloDomStyleAdapter::new(),
             document_worlds: DocumentStyleWorlds::new(),
+            author_styles_disabled,
             owner_stylesheet_source_documents: RefCell::new(HashMap::new()),
             linked_stylesheet_owner_documents: RefCell::new(HashMap::new()),
             inline_style_metadata_documents: RefCell::new(HashMap::new()),
         }
+    }
+
+    pub(crate) fn author_styles_disabled(&self) -> bool {
+        self.author_styles_disabled
     }
 
     pub(crate) fn author_shared_lock(&self) -> style::shared_lock::SharedRwLock {

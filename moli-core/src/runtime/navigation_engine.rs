@@ -580,6 +580,7 @@ impl NavigationEngine {
             page_network_policy: PageNetworkPolicy::new(
                 optional_resource_fetch_mask,
                 subframe_loading_enabled,
+                false,
             ),
             layout_policy,
             js_runtime,
@@ -629,6 +630,7 @@ impl NavigationEngine {
             page_network_policy: PageNetworkPolicy::new(
                 optional_resource_fetch_mask,
                 subframe_loading_enabled,
+                false,
             ),
             layout_policy,
             js_runtime: renderer_owner_source.js_runtime.clone(),

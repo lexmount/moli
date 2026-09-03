@@ -32,6 +32,7 @@ struct PageNetworkPolicyState {
     blocked_url_patterns: SharedPatternList,
     optional_resource_fetch_mask: OptionalResourceFetchMask,
     subframe_loading_enabled: bool,
+    author_styles_disabled: bool,
     bypass_service_worker: bool,
     cache_disabled: bool,
 }
@@ -54,6 +55,7 @@ impl Default for PageNetworkPolicyState {
             blocked_url_patterns: Arc::from([]),
             optional_resource_fetch_mask: OptionalResourceFetchMask::NONE,
             subframe_loading_enabled: true,
+            author_styles_disabled: false,
             bypass_service_worker: false,
             cache_disabled: false,
         }
@@ -105,10 +107,12 @@ impl PageNetworkPolicy {
     pub fn new(
         optional_resource_fetch_mask: OptionalResourceFetchMask,
         subframe_loading_enabled: bool,
+        author_styles_disabled: bool,
     ) -> Self {
         let state = PageNetworkPolicyState {
             optional_resource_fetch_mask,
             subframe_loading_enabled,
+            author_styles_disabled,
             ..PageNetworkPolicyState::default()
         };
         Self {
@@ -162,6 +166,7 @@ impl PageNetworkPolicy {
                 blocked_url_patterns: snapshot.blocked_url_patterns,
                 optional_resource_fetch_mask: snapshot.optional_resource_fetch_mask,
                 subframe_loading_enabled: snapshot.subframe_loading_enabled,
+                author_styles_disabled: snapshot.author_styles_disabled,
                 bypass_service_worker: snapshot.bypass_service_worker,
                 cache_disabled: snapshot.cache_disabled,
             })),
@@ -189,6 +194,7 @@ impl PageNetworkPolicy {
                 blocked_url_patterns: snapshot.blocked_url_patterns,
                 optional_resource_fetch_mask: snapshot.optional_resource_fetch_mask,
                 subframe_loading_enabled: snapshot.subframe_loading_enabled,
+                author_styles_disabled: snapshot.author_styles_disabled,
                 bypass_service_worker: snapshot.bypass_service_worker,
                 cache_disabled: snapshot.cache_disabled,
             })),
@@ -222,6 +228,7 @@ impl PageNetworkPolicy {
             blocked_url_patterns: state.blocked_url_patterns.clone(),
             optional_resource_fetch_mask: state.optional_resource_fetch_mask,
             subframe_loading_enabled: state.subframe_loading_enabled,
+            author_styles_disabled: state.author_styles_disabled,
             bypass_service_worker: state.bypass_service_worker,
             cache_disabled: state.cache_disabled,
         }
@@ -322,6 +329,10 @@ impl PageNetworkPolicy {
         self.state.lock().subframe_loading_enabled
     }
 
+    pub fn author_styles_disabled(&self) -> bool {
+        self.state.lock().author_styles_disabled
+    }
+
     pub fn set_bypass_service_worker(&self, bypass: bool) {
         let mut state = self.state.lock();
         if state.bypass_service_worker == bypass {
@@ -362,6 +373,7 @@ pub struct PageNetworkPolicySnapshot {
     blocked_url_patterns: SharedPatternList,
     optional_resource_fetch_mask: OptionalResourceFetchMask,
     subframe_loading_enabled: bool,
+    author_styles_disabled: bool,
     bypass_service_worker: bool,
     cache_disabled: bool,
 }
@@ -382,6 +394,10 @@ impl PageNetworkPolicySnapshot {
 
     pub fn subframe_loading_enabled(&self) -> bool {
         self.subframe_loading_enabled
+    }
+
+    pub fn author_styles_disabled(&self) -> bool {
+        self.author_styles_disabled
     }
 
     pub fn bypass_service_worker(&self) -> bool {
@@ -407,6 +423,15 @@ impl PageNetworkPolicySnapshot {
             return Err(anyhow!("Network emulation offline"));
         }
         if self.blocks_url(&request.url) {
+            return Err(anyhow!(BLOCKED_BY_CLIENT_ERROR_TEXT));
+        }
+        if self.author_styles_disabled
+            && matches!(
+                request.resource_type,
+                moli_fetch::RequestResourceType::CssStyleSheet
+                    | moli_fetch::RequestResourceType::LatePreloadCssStyleSheet
+            )
+        {
             return Err(anyhow!(BLOCKED_BY_CLIENT_ERROR_TEXT));
         }
 
@@ -454,7 +479,7 @@ mod tests {
 
     #[test]
     fn isolated_policy_copy_preserves_values_without_sharing_mutations() {
-        let policy = PageNetworkPolicy::new(OptionalResourceFetchMask::IMAGE, false);
+        let policy = PageNetworkPolicy::new(OptionalResourceFetchMask::IMAGE, false, true);
         policy.set_extra_http_headers(&[("x-owner".to_owned(), "first".to_owned())]);
         let isolated = policy.isolated_copy();
 
@@ -464,6 +489,7 @@ mod tests {
             OptionalResourceFetchMask::IMAGE
         );
         assert!(!isolated.subframe_loading_enabled());
+        assert!(isolated.author_styles_disabled());
 
         isolated.set_network_offline(true);
         isolated.set_extra_http_headers(&[("x-owner".to_owned(), "second".to_owned())]);
@@ -480,6 +506,41 @@ mod tests {
         assert_eq!(
             original.request_headers,
             vec![("x-owner".to_owned(), "first".to_owned())]
+        );
+    }
+
+    #[test]
+    fn author_style_policy_blocks_only_stylesheet_requests() {
+        let policy = PageNetworkPolicy::new(OptionalResourceFetchMask::NONE, true, true);
+
+        for resource_type in [
+            moli_fetch::RequestResourceType::CssStyleSheet,
+            moli_fetch::RequestResourceType::LatePreloadCssStyleSheet,
+        ] {
+            let error = policy
+                .snapshot()
+                .apply_to_request(
+                    Request::get("https://example.test/page.css")
+                        .unwrap()
+                        .with_resource_type(resource_type)
+                        .with_page_network_policy(),
+                )
+                .expect_err("disabled author styles must block CSS requests");
+            assert_eq!(error.to_string(), BLOCKED_BY_CLIENT_ERROR_TEXT);
+        }
+
+        let script = policy
+            .snapshot()
+            .apply_to_request(
+                Request::get("https://example.test/page.js")
+                    .unwrap()
+                    .with_resource_type(moli_fetch::RequestResourceType::Script)
+                    .with_page_network_policy(),
+            )
+            .expect("disabling styles must not block scripts");
+        assert_eq!(
+            script.resource_type,
+            moli_fetch::RequestResourceType::Script
         );
     }
 

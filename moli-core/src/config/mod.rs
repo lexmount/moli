@@ -12,6 +12,7 @@ pub struct BrowserConfig {
     optional_resource_fetch_mask: OptionalResourceFetchMask,
     subframe_loading_enabled: bool,
     script_execution_disabled: bool,
+    author_styles_disabled: bool,
     wpt_extensions_enabled: bool,
 }
 
@@ -25,6 +26,7 @@ impl Default for BrowserConfig {
             optional_resource_fetch_mask: OptionalResourceFetchMask::NONE,
             subframe_loading_enabled: true,
             script_execution_disabled: false,
+            author_styles_disabled: false,
             wpt_extensions_enabled: false,
         }
     }
@@ -135,6 +137,14 @@ impl BrowserConfig {
         self.script_execution_disabled = disabled;
     }
 
+    pub fn author_styles_disabled(&self) -> bool {
+        self.author_styles_disabled
+    }
+
+    pub fn set_author_styles_disabled(&mut self, disabled: bool) {
+        self.author_styles_disabled = disabled;
+    }
+
     pub fn wpt_extensions_enabled(&self) -> bool {
         self.wpt_extensions_enabled
     }
@@ -226,6 +236,15 @@ mod tests {
 
         config.set_script_execution_disabled(true);
         assert!(config.script_execution_disabled());
+    }
+
+    #[test]
+    fn browser_config_defaults_to_author_styles_and_can_disable_them() {
+        let mut config = BrowserConfig::default();
+        assert!(!config.author_styles_disabled());
+
+        config.set_author_styles_disabled(true);
+        assert!(config.author_styles_disabled());
     }
 
     #[test]

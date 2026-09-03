@@ -75,6 +75,7 @@ impl DocumentRuntime {
             document,
             design_mode_documents: HashSet::new(),
             script_execution_control: Default::default(),
+            author_styles_disabled: false,
             bypass_content_security_policy: false,
             policy_container: DocumentPolicyContainer::default(),
             delivered_meta_content_security_policies: RefCell::new(HashMap::new()),
@@ -161,6 +162,7 @@ impl DocumentRuntime {
             .script_lifecycle
             .retain_standalone_parser_boundary_lifecycle_source(parser_boundary_lifecycle_source);
         if let Some((loader, task_runner)) = resource_environment {
+            runtime.set_author_styles_disabled(loader.author_styles_disabled());
             let document_url = runtime
                 .dom_host
                 .borrow()
@@ -204,6 +206,7 @@ impl DocumentRuntime {
             document: _,
             design_mode_documents: _,
             script_execution_control: _,
+            author_styles_disabled: _,
             bypass_content_security_policy: _,
             policy_container: _,
             delivered_meta_content_security_policies: _,
@@ -269,6 +272,14 @@ impl DocumentRuntime {
 
     pub(crate) fn script_execution_disabled(&self) -> bool {
         self.script_execution_control.is_disabled()
+    }
+
+    pub(crate) fn set_author_styles_disabled(&mut self, disabled: bool) {
+        self.author_styles_disabled = disabled;
+    }
+
+    pub(crate) fn author_styles_disabled(&self) -> bool {
+        self.author_styles_disabled
     }
 
     pub(crate) fn document_scripting_enabled(&self) -> bool {

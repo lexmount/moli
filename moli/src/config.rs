@@ -44,6 +44,7 @@ impl AppConfig {
                 config
                     .browser
                     .set_script_execution_disabled(args.disable_js);
+                config.browser.set_author_styles_disabled(args.disable_css);
                 config.fetch.dump_mode = args.dump;
                 config.fetch.strip = args.strip_options();
                 config.fetch.with_base = args.with_base;

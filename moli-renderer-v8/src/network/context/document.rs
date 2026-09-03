@@ -98,6 +98,10 @@ impl DocumentResourceLoaderBootstrap {
     pub(crate) fn commit(self, context: DocumentFetchContext) -> DocumentResourceLoader {
         DocumentResourceLoader::new(self.request_client, self.task_runner, context)
     }
+
+    pub(crate) fn author_styles_disabled(&self) -> bool {
+        self.request_client.author_styles_disabled()
+    }
 }
 
 /// Exact backend source selected when a new Document commits.

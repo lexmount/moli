@@ -1027,6 +1027,10 @@ impl ResourceRequestClient {
         self.page_network_policy.subframe_loading_enabled()
     }
 
+    pub fn author_styles_disabled(&self) -> bool {
+        self.page_network_policy.author_styles_disabled()
+    }
+
     pub fn set_bypass_service_worker(&self, bypass: bool) {
         self.page_network_policy.set_bypass_service_worker(bypass);
     }

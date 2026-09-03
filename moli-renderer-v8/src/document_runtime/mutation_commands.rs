@@ -1824,6 +1824,9 @@ pub(super) fn finish_runtime_mutation_effects(
             );
         }
         for prepared_owner_change in prepared_owner_changes {
+            if runtime.author_styles_disabled() {
+                continue;
+            }
             let owner = prepared_owner_change.owner();
             if let Some(url) = prepared_owner_change.cached_linked_stylesheet_url() {
                 let _ = unsafe { &mut *host_ptr }

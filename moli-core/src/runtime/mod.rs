@@ -251,6 +251,7 @@ impl Browser {
         let page_network_policy = PageNetworkPolicy::new(
             config.optional_resource_fetch_mask(),
             config.subframe_loading_enabled(),
+            config.author_styles_disabled(),
         );
         // A script-disabled CLI fetch must not execute site-owned JavaScript
         // through a previously registered Service Worker before the new

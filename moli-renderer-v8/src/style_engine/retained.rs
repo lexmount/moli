@@ -6,7 +6,7 @@ use style::{
     servo_arc::Arc as ServoArc,
     shared_lock::{SharedRwLock, StylesheetGuards},
     stylesheets::{CustomMediaMap, DocumentStyleSheet, Origin, OriginSet, UrlExtraData},
-    stylist::Stylist,
+    stylist::{AuthorStylesEnabled, Stylist},
 };
 
 use crate::{document_runtime::DomHandle, dom::native::DomHost};
@@ -88,6 +88,7 @@ pub(super) fn build_retained_style_system(
     inputs: &FullStyleWorldSnapshot,
     shared_lock: &SharedRwLock,
     retained_source_records: &[RetainedStylesheetSourceRecord<'_>],
+    author_styles_disabled: bool,
 ) -> RetainedStyleSystem {
     let mut stylist = new_stylist_with_viewport_bits(
         key.viewport_width_bits,
@@ -97,6 +98,11 @@ pub(super) fn build_retained_style_system(
         key.environment,
         key.quirks_mode,
     );
+    stylist.set_author_styles_enabled(if author_styles_disabled {
+        AuthorStylesEnabled::No
+    } else {
+        AuthorStylesEnabled::Yes
+    });
     register_script_custom_properties(&mut stylist, inputs);
     append_stylesheet_to_stylist(
         &mut stylist,

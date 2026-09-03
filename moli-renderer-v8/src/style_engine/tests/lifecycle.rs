@@ -1,6 +1,53 @@
 use super::*;
 
 #[test]
+fn disabled_author_styles_use_stylo_author_origin_gate() {
+    let mut host = test_host();
+    host.reset_html_document_shell();
+    let body = host.document_body_handle().expect("test body");
+    let target = host.create_element("div");
+    assert!(host.set_attribute(target, "class", "styled"));
+    assert!(host.set_attribute(target, "style", "color: rgb(1, 2, 3); display: none"));
+    assert!(host.append_child(body, target));
+
+    let document_url = url::Url::parse("https://example.test/").expect("test URL");
+    let mut inputs = FullStyleWorldSnapshot::default();
+    inputs
+        .document_stylesheet_sources
+        .push(StyloStylesheetSource::new(
+            ".styled { color: rgb(4, 5, 6); display: none; }".into(),
+            document_url.clone(),
+        ));
+    let engine = MoliStyleEngine::new_with_author_styles_disabled(true);
+
+    assert_eq!(
+        engine.computed_style_property_value(
+            &host,
+            &document_url,
+            target,
+            "display",
+            None,
+            &inputs,
+            None,
+        ),
+        Some("block".to_owned()),
+        "UA styles must remain active while stylesheet and style-attribute declarations are ignored"
+    );
+    assert_eq!(
+        engine.computed_style_property_value(
+            &host,
+            &document_url,
+            target,
+            "color",
+            None,
+            &inputs,
+            None,
+        ),
+        Some("rgb(0, 0, 0)".to_owned())
+    );
+}
+
+#[test]
 fn document_connected_shadow_scope_fallback_roots_include_shadow_roots() {
     let mut host = test_host();
     let document = host.document_handle();

@@ -1915,6 +1915,7 @@ impl ScriptVmPageRealmBootstrap {
         let stylesheet_task_sender = page_task_tx.stylesheet_task_sender();
         let main_parser_continuation_sender = page_task_tx.main_parser_continuation_sender();
         let resource_owner_id = crate::resource_owner::ResourceOwnerId::new();
+        let author_styles_disabled = initial_document_loader_bootstrap.author_styles_disabled();
         let mut document_runtime = Box::new(DocumentRuntime::from_main_frame_dom_host(
             dom_host,
             main_document_owner,
@@ -1923,6 +1924,7 @@ impl ScriptVmPageRealmBootstrap {
             stylesheet_task_sender,
             main_parser_continuation_sender,
         ));
+        document_runtime.set_author_styles_disabled(author_styles_disabled);
         document_runtime.set_bypass_content_security_policy(bypass_content_security_policy);
         let (page_context_cancel_tx, page_context_cancel_rx) =
             renderer_page_context_cancel_channel();

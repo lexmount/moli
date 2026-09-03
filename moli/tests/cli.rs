@@ -35,6 +35,7 @@ fn parses_explicit_fetch_command_with_compatibility_flags() {
         "-H",
         "X-Trace: two",
         "--disable-js",
+        "--disable-css",
         "--with-base",
         "--with-frames",
         "--strip-mode",
@@ -87,6 +88,7 @@ fn parses_explicit_fetch_command_with_compatibility_flags() {
                 },
             ],
             disable_js: true,
+            disable_css: true,
             with_base: true,
             with_frames: true,
             trace_network: false,
@@ -422,6 +424,7 @@ fn infers_fetch_mode_from_bare_url() {
             eval_file: None,
             headers: vec![],
             disable_js: false,
+            disable_css: false,
             with_base: false,
             with_frames: false,
             trace_network: false,
@@ -464,6 +467,7 @@ fn parses_bare_dump_with_explicit_fetch_command_and_defaults_to_html() {
             eval_file: None,
             headers: vec![],
             disable_js: false,
+            disable_css: false,
             with_base: false,
             with_frames: false,
             trace_network: false,
@@ -510,6 +514,7 @@ fn parses_header_flag_with_explicit_fetch_command() {
                 value: "one".to_owned(),
             }],
             disable_js: false,
+            disable_css: false,
             with_base: false,
             with_frames: false,
             trace_network: false,
@@ -1473,6 +1478,36 @@ fn app_config_from_fetch_cli_disables_script_execution_only_when_requested() {
             .unwrap()
             .browser
             .script_execution_disabled()
+    );
+}
+
+#[test]
+fn app_config_from_fetch_cli_disables_author_styles_only_when_requested() {
+    let enabled = Cli::try_parse_from(normalize_args_for_compat([
+        "moli",
+        "fetch",
+        "https://example.com",
+    ]))
+    .unwrap();
+    assert!(
+        !AppConfig::from_cli(&enabled)
+            .unwrap()
+            .browser
+            .author_styles_disabled()
+    );
+
+    let disabled = Cli::try_parse_from(normalize_args_for_compat([
+        "moli",
+        "fetch",
+        "--disable-css",
+        "https://example.com",
+    ]))
+    .unwrap();
+    assert!(
+        AppConfig::from_cli(&disabled)
+            .unwrap()
+            .browser
+            .author_styles_disabled()
     );
 }
 
