@@ -68,6 +68,7 @@ fn clone_detached_document_shell<'s>(
     set_detached_document_content_type(scope, cloned, &content_type)?;
     let character_set = detached_document_character_set_value(scope, document)?;
     set_detached_document_character_set(scope, cloned, &character_set)?;
+    inherit_detached_document_origin(scope, cloned, document);
     if html_shell {
         for child in detached_child_node_objects(scope, cloned) {
             detached_detach_from_parent(scope, child);
