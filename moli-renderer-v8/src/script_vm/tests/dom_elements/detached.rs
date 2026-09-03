@@ -8027,6 +8027,7 @@ fn detached_resource_template_accessors_use_owner_prototypes() {
   for (const name of ["integrity", "rev", "type"]) {
     accessor(HTMLLinkElement.prototype, name);
   }
+  accessor(HTMLIFrameElement.prototype, "csp");
   accessor(HTMLIFrameElement.prototype, "sandbox");
   accessor(HTMLIFrameElement.prototype, "allowFullscreen");
   for (const name of ["default", "kind", "src", "srclang", "label"]) {
@@ -8111,6 +8112,7 @@ fn detached_resource_template_accessors_use_owner_prototypes() {
     const sandbox = iframe.sandbox;
     assert(Object.prototype.toString.call(sandbox) === "[object DOMTokenList]", "iframe sandbox type");
     assert(sandbox === iframe.sandbox, "iframe sandbox SameObject");
+    iframe.csp = 123456;
     iframe.sandbox = "allow-scripts";
     iframe.allowFullscreen = true;
     assert(iframe.csp === "123456" && iframe.getAttribute("csp") === "123456", "iframe csp");
