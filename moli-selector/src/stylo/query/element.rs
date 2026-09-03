@@ -68,6 +68,11 @@ impl<'a> QueryElement<'a> {
         self.shared_lock
     }
 
+    pub(in crate::stylo) fn author_styles_enabled(self) -> bool {
+        self.style_data
+            .is_none_or(StyloElementDataStore::author_styles_enabled)
+    }
+
     pub(crate) fn read_quirks_mode(self) -> QuirksMode {
         self.host
             .owner_document_handle(self.handle)

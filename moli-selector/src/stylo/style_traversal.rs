@@ -58,6 +58,10 @@ pub struct StyloDomStyleAdapter {
 /// must not clear an element's data while Stylo holds a borrow to it.
 #[derive(Default)]
 pub struct StyloElementDataStore {
+    /// Presentation hints are synthesized by the DOM adapter before Stylo's
+    /// author-origin gate. Keep the Document's author-style policy here so
+    /// those declarations follow the same policy as rules and `style=`.
+    author_styles_disabled: bool,
     handle_documents: RefCell<HashMap<NodeId, NodeId>>,
     documents: RefCell<HashMap<NodeId, StyloElementDocumentDataStore>>,
     #[cfg(test)]
@@ -134,11 +138,18 @@ struct SnapshotHandlesReset<'a> {
 
 impl StyloDomStyleAdapter {
     pub fn new() -> Self {
+        Self::new_with_author_styles_enabled(true)
+    }
+
+    pub fn new_with_author_styles_enabled(author_styles_enabled: bool) -> Self {
         Self {
             state: Box::new(StyleDomState {
                 host: Cell::new(std::ptr::null()),
                 shared_lock: SharedRwLock::new(),
-                element_data: StyloElementDataStore::default(),
+                element_data: StyloElementDataStore {
+                    author_styles_disabled: !author_styles_enabled,
+                    ..StyloElementDataStore::default()
+                },
                 atom_cache: QueryAtomCache::default(),
                 node_data: RefCell::default(),
                 slotted_node_data: RefCell::default(),
@@ -411,6 +422,10 @@ impl Drop for StyleDomHostBinding<'_> {
 }
 
 impl StyloElementDataStore {
+    pub(in crate::stylo) fn author_styles_enabled(&self) -> bool {
+        !self.author_styles_disabled
+    }
+
     pub(super) fn note_owner_document_for_host(
         &self,
         host: &DomHost,

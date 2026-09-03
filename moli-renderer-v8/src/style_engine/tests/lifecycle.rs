@@ -45,6 +45,64 @@ fn disabled_author_styles_use_stylo_author_origin_gate() {
         ),
         Some("rgb(0, 0, 0)".to_owned())
     );
+
+    let svg = host
+        .create_element_ns(Some("http://www.w3.org/2000/svg"), "svg:svg")
+        .expect("SVG root");
+    let rect = host
+        .create_element_ns(Some("http://www.w3.org/2000/svg"), "svg:rect")
+        .expect("SVG rect");
+    assert!(host.set_attribute(rect, "display", "none"));
+    assert!(host.set_attribute(rect, "fill", "red"));
+    assert!(host.append_child(svg, rect));
+    assert!(host.append_child(body, svg));
+
+    assert_eq!(
+        engine.computed_style_property_value(
+            &host,
+            &document_url,
+            rect,
+            "display",
+            None,
+            &inputs,
+            None,
+        ),
+        Some("inline".to_owned()),
+        "SVG presentation attributes must follow the author-style policy"
+    );
+    assert_eq!(
+        engine.computed_style_property_value(
+            &host,
+            &document_url,
+            rect,
+            "fill",
+            None,
+            &inputs,
+            None,
+        ),
+        Some("rgb(0, 0, 0)".to_owned())
+    );
+
+    let table = host.create_element("table");
+    let row = host.create_element("tr");
+    let cell = host.create_element("td");
+    assert!(host.set_attribute(table, "cellpadding", "17"));
+    assert!(host.append_child(row, cell));
+    assert!(host.append_child(table, row));
+    assert!(host.append_child(body, table));
+    assert_eq!(
+        engine.computed_style_property_value(
+            &host,
+            &document_url,
+            cell,
+            "padding-left",
+            None,
+            &inputs,
+            None,
+        ),
+        Some("0px".to_owned()),
+        "legacy HTML presentation hints must follow the author-style policy"
+    );
 }
 
 #[test]

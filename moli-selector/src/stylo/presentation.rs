@@ -107,6 +107,14 @@ impl QueryElement<'_> {
     where
         V: Push<ApplicableDeclarationBlock>,
     {
+        // Stylo collects presentation hints before checking
+        // `AuthorStylesEnabled`, so the adapter must apply the same Document
+        // policy explicitly. Otherwise SVG attributes such as `fill` and
+        // legacy HTML attributes such as `cellpadding` leak into an
+        // author-style-disabled cascade.
+        if !self.author_styles_enabled() {
+            return;
+        }
         let element = self.element();
         let mut block = PropertyDeclarationBlock::new();
         if element.namespace() == SVG_NAMESPACE {

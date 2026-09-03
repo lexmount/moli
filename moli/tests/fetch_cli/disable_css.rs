@@ -56,6 +56,8 @@ const MAIN_PAGE: &str = r#"<!doctype html>
     <div id="adopted-target">adopted</div>
     <div id="dynamic-target">dynamic</div>
     <div id="shadow-host"></div>
+    <svg><rect id="svg-target" display="none" fill="red"></rect></svg>
+    <table cellpadding="17"><tr><td id="legacy-table-target">legacy</td></tr></table>
     <iframe id="child" src="/child.html"></iframe>
     <iframe id="srcdoc-child" srcdoc="<!doctype html><style>@import url('/srcdoc.css'); #srcdoc-target { display:none; color:rgb(31,32,33) }</style><div id='srcdoc-target' style='display:none'>srcdoc</div><script>document.documentElement.setAttribute('data-script-ran','yes')</script>"></iframe>
     <script>
@@ -85,6 +87,8 @@ const DISABLED_READY_SCRIPT: &str = r#"(() => {
     const grandchild = child?.getElementById('grandchild')?.contentDocument;
     const srcdoc = document.getElementById('srcdoc-child')?.contentDocument;
     const shadow = document.getElementById('shadow-host')?.shadowRoot;
+    const svgTarget = document.getElementById('svg-target');
+    const legacyTableTarget = document.getElementById('legacy-table-target');
     const targets = [
         [window, document.getElementById('main-target'), 'block'],
         [window, document.getElementById('adopted-target'), 'block'],
@@ -104,7 +108,13 @@ const DISABLED_READY_SCRIPT: &str = r#"(() => {
     const scriptsRan = [document, child, grandchild, srcdoc].every(
         targetDocument => targetDocument?.documentElement?.getAttribute('data-script-ran') === 'yes'
     );
-    if (!authorStylesAreAbsent || !scriptsRan) {
+    const svgStyle = svgTarget && getComputedStyle(svgTarget);
+    const legacyTableStyle = legacyTableTarget && getComputedStyle(legacyTableTarget);
+    const presentationHintsAreAbsent =
+        svgStyle?.display === 'inline' &&
+        svgStyle?.fill === 'rgb(0, 0, 0)' &&
+        legacyTableStyle?.paddingLeft === '0px';
+    if (!authorStylesAreAbsent || !presentationHintsAreAbsent || !scriptsRan) {
         return false;
     }
     document.documentElement.setAttribute('data-disable-css-probe', 'ready');
@@ -271,6 +281,8 @@ fn disables_all_author_style_surfaces_without_disabling_scripts() -> Result<()> 
     for preserved in [
         "id=\"external-link\"",
         "id=\"inline-sheet\"",
+        "id=\"svg-target\" display=\"none\" fill=\"red\"",
+        "cellpadding=\"17\"",
         "style=\"color: rgb(4, 5, 6); display: none\"",
     ] {
         assert!(

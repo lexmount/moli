@@ -182,7 +182,9 @@ impl MoliStyleEngine {
     pub(crate) fn new_with_author_styles_disabled(author_styles_disabled: bool) -> Self {
         ensure_stylo_browser_compat_prefs();
         Self {
-            dom_adapter: StyloDomStyleAdapter::new(),
+            dom_adapter: StyloDomStyleAdapter::new_with_author_styles_enabled(
+                !author_styles_disabled,
+            ),
             document_worlds: DocumentStyleWorlds::new(),
             author_styles_disabled,
             owner_stylesheet_source_documents: RefCell::new(HashMap::new()),
