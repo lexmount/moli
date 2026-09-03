@@ -8091,3 +8091,87 @@ async fn child_document_write_custom_element_reaction_queue_wpt_shape() {
 
     assert_eq!(result, expected);
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn child_dynamic_markup_counter_exceptions_use_document_realm() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_page_task_executor_test_vm_with_loader(
+        "https://dynamic-markup-exception-realm.test/",
+        &loader,
+    );
+
+    vm.eval(
+        r#"
+            (() => {
+              globalThis.__dynamicMarkupExceptionRealm = "pending";
+              new Promise((resolve) => {
+                const frame = document.createElement("iframe");
+                frame.srcdoc = "";
+                frame.onload = () => resolve(frame.contentWindow);
+                (document.body || document.documentElement || document).appendChild(frame);
+              }).then((childWindow) => {
+                const childDocument = childWindow.document;
+                childDocument.open();
+                const results = [];
+                class DynamicMarkupProbe extends childWindow.HTMLElement {
+                  constructor() {
+                    super();
+                    const probe = (label, callback) => {
+                      try {
+                        callback();
+                        results.push([label, "no throw"]);
+                      } catch (error) {
+                        results.push([
+                          label,
+                          error.name,
+                          error.code,
+                          error instanceof childWindow.DOMException,
+                          error instanceof DOMException
+                        ]);
+                      }
+                    };
+                    probe("open", () => childDocument.open());
+                    probe("open-type", () => childDocument.open("text/html"));
+                    probe("close", () => childDocument.close());
+                    probe("write", () => childDocument.write("<b>write</b>"));
+                    probe("writeln", () => childDocument.writeln("<b>writeln</b>"));
+                    globalThis.__dynamicMarkupExceptionRealm = JSON.stringify({
+                      distinctConstructors: childWindow.DOMException !== DOMException,
+                      results
+                    });
+                  }
+                }
+                childWindow.customElements.define(
+                  "dynamic-markup-probe",
+                  DynamicMarkupProbe
+                );
+                childDocument.write(
+                  "<!doctype html><body><dynamic-markup-probe></dynamic-markup-probe>"
+                );
+                childDocument.close();
+              }, (error) => {
+                globalThis.__dynamicMarkupExceptionRealm =
+                  "reject:" + error.name + ":" + error.message;
+              });
+              return "scheduled";
+            })()
+            "#,
+    )
+    .expect("dynamic markup exception realm setup should evaluate");
+
+    let expected = r#"{"distinctConstructors":true,"results":[["open","InvalidStateError",11,true,false],["open-type","InvalidStateError",11,true,false],["close","InvalidStateError",11,true,false],["write","InvalidStateError",11,true,false],["writeln","InvalidStateError",11,true,false]]}"#;
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "globalThis.__dynamicMarkupExceptionRealm",
+        expected,
+        "child dynamic-markup exception realm",
+    )
+    .await;
+
+    let result = vm
+        .eval("globalThis.__dynamicMarkupExceptionRealm")
+        .expect("dynamic markup exception realm result should evaluate");
+
+    assert_eq!(result, expected);
+}
