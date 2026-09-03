@@ -2797,7 +2797,6 @@ html/browsers/the-window-object/window-indexed-properties-strict.html
 html/browsers/the-window-object/window-indexed-properties.html
 html/browsers/the-window-object/window-open-noopener.html?indexed
 html/browsers/windows/browsing-context-names/choose-_self-001.html
-html/browsers/windows/browsing-context.html
 html/browsers/windows/document-domain-removed-iframe.html
 html/browsers/windows/embedded-opener-remove-frame.html
 html/browsers/windows/embedded-opener.html
