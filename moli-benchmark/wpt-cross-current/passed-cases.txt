@@ -3463,6 +3463,8 @@ custom-elements/state/state-css-selector-nth-of.html
 custom-elements/state/state-css-selector-shadow-dom.html
 custom-elements/state/state-css-selector.html
 custom-elements/state/state-pseudo-class.html
+custom-elements/throw-on-dynamic-markup-insertion-counter-construct.html
+custom-elements/throw-on-dynamic-markup-insertion-counter-reactions.html
 custom-elements/upgrading.html
 custom-elements/upgrading/Document-importNode-customized-builtins.html
 custom-elements/upgrading/Document-importNode.html

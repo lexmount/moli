@@ -2501,8 +2501,6 @@ css/selectors/media/sound-state.html
 css/selectors/missing-right-token.html
 css/selectors/selectors-4/lang-singleton-subtag-matching.html
 css/selectors/webkit-pseudo-element.html
-custom-elements/throw-on-dynamic-markup-insertion-counter-construct.html
-custom-elements/throw-on-dynamic-markup-insertion-counter-reactions.html
 density-size-correction/density-corrected-image-in-canvas.html
 density-size-correction/density-corrected-natural-size.html
 document-policy/reporting/sync-xhr-report-only.html
