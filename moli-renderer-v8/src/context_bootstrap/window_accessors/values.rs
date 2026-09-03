@@ -67,8 +67,17 @@ pub(crate) fn window_opener_value<'s>(
     receiver: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Value>> {
     let null = v8::null(scope).into();
-    if window_is_closed(scope, receiver) || window_child_context_handle(scope, receiver).is_some() {
+    if window_is_closed(scope, receiver) {
         return Some(null);
+    }
+    if let Some(host_ptr) = window_host_ptr(scope, receiver) {
+        let host = unsafe { &*host_ptr };
+        if let Some(popup_id) = crate::native_bridge::lightweight_popup_id_from_window(scope, receiver) {
+            return Some(host.lightweight_popup_opener_window(scope, popup_id).map(Into::into).unwrap_or(null));
+        }
+        if let Some(handle) = window_child_context_handle(scope, receiver) {
+            return Some(host.child_browsing_context_opener(scope, handle).map(Into::into).unwrap_or(null));
+        }
     }
     let opener = (|| {
         let host = receiver
