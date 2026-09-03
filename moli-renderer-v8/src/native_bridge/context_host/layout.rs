@@ -555,6 +555,12 @@ impl JsContextHost {
             .web_font_resources_are_current(generation)
     }
 
+    pub(crate) fn document_web_font_sidecar_is_pristine(&self) -> bool {
+        self.document_layout_state
+            .borrow()
+            .web_font_sidecar_is_pristine()
+    }
+
     pub(crate) fn publish_document_web_font_resource_generation(
         &self,
         generation: crate::style_engine::StylesheetResourceGeneration,

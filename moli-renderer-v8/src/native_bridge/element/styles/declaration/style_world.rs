@@ -229,6 +229,28 @@ fn connected_shadow_roots(host: &DomHost, document: DomHandle) -> Vec<DomHandle>
     roots
 }
 
+impl JsContextHost {
+    pub(crate) fn document_has_active_author_stylesheet_sources(
+        &self,
+        document: DomHandle,
+    ) -> bool {
+        // Keep detached-source handling aligned with the ordinary document
+        // style observation used by stylesheet resource reconciliation.
+        if !active_stylesheet_handles(self, document, false).is_empty()
+            || self.document_has_adopted_style_sheet_sources(document)
+        {
+            return true;
+        }
+
+        connected_shadow_roots(self.dom_host(), document)
+            .into_iter()
+            .any(|root| {
+                !active_stylesheet_handles(self, root, false).is_empty()
+                    || self.shadow_root_has_adopted_style_sheet_sources(root)
+            })
+    }
+}
+
 fn document_stylesheet_sources(
     runtime: &JsContextHost,
     source_document: Option<DomHandle>,

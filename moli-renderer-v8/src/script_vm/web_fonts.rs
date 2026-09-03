@@ -44,6 +44,10 @@ pub(crate) enum DocumentWebFontCompletion {
 }
 
 impl DocumentWebFontState {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.slots.is_empty()
+    }
+
     /// Removes registrations whose declarations are no longer in the current
     /// Stylo source set. Pending network work may still finish, but its exact
     /// request identity will no longer be accepted by [`Self::complete`].
