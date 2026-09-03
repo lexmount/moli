@@ -348,6 +348,44 @@ fn shadow_including_tree_contains(
     }
 }
 
+fn popover_flat_tree_contains(
+    runtime: &JsContextHost,
+    ancestor: DomHandle,
+    handle: DomHandle,
+) -> bool {
+    let mut current = Some(handle);
+    while let Some(candidate) = current {
+        if candidate == ancestor {
+            return true;
+        }
+        current = popover_flat_tree_parent(runtime, candidate);
+    }
+    false
+}
+
+fn popover_flat_tree_parent(runtime: &JsContextHost, handle: DomHandle) -> Option<DomHandle> {
+    if let Some(slot) = runtime.dom_host().assigned_slot_for_node(handle) {
+        return Some(slot);
+    }
+    let parent = runtime.dom_host().parent_node(handle)?;
+    if runtime.dom_host().is_shadow_root(parent) {
+        return runtime.dom_host().shadow_root_host(parent);
+    }
+    if runtime.dom_host().shadow_root_handle(parent).is_some() {
+        return None;
+    }
+    if runtime.dom_host().is_html_element_named(parent, "slot")
+        && runtime.dom_host().containing_shadow_root(parent).is_some()
+        && !runtime
+            .dom_host()
+            .assigned_nodes_for_slot_with_options(parent, false)
+            .is_empty()
+    {
+        return None;
+    }
+    Some(parent)
+}
+
 fn close_open_auto_popovers(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
@@ -366,7 +404,9 @@ fn close_open_auto_popovers(
         if !popover_is_open(runtime, candidate) {
             continue;
         }
-        if source.is_some_and(|source| runtime.dom_host().dom().contains(candidate, source)) {
+        if popover_flat_tree_contains(runtime, candidate, opening)
+            || source.is_some_and(|source| popover_flat_tree_contains(runtime, candidate, source))
+        {
             continue;
         }
         let _ = set_popover_open_state(scope, runtime_ptr, candidate, false, None);

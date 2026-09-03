@@ -6816,6 +6816,87 @@ fn show_and_hide_popover_are_no_ops_for_redundant_state_changes() {
 }
 
 #[test]
+fn opening_auto_popovers_preserves_flat_tree_ancestors() {
+    let mut vm = new_storage_test_vm("https://popover-flat-tree-ancestors.test/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const html = document.appendChild(document.createElement("html"));
+              const body = html.appendChild(document.createElement("body"));
+              const outer = document.createElement("div");
+              const middle = document.createElement("div");
+              const inner = document.createElement("div");
+              const unrelated = document.createElement("div");
+              for (const popover of [outer, middle, inner, unrelated]) {
+                popover.popover = "auto";
+              }
+              outer.appendChild(middle).appendChild(inner);
+              body.append(outer, unrelated);
+
+              outer.showPopover();
+              middle.showPopover();
+              inner.showPopover();
+              const nested = [outer, middle, inner].map(popover =>
+                popover.matches(":popover-open")
+              );
+
+              unrelated.showPopover();
+              const unrelatedClosesStack = [outer, middle, inner, unrelated].map(popover =>
+                popover.matches(":popover-open")
+              );
+
+              unrelated.hidePopover();
+              const sourceOwner = document.createElement("div");
+              const sourceHost = document.createElement("span");
+              const sourced = document.createElement("div");
+              sourceOwner.popover = "auto";
+              sourced.popover = "auto";
+              const source = sourceHost
+                .attachShadow({ mode: "open" })
+                .appendChild(document.createElement("button"));
+              sourceOwner.appendChild(sourceHost);
+              body.append(sourceOwner, sourced);
+              sourceOwner.showPopover();
+              sourced.showPopover({ source });
+              const shadowSource = [sourceOwner, sourced].map(popover =>
+                popover.matches(":popover-open")
+              );
+
+              sourced.hidePopover();
+              sourceOwner.hidePopover();
+              const shadowHost = document.createElement("div");
+              const unassigned = document.createElement("div");
+              shadowHost.popover = "auto";
+              unassigned.popover = "auto";
+              shadowHost.appendChild(unassigned);
+              shadowHost.attachShadow({ mode: "open" }).innerHTML = "<span></span>";
+              body.appendChild(shadowHost);
+              shadowHost.showPopover();
+              unassigned.showPopover();
+              const unassignedLightChild = [shadowHost, unassigned].map(popover =>
+                popover.matches(":popover-open")
+              );
+
+              return JSON.stringify({
+                nested,
+                unrelatedClosesStack,
+                shadowSource,
+                unassignedLightChild
+              });
+            })()
+            "#,
+        )
+        .expect("popover flat-tree ancestor probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"nested":[true,true,true],"unrelatedClosesStack":[false,false,false,true],"shadowSource":[true,true],"unassignedLightChild":[false,true]}"#
+    );
+}
+
+#[test]
 fn input_button_popover_invokers_run_across_form_ownership() {
     let mut vm = new_storage_test_vm("https://input-button-popover.test/");
 
