@@ -307,7 +307,7 @@ fn child_document_open_callback<'s>(
         return;
     }
     if child_document_has_invalid_dynamic_markup_state(scope, document) {
-        throw_dynamic_markup_invalid_state(scope);
+        throw_dynamic_markup_invalid_state(scope, document);
         return;
     }
     let _ = begin_child_document_stream_replacement(scope, handle, document);
@@ -358,7 +358,7 @@ fn child_document_write_or_writeln_callback<'s>(
         }
         // Argument conversion precedes both the XML and parser-constructor guards.
         if child_document_has_invalid_dynamic_markup_state(scope, document) {
-            throw_dynamic_markup_invalid_state(scope);
+            throw_dynamic_markup_invalid_state(scope, document);
             return;
         }
         let host = unsafe { &mut *host_ptr };
@@ -423,7 +423,7 @@ fn child_document_close_callback<'s>(
         };
         let document = args.this();
         if child_document_has_invalid_dynamic_markup_state(scope, document) {
-            throw_dynamic_markup_invalid_state(scope);
+            throw_dynamic_markup_invalid_state(scope, document);
             return;
         }
         let Some(document_handle) =
@@ -530,9 +530,15 @@ fn child_document_has_invalid_dynamic_markup_state<'s>(
         .unwrap_or(false)
 }
 
-fn throw_dynamic_markup_invalid_state(scope: &mut v8::PinScope<'_, '_>) {
+fn throw_dynamic_markup_invalid_state<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    document: v8::Local<'s, v8::Object>,
+) {
+    let relevant_context = crate::native_bridge::node_relevant_context(scope, document)
+        .unwrap_or_else(|| scope.get_current_context());
+    let relevant_scope = &mut v8::ContextScope::new(scope, relevant_context);
     throw_dom_exception(
-        scope,
+        relevant_scope,
         "InvalidStateError",
         11,
         "The object is in an invalid state.",
