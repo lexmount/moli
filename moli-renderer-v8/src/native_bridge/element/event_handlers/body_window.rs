@@ -1,7 +1,7 @@
 use crate::{
     context_bootstrap::BODY_OR_FRAMESET_WINDOW_EVENT_HANDLER_PROPERTIES,
     document_runtime::{DomHandle, EventTargetHandle},
-    native_bridge::JsContextHost,
+    native_bridge::{JsContextHost, OwnerDispatchScope},
     util::{v8_string, v8str},
 };
 
@@ -68,11 +68,15 @@ fn body_window_event_handler_getter_function<'s>(
         rv.set_null();
         return;
     };
-    if !super::body_or_frameset_uses_runtime_window(unsafe { &*runtime_ptr }, handle) {
-        rv.set_null();
-        return;
-    }
-    match resolve_window_event_handler_content_attribute(scope, runtime_ptr, event_type) {
+    let value = match super::body_or_frameset_window_owner(unsafe { &*runtime_ptr }, handle) {
+        Some(OwnerDispatchScope::Top) => {
+            resolve_window_event_handler_content_attribute(scope, runtime_ptr, event_type)
+        }
+        Some(OwnerDispatchScope::Child(child_handle)) => unsafe { &*runtime_ptr }
+            .child_window_event_handler_property_value(scope, child_handle, &handler_name),
+        Some(OwnerDispatchScope::LightweightPopup(_)) | None => None,
+    };
+    match value {
         Some(value) => rv.set(value),
         None => rv.set_null(),
     }
@@ -97,13 +101,28 @@ fn body_window_event_handler_setter_function<'s>(
         rv.set_undefined();
         return;
     };
-    if super::body_or_frameset_uses_runtime_window(unsafe { &*runtime_ptr }, handle) {
-        unsafe { &mut *runtime_ptr }.set_registered_event_handler_property(
-            scope,
-            EventTargetHandle::Window,
-            event_type,
-            v8::Local::<v8::Function>::try_from(args.get(0)).ok(),
-        );
+    let handler = v8::Local::<v8::Function>::try_from(args.get(0)).ok();
+    match super::body_or_frameset_window_owner(unsafe { &*runtime_ptr }, handle) {
+        Some(OwnerDispatchScope::Top) => unsafe { &mut *runtime_ptr }
+            .set_registered_event_handler_property(
+                scope,
+                EventTargetHandle::Window,
+                event_type,
+                handler,
+            ),
+        Some(OwnerDispatchScope::Child(child_handle)) => {
+            let relevant_context = handler
+                .and_then(|handler| handler.get_creation_context(scope))
+                .unwrap_or_else(|| scope.get_current_context());
+            unsafe { &mut *runtime_ptr }.set_child_window_event_handler_property(
+                scope,
+                child_handle,
+                &handler_name,
+                handler,
+                relevant_context,
+            );
+        }
+        Some(OwnerDispatchScope::LightweightPopup(_)) | None => {}
     }
     rv.set_undefined();
 }

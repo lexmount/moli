@@ -307,6 +307,80 @@ fn body_and_frameset_window_event_handlers_share_owner_and_content_sources() {
 }
 
 #[test]
+fn child_frameset_event_handler_property_reflects_on_its_window() {
+    let mut vm = new_parsed_test_vm(
+        "https://child-frameset-window-handler.test/",
+        "<!doctype html><iframe id='child'></iframe>",
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const frame = document.getElementById("child");
+  const childWindow = frame.contentWindow;
+  const childDocument = frame.contentDocument;
+  const frameset = childDocument.createElement("frameset");
+  childDocument.documentElement.replaceChild(frameset, childDocument.body);
+  const errorCalls = [];
+  const errorHandler = function (...args) {
+    errorCalls.push([
+      args.length,
+      this === childWindow,
+      args[0],
+      args[1],
+      args[2],
+      args[3],
+      args[4]
+    ]);
+    return true;
+  };
+  frameset.onerror = errorHandler;
+  const reflectedErrorHandler =
+    frameset.onerror === errorHandler && childWindow.onerror === errorHandler;
+  const error = new ErrorEvent("error", {
+    bubbles: true,
+    cancelable: true,
+    message: "message",
+    filename: "source",
+    lineno: 3,
+    colno: 4,
+    error: "reason"
+  });
+  frameset.dispatchEvent(error);
+
+  const ordinaryCalls = [];
+  const ordinaryHandler = function (...args) {
+    ordinaryCalls.push([args.length, this === childWindow, args[0].type]);
+    return true;
+  };
+  frameset.onerror = ordinaryHandler;
+  const reflectedOrdinaryHandler =
+    frameset.onerror === ordinaryHandler && childWindow.onerror === ordinaryHandler;
+  const ordinary = new Event("error", { bubbles: true, cancelable: true });
+  frameset.dispatchEvent(ordinary);
+
+  return JSON.stringify({
+    reflectedErrorHandler,
+    reflectedOrdinaryHandler,
+    mainWindowUntouched: window.onerror === null,
+    errorCalls,
+    errorDefaultPrevented: error.defaultPrevented,
+    ordinaryCalls,
+    ordinaryDefaultPrevented: ordinary.defaultPrevented
+  });
+})()
+"#,
+        )
+        .expect("child frameset Window event handler probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"reflectedErrorHandler":true,"reflectedOrdinaryHandler":true,"mainWindowUntouched":true,"errorCalls":[[5,true,"message","source",3,4,"reason"]],"errorDefaultPrevented":true,"ordinaryCalls":[[1,true,"error"]],"ordinaryDefaultPrevented":false}"#,
+    );
+}
+
+#[test]
 fn inline_event_handlers_retain_listener_registration_order() {
     let mut vm = new_parsed_test_vm(
         "https://inline-event-handler-order.test/",
