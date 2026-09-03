@@ -136,8 +136,21 @@ pub(in crate::context_bootstrap) fn window_has_discarded_child_browsing_context<
     let Some(handle) = window_child_context_handle(scope, receiver) else {
         return false;
     };
-    window_host_ptr(scope, receiver)
-        .is_none_or(|host_ptr| !unsafe { &*host_ptr }.child_browsing_context_is_live(handle))
+    let Some(host_ptr) = window_host_ptr(scope, receiver) else {
+        return true;
+    };
+    let host = unsafe { &*host_ptr };
+    if !host.child_browsing_context_is_live(handle) {
+        return true;
+    }
+    let Some(context) = receiver.get_creation_context(scope) else {
+        return true;
+    };
+    host.window_execution_context_identity_for_access_check(context)
+        .is_none_or(|identity| {
+            identity.dispatch_scope() != crate::native_bridge::OwnerDispatchScope::Child(handle)
+                || !host.window_execution_context_identity_is_current(identity)
+        })
 }
 
 pub(super) fn window_receiver<'s>(
