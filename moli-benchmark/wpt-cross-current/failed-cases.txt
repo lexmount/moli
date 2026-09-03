@@ -2900,7 +2900,6 @@ html/infrastructure/safe-passing-of-structured-data/transfer-videoframe.html
 html/interaction/focus/document-level-focus-apis/document-has-system-focus.html
 html/interaction/focus/focus-management/focus-events.html
 html/interaction/focus/focus-selection.html
-html/interaction/focus/focusgroup/tentative/idl-reflection.html
 html/interaction/focus/processing-model/focus-fixup-rule-one-no-dialogs.html
 html/interaction/focus/processing-model/textarea-scroll-selection.html
 html/interaction/focus/tabindex-focus-flag.html

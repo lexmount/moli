@@ -5523,6 +5523,7 @@ html/interaction/focus/focusgroup/tentative/ax-role-inference-item-elementintern
 html/interaction/focus/focusgroup/tentative/ax-role-inference-item-elementinternals.html
 html/interaction/focus/focusgroup/tentative/ax-role-inference-owner-elementinternals.html
 html/interaction/focus/focusgroup/tentative/ax-role-inference-owner.html
+html/interaction/focus/focusgroup/tentative/idl-reflection.html
 html/interaction/focus/processing-model/legend-focusable.html
 html/interaction/focus/processing-model/legend.html
 html/interaction/focus/processing-model/preventScroll-nested-scroll-elements.html
