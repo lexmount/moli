@@ -503,9 +503,8 @@ css/css-grid/abspos/positioned-grid-descendants-002.html
 css/css-grid/abspos/positioned-grid-descendants-004.html
 css/css-grid/abspos/positioned-grid-descendants-005.html
 css/css-grid/abspos/positioned-grid-descendants-007.html
-css/css-grid/abspos/positioned-grid-descendants-009.html
+css/css-grid/abspos/positioned-grid-descendants-008.html
 css/css-grid/abspos/positioned-grid-descendants-010.html
-css/css-grid/abspos/positioned-grid-descendants-015.html
 css/css-grid/abspos/positioned-grid-items-020.html
 css/css-grid/abspos/positioned-grid-items-021.html
 css/css-grid/abspos/positioned-grid-items-024.html
@@ -2517,7 +2516,7 @@ dom/ranges/tentative/OpaqueRange-range-updates.html
 dom/ranges/tentative/OpaqueRange-supported-elements.html
 dom/ranges/tentative/OpaqueRange-unsupported-elements.html
 dom/ranges/tentative/OpaqueRange-validation.html
-domparsing/DOMParser-parseFromString-url-pushstate.html
+domparsing/DOMParser-parseFromString-url-base-pushstate.html
 domparsing/DOMParser-parseFromString-xml.html
 domparsing/tentative/all-stream-methods-with-trusted-types-no-policy.html
 domparsing/tentative/positional-methods-with-trusted-types.html
@@ -2990,7 +2989,6 @@ html/semantics/interactive-elements/the-dialog-element/modal-dialog-scroll-heigh
 html/semantics/interactive-elements/the-dialog-element/multiple-centered-dialogs.html
 html/semantics/interactive-elements/the-dialog-element/non-modal-dialog-layout.html
 html/semantics/links/links-created-by-a-and-area-elements/rel-attribute-clearing.html
-html/semantics/links/links-created-by-a-and-area-elements/target_blank_implicit_noopener.html
 html/semantics/menu/tentative/button-invoke-menulist.html
 html/semantics/menu/tentative/checkable.html
 html/semantics/menu/tentative/menubar-invoke-menulist.html
@@ -3390,7 +3388,6 @@ webrtc-identity/RTCPeerConnection-constructor.html
 webrtc-priority/RTCPeerConnection-ondatachannel.html
 webrtc-priority/RTCRtpParameters-encodings.html
 webusb/usb-supported-by-permissions-policy.html
-workers/interfaces/WorkerGlobalScope/onerror/exception-in-onerror.html
 workers/semantics/structured-clone/dedicated.html
 workers/semantics/structured-clone/shared.html
 worklets/animation-worklet-service-worker-interception.https.html

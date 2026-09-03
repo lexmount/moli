@@ -1,10 +1,8 @@
-dom/ranges/Range-insertNode.html
-dom/ranges/Range-mutations-dataChange.html
-dom/ranges/Range-surroundContents.html
+css/css-flexbox/align-items-baseline-column-vert-rl-table-item.html
+dom/nodes/NodeList-static-length-getter-tampered-1.html
 editing/run/delete.html?1-1000
 encoding/legacy-mb-tchinese/big5/big5-decode.html?5001-6000
 html/browsers/the-window-object/window-open-windowfeatures-values.html
-html/select/options-length-too-large.html
 infrastructure/expected-fail/user-prompt.html?type=alert
 infrastructure/expected-fail/user-prompt.html?type=alert&wait
 infrastructure/expected-fail/user-prompt.html?type=confirm
