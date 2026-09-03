@@ -1508,6 +1508,7 @@ css/css-grid/abspos/orthogonal-positioned-grid-items-017.html
 css/css-grid/abspos/positioned-grid-descendants-003.html
 css/css-grid/abspos/positioned-grid-descendants-005.html
 css/css-grid/abspos/positioned-grid-descendants-006.html
+css/css-grid/abspos/positioned-grid-descendants-008.html
 css/css-grid/abspos/positioned-grid-descendants-009.html
 css/css-grid/abspos/positioned-grid-descendants-010.html
 css/css-grid/abspos/positioned-grid-descendants-011.html
@@ -5370,6 +5371,7 @@ html/browsers/windows/browsing-context-window.html
 html/browsers/windows/embedded-opener-a-form.html
 html/browsers/windows/nested-browsing-contexts/window-parent.html
 html/browsers/windows/nested-browsing-contexts/window-top.html
+html/browsers/windows/noreferrer-null-opener.html
 html/browsers/windows/noreferrer-window-name.html
 html/browsers/windows/targeting-cross-origin-nested-browsing-contexts.html
 html/browsers/windows/targeting-with-embedded-null-in-target.html
@@ -5473,7 +5475,6 @@ html/dom/partial-updates/tentative/template-for-parsing-only.html
 html/dom/partial-updates/tentative/template-for-reverse.html
 html/dom/partial-updates/tentative/template-for-scripting-nested.html
 html/dom/partial-updates/tentative/template-for-superseded-by-shadowrootmode.html
-html/dom/reflection-embedded.html
 html/dom/reflection-forms-weekmonth.html
 html/dom/reflection-forms.html
 html/dom/reflection-grouping.html
@@ -6108,6 +6109,7 @@ html/semantics/popovers/input-type-popovertarget.html
 html/semantics/popovers/popover-active-document.html
 html/semantics/popovers/popover-beforetoggle-opening-event.html
 html/semantics/popovers/popover-document-open.html
+html/semantics/popovers/popover-light-dismiss-on-scroll.html
 html/semantics/popovers/popover-open-overflow-display-2.html
 html/semantics/popovers/popover-removal-2.html
 html/semantics/popovers/popover-removal.html
@@ -6207,6 +6209,7 @@ html/semantics/scripting-1/the-script-element/execution-timing/079.html
 html/semantics/scripting-1/the-script-element/execution-timing/081.html
 html/semantics/scripting-1/the-script-element/execution-timing/082.html
 html/semantics/scripting-1/the-script-element/execution-timing/084.html
+html/semantics/scripting-1/the-script-element/execution-timing/086.html
 html/semantics/scripting-1/the-script-element/execution-timing/087.html
 html/semantics/scripting-1/the-script-element/execution-timing/088.html
 html/semantics/scripting-1/the-script-element/execution-timing/089.html
@@ -6724,6 +6727,7 @@ html/webappapis/animation-frames/callback-invoked.html
 html/webappapis/animation-frames/callback-multicalls.html
 html/webappapis/animation-frames/callback-timestamp.html
 html/webappapis/animation-frames/cancel-invoked.html
+html/webappapis/animation-frames/cancel-pending.html
 html/webappapis/animation-frames/same-dispatch-time.html
 html/webappapis/animation-frames/spurious-frame-callbacks-optimization.html
 html/webappapis/dynamic-markup-insertion/document-write/001.html

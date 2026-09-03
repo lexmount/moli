@@ -513,7 +513,6 @@ css/css-grid/abspos/positioned-grid-descendants-001.html
 css/css-grid/abspos/positioned-grid-descendants-002.html
 css/css-grid/abspos/positioned-grid-descendants-004.html
 css/css-grid/abspos/positioned-grid-descendants-007.html
-css/css-grid/abspos/positioned-grid-descendants-008.html
 css/css-grid/abspos/positioned-grid-items-020.html
 css/css-grid/abspos/positioned-grid-items-021.html
 css/css-grid/abspos/positioned-grid-items-024.html
@@ -2882,6 +2881,7 @@ html/dom/partial-updates/tentative/template-for-style-in-head.html
 html/dom/partial-updates/tentative/template-for-style.html
 html/dom/partial-updates/tentative/template-for-supersedes-invalid-shadowrootmode.html
 html/dom/partial-updates/tentative/template-for-title.html
+html/dom/reflection-embedded.html
 html/editing/dnd/target-origin/202.html
 html/editing/dnd/the-dropzone-attribute/dropzone_attribute.html
 html/editing/the-hidden-attribute/beforematch-element-fragment-navigation.html
@@ -3009,7 +3009,6 @@ html/semantics/permission-element/usermedia/onstream-attribute.html
 html/semantics/permission-element/usermedia/usermedia-error-attribute.html
 html/semantics/popovers/popover-anchor-multicol-display.html
 html/semantics/popovers/popover-events.html
-html/semantics/popovers/popover-light-dismiss-on-scroll.html
 html/semantics/popovers/popover-move-documents.html
 html/semantics/popovers/popover-nested-in-button.html
 html/semantics/popovers/popover-overlay.html
@@ -3019,7 +3018,6 @@ html/semantics/popovers/popover-types-with-hints.html
 html/semantics/scripting-1/the-script-element/css-module/cors-crossorigin-requests.html
 html/semantics/scripting-1/the-script-element/execution-timing/083.html
 html/semantics/scripting-1/the-script-element/execution-timing/085.html
-html/semantics/scripting-1/the-script-element/execution-timing/086.html
 html/semantics/scripting-1/the-script-element/execution-timing/128.html
 html/semantics/scripting-1/the-script-element/execution-timing/137.html
 html/semantics/scripting-1/the-script-element/json-module/cors-crossorigin-requests.html
@@ -3058,7 +3056,6 @@ html/semantics/scripting-1/the-script-element/text-module/service-worker-test.ht
 html/semantics/the-button-element/command-and-commandfor/on-dialog-behavior.html
 html/syntax/charset/xhr.html
 html/syntax/parsing/cdata-in-integration-point-fragment.html
-html/webappapis/animation-frames/cancel-pending.html
 html/webappapis/dynamic-markup-insertion/document-write/module-delayed.html
 html/webappapis/dynamic-markup-insertion/document-write/module-static-import-delayed.html
 html/webappapis/dynamic-markup-insertion/document-write/module-static-import.html
