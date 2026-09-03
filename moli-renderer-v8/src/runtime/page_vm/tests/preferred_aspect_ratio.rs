@@ -1,6 +1,42 @@
 use super::*;
 
 #[tokio::test(flavor = "current_thread")]
+async fn screenshot_applies_the_absolute_ratio_dependent_automatic_minimum() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/absolute-ratio-automatic-minimum.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>html,body{margin:0}</style>`;
+document.body.innerHTML = `<div id=target style="height:100px;aspect-ratio:1/2;position:absolute"><div style="width:100px"></div></div>`;
+'installed'
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(320, 240, 1.0))?
+            .expect("absolute ratio automatic-minimum fixture must retain a layout root");
+
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                "const rect=document.querySelector('#target').getBoundingClientRect();JSON.stringify([rect.width,rect.height])",
+            )?,
+            "[100,100]",
+            "the min-content contribution must floor a ratio-derived absolute inline size",
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("absolute ratio automatic-minimum fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn screenshot_resolves_preferred_ratios_at_layout_boundaries() {
     run_page_vm_async_test(async move {
         let loader =
