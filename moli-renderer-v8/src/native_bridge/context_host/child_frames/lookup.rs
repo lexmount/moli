@@ -384,10 +384,17 @@ impl JsContextHost {
         &self,
         document_handle: DomHandle,
     ) -> Option<&str> {
-        self.child_browsing_context_host_for_document_handle(document_handle)
-            .and_then(|child_handle| self.child_browsing_contexts.get(&child_handle))
+        let child_handle = self.child_browsing_context_host_for_document_handle(document_handle)?;
+        if let Some(character_set) = self
+            .child_browsing_contexts
+            .get(&child_handle)
             .and_then(|entry| entry.cached_snapshot_ref())
             .map(|snapshot| snapshot.character_set.as_str())
+        {
+            return Some(character_set);
+        }
+        self.child_current_document_is_initial_empty(child_handle)
+            .then_some("UTF-8")
     }
 
     pub(crate) fn child_browsing_context_referrer_for_document_handle(

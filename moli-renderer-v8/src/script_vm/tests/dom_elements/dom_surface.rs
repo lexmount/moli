@@ -620,7 +620,7 @@ fn transformed_constrained_iframe_routes_hover_click_and_wheel_in_child_coordina
               const frame = document.getElementById('input-frame');
               const child = frame.contentDocument;
               return JSON.stringify({
-                hovered: child.getElementById('hover-target').matches(':hover'),
+                hovered: child.getElementById('hover-target').matches('#hover-target:hover'),
                 wheelTop: child.getElementById('wheel-target').scrollTop,
                 rootTop: document.scrollingElement.scrollTop,
                 events: frame.contentWindow.__inputEvents
@@ -915,7 +915,7 @@ fn focusing_visible_child_target_does_not_scroll_partially_hidden_transformed_if
                 parentScroll: window.scrollY,
                 parentActive: document.activeElement === frame,
                 childActive: child.activeElement === child.getElementById('focus-target'),
-                hovered: child.getElementById('focus-target').matches(':hover'),
+                hovered: child.getElementById('focus-target').matches('#focus-target:hover'),
                 events: frame.contentWindow.__focusEvents
               });
             })()
@@ -11200,6 +11200,46 @@ fn no_src_iframe_initial_about_blank_load_is_synchronous_at_connection() {
     assert!(
         !vm.has_ready_child_frame_semantic_turn_for_test(ChildFrameSemanticTurnKind::HostLoad),
         "synchronous initial about:blank delivery must not leave HostLoad work"
+    );
+}
+
+#[test]
+fn no_src_iframe_initial_about_blank_has_a_quirks_empty_document() {
+    let mut vm = new_storage_test_vm("https://iframe-initial-document.test/page.html");
+    vm.document_runtime
+        .set_document_character_set("windows-1252");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const frame = document.createElement("iframe");
+  (document.body || document.documentElement || document).appendChild(frame);
+  const doc = frame.contentDocument;
+  return JSON.stringify({
+    compatMode: doc.compatMode,
+    contentType: doc.contentType,
+    readyState: doc.readyState,
+    documentURI: doc.documentURI,
+    url: doc.URL,
+    doctypeIsNull: doc.doctype === null,
+    characterSet: doc.characterSet,
+    documentChildCount: doc.childNodes.length,
+    documentElement: doc.documentElement.tagName,
+    documentElementChildCount: doc.documentElement.childNodes.length,
+    head: doc.documentElement.firstChild.tagName,
+    headChildCount: doc.head.childNodes.length,
+    body: doc.documentElement.lastChild.tagName,
+    bodyChildCount: doc.body.childNodes.length
+  });
+})()
+"#,
+        )
+        .expect("initial about:blank document shape should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"compatMode":"BackCompat","contentType":"text/html","readyState":"complete","documentURI":"about:blank","url":"about:blank","doctypeIsNull":true,"characterSet":"UTF-8","documentChildCount":1,"documentElement":"HTML","documentElementChildCount":2,"head":"HEAD","headChildCount":0,"body":"BODY","bodyChildCount":0}"#
     );
 }
 
