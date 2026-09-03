@@ -2045,19 +2045,14 @@ async fn websocket_cdp_raw_client_runtime_evaluate_immediately_after_page_naviga
 }
 
 #[tokio::test]
-async fn websocket_cdp_offline_emulation_loopback_navigation_proceeds_and_evaluates() {
+async fn websocket_cdp_offline_emulation_navigation_fails_like_network_error() {
     async fn page() -> impl IntoResponse {
         (
             [(axum::http::header::CONTENT_TYPE.as_str(), "text/html")],
             "<!doctype html><html><body><div id='probe'>online</div></body></html>",
         )
     }
-    async fn probe() -> &'static str {
-        "pong"
-    }
-    let fixture_app = Router::new()
-        .route("/", get(page))
-        .route("/probe", get(probe));
+    let fixture_app = Router::new().route("/", get(page));
     let fixture_listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind fixture listener");
@@ -2073,257 +2068,137 @@ async fn websocket_cdp_offline_emulation_loopback_navigation_proceeds_and_evalua
     .await
     .expect("connect to cdp websocket");
 
-    socket
-        .send(WsMessage::Text(
-            json!({ "id": 1_u64, "method": "Target.createBrowserContext" })
-                .to_string()
-                .into(),
-        ))
-        .await
-        .expect("send createBrowserContext");
-    let create_browser_context = recv_until_id(&mut socket, 1).await;
-    let browser_context_id = create_browser_context
-        .iter()
-        .find(|message| message["id"] == json!(1_u64))
-        .and_then(|message| message["result"]["browserContextId"].as_str())
-        .expect("browserContextId")
-        .to_owned();
+    let browser_context_id = cdp_create_browser_context(&mut socket, 1).await;
+    let session = cdp_create_attached_target(&mut socket, 2, &browser_context_id).await;
 
-    socket
-        .send(WsMessage::Text(
-            json!({
-                "id": 2_u64,
-                "method": "Target.createTarget",
-                "params": { "browserContextId": browser_context_id, "url": "about:blank" }
-            })
-            .to_string()
-            .into(),
-        ))
-        .await
-        .expect("send createTarget");
-    let create_target = recv_until_id(&mut socket, 2).await;
-    let target_id = create_target
-        .iter()
-        .find(|message| message["id"] == json!(2_u64))
-        .and_then(|message| message["result"]["targetId"].as_str())
-        .expect("targetId")
-        .to_owned();
-
-    socket
-        .send(WsMessage::Text(
-            json!({
-                "id": 3_u64,
-                "method": "Target.attachToTarget",
-                "params": { "targetId": target_id, "flatten": true }
-            })
-            .to_string()
-            .into(),
-        ))
-        .await
-        .expect("send attachToTarget");
-    let attach = recv_until_id(&mut socket, 3).await;
-    let session_id = attach
-        .iter()
-        .find(|message| message["id"] == json!(3_u64))
-        .and_then(|message| message["result"]["sessionId"].as_str())
-        .expect("sessionId")
-        .to_owned();
-
-    // Reproduce the offline scenario from the bug report: enable offline
-    // emulation, then navigate to a loopback fixture. Chromium does not
-    // hard-block loopback navigations under offline emulation, so the
-    // navigation must proceed and the committed page must stay usable.
-    socket
-        .send(WsMessage::Text(
-            json!({
-                "id": 4_u64,
-                "method": "Network.emulateNetworkConditions",
-                "sessionId": session_id,
-                "params": {
-                    "offline": true,
-                    "latency": 0,
-                    "downloadThroughput": -1,
-                    "uploadThroughput": -1
-                }
-            })
-            .to_string()
-            .into(),
-        ))
-        .await
-        .expect("send emulateNetworkConditions");
-    let emulate = recv_until_id(&mut socket, 4).await;
-    let emulate_response = emulate
-        .iter()
-        .find(|message| message["id"] == json!(4_u64))
-        .expect("emulateNetworkConditions response");
+    let network_enable = send_cdp_command(
+        &mut socket,
+        4,
+        "Network.enable",
+        Some(&session.session_id),
+        json!({}),
+    )
+    .await;
     assert!(
-        emulate_response.get("error").is_none(),
-        "offline emulation should be accepted; got {emulate_response}"
+        network_enable
+            .iter()
+            .any(|message| message["id"] == json!(4_u64) && message.get("error").is_none()),
+        "Network.enable should succeed: {network_enable:?}"
     );
 
-    socket
-        .send(WsMessage::Text(
-            json!({
-                "id": 5_u64,
-                "method": "Page.navigate",
-                "sessionId": session_id,
-                "params": { "url": fixture_url }
-            })
-            .to_string()
-            .into(),
-        ))
-        .await
-        .expect("send Page.navigate");
-    let navigate = recv_until_id(&mut socket, 5).await;
+    // Turn offline emulation on. Chromium blocks loopback too, so the
+    // navigation must fail as a network error rather than succeed.
+    let emulate = send_cdp_command(
+        &mut socket,
+        5,
+        "Network.emulateNetworkConditions",
+        Some(&session.session_id),
+        json!({
+            "offline": true,
+            "latency": 0,
+            "downloadThroughput": -1,
+            "uploadThroughput": -1
+        }),
+    )
+    .await;
+    assert!(
+        emulate
+            .iter()
+            .any(|message| message["id"] == json!(5_u64) && message.get("error").is_none()),
+        "offline emulation should be accepted: {emulate:?}"
+    );
+
+    let navigate = send_cdp_command(
+        &mut socket,
+        6,
+        "Page.navigate",
+        Some(&session.session_id),
+        json!({ "url": fixture_url }),
+    )
+    .await;
     let navigate_response = navigate
         .iter()
-        .find(|message| message["id"] == json!(5_u64))
+        .find(|message| message["id"] == json!(6_u64))
         .expect("Page.navigate response");
     assert!(
         navigate_response.get("error").is_none(),
-        "loopback navigation must proceed under offline emulation; got {navigate_response}"
+        "an offline navigation must not be a -32000 protocol error; got {navigate_response:#?}"
     );
     assert!(
         navigate_response["result"]["frameId"].is_string(),
-        "Page.navigate must resolve with a frameId; got {navigate_response}"
+        "Page.navigate must still resolve with a frameId; got {navigate_response:#?}"
     );
-
-    socket
-        .send(WsMessage::Text(
-            json!({
-                "id": 6_u64,
-                "method": "Runtime.evaluate",
-                "sessionId": session_id,
-                "params": { "expression": "1 + 1", "returnByValue": true }
-            })
-            .to_string()
-            .into(),
-        ))
-        .await
-        .expect("send Runtime.evaluate");
-    let evaluate = recv_until_id(&mut socket, 6).await;
-    let evaluate_response = evaluate
-        .iter()
-        .find(|message| message["id"] == json!(6_u64))
-        .expect("Runtime.evaluate response");
     assert!(
-        evaluate_response.get("error").is_none(),
-        "Runtime.evaluate must not error after loopback navigation; got {evaluate_response}"
+        navigate.iter().any(|message| {
+            message["sessionId"].as_str() == Some(session.session_id.as_str())
+                && message["method"] == json!("Network.loadingFailed")
+                && message["params"]["errorText"] == json!("net::ERR_INTERNET_DISCONNECTED")
+        }),
+        "offline navigation must emit Network.loadingFailed with net::ERR_INTERNET_DISCONNECTED: {navigate:#?}"
     );
-    assert_eq!(
-        evaluate_response["result"]["result"]["value"],
-        json!(2),
-        "Runtime.evaluate must observe the committed loopback document"
+    if let Some(error_text) = navigate_response["result"]["errorText"].as_str() {
+        assert_eq!(
+            error_text, "net::ERR_INTERNET_DISCONNECTED",
+            "Page.navigate errorText must match the network error"
+        );
+    }
+
+    // The committed error Document keeps the target responsive.
+    let value =
+        cdp_runtime_evaluate_string(&mut socket, &session.session_id, 7, "String(1 + 1)").await;
+    assert_eq!(value, "2");
+
+    // Restoring offline:false lets the same loopback navigation succeed.
+    let restore = send_cdp_command(
+        &mut socket,
+        8,
+        "Network.emulateNetworkConditions",
+        Some(&session.session_id),
+        json!({
+            "offline": false,
+            "latency": 0,
+            "downloadThroughput": -1,
+            "uploadThroughput": -1
+        }),
+    )
+    .await;
+    assert!(
+        restore
+            .iter()
+            .any(|message| message["id"] == json!(8_u64) && message.get("error").is_none()),
+        "offline:false should be accepted: {restore:?}"
     );
 
-    // The loopback document keeps navigator.onLine true, matching the known
-    // Chromium quirk where offline emulation leaves loopback pages online.
-    socket
-        .send(WsMessage::Text(
-            json!({
-                "id": 7_u64,
-                "method": "Runtime.evaluate",
-                "sessionId": session_id,
-                "params": { "expression": "navigator.onLine", "returnByValue": true }
-            })
-            .to_string()
-            .into(),
-        ))
-        .await
-        .expect("send navigator.onLine evaluate");
-    let on_line = recv_until_id(&mut socket, 7).await;
-    let on_line_response = on_line
-        .iter()
-        .find(|message| message["id"] == json!(7_u64))
-        .expect("navigator.onLine response");
-    assert_eq!(
-        on_line_response["result"]["result"]["value"],
-        json!(true),
-        "navigator.onLine should stay true on a loopback page; got {on_line_response}"
-    );
-
-    // Subresource fetches to the loopback fixture also succeed while offline
-    // emulation stays active, because the committed document is online.
-    socket
-        .send(WsMessage::Text(
-            json!({
-                "id": 8_u64,
-                "method": "Runtime.evaluate",
-                "sessionId": session_id,
-                "params": {
-                    "expression": "fetch('/probe').then((r) => r.text()).catch(() => 'offline')",
-                    "awaitPromise": true,
-                    "returnByValue": true
-                }
-            })
-            .to_string()
-            .into(),
-        ))
-        .await
-        .expect("send loopback fetch evaluate");
-    let fetched = recv_until_id(&mut socket, 8).await;
-    let fetch_response = fetched
-        .iter()
-        .find(|message| message["id"] == json!(8_u64))
-        .expect("loopback fetch response");
-    assert_eq!(
-        fetch_response["result"]["result"]["value"],
-        json!("pong"),
-        "loopback subresource fetch must succeed while offline; got {fetch_response}"
-    );
-
-    // Restoring offline:false is accepted and the target stays responsive.
-    socket
-        .send(WsMessage::Text(
-            json!({
-                "id": 9_u64,
-                "method": "Network.emulateNetworkConditions",
-                "sessionId": session_id,
-                "params": {
-                    "offline": false,
-                    "latency": 0,
-                    "downloadThroughput": -1,
-                    "uploadThroughput": -1
-                }
-            })
-            .to_string()
-            .into(),
-        ))
-        .await
-        .expect("send offline restore");
-    let restore = recv_until_id(&mut socket, 9).await;
-    let restore_response = restore
+    let reloaded = send_cdp_command(
+        &mut socket,
+        9,
+        "Page.navigate",
+        Some(&session.session_id),
+        json!({ "url": fixture_url }),
+    )
+    .await;
+    let reloaded_response = reloaded
         .iter()
         .find(|message| message["id"] == json!(9_u64))
-        .expect("offline restore response");
+        .expect("recovered Page.navigate response");
     assert!(
-        restore_response.get("error").is_none(),
-        "offline:false must be accepted; got {restore_response}"
+        reloaded_response.get("error").is_none(),
+        "navigation after offline:false must succeed; got {reloaded_response:#?}"
     );
-
-    socket
-        .send(WsMessage::Text(
-            json!({
-                "id": 10_u64,
-                "method": "Runtime.evaluate",
-                "sessionId": session_id,
-                "params": { "expression": "1 + 1", "returnByValue": true }
-            })
-            .to_string()
-            .into(),
-        ))
-        .await
-        .expect("send post-restore evaluate");
-    let restored = recv_until_id(&mut socket, 10).await;
-    let restored_response = restored
-        .iter()
-        .find(|message| message["id"] == json!(10_u64))
-        .expect("post-restore evaluate response");
-    assert_eq!(
-        restored_response["result"]["result"]["value"],
-        json!(2),
-        "target must remain responsive after restoring offline; got {restored_response}"
+    assert!(
+        reloaded_response["result"]
+            .get("errorText")
+            .is_none_or(|value| value.is_null()),
+        "a recovered navigation must not report an errorText; got {reloaded_response:#?}"
     );
+    let body = cdp_runtime_evaluate_string(
+        &mut socket,
+        &session.session_id,
+        10,
+        "document.querySelector('#probe')?.textContent ?? ''",
+    )
+    .await;
+    assert_eq!(body, "online");
 
     let _ = socket.close(None).await;
     abort_test_cdp_server(protocol_server).await;
