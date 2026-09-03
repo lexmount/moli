@@ -184,7 +184,7 @@ fn dom_implementation_create_html_document_callback<'s>(
         .or_else(|| args.this().get_creation_context(scope))
         .unwrap_or_else(|| scope.get_current_context());
     let target_scope = &mut v8::ContextScope::new(scope, relevant_context);
-    match create_html_document_value(target_scope, parsed.title.as_deref()) {
+    match create_html_document_value(target_scope, parsed.title.as_deref(), owner_document) {
         Some(value) => rv.set(value),
         None => rv.set_undefined(),
     }
@@ -193,13 +193,23 @@ fn dom_implementation_create_html_document_callback<'s>(
 fn create_html_document_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     title: Option<&str>,
+    origin_document: Option<v8::Local<'s, v8::Object>>,
 ) -> Option<v8::Local<'s, v8::Value>> {
     let (bridge, method) = global_bridge_method(scope, "__createDetachedHTMLDocument")?;
     let call_args = match title {
         Some(title) => vec![v8_string(scope, title)?.into()],
         None => Vec::new(),
     };
-    method.call(scope, bridge.into(), &call_args)
+    let value = method.call(scope, bridge.into(), &call_args)?;
+    if let Some(origin_document) = origin_document {
+        let document = v8::Local::<v8::Object>::try_from(value).ok()?;
+        crate::native_bridge::document::inherit_detached_document_origin(
+            scope,
+            document,
+            origin_document,
+        );
+    }
+    Some(value)
 }
 
 enum DomImplementationQualifiedName {
@@ -232,6 +242,7 @@ fn create_document_value<'s>(
     namespace_uri: Option<&str>,
     qualified_name: &DomImplementationQualifiedName,
     doctype: Option<v8::Local<'s, v8::Object>>,
+    origin_document: Option<v8::Local<'s, v8::Object>>,
 ) -> Option<v8::Local<'s, v8::Value>> {
     let namespace_uri = match namespace_uri {
         Some(namespace_uri) => v8_string(scope, namespace_uri)?.into(),
@@ -246,7 +257,16 @@ fn create_document_value<'s>(
         .unwrap_or_else(|| v8::null(scope).into());
     let argv = [namespace_uri, qualified_name, doctype];
     let (bridge, method) = global_bridge_method(scope, "__createDetachedXmlDocument")?;
-    method.call(scope, bridge.into(), &argv)
+    let value = method.call(scope, bridge.into(), &argv)?;
+    if let Some(origin_document) = origin_document {
+        let document = v8::Local::<v8::Object>::try_from(value).ok()?;
+        crate::native_bridge::document::inherit_detached_document_origin(
+            scope,
+            document,
+            origin_document,
+        );
+    }
+    Some(value)
 }
 
 fn dom_implementation_create_document_callback<'s>(
@@ -275,6 +295,7 @@ fn dom_implementation_create_document_callback<'s>(
         parsed.namespace_uri.as_deref(),
         &qualified_name,
         parsed.doctype,
+        owner_document,
     ) {
         Some(value) => rv.set(value),
         None => rv.set_undefined(),

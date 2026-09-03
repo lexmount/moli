@@ -3566,8 +3566,56 @@ fn detached_document_state_and_collections_use_document_prototype_accessors() {
 
     assert_eq!(
         result,
-        "false,false,false,false,false,false,false,false,false,false,false,false,false,false|false,false,false,false,false,false,false,false,false,false,false,false,false,false|||detached-document-prototype-state.test"
+        "false,false,false,false,false,false,false,false,false,false,false,false,false,false|false,false,false,false,false,false,false,false,false,false,false,false,false,false||detached-document-prototype-state.test|detached-document-prototype-state.test"
     );
+}
+
+#[test]
+fn constructed_documents_share_their_associated_document_origin() {
+    let mut vm = new_storage_test_vm("https://www.example.com/path");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const assert = (condition, message) => {
+    if (!condition) throw new Error(message);
+  };
+  const plain = new Document();
+  const html = document.implementation.createHTMLDocument("");
+  const xml = document.implementation.createDocument(null, "");
+  const nested = html.implementation.createHTMLDocument("");
+  const cloned = html.cloneNode(true);
+  const documents = [plain, html, xml, nested, cloned];
+
+  for (const constructed of documents) {
+    assert(constructed.URL === "about:blank", "constructed URL remains about:blank");
+    assert(constructed.domain === "www.example.com", "initial associated domain");
+  }
+
+  document.domain = "example.com";
+  for (const constructed of documents) {
+    assert(constructed.domain === "example.com", "shared relaxed domain");
+    try {
+      constructed.domain = document.domain;
+      throw new Error("detached domain setter did not throw");
+    } catch (error) {
+      assert(error instanceof DOMException, "setter throws DOMException");
+      assert(error.name === "SecurityError", "setter throws SecurityError");
+      assert(error.code === 18, "setter throws legacy SecurityError code");
+    }
+  }
+
+  const afterRelaxation = new Document();
+  assert(afterRelaxation.URL === "about:blank", "post-relaxation URL remains about:blank");
+  assert(afterRelaxation.domain === "example.com", "post-relaxation associated domain");
+  return "ok";
+})()
+"#,
+        )
+        .expect("constructed Document origin probe should evaluate");
+
+    assert_eq!(result, "ok");
 }
 
 #[test]

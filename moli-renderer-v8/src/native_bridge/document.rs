@@ -8,8 +8,9 @@ use crate::{
 use super::super::{
     document_runtime::DomHandle,
     util::{
-        call_global_bridge_method, context_host_ptr_from_global_bridge, get_private_value,
-        global_bridge_object, set_private_value, throw_type_error, v8_string, v8str,
+        call_global_bridge_method, context_host_ptr_from_global_bridge, get_private_object,
+        get_private_value, global_bridge_object, set_private_value, throw_type_error, v8_string,
+        v8str,
     },
 };
 use super::element::{canonical_dir_value, element_attribute, set_reflected_attribute};
@@ -50,6 +51,7 @@ pub(crate) const DETACHED_NATIVE_HANDLE_SLOT: &str = "__moliDetachedNativeHandle
 pub(crate) const DETACHED_NATIVE_NODE_LIST_HANDLES_SLOT: &str =
     "__moliDetachedNativeNodeListHandles";
 const DOCUMENT_ASSOCIATED_WINDOW_SLOT: &str = "__moliDocumentAssociatedWindow";
+const DETACHED_DOCUMENT_ORIGIN_SOURCE_SLOT: &str = "__moliDetachedDocumentOriginSource";
 
 pub(crate) fn node_document_design_mode_getter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -704,6 +706,44 @@ fn document_receiver_runtime_and_handle<'s>(
     Some((runtime_ptr, handle))
 }
 
+fn document_origin_source_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    document: v8::Local<'s, v8::Object>,
+) -> v8::Local<'s, v8::Object> {
+    let mut source = document;
+    for _ in 0..16 {
+        let Some(next) = get_private_object(scope, source, DETACHED_DOCUMENT_ORIGIN_SOURCE_SLOT)
+        else {
+            break;
+        };
+        source = next;
+    }
+    source
+}
+
+pub(crate) fn inherit_detached_document_origin<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    document: v8::Local<'s, v8::Object>,
+    source_document: v8::Local<'s, v8::Object>,
+) {
+    let source_document = document_origin_source_object(scope, source_document);
+    set_private_value(
+        scope,
+        document,
+        DETACHED_DOCUMENT_ORIGIN_SOURCE_SLOT,
+        source_document.into(),
+    );
+}
+
+pub(crate) fn document_domain_value_for_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    document: v8::Local<'s, v8::Object>,
+) -> Option<String> {
+    let origin_source = document_origin_source_object(scope, document);
+    let (runtime_ptr, handle) = document_receiver_runtime_and_handle(scope, origin_source)?;
+    Some(unsafe { &*runtime_ptr }.document_domain_value_for_document_handle(handle))
+}
+
 fn document_obsolete_noop_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -1305,12 +1345,10 @@ fn document_domain_getter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let Some((runtime_ptr, handle)) = document_receiver_runtime_and_handle(scope, args.this())
-    else {
+    let Some(value) = document_domain_value_for_object(scope, args.this()) else {
         rv.set_undefined();
         return;
     };
-    let value = unsafe { &*runtime_ptr }.document_domain_value_for_document_handle(handle);
     set_document_string_return_value(scope, &mut rv, &value);
 }
 
