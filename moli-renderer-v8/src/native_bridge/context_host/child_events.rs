@@ -2,6 +2,7 @@ use super::{
     JsContextHost, OwnerDispatchScope, child_frame_runtime::WINDOW_EVENT_HANDLER_PROPERTIES,
 };
 use crate::{
+    context_bootstrap::{EventHandlerType, apply_event_handler_return_value, event_is_error_event},
     document_runtime::DomHandle,
     document_runtime::EventTargetHandle,
     exception_reporting::invoke_event_handler,
@@ -770,6 +771,7 @@ fn child_window_event_callback_arguments<'s>(
 ) -> Vec<v8::Local<'s, v8::Value>> {
     if registration_kind == ChildWindowEventRegistrationKind::EventHandlerProperty
         && event_type == "error"
+        && event_is_error_event(scope, event)
     {
         vec![
             crate::context_bootstrap::event_backing(scope, event)
@@ -793,28 +795,22 @@ fn child_window_event_callback_arguments<'s>(
     }
 }
 
-fn apply_child_window_event_handler_return(
-    scope: &mut v8::PinScope<'_, '_>,
+fn apply_child_window_event_handler_return<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     event_type: &str,
-    event: v8::Local<'_, v8::Object>,
+    event: v8::Local<'s, v8::Object>,
     returned: Option<v8::Global<v8::Value>>,
 ) {
     let Some(returned) = returned else {
         return;
     };
     let returned = v8::Local::new(scope, returned);
-    let should_cancel = if event_type == "error" {
-        returned.is_boolean() && returned.boolean_value(scope)
+    let handler_type = if event_type == "error" && event_is_error_event(scope, event) {
+        EventHandlerType::OnErrorEventHandler
     } else {
-        returned.is_boolean() && !returned.boolean_value(scope)
+        EventHandlerType::EventHandler
     };
-    if should_cancel && crate::context_bootstrap::event_bool_attribute(scope, event, "cancelable") {
-        let _ = crate::context_bootstrap::event_backing(scope, event).set(
-            scope,
-            v8str(scope, "defaultPrevented").into(),
-            v8::Boolean::new(scope, true).into(),
-        );
-    }
+    apply_event_handler_return_value(scope, event, returned, handler_type);
 }
 
 fn install_child_body_load_attribute_handler_if_needed<'s>(
