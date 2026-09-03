@@ -101,6 +101,7 @@ html/browsers/browsing-the-web/overlapping-navigations-and-traversals/same-docum
 html/browsers/browsing-the-web/overlapping-navigations-and-traversals/same-document-traversal-same-document-traversal-pushstate.html
 html/browsers/browsing-the-web/unloading-documents/002.html
 html/browsers/browsing-the-web/unloading-documents/004.html
+html/browsers/browsing-the-web/unloading-documents/beforeunload-canceling.html
 html/browsers/browsing-the-web/unloading-documents/beforeunload-on-navigation-of-parent.html
 html/browsers/history/the-history-interface/001.html
 html/browsers/history/the-history-interface/002.html
