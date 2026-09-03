@@ -95,6 +95,12 @@ impl PageScriptHost {
                 document_handle,
                 Some(init.creator_base_url),
             );
+        unsafe { &*self.document_runtime }.initialize_inherited_meta_content_security_policies(
+            document_handle,
+            &init
+                .policy_container
+                .inherited_meta_content_security_policies,
+        );
         let document_base_url = self.document_base_url_for_handle(document_handle);
         let document_origin = init.inherited_origin.clone();
         let referrer_policy = init.policy_container.referrer_policy.clone();
@@ -177,9 +183,11 @@ impl PageScriptHost {
     }
 
     fn populate_initial_empty_child_html_document(&mut self, document_handle: DomHandle) {
-        let doctype =
-            self.dom_host_mut()
-                .create_document_type_for_document(document_handle, "html", "", "");
+        self.dom_host_mut()
+            .set_html_quirks_mode_for_parser_document(
+                document_handle,
+                html5ever::tree_builder::QuirksMode::Quirks,
+            );
         let html = self
             .dom_host_mut()
             .create_element_without_attributes_for_document(
@@ -204,7 +212,6 @@ impl PageScriptHost {
                 "http://www.w3.org/1999/xhtml".to_owned(),
                 None,
             );
-        assert!(self.dom_host_mut().append_child(document_handle, doctype));
         assert!(self.dom_host_mut().append_child(document_handle, html));
         assert!(self.dom_host_mut().append_child(html, head));
         assert!(self.dom_host_mut().append_child(html, body));
