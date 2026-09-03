@@ -262,6 +262,13 @@ impl DocumentRuntime {
         };
         if self
             .dom_host
+            .select_selectedcontent_elements(select)
+            .is_empty()
+        {
+            return false;
+        }
+        if self
+            .dom_host
             .select_selected_option_elements(select)
             .first()
             .copied()
@@ -406,12 +413,15 @@ impl DocumentRuntime {
             return false;
         }
 
+        let targets = self.dom_host.select_selectedcontent_elements(select);
+        if targets.is_empty() {
+            return false;
+        }
         let selected_option = self
             .dom_host
             .select_selected_option_elements(select)
             .first()
             .copied();
-        let targets = self.dom_host.select_selectedcontent_elements(select);
         let mut changed = false;
         for target in targets {
             changed |= self.clone_selected_option_contents_into_selectedcontent(
