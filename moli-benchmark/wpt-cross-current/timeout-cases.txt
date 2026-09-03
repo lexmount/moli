@@ -204,7 +204,6 @@ navigation-api/navigate-event/defer/tentative/defer-with-multiple-handlers-and-s
 navigation-api/navigate-event/defer/tentative/defer-with-multiple-handlers.html
 navigation-api/navigate-event/defer/tentative/defer-with-single-handler-reject.html
 navigation-api/navigate-event/defer/tentative/defer-with-single-handler.html
-navigation-api/navigate-event/intercept-cross-origin.html
 navigation-api/navigate-event/navigate-form-requestSubmit.html
 navigation-api/navigate-event/navigate-history-back-noop.html
 navigation-api/navigate-event/navigation-back-cross-document-preventDefault.html

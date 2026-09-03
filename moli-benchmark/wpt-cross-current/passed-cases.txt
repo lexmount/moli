@@ -3463,8 +3463,6 @@ custom-elements/state/state-css-selector-nth-of.html
 custom-elements/state/state-css-selector-shadow-dom.html
 custom-elements/state/state-css-selector.html
 custom-elements/state/state-pseudo-class.html
-custom-elements/throw-on-dynamic-markup-insertion-counter-construct.html
-custom-elements/throw-on-dynamic-markup-insertion-counter-reactions.html
 custom-elements/upgrading.html
 custom-elements/upgrading/Document-importNode-customized-builtins.html
 custom-elements/upgrading/Document-importNode.html
@@ -5359,6 +5357,7 @@ html/browsers/the-window-object/window-open-invalid-url.html
 html/browsers/the-window-object/window-open-noopener.html?_parent
 html/browsers/the-window-object/window-open-noopener.html?_self
 html/browsers/the-window-object/window-open-noopener.html?_top
+html/browsers/the-window-object/window-open-noopener.html?indexed
 html/browsers/the-window-object/window-prototype-chain.html
 html/browsers/the-windowproxy-exotic-object/windowproxy-define-own-property-unforgeable-same-origin.html
 html/browsers/the-windowproxy-exotic-object/windowproxy-prevent-extensions.html
@@ -5705,6 +5704,7 @@ html/semantics/embedded-content/the-iframe-element/iframe_sandbox_popups_escapin
 html/semantics/embedded-content/the-iframe-element/iframe_sandbox_popups_escaping-3.html
 html/semantics/embedded-content/the-iframe-element/iframe_sandbox_popups_nonescaping-1.html
 html/semantics/embedded-content/the-iframe-element/iframe_sandbox_popups_nonescaping-3.html
+html/semantics/embedded-content/the-iframe-element/move-node-local-root.html
 html/semantics/embedded-content/the-iframe-element/same-origin-contextual-fragment.html
 html/semantics/embedded-content/the-iframe-element/sandbox-ascii-case-insensitive.html
 html/semantics/embedded-content/the-iframe-element/sandbox-inherit-to-blank-document-unsandboxed-frame.html
