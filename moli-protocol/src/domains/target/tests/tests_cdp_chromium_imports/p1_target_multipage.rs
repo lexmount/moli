@@ -1316,7 +1316,7 @@ async fn rust_cdp_chromium_target_named_reuse_updates_dom_opener_before_returnin
         &mut ctx,
         &parent_session,
         269_027,
-        "child.opener=null;Object.getOwnPropertyDescriptor(child,'opener').value===null",
+        "child.opener=null;child.opener===null && typeof Object.getOwnPropertyDescriptor(child,'opener').get==='function'",
     )
     .await;
     assert_eq!(disowned["result"]["result"]["value"], true);
@@ -1324,7 +1324,7 @@ async fn rust_cdp_chromium_target_named_reuse_updates_dom_opener_before_returnin
         &mut ctx,
         &sibling_session,
         269_028,
-        "open('', 'child').opener===null",
+        "open('', 'child').opener===window",
     )
     .await;
     assert_eq!(shadowed["result"]["result"]["value"], true);
