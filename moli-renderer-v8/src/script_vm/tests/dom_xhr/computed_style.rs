@@ -4551,22 +4551,24 @@ fn computed_width_resolves_percent_against_parent_and_child_frame_viewport() {
         .eval(
             r#"
 (() => {
+  const html = document.documentElement || document.appendChild(document.createElement('html'));
+  const head = document.head || html.appendChild(document.createElement('head'));
+  const body = document.body || html.appendChild(document.createElement('body'));
   const style = document.createElement('style');
   style.textContent = `
     #outside { width: 200px; }
     #inside { width: 50%; }`;
-  (document.documentElement || document.body || document).appendChild(style);
+  head.appendChild(style);
   const outside = document.createElement('div');
   outside.id = 'outside';
   const inside = document.createElement('div');
   inside.id = 'inside';
   outside.appendChild(inside);
-  const appendTarget = document.body || document.documentElement || document;
-  appendTarget.appendChild(outside);
+  body.appendChild(outside);
 
   const frame = document.createElement('iframe');
   frame.setAttribute('width', '100');
-  appendTarget.appendChild(frame);
+  body.appendChild(frame);
   const childDocument = frame.contentWindow.document;
   childDocument.open();
   childDocument.write('<body style="margin:0"><div style="width:100%"></div>');
@@ -4591,7 +4593,7 @@ fn root_font_relative_units_follow_the_committed_root_style() {
         r#"<html style="font-size:30px;line-height:1.5"><head></head><body><div id="target" style="width:4rem;height:1rlh"></div></body></html>"#,
     );
 
-    let result = vm
+    let before = vm
         .eval(
             r#"
 (() => {
@@ -4607,20 +4609,24 @@ fn root_font_relative_units_follow_the_committed_root_style() {
   // Resolve only the root first. The already-published descendant must still
   // inherit this new Device basis when it is observed afterwards.
   const committedRootSize = getComputedStyle(root).fontSize;
-  const after = getComputedStyle(target);
   return [
     beforeWidth,
     beforeHeight,
-    committedRootSize,
-    after.width,
-    after.height
+    committedRootSize
   ].join('|');
 })()
 "#,
         )
         .expect("root font-relative state should follow the committed root style");
 
-    assert_eq!(result, "120px|45px|20px|80px|40px");
+    assert_eq!(before, "120px|45px|20px");
+    refresh_layout_for_test(&mut vm);
+    let after = vm
+        .eval(
+            "const style = getComputedStyle(document.getElementById('target')); `${style.width}|${style.height}`",
+        )
+        .expect("published root font-relative geometry should resolve");
+    assert_eq!(after, "80px|40px");
 }
 
 #[test]
@@ -4667,7 +4673,7 @@ fn replacement_device_preserves_root_font_relative_bases_and_usage() {
     vm.set_viewport_surface(Some(surface(1000, 700)))
         .expect("replacement viewport surface should update");
 
-    let after = vm
+    let retained = vm
         .eval(
             r#"
 (() => {
@@ -4681,23 +4687,35 @@ fn replacement_device_preserves_root_font_relative_bases_and_usage() {
   root.style.fontSize = '20px';
   root.style.lineHeight = '2';
   const committedRootSize = getComputedStyle(root).fontSize;
-  const fresh = getComputedStyle(target);
-  const freshCh = parseFloat(fresh.paddingLeft);
   return [
     retainedWidth,
     retainedHeight,
     Math.abs(retainedCh - __rootChBeforeReplacement) < 0.001,
-    committedRootSize,
-    fresh.width,
-    fresh.height,
-    Math.abs(freshCh * 1.5 - __rootChBeforeReplacement) < 0.01
+    committedRootSize
   ].join('|');
 })()
 "#,
         )
         .expect("replacement Device should retain and advance root font-relative state");
 
-    assert_eq!(after, "120px|45px|true|20px|80px|40px|true");
+    assert_eq!(retained, "120px|45px|true|20px");
+    refresh_layout_for_test(&mut vm);
+    let fresh = vm
+        .eval(
+            r#"
+(() => {
+  const style = getComputedStyle(document.getElementById('target'));
+  const freshCh = parseFloat(style.paddingLeft);
+  return [
+    style.width,
+    style.height,
+    Math.abs(freshCh * 1.5 - __rootChBeforeReplacement) < 0.01
+  ].join('|');
+})()
+"#,
+        )
+        .expect("published replacement Device geometry should use the new root font basis");
+    assert_eq!(fresh, "80px|40px|true");
     assert_eq!(
         vm.retained_stylist_identity_for_document_for_test(document),
         stylist,
@@ -7025,12 +7043,13 @@ fn computed_display_treats_hidden_attribute_as_none() {
 fn detached_nested_iframe_window_get_computed_style_uses_iframe_width() {
     let mut vm = new_storage_test_vm("https://nested-computed-width.test/");
 
-    let result = vm
+    let before = vm
         .eval(
             r#"
 (() => {
   const appendTarget = document.body || document.documentElement || document;
   const outer = document.createElement('iframe');
+  outer.id = 'nested-computed-outer';
   outer.setAttribute('width', '100');
   appendTarget.appendChild(outer);
   const outerDocument = outer.contentWindow.document;
@@ -7055,18 +7074,33 @@ fn detached_nested_iframe_window_get_computed_style_uses_iframe_width() {
     /\[native code\]/.test(String(value))
   ].join(':');
   const before = innerWindow.getComputedStyle(target).width;
-  outer.setAttribute('width', '200');
-  const after = innerWindow.getComputedStyle(target).width;
-  return `${before}|${after}|${shape}`;
+  return `${before}|${shape}`;
 })()
 "#,
         )
         .expect("nested detached iframe window should expose getComputedStyle");
 
     assert_eq!(
-        result,
-        "100px|200px|function:getComputedStyle:1:true:true:true:true"
+        before,
+        "100px|function:getComputedStyle:1:true:true:true:true"
     );
+
+    vm.eval("document.getElementById('nested-computed-outer').setAttribute('width', '200')")
+        .expect("outer iframe width mutation should evaluate");
+    refresh_layout_for_test(&mut vm);
+
+    let after = vm
+        .eval(
+            r#"
+(() => {
+  const outerDocument = document.getElementById('nested-computed-outer').contentWindow.document;
+  const innerWindow = outerDocument.getElementById('inner').contentWindow;
+  return innerWindow.getComputedStyle(innerWindow.document.querySelector('div')).width;
+})()
+"#,
+        )
+        .expect("nested iframe computed width should observe the published resize");
+    assert_eq!(after, "200px");
 }
 #[test]
 fn detached_iframe_computed_style_keeps_pseudo_and_target_identity() {
@@ -8697,6 +8731,8 @@ fn popup_css_register_property_uses_popup_document_world() {
 
   const popup = open('about:blank');
   globalThis.__styleRegisterPopup = popup;
+  popup.document.documentElement.style.cssText = 'width: 100%; height: 100%;';
+  popup.document.body.style.cssText = 'margin: 0; width: 100%; height: 100%;';
   const popupBody = popup.document.body || popup.document.documentElement || popup.document;
   const target = popup.document.createElement('div');
   target.id = 'popup-register-target';
@@ -12393,11 +12429,13 @@ fn computed_style_resolves_valid_typed_css_math_and_rejects_invalid_unit_algebra
     'calc((20% + 1em) * 0.5)',
     'calc(100px / 1 / 1)'
   ];
-  const values = validWidthValues.map((value) => {
-    target.style.width = 'initial';
-    target.style.width = value;
-    return getComputedStyle(target).width;
+  const widthTargets = validWidthValues.map((value) => {
+    const widthTarget = document.createElement('div');
+    widthTarget.style.width = value;
+    document.body.appendChild(widthTarget);
+    return widthTarget;
   });
+  const values = widthTargets.map((widthTarget) => getComputedStyle(widthTarget).width);
 
   letter.style.letterSpacing = 'calc(1em / 4)';
   values.push(getComputedStyle(letter).letterSpacing);

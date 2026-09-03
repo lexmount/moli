@@ -74,6 +74,17 @@ where
             .map(|geometry| geometry.content_box)
     }
 
+    /// Returns the layout-dependent CSSOM resolved size for one principal
+    /// CSS box. Both box applicability and `box-sizing` were captured by the
+    /// same frozen layout epoch; this projection only removes its retained
+    /// effective zoom.
+    pub fn used_box_size_for_source(&self, source: N) -> Option<LayoutSize> {
+        let output = self.source_output(source)?;
+        let geometry = self.box_geometry(output.principal_box?)?;
+        let size = geometry.used_box_size?;
+        Some(CssomAbsoluteZoom::new(geometry.effective_zoom).size(size))
+    }
+
     /// Resolves CSSOM View element metrics while allowing the renderer to hide
     /// flat-tree ancestors that do not belong to the queried element's
     /// ancestor tree scopes.
@@ -780,6 +791,7 @@ mod tests {
                     padding_box: LayoutRect::ZERO,
                     border_box: LayoutRect::ZERO,
                     margin_box: LayoutRect::ZERO,
+                    used_box_size: None,
                     fragments: vec![skipped_fragment, valid_fragment],
                     layout_origin_in_document: LayoutPoint::new(100.0, 200.0),
                     is_body_element: false,

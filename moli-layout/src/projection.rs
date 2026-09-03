@@ -438,6 +438,13 @@ where
                 ) => is_document_element,
                 None => false,
             };
+            let used_box_size = layout_box.is_css_box().then(|| {
+                let box_rect = match layout_box.style.taffy.box_sizing {
+                    taffy::BoxSizing::ContentBox => geometry.content_box,
+                    taffy::BoxSizing::BorderBox => geometry.border_box,
+                };
+                LayoutSize::new(box_rect.width, box_rect.height)
+            });
             self.boxes.push(LayoutBoxGeometry {
                 id,
                 effective_zoom: layout_box.style.effective_zoom(),
@@ -462,6 +469,7 @@ where
                 padding_box: geometry.padding_box,
                 border_box: geometry.border_box,
                 margin_box: geometry.margin_box,
+                used_box_size,
                 fragments: Vec::new(),
                 layout_origin_in_document: layout_origins[index],
                 is_body_element: semantics.is_some_and(|element| element.is_html_element("body")),

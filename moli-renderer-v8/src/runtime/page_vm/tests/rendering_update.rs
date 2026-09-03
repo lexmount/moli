@@ -3108,11 +3108,11 @@ return JSON.stringify(Object.fromEntries(
         );
         assert_eq!(
             initial["author"],
-            serde_json::json!({"style":["120px","auto","auto 80 / 40"],"box":[120,80]}),
+            serde_json::json!({"style":["120px","80px","auto 80 / 40"],"box":[120,80]}),
         );
         assert_eq!(
             initial["canvas"],
-            serde_json::json!({"style":["auto","auto","auto"],"box":[600,150]}),
+            serde_json::json!({"style":["600px","150px","auto"],"box":[600,150]}),
         );
         assert_eq!(
             initial["frame"],
@@ -3126,10 +3126,15 @@ return JSON.stringify(Object.fromEntries(
             initial["hidden-input"],
             serde_json::json!({"style":["90px","45px","auto 90 / 45"],"box":[0,0]}),
         );
-        assert_eq!(
-            initial["dynamic-input"]["style"],
-            serde_json::json!(["auto", "auto", "auto"]),
-            "a text input must ignore image-only dimension hints",
+        assert_eq!(initial["dynamic-input"]["style"][2], "auto");
+        assert!(
+            initial["dynamic-input"]["style"][0]
+                .as_str()
+                .is_some_and(|width| width.ends_with("px"))
+                && initial["dynamic-input"]["style"][1]
+                    .as_str()
+                    .is_some_and(|height| height.ends_with("px")),
+            "resolved text-control dimensions must expose used pixels without pinning UA sizing",
         );
         assert!(
             initial["dynamic-input"]["box"][0]
@@ -3619,17 +3624,45 @@ document.body.innerHTML = `
         page_vm.vm_mut().eval(
             "document.getElementById('icon').classList.add('blue');document.getElementById('shape').setAttribute('x','2');document.getElementById('feishu-time').setAttribute('width','2em');'mutated'",
         )?;
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(220, 190, 1.0))?
+            .expect("the presentation-attribute mutation must publish a layout tree");
         assert_eq!(
             page_vm.vm_mut().eval(
-                "const icon=document.getElementById('feishu-time');const fromAttribute=getComputedStyle(icon).width;icon.classList.add('css-width');const fromCss=getComputedStyle(icon).width;icon.classList.remove('css-width');[fromAttribute,fromCss,getComputedStyle(icon).width].join('|')",
+                "getComputedStyle(document.getElementById('feishu-time')).width",
             )?,
-            "32px|24px|32px",
-            "mutated presentation attributes must recascade and author CSS must override them",
+            "32px",
+            "the published presentation-attribute mutation must update resolved geometry",
         );
+        page_vm
+            .vm_mut()
+            .eval("document.getElementById('feishu-time').classList.add('css-width')")?;
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(220, 190, 1.0))?
+            .expect("the author CSS override must publish a layout tree");
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                "getComputedStyle(document.getElementById('feishu-time')).width",
+            )?,
+            "24px",
+            "author CSS must override the presentation attribute after layout publication",
+        );
+        page_vm
+            .vm_mut()
+            .eval("document.getElementById('feishu-time').classList.remove('css-width')")?;
         let second = page_vm
             .vm_mut()
             .screenshot_layout_snapshot(moli_layout::PaintViewport::new(220, 190, 1.0))?
             .expect("mutated inline SVG fixture must retain a layout root");
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                "getComputedStyle(document.getElementById('feishu-time')).width",
+            )?,
+            "32px",
+            "removing author CSS must reveal the presentation attribute in the next layout",
+        );
         assert_eq!(second.svg_images.len(), 3);
         assert!(second.fragments.iter().any(|fragment| {
             matches!(

@@ -4,6 +4,7 @@ use moli_layout::{
     LayoutAnswers, LayoutBoxModel, LayoutCaretPosition, LayoutDocumentMetrics,
     LayoutElementMetrics, LayoutError, LayoutFlushReason, LayoutHit, LayoutPoint, LayoutQuery,
     LayoutQueryAnswer, LayoutQueryBatch, LayoutResolvedGridTracks, LayoutScrollIntoViewGeometry,
+    LayoutSize,
 };
 
 use super::client_rect::{ClientRect, client_rect_from_quad, union_client_rect, zero_client_rect};
@@ -271,6 +272,29 @@ pub(crate) fn observable_used_grid_tracks(
     match answers.answers.into_iter().next() {
         Some(LayoutQueryAnswer::UsedGridTracks(tracks)) => Ok(tracks),
         _ => Err(provider_contract_error("used Grid tracks")),
+    }
+}
+
+pub(crate) fn observable_used_box_size(
+    runtime: &JsContextHost,
+    source: DomHandle,
+    reason: LayoutFlushReason,
+) -> Result<Option<LayoutSize>, LayoutError> {
+    if !runtime.dom_host().is_connected(source) {
+        return Ok(None);
+    }
+    let Some(document) = runtime.layout_document_for_source(source) else {
+        return Ok(None);
+    };
+    let answers = observable_geometry_batch(
+        runtime,
+        document,
+        reason,
+        &LayoutQueryBatch::new(vec![LayoutQuery::UsedBoxSize { source }]),
+    )?;
+    match answers.answers.into_iter().next() {
+        Some(LayoutQueryAnswer::UsedBoxSize(size)) => Ok(size),
+        _ => Err(provider_contract_error("used box size")),
     }
 }
 

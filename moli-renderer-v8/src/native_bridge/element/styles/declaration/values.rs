@@ -13,7 +13,7 @@ use crate::{
         document_runtime::DomHandle,
         native_bridge::element::geometry::{
             ClientRect, observable_bounding_client_rect, observable_bounding_client_rects,
-            observable_used_grid_tracks,
+            observable_used_box_size, observable_used_grid_tracks,
         },
         style_engine::{
             ComputedDisplayKind, ComputedRenderedStyleFacts, FullStyleWorldSnapshot, StyleViewport,
@@ -5125,6 +5125,13 @@ fn resolve_moli_computed_style_value(
     {
         return tracks;
     }
+    if matches!(property, "width" | "height") {
+        match resolved_layout_box_dimension(runtime, handle, property, context) {
+            Some(ResolvedLayoutBoxDimension::Used(size)) => return size,
+            Some(ResolvedLayoutBoxDimension::Computed) => return value.to_owned(),
+            None => {}
+        }
+    }
     if property == "width"
         && let Some(width) =
             resolve_computed_width_with_inline_fallback(runtime, handle, value, context, resolution)
@@ -5249,6 +5256,42 @@ fn serialize_used_grid_track_list(
         size_index += 1;
     }
     (size_index == tracks.used_track_sizes.len()).then(|| components.join(" "))
+}
+
+enum ResolvedLayoutBoxDimension {
+    Used(String),
+    Computed,
+}
+
+fn resolved_layout_box_dimension(
+    runtime: &JsContextHost,
+    handle: DomHandle,
+    property: &str,
+    context: StyleComputationContext,
+) -> Option<ResolvedLayoutBoxDimension> {
+    if !context.reads_resolved_values() || !runtime.layout_policy().uses_real_layout() {
+        return None;
+    }
+    let size = observable_used_box_size(
+        runtime,
+        handle,
+        moli_layout::LayoutFlushReason::SynchronousGeometry,
+    )
+    .ok()?;
+    let Some(size) = size else {
+        // The published tree has no principal CSS-box used value (for
+        // example, for a non-replaced inline or a box-suppressed element).
+        // Do not reconstruct one from declarations and ancestor sizes.
+        return Some(ResolvedLayoutBoxDimension::Computed);
+    };
+    let value = match property {
+        "width" => size.width,
+        "height" => size.height,
+        _ => return None,
+    };
+    Some(ResolvedLayoutBoxDimension::Used(
+        format_non_negative_used_css_px(f64::from(value)),
+    ))
 }
 
 fn computed_axis_position_shorthand_value(

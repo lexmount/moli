@@ -460,6 +460,13 @@ pub struct LayoutBoxGeometry {
     pub padding_box: LayoutRect,
     pub border_box: LayoutRect,
     pub margin_box: LayoutRect,
+    /// CSSOM used `width`/`height` selected during this layout epoch.
+    ///
+    /// This remains in the box's effective-zoomed layout space, like the
+    /// retained box rectangles. Query projection removes that same retained
+    /// zoom. `None` means this principal layout object is not a CSS box, so
+    /// these properties expose their computed rather than used values.
+    pub used_box_size: Option<LayoutSize>,
     pub fragments: Vec<LayoutFragmentId>,
     /// Untransformed border-box origin in document layout coordinates.
     pub layout_origin_in_document: LayoutPoint,
