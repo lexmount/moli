@@ -513,9 +513,9 @@ css/css-grid/abspos/positioned-grid-descendants-001.html
 css/css-grid/abspos/positioned-grid-descendants-002.html
 css/css-grid/abspos/positioned-grid-descendants-004.html
 css/css-grid/abspos/positioned-grid-descendants-007.html
-css/css-grid/abspos/positioned-grid-descendants-008.html
 css/css-grid/abspos/positioned-grid-descendants-009.html
-css/css-grid/abspos/positioned-grid-descendants-010.html
+css/css-grid/abspos/positioned-grid-descendants-011.html
+css/css-grid/abspos/positioned-grid-descendants-013.html
 css/css-grid/abspos/positioned-grid-items-020.html
 css/css-grid/abspos/positioned-grid-items-021.html
 css/css-grid/abspos/positioned-grid-items-024.html
@@ -2084,6 +2084,7 @@ css/css-typed-om/the-stylepropertymap/properties/contain.html
 css/css-typed-om/the-stylepropertymap/properties/container-name.html
 css/css-typed-om/the-stylepropertymap/properties/container-type.html
 css/css-typed-om/the-stylepropertymap/properties/coordinate.html
+css/css-typed-om/the-stylepropertymap/properties/counter-increment.html
 css/css-typed-om/the-stylepropertymap/properties/counter-reset.html
 css/css-typed-om/the-stylepropertymap/properties/counter-set.html
 css/css-typed-om/the-stylepropertymap/properties/cursor.html
@@ -2530,6 +2531,7 @@ dom/ranges/tentative/OpaqueRange-range-updates.html
 dom/ranges/tentative/OpaqueRange-supported-elements.html
 dom/ranges/tentative/OpaqueRange-unsupported-elements.html
 dom/ranges/tentative/OpaqueRange-validation.html
+domparsing/DOMParser-parseFromString-url-pushstate.html
 domparsing/DOMParser-parseFromString-xml.html
 domparsing/tentative/all-stream-methods-with-trusted-types-no-policy.html
 domparsing/tentative/positional-methods-with-trusted-types.html
@@ -2820,7 +2822,6 @@ html/browsers/the-window-object/open-close/script-closable.html
 html/browsers/the-window-object/window-indexed-properties-delete-no-cache.html
 html/browsers/the-window-object/window-indexed-properties-strict.html
 html/browsers/the-window-object/window-indexed-properties.html
-html/browsers/the-window-object/window-open-noopener.html?indexed
 html/browsers/the-window-object/window-open-noreferrer.html
 html/browsers/the-windowproxy-exotic-object/windowproxy-prototype-setting-same-origin.html
 html/browsers/windows/browsing-context-names/choose-_self-001.html
@@ -2959,7 +2960,6 @@ html/semantics/embedded-content/the-img-element/current-pixel-density/error.html
 html/semantics/embedded-content/the-img-element/currentSrc-blob-cache.html
 html/semantics/embedded-content/the-img-element/decode/image-decode-image-document.html
 html/semantics/embedded-content/the-img-element/decode/image-decode-with-quick-attach.html
-html/semantics/embedded-content/the-img-element/disconnected-image-loading-lazy.html
 html/semantics/embedded-content/the-img-element/image-loading-lazy-base-url-2.html
 html/semantics/embedded-content/the-img-element/image-loading-lazy-base-url.html
 html/semantics/embedded-content/the-img-element/image-loading-lazy-below-viewport-dynamic.html
@@ -3006,6 +3006,7 @@ html/semantics/interactive-elements/the-dialog-element/dialog-showModal.html
 html/semantics/interactive-elements/the-dialog-element/modal-dialog-scroll-height.html
 html/semantics/interactive-elements/the-dialog-element/multiple-centered-dialogs.html
 html/semantics/interactive-elements/the-dialog-element/non-modal-dialog-layout.html
+html/semantics/links/links-created-by-a-and-area-elements/rel-attribute-clearing.html
 html/semantics/links/links-created-by-a-and-area-elements/target_blank_implicit_noopener.html
 html/semantics/menu/tentative/button-invoke-menulist.html
 html/semantics/menu/tentative/checkable.html
@@ -3026,7 +3027,6 @@ html/semantics/popovers/popover-types-with-hints.html
 html/semantics/scripting-1/the-script-element/css-module/cors-crossorigin-requests.html
 html/semantics/scripting-1/the-script-element/execution-timing/083.html
 html/semantics/scripting-1/the-script-element/execution-timing/085.html
-html/semantics/scripting-1/the-script-element/execution-timing/102.html
 html/semantics/scripting-1/the-script-element/execution-timing/128.html
 html/semantics/scripting-1/the-script-element/execution-timing/137.html
 html/semantics/scripting-1/the-script-element/json-module/cors-crossorigin-requests.html
@@ -3076,7 +3076,6 @@ html/webappapis/dynamic-markup-insertion/document-write/module-tla-promise.html
 html/webappapis/dynamic-markup-insertion/document-write/module.html
 html/webappapis/dynamic-markup-insertion/document-write/mutation-observer.html
 html/webappapis/dynamic-markup-insertion/document-write/write-active-document.html
-html/webappapis/dynamic-markup-insertion/html-unsafe-methods/Document-parseHTMLUnsafe-url-base-pushstate.html
 html/webappapis/scripting/event-loops/microtask_before_prepare_the_script_element-01.html
 html/webappapis/scripting/events/event-handler-processing-algorithm-error/frameset-element-synthetic-errorevent.html
 html/webappapis/scripting/processing-model-2/compile-error-cross-origin.html

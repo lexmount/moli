@@ -100,7 +100,6 @@ html/browsers/browsing-the-web/overlapping-navigations-and-traversals/same-docum
 html/browsers/browsing-the-web/overlapping-navigations-and-traversals/same-document-traversal-same-document-traversal-pushstate.html
 html/browsers/browsing-the-web/unloading-documents/002.html
 html/browsers/browsing-the-web/unloading-documents/004.html
-html/browsers/browsing-the-web/unloading-documents/beforeunload-canceling.html
 html/browsers/browsing-the-web/unloading-documents/beforeunload-on-navigation-of-parent.html
 html/browsers/history/the-history-interface/001.html
 html/browsers/history/the-history-interface/002.html
@@ -118,6 +117,7 @@ html/browsers/history/the-location-interface/location_replace_session_history.ht
 html/browsers/history/the-location-interface/reload_document_open_write.html
 html/browsers/history/the-location-interface/scripted_click_assign_during_load.html
 html/browsers/history/the-location-interface/scripted_click_location_assign_during_load.html
+html/browsers/history/the-location-interface/scripted_form_submit_assign_during_load.html
 html/browsers/history/the-session-history-of-browsing-contexts/navigation-in-onload.html
 html/browsers/sandboxing/sandbox-document-open.html
 html/browsers/sandboxing/sandbox-window-open-srcdoc.html
@@ -144,7 +144,7 @@ html/editing/the-hidden-attribute/beforematch-attribute-removal-002.html
 html/editing/the-hidden-attribute/beforematch-element-removal-001.html
 html/editing/the-hidden-attribute/beforematch-element-removal-002.html
 html/editing/the-hidden-attribute/hidden-until-found-and-details.html
-html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/allow-scripts-flag-changing-1.html
+html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/allow-scripts-flag-changing-2.html
 html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/remove-from-document.html
 html/semantics/embedded-content/the-embed-element/embed-change-src.html
 html/semantics/embedded-content/the-iframe-element/change_parentage.html
@@ -172,6 +172,7 @@ html/semantics/embedded-content/the-img-element/source-media-outside-doc.html
 html/semantics/embedded-content/the-img-element/srcset/srcset-w-reselect-on-resize.html
 html/semantics/forms/the-button-element/button-submit-remove-children.html
 html/semantics/scripting-1/the-script-element/change-src-attr-prepare-a-script.html
+html/semantics/scripting-1/the-script-element/execution-timing/102.html
 html/semantics/scripting-1/the-script-element/microtasks/checkpoint-after-workerglobalscope-onerror-module.html
 html/semantics/scripting-1/the-script-element/script-onerror-insertion-point-2.html
 html/semantics/text-level-semantics/the-a-element/a-type.historical.html
