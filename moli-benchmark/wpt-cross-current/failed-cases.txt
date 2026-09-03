@@ -17,7 +17,6 @@ content-security-policy/inheritance/document-write-iframe.html
 content-security-policy/inheritance/location-reload.html
 content-security-policy/inside-worker/dedicatedworker-report-only.html
 content-security-policy/inside-worker/serviceworker-report-only.https.sub.html
-content-security-policy/navigation/javascript-url-navigation-evaluated-to-string-inherits-csp.html
 content-security-policy/resource-hints/prefetch-allowed-by-default.html
 content-security-policy/resource-hints/prefetch-allowed-no-default.html
 content-security-policy/resource-hints/prefetch-allowed-with-conflicting-permissive-policies.html
@@ -669,6 +668,7 @@ css/css-grid/alignment/grid-justify-baseline-002.html
 css/css-grid/alignment/grid-justify-baseline-003.html
 css/css-grid/alignment/grid-justify-baseline-004.html
 css/css-grid/alignment/grid-justify-baseline-005.html
+css/css-grid/alignment/grid-place-content-001.html
 css/css-grid/alignment/grid-row-axis-alignment-positioned-items-001.html
 css/css-grid/alignment/grid-row-axis-alignment-positioned-items-002.html
 css/css-grid/alignment/grid-row-axis-alignment-positioned-items-003.html
@@ -2810,11 +2810,9 @@ html/browsers/the-window-object/open-close/script-closable.html
 html/browsers/the-window-object/window-indexed-properties-delete-no-cache.html
 html/browsers/the-window-object/window-indexed-properties-strict.html
 html/browsers/the-window-object/window-indexed-properties.html
-html/browsers/the-window-object/window-open-noreferrer.html
 html/browsers/the-windowproxy-exotic-object/windowproxy-prototype-setting-same-origin.html
 html/browsers/windows/browsing-context-names/choose-_self-001.html
 html/browsers/windows/document-domain-removed-iframe.html
-html/browsers/windows/embedded-opener-remove-frame.html
 html/cross-origin-embedder-policy/coep-on-response-from-service-worker.https.html
 html/cross-origin-embedder-policy/service-worker-cache-storage.https.html
 html/dom/documents/dom-tree-accessors/nameditem-names.html
@@ -2906,7 +2904,6 @@ html/semantics/document-metadata/the-style-element/tentative/style-element-csp-a
 html/semantics/document-metadata/the-style-element/tentative/style-element-csp-nonce-allowed.html
 html/semantics/document-metadata/the-style-element/tentative/style-element-csp-script-src-allowed.html
 html/semantics/document-metadata/the-style-element/tentative/style-element-fixed.html
-html/semantics/embedded-content/image-maps/image-map-processing-model/hash-name-reference.html
 html/semantics/embedded-content/the-area-element/area-coords.html
 html/semantics/embedded-content/the-area-element/area-processing.html
 html/semantics/embedded-content/the-area-element/area-shape.html
@@ -2956,10 +2953,7 @@ html/semantics/embedded-content/the-img-element/natural-size-orientation.html
 html/semantics/embedded-content/the-img-element/naturalWidth-naturalHeight-width-height.html
 html/semantics/embedded-content/the-img-element/relevant-mutations-lazy.html
 html/semantics/embedded-content/the-img-element/relevant-mutations.html
-html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-display-none.html
-html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-quirks-mode.html
 html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-standards-mode.html
-html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-width-1000px.html
 html/semantics/embedded-content/the-img-element/svg-img-density-vs-zoom.html
 html/semantics/embedded-content/the-img-element/update-src-complete.html
 html/semantics/embedded-content/the-img-element/update-the-image-data/current-request-microtask-002.html
@@ -2986,6 +2980,7 @@ html/semantics/interactive-elements/the-dialog-element/dialog-showModal.html
 html/semantics/interactive-elements/the-dialog-element/modal-dialog-scroll-height.html
 html/semantics/interactive-elements/the-dialog-element/multiple-centered-dialogs.html
 html/semantics/interactive-elements/the-dialog-element/non-modal-dialog-layout.html
+html/semantics/links/links-created-by-a-and-area-elements/htmlanchorelement_noopener.html
 html/semantics/links/links-created-by-a-and-area-elements/rel-attribute-clearing.html
 html/semantics/menu/tentative/button-invoke-menulist.html
 html/semantics/menu/tentative/checkable.html

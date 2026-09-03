@@ -136,6 +136,7 @@ html/browsers/windows/browsing-context-names/choose-_blank-003.html
 html/browsers/windows/browsing-context-names/choose-_top-001.html
 html/browsers/windows/browsing-context-names/choose-_top-002.html
 html/browsers/windows/browsing-context-names/choose-_top-003.html
+html/browsers/windows/embedded-opener-remove-frame.html
 html/cross-origin-embedder-policy/cache-storage-reporting-service-worker.https.html
 html/dom/documents/dom-tree-accessors/Document.currentScript.html
 html/dom/elements/global-attributes/cdata-dir_auto.html
@@ -156,7 +157,6 @@ html/semantics/embedded-content/the-iframe-element/move_iframe_in_dom_03.html
 html/semantics/embedded-content/the-iframe-element/move_iframe_in_dom_04.html
 html/semantics/embedded-content/the-img-element/below-viewport-image-loading-lazy-load-event.html
 html/semantics/embedded-content/the-img-element/empty-src-no-current-request.html
-html/semantics/embedded-content/the-img-element/environment-changes/viewport-change.html
 html/semantics/embedded-content/the-img-element/image-loading-lazy-empty-src.html
 html/semantics/embedded-content/the-img-element/image-loading-lazy-move-document.html
 html/semantics/embedded-content/the-img-element/image-loading-lazy-move-into-script-disabled-iframe.html
@@ -224,8 +224,6 @@ navigation-api/ordering-and-transition/back-same-document-intercept.html?current
 navigation-api/ordering-and-transition/back-same-document-intercept.html?no-currententrychange
 navigation-api/ordering-and-transition/navigate-intercept-precommitHandler-redirect.html?currententrychange
 navigation-api/ordering-and-transition/navigate-intercept-precommitHandler-redirect.html?no-currententrychange
-navigation-api/state/cross-document-getState-undefined.html
-navigation-api/state/cross-document-getState.html
 page-visibility/iframe-unload.html
 page-visibility/onvisibilitychange.html
 page-visibility/unload-bubbles.html

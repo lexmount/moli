@@ -82,6 +82,7 @@ content-security-policy/media-src/media-src-blocked-data-url.html
 content-security-policy/meta/meta-img-src.html
 content-security-policy/meta/meta-modified.html
 content-security-policy/meta/sandbox-iframe.html
+content-security-policy/navigation/javascript-url-navigation-evaluated-to-string-inherits-csp.html
 content-security-policy/navigation/to-javascript-parent-initiated-check-csp-order.html
 content-security-policy/navigation/to-javascript-parent-initiated-child-csp.html
 content-security-policy/navigation/to-javascript-url-frame-src.html
@@ -1643,7 +1644,6 @@ css/css-grid/alignment/grid-item-aspect-ratio-justify-self-002.html
 css/css-grid/alignment/grid-item-auto-margins-001.html
 css/css-grid/alignment/grid-item-auto-margins-002.html
 css/css-grid/alignment/grid-item-auto-margins-alignment.html
-css/css-grid/alignment/grid-place-content-001.html
 css/css-grid/alignment/grid-row-axis-alignment-sticky-positioned-items-001.html
 css/css-grid/alignment/grid-row-axis-alignment-sticky-positioned-items-002.html
 css/css-grid/alignment/grid-self-alignment-baseline-with-grid-001.html
@@ -5361,6 +5361,7 @@ html/browsers/the-window-object/window-open-noopener.html?_parent
 html/browsers/the-window-object/window-open-noopener.html?_self
 html/browsers/the-window-object/window-open-noopener.html?_top
 html/browsers/the-window-object/window-open-noopener.html?indexed
+html/browsers/the-window-object/window-open-noreferrer.html
 html/browsers/the-window-object/window-prototype-chain.html
 html/browsers/the-windowproxy-exotic-object/windowproxy-define-own-property-unforgeable-same-origin.html
 html/browsers/the-windowproxy-exotic-object/windowproxy-prevent-extensions.html
@@ -6114,7 +6115,6 @@ html/semantics/interfaces.html
 html/semantics/links/links-created-by-a-and-area-elements/anchor-src-encoding.html
 html/semantics/links/links-created-by-a-and-area-elements/htmlanchorelement_attribute-getter-setter.html
 html/semantics/links/links-created-by-a-and-area-elements/htmlanchorelement_getter.html
-html/semantics/links/links-created-by-a-and-area-elements/htmlanchorelement_noopener.html
 html/semantics/links/links-created-by-a-and-area-elements/target_blank_implicit_noopener.html
 html/semantics/links/links-created-by-a-and-area-elements/target_blank_implicit_noopener_base.html
 html/semantics/popovers/button-type-popovertarget.html
@@ -7373,6 +7373,8 @@ navigation-api/scroll-behavior/scroll-on-synthetic-event.html
 navigation-api/scroll-behavior/scroll-without-intercept.html
 navigation-api/state/cross-document-away-and-back.html?method=navigate
 navigation-api/state/cross-document-away-and-back.html?method=updateCurrentEntry
+navigation-api/state/cross-document-getState-undefined.html
+navigation-api/state/cross-document-getState.html
 navigation-api/state/cross-document-location-api.html?method=navigate
 navigation-api/state/cross-document-location-api.html?method=updateCurrentEntry
 navigation-api/state/history-pushState.html?method=navigate
