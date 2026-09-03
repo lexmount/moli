@@ -669,7 +669,6 @@ css/css-grid/alignment/grid-justify-baseline-002.html
 css/css-grid/alignment/grid-justify-baseline-003.html
 css/css-grid/alignment/grid-justify-baseline-004.html
 css/css-grid/alignment/grid-justify-baseline-005.html
-css/css-grid/alignment/grid-place-content-001.html
 css/css-grid/alignment/grid-row-axis-alignment-positioned-items-001.html
 css/css-grid/alignment/grid-row-axis-alignment-positioned-items-002.html
 css/css-grid/alignment/grid-row-axis-alignment-positioned-items-003.html

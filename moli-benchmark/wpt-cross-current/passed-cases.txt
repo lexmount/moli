@@ -1643,6 +1643,7 @@ css/css-grid/alignment/grid-item-aspect-ratio-justify-self-002.html
 css/css-grid/alignment/grid-item-auto-margins-001.html
 css/css-grid/alignment/grid-item-auto-margins-002.html
 css/css-grid/alignment/grid-item-auto-margins-alignment.html
+css/css-grid/alignment/grid-place-content-001.html
 css/css-grid/alignment/grid-row-axis-alignment-sticky-positioned-items-001.html
 css/css-grid/alignment/grid-row-axis-alignment-sticky-positioned-items-002.html
 css/css-grid/alignment/grid-self-alignment-baseline-with-grid-001.html
@@ -5612,6 +5613,7 @@ html/semantics/document-metadata/the-meta-element/color-scheme/meta-color-scheme
 html/semantics/document-metadata/the-meta-element/color-scheme/meta-color-scheme-single-value-in-shadow-tree.html
 html/semantics/document-metadata/the-meta-element/http-equiv-and-name-1.html
 html/semantics/document-metadata/the-meta-element/http-equiv-and-name-2.html
+html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/allow-scripts-flag-changing-1.html
 html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/allow-scripts-flag-changing-2.html
 html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/dynamic-append.html
 html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/not-in-shadow-tree.html
