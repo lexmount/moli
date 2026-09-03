@@ -5226,7 +5226,7 @@ fn detached_popover_methods_use_html_element_prototype_brand_checks() {
 
     assert_eq!(
         result,
-        r#"{"shapes":"true:function:0:true:true|true:function:0:true:true|true:function:0:true:true","own":"false,false,false","elementOwn":"false,false,false","svgTypes":"undefined,undefined,undefined","direct":"ERR:NotSupportedError:9|ERR:InvalidStateError:11|ERR:InvalidStateError:11|ERR:InvalidStateError:11","prototype":"ERR:NotSupportedError:9|ERR:InvalidStateError:11|ERR:InvalidStateError:11|ERR:InvalidStateError:11"}"#
+        r#"{"shapes":"true:function:0:true:true|true:function:0:true:true|true:function:0:true:true","own":"false,false,false","elementOwn":"false,false,false","svgTypes":"undefined,undefined,undefined","direct":"ERR:NotSupportedError:9|ERR:InvalidStateError:11|OK:undefined|ERR:InvalidStateError:11","prototype":"ERR:NotSupportedError:9|ERR:InvalidStateError:11|OK:undefined|ERR:InvalidStateError:11"}"#
     );
 }
 

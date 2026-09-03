@@ -332,15 +332,6 @@ fn close_open_auto_popovers(
     }
 }
 
-fn throw_redundant_popover_state_error(scope: &mut v8::PinScope<'_, '_>) {
-    throw_dom_exception(
-        scope,
-        "InvalidStateError",
-        11,
-        "Popover is already in the requested state.",
-    );
-}
-
 fn parse_popover_invocation<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
@@ -444,14 +435,15 @@ pub(in crate::native_bridge) fn node_show_popover_callback<'s>(
         return;
     };
     let runtime = unsafe { &*runtime_ptr };
-    if !ensure_popover_supported(scope, runtime, handle)
-        || !ensure_popover_connected(scope, runtime, handle)
-    {
+    if !ensure_popover_supported(scope, runtime, handle) {
         rv.set_undefined();
         return;
     }
     if popover_is_open(runtime, handle) {
-        throw_redundant_popover_state_error(scope);
+        rv.set_undefined();
+        return;
+    }
+    if !ensure_popover_connected(scope, runtime, handle) {
         rv.set_undefined();
         return;
     }
@@ -470,14 +462,15 @@ pub(in crate::native_bridge) fn node_hide_popover_callback<'s>(
         return;
     };
     let runtime = unsafe { &*runtime_ptr };
-    if !ensure_popover_supported(scope, runtime, handle)
-        || !ensure_popover_connected(scope, runtime, handle)
-    {
+    if !ensure_popover_supported(scope, runtime, handle) {
         rv.set_undefined();
         return;
     }
     if !popover_is_open(runtime, handle) {
-        throw_redundant_popover_state_error(scope);
+        rv.set_undefined();
+        return;
+    }
+    if !ensure_popover_connected(scope, runtime, handle) {
         rv.set_undefined();
         return;
     }
