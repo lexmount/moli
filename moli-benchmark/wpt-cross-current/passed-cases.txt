@@ -3786,6 +3786,7 @@ dom/ranges/Range-mutations-splitText.html
 dom/ranges/Range-selectNode.html
 dom/ranges/Range-set.html
 dom/ranges/Range-stringifier.html
+dom/ranges/Range-surroundContents.html
 dom/ranges/StaticRange-constructor.html
 dom/svg-insert-crash.html
 dom/traversal/NodeFilter-constants.html
