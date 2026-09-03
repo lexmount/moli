@@ -304,12 +304,6 @@ impl DocumentRuntime {
             .native_compiled_module(entry_id)
     }
 
-    pub(crate) fn native_module_url_for(&self, module: v8::Local<'_, v8::Module>) -> Option<Url> {
-        self.script_lifecycle
-            .scripts()
-            .native_module_url_for(module)
-    }
-
     pub(crate) fn mark_native_module_instantiated(&mut self, entry_id: ModuleEntryId) {
         self.script_lifecycle
             .scripts_mut()

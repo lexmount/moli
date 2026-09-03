@@ -592,12 +592,6 @@ impl ModuleOwnerState {
             .map(|record| record.compiled_module().clone())
     }
 
-    pub(crate) fn native_module_url_for(&self, module: v8::Local<'_, v8::Module>) -> Option<Url> {
-        self.document_modulator
-            .module_key_for(module)
-            .map(|key| key.url().clone())
-    }
-
     pub(crate) fn mark_native_module_instantiated(&mut self, entry_id: ModuleEntryId) {
         self.document_modulator.mark_instantiated(entry_id);
     }
