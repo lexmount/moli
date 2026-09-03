@@ -5376,6 +5376,7 @@ html/browsers/windows/browsing-context-names/choose-existing-001.html
 html/browsers/windows/browsing-context-window.html
 html/browsers/windows/browsing-context.html
 html/browsers/windows/embedded-opener-a-form.html
+html/browsers/windows/embedded-opener.html
 html/browsers/windows/nested-browsing-contexts/window-parent-null.html
 html/browsers/windows/nested-browsing-contexts/window-parent.html
 html/browsers/windows/nested-browsing-contexts/window-top-null.html

@@ -2815,7 +2815,6 @@ html/browsers/the-windowproxy-exotic-object/windowproxy-prototype-setting-same-o
 html/browsers/windows/browsing-context-names/choose-_self-001.html
 html/browsers/windows/document-domain-removed-iframe.html
 html/browsers/windows/embedded-opener-remove-frame.html
-html/browsers/windows/embedded-opener.html
 html/cross-origin-embedder-policy/coep-on-response-from-service-worker.https.html
 html/cross-origin-embedder-policy/service-worker-cache-storage.https.html
 html/dom/documents/dom-tree-accessors/nameditem-names.html
