@@ -1,6 +1,47 @@
 use super::*;
 
 #[tokio::test(flavor = "current_thread")]
+async fn screenshot_resolves_orthogonal_percentages_against_ratio_derived_block_size() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/ratio-derived-percentage-basis.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>html,body{margin:0}</style>`;
+document.body.innerHTML = `<div id=container style="width:100px;aspect-ratio:1/1"><div id=child style="width:100%;height:100%;writing-mode:vertical-lr"></div></div>`;
+'installed'
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(800, 600, 1.0))?
+            .expect("ratio-derived percentage-basis screenshot layout");
+
+        let geometry = page_vm.vm_mut().eval(
+            r#"JSON.stringify(Object.fromEntries(['container','child'].map(id=>{const rect=document.getElementById(id).getBoundingClientRect();return [id,[rect.width,rect.height]]})))"#,
+        )?;
+        let geometry: serde_json::Value = serde_json::from_str(&geometry)?;
+        assert_eq!(
+            geometry,
+            serde_json::json!({
+                "container": [100, 100],
+                "child": [100, 100],
+            }),
+            "a block size made definite through aspect-ratio must be the percentage basis of an orthogonal child",
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("ratio-derived percentage-basis fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn screenshot_keeps_absolute_calc_terms_in_intrinsic_flex_margins() {
     run_page_vm_async_test(async move {
         let loader =
