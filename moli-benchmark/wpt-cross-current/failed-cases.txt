@@ -513,9 +513,7 @@ css/css-grid/abspos/positioned-grid-descendants-001.html
 css/css-grid/abspos/positioned-grid-descendants-002.html
 css/css-grid/abspos/positioned-grid-descendants-004.html
 css/css-grid/abspos/positioned-grid-descendants-007.html
-css/css-grid/abspos/positioned-grid-descendants-009.html
-css/css-grid/abspos/positioned-grid-descendants-011.html
-css/css-grid/abspos/positioned-grid-descendants-013.html
+css/css-grid/abspos/positioned-grid-descendants-008.html
 css/css-grid/abspos/positioned-grid-items-020.html
 css/css-grid/abspos/positioned-grid-items-021.html
 css/css-grid/abspos/positioned-grid-items-024.html
@@ -2473,7 +2471,6 @@ css/cssom-view/table-with-border-client-width-height.html
 css/cssom-view/window-scroll-arguments.html
 css/cssom-view/window-scroll-promise-interruption.html
 css/cssom-view/window-scroll-promises.html
-css/cssom/cssimportrule.html
 css/cssom/cssom-getPropertyValue-common-checks.html
 css/cssom/cssom-pagerule.html
 css/cssom/flex-serialization.html
@@ -2531,7 +2528,6 @@ dom/ranges/tentative/OpaqueRange-range-updates.html
 dom/ranges/tentative/OpaqueRange-supported-elements.html
 dom/ranges/tentative/OpaqueRange-unsupported-elements.html
 dom/ranges/tentative/OpaqueRange-validation.html
-domparsing/DOMParser-parseFromString-url-pushstate.html
 domparsing/DOMParser-parseFromString-xml.html
 domparsing/tentative/all-stream-methods-with-trusted-types-no-policy.html
 domparsing/tentative/positional-methods-with-trusted-types.html
@@ -2694,7 +2690,6 @@ encrypted-media/missing-sinf.html
 fetch/api/cors/sandboxed-iframe.html
 focus/activeelement-after-focusing-different-site-iframe-contentwindow.html
 focus/activeelement-after-focusing-different-site-iframe.html
-focus/activeelement-after-focusing-same-site-iframe-contentwindow.html
 focus/activeelement-after-focusing-same-site-iframe.html
 focus/activeelement-after-immediately-focusing-different-site-iframe-contentwindow.html
 focus/activeelement-after-immediately-focusing-different-site-iframe.html
@@ -2708,8 +2703,6 @@ focus/hasfocus-different-site.html
 focus/hasfocus-same-site.html
 focus/iframe-contentwindow-focus-with-different-site-intermediate-frame.html
 focus/iframe-contentwindow-focus-with-same-as-top-intermediate-frame.html
-focus/iframe-focus-with-different-site-intermediate-frame.html
-focus/iframe-focus-with-same-as-top-intermediate-frame.html
 font-access/permissions-policy/local-fonts-supported-by-permissions-policy.html
 fullscreen/api/historical.html
 geolocation/non-secure-contexts.http.html
@@ -2822,6 +2815,7 @@ html/browsers/the-window-object/open-close/script-closable.html
 html/browsers/the-window-object/window-indexed-properties-delete-no-cache.html
 html/browsers/the-window-object/window-indexed-properties-strict.html
 html/browsers/the-window-object/window-indexed-properties.html
+html/browsers/the-window-object/window-open-noopener.html?indexed
 html/browsers/the-window-object/window-open-noreferrer.html
 html/browsers/the-windowproxy-exotic-object/windowproxy-prototype-setting-same-origin.html
 html/browsers/windows/browsing-context-names/choose-_self-001.html
@@ -3007,7 +3001,6 @@ html/semantics/interactive-elements/the-dialog-element/modal-dialog-scroll-heigh
 html/semantics/interactive-elements/the-dialog-element/multiple-centered-dialogs.html
 html/semantics/interactive-elements/the-dialog-element/non-modal-dialog-layout.html
 html/semantics/links/links-created-by-a-and-area-elements/rel-attribute-clearing.html
-html/semantics/links/links-created-by-a-and-area-elements/target_blank_implicit_noopener.html
 html/semantics/menu/tentative/button-invoke-menulist.html
 html/semantics/menu/tentative/checkable.html
 html/semantics/menu/tentative/menubar-invoke-menulist.html
@@ -3027,6 +3020,7 @@ html/semantics/popovers/popover-types-with-hints.html
 html/semantics/scripting-1/the-script-element/css-module/cors-crossorigin-requests.html
 html/semantics/scripting-1/the-script-element/execution-timing/083.html
 html/semantics/scripting-1/the-script-element/execution-timing/085.html
+html/semantics/scripting-1/the-script-element/execution-timing/086.html
 html/semantics/scripting-1/the-script-element/execution-timing/128.html
 html/semantics/scripting-1/the-script-element/execution-timing/137.html
 html/semantics/scripting-1/the-script-element/json-module/cors-crossorigin-requests.html
@@ -3067,6 +3061,7 @@ html/semantics/text-level-semantics/historical.html
 html/semantics/the-button-element/command-and-commandfor/on-dialog-behavior.html
 html/syntax/charset/xhr.html
 html/syntax/parsing/cdata-in-integration-point-fragment.html
+html/webappapis/animation-frames/cancel-pending.html
 html/webappapis/dynamic-markup-insertion/document-write/module-delayed.html
 html/webappapis/dynamic-markup-insertion/document-write/module-static-import-delayed.html
 html/webappapis/dynamic-markup-insertion/document-write/module-static-import.html
