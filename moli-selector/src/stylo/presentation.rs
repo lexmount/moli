@@ -267,8 +267,10 @@ fn append_parsed_presentation_declaration(
 /// Parses the legacy HTML dimension grammar used by table attributes.
 ///
 /// Blink accepts an initial run of ASCII digits, an optional fractional part,
-/// and then either `%` or arbitrary trailing garbage. A leading `+`, a leading
-/// decimal point, and percentage values in `cellspacing` remain invalid.
+/// and then either `%` or arbitrary trailing garbage. Blink classifies an
+/// immediately trailing `*` as a relative dimension and omits the resulting
+/// presentation hint. A leading `+`, a leading decimal point, and percentage
+/// values in `cellspacing` remain invalid.
 fn parse_html_dimension(
     value: &str,
     allow_percentage: bool,
@@ -296,6 +298,9 @@ fn parse_html_dimension(
 
     let number = value[number_start..current].parse::<f64>().ok()?;
     let number = number.min(f64::from(f32::MAX)) as f32;
+    if bytes.get(current) == Some(&b'*') {
+        return None;
+    }
     if number == 0.0 && !allow_zero {
         return None;
     }
@@ -644,6 +649,11 @@ mod tests {
         assert!(parse_html_dimension(".5", true, true).is_none());
         assert!(parse_html_dimension("50%", false, true).is_none());
         assert!(parse_html_dimension("0", true, false).is_none());
+        assert!(parse_html_dimension("10*", true, true).is_none());
+        assert_eq!(
+            parse_html_dimension("10 *", true, true),
+            Some(LengthPercentage::Length(NoCalcLength::from_px(10.0)))
+        );
     }
 
     #[test]
