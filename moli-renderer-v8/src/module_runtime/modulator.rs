@@ -655,14 +655,6 @@ impl NativeDocumentModulator {
             .set_record_state_for_entry(self.core.entry(entry_id), ModuleRecordState::Evaluated);
     }
 
-    pub(crate) fn module_key_for(
-        &self,
-        module: v8::Local<'_, v8::Module>,
-    ) -> Option<&ModuleMapKey> {
-        self.module_entry_id_for(module)
-            .map(|entry_id| self.entry(entry_id).effective_key())
-    }
-
     pub(crate) fn module_source_for(
         &self,
         module: v8::Local<'_, v8::Module>,
