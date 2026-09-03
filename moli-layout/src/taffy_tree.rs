@@ -5,14 +5,15 @@ use style::Atom;
 use taffy::{
     AbsoluteAxis, AlignContent, AlignContentKeyword, AlignmentSafety, AutoSizeBehavior,
     AvailableSpace, BlockContext, BlockFormattingContext, BoxSizing, CacheTree, Clear,
-    DetailedGridInfo, Dimension, Display, FloatDirection, IntrinsicSizeResult, Layout,
-    LayoutBlockContainer, LayoutEnvironment, LayoutFlexboxContainer, LayoutGridContainer,
-    LayoutInput, LayoutOutput, LayoutPartialTree, LeafLayoutContext, Line, LogicalBoxStrut,
-    LogicalOffset, LogicalSize, MaybeMath, MaybeResolve, NodeId, OrthogonalFallback, Point,
-    ResolveOrZero, RoundTree, RunMode, Size, SizingMode, SizingPurpose, Style, TraversePartialTree,
-    TraverseTree, WritingDirection, compute_block_layout, compute_cached_layout,
-    compute_cached_size, compute_flexbox_layout, compute_grid_layout, compute_hidden_layout,
-    compute_leaf_layout_with_context, compute_root_layout, resolve_leaf_node_sizing, round_layout,
+    DetailedGridInfo, Dimension, Display, FloatDirection, InsetModifiedContainingBlock,
+    IntrinsicSizeResult, Layout, LayoutBlockContainer, LayoutEnvironment, LayoutFlexboxContainer,
+    LayoutGridContainer, LayoutInput, LayoutOutput, LayoutPartialTree, LeafLayoutContext, Line,
+    LogicalBoxStrut, LogicalOffset, LogicalSize, MaybeMath, MaybeResolve, NodeId,
+    OrthogonalFallback, Point, ResolveOrZero, RoundTree, RunMode, Size, SizingMode, SizingPurpose,
+    Style, TraversePartialTree, TraverseTree, WritingDirection, compute_block_layout,
+    compute_cached_layout, compute_cached_size, compute_flexbox_layout, compute_grid_layout,
+    compute_hidden_layout, compute_leaf_layout_with_context, compute_root_layout,
+    resolve_leaf_node_sizing, round_layout,
 };
 
 use crate::{
@@ -1146,7 +1147,7 @@ fn layout_inline_absolute_child<N>(
     let area_width = area.size.width;
     let area_height = area.size.height;
     let percentage_basis = area.writing_mode.to_logical(area.size).inline_size;
-    let aspect_ratio = style.aspect_ratio;
+    let resolved_aspect_ratio = world.boxes[child.index()].resolved_aspect_ratio();
     let margin = style
         .margin
         .map(|value| value.maybe_resolve(percentage_basis, resolve_stylo_calc_value));
@@ -1178,6 +1179,26 @@ fn layout_inline_absolute_child<N>(
         .inset
         .bottom
         .maybe_resolve(area_height, resolve_stylo_calc_value);
+    let static_position_opportunity = Size {
+        width: if area.direction == taffy::Direction::Rtl && inline_level {
+            static_position.x
+        } else {
+            area_width - static_position.x
+        },
+        height: area_height - static_position.y,
+    };
+    let inset_modified_containing_block = InsetModifiedContainingBlock::new(
+        area.size,
+        taffy::Rect {
+            left,
+            right,
+            top,
+            bottom,
+        },
+        static_position_opportunity,
+        margin,
+    );
+    let child_available_size = inset_modified_containing_block.margin_box_opportunity();
     let block_auto_behavior = match child_writing_mode.block_axis() {
         AbsoluteAxis::Horizontal if left.is_some() && right.is_some() => {
             AutoSizeBehavior::StretchExplicit
@@ -1190,20 +1211,32 @@ fn layout_inline_absolute_child<N>(
     let style_size = style
         .size
         .maybe_resolve(area.size, resolve_stylo_calc_value)
-        .maybe_apply_aspect_ratio(aspect_ratio)
-        .maybe_add(box_sizing_adjustment);
+        .maybe_add(box_sizing_adjustment)
+        .maybe_apply_aspect_ratio_with_box_sizing(
+            resolved_aspect_ratio,
+            BoxSizing::BorderBox,
+            padding_border_sum,
+        );
     let min_size = style
         .min_size
         .maybe_resolve(area.size, resolve_stylo_calc_value)
-        .maybe_apply_aspect_ratio(aspect_ratio)
         .maybe_add(box_sizing_adjustment)
+        .maybe_apply_aspect_ratio_with_box_sizing(
+            resolved_aspect_ratio,
+            BoxSizing::BorderBox,
+            padding_border_sum,
+        )
         .or(padding_border_sum.map(Some))
         .maybe_max(padding_border_sum);
     let max_size = style
         .max_size
         .maybe_resolve(area.size, resolve_stylo_calc_value)
-        .maybe_apply_aspect_ratio(aspect_ratio)
-        .maybe_add(box_sizing_adjustment);
+        .maybe_add(box_sizing_adjustment)
+        .maybe_apply_aspect_ratio_with_box_sizing(
+            resolved_aspect_ratio,
+            BoxSizing::BorderBox,
+            padding_border_sum,
+        );
     let mut known_dimensions = style_size.maybe_clamp(min_size, max_size);
 
     if let (None, Some(left), Some(right)) = (known_dimensions.width, left, right) {
@@ -1211,7 +1244,11 @@ fn layout_inline_absolute_child<N>(
             (area_width.maybe_sub(margin.left).maybe_sub(margin.right) - left - right).max(0.0),
         );
         known_dimensions = known_dimensions
-            .maybe_apply_aspect_ratio(aspect_ratio)
+            .maybe_apply_aspect_ratio_with_box_sizing(
+                resolved_aspect_ratio,
+                BoxSizing::BorderBox,
+                padding_border_sum,
+            )
             .maybe_clamp(min_size, max_size);
     }
     if let (None, Some(top), Some(bottom)) = (known_dimensions.height, top, bottom) {
@@ -1219,29 +1256,33 @@ fn layout_inline_absolute_child<N>(
             (area_height.maybe_sub(margin.top).maybe_sub(margin.bottom) - top - bottom).max(0.0),
         );
         known_dimensions = known_dimensions
-            .maybe_apply_aspect_ratio(aspect_ratio)
+            .maybe_apply_aspect_ratio_with_box_sizing(
+                resolved_aspect_ratio,
+                BoxSizing::BorderBox,
+                padding_border_sum,
+            )
             .maybe_clamp(min_size, max_size);
     }
 
     let available_space = Size {
-        width: AvailableSpace::Definite(area_width.maybe_clamp(min_size.width, max_size.width)),
-        height: AvailableSpace::Definite(area_height.maybe_clamp(min_size.height, max_size.height)),
+        width: AvailableSpace::Definite(
+            child_available_size
+                .width
+                .maybe_clamp(min_size.width, max_size.width),
+        ),
+        height: AvailableSpace::Definite(
+            child_available_size
+                .height
+                .maybe_clamp(min_size.height, max_size.height),
+        ),
     };
-    if known_dimensions.width.is_none() {
+    if known_dimensions.width.is_none() && !world.boxes[child.index()].is_replaced() {
         // CSS 2.2 §10.3.7 resolves an auto-width absolute box with at least
         // one auto horizontal inset as fit-content. Taffy's block/flex paths
         // already implement this contract, but an IFC's Parley placeholder
         // requires Moli to perform the same sizing at this custom seam.
         let non_auto_margin_width = margin.left.unwrap_or(0.0) + margin.right.unwrap_or(0.0);
-        let available_width = match (left, right) {
-            (Some(left), None) => area_width - left,
-            (None, Some(right)) => area_width - right,
-            (None, None) if area.direction == taffy::Direction::Rtl && inline_level => {
-                static_position.x
-            }
-            (None, None) => area_width - static_position.x,
-            (Some(_), Some(_)) => unreachable!("both insets already resolve auto width"),
-        } - non_auto_margin_width;
+        let available_width = child_available_size.width - non_auto_margin_width;
         known_dimensions.width = Some(world.measure_fit_content_width(
             child,
             LayoutInput {
@@ -1263,7 +1304,11 @@ fn layout_inline_absolute_child<N>(
             available_width,
         ));
         known_dimensions = known_dimensions
-            .maybe_apply_aspect_ratio(aspect_ratio)
+            .maybe_apply_aspect_ratio_with_box_sizing(
+                resolved_aspect_ratio,
+                BoxSizing::BorderBox,
+                padding_border_sum,
+            )
             .maybe_clamp(min_size, max_size);
     }
     let measured_size = world

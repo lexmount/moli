@@ -3598,6 +3598,20 @@ document.body.innerHTML = `
                     && (destination.height - 16.0).abs() <= 0.01
             })
             .expect("the Feishu-style 1em SVG must paint into a 16x16 destination");
+        first
+            .fragments
+            .iter()
+            .filter_map(|fragment| match fragment {
+                moli_layout::PaintFragment::SvgImage(image) => Some(image.destination),
+                _ => None,
+            })
+            .find(|destination| {
+                destination.x.abs() <= 0.01
+                    && (destination.y - 30.0).abs() <= 0.01
+                    && (destination.width - 205.0).abs() <= 0.01
+                    && (destination.height - 205.0).abs() <= 0.01
+            })
+            .expect("the ratio-only SVG must stretch against the containing block");
         assert!(first.diagnostics.iter().all(|diagnostic| {
             diagnostic.code != "replaced-content-placeholder"
                 && diagnostic.code != "svg-resource-unsupported"
@@ -3616,10 +3630,11 @@ document.body.innerHTML = `
         assert_eq!(first_pixel(65, 5), [100, 106, 115, 255]);
         assert_eq!(first_pixel(80, 5), [255, 255, 255, 255]);
         assert_eq!(first_pixel(140, 40), [0, 128, 0, 255]);
-        // A viewBox-only square uses its 1:1 ratio inside the CSS 300x150
-        // default object size, yielding a 150x150 replaced box rather than
-        // losing the ratio and stretching to 300x150.
-        assert_eq!(first_pixel(170, 40), [255, 255, 255, 255]);
+        // A viewBox-only square has a ratio but no natural dimensions.
+        // Chromium stretch-fits its inline size to the containing block and
+        // transfers the 205px post-scrollbar inline size through the 1:1
+        // ratio.
+        assert_eq!(first_pixel(170, 40), [0, 128, 0, 255]);
 
         page_vm.vm_mut().eval(
             "document.getElementById('icon').classList.add('blue');document.getElementById('shape').setAttribute('x','2');document.getElementById('feishu-time').setAttribute('width','2em');'mutated'",
