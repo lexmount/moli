@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import sys
 import urllib.parse
 
 from playwright.async_api import Error as PlaywrightError, expect
@@ -11,19 +12,35 @@ from . import SmokeState
 from ..assertions import SmokeError, assert_equal, wait_until
 
 
+def _checkpoint(label: str) -> None:
+    # The supervisor can terminate this worker without giving Python a cleanup
+    # turn. Flush the replacement/Runtime boundary so a timeout artifact names
+    # the exact CDP operation that stopped making progress.
+    print(
+        f"[moli-cdp-smoke] CHECKPOINT dom-input/{label}",
+        file=sys.stderr,
+        flush=True,
+    )
+
+
 async def run_dom_input_group(state: SmokeState) -> None:
     page = state.page
     fixture = state.fixture
     temp_dir = state.temp_dir
 
+    _checkpoint("static/set-content")
     await page.set_content('<main id="set-content">set content ok</main>')
+    _checkpoint("static/read-text")
     assert_equal(await page.text_content("#set-content"), "set content ok", "setContent text")
     state.record("set_content_static_dom")
 
+    _checkpoint("inline/set-content")
     await page.set_content(
         '<main id="set-content-inline">inline content ok</main><script>window.__moliSetContentInlineRan = (window.__moliSetContentInlineRan || 0) + 1;</script>'
     )
+    _checkpoint("inline/read-text")
     assert_equal(await page.text_content("#set-content-inline"), "inline content ok", "setContent inline text")
+    _checkpoint("inline/read-marker")
     assert_equal(await page.evaluate("() => window.__moliSetContentInlineRan"), 1, "setContent inline script ran")
     state.record("set_content_inline_script")
 

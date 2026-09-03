@@ -78,6 +78,24 @@ fn page_javascript_owner_is_blocked(
             .any(|state| state.metadata.executes_page_javascript)
 }
 
+/// Preserve Chromium's initialization order when a client pipelines frame
+/// discovery and Runtime activation. Playwright drops a context event whose
+/// frame is not in its local tree yet; Moli's asynchronous frame snapshot must
+/// therefore finish before Runtime.enable can replay the live context list.
+fn runtime_enable_waits_for_frame_inventory<'a>(
+    command: &ParsedCdpCommand,
+    mut in_flight_commands: impl Iterator<Item = &'a InFlightCommandMetadata>,
+) -> bool {
+    if command.method() != "Runtime.enable" {
+        return false;
+    }
+    let session_id = command.request().session_id();
+    in_flight_commands.any(|metadata| {
+        metadata.method.as_deref() == Some("Page.getFrameTree")
+            && metadata.session_id.as_deref() == session_id
+    })
+}
+
 enum SchedulerInput {
     BackgroundNavigationCompletion(BackgroundNavigationCompletion),
     BackgroundEvent(BackgroundProtocolEvent),
@@ -282,7 +300,7 @@ async fn run_cdp_scheduler_actor(
                 {
                     break;
                 }
-                if !drain_blocked_commands_after_navigation_gate(
+                if !drain_blocked_commands_after_prerequisites(
                     &frontend_router,
                     &mut scheduler,
                     &mut scheduler_input_rx,
@@ -455,7 +473,7 @@ async fn handle_scheduler_input(
             {
                 return false;
             }
-            drain_blocked_commands_after_navigation_gate(
+            drain_blocked_commands_after_prerequisites(
                 frontend_router,
                 scheduler,
                 scheduler_input_rx,
@@ -1417,6 +1435,20 @@ async fn handle_client_command_with_interleaved_output(
     if let Some(method) = probe_method.as_deref() {
         tracing::info!(method, "CMD_PROBE_COMMAND_RECEIVED");
     }
+    if runtime_enable_waits_for_frame_inventory(
+        &command,
+        in_flight_commands.values().map(|state| &state.metadata),
+    ) {
+        trace_command(
+            &command,
+            "command_blocked_by_inflight_frame_inventory",
+            None,
+            None,
+            None,
+        );
+        blocked_commands.push_back(BlockedCommandDispatch { command, metadata });
+        return true;
+    }
     if !blocked_commands.is_empty() && scheduler.command_waits_for_navigation_flush(&command) {
         trace_command(
             &command,
@@ -1426,7 +1458,7 @@ async fn handle_client_command_with_interleaved_output(
             None,
         );
         blocked_commands.push_back(BlockedCommandDispatch { command, metadata });
-        return drain_blocked_commands_after_navigation_gate(
+        return drain_blocked_commands_after_prerequisites(
             frontend_router,
             scheduler,
             scheduler_input_rx,
@@ -1579,7 +1611,7 @@ async fn start_ready_command_dispatch(
     }
 }
 
-async fn drain_blocked_commands_after_navigation_gate(
+async fn drain_blocked_commands_after_prerequisites(
     frontend_router: &CdpFrontendRouter,
     scheduler: &mut CdpScheduler,
     scheduler_input_rx: &mut SchedulerInputReceivers,
@@ -1595,6 +1627,20 @@ async fn drain_blocked_commands_after_navigation_gate(
         let Some(blocked) = blocked_commands.pop_front() else {
             return true;
         };
+        if runtime_enable_waits_for_frame_inventory(
+            &blocked.command,
+            in_flight_commands.values().map(|state| &state.metadata),
+        ) {
+            trace_command(
+                &blocked.command,
+                "blocked_command_still_waiting_for_frame_inventory",
+                None,
+                None,
+                None,
+            );
+            blocked_commands.push_front(blocked);
+            return true;
+        }
         if scheduler.command_waits_for_navigation_flush(&blocked.command) {
             trace_command(
                 &blocked.command,
@@ -2056,6 +2102,54 @@ mod tests {
     fn in_flight_command_tokens_never_wrap() {
         let mut next = u64::MAX;
         let _ = take_next_in_flight_command_token(&mut next);
+    }
+
+    #[test]
+    fn runtime_enable_waits_for_same_session_frame_inventory() {
+        let frame_tree = ParsedCdpCommand::parse_str(
+            r#"{"id":1,"method":"Page.getFrameTree","sessionId":"SID-page"}"#,
+        )
+        .expect("frame-tree command should parse");
+        let frame_tree_metadata = command_metadata(&frame_tree);
+        let runtime_enable = ParsedCdpCommand::parse_str(
+            r#"{"id":2,"method":"Runtime.enable","sessionId":"SID-page"}"#,
+        )
+        .expect("Runtime.enable command should parse");
+
+        assert!(runtime_enable_waits_for_frame_inventory(
+            &runtime_enable,
+            std::iter::once(&frame_tree_metadata),
+        ));
+
+        let other_session_runtime_enable = ParsedCdpCommand::parse_str(
+            r#"{"id":3,"method":"Runtime.enable","sessionId":"SID-other"}"#,
+        )
+        .expect("other-session Runtime.enable command should parse");
+        assert!(!runtime_enable_waits_for_frame_inventory(
+            &other_session_runtime_enable,
+            std::iter::once(&frame_tree_metadata),
+        ));
+
+        let page_enable = ParsedCdpCommand::parse_str(
+            r#"{"id":4,"method":"Page.enable","sessionId":"SID-page"}"#,
+        )
+        .expect("Page.enable command should parse");
+        assert!(!runtime_enable_waits_for_frame_inventory(
+            &page_enable,
+            std::iter::once(&frame_tree_metadata),
+        ));
+
+        let root_frame_tree =
+            ParsedCdpCommand::parse_str(r#"{"id":5,"method":"Page.getFrameTree"}"#)
+                .expect("root frame-tree command should parse");
+        let root_frame_tree_metadata = command_metadata(&root_frame_tree);
+        let root_runtime_enable =
+            ParsedCdpCommand::parse_str(r#"{"id":6,"method":"Runtime.enable"}"#)
+                .expect("root Runtime.enable command should parse");
+        assert!(runtime_enable_waits_for_frame_inventory(
+            &root_runtime_enable,
+            std::iter::once(&root_frame_tree_metadata),
+        ));
     }
 
     #[tokio::test]

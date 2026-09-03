@@ -9605,6 +9605,74 @@ async fn websocket_cdp_remote_objects_classify_cross_frame_nodes_at_v8_boundary(
 }
 
 #[tokio::test]
+async fn websocket_cdp_playwright_init_publishes_frame_tree_before_runtime_contexts() {
+    let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
+    let (mut socket, _) = connect_async(format!(
+        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
+    ))
+    .await
+    .expect("connect to cdp websocket");
+    let browser_context_id = cdp_create_browser_context(&mut socket, 1).await;
+    let target = cdp_create_attached_target(&mut socket, 10, browser_context_id.as_str()).await;
+
+    // Playwright pipelines these two commands during FrameSession startup. It
+    // discards execution contexts whose frame is not known yet, so Chromium's
+    // observable contract is that the frame inventory arrives first.
+    send_cdp_command_without_wait(
+        &mut socket,
+        20,
+        "Page.getFrameTree",
+        Some(target.session_id.as_str()),
+        json!({}),
+    )
+    .await;
+    send_cdp_command_without_wait(
+        &mut socket,
+        21,
+        "Runtime.enable",
+        Some(target.session_id.as_str()),
+        json!({}),
+    )
+    .await;
+
+    let mut messages = Vec::new();
+    let mut saw_frame_tree = false;
+    let mut saw_runtime_response = false;
+    let mut saw_default_context = false;
+    while !(saw_frame_tree && saw_runtime_response && saw_default_context) {
+        let message = recv_ws_json(&mut socket).await;
+        saw_frame_tree |= message["id"] == json!(20_u64);
+        saw_runtime_response |= message["id"] == json!(21_u64);
+        saw_default_context |= message["sessionId"] == json!(target.session_id.as_str())
+            && message["method"] == json!("Runtime.executionContextCreated")
+            && message["params"]["context"]["auxData"]["isDefault"] == json!(true)
+            && message["params"]["context"]["auxData"]["frameId"]
+                == json!(target.target_id.as_str());
+        messages.push(message);
+    }
+
+    let frame_tree_index = messages
+        .iter()
+        .position(|message| message["id"] == json!(20_u64))
+        .expect("Page.getFrameTree response");
+    let default_context_index = messages
+        .iter()
+        .position(|message| {
+            message["sessionId"] == json!(target.session_id.as_str())
+                && message["method"] == json!("Runtime.executionContextCreated")
+                && message["params"]["context"]["auxData"]["isDefault"] == json!(true)
+        })
+        .expect("default execution context");
+    assert!(
+        frame_tree_index < default_context_index,
+        "Playwright must learn the frame before its default execution context: {messages:#?}"
+    );
+
+    let _ = socket.close(None).await;
+    protocol_server.abort();
+}
+
+#[tokio::test]
 async fn websocket_cdp_playwright_auto_attach_child_frame_events_precede_main_load_boundary() {
     async fn parent() -> impl IntoResponse {
         (
