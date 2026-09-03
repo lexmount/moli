@@ -6850,6 +6850,7 @@ html/webappapis/scripting/events/event-handler-processing-algorithm-error/body-e
 html/webappapis/scripting/events/event-handler-processing-algorithm-error/body-element-synthetic-event.html
 html/webappapis/scripting/events/event-handler-processing-algorithm-error/document-synthetic-errorevent.html
 html/webappapis/scripting/events/event-handler-processing-algorithm-error/document-synthetic-event.html
+html/webappapis/scripting/events/event-handler-processing-algorithm-error/frameset-element-synthetic-errorevent.html
 html/webappapis/scripting/events/event-handler-processing-algorithm-error/frameset-element-synthetic-event.html
 html/webappapis/scripting/events/event-handler-processing-algorithm-error/script-element.html
 html/webappapis/scripting/events/event-handler-processing-algorithm-error/synthetic-errorevent-click.html
